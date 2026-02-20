@@ -784,4 +784,176 @@
         });
     });
 
+    // ================================================================
+    // Test suite 8: Unlink group
+    // ================================================================
+
+    describe('Assignment - unlink group', function () {
+
+        it('Session.unlinkGroup returns instances to unlinked pool', function () {
+            var env = buildEnv();
+            try {
+                // Create a group first
+                env.mgr.setAssignmentMode(true);
+                env.mgr.addToAssignmentSelection(env.unlinked1);
+                env.mgr.addToAssignmentSelection(env.unlinked2);
+                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+
+                var groups = env.session.getInstanceGroupsForFrame(0);
+                assertEqual(groups.length, 1, 'group created');
+
+                // Unlink the group
+                var group = groups[0];
+                var returned = env.session.unlinkGroup(0, group);
+
+                // Group should be removed
+                var afterGroups = env.session.getInstanceGroupsForFrame(0);
+                assertEqual(afterGroups.length, 0, 'group removed after unlink');
+
+                // Instances should be back in unlinked pool
+                assertEqual(returned.length, 2, 'two unlinked instances returned');
+
+                var fg = env.session.getFrameGroup(0);
+                var ulCam1 = fg.getUnlinkedInstances('cam1');
+                var ulCam2 = fg.getUnlinkedInstances('cam2');
+                assertEqual(ulCam1.length, 1, 'cam1 has unlinked instance again');
+                assertEqual(ulCam2.length, 1, 'cam2 has unlinked instance again');
+
+                // The returned instances should contain the original Instance objects
+                assertTrue(
+                    returned.some(function (u) { return u.instance === env.inst1; }),
+                    'returned includes original inst1'
+                );
+                assertTrue(
+                    returned.some(function (u) { return u.instance === env.inst2; }),
+                    'returned includes original inst2'
+                );
+            } finally {
+                env.cleanup();
+            }
+        });
+
+        it('_unlinkSelectedGroup clears selection', function () {
+            var env = buildEnv();
+            try {
+                // Create a group
+                env.mgr.setAssignmentMode(true);
+                env.mgr.addToAssignmentSelection(env.unlinked1);
+                env.mgr.addToAssignmentSelection(env.unlinked2);
+                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+
+                var groups = env.session.getInstanceGroupsForFrame(0);
+                assertEqual(groups.length, 1, 'group created');
+
+                // Select the group
+                env.mgr.select(groups[0], -1);
+                assertNotNull(env.mgr.selectedInstanceGroup, 'group is selected');
+
+                // Unlink via interaction method
+                env.mgr._unlinkSelectedGroup();
+
+                // Selection should be cleared
+                assertNull(env.mgr.selectedInstanceGroup, 'selection cleared after unlink');
+
+                // Group should be gone
+                var afterGroups = env.session.getInstanceGroupsForFrame(0);
+                assertEqual(afterGroups.length, 0, 'group removed');
+
+                // Instances back in unlinked pool
+                var fg = env.session.getFrameGroup(0);
+                assertEqual(fg.getUnlinkedInstances('cam1').length, 1, 'cam1 unlinked restored');
+                assertEqual(fg.getUnlinkedInstances('cam2').length, 1, 'cam2 unlinked restored');
+            } finally {
+                env.cleanup();
+            }
+        });
+
+        it('U key triggers unlink when group is selected', function () {
+            var env = buildEnv();
+            try {
+                // Create a group
+                env.mgr.setAssignmentMode(true);
+                env.mgr.addToAssignmentSelection(env.unlinked1);
+                env.mgr.onKeyDown(makeKeyEvent('c'));
+
+                var groups = env.session.getInstanceGroupsForFrame(0);
+                assertEqual(groups.length, 1, 'group created');
+
+                // Select the group
+                env.mgr.select(groups[0], -1);
+
+                // Press U to unlink
+                env.mgr.onKeyDown(makeKeyEvent('u'));
+
+                // Group should be unlinked
+                var afterGroups = env.session.getInstanceGroupsForFrame(0);
+                assertEqual(afterGroups.length, 0, 'group removed by U key');
+
+                // Instance back in unlinked pool
+                var fg = env.session.getFrameGroup(0);
+                assertEqual(fg.getUnlinkedInstances('cam1').length, 1, 'cam1 unlinked restored by U');
+            } finally {
+                env.cleanup();
+            }
+        });
+
+        it('U key is no-op when no group selected', function () {
+            var env = buildEnv();
+            try {
+                // Create a group but don't select it
+                env.mgr.setAssignmentMode(true);
+                env.mgr.addToAssignmentSelection(env.unlinked1);
+                env.mgr.addToAssignmentSelection(env.unlinked2);
+                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+
+                var groups = env.session.getInstanceGroupsForFrame(0);
+                assertEqual(groups.length, 1, 'group exists');
+
+                // Ensure nothing is selected
+                env.mgr.clearSelection();
+                assertNull(env.mgr.selectedInstanceGroup, 'nothing selected');
+
+                // Press U — should be no-op
+                env.mgr.onKeyDown(makeKeyEvent('u'));
+
+                var afterGroups = env.session.getInstanceGroupsForFrame(0);
+                assertEqual(afterGroups.length, 1, 'group still exists (no-op)');
+            } finally {
+                env.cleanup();
+            }
+        });
+
+        it('unlinkGroup preserves Instance object identity', function () {
+            var env = buildEnv();
+            try {
+                // Create a group
+                env.mgr.setAssignmentMode(true);
+                env.mgr.addToAssignmentSelection(env.unlinked1);
+                env.mgr.addToAssignmentSelection(env.unlinked2);
+                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+
+                var groups = env.session.getInstanceGroupsForFrame(0);
+                var group = groups[0];
+
+                // Get the actual instance objects from the group
+                var cam1Inst = group.getInstance('cam1');
+                var cam2Inst = group.getInstance('cam2');
+
+                // Unlink
+                var returned = env.session.unlinkGroup(0, group);
+
+                // Verify the same Instance objects are reused (not copies)
+                var returnedCam1 = returned.find(function (u) { return u.cameraName === 'cam1'; });
+                var returnedCam2 = returned.find(function (u) { return u.cameraName === 'cam2'; });
+
+                assertTrue(returnedCam1.instance === cam1Inst,
+                    'cam1 instance is same object (not copied)');
+                assertTrue(returnedCam2.instance === cam2Inst,
+                    'cam2 instance is same object (not copied)');
+            } finally {
+                env.cleanup();
+            }
+        });
+    });
+
 })();
