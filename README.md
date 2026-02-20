@@ -26,7 +26,7 @@ python3 -m http.server 8080 --bind 0.0.0.0
 ```
 ## Web Deployment from Main 
 ```bash
-# App: https://talmolab.github.io/lucid/
+# https://talmolab.github.io/lucid/
 ```
 
 ## Dependencies (CDN only)
