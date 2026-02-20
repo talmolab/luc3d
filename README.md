@@ -24,6 +24,10 @@ python3 -m http.server 8080 --bind 0.0.0.0
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
+## Web Deployment from Main 
+```bash
+# App: https://talmolab.github.io/lucid/
+```
 
 ## Dependencies (CDN only)
 - Three.js 0.147
