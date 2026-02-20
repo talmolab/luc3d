@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>mv-gui Test Suite</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { color: #667eea; margin-bottom: 5px; }
+        .subtitle { color: #888; margin-bottom: 20px; font-size: 14px; }
+        .test-summary {
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        .test-summary.all-passed {
+            background: rgba(72, 187, 120, 0.15);
+            color: #48bb78;
+            border: 1px solid rgba(72, 187, 120, 0.3);
+        }
+        .test-summary.has-failures {
+            background: rgba(245, 101, 101, 0.15);
+            color: #f56565;
+            border: 1px solid rgba(245, 101, 101, 0.3);
+        }
+        .test-suite {
+            background: #16213e;
+            border: 1px solid #2a2d5e;
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin-bottom: 12px;
+        }
+        .suite-title {
+            font-size: 14px;
+            margin: 0 0 8px 0;
+        }
+        .suite-passed { color: #48bb78; }
+        .suite-failed { color: #f56565; }
+        .test-case {
+            font-size: 13px;
+            padding: 2px 0;
+        }
+        .test-case.passed { color: #9ae6b4; }
+        .test-case.failed { color: #feb2b2; }
+        .test-error {
+            color: #fc8181;
+            font-size: 12px;
+            padding: 4px 0 4px 28px;
+            word-break: break-all;
+        }
+        #results { min-height: 100px; }
+        .loading {
+            color: #667eea;
+            font-size: 14px;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>mv-gui Test Suite</h1>
+    <div class="subtitle">Browser-based tests for the multi-view pose proofreading GUI</div>
+    <div id="results"><div class="loading">Running tests...</div></div>
+
+    <!-- Test framework -->
+    <script src="test-framework.js"></script>
+
+    <!-- Source files under test -->
+    <script src="../pose-data.js"></script>
+    <script src="../triangulation.js"></script>
+    <script src="../file-io.js"></script>
+    <script src="../interaction.js"></script>
+    <script src="../overlays.js"></script>
+    <script src="../timeline.js"></script>
+    <script src="../video.js"></script>
+
+    <!-- Test files -->
+    <script src="test-pose-data.js"></script>
+    <script src="test-triangulation.js"></script>
+    <script src="test-file-io.js"></script>
+    <script src="test-interaction.js"></script>
+    <script src="test-regressions.js"></script>
+    <script src="test-overlays.js"></script>
+    <script src="test-integration.js"></script>
+
+    <!-- Phase 5 test files -->
+    <script src="test-video-mgmt.js"></script>
+    <script src="test-view-mode.js"></script>
+    <script src="test-instance-drag.js"></script>
+
+    <!-- Phase 6 test files -->
+    <script src="test-phase6.js"></script>
+
+    <!-- Phase 7 test files -->
+    <script src="test-phase7.js"></script>
+
+    <!-- Timeline and video controller tests -->
+    <script src="test-timeline.js"></script>
+    <script src="test-video-controller.js"></script>
+    <script src="test-multi-video.js"></script>
+
+    <!-- Drag freeze regression tests -->
+    <script src="test-drag-freeze.js"></script>
+
+    <!-- Label rendering tests -->
+    <script src="test-labels.js"></script>
+
+    <!-- Assignment mode tests -->
+    <script src="test-assignment.js"></script>
+
+    <!-- Project loading and triangulation tests -->
+    <script src="test-project-triangulation.js"></script>
+
+    <!-- Run all tests -->
+    <script>
+        (async function () {
+            try {
+                const results = await TestFramework.runAll();
+                TestFramework.renderResults(results, document.getElementById('results'));
+
+                // Also log to console for headless/CI use
+                console.log('Test results:', results.passed + '/' + results.total + ' passed');
+                if (results.failed > 0) {
+                    console.error(results.failed + ' test(s) failed:');
+                    for (const suite of results.suites) {
+                        for (const test of suite.tests) {
+                            if (test.status === 'failed') {
+                                console.error('  FAIL: ' + suite.name + ' > ' + test.name + ': ' + test.error);
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                document.getElementById('results').textContent = 'Error running tests: ' + err.message;
+                console.error('Test runner error:', err);
+            }
+        })();
+    </script>
+</body>
+</html>

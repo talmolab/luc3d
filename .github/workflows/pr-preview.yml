@@ -1,0 +1,69 @@
+name: PR Preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pr-preview-${{ github.event.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy PR Preview
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-pages
+          folder: .
+          target-folder: pr/${{ github.event.number }}
+          commit-message: "Deploy PR #${{ github.event.number }} preview"
+
+      - name: Comment on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-preview
+          message: |
+            ## Preview Deployment
+
+            | | |
+            |---|---|
+            | **Preview URL** | https://talmolab.github.io/LUCID/pr/${{ github.event.number }}/ |
+            | **Commit** | ${{ github.sha }} |
+
+            _This preview will be removed when the PR is closed._
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Remove PR preview
+        run: |
+          if [ -d "pr/${{ github.event.number }}" ]; then
+            rm -rf "pr/${{ github.event.number }}"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "Remove PR #${{ github.event.number }} preview" || true
+            git push
+          fi
+
+      - name: Comment on PR (cleanup)
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-preview
+          message: |
+            ## Preview Deployment
+            Preview has been removed.
