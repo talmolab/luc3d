@@ -795,6 +795,61 @@ class Session {
     }
 
     /**
+     * Unlink an InstanceGroup: remove the group but return its instances
+     * to the unlinked pool instead of deleting them.
+     *
+     * @param {number} frameIdx
+     * @param {InstanceGroup} group - The group to unlink
+     * @returns {UnlinkedInstance[]} The newly created unlinked instances
+     */
+    unlinkGroup(frameIdx, group) {
+        const fg = this.frameGroups.get(frameIdx);
+        const newUnlinked = [];
+
+        // Remove from instanceGroups map (same as removeInstanceGroup)
+        const trackMap = this.instanceGroups.get(frameIdx);
+        if (trackMap) {
+            for (const [trackIdx, groups] of trackMap) {
+                const idx = groups.indexOf(group);
+                if (idx >= 0) {
+                    groups.splice(idx, 1);
+                    if (groups.length === 0) {
+                        trackMap.delete(trackIdx);
+                    }
+                    break;
+                }
+            }
+            if (trackMap.size === 0) {
+                this.instanceGroups.delete(frameIdx);
+            }
+        }
+
+        // Convert each linked instance to an UnlinkedInstance
+        if (fg) {
+            for (const [camName, instance] of group.instances) {
+                // Remove from FrameGroup.instances
+                const camInstances = fg.instances.get(camName);
+                if (camInstances) {
+                    const instIdx = camInstances.indexOf(instance);
+                    if (instIdx >= 0) {
+                        camInstances.splice(instIdx, 1);
+                    }
+                    if (camInstances.length === 0) {
+                        fg.instances.delete(camName);
+                    }
+                }
+
+                // Add as unlinked
+                const ul = new UnlinkedInstance(instance, camName);
+                fg.addUnlinkedInstance(camName, ul);
+                newUnlinked.push(ul);
+            }
+        }
+
+        return newUnlinked;
+    }
+
+    /**
      * Assign an unlinked instance to an existing InstanceGroup.
      * Removes it from the unlinked list and adds to the group.
      *

@@ -405,6 +405,51 @@ body {
   flex-shrink: 0;
 }
 
+.toolbar-dropdown-trigger {
+  padding: 4px 6px;
+  min-width: auto;
+  font-size: 10px;
+}
+
+.toolbar-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 180px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 200;
+  padding: 4px 0;
+}
+
+.toolbar-dropdown-item {
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-primary);
+  transition: background var(--transition-fast);
+}
+
+.toolbar-dropdown-item:hover {
+  background: var(--accent-dim);
+}
+
+.toolbar-dropdown-item.disabled {
+  color: var(--text-secondary);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.toolbar-dropdown-separator {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
+}
+
 /* --------------------------------------------------------------------------
    Timeline
    -------------------------------------------------------------------------- */
