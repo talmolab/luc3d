@@ -56,6 +56,9 @@
                     <div class="menu-dropdown-item" id="menuDeleteInstance">Delete Instance <span
                             class="shortcut-hint">Del / Shift+Del</span></div>
                     <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuUnlinkGroup">Unlink Group <span
+                            class="shortcut-hint">U</span></div>
+                    <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuTriangulate">Triangulate <span
                             class="shortcut-hint">T</span></div>
                 </div>
@@ -83,10 +86,15 @@
                     Instance</button>
             </div>
             <div class="toolbar-separator"></div>
-            <div class="toolbar-group">
+            <div class="toolbar-group" style="position:relative;">
                 <button class="toolbar-btn" id="tbAssign" title="Toggle assignment mode (A)">Assign</button>
-                <button class="toolbar-btn" id="tbCreateGroup" title="Create group from selection (Enter)"
-                    disabled>Create Group</button>
+                <button class="toolbar-btn toolbar-dropdown-trigger" id="tbGroupMenu" title="Group actions">&#9662;</button>
+                <div class="toolbar-dropdown" id="tbGroupDropdown">
+                    <div class="toolbar-dropdown-item" id="tbToggleAssignment">Toggle Assignment Mode</div>
+                    <div class="toolbar-dropdown-item" id="tbCreateGroup">Create Group</div>
+                    <div class="toolbar-dropdown-separator"></div>
+                    <div class="toolbar-dropdown-item" id="tbUnlinkGroup">Unlink Selected Group</div>
+                </div>
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
@@ -195,6 +203,7 @@
                                     <th>Views</th>
                                     <th>Type</th>
                                     <th>Error</th>
+                                    <th style="width:24px;"></th>
                                 </tr>
                             </thead>
                             <tbody></tbody>
@@ -445,6 +454,12 @@
                 <span class="status-item" id="statusSelection">Selection: none</span>
             </div>
         </div>
+    </div>
+
+    <!-- Context menu for instance groups -->
+    <div class="context-menu" id="groupContextMenu" style="display:none;">
+        <div class="context-menu-item" id="ctxUnlinkGroup">Unlink Group</div>
+        <div class="context-menu-item danger" id="ctxDeleteGroup">Delete Group</div>
     </div>
 
     <!-- Module scripts (order matters: dependencies first) -->
@@ -1004,12 +1019,8 @@
 
             // Update assignment toolbar state
             const tbAssign = document.getElementById('tbAssign');
-            const tbCreateGroup = document.getElementById('tbCreateGroup');
             if (tbAssign) {
                 tbAssign.classList.toggle('active', assignmentMode);
-            }
-            if (tbCreateGroup) {
-                tbCreateGroup.disabled = !assignmentMode || assignmentSelectedIds.length < 1;
             }
 
             for (const view of state.views) {
@@ -1269,6 +1280,10 @@
                 document.querySelectorAll('.menu-dropdown').forEach(function (d) {
                     d.style.display = 'none';
                 });
+                document.querySelectorAll('.toolbar-dropdown').forEach(function (d) {
+                    d.style.display = 'none';
+                });
+                hideGroupContextMenu();
                 activeMenu = null;
             });
 
@@ -1286,6 +1301,11 @@
             document.getElementById('menuDeleteInstance').addEventListener('click', function () {
                 closeMenus();
                 if (interactionManager) interactionManager._deleteSelected();
+            });
+
+            document.getElementById('menuUnlinkGroup').addEventListener('click', function () {
+                closeMenus();
+                if (interactionManager) interactionManager._unlinkSelectedGroup();
             });
 
             document.getElementById('menuTriangulate').addEventListener('click', function () {
@@ -1414,8 +1434,66 @@
                 document.querySelectorAll('.menu-dropdown').forEach(function (d) {
                     d.style.display = 'none';
                 });
+                document.querySelectorAll('.toolbar-dropdown').forEach(function (d) {
+                    d.style.display = 'none';
+                });
                 activeMenu = null;
             }
+        }
+
+        /**
+         * Unlink a given group (or the selected group) — returns its instances
+         * to the unlinked pool and refreshes all UI.
+         */
+        function unlinkGroup(group) {
+            if (!state.session) return;
+            var frameIdx = state.currentFrame;
+
+            if (!group) {
+                if (interactionManager && interactionManager.selectedInstanceGroup) {
+                    group = interactionManager.selectedInstanceGroup;
+                } else {
+                    return;
+                }
+            }
+
+            // Clear selection if this group is selected
+            if (interactionManager && interactionManager.selectedInstanceGroup === group) {
+                interactionManager.clearSelection();
+            }
+
+            var trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
+            state.session.unlinkGroup(frameIdx, group);
+            setStatus('Unlinked ' + trackName, 'success');
+
+            // Refresh everything
+            if (timeline) {
+                timeline.setFrameModified(frameIdx, true);
+            }
+            if (viewport3d) {
+                var groups = getInstanceGroupsForFrame(frameIdx);
+                viewport3d.setFrame(groups);
+            }
+            triangulateCurrentFrame();
+            drawAllOverlays(state.currentFrame);
+            updateInfoPanel();
+        }
+
+        /**
+         * Show context menu for an InstanceGroup row.
+         */
+        function showGroupContextMenu(x, y, group) {
+            var menu = document.getElementById('groupContextMenu');
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+            menu.style.display = 'block';
+            menu._targetGroup = group;
+        }
+
+        function hideGroupContextMenu() {
+            var menu = document.getElementById('groupContextMenu');
+            menu.style.display = 'none';
+            menu._targetGroup = null;
         }
 
         // ============================================
@@ -1598,11 +1676,64 @@
                 if (interactionManager) interactionManager.setAssignmentMode();
                 drawAllOverlays(state.currentFrame);
             });
+
+            // Toolbar dropdown
+            document.getElementById('tbGroupMenu').addEventListener('click', function (e) {
+                e.stopPropagation();
+                var dd = document.getElementById('tbGroupDropdown');
+                var isOpen = dd.style.display === 'block';
+                // Close all other dropdowns
+                document.querySelectorAll('.toolbar-dropdown').forEach(function (d) { d.style.display = 'none'; });
+                if (!isOpen) {
+                    // Update disabled states
+                    var hasGroup = interactionManager && interactionManager.selectedInstanceGroup;
+                    var inAssign = interactionManager && interactionManager.assignmentMode;
+                    var hasSelection = interactionManager && interactionManager.assignmentSelection && interactionManager.assignmentSelection.length >= 1;
+                    document.getElementById('tbCreateGroup').classList.toggle('disabled', !inAssign || !hasSelection);
+                    document.getElementById('tbUnlinkGroup').classList.toggle('disabled', !hasGroup);
+                    dd.style.display = 'block';
+                }
+            });
+            document.getElementById('tbToggleAssignment').addEventListener('click', function () {
+                document.getElementById('tbGroupDropdown').style.display = 'none';
+                if (interactionManager) interactionManager.setAssignmentMode();
+                drawAllOverlays(state.currentFrame);
+            });
             document.getElementById('tbCreateGroup').addEventListener('click', function () {
+                document.getElementById('tbGroupDropdown').style.display = 'none';
                 if (interactionManager) interactionManager._createGroupFromAssignment();
             });
+            document.getElementById('tbUnlinkGroup').addEventListener('click', function () {
+                document.getElementById('tbGroupDropdown').style.display = 'none';
+                unlinkGroup();
+            });
+
             document.getElementById('tbTriangulate').addEventListener('click', function () {
                 triangulateCurrentFrame();
+            });
+
+            // Context menu for instance groups
+            document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
+                var menu = document.getElementById('groupContextMenu');
+                var group = menu._targetGroup;
+                hideGroupContextMenu();
+                if (group) unlinkGroup(group);
+            });
+            document.getElementById('ctxDeleteGroup').addEventListener('click', function () {
+                var menu = document.getElementById('groupContextMenu');
+                var group = menu._targetGroup;
+                hideGroupContextMenu();
+                if (group && state.session) {
+                    if (interactionManager && interactionManager.selectedInstanceGroup === group) {
+                        interactionManager.clearSelection();
+                    }
+                    state.session.removeInstanceGroup(state.currentFrame, group);
+                    setStatus('Deleted group', 'success');
+                    if (timeline) timeline.setFrameModified(state.currentFrame, true);
+                    if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                }
             });
 
             // Frame counter and FPS
@@ -2712,10 +2843,20 @@
                         tdError.textContent = '-';
                     }
 
+                    // Unlink button column
+                    const tdUnlink = document.createElement('td');
+                    tdUnlink.style.padding = '0';
+                    const unlinkBtn = document.createElement('button');
+                    unlinkBtn.textContent = '\u00d7';
+                    unlinkBtn.title = 'Unlink group';
+                    unlinkBtn.style.cssText = 'background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:14px;padding:2px 4px;line-height:1;';
+
                     tr.appendChild(tdTrack);
                     tr.appendChild(tdViews);
                     tr.appendChild(tdType);
                     tr.appendChild(tdError);
+                    tr.appendChild(tdUnlink);
+                    tdUnlink.appendChild(unlinkBtn);
 
                     // Click to select this group
                     (function (g) {
@@ -2723,6 +2864,15 @@
                             if (interactionManager) {
                                 interactionManager.select(g, -1);
                             }
+                        });
+                        unlinkBtn.addEventListener('click', function (e) {
+                            e.stopPropagation();
+                            unlinkGroup(g);
+                        });
+                        tr.addEventListener('contextmenu', function (e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            showGroupContextMenu(e.clientX, e.clientY, g);
                         });
                     })(group);
 

@@ -813,6 +813,17 @@ class InteractionManager {
                 }
                 break;
             }
+
+            case 'u':
+            case 'U': {
+                if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+                    if (this.selectedInstanceGroup) {
+                        e.preventDefault();
+                        this._unlinkSelectedGroup();
+                    }
+                }
+                break;
+            }
         }
     }
 
@@ -1298,6 +1309,33 @@ class InteractionManager {
 
         // Select the newly created group
         this.select(group, -1);
+        this._requestRedraw();
+    }
+
+    /**
+     * Unlink the currently selected InstanceGroup: break it apart and
+     * return its instances to the unlinked pool.
+     * @private
+     */
+    _unlinkSelectedGroup() {
+        const state = this._getState();
+        if (!state || !state.session) return;
+        if (!this.selectedInstanceGroup) return;
+
+        const frameIdx = state.currentFrame;
+        const group = this.selectedInstanceGroup;
+
+        // Clear selection before modifying data
+        this.clearSelection();
+
+        // Unlink the group (instances go back to unlinked pool)
+        state.session.unlinkGroup(frameIdx, group);
+
+        // Notify the application
+        if (this.callbacks.onInstanceDeleted) {
+            this.callbacks.onInstanceDeleted(frameIdx, group);
+        }
+
         this._requestRedraw();
     }
 
