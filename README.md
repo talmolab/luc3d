@@ -5,6 +5,9 @@ Label Unification and Correspondence in 3D Annotation GUI in Web Browser
 
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
+![GUI image](https://github.com/user-attachments/assets/d102ab51-6951-4100-8df5-b64d390e98cd)
+
+
 ## Architecture
 - `index.html` — Main SPA with all app logic in inline script
 - `pose-data.js` — Data model (Skeleton, Camera, Instance, FrameGroup, InstanceGroup, Session)
