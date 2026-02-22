@@ -2,7 +2,7 @@
 Label Unification and Correspondence in 3D Annotation GUI in Web Browser
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
-![LUCID](https://github.com/user-attachments/assets/d4f44671-d144-4150-a4d5-a3692bd3ddd9)
+![LUCID](https://github.com/user-attachments/assets/ceed2a47-6515-4010-a8db-b846d9a064b6)
 
 ![lucidGUI](https://github.com/user-attachments/assets/bc89788a-bf2b-4816-89ff-b23fa4ef0b5b)
 
