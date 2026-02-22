@@ -1351,6 +1351,9 @@
                 totalFrames: state.totalFrames,
                 onFrameChange: function (frameIdx) {
                     if (videoController) {
+                        if (state.isPlaying) {
+                            videoController.stopPlayback();
+                        }
                         videoController.seekToFrame(frameIdx);
                     }
                 },
@@ -4943,7 +4946,33 @@
                     }
                 }
 
-                // 5. Finalize
+                // 5. Build InstanceGroups from FrameGroup instances
+                if (state.session) {
+                    showLoading('Building instance groups...');
+                    for (var [fgIdx, fgObj] of state.session.frameGroups) {
+                        var trackInstances = new Map();
+                        for (var [cn, instances] of fgObj.instances) {
+                            for (var instItem of instances) {
+                                var tIdx = instItem.trackIdx >= 0 ? instItem.trackIdx : 0;
+                                if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
+                                trackInstances.get(tIdx).push({ camName: cn, instance: instItem });
+                            }
+                        }
+                        if (trackInstances.size > 0) {
+                            state.session.instanceGroups.set(fgIdx, new Map());
+                            var trackMap3 = state.session.instanceGroups.get(fgIdx);
+                            for (var [trkIdx, entries] of trackInstances) {
+                                var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trkIdx, trkIdx);
+                                for (var e2 of entries) group.addInstance(e2.camName, e2.instance);
+                                if (!trackMap3.has(trkIdx)) trackMap3.set(trkIdx, []);
+                                trackMap3.get(trkIdx).push(group);
+                            }
+                        }
+                    }
+                    console.log('[session-folder] Built instance groups for', state.session.frameGroups.size, 'frames');
+                }
+
+                // 6. Finalize
                 if (state.views.length > 0) {
                     populateViewStrip();
                     rebuildVideoController();
@@ -4954,6 +4983,23 @@
                 // Set up 3D viewport
                 if (state.session && state.session.cameras.length > 0) {
                     setup3DViewport();
+                }
+
+                // Set up interaction manager for pose editing
+                if (state.session && !interactionManager) {
+                    setupInteraction();
+                }
+                if (interactionManager && state.views.length > 0) {
+                    interactionManager.detach();
+                    interactionManager.attach(state.views);
+                }
+
+                // Set up timeline
+                if (state.session && !timeline) {
+                    setupTimeline();
+                } else if (timeline) {
+                    timeline.setData(state.session);
+                    timeline.setTotalFrames(state.totalFrames);
                 }
 
                 precomputeTriangulation();
@@ -6084,6 +6130,19 @@
                     self.addVideoPanel(viewName, position);
                 });
 
+                // Track active panel — highlight selected video
+                this.api.onDidActivePanelChange(function (event) {
+                    document.querySelectorAll('.video-cell.video-selected').forEach(function (el) {
+                        el.classList.remove('video-selected');
+                    });
+                    if (event && event.id) {
+                        var renderer = panelRenderers.get(event.id);
+                        if (renderer && renderer.element) {
+                            renderer.element.classList.add('video-selected');
+                        }
+                    }
+                });
+
                 // Track panel removal
                 this.api.onDidRemovePanel(function (event) {
                     var renderer = panelRenderers.get(event.id);
@@ -6246,21 +6305,71 @@
                         item.classList.remove('dragging');
                     });
 
+                    // Single click: if already in dock, select that panel
+                    item.addEventListener('click', function () {
+                        var count = paneManager.dockedViews.get(view.name) || 0;
+                        if (count > 0 && paneManager.api) {
+                            // Find and activate the first panel for this view
+                            var panels = Array.from(paneManager.api.panels);
+                            for (var pi = 0; pi < panels.length; pi++) {
+                                var renderer = panelRenderers.get(panels[pi].id);
+                                if (renderer && renderer.getViewName() === view.name) {
+                                    panels[pi].api.setActive();
+                                    return;
+                                }
+                            }
+                        }
+                    });
+
+                    // Double click: only add to dock if NOT already loaded
                     item.addEventListener('dblclick', function () {
+                        var count = paneManager.dockedViews.get(view.name) || 0;
+                        if (count > 0 && paneManager.api) {
+                            // Already in dock — select it instead
+                            var panels = Array.from(paneManager.api.panels);
+                            for (var pi = 0; pi < panels.length; pi++) {
+                                var renderer = panelRenderers.get(panels[pi].id);
+                                if (renderer && renderer.getViewName() === view.name) {
+                                    panels[pi].api.setActive();
+                                    return;
+                                }
+                            }
+                        }
                         paneManager.addVideoPanel(view.name);
                     });
 
                     list.appendChild(item);
 
-                    requestAnimationFrame(function () {
-                        updateViewStripThumbnail(view, thumbCanvas);
-                    });
+                    // Render first frame directly from decoder to thumbnail
+                    if (view.decoder) {
+                        view.decoder.getFrame(0).then(function (frame) {
+                            if (frame && thumbCanvas) {
+                                var ctx = thumbCanvas.getContext('2d');
+                                ctx.drawImage(frame, 0, 0, thumbCanvas.width, thumbCanvas.height);
+                            }
+                        }).catch(function () { /* decoder not ready */ });
+                    } else {
+                        requestAnimationFrame(function () {
+                            updateViewStripThumbnail(view, thumbCanvas);
+                        });
+                    }
                 })(state.views[idx]);
             }
         }
 
         function updateViewStripThumbnail(view, thumbCanvas) {
-            if (!view.canvas || !thumbCanvas) return;
+            if (!thumbCanvas) return;
+            // Prefer decoding first frame directly from decoder
+            if (view.decoder) {
+                view.decoder.getFrame(0).then(function (frame) {
+                    if (frame) {
+                        var ctx = thumbCanvas.getContext('2d');
+                        ctx.drawImage(frame, 0, 0, thumbCanvas.width, thumbCanvas.height);
+                    }
+                }).catch(function () { /* decoder not ready */ });
+                return;
+            }
+            if (!view.canvas) return;
             var ctx = thumbCanvas.getContext('2d');
             try {
                 ctx.drawImage(view.canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);

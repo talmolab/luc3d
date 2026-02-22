@@ -473,6 +473,11 @@ body {
   z-index: 11;
 }
 
+.video-cell.video-selected {
+  outline: 2px solid rgba(255, 221, 68, 0.5);
+  outline-offset: -2px;
+}
+
 .unzoom-btn {
   position: absolute;
   top: 8px;

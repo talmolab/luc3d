@@ -68,3 +68,20 @@ global.js:1 Error fetching user data for Floating K visibility: Error: unexpecte
 ```
 
 Please allow folders to be uploaded
+
+##
+
+# Prompt 6
+
+There is a bug in the timeline-contrainer where moving the timeline-cursor causes the video start playing. Moving the timeline-cursor should immediately pause the video.
+
+Visual UI Changes
+
+- Add a slight yellow highlight over the currently selected video.
+- A video's *thumbnail* is the video icon displayed on the viewbar. Change each thumbail to have the first frame of its corresponding video, but keep the size of the icon the same
+- If a video is already loaded into the video dock, then clicking **once** on the thumbnail will cause the video to be selected on the video dock. If multiple instances are already on the dock, then just select any one of the instances
+- If the video is not loaded on the dock, then **double clicking** on its thumbnail will open and select the video next to the currently selected video. Note that this double click feature is currently working, but I want this to only work for videos that are not already loaded in the dock
+
+
+Interaction Changes
+- After uploading the SLP files, I could not click or move around the pose estimations. I can create and delete instances, but the instance that are already defined from the SLP files are not interactable. Please load the pose estimations from SLP files as instances editable by the user
