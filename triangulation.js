@@ -545,3 +545,126 @@ function triangulateAndReproject(instanceGroup, cameras) {
         meanError: meanError
     };
 }
+
+// ============================================
+// Hungarian Algorithm (Kuhn-Munkres)
+// ============================================
+
+/**
+ * Solve the assignment problem using the Hungarian algorithm.
+ * Given an n x m cost matrix, returns the optimal assignment
+ * that minimizes total cost.
+ *
+ * @param {number[][]} costMatrix - n x m cost matrix (n <= m)
+ * @returns {number[]} assignment - assignment[i] = column assigned to row i (-1 if unassigned)
+ */
+function hungarianAlgorithm(costMatrix) {
+    var n = costMatrix.length;
+    if (n === 0) return [];
+    var m = costMatrix[0].length;
+
+    // Ensure n <= m (more columns than rows)
+    var transposed = false;
+    var C;
+    if (n > m) {
+        transposed = true;
+        C = [];
+        for (var j = 0; j < m; j++) {
+            C[j] = [];
+            for (var i = 0; i < n; i++) {
+                C[j][i] = costMatrix[i][j];
+            }
+        }
+        var tmp = n; n = m; m = tmp;
+    } else {
+        C = [];
+        for (var i2 = 0; i2 < n; i2++) {
+            C[i2] = costMatrix[i2].slice();
+        }
+    }
+
+    // Pad to square if needed
+    var sz = Math.max(n, m);
+    var cost = [];
+    for (var r = 0; r < sz; r++) {
+        cost[r] = [];
+        for (var c = 0; c < sz; c++) {
+            cost[r][c] = (r < n && c < m) ? C[r][c] : 0;
+        }
+    }
+
+    // u[i] and v[j] are potentials
+    var u = new Array(sz + 1).fill(0);
+    var v = new Array(sz + 1).fill(0);
+    var p = new Array(sz + 1).fill(0);   // p[j] = row assigned to col j
+    var way = new Array(sz + 1).fill(0); // way[j] = previous col in path
+
+    for (var i1 = 1; i1 <= sz; i1++) {
+        p[0] = i1;
+        var j0 = 0;
+        var minv = new Array(sz + 1).fill(Infinity);
+        var used = new Array(sz + 1).fill(false);
+
+        do {
+            used[j0] = true;
+            var i0 = p[j0];
+            var delta = Infinity;
+            var j1 = -1;
+
+            for (var j = 1; j <= sz; j++) {
+                if (used[j]) continue;
+                var cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+                if (cur < minv[j]) {
+                    minv[j] = cur;
+                    way[j] = j0;
+                }
+                if (minv[j] < delta) {
+                    delta = minv[j];
+                    j1 = j;
+                }
+            }
+
+            for (var j2 = 0; j2 <= sz; j2++) {
+                if (used[j2]) {
+                    u[p[j2]] += delta;
+                    v[j2] -= delta;
+                } else {
+                    minv[j2] -= delta;
+                }
+            }
+
+            j0 = j1;
+        } while (p[j0] !== 0);
+
+        do {
+            var j3 = way[j0];
+            p[j0] = p[j3];
+            j0 = j3;
+        } while (j0);
+    }
+
+    // Extract assignment
+    var result;
+    if (!transposed) {
+        result = new Array(n).fill(-1);
+        for (var j4 = 1; j4 <= sz; j4++) {
+            if (p[j4] > 0 && p[j4] <= n && j4 <= m) {
+                result[p[j4] - 1] = j4 - 1;
+            }
+        }
+    } else {
+        result = new Array(costMatrix.length).fill(-1);
+        for (var j5 = 1; j5 <= sz; j5++) {
+            if (p[j5] > 0 && p[j5] <= n && j5 <= m) {
+                // transposed: row in C = col in original, col in C = row in original
+                var origRow = j5 - 1;
+                var origCol = p[j5] - 1;
+                if (origRow < costMatrix.length && origCol < costMatrix[0].length) {
+                    result[origRow] = origCol;
+                }
+            }
+        }
+    }
+
+    return result;
+}

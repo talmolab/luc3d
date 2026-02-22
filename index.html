@@ -94,7 +94,13 @@
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbAssign" title="Toggle assignment mode (A)">Assign</button>
+                <div class="toolbar-dropdown" id="tbAssignDropdown">
+                    <button class="toolbar-btn" id="tbAssign" title="Assignment mode">Assign &#9662;</button>
+                    <div class="toolbar-dropdown-menu" id="tbAssignMenu">
+                        <div class="toolbar-dropdown-item" id="tbAssignManual">Manual</div>
+                        <div class="toolbar-dropdown-item" id="tbAssignAutomatic">Automatic</div>
+                    </div>
+                </div>
                 <button class="toolbar-btn" id="tbCreateGroup" title="Create group from assignment (Enter)">Create Group</button>
                 <button class="toolbar-btn" id="tbUnlinkGroup" title="Unlink selected group">Unlink</button>
             </div>
@@ -644,8 +650,8 @@
                 state.session = demoResult.session;
                 state.keypoints3d = demoResult.keypoints3d;
 
-                showLoading('Computing triangulation...');
-                precomputeTriangulation();
+                // Triangulation is NOT run automatically — user must trigger it
+                // after identity assignment via Edit > Triangulate
 
                 // Populate view strip and auto-arrange in grid
                 populateViewStrip();
@@ -1832,9 +1838,24 @@
             document.getElementById('tbDeleteInstance').addEventListener('click', function () {
                 if (interactionManager) interactionManager._deleteSelected();
             });
-            document.getElementById('tbAssign').addEventListener('click', function () {
+            // Assign dropdown toggle
+            document.getElementById('tbAssign').addEventListener('click', function (e) {
+                e.stopPropagation();
+                var dropdown = document.getElementById('tbAssignDropdown');
+                dropdown.classList.toggle('open');
+            });
+            document.addEventListener('click', function () {
+                var dropdown = document.getElementById('tbAssignDropdown');
+                if (dropdown) dropdown.classList.remove('open');
+            });
+            document.getElementById('tbAssignManual').addEventListener('click', function () {
+                document.getElementById('tbAssignDropdown').classList.remove('open');
                 if (interactionManager) interactionManager.setAssignmentMode();
                 drawAllOverlays(state.currentFrame);
+            });
+            document.getElementById('tbAssignAutomatic').addEventListener('click', function () {
+                document.getElementById('tbAssignDropdown').classList.remove('open');
+                startAutoAssignment();
             });
 
             // Create Group button
@@ -1937,6 +1958,201 @@
             container.classList.toggle('collapsed');
             if (timeline && !container.classList.contains('collapsed')) {
                 setTimeout(function () { timeline.resize(); }, 300);
+            }
+        }
+
+        // ============================================
+        // Automatic Identity Assignment
+        // ============================================
+
+        var autoAssignState = null; // { selectedViews: Set, toast: HTMLElement }
+
+        function startAutoAssignment() {
+            if (!state.session || state.views.length === 0) {
+                setStatus('No session loaded', 'warning');
+                return;
+            }
+
+            // Check for unlinked instances
+            var fg = state.session.getFrameGroup(state.currentFrame);
+            if (!fg) {
+                setStatus('No instances on current frame', 'warning');
+                return;
+            }
+            var hasUnlinked = false;
+            for (var v = 0; v < state.views.length; v++) {
+                var ul = fg.getUnlinkedInstances(state.views[v].name);
+                if (ul && ul.length > 0) { hasUnlinked = true; break; }
+            }
+            if (!hasUnlinked) {
+                setStatus('No unlinked instances to assign on this frame', 'warning');
+                return;
+            }
+
+            // Temporarily remove yellow selection highlight
+            document.querySelectorAll('.video-cell.video-selected').forEach(function (el) {
+                el.classList.remove('video-selected');
+            });
+
+            // Create toast
+            var toast = document.createElement('div');
+            toast.className = 'auto-assign-toast';
+            toast.innerHTML = '<span>Select the views for automatic Identity Assignment</span>' +
+                '<button id="autoAssignCancel">Cancel</button>' +
+                '<button id="autoAssignContinue" class="primary">Continue</button>';
+            document.body.appendChild(toast);
+
+            autoAssignState = { selectedViews: new Set(), toast: toast };
+
+            // Add click listeners to video cells for view selection
+            document.querySelectorAll('.video-cell').forEach(function (cell) {
+                cell._autoAssignClick = function () {
+                    var viewName = cell.getAttribute('data-view-name');
+                    if (!viewName) return;
+                    if (autoAssignState.selectedViews.has(viewName)) {
+                        autoAssignState.selectedViews.delete(viewName);
+                        cell.classList.remove('auto-assign-selected');
+                    } else {
+                        autoAssignState.selectedViews.add(viewName);
+                        cell.classList.add('auto-assign-selected');
+                    }
+                };
+                cell.addEventListener('click', cell._autoAssignClick);
+            });
+
+            toast.querySelector('#autoAssignCancel').addEventListener('click', function () {
+                cleanupAutoAssignment();
+            });
+
+            toast.querySelector('#autoAssignContinue').addEventListener('click', function () {
+                var selectedViews = Array.from(autoAssignState.selectedViews);
+                cleanupAutoAssignment();
+
+                if (selectedViews.length < 2) {
+                    setStatus('Select at least 2 views for automatic assignment', 'warning');
+                    return;
+                }
+
+                runAutomaticAssignment(selectedViews);
+            });
+        }
+
+        function cleanupAutoAssignment() {
+            if (!autoAssignState) return;
+            // Remove toast
+            if (autoAssignState.toast && autoAssignState.toast.parentNode) {
+                autoAssignState.toast.parentNode.removeChild(autoAssignState.toast);
+            }
+            // Remove red highlights and click listeners
+            document.querySelectorAll('.video-cell').forEach(function (cell) {
+                cell.classList.remove('auto-assign-selected');
+                if (cell._autoAssignClick) {
+                    cell.removeEventListener('click', cell._autoAssignClick);
+                    delete cell._autoAssignClick;
+                }
+            });
+            autoAssignState = null;
+        }
+
+        function runAutomaticAssignment(selectedViewNames) {
+            if (!state.session) return;
+            var fg = state.session.getFrameGroup(state.currentFrame);
+            if (!fg) return;
+            var cameras = state.session.cameras;
+
+            // Collect unlinked instances per selected view
+            var viewUnlinked = {}; // viewName -> UnlinkedInstance[]
+            for (var vi = 0; vi < selectedViewNames.length; vi++) {
+                var vn = selectedViewNames[vi];
+                var ul = fg.getUnlinkedInstances(vn);
+                if (ul && ul.length > 0) {
+                    viewUnlinked[vn] = ul.slice();
+                }
+            }
+
+            var viewNames = Object.keys(viewUnlinked);
+            if (viewNames.length < 2) {
+                setStatus('Need unlinked instances in at least 2 selected views', 'warning');
+                return;
+            }
+
+            // Use first view with unlinked instances as reference
+            var refView = viewNames[0];
+            var refInstances = viewUnlinked[refView];
+
+            // For each other view, build cost matrix using triangulation reprojection error
+            // Then use Hungarian to match reference instances to other view instances
+            // Result: groups of matched instances across views
+
+            // Track assignments: refIdx -> { viewName -> UnlinkedInstance }
+            var assignments = [];
+            for (var ri = 0; ri < refInstances.length; ri++) {
+                assignments[ri] = {};
+                assignments[ri][refView] = refInstances[ri];
+            }
+
+            for (var ovi = 1; ovi < viewNames.length; ovi++) {
+                var otherView = viewNames[ovi];
+                var otherInstances = viewUnlinked[otherView];
+                var nRef = refInstances.length;
+                var nOther = otherInstances.length;
+
+                // Build cost matrix: cost[refIdx][otherIdx] = reprojection error
+                var costMatrix = [];
+                for (var a = 0; a < nRef; a++) {
+                    costMatrix[a] = [];
+                    for (var b = 0; b < nOther; b++) {
+                        // Create temporary group with instances from both views
+                        var tempGroup = new InstanceGroup(-1, 0);
+                        tempGroup.addInstance(refView, refInstances[a].instance);
+                        tempGroup.addInstance(otherView, otherInstances[b].instance);
+                        var result = triangulateAndReproject(tempGroup, cameras);
+                        costMatrix[a][b] = (result.meanError != null && isFinite(result.meanError))
+                            ? result.meanError : 1e6;
+                    }
+                }
+
+                // Run Hungarian algorithm
+                var matching = hungarianAlgorithm(costMatrix);
+                for (var mi = 0; mi < matching.length; mi++) {
+                    if (matching[mi] >= 0 && matching[mi] < nOther) {
+                        // Only accept if reprojection error is reasonable (< 50px)
+                        if (costMatrix[mi][matching[mi]] < 50) {
+                            assignments[mi][otherView] = otherInstances[matching[mi]];
+                        }
+                    }
+                }
+            }
+
+            // Create groups from assignments
+            var groupsCreated = 0;
+            for (var gi = 0; gi < assignments.length; gi++) {
+                var assignedUnlinked = [];
+                var viewKeys = Object.keys(assignments[gi]);
+                for (var vk = 0; vk < viewKeys.length; vk++) {
+                    assignedUnlinked.push(assignments[gi][viewKeys[vk]]);
+                }
+                if (assignedUnlinked.length >= 2) {
+                    var group = state.session.createGroupFromUnlinked(
+                        state.currentFrame, assignedUnlinked
+                    );
+                    // Update instance trackIdx to match group for consistent coloring
+                    for (var [camName, inst] of group.instances) {
+                        inst.trackIdx = group.trackIdx;
+                    }
+                    groupsCreated++;
+                }
+            }
+
+            if (groupsCreated > 0) {
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                if (viewport3d) {
+                    update3DViewport(state.currentFrame);
+                }
+                setStatus('Auto-assigned ' + groupsCreated + ' identity group(s) across ' + viewNames.length + ' views', 'success');
+            } else {
+                setStatus('No matching identities found across selected views', 'warning');
             }
         }
 
@@ -5015,7 +5231,7 @@
                     timeline.setTotalFrames(state.totalFrames);
                 }
 
-                precomputeTriangulation();
+                // Triangulation is NOT run automatically — user triggers it
                 updateInfoPanel();
                 updateFpsDisplay();
 

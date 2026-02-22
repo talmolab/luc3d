@@ -98,3 +98,14 @@ Interaction Changes
 - Make the right panel disappear when I click on `Hide Panel`
 - Add a button that can collapse the timeline
 - Now, when you load a project or multiple videos, I want you to display them all in a grid. Do **not** hard code any grid. I want you to use the current framework, but initialize the videos in a way that is convenint for the user. You can think of the best way to display them. For instance, if there are 4 videos they should be in a 2x2 grid. If there are 6 videos, they should be in a 2x3 grid. if there are 7 videos, there should be 4 in the top row and 3 on the bottom row. For 8 rows, they should be aligned in a 2x4 grid.
+
+
+## 
+
+# Prompt 8
+
+* When load a project and the videos are shown on the video viewer, there is already a triangulation shown on the 3D viewer. I am confused about why triangulation is calculated pre-emptively. In your plans markdown file, I want you to explain this bug in detail. Do **not** run triangulation before identity assignment or before the user runs triangulation themselves.
+
+* Convert the `Assign` button to a drop down menu. Include the options 'Automatic' and 'Manual'. The functionality of the 'manual' option should be what is currently the assign button. 
+* For the `Automatic` option in `Assign`, first display a toast (pop up message ) that says "Select the views for automatic Identity Assignment". Make this message persist with the buttons 'Cancel' or 'Continue'. Temporarily remove the yellow highlight around the currently selected border. Now, allow the user to select or deselect each window for identity assignment. Selected windows will be highlighted in red. When the user presses the `continue` button, run Epipolar matching and the Hungarian algorithm to run automatic identity assignment for the selected views. If no views are selected, then let the user know they they did not select any views and automatic assignment was not run.
+* Once automatic assignment is run, color the labels for each animal of the same identity with the same color
