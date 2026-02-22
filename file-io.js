@@ -27,20 +27,40 @@
 function pickFiles(options) {
     options = options || {};
     return new Promise(function (resolve) {
+        var resolved = false;
         const input = document.createElement('input');
         input.type = 'file';
         if (options.accept) input.accept = options.accept;
         if (options.multiple) input.multiple = true;
 
-        input.addEventListener('change', function () {
-            const files = input.files ? Array.from(input.files) : [];
+        function done(files) {
+            if (resolved) return;
+            resolved = true;
             resolve(files);
+        }
+
+        input.addEventListener('change', function () {
+            done(input.files ? Array.from(input.files) : []);
         });
 
-        // Handle cancel (no change event fires)
+        // Handle cancel — 'cancel' event + focus fallback for browsers that don't fire it
         input.addEventListener('cancel', function () {
-            resolve([]);
+            done([]);
         });
+
+        // Fallback: if window regains focus and no change event fired, assume cancel
+        var focusTimer = null;
+        function onFocus() {
+            clearTimeout(focusTimer);
+            focusTimer = setTimeout(function () {
+                window.removeEventListener('focus', onFocus);
+                done([]);
+            }, 500);
+        }
+        // Small delay before attaching focus listener so it doesn't fire immediately
+        setTimeout(function () {
+            if (!resolved) window.addEventListener('focus', onFocus);
+        }, 100);
 
         input.click();
     });
@@ -696,8 +716,17 @@ let _h5wasmReady = null;
  * @returns {Promise<Object>} The h5wasm module
  */
 async function initH5wasm() {
+    if (typeof h5wasm === 'undefined') {
+        throw new Error('h5wasm script not loaded — check CDN script tag');
+    }
     if (!_h5wasmReady) {
-        _h5wasmReady = h5wasm.ready;
+        // Add timeout so we don't hang forever
+        _h5wasmReady = Promise.race([
+            h5wasm.ready,
+            new Promise(function(_, reject) {
+                setTimeout(function() { reject(new Error('h5wasm init timed out (15s)')); }, 15000);
+            })
+        ]);
     }
     await _h5wasmReady;
     return h5wasm;
@@ -1009,6 +1038,230 @@ async function buildReprojH5(session) {
         return h5FileToBlob(fname);
     } catch (err) {
         f.close();
+        throw err;
+    }
+}
+
+// ============================================
+// SLP HDF5 import (in-browser)
+// ============================================
+// Adapted from slp-viewer/slp-worker.js — proven to work with real SLEAP .slp files.
+
+/**
+ * Normalize a compound dataset value from h5wasm to columnar format.
+ * h5wasm can return compound datasets as:
+ *   - Array of arrays (tuples): [[v1,v2,...], [v1,v2,...], ...]
+ *   - Object with typed arrays (columnar): { field1: TypedArray, field2: TypedArray, ... }
+ *
+ * @param {*} raw - dataset.value
+ * @param {string[]} fieldNames - expected field names
+ * @returns {Object|null} Columnar object { field: array, ... } or null
+ */
+function _normalizeCompound(raw, fieldNames) {
+    if (!raw || raw.length === 0) return null;
+
+    // Already columnar (object with named arrays)
+    if (!Array.isArray(raw) && typeof raw === 'object' && raw[fieldNames[0]] !== undefined) {
+        return raw;
+    }
+
+    // Array of tuples → convert to columnar
+    if (Array.isArray(raw) && raw.length > 0 && Array.isArray(raw[0])) {
+        var data = {};
+        for (var i = 0; i < fieldNames.length; i++) {
+            data[fieldNames[i]] = raw.map(function(row) { return row[i]; });
+        }
+        return data;
+    }
+
+    console.warn('[_normalizeCompound] Unexpected format:', typeof raw, Array.isArray(raw),
+        raw.length > 0 ? typeof raw[0] : 'empty');
+    return null;
+}
+
+/**
+ * Read an HDF5 object (dataset or group) into columnar format.
+ * Handles:
+ *   - Compound dataset: calls _normalizeCompound on .value
+ *   - Group with sub-datasets: reads each field as a sub-dataset
+ *
+ * @param {Object} obj - h5wasm Dataset or Group
+ * @param {string[]} fieldNames - Expected field names
+ * @returns {Object|null} Columnar object { field: array, ... } or null
+ */
+function _readColumnar(obj, fieldNames) {
+    console.log('[_readColumnar] Reading fields:', fieldNames.join(','),
+        'obj type:', obj.constructor ? obj.constructor.name : typeof obj,
+        'has .value:', obj.value !== undefined,
+        'has .keys:', typeof obj.keys === 'function');
+
+    // Try as compound dataset first
+    if (obj.value !== undefined) {
+        var raw = obj.value;
+        console.log('[_readColumnar] .value type:', typeof raw, 'isArray:', Array.isArray(raw),
+            'length:', raw && raw.length !== undefined ? raw.length : 'N/A');
+        if (Array.isArray(raw) && raw.length > 0) {
+            console.log('[_readColumnar] First element type:', typeof raw[0], 'isArray:', Array.isArray(raw[0]));
+        }
+        var result = _normalizeCompound(raw, fieldNames);
+        if (result) {
+            console.log('[_readColumnar] Normalized as compound dataset, length:', result[fieldNames[0]] ? result[fieldNames[0]].length : 0);
+            return result;
+        }
+    }
+
+    // Try as group with sub-datasets
+    if (typeof obj.keys === 'function') {
+        var keys = obj.keys();
+        console.log('[_readColumnar] Reading as group, keys:', keys);
+        var data = {};
+        var length = 0;
+        for (var i = 0; i < fieldNames.length; i++) {
+            var name = fieldNames[i];
+            if (keys.indexOf(name) >= 0) {
+                var subDs = obj.get(name);
+                data[name] = subDs.value ? Array.from(subDs.value) : [];
+                if (data[name].length > length) length = data[name].length;
+            }
+        }
+        // Fill missing fields with zeros
+        for (var j = 0; j < fieldNames.length; j++) {
+            if (!data[fieldNames[j]]) {
+                data[fieldNames[j]] = new Array(length).fill(0);
+            }
+        }
+        if (length > 0) {
+            console.log('[_readColumnar] Read as group, length:', length);
+            return data;
+        }
+    }
+
+    console.error('[_readColumnar] Failed to read data');
+    return null;
+}
+
+/**
+ * Parse a SLEAP .slp HDF5 file using a Web Worker.
+ * The worker uses h5wasm with WORKERFS (zero-copy file mounting)
+ * so the main thread stays responsive during parsing.
+ *
+ * @param {File} file - The .slp file
+ * @param {Function} [onProgress] - Optional progress callback
+ * @returns {Promise<Object>} Raw parsed data from worker
+ */
+function parseSlpH5(file, onProgress) {
+    return new Promise(function (resolve, reject) {
+        var worker = new Worker('slp-import-worker.js?v=' + Date.now());
+
+        worker.onmessage = function (e) {
+            var msg = e.data;
+            if (msg.type === 'progress') {
+                console.log('[slp-import]', msg.message);
+                if (onProgress) onProgress(msg.message);
+            } else if (msg.type === 'result') {
+                worker.terminate();
+                resolve(msg.data);
+            } else if (msg.type === 'error') {
+                worker.terminate();
+                reject(new Error(msg.message));
+            }
+        };
+
+        worker.onerror = function (err) {
+            worker.terminate();
+            reject(new Error('SLP worker error: ' + (err.message || 'unknown')));
+        };
+
+        worker.postMessage({ type: 'parse', file: file });
+    });
+}
+
+// ============================================
+// Points3d HDF5 import (in-browser)
+// ============================================
+
+/**
+ * Parse a points3d.h5 HDF5 file and return 3D point data.
+ *
+ * @param {ArrayBuffer} arrayBuffer - File contents
+ * @returns {Promise<Object>} { nodeNames, trackNames, frameIndices, points3d }
+ *   points3d: Map<frameIdx, Map<trackIdx, number[][]>>
+ */
+async function parsePoints3dH5(arrayBuffer) {
+    var mod = await initH5wasm();
+    var fname = '_import_pts3d_' + Date.now() + '.h5';
+
+    mod.FS.writeFile(fname, new Uint8Array(arrayBuffer));
+    var f = new mod.File(fname, 'r');
+
+    try {
+        var nodeNamesDs = f.get('node_names');
+        var trackNamesDs = f.get('track_names');
+        var frameIndicesDs = f.get('frame_indices');
+        var pts3dDs = f.get('points_3d');
+
+        if (!pts3dDs) throw new Error('Missing /points_3d dataset');
+        if (!frameIndicesDs) throw new Error('Missing /frame_indices dataset');
+
+        var nodeNames = nodeNamesDs ? Array.from(nodeNamesDs.value) : [];
+        var trackNames = trackNamesDs ? Array.from(trackNamesDs.value) : [];
+        var frameIndices = Array.from(frameIndicesDs.value);
+
+        var pts3dFlat = pts3dDs.value;
+        var shape = pts3dDs.shape; // [n_frames, n_tracks, n_nodes, 3]
+
+        var nFrames = shape[0];
+        var nTracks = shape[1];
+        var nNodes = shape[2];
+
+        var points3d = new Map();
+
+        for (var fi = 0; fi < nFrames; fi++) {
+            var frameIdx = Number(frameIndices[fi]);
+            var trackMap = new Map();
+            var hasData = false;
+
+            for (var ti = 0; ti < nTracks; ti++) {
+                var nodePts = [];
+                var trackHasData = false;
+
+                for (var ni = 0; ni < nNodes; ni++) {
+                    var base = ((fi * nTracks + ti) * nNodes + ni) * 3;
+                    var x = pts3dFlat[base];
+                    var y = pts3dFlat[base + 1];
+                    var z = pts3dFlat[base + 2];
+
+                    if (isNaN(x) || isNaN(y) || isNaN(z)) {
+                        nodePts.push([NaN, NaN, NaN]);
+                    } else {
+                        nodePts.push([x, y, z]);
+                        trackHasData = true;
+                    }
+                }
+
+                if (trackHasData) {
+                    trackMap.set(ti, nodePts);
+                    hasData = true;
+                }
+            }
+
+            if (hasData) {
+                points3d.set(frameIdx, trackMap);
+            }
+        }
+
+        f.close();
+        try { mod.FS.unlink(fname); } catch(e) {}
+
+        return {
+            nodeNames: nodeNames,
+            trackNames: trackNames,
+            frameIndices: frameIndices,
+            points3d: points3d,
+        };
+    } catch(err) {
+        f.close();
+        try { mod.FS.unlink(fname); } catch(e) {}
         throw err;
     }
 }
