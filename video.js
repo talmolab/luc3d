@@ -54,6 +54,7 @@ class OnDemandVideoDecoder {
         this._offCtx = null;
         this._mp4Initialized = false;
         this._mp4InitPromise = null;
+        this._html5SeekLock = null; // Prevent concurrent HTML5 seeks
 
         // Source reference for mp4box lazy init
         this._source = null;
@@ -171,12 +172,15 @@ class OnDemandVideoDecoder {
 
         this._videoReady = true;
 
-        // Background mp4box initialization is disabled - HTML5 video handles
-        // playback and seeking. Re-enable for frame-accurate WebCodecs decoding
-        // by calling decoder.initWebCodecs() manually.
-        // this._mp4InitPromise = this._initMp4box().catch(...);
+        // Initialize mp4box for frame-accurate WebCodecs decoding.
+        // Without this, HTML5 fallback uses frameIndex/30 which drifts on non-30fps video.
+        try {
+            await this._initMp4box();
+        } catch (e) {
+            videoLog("MP4Box init failed (HTML5 fallback will be used): " + e.message, "warn");
+        }
 
-        videoLog("Video loaded: " + width + "x" + height + " " + totalFrames + " frames @ " + fps.toFixed(1) + "fps (" + (this.fileSize / 1048576).toFixed(1) + " MB)");
+        videoLog("Video loaded: " + width + "x" + height + " " + this.samples.length + " frames @ " + this._fps.toFixed(2) + "fps (" + (this.fileSize / 1048576).toFixed(1) + " MB)");
     }
 
     /**
@@ -233,25 +237,54 @@ class OnDemandVideoDecoder {
             return;
         }
 
-        // Get real sample table
+        // Get real sample table for accurate frame count and FPS
         var mp4Samples = this.mp4boxFile.getTrackSamplesInfo(videoTrackInfo.id);
         if (mp4Samples && mp4Samples.length > 0) {
-            this.samples = mp4Samples;
+            // Update frame count and FPS from real sample data
+            var realFrameCount = mp4Samples.length;
+            if (this._videoEl && this._videoEl.duration > 0) {
+                this._fps = realFrameCount / this._videoEl.duration;
+            }
+
+            // Rebuild pseudo-samples with correct count (for samples.length)
+            var width = this.videoTrack.video.width;
+            var height = this.videoTrack.video.height;
+            this.samples = new Array(realFrameCount);
+            for (var si = 0; si < realFrameCount; si++) {
+                this.samples[si] = {
+                    index: si,
+                    cts: Math.round(si * 1000000 / this._fps),
+                    duration: Math.round(1000000 / this._fps),
+                    is_sync: false,
+                    offset: 0,
+                    size: 0,
+                };
+            }
+            var kfInterval = Math.max(1, Math.round(this._fps));
             this.keyframeIndices = [];
-            for (var i = 0; i < mp4Samples.length; i++) {
-                if (mp4Samples[i].is_sync) {
-                    this.keyframeIndices.push(i);
-                }
+            for (var ki = 0; ki < realFrameCount; ki += kfInterval) {
+                this.samples[ki].is_sync = true;
+                this.keyframeIndices.push(ki);
+            }
+            if (realFrameCount > 0 && this.keyframeIndices[0] !== 0) {
+                this.keyframeIndices.unshift(0);
             }
 
             // Update videoTrack with real info
             this.videoTrack = videoTrackInfo;
-            this._mp4Initialized = true;
-            videoLog("MP4Box ready: " + codec + " " + mp4Samples.length + " samples, " + this.keyframeIndices.length + " keyframes");
+
+            // Do NOT enable WebCodecs decoding (_mp4Initialized stays false).
+            // WebCodecs mp4box samples are in decode order which doesn't match
+            // display order for videos with B-frames. The HTML5 <video> element
+            // handles B-frame reordering natively and gives correct frames.
+            // We only use mp4box for accurate FPS and frame count.
+
+            videoLog("MP4Box ready: " + realFrameCount + " frames, fps=" + this._fps.toFixed(2) + " (using HTML5 decode with accurate FPS)");
         } else {
             videoLog("MP4Box returned no samples, keeping HTML5 mode", "warn");
-            this.mp4boxFile = null;
         }
+        // Release mp4box resources - we only needed it for metadata
+        this.mp4boxFile = null;
     }
 
     async readChunk(offset, size) {
@@ -356,33 +389,46 @@ class OnDemandVideoDecoder {
     async _getFrameHTML5(frameIndex) {
         if (!this._videoEl || !this._videoReady) return null;
 
+        // Serialize HTML5 seeks — concurrent seeks on the same <video> element
+        // cause the browser to serve stale frames, leading to scrambled output
+        while (this._html5SeekLock) {
+            await this._html5SeekLock;
+        }
+
         var self = this;
-        var time = frameIndex / this._fps;
+        var resolveLock;
+        this._html5SeekLock = new Promise(function (r) { resolveLock = r; });
 
-        // Only seek if we're not already at the target time
-        var currentTime = this._videoEl.currentTime;
-        if (Math.abs(currentTime - time) > 0.01) {
-            // Set up seeked listener BEFORE changing currentTime to avoid race condition
-            var seekPromise = new Promise(function (resolve) {
-                self._videoEl.addEventListener("seeked", function () { resolve(); }, { once: true });
-                setTimeout(resolve, 1000);
-            });
-            this._videoEl.currentTime = time;
-            await seekPromise;
+        try {
+            var time = frameIndex / this._fps;
+
+            // Only seek if we're not already at the target time
+            var currentTime = this._videoEl.currentTime;
+            if (Math.abs(currentTime - time) > 0.01) {
+                var seekPromise = new Promise(function (resolve) {
+                    self._videoEl.addEventListener("seeked", function () { resolve(); }, { once: true });
+                    setTimeout(resolve, 5000);
+                });
+                this._videoEl.currentTime = time;
+                await seekPromise;
+            }
+
+            // Ensure the video has renderable data (readyState >= 2 = HAVE_CURRENT_DATA)
+            if (this._videoEl.readyState < 2) {
+                await new Promise(function (resolve) {
+                    self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
+                    setTimeout(resolve, 5000);
+                });
+            }
+
+            this._offCtx.drawImage(this._videoEl, 0, 0);
+            var bitmap = await createImageBitmap(this._offCanvas);
+            this.addToCache(frameIndex, bitmap);
+            return bitmap;
+        } finally {
+            this._html5SeekLock = null;
+            resolveLock();
         }
-
-        // Ensure the video has renderable data (readyState >= 2 = HAVE_CURRENT_DATA)
-        if (this._videoEl.readyState < 2) {
-            await new Promise(function (resolve) {
-                self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
-                setTimeout(resolve, 1000);
-            });
-        }
-
-        this._offCtx.drawImage(this._videoEl, 0, 0);
-        var bitmap = await createImageBitmap(this._offCanvas);
-        this.addToCache(frameIndex, bitmap);
-        return bitmap;
     }
 
     /**
@@ -686,6 +732,169 @@ class OnDemandVideoDecoder {
         this.config = null;
         this.videoTrack = null;
         videoLog("Decoder closed");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EmbeddedVideoDecoder - On-demand frame extraction from SLP via frame-worker
+// ---------------------------------------------------------------------------
+class EmbeddedVideoDecoder {
+    /**
+     * Decoder for embedded video frames in SLP files.
+     * Uses a frame-worker.js Web Worker with SLPPackageReader for on-demand
+     * frame extraction (one frame at a time, no bulk loading).
+     *
+     * @param {Object} options
+     * @param {Worker} options.worker - frame-worker.js Worker instance
+     * @param {Object} options.videoInfo - Video metadata from SLPPackageReader.getVideos()
+     * @param {number} [options.cacheSize=60] - Number of decoded ImageBitmaps to cache
+     */
+    constructor(options) {
+        this._worker = options.worker;
+        this._videoInfo = options.videoInfo;
+        this.cacheSize = options.cacheSize || 60;
+        this.cache = new Map();
+        this._pending = new Map();
+        this._closed = false;
+
+        var info = this._videoInfo;
+        var width = info.width || 0;
+        var height = info.height || 0;
+
+        // Build display frame → embedded index lookup
+        this._displayToEmbedded = new Map();
+        var maxDisplayFrame = 0;
+        var frameNumbers = info.frameNumbers || [];
+        for (var i = 0; i < frameNumbers.length; i++) {
+            var df = frameNumbers[i];
+            this._displayToEmbedded.set(df, i);
+            if (df > maxDisplayFrame) maxDisplayFrame = df;
+        }
+        if (frameNumbers.length === 0) {
+            for (var j = 0; j < info.frameCount; j++) {
+                this._displayToEmbedded.set(j, j);
+            }
+            maxDisplayFrame = Math.max(info.frameCount - 1, 0);
+        }
+
+        var totalFrames = maxDisplayFrame + 1;
+        this.samples = new Array(totalFrames);
+        for (var k = 0; k < totalFrames; k++) {
+            this.samples[k] = { index: k };
+        }
+
+        this.videoTrack = {
+            video: { width: width, height: height },
+            codec: 'embedded',
+            timescale: 30,
+            duration: totalFrames,
+        };
+
+        this._fps = 30;
+
+        // Listen for frame responses from the worker
+        var self = this;
+        this._messageHandler = function (e) {
+            if (e.data.type === 'frame' && e.data.videoKey === info.key) {
+                self._handleFrameResult(e.data);
+            }
+        };
+        this._worker.addEventListener('message', this._messageHandler);
+
+        videoLog("EmbeddedVideoDecoder: " + info.frameCount + " embedded frames, " +
+            width + "x" + height + ", videoKey=" + info.key);
+    }
+
+    /** @private */
+    async _handleFrameResult(data) {
+        var embeddedIdx = data.embeddedIdx;
+        var displayFrame = data.displayFrame;
+        var pending = this._pending.get(embeddedIdx);
+        if (!pending) return;
+
+        try {
+            var format = data.format || 'png';
+            var mimeType = format === 'jpg' || format === 'jpeg' ? 'image/jpeg' : 'image/png';
+            var blob = new Blob([data.pngBytes], { type: mimeType });
+            var bitmap = await createImageBitmap(blob);
+            this._addToCache(displayFrame, bitmap);
+            pending.resolve(bitmap);
+        } catch (err) {
+            pending.resolve(null);
+        }
+        this._pending.delete(embeddedIdx);
+    }
+
+    hasFrame(displayFrame) {
+        return this._displayToEmbedded.has(displayFrame);
+    }
+
+    async getFrame(displayFrame) {
+        if (this._closed) return null;
+        if (displayFrame < 0 || displayFrame >= this.samples.length) return null;
+
+        // Check cache
+        if (this.cache.has(displayFrame)) {
+            var cached = this.cache.get(displayFrame);
+            this.cache.delete(displayFrame);
+            this.cache.set(displayFrame, cached);
+            return cached;
+        }
+
+        var embeddedIdx = this._displayToEmbedded.get(displayFrame);
+        if (embeddedIdx === undefined) return null;
+
+        // Check if already pending
+        if (this._pending.has(embeddedIdx)) {
+            return this._pending.get(embeddedIdx).promise;
+        }
+
+        // Request frame from worker
+        var resolve;
+        var promise = new Promise(function (res) { resolve = res; });
+        this._pending.set(embeddedIdx, { promise: promise, resolve: resolve });
+
+        this._worker.postMessage({
+            type: 'getFrame',
+            videoKey: this._videoInfo.key,
+            embeddedIdx: embeddedIdx
+        });
+
+        return promise;
+    }
+
+    /** @private */
+    _addToCache(displayFrame, bitmap) {
+        if (this.cache.size >= this.cacheSize) {
+            var oldest = this.cache.keys().next().value;
+            var oldBitmap = this.cache.get(oldest);
+            if (oldBitmap && typeof oldBitmap.close === "function") oldBitmap.close();
+            this.cache.delete(oldest);
+        }
+        this.cache.set(displayFrame, bitmap);
+    }
+
+    seekNative(frameIndex) {}
+    playNative() {}
+    pauseNative() {}
+    drawCurrentFrame(ctx, width, height) { return false; }
+    getCurrentFrameIndex() { return 0; }
+
+    close() {
+        this._closed = true;
+        if (this._messageHandler && this._worker) {
+            this._worker.removeEventListener('message', this._messageHandler);
+            this._messageHandler = null;
+        }
+        for (var entry of this.cache) {
+            if (entry[1] && typeof entry[1].close === "function") entry[1].close();
+        }
+        this.cache.clear();
+        for (var p of this._pending.values()) p.resolve(null);
+        this._pending.clear();
+        this.samples = [];
+        this.videoTrack = null;
+        videoLog("EmbeddedVideoDecoder closed");
     }
 }
 

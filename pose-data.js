@@ -226,6 +226,45 @@ class Camera {
     projectPoints(points3d) {
         return points3d.map(p => this.project(p));
     }
+
+    /**
+     * Undistort a 2D pixel point using OpenCV's distortion model.
+     * Converts distorted pixel coords to ideal (undistorted) pixel coords.
+     * Uses iterative refinement (OpenCV's undistortPoints approach).
+     *
+     * @param {number[]} point2d - [u, v] distorted pixel coordinates
+     * @returns {number[]} [u, v] undistorted pixel coordinates
+     */
+    undistortPoint(point2d) {
+        const K = this.matrix;
+        const d = this.dist;
+        if (!d || (d[0] === 0 && d[1] === 0 && d[2] === 0 && d[3] === 0 && (d.length < 5 || d[4] === 0))) {
+            return point2d; // No distortion
+        }
+
+        const fx = K[0][0], fy = K[1][1], cx = K[0][2], cy = K[1][2];
+        const k1 = d[0], k2 = d[1], p1 = d[2], p2 = d[3], k3 = d.length > 4 ? d[4] : 0;
+
+        // Normalize to camera coordinates
+        let x = (point2d[0] - cx) / fx;
+        let y = (point2d[1] - cy) / fy;
+
+        // Iterative undistortion (Newton's method, ~10 iterations is plenty)
+        let x0 = x, y0 = y;
+        for (let iter = 0; iter < 10; iter++) {
+            const r2 = x * x + y * y;
+            const r4 = r2 * r2;
+            const r6 = r4 * r2;
+            const radial = 1 + k1 * r2 + k2 * r4 + k3 * r6;
+            const dx = 2 * p1 * x * y + p2 * (r2 + 2 * x * x);
+            const dy = p1 * (r2 + 2 * y * y) + 2 * p2 * x * y;
+            x = (x0 - dx) / radial;
+            y = (y0 - dy) / radial;
+        }
+
+        // Back to pixel coordinates
+        return [x * fx + cx, y * fy + cy];
+    }
 }
 
 
