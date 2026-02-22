@@ -166,12 +166,13 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     ctx.save();
     ctx.globalAlpha = alpha;
 
+    // Check for occluded array on the instance
+    const occluded = instance.occluded || [];
+
     // --- 1. Draw edges ---
     if (skeleton.edges) {
-        ctx.strokeStyle = color;
         ctx.lineWidth = lineWidth;
         ctx.lineCap = 'round';
-        ctx.beginPath();
         for (let i = 0; i < skeleton.edges.length; i++) {
             const edge = skeleton.edges[i];
             const srcIdx = edge[0];
@@ -179,22 +180,58 @@ function drawSkeleton(ctx, instance, skeleton, options) {
             const src = canvasPoints[srcIdx];
             const dst = canvasPoints[dstIdx];
             if (src && dst) {
+                const eitherOccluded = occluded[srcIdx] || occluded[dstIdx];
+                if (eitherOccluded) {
+                    ctx.strokeStyle = color;
+                    ctx.globalAlpha = alpha * 0.35;
+                    ctx.setLineDash([4 * scale, 4 * scale]);
+                } else {
+                    ctx.strokeStyle = color;
+                    ctx.globalAlpha = alpha;
+                    ctx.setLineDash([]);
+                }
+                ctx.beginPath();
                 ctx.moveTo(src.x, src.y);
                 ctx.lineTo(dst.x, dst.y);
+                ctx.stroke();
             }
         }
-        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = alpha;
     }
 
     // --- 2. Draw nodes ---
-    ctx.fillStyle = color;
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
-        ctx.beginPath();
-        ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
-        ctx.fill();
+        if (occluded[i]) {
+            // Occluded: draw node at reduced opacity with same color
+            ctx.globalAlpha = alpha * 0.35;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw a small "X" over the node to indicate occlusion
+            ctx.globalAlpha = alpha * 0.7;
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = Math.max(1, lineWidth * 0.6);
+            var xArm = nodeSize * 0.7;
+            ctx.beginPath();
+            ctx.moveTo(cp.x - xArm, cp.y - xArm);
+            ctx.lineTo(cp.x + xArm, cp.y + xArm);
+            ctx.moveTo(cp.x + xArm, cp.y - xArm);
+            ctx.lineTo(cp.x - xArm, cp.y + xArm);
+            ctx.stroke();
+        } else {
+            ctx.fillStyle = color;
+            ctx.globalAlpha = alpha;
+            ctx.beginPath();
+            ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
+    ctx.globalAlpha = alpha;
 
     // --- 3. Optional labels (SLEAP-style with dark outline) ---
     if (showLabels) {
