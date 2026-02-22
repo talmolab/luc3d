@@ -88,6 +88,9 @@ class Viewport3D {
         /** @type {boolean} Whether the viewport has been disposed */
         this._disposed = false;
 
+        /** @type {number} Scene scale factor based on camera baseline */
+        this._sceneScale = 1;
+
         // Resize observer for container dimension changes
         /** @type {ResizeObserver|null} */
         this._resizeObserver = null;
@@ -118,7 +121,7 @@ class Viewport3D {
         this.container.appendChild(this.renderer.domElement);
 
         // --- Camera ---
-        this.threeCamera = new THREE.PerspectiveCamera(50, width / height, 1, 5000);
+        this.threeCamera = new THREE.PerspectiveCamera(50, width / height, 0.1, 100000);
         // Position to see the full scene: cameras are ~300-400mm from origin
         this.threeCamera.position.set(500, -500, 400);
         this.threeCamera.up.set(0, 0, 1); // Z-up world convention
@@ -130,7 +133,7 @@ class Viewport3D {
         this.controls.dampingFactor = 0.1;
         this.controls.screenSpacePanning = true;
         this.controls.minDistance = 10;
-        this.controls.maxDistance = 3000;
+        this.controls.maxDistance = 100000;
         this.controls.update();
 
         // --- Lights ---
@@ -149,9 +152,9 @@ class Viewport3D {
         // --- Grid floor (XY plane at Z=0, matching Z-up convention) ---
         this._addGridFloor();
 
-        // --- Axis helper ---
-        const axisHelper = new THREE.AxesHelper(50);
-        this.scene.add(axisHelper);
+        // --- Axis helper (will be rescaled in fitToScene) ---
+        this._axisHelper = new THREE.AxesHelper(50);
+        this.scene.add(this._axisHelper);
 
         // --- Scene groups ---
         this._cameraGroup = new THREE.Group();
@@ -214,8 +217,31 @@ class Viewport3D {
         // Clear any existing camera visualizations
         this._clearGroup(this._cameraGroup);
 
-        const pyramidScale = 20; // mm - half-size of the near plane rectangle
-        const pyramidDepth = 40; // mm - distance from camera center to near plane
+        // Compute scene scale from camera positions to size pyramids appropriately
+        var sceneScale = 1;
+        if (this.cameras.length >= 2) {
+            var positions = [];
+            for (var ci = 0; ci < this.cameras.length; ci++) {
+                var cam = this.cameras[ci];
+                positions.push(this._computeCameraPosition(cam.rotationMatrix, cam.tvec));
+            }
+            var maxCamDist = 0;
+            for (var ai = 0; ai < positions.length; ai++) {
+                for (var bi = ai + 1; bi < positions.length; bi++) {
+                    var dx = positions[ai][0] - positions[bi][0];
+                    var dy = positions[ai][1] - positions[bi][1];
+                    var dz = positions[ai][2] - positions[bi][2];
+                    var d = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    if (d > maxCamDist) maxCamDist = d;
+                }
+            }
+            sceneScale = Math.max(1, maxCamDist / 500); // normalize so 500mm baseline = 1x
+        }
+
+        this._sceneScale = sceneScale;
+
+        const pyramidScale = 20 * sceneScale;
+        const pyramidDepth = 40 * sceneScale;
 
         for (let i = 0; i < this.cameras.length; i++) {
             const cam = this.cameras[i];
@@ -301,12 +327,13 @@ class Viewport3D {
                 backgroundColor: 'rgba(0, 0, 0, 0.5)',
             });
             // Position label slightly above the camera center
-            label.position.set(camPos[0], camPos[1], camPos[2] + 15);
+            label.position.set(camPos[0], camPos[1], camPos[2] + 15 * sceneScale);
+            label.scale.multiplyScalar(sceneScale);
             label.name = 'label_' + cam.name;
             this._cameraGroup.add(label);
 
             // --- Small sphere at camera center for visibility ---
-            const sphereGeo = new THREE.SphereGeometry(3, 8, 8);
+            const sphereGeo = new THREE.SphereGeometry(3 * sceneScale, 8, 8);
             const sphereMat = new THREE.MeshPhongMaterial({
                 color: 0xffdd44,
                 transparent: true,
@@ -490,11 +517,16 @@ class Viewport3D {
         this._clearGroup(this._skeletonGroup);
 
         if (!instanceGroups || instanceGroups.length === 0) {
+            console.log('[3D] updateSkeleton: no instance groups');
             return;
         }
 
-        const nodeRadius = 2;        // mm
-        const edgeRadius = 0.8;      // mm
+        var groupsWithPts = instanceGroups.filter(function(g) { return g.points3d && g.points3d.length > 0; });
+        console.log('[3D] updateSkeleton:', instanceGroups.length, 'groups,', groupsWithPts.length, 'with points3d, sceneScale:', this._sceneScale);
+
+        const ss = this._sceneScale || 1;
+        const nodeRadius = 2 * ss;        // mm, scaled
+        const edgeRadius = 0.8 * ss;      // mm, scaled
         const highlightScale = 1.5;  // scale factor for selected instance
         const sphereSegments = 12;
         const cylinderSegments = 6;
@@ -570,7 +602,10 @@ class Viewport3D {
             }
 
             this._skeletonGroup.add(instanceGroup3D);
+            console.log('[3D] Added instance group with', instanceGroup3D.children.length, 'meshes');
         }
+
+        console.log('[3D] updateSkeleton complete:', this._skeletonGroup.children.length, 'instance groups in scene');
     }
 
     /**
@@ -736,6 +771,24 @@ class Viewport3D {
         // Position camera to see the bounding sphere
         const fov = this.threeCamera.fov * Math.PI / 180;
         const cameraDistance = (maxDist / Math.sin(fov / 2)) * 1.2; // 20% margin
+
+        console.log('[3D] fitToScene:', points.length, 'pts, center=[' +
+            cx.toFixed(1) + ',' + cy.toFixed(1) + ',' + cz.toFixed(1) +
+            '], radius=' + maxDist.toFixed(1) + ', camDist=' + cameraDistance.toFixed(1));
+
+        // Dynamically update clipping planes based on scene scale
+        this.threeCamera.near = Math.max(0.1, cameraDistance * 0.001);
+        this.threeCamera.far = Math.max(5000, cameraDistance * 10);
+        this.threeCamera.updateProjectionMatrix();
+
+        // Update orbit controls limits to match scene scale
+        this.controls.maxDistance = Math.max(3000, cameraDistance * 5);
+
+        // Rescale axis helper and grid to match scene scale
+        if (this._axisHelper) {
+            var axisScale = Math.max(1, maxDist * 0.1);
+            this._axisHelper.scale.setScalar(axisScale / 50); // 50 was original size
+        }
 
         const direction = new THREE.Vector3(1, -1, 0.8).normalize();
         this.threeCamera.position.set(

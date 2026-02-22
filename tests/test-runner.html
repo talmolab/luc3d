@@ -76,9 +76,14 @@
     <!-- Test framework -->
     <script src="test-framework.js"></script>
 
+    <!-- Three.js (needed for Viewport3D tests) -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+
     <!-- Source files under test -->
     <script src="../pose-data.js"></script>
     <script src="../triangulation.js"></script>
+    <script src="../viewport3d.js"></script>
     <script src="../file-io.js"></script>
     <script src="../slp-merge.js"></script>
     <script src="../interaction.js"></script>
@@ -125,6 +130,9 @@
 
     <!-- SLP merge tests -->
     <script src="test-slp-merge.js"></script>
+
+    <!-- Tempdata triangulation pipeline tests -->
+    <script src="test-tempdata-triangulation.js"></script>
 
     <!-- Run all tests -->
     <script>
