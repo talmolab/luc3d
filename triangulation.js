@@ -478,13 +478,14 @@ function triangulateAndReproject(instanceGroup, cameras) {
 
     // Step 1: Collect observations per keypoint across cameras
     // Undistort 2D points before triangulation for accuracy
+    // Occluded keypoints are excluded (position may be imprecise)
     // allObservations[k][c] = [x,y] (undistorted) or null
     const allObservations = [];
     for (let k = 0; k < numKeypoints; k++) {
         const obsForKeypoint = [];
         for (let c = 0; c < cameraNames.length; c++) {
             const inst = instanceGroup.getInstance(cameraNames[c]);
-            if (inst && inst.points && inst.points[k] != null) {
+            if (inst && inst.points && inst.points[k] != null && !(inst.occluded && inst.occluded[k])) {
                 const cam = cameraMap[cameraNames[c]];
                 if (cam && cam.undistortPoint) {
                     obsForKeypoint.push(cam.undistortPoint(inst.points[k]));
@@ -517,7 +518,7 @@ function triangulateAndReproject(instanceGroup, cameras) {
         const inst = instanceGroup.getInstance(camName);
         const observed = [];
         for (let k = 0; k < numKeypoints; k++) {
-            if (inst && inst.points && inst.points[k] != null) {
+            if (inst && inst.points && inst.points[k] != null && !(inst.occluded && inst.occluded[k])) {
                 observed.push(inst.points[k]);
             } else {
                 observed.push(null);

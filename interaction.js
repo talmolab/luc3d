@@ -1110,10 +1110,10 @@ class InteractionManager {
     }
 
     /**
-     * Toggle a node's visibility. If the point is non-null, set it to null
-     * (hide). If it is null, there is nothing to restore without a
-     * reprojection source, so we leave it null and let the callback handle
-     * restoration logic.
+     * Toggle a node's occlusion state (SLEAP-style).
+     * If the point has valid coordinates, toggles between visible and occluded.
+     * Occluded nodes keep their position but render differently and are
+     * excluded from 3D triangulation.
      *
      * @param {string} viewName
      * @param {InstanceGroup} group
@@ -1125,11 +1125,10 @@ class InteractionManager {
         if (!instance || !instance.points) return;
 
         if (instance.points[nodeIdx] != null) {
-            // Hide the point
-            instance.points[nodeIdx] = null;
+            instance.toggleOccluded(nodeIdx);
+            instance.modified = true;
         }
-        // If the point is already null, the callback is responsible for
-        // deciding how to restore it (e.g. from reprojection).
+        // If the point is null, there's nothing to toggle.
 
         if (this.callbacks.onNodeVisibilityToggled) {
             this.callbacks.onNodeVisibilityToggled(viewName, group, nodeIdx);

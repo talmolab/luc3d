@@ -284,6 +284,19 @@ class Instance {
         this.modified = false;
         /** @type {(number[]|null)[]|null} Backup of original points before editing */
         this._originalPoints = null;
+        /** @type {boolean[]} Per-node occlusion state (true = occluded but position known) */
+        this.occluded = new Array(points.length).fill(false);
+    }
+
+    /**
+     * Toggle the occluded state of a node.
+     * Only works if the point has valid coordinates (non-null).
+     * @param {number} nodeIdx
+     */
+    toggleOccluded(nodeIdx) {
+        if (nodeIdx < 0 || nodeIdx >= this.points.length) return;
+        if (this.points[nodeIdx] == null) return;
+        this.occluded[nodeIdx] = !this.occluded[nodeIdx];
     }
 
     /**
@@ -302,6 +315,7 @@ class Instance {
             }
         } else {
             this.points[nodeIdx] = null;
+            this.occluded[nodeIdx] = false;
         }
     }
 
@@ -311,6 +325,7 @@ class Instance {
      */
     backupPoints() {
         this._originalPoints = clonePoints(this.points);
+        this._originalOccluded = this.occluded.slice();
     }
 
     /**
@@ -320,6 +335,9 @@ class Instance {
     restorePoints() {
         if (this._originalPoints) {
             this.points = clonePoints(this._originalPoints);
+        }
+        if (this._originalOccluded) {
+            this.occluded = this._originalOccluded.slice();
         }
     }
 }
@@ -726,13 +744,17 @@ class Session {
             for (const instances of fg.instances.values()) {
                 for (const inst of instances) {
                     inst.points.push(null);
+                    inst.occluded.push(false);
                     if (inst._originalPoints) inst._originalPoints.push(null);
+                    if (inst._originalOccluded) inst._originalOccluded.push(false);
                 }
             }
             for (const unlinkedList of fg.unlinkedInstances.values()) {
                 for (const ul of unlinkedList) {
                     ul.instance.points.push(null);
+                    ul.instance.occluded.push(false);
                     if (ul.instance._originalPoints) ul.instance._originalPoints.push(null);
+                    if (ul.instance._originalOccluded) ul.instance._originalOccluded.push(false);
                 }
             }
         }
@@ -750,8 +772,14 @@ class Session {
                     if (inst.points.length > nodeIdx) {
                         inst.points.splice(nodeIdx, 1);
                     }
+                    if (inst.occluded.length > nodeIdx) {
+                        inst.occluded.splice(nodeIdx, 1);
+                    }
                     if (inst._originalPoints && inst._originalPoints.length > nodeIdx) {
                         inst._originalPoints.splice(nodeIdx, 1);
+                    }
+                    if (inst._originalOccluded && inst._originalOccluded.length > nodeIdx) {
+                        inst._originalOccluded.splice(nodeIdx, 1);
                     }
                 }
             }
@@ -760,8 +788,14 @@ class Session {
                     if (ul.instance.points.length > nodeIdx) {
                         ul.instance.points.splice(nodeIdx, 1);
                     }
+                    if (ul.instance.occluded.length > nodeIdx) {
+                        ul.instance.occluded.splice(nodeIdx, 1);
+                    }
                     if (ul.instance._originalPoints && ul.instance._originalPoints.length > nodeIdx) {
                         ul.instance._originalPoints.splice(nodeIdx, 1);
+                    }
+                    if (ul.instance._originalOccluded && ul.instance._originalOccluded.length > nodeIdx) {
+                        ul.instance._originalOccluded.splice(nodeIdx, 1);
                     }
                 }
             }
