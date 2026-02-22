@@ -11,8 +11,8 @@
     <!-- Three.js for 3D viewport (v0.147 is the last version with examples/js/) -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-    <!-- h5wasm for in-browser HDF5 writing -->
-    <script src="https://cdn.jsdelivr.net/npm/h5wasm@latest/dist/iife/h5wasm.js"></script>
+    <!-- h5wasm for in-browser HDF5 read/write (pinned to 0.8.8, matching slp-viewer) -->
+    <script src="https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/dist/iife/h5wasm.js"></script>
 </head>
 
 <body>
@@ -35,6 +35,8 @@
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
                     <div class="menu-dropdown-item" id="menuLoadSession">Load Session...</div>
+                    <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
+                    <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
                     <div class="menu-dropdown-item" id="menuLoadDemo">Load Demo Session</div>
                     <div class="menu-separator"></div>
@@ -61,6 +63,7 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuTriangulate">Triangulate <span
                             class="shortcut-hint">T</span></div>
+                    <div class="menu-dropdown-item" id="menuTriangulateAll">Triangulate All Frames</div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -86,20 +89,17 @@
                     Instance</button>
             </div>
             <div class="toolbar-separator"></div>
-            <div class="toolbar-group" style="position:relative;">
+            <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbAssign" title="Toggle assignment mode (A)">Assign</button>
-                <button class="toolbar-btn toolbar-dropdown-trigger" id="tbGroupMenu" title="Group actions">&#9662;</button>
-                <div class="toolbar-dropdown" id="tbGroupDropdown">
-                    <div class="toolbar-dropdown-item" id="tbToggleAssignment">Toggle Assignment Mode</div>
-                    <div class="toolbar-dropdown-item" id="tbCreateGroup">Create Group</div>
-                    <div class="toolbar-dropdown-separator"></div>
-                    <div class="toolbar-dropdown-item" id="tbUnlinkGroup">Unlink Selected Group</div>
-                </div>
+                <button class="toolbar-btn" id="tbCreateGroup" title="Create group from assignment (Enter)">Create Group</button>
+                <button class="toolbar-btn" id="tbUnlinkGroup" title="Unlink selected group">Unlink</button>
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbTriangulate"
                     title="Triangulate from labeled views (T)">Triangulate</button>
+                <button class="toolbar-btn" id="tbTriangulateAll"
+                    title="Triangulate all frames in session">Triangulate All</button>
                 <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
             <div class="toolbar-separator"></div>
@@ -463,7 +463,7 @@
     </div>
 
     <!-- Module scripts (order matters: dependencies first) -->
-    <script src="video.js"></script>
+    <script src="video.js?v=4"></script>
     <script src="pose-data.js"></script>
     <script src="triangulation.js"></script>
     <script src="demo-data.js"></script>
@@ -471,9 +471,14 @@
     <script src="interaction.js"></script>
     <script src="viewport3d.js"></script>
     <script src="timeline.js"></script>
-    <script src="file-io.js"></script>
+    <script src="file-io.js?v=4"></script>
+    <script src="slp-merge.js"></script>
 
     <script>
+        // Quick diagnostic: verify external scripts loaded
+        if (typeof parseSlpH5 !== 'function') console.error('[LOAD] file-io.js did not load! parseSlpH5 is missing.');
+        if (typeof Skeleton !== 'function') console.error('[LOAD] pose-data.js did not load!');
+
         // ============================================
         // Application State
         // ============================================
@@ -969,6 +974,153 @@
             }
         }
 
+        /**
+         * Triangulate all frames in the session.
+         * Uses the same logic as triangulateCurrentFrame but batched across all frames.
+         */
+        async function triangulateAllFrames() {
+            if (!state.session) {
+                setStatus('No session loaded', 'warning');
+                return;
+            }
+
+            var cameras = state.session.cameras;
+            if (cameras.length < 2) {
+                setStatus('Need at least 2 cameras for triangulation', 'warning');
+                return;
+            }
+
+            var frameIndices = [];
+            for (var [fIdx] of state.session.instanceGroups) {
+                frameIndices.push(fIdx);
+            }
+            if (frameIndices.length === 0) {
+                setStatus('No instance groups to triangulate', 'warning');
+                return;
+            }
+
+            showLoading('Triangulating ' + frameIndices.length + ' frames...');
+            var totalTriangulated = 0;
+            var totalGroups = 0;
+            var totalErrors = [];
+            var YIELD_EVERY = 100;
+
+            for (var fi = 0; fi < frameIndices.length; fi++) {
+                var frameIdx = frameIndices[fi];
+                var trackMap = state.session.instanceGroups.get(frameIdx);
+                if (!trackMap) continue;
+
+                var frameResults = [];
+
+                for (var [trackIdx, groups] of trackMap) {
+                    for (var gi = 0; gi < groups.length; gi++) {
+                        var group = groups[gi];
+
+                        // Resolve camera name mismatches
+                        var groupKeys = group.cameraNames;
+                        for (var ki = 0; ki < groupKeys.length; ki++) {
+                            var gk = groupKeys[ki];
+                            if (!cameras.some(function (c) { return c.name === gk; })) {
+                                var gkLower = gk.toLowerCase();
+                                for (var ci = 0; ci < cameras.length; ci++) {
+                                    var camLower = cameras[ci].name.toLowerCase();
+                                    if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
+                                        if (!group.getInstance(cameras[ci].name)) {
+                                            var inst = group.getInstance(gk);
+                                            group.instances.delete(gk);
+                                            group.instances.set(cameras[ci].name, inst);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Count views with labels
+                        var viewsWithLabels = 0;
+                        for (var cj = 0; cj < cameras.length; cj++) {
+                            var inst2 = group.getInstance(cameras[cj].name);
+                            if (inst2 && inst2.points && inst2.points.some(function (p) { return p != null; })) {
+                                viewsWithLabels++;
+                            }
+                        }
+
+                        if (viewsWithLabels < 2) continue;
+
+                        var result = triangulateAndReproject(group, cameras);
+
+                        group.reprojections = result.reprojections;
+                        group.points3d = result.points3d;
+                        group.observedPoints = {};
+                        group.usedCameras = new Set();
+                        for (var ck = 0; ck < cameras.length; ck++) {
+                            var camInst = group.getInstance(cameras[ck].name);
+                            if (camInst) {
+                                group.observedPoints[cameras[ck].name] = camInst.points;
+                                if (camInst.points.some(function (p) { return p != null; })) {
+                                    group.usedCameras.add(cameras[ck].name);
+                                }
+                            }
+                        }
+
+                        // Fill missing views with reprojected predictions
+                        for (var cl = 0; cl < cameras.length; cl++) {
+                            if (!group.getInstance(cameras[cl].name) && result.reprojections[cameras[cl].name]) {
+                                var reprojPts = result.reprojections[cameras[cl].name];
+                                var filledInstance = new Instance(
+                                    reprojPts.map(function (p) { return p ? [p[0], p[1]] : null; }),
+                                    group.trackIdx,
+                                    'predicted',
+                                    0.5
+                                );
+                                group.addInstance(cameras[cl].name, filledInstance);
+                                var fg = state.session.getFrameGroup(frameIdx);
+                                if (fg) fg.addInstance(cameras[cl].name, filledInstance);
+                            }
+                        }
+
+                        group.markClean();
+                        totalGroups++;
+
+                        frameResults.push({
+                            group: group,
+                            points3d: result.points3d,
+                            reprojections: result.reprojections,
+                            errors: result.errors,
+                            meanError: result.meanError,
+                        });
+
+                        if (result.meanError != null) {
+                            totalErrors.push(result.meanError);
+                        }
+                    }
+                }
+
+                if (frameResults.length > 0) {
+                    state.triangulationResults.set(frameIdx, frameResults);
+                    totalTriangulated++;
+                }
+
+                // Yield to UI periodically
+                if (fi > 0 && fi % YIELD_EVERY === 0) {
+                    showLoading('Triangulating... ' + fi + '/' + frameIndices.length + ' frames');
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+            }
+
+            // Update display for current frame
+            drawAllOverlays(state.currentFrame);
+            update3DViewport(state.currentFrame);
+            if (viewport3d) viewport3d.fitToScene();
+
+            hideLoading();
+            var avgError = totalErrors.length > 0
+                ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
+                : 'N/A';
+            setStatus('Triangulated ' + totalTriangulated + ' frames (' + totalGroups + ' groups, avg error: ' + avgError + 'px)', 'success');
+            console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
+        }
+
         // ============================================
         // Helper: get instance groups for a frame
         // ============================================
@@ -1313,6 +1465,11 @@
                 triangulateCurrentFrame();
             });
 
+            document.getElementById('menuTriangulateAll').addEventListener('click', function () {
+                closeMenus();
+                triangulateAllFrames();
+            });
+
             document.getElementById('menuToggle3D').addEventListener('click', function () {
                 closeMenus();
                 toggle3DViewport();
@@ -1366,6 +1523,20 @@
             document.getElementById('menuLoadSession').addEventListener('click', function () {
                 closeMenus();
                 handleLoadSession();
+            });
+
+            document.getElementById('menuLoadSlp').addEventListener('click', function () {
+                closeMenus();
+                if (state.session) {
+                    handleAddSlp();
+                } else {
+                    handleLoadSlp();
+                }
+            });
+
+            document.getElementById('menuLoadPoints3dH5').addEventListener('click', function () {
+                closeMenus();
+                handleLoadPoints3dH5();
             });
 
             document.getElementById('menuLoadSkeletonMenu').addEventListener('click', function () {
@@ -1677,39 +1848,21 @@
                 drawAllOverlays(state.currentFrame);
             });
 
-            // Toolbar dropdown
-            document.getElementById('tbGroupMenu').addEventListener('click', function (e) {
-                e.stopPropagation();
-                var dd = document.getElementById('tbGroupDropdown');
-                var isOpen = dd.style.display === 'block';
-                // Close all other dropdowns
-                document.querySelectorAll('.toolbar-dropdown').forEach(function (d) { d.style.display = 'none'; });
-                if (!isOpen) {
-                    // Update disabled states
-                    var hasGroup = interactionManager && interactionManager.selectedInstanceGroup;
-                    var inAssign = interactionManager && interactionManager.assignmentMode;
-                    var hasSelection = interactionManager && interactionManager.assignmentSelection && interactionManager.assignmentSelection.length >= 1;
-                    document.getElementById('tbCreateGroup').classList.toggle('disabled', !inAssign || !hasSelection);
-                    document.getElementById('tbUnlinkGroup').classList.toggle('disabled', !hasGroup);
-                    dd.style.display = 'block';
-                }
-            });
-            document.getElementById('tbToggleAssignment').addEventListener('click', function () {
-                document.getElementById('tbGroupDropdown').style.display = 'none';
-                if (interactionManager) interactionManager.setAssignmentMode();
-                drawAllOverlays(state.currentFrame);
-            });
+            // Create Group button
             document.getElementById('tbCreateGroup').addEventListener('click', function () {
-                document.getElementById('tbGroupDropdown').style.display = 'none';
                 if (interactionManager) interactionManager._createGroupFromAssignment();
             });
+            // Unlink Group button
             document.getElementById('tbUnlinkGroup').addEventListener('click', function () {
-                document.getElementById('tbGroupDropdown').style.display = 'none';
                 unlinkGroup();
             });
 
             document.getElementById('tbTriangulate').addEventListener('click', function () {
                 triangulateCurrentFrame();
+            });
+
+            document.getElementById('tbTriangulateAll').addEventListener('click', function () {
+                triangulateAllFrames();
             });
 
             // Context menu for instance groups
@@ -3014,8 +3167,10 @@
             const a = document.createElement('a');
             a.href = url;
             a.download = 'labels_export.json';
+            document.body.appendChild(a);
             a.click();
-            URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
             setStatus('Labels exported', 'success');
         }
@@ -3157,6 +3312,8 @@
                 return;
             }
 
+            try {
+
             const projectData = {
                 version: 2,
                 skeleton: {
@@ -3222,16 +3379,38 @@
                 projectData.frames[frameIdx] = frameData;
             }
 
-            // Download
-            const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
+            // Build blob in chunks to avoid "invalid string length" on large sessions
+            var header = Object.assign({}, projectData);
+            delete header.frames;
+            var headerJson = JSON.stringify(header);
+            // Strip closing "}" so we can append frames
+            headerJson = headerJson.slice(0, -1) + ',"frames":{';
+
+            var blobParts = [headerJson];
+            var frameKeys = Object.keys(projectData.frames);
+            for (var bfi = 0; bfi < frameKeys.length; bfi++) {
+                var fk = frameKeys[bfi];
+                var prefix = bfi > 0 ? ',' : '';
+                blobParts.push(prefix + JSON.stringify(fk) + ':' + JSON.stringify(projectData.frames[fk]));
+            }
+            blobParts.push('}}');
+
+            const blob = new Blob(blobParts, { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
             a.download = 'project.mvgui.json';
+            document.body.appendChild(a);
             a.click();
-            URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
-            setStatus('Project saved', 'success');
+            setStatus('Project saved (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
+
+            } catch (err) {
+                console.error('Save project failed:', err);
+                setStatus('Save failed: ' + err.message, 'error');
+            }
         }
 
         async function handleLoadProject() {
@@ -3256,14 +3435,10 @@
                     cameras = _restoreLegacySession(data);
                 }
 
-                // 2. Load videos (same flow as Load Videos button)
+                // 2. Load videos — force selection
                 hideLoading();
-                var videoFiles = [];
-                try {
-                    videoFiles = await pickVideoFiles();
-                } catch (e) {
-                    // User cancelled the picker
-                }
+                var manifestInfo = (data.videoManifest || []).map(function (m) { return m.filename; }).filter(Boolean).join(', ') || '(unknown)';
+                var videoFiles = await forceVideoSelection(manifestInfo);
 
                 if (videoFiles.length > 0) {
                     // Clear any stale views/videoFiles from a previous session
@@ -3947,6 +4122,47 @@
             }
         }
 
+        /**
+         * Show a full-screen overlay that blocks until the user selects video files.
+         * Returns the selected File[] (never empty — overlay stays until files are picked).
+         */
+        function forceVideoSelection(refInfo) {
+            return new Promise(function (resolve) {
+                var overlay = document.createElement('div');
+                overlay.id = 'videoSelectOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+
+                var title = document.createElement('div');
+                title.style.cssText = 'color:#fff;font-size:20px;font-weight:600;margin-bottom:8px;';
+                title.textContent = 'SLP loaded — now select the video file(s)';
+                overlay.appendChild(title);
+
+                if (refInfo) {
+                    var sub = document.createElement('div');
+                    sub.style.cssText = 'color:#aaa;font-size:14px;margin-bottom:24px;max-width:600px;text-align:center;word-break:break-all;';
+                    sub.textContent = 'Expected: ' + refInfo;
+                    overlay.appendChild(sub);
+                }
+
+                var btn = document.createElement('button');
+                btn.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
+                btn.textContent = 'Select Video Files';
+                overlay.appendChild(btn);
+
+                btn.addEventListener('click', async function () {
+                    var files = [];
+                    try { files = await pickVideoFiles(); } catch (e) { /* cancelled */ }
+                    if (files.length > 0) {
+                        overlay.remove();
+                        resolve(files);
+                    }
+                    // If cancelled / empty, overlay stays — user must pick files
+                });
+
+                document.body.appendChild(overlay);
+            });
+        }
+
         function createViewForVideoFile(videoFile) {
             if (!videoFile.assignedCamera) return null;
 
@@ -3997,15 +4213,118 @@
             };
 
             state.views.push(view);
+            updateGridLayout();
+            return view;
+        }
 
-            // Update grid layout (columns and rows)
-            var count = state.views.length;
+        /**
+         * Update grid layout based on all .video-cell elements (views + prompt cells).
+         */
+        function updateGridLayout() {
+            var gridEl = document.getElementById('videoGrid');
+            var allCells = gridEl.querySelectorAll('.video-cell');
+            var count = allCells.length;
+            if (count === 0) return;
             var cols = Math.ceil(Math.sqrt(count));
             var rows = Math.ceil(count / cols);
             gridEl.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
             gridEl.style.gridTemplateRows = 'repeat(' + rows + ', 1fr)';
+        }
 
-            return view;
+        /**
+         * Create a per-cell video prompt in the grid for a camera that needs a video loaded.
+         */
+        function createVideoPromptCell(cameraName, referencedFilename) {
+            var gridEl = document.getElementById('videoGrid');
+
+            var cell = document.createElement('div');
+            cell.className = 'video-cell';
+            cell.id = 'cell-' + cameraName;
+
+            var label = document.createElement('span');
+            label.className = 'view-label';
+            label.textContent = cameraName;
+
+            var promptDiv = document.createElement('div');
+            promptDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;background:var(--bg-secondary,#1e1e1e);border:1px dashed var(--border,#444);';
+
+            var camLabel = document.createElement('div');
+            camLabel.style.cssText = 'font-size:16px;font-weight:600;color:var(--text-primary,#e0e0e0);margin-bottom:4px;';
+            camLabel.textContent = cameraName;
+            promptDiv.appendChild(camLabel);
+
+            if (referencedFilename && referencedFilename !== '.') {
+                var fnEl = document.createElement('div');
+                fnEl.style.cssText = 'font-size:12px;color:var(--text-muted,#888);margin-bottom:12px;';
+                fnEl.textContent = referencedFilename;
+                promptDiv.appendChild(fnEl);
+            }
+
+            var btn = document.createElement('button');
+            btn.className = 'btn btn-primary';
+            btn.textContent = 'Load Video';
+            btn.style.cssText = 'padding:10px 24px;font-size:14px;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
+            btn.addEventListener('click', async function () {
+                try {
+                    var files = await pickVideoFiles();
+                    if (files.length === 0) return;
+
+                    var vf = files[0];
+                    showLoading('Loading ' + vf.name + '...');
+                    var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                    await decoder.init(vf);
+
+                    var videoFileEntry = {
+                        file: vf,
+                        name: vf.name.replace(/\.[^.]+$/, ''),
+                        decoder: decoder,
+                        videoWidth: decoder.videoTrack.video.width,
+                        videoHeight: decoder.videoTrack.video.height,
+                        frameCount: decoder.samples.length,
+                        assignedCamera: cameraName,
+                    };
+                    state.videoFiles.push(videoFileEntry);
+
+                    // Remove prompt cell and create real view
+                    cell.remove();
+                    createViewForVideoFile(videoFileEntry);
+                    updateTotalFrames();
+
+                    hideWelcomeOverlay();
+                    rebuildVideoController();
+                    requestAnimationFrame(function () { fitCanvasesToCells(); });
+
+                    if (videoController) {
+                        if (state.views.length === 1) {
+                            var firstFrame = 0;
+                            for (var [fIdx] of state.session.frameGroups) {
+                                firstFrame = fIdx;
+                                break;
+                            }
+                            state.currentFrame = firstFrame;
+                            await videoController.seekToFrame(firstFrame);
+                        } else {
+                            await videoController.seekToFrame(state.currentFrame);
+                        }
+                    }
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+
+                    hideLoading();
+                    setStatus('Video loaded for ' + cameraName, 'success');
+                } catch (e) {
+                    hideLoading();
+                    console.error('Failed to load video:', e);
+                    setStatus('Video load error: ' + e.message, 'error');
+                }
+            });
+
+            promptDiv.appendChild(btn);
+            cell.appendChild(label);
+            cell.appendChild(promptDiv);
+            gridEl.appendChild(cell);
+
+            updateGridLayout();
         }
 
         /**
@@ -4044,6 +4363,8 @@
                 view.overlayCanvas.style.width = cssW + 'px';
                 view.overlayCanvas.style.height = cssH + 'px';
             }
+            // Keep 3D viewport in sync with layout changes
+            if (viewport3d) viewport3d.resize();
         }
 
         // Refit canvases on window resize
@@ -4200,6 +4521,836 @@
             }
         }
 
+        // ============================================
+        // SLP H5 Import
+        // ============================================
+
+        async function handleLoadSlp() {
+            try {
+                setStatus('Pick SLP file...', 'warning');
+                var slpFiles = await pickFiles({ accept: '.slp,.h5' });
+                if (slpFiles.length === 0) {
+                    setStatus('No file selected', 'warning');
+                    return;
+                }
+                var slpFile = slpFiles[0];
+
+                showLoading('Reading SLP file (' + (slpFile.size / 1024 / 1024).toFixed(1) + ' MB)...');
+                console.log('[load-slp] SLP:', slpFile.name);
+
+                // Parse in Web Worker (non-blocking)
+                var slpData;
+                try {
+                    slpData = await parseSlpH5(slpFile, function (msg) {
+                        showLoading(msg);
+                    });
+                } catch (parseErr) {
+                    console.error('[load-slp] Parse failed:', parseErr);
+                    hideLoading();
+                    setStatus('SLP parse error: ' + parseErr.message, 'error');
+                    return;
+                }
+
+                var totalFrames = slpData.frames.length;
+                console.log('[load-slp] Parsed OK:', {
+                    skeleton: slpData.skeleton ? slpData.skeleton.nodes.length + ' nodes' : 'none',
+                    tracks: slpData.tracks.length,
+                    frames: totalFrames,
+                    videos: slpData.videos.length,
+                });
+
+                showLoading('Building session (' + totalFrames + ' frames)...');
+                await new Promise(function (r) { setTimeout(r, 0); });
+
+                // 1. Build session from raw worker data
+                var skelData = slpData.skeleton || { name: 'skeleton', nodes: [], edges: [] };
+                var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
+
+                // Extract cameras from sessions calibration
+                var cameras = [];
+                var videoIdxToCameraName = {};
+                if (slpData.sessions && slpData.sessions.length > 0) {
+                    var sessData = slpData.sessions[0];
+                    var calib = sessData.calibration || {};
+                    var camMap = sessData.camcorder_to_video_idx_map || {};
+
+                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; }).sort();
+                    for (var ck = 0; ck < camKeys.length; ck++) {
+                        var cd = calib[camKeys[ck]];
+                        if (!cd || typeof cd !== 'object') continue;
+                        cameras.push(new Camera(
+                            cd.name || camKeys[ck],
+                            cd.matrix || [[1,0,0],[0,1,0],[0,0,1]],
+                            cd.distortions || cd.dist || [0,0,0,0,0],
+                            cd.rotation || cd.rvec || [0,0,0],
+                            cd.translation || cd.tvec || [0,0,0],
+                            cd.size || [640,480]
+                        ));
+                    }
+                    for (var cmk in camMap) {
+                        var camIdx = parseInt(cmk.replace(/[^0-9]/g, ''));
+                        var vidIdx = camMap[cmk];
+                        if (cameras[camIdx]) {
+                            videoIdxToCameraName[vidIdx] = cameras[camIdx].name;
+                        }
+                    }
+                }
+
+                // Fallback: use video filenames as camera names
+                if (cameras.length === 0) {
+                    for (var dvi = 0; dvi < Math.max(slpData.videos.length, 1); dvi++) {
+                        var vMeta = slpData.videos[dvi];
+                        var dName = vMeta ? (vMeta.sourceFilename || vMeta.filename) : null;
+                        if (dName && dName !== '.') {
+                            dName = dName.replace(/\.[^.]+$/, '').split('/').pop().split('\\').pop();
+                        } else {
+                            dName = 'cam_' + dvi;
+                        }
+                        cameras.push(new Camera(dName, [[1,0,0],[0,1,0],[0,0,1]],
+                            [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
+                        videoIdxToCameraName[dvi] = dName;
+                    }
+                }
+
+                var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
+
+                // Ensure enough track slots
+                var maxTrack = 0;
+                for (var fri = 0; fri < totalFrames; fri++) {
+                    var fd = slpData.frames[fri];
+                    for (var ii = 0; ii < fd.instances.length; ii++) {
+                        if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
+                    }
+                }
+                while (tracks.length <= maxTrack) tracks.push('track_' + tracks.length);
+
+                var session = new Session(cameras, skeleton, tracks);
+
+                // Populate FrameGroups from worker's frames array (yield every 20K for UI)
+                var BATCH = 20000;
+                for (var fi = 0; fi < totalFrames; fi++) {
+                    var fd2 = slpData.frames[fi];
+                    var camName = videoIdxToCameraName[fd2.videoIdx];
+                    if (!camName && cameras.length > 0) {
+                        camName = cameras[fd2.videoIdx % cameras.length].name;
+                    }
+                    if (!camName) camName = 'cam_' + fd2.videoIdx;
+
+                    var fg = session.frameGroups.get(fd2.frameIdx);
+                    if (!fg) {
+                        fg = new FrameGroup(fd2.frameIdx);
+                        session.addFrameGroup(fg);
+                    }
+                    for (var ii2 = 0; ii2 < fd2.instances.length; ii2++) {
+                        var instData = fd2.instances[ii2];
+                        fg.addInstance(camName, new Instance(
+                            instData.points,
+                            instData.trackIdx >= 0 ? instData.trackIdx : 0,
+                            instData.type || 'predicted',
+                            instData.score || 0
+                        ));
+                    }
+                    if (fi > 0 && fi % BATCH === 0) {
+                        showLoading('Building session (' + fi + '/' + totalFrames + ')...');
+                        await new Promise(function (r) { setTimeout(r, 0); });
+                    }
+                }
+
+                // Build InstanceGroups
+                showLoading('Building instance groups...');
+                await new Promise(function (r) { setTimeout(r, 0); });
+                var fgCount = 0;
+                for (var [frameIdx2, fg2] of session.frameGroups) {
+                    var trackInstances = new Map();
+                    for (var [cn, instances] of fg2.instances) {
+                        for (var inst3 of instances) {
+                            var tIdx = inst3.trackIdx >= 0 ? inst3.trackIdx : 0;
+                            if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
+                            trackInstances.get(tIdx).push({ camName: cn, instance: inst3 });
+                        }
+                    }
+                    if (trackInstances.size > 0) {
+                        session.instanceGroups.set(frameIdx2, new Map());
+                        var trackMap2 = session.instanceGroups.get(frameIdx2);
+                        for (var [trackIdx, entries] of trackInstances) {
+                            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx);
+                            for (var e of entries) group.addInstance(e.camName, e.instance);
+                            if (!trackMap2.has(trackIdx)) trackMap2.set(trackIdx, []);
+                            trackMap2.get(trackIdx).push(group);
+                        }
+                    }
+                    fgCount++;
+                    if (fgCount % BATCH === 0) {
+                        showLoading('Building instance groups (' + fgCount + '/' + session.frameGroups.size + ')...');
+                        await new Promise(function (r) { setTimeout(r, 0); });
+                    }
+                }
+
+                state.session = session;
+                console.log('[load-slp] Session:', session.numFrames, 'frames,',
+                    cameras.length, 'cameras, tracks:', tracks);
+
+                // 2. Video loading — embedded or external
+                // Clear previous views
+                if (videoController) {
+                    if (state.isPlaying) videoController.pause();
+                    videoController = null;
+                }
+                state.views = [];
+                state.videoFiles = [];
+                var gridEl = document.getElementById('videoGrid');
+                if (gridEl) gridEl.innerHTML = '';
+
+                var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
+
+                if (hasEmbedded) {
+                    // --- Embedded videos: use frame-worker for on-demand extraction ---
+                    showLoading('Loading embedded video frames...');
+
+                    var frameWorker = new Worker('frame-worker.js');
+                    var embeddedVideoInfos = await new Promise(function (resolve, reject) {
+                        frameWorker.onmessage = function (e) {
+                            var msg = e.data;
+                            if (msg.type === 'ready') {
+                                frameWorker.postMessage({ type: 'loadFile', file: slpFile });
+                            } else if (msg.type === 'loaded') {
+                                resolve(msg.videos || []);
+                            } else if (msg.type === 'error') {
+                                reject(new Error(msg.error || 'Frame worker error'));
+                            }
+                        };
+                        frameWorker.onerror = function (err) {
+                            reject(new Error('Frame worker failed: ' + (err.message || 'unknown')));
+                        };
+                    });
+
+                    console.log('[load-slp] Frame worker loaded, embedded videos:', embeddedVideoInfos.length);
+
+                    for (var evi = 0; evi < embeddedVideoInfos.length; evi++) {
+                        var evInfo = embeddedVideoInfos[evi];
+                        var evCamName = videoIdxToCameraName[evInfo.idx] || ('cam_' + evInfo.idx);
+                        var evWidth = evInfo.width || 0;
+                        var evHeight = evInfo.height || 0;
+
+                        // Probe first frame for dimensions if needed
+                        if (!evWidth || !evHeight) {
+                            try {
+                                showLoading('Probing dimensions for ' + evInfo.key + '...');
+                                var probeResult = await new Promise(function (res) {
+                                    var handler = function (e2) {
+                                        if (e2.data.type === 'frame' && e2.data.videoKey === evInfo.key) {
+                                            frameWorker.removeEventListener('message', handler);
+                                            res(e2.data);
+                                        }
+                                    };
+                                    frameWorker.addEventListener('message', handler);
+                                    frameWorker.postMessage({ type: 'getFrame', videoKey: evInfo.key, embeddedIdx: 0 });
+                                });
+                                var probeMime = (probeResult.format === 'jpg' || probeResult.format === 'jpeg')
+                                    ? 'image/jpeg' : 'image/png';
+                                var probeBmp = await createImageBitmap(new Blob([probeResult.pngBytes], { type: probeMime }));
+                                evWidth = probeBmp.width;
+                                evHeight = probeBmp.height;
+                                probeBmp.close();
+                            } catch (probeErr) {
+                                console.warn('[load-slp] Could not probe frame dimensions:', probeErr);
+                                evWidth = evWidth || 640;
+                                evHeight = evHeight || 480;
+                            }
+                        }
+
+                        var decoder = new EmbeddedVideoDecoder({
+                            worker: frameWorker,
+                            videoInfo: evInfo,
+                            cacheSize: 60,
+                        });
+                        if (evWidth && evHeight) {
+                            decoder.videoTrack.video.width = evWidth;
+                            decoder.videoTrack.video.height = evHeight;
+                        }
+
+                        state.videoFiles.push({
+                            file: null, name: evCamName, decoder: decoder,
+                            videoWidth: evWidth, videoHeight: evHeight,
+                            frameCount: decoder.samples.length,
+                            assignedCamera: evCamName,
+                        });
+                    }
+
+                    state._frameWorker = frameWorker;
+
+                    for (var evi2 = 0; evi2 < state.videoFiles.length; evi2++) {
+                        createViewForVideoFile(state.videoFiles[evi2]);
+                    }
+                } else {
+                    // --- No embedded videos: prompt for video files ---
+                    hideLoading();
+
+                    // Extract video basenames from SLP metadata
+                    var slpVideoRefs = slpData.videos.map(function (v) {
+                        var fn = v.sourceFilename || v.filename || '';
+                        if (fn === '.') return '';
+                        return fn.replace(/^.*[\/\\]/, '');
+                    });
+                    var refInfo = slpVideoRefs.filter(function (r) { return r; }).join(', ') || '(unknown)';
+                    console.log('[load-slp] SLP references videos:', slpVideoRefs);
+
+                    // Show blocking overlay forcing user to select video files
+                    var videoFiles = await forceVideoSelection(refInfo);
+
+                    if (videoFiles.length > 0) {
+                        for (var mvi = 0; mvi < videoFiles.length; mvi++) {
+                            var vFile = videoFiles[mvi];
+                            var stem = vFile.name.replace(/\.[^.]+$/, '');
+                            showLoading('Loading ' + vFile.name + ' (' + (mvi + 1) + '/' + videoFiles.length + ')...');
+                            try {
+                                var vdec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                                await vdec.init(vFile);
+
+                                // Match to SLP video reference by filename
+                                var assignedCam = null;
+                                var vStem = stem.toLowerCase();
+                                for (var rvi = 0; rvi < slpVideoRefs.length; rvi++) {
+                                    var refName = slpVideoRefs[rvi];
+                                    if (!refName) continue;
+                                    var refStem = refName.replace(/\.[^.]+$/, '').toLowerCase();
+                                    if (vFile.name.toLowerCase() === refName.toLowerCase() ||
+                                        vStem === refStem ||
+                                        vStem.indexOf(refStem) >= 0 ||
+                                        refStem.indexOf(vStem) >= 0) {
+                                        if (videoIdxToCameraName[rvi]) {
+                                            assignedCam = videoIdxToCameraName[rvi];
+                                        }
+                                        break;
+                                    }
+                                }
+
+                                state.videoFiles.push({
+                                    file: vFile, name: stem, decoder: vdec,
+                                    videoWidth: vdec.videoTrack.video.width,
+                                    videoHeight: vdec.videoTrack.video.height,
+                                    frameCount: vdec.samples.length,
+                                    assignedCamera: assignedCam,
+                                });
+                            } catch (videoErr) {
+                                console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);
+                            }
+                        }
+
+                        var cameraNames = cameras.map(function (c) { return c.name; });
+                        for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
+                            var vf = state.videoFiles[vfi];
+                            if (vf.assignedCamera) continue;
+                            if (cameraNames.indexOf(vf.name) >= 0) {
+                                vf.assignedCamera = vf.name;
+                            }
+                        }
+                        autoAssignVideosToCameras();
+                        for (var oi = 0; oi < state.videoFiles.length; oi++) {
+                            if (!state.videoFiles[oi].assignedCamera && oi < cameraNames.length) {
+                                var alreadyUsed = state.videoFiles.some(function(other) {
+                                    return other.assignedCamera === cameraNames[oi];
+                                });
+                                if (!alreadyUsed) {
+                                    state.videoFiles[oi].assignedCamera = cameraNames[oi];
+                                }
+                            }
+                        }
+
+                        showLoading('Creating views...');
+                        for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
+                            var vf3 = state.videoFiles[vi2];
+                            if (vf3.assignedCamera) {
+                                var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
+                                if (!hasView) createViewForVideoFile(vf3);
+                            }
+                        }
+                    }
+                }
+
+                updateTotalFrames();
+                if (state.views.length > 0) {
+                    hideWelcomeOverlay();
+                    rebuildVideoController();
+                    fitCanvasesToCells();
+                }
+
+                // Seek to first labeled frame
+                if (videoController && state.views.length > 0) {
+                    var firstFrame = 0;
+                    var sortedFrames = session.frameIndices;
+                    if (sortedFrames.length > 0) firstFrame = sortedFrames[0];
+                    state.currentFrame = firstFrame;
+                    await videoController.seekToFrame(firstFrame);
+                }
+
+                // 3. Set up 3D viewport
+                if (cameras.length > 0) {
+                    if (viewport3d) {
+                        viewport3d.cameras = cameras;
+                        viewport3d.skeleton = skeleton;
+                        viewport3d.addCameraPyramids();
+                        viewport3d.fitToScene();
+                        viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                    } else {
+                        setup3DViewport();
+                    }
+                }
+
+                // 4. Draw overlays and update UI
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                if (timeline) timeline.setData(state.session);
+
+                if (interactionManager && state.views.length > 0) {
+                    interactionManager.detach();
+                    interactionManager.attach(state.views);
+                }
+
+                hideLoading();
+                var statusParts = [skeleton.nodes.length + ' nodes', session.numFrames + ' labeled frames'];
+                if (cameras.length > 0) statusParts.push(cameras.length + ' cameras');
+                if (state.views.length > 0) statusParts.push(state.views.length + ' views');
+                if (hasEmbedded) statusParts.push(slpData.videos.filter(function (v) { return v.embedded; }).length + ' embedded video(s)');
+                setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
+            } catch (err) {
+                console.error('[load-slp] FATAL:', err);
+                hideLoading();
+                setStatus('SLP load error: ' + err.message, 'error');
+            }
+        }
+
+        // ============================================
+        // Add SLP (Additive Merge)
+        // ============================================
+
+        async function handleAddSlp() {
+            try {
+                setStatus('Pick SLP file to add...', 'warning');
+                var slpFiles = await pickFiles({ accept: '.slp,.h5' });
+                if (slpFiles.length === 0) {
+                    setStatus('No file selected', 'warning');
+                    return;
+                }
+                var slpFile = slpFiles[0];
+
+                showLoading('Reading SLP file (' + (slpFile.size / 1024 / 1024).toFixed(1) + ' MB)...');
+                console.log('[add-slp] SLP:', slpFile.name);
+
+                var slpData;
+                try {
+                    slpData = await parseSlpH5(slpFile, function (msg) {
+                        showLoading(msg);
+                    });
+                } catch (parseErr) {
+                    console.error('[add-slp] Parse failed:', parseErr);
+                    hideLoading();
+                    setStatus('SLP parse error: ' + parseErr.message, 'error');
+                    return;
+                }
+
+                console.log('[add-slp] Parsed OK:', {
+                    skeleton: slpData.skeleton ? slpData.skeleton.nodes.length + ' nodes' : 'none',
+                    tracks: slpData.tracks.length,
+                    frames: slpData.frames.length,
+                    videos: slpData.videos.length,
+                });
+
+                showLoading('Merging into session...');
+                await new Promise(function (r) { setTimeout(r, 0); });
+
+                // Build incoming skeleton, cameras, tracks
+                var skelData = slpData.skeleton || { name: 'skeleton', nodes: [], edges: [] };
+                var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
+
+                var cameras = [];
+                var videoIdxToCameraName = {};
+                if (slpData.sessions && slpData.sessions.length > 0) {
+                    var sessData = slpData.sessions[0];
+                    var calib = sessData.calibration || {};
+                    var camMap = sessData.camcorder_to_video_idx_map || {};
+                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; }).sort();
+                    for (var ck = 0; ck < camKeys.length; ck++) {
+                        var cd = calib[camKeys[ck]];
+                        if (!cd || typeof cd !== 'object') continue;
+                        cameras.push(new Camera(
+                            cd.name || camKeys[ck],
+                            cd.matrix || [[1,0,0],[0,1,0],[0,0,1]],
+                            cd.distortions || cd.dist || [0,0,0,0,0],
+                            cd.rotation || cd.rvec || [0,0,0],
+                            cd.translation || cd.tvec || [0,0,0],
+                            cd.size || [640,480]
+                        ));
+                    }
+                    for (var cmk in camMap) {
+                        var camIdx = parseInt(cmk.replace(/[^0-9]/g, ''));
+                        var vidIdx = camMap[cmk];
+                        if (cameras[camIdx]) {
+                            videoIdxToCameraName[vidIdx] = cameras[camIdx].name;
+                        }
+                    }
+                }
+
+                // Fallback: use video filenames as camera names
+                if (cameras.length === 0) {
+                    for (var dvi = 0; dvi < Math.max(slpData.videos.length, 1); dvi++) {
+                        var vMeta = slpData.videos[dvi];
+                        var dName = vMeta ? (vMeta.sourceFilename || vMeta.filename) : null;
+                        if (dName && dName !== '.') {
+                            dName = dName.replace(/\.[^.]+$/, '').split('/').pop().split('\\').pop();
+                        } else {
+                            dName = 'cam_' + dvi;
+                        }
+                        cameras.push(new Camera(dName, [[1,0,0],[0,1,0],[0,0,1]],
+                            [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
+                        videoIdxToCameraName[dvi] = dName;
+                    }
+                }
+
+                var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
+                var maxTrack = 0;
+                for (var fri = 0; fri < slpData.frames.length; fri++) {
+                    var fd = slpData.frames[fri];
+                    for (var ii = 0; ii < fd.instances.length; ii++) {
+                        if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
+                    }
+                }
+                while (tracks.length <= maxTrack) tracks.push('track_' + tracks.length);
+
+                // Validate skeleton compatibility (set-based, allows reordering)
+                var skelResult = validateSkeletonCompatibility(state.session.skeleton, skeleton);
+                console.log('[add-slp] Skeleton validation:', skelResult);
+                if (skelResult.error) {
+                    hideLoading();
+                    setStatus('Skeleton mismatch: ' + skelResult.error, 'error');
+                    return;
+                }
+                var nodeReorderMap = skelResult.reorderMap;
+
+                // Auto-rename duplicate camera names
+                for (var aci = 0; aci < cameras.length; aci++) {
+                    var addCamName = cameras[aci].name;
+                    var isDuplicate = state.session.cameras.some(function (c) { return c.name === addCamName; });
+                    if (isDuplicate) {
+                        var suffix = 2;
+                        while (state.session.cameras.some(function (c) { return c.name === addCamName + '_' + suffix; })) {
+                            suffix++;
+                        }
+                        var newName = addCamName + '_' + suffix;
+                        console.log('[add-slp] Camera "' + addCamName + '" already exists, renaming to "' + newName + '"');
+                        cameras[aci].name = newName;
+                        for (var vk in videoIdxToCameraName) {
+                            if (videoIdxToCameraName[vk] === addCamName) {
+                                videoIdxToCameraName[vk] = newName;
+                            }
+                        }
+                    }
+                }
+
+                // Merge tracks
+                var trackRemap = mergeTracksIntoSession(state.session, tracks);
+
+                // Add cameras to session
+                for (var aci2 = 0; aci2 < cameras.length; aci2++) {
+                    state.session.cameras.push(cameras[aci2]);
+                }
+
+                // Merge frames (with node reorder map if needed)
+                var affectedFrames = mergeSlpFramesIntoSession(state.session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap);
+
+                // Rebuild instance groups for affected frames
+                rebuildInstanceGroupsForFrames(state.session, affectedFrames);
+
+                console.log('[add-slp] Merged ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames affected');
+
+                // Create video views or prompt cells for new cameras
+                var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
+
+                if (hasEmbedded) {
+                    showLoading('Loading embedded video frames...');
+
+                    var frameWorker = new Worker('frame-worker.js');
+                    var embeddedVideoInfos = await new Promise(function (resolve, reject) {
+                        frameWorker.onmessage = function (e) {
+                            var msg = e.data;
+                            if (msg.type === 'ready') {
+                                frameWorker.postMessage({ type: 'loadFile', file: slpFile });
+                            } else if (msg.type === 'loaded') {
+                                resolve(msg.videos || []);
+                            } else if (msg.type === 'error') {
+                                reject(new Error(msg.error || 'Frame worker error'));
+                            }
+                        };
+                        frameWorker.onerror = function (err) {
+                            reject(new Error('Frame worker failed: ' + (err.message || 'unknown')));
+                        };
+                    });
+
+                    for (var mevi = 0; mevi < embeddedVideoInfos.length; mevi++) {
+                        var mevInfo = embeddedVideoInfos[mevi];
+                        var mevCamName = videoIdxToCameraName[mevInfo.idx] || ('cam_' + mevInfo.idx);
+                        var mevWidth = mevInfo.width || 0;
+                        var mevHeight = mevInfo.height || 0;
+
+                        if (!mevWidth || !mevHeight) {
+                            try {
+                                showLoading('Probing frame dimensions...');
+                                var mProbeResult = await new Promise(function (res) {
+                                    var handler = function (e2) {
+                                        if (e2.data.type === 'frame' && e2.data.videoKey === mevInfo.key) {
+                                            frameWorker.removeEventListener('message', handler);
+                                            res(e2.data);
+                                        }
+                                    };
+                                    frameWorker.addEventListener('message', handler);
+                                    frameWorker.postMessage({ type: 'getFrame', videoKey: mevInfo.key, embeddedIdx: 0 });
+                                });
+                                var mProbeMime = (mProbeResult.format === 'jpg' || mProbeResult.format === 'jpeg')
+                                    ? 'image/jpeg' : 'image/png';
+                                var mProbeBmp = await createImageBitmap(new Blob([mProbeResult.pngBytes], { type: mProbeMime }));
+                                mevWidth = mProbeBmp.width;
+                                mevHeight = mProbeBmp.height;
+                                mProbeBmp.close();
+                            } catch (mProbeErr) {
+                                console.warn('[add-slp] Could not probe frame dimensions:', mProbeErr);
+                                mevWidth = mevWidth || 640;
+                                mevHeight = mevHeight || 480;
+                            }
+                        }
+
+                        var mDecoder = new EmbeddedVideoDecoder({
+                            worker: frameWorker,
+                            videoInfo: mevInfo,
+                            cacheSize: 60,
+                        });
+                        if (mevWidth && mevHeight) {
+                            mDecoder.videoTrack.video.width = mevWidth;
+                            mDecoder.videoTrack.video.height = mevHeight;
+                        }
+
+                        var mVideoEntry = {
+                            file: null, name: mevCamName, decoder: mDecoder,
+                            videoWidth: mevWidth, videoHeight: mevHeight,
+                            frameCount: mDecoder.samples.length,
+                            assignedCamera: mevCamName,
+                        };
+                        state.videoFiles.push(mVideoEntry);
+                        createViewForVideoFile(mVideoEntry);
+                    }
+
+                    updateTotalFrames();
+                    rebuildVideoController();
+                    requestAnimationFrame(function () { fitCanvasesToCells(); });
+
+                    if (videoController) {
+                        await videoController.seekToFrame(state.currentFrame);
+                    }
+                } else {
+                    // --- No embedded videos: prompt for video files ---
+                    hideLoading();
+
+                    // Extract video basenames from SLP metadata
+                    var addSlpVideoRefs = slpData.videos.map(function (v) {
+                        var fn = v.sourceFilename || v.filename || '';
+                        if (fn === '.') return '';
+                        return fn.replace(/^.*[\/\\]/, '');
+                    });
+                    var addRefInfo = addSlpVideoRefs.filter(function (r) { return r; }).join(', ') || '(unknown)';
+                    console.log('[add-slp] SLP references videos:', addSlpVideoRefs);
+
+                    // Show blocking overlay forcing user to select video files
+                    var addVideoFiles = await forceVideoSelection(addRefInfo);
+
+                    if (addVideoFiles.length > 0) {
+                        for (var amvi = 0; amvi < addVideoFiles.length; amvi++) {
+                            var amvFile = addVideoFiles[amvi];
+                            var amvStem = amvFile.name.replace(/\.[^.]+$/, '');
+                            showLoading('Loading ' + amvFile.name + ' (' + (amvi + 1) + '/' + addVideoFiles.length + ')...');
+                            try {
+                                var amvDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                                await amvDec.init(amvFile);
+
+                                // Match to SLP video reference by filename
+                                var amvCam = null;
+                                var amvStemLower = amvStem.toLowerCase();
+                                for (var arvi = 0; arvi < addSlpVideoRefs.length; arvi++) {
+                                    var aRefName = addSlpVideoRefs[arvi];
+                                    if (!aRefName) continue;
+                                    var aRefStem = aRefName.replace(/\.[^.]+$/, '').toLowerCase();
+                                    if (amvFile.name.toLowerCase() === aRefName.toLowerCase() ||
+                                        amvStemLower === aRefStem ||
+                                        amvStemLower.indexOf(aRefStem) >= 0 ||
+                                        aRefStem.indexOf(amvStemLower) >= 0) {
+                                        if (videoIdxToCameraName[arvi]) {
+                                            amvCam = videoIdxToCameraName[arvi];
+                                        }
+                                        break;
+                                    }
+                                }
+                                // Fallback: match by camera name
+                                if (!amvCam) {
+                                    for (var aci3 = 0; aci3 < cameras.length; aci3++) {
+                                        if (cameras[aci3].name.toLowerCase() === amvStemLower) {
+                                            amvCam = cameras[aci3].name;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                var amvEntry = {
+                                    file: amvFile, name: amvStem, decoder: amvDec,
+                                    videoWidth: amvDec.videoTrack.video.width,
+                                    videoHeight: amvDec.videoTrack.video.height,
+                                    frameCount: amvDec.samples.length,
+                                    assignedCamera: amvCam,
+                                };
+                                state.videoFiles.push(amvEntry);
+                                if (amvCam) createViewForVideoFile(amvEntry);
+                            } catch (amvErr) {
+                                console.error('[add-slp] Failed to load ' + amvFile.name + ':', amvErr);
+                            }
+                        }
+                        updateGridLayout();
+                        updateTotalFrames();
+                        rebuildVideoController();
+                        requestAnimationFrame(function () { fitCanvasesToCells(); });
+                        if (videoController) {
+                            await videoController.seekToFrame(state.currentFrame);
+                        }
+                    } else {
+                        // No videos selected — show per-cell prompts
+                        console.log('[add-slp] Creating ' + cameras.length + ' prompt cells');
+                        for (var mpci = 0; mpci < cameras.length; mpci++) {
+                            var mpCamName = cameras[mpci].name;
+                            var mpVideoMeta = slpData.videos[mpci];
+                            var mpRefFilename = mpVideoMeta ? (mpVideoMeta.sourceFilename || mpVideoMeta.filename || null) : null;
+                            if (mpRefFilename === '.') mpRefFilename = null;
+                            createVideoPromptCell(mpCamName, mpRefFilename);
+                        }
+                        updateGridLayout();
+                        requestAnimationFrame(function () { fitCanvasesToCells(); });
+                    }
+                }
+
+                // Ensure welcome overlay is hidden
+                hideWelcomeOverlay();
+
+                // Validate currentFrame is still valid
+                if (!state.session.frameGroups.has(state.currentFrame)) {
+                    var firstAvail = 0;
+                    for (var [fk] of state.session.frameGroups) {
+                        firstAvail = fk;
+                        break;
+                    }
+                    state.currentFrame = firstAvail;
+                }
+
+                // Update 3D viewport
+                if (viewport3d) {
+                    viewport3d.cameras = state.session.cameras;
+                    viewport3d.skeleton = state.session.skeleton;
+                    viewport3d.addCameraPyramids();
+                    viewport3d.fitToScene();
+                    viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                }
+
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                if (timeline) timeline.setData(state.session);
+
+                hideLoading();
+                var gridCellCount = document.querySelectorAll('#videoGrid .video-cell').length;
+                console.log('[add-slp] Done. Grid cells: ' + gridCellCount + ', Views: ' + state.views.length);
+                setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames merged. Grid: ' + gridCellCount + ' cells', 'success');
+            } catch (err) {
+                console.error('[add-slp] FATAL:', err);
+                hideLoading();
+                setStatus('Add SLP error: ' + err.message, 'error');
+            }
+        }
+
+        // ============================================
+        // Points3d H5 Import
+        // ============================================
+
+        async function handleLoadPoints3dH5() {
+            try {
+                if (!state.session) {
+                    setStatus('Load an SLP or session first before loading 3D points', 'error');
+                    return;
+                }
+
+                setStatus('Picking 3D points file...', 'warning');
+                var files = await pickFiles({ accept: '.h5,.hdf5' });
+                if (files.length === 0) {
+                    setStatus('No file selected', 'warning');
+                    return;
+                }
+
+                showLoading('Reading 3D points file...');
+                var arrayBuffer = await files[0].arrayBuffer();
+
+                showLoading('Parsing 3D points...');
+                var ptsData = await parsePoints3dH5(arrayBuffer);
+
+                // Verify skeleton compatibility
+                var sessionNodes = state.session.skeleton.nodes;
+                if (ptsData.nodeNames.length > 0 && ptsData.nodeNames.length !== sessionNodes.length) {
+                    console.warn('Node count mismatch: H5 has ' + ptsData.nodeNames.length + ' nodes, session has ' + sessionNodes.length);
+                }
+
+                // Ensure enough tracks
+                while (state.session.tracks.length < ptsData.trackNames.length) {
+                    state.session.tracks.push(ptsData.trackNames[state.session.tracks.length] || ('track_' + state.session.tracks.length));
+                }
+
+                // Populate InstanceGroups with 3D data
+                var framesUpdated = 0;
+                for (var [frameIdx, trackMap] of ptsData.points3d) {
+                    // Ensure instanceGroups entry exists for this frame
+                    if (!state.session.instanceGroups.has(frameIdx)) {
+                        state.session.instanceGroups.set(frameIdx, new Map());
+                    }
+                    var sessionTrackMap = state.session.instanceGroups.get(frameIdx);
+
+                    for (var [trackIdx, pts3d] of trackMap) {
+                        // Find or create InstanceGroup for this track
+                        var groups = sessionTrackMap.get(trackIdx);
+                        if (groups && groups.length > 0) {
+                            // Assign 3D points to existing group
+                            groups[0].points3d = pts3d;
+                            groups[0].markClean();
+                        } else {
+                            // Create a new InstanceGroup with just 3D data
+                            var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx);
+                            newGroup.points3d = pts3d;
+                            newGroup.markClean();
+                            if (!sessionTrackMap.has(trackIdx)) sessionTrackMap.set(trackIdx, []);
+                            sessionTrackMap.get(trackIdx).push(newGroup);
+                        }
+                    }
+                    framesUpdated++;
+                }
+
+                // Refresh 3D viewport
+                if (viewport3d) {
+                    viewport3d.skeleton = state.session.skeleton;
+                    viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                }
+
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                if (timeline) timeline.setData(state.session);
+
+                hideLoading();
+                setStatus('3D points loaded: ' + framesUpdated + ' frames, ' + ptsData.trackNames.length + ' tracks', 'success');
+            } catch (err) {
+                console.error('Failed to load 3D points:', err);
+                hideLoading();
+                setStatus('3D points error: ' + err.message, 'error');
+            }
+        }
+
         function highlightVideoCell(cameraName) {
             // Remove previous highlights
             document.querySelectorAll('.video-cell.camera-highlighted').forEach(function (el) {
@@ -4261,8 +5412,10 @@
             const a = document.createElement('a');
             a.href = url;
             a.download = filename;
+            document.body.appendChild(a);
             a.click();
-            URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
         }
 
         // ============================================
