@@ -949,7 +949,7 @@ class VideoController {
             var view = views[i];
             var videoFrame = frames[i];
 
-            if (videoFrame) {
+            if (videoFrame && view.ctx && view.canvas) {
                 // Draw video frame to the main canvas
                 view.ctx.drawImage(videoFrame, 0, 0, view.canvas.width, view.canvas.height);
             }
@@ -1261,11 +1261,10 @@ class VideoController {
 
         var cell = view.canvas ? view.canvas.closest('.video-cell') : null;
         if (cell) {
-            if (z.scale > 1.01 || Math.abs(z.offsetX) > 1 || Math.abs(z.offsetY) > 1) {
-                cell.classList.add('zoomed');
-            } else {
-                cell.classList.remove('zoomed');
-            }
+            var isZoomed = z.scale > 1.01 || Math.abs(z.offsetX) > 1 || Math.abs(z.offsetY) > 1;
+            cell.classList.toggle('zoomed', isZoomed);
+            var unzoomBtn = cell.querySelector('.unzoom-btn');
+            if (unzoomBtn) unzoomBtn.style.display = isZoomed ? '' : 'none';
         }
     }
 
@@ -1351,16 +1350,6 @@ class VideoController {
             var cssY = e.clientY - rect.top;
             self.zoomVideo(view, factor, cssX, cssY);
         }, { passive: false });
-
-        // ---- Double-click to reset zoom ----
-        container.addEventListener("dblclick", function (e) {
-            if (view.zoom && (view.zoom.scale > 1.01 || view.zoom.scale < 0.99 ||
-                Math.abs(view.zoom.offsetX) > 1 || Math.abs(view.zoom.offsetY) > 1)) {
-                e.preventDefault();
-                e.stopPropagation();
-                self.resetZoom(view);
-            }
-        });
 
         // ---- Drag state for pan / box zoom ----
         var isPanning = false;

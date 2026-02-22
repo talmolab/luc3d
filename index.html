@@ -146,8 +146,8 @@
                 <div class="video-dock" id="videoDock">
                     <div class="video-dock-empty" id="videoDockEmpty">
                         <div class="dock-empty-icon">&#128249;</div>
-                        <div id="dockEmptyText">Load Videos</div>
-                        <div id="dockEmptySubtext" style="font-size:11px;margin-top:4px;color:var(--text-muted);">Use File &gt; Load Videos or click Load Demo</div>
+                        <div id="dockEmptyText">Drag and Drop videos</div>
+                        <div id="dockEmptySubtext" style="font-size:11px;margin-top:4px;color:var(--text-muted);">Drag from the view strip or double-click to add</div>
                     </div>
                 </div>
             </div>
@@ -644,16 +644,13 @@
                 showLoading('Computing triangulation...');
                 precomputeTriangulation();
 
-                // Populate view strip and add all views to dock
+                // Populate view strip only — dock stays empty until user drags videos in
                 populateViewStrip();
-                paneManager.addAllViews();
 
                 rebuildVideoController();
                 setup3DViewport();
                 updateInfoPanel();
                 updateFpsDisplay();
-
-                await videoController.seekToFrame(0);
 
                 hideLoading();
                 setStatus('Demo session loaded', 'success');
@@ -1088,6 +1085,7 @@
             }
 
             for (const view of state.views) {
+                if (!view.overlayCtx || !view.overlayCanvas) continue;
                 // Convert FrameGroup instances to the format expected by drawFrameOverlays
                 let overlayFrameGroup = null;
                 if (frameGroup) {
@@ -3565,7 +3563,6 @@
                     updateTotalFrames();
                     if (state.views.length > 0) {
                         populateViewStrip();
-                        hideWelcomeOverlay();
                         rebuildVideoController();
                         fitCanvasesToCells();
                     }
@@ -4088,7 +4085,6 @@
 
                 if (newViewsCreated) {
                     populateViewStrip();
-                    hideWelcomeOverlay();
                     rebuildVideoController();
                     fitCanvasesToCells();
                 }
@@ -4217,9 +4213,6 @@
 
             state.views.push(view);
 
-            // Add to dock and view strip
-            paneManager.addVideoPanel(name);
-
             return view;
         }
 
@@ -4286,7 +4279,6 @@
                     createViewForVideoFile(videoFileEntry);
                     updateTotalFrames();
 
-                    hideWelcomeOverlay();
                     rebuildVideoController();
                     requestAnimationFrame(function () { fitCanvasesToCells(); });
 
@@ -4381,9 +4373,9 @@
                 log: window.logMessage,
             });
 
-            // Set up zoom handlers for new views (don't re-register UI listeners)
+            // Set up zoom handlers for views that have been docked (have canvases)
             for (const view of state.views) {
-                if (!view._zoomSetup) {
+                if (!view._zoomSetup && view.canvas) {
                     view._zoomSetup = true;
                     videoController.initZoom(view);
                     const cell = view.canvas.closest('.video-cell');
@@ -4869,7 +4861,6 @@
                 updateTotalFrames();
                 if (state.views.length > 0) {
                     populateViewStrip();
-                    hideWelcomeOverlay();
                     rebuildVideoController();
                     fitCanvasesToCells();
                 }
@@ -5256,8 +5247,7 @@
                     }
                 }
 
-                // Ensure welcome overlay is hidden
-                hideWelcomeOverlay();
+                // Dock empty message is hidden by addVideoPanel when user drags videos in
 
                 // Validate currentFrame is still valid
                 if (!state.session.frameGroups.has(state.currentFrame)) {
@@ -5469,7 +5459,7 @@
 
                 var self = this;
 
-                // Unzoom button
+                // Unzoom button (shown when view is zoomed)
                 var unzoomBtn = document.createElement('button');
                 unzoomBtn.className = 'unzoom-btn';
                 unzoomBtn.textContent = 'Zoomed';
@@ -5479,8 +5469,9 @@
                 unzoomBtn.addEventListener('mouseleave', function () { unzoomBtn.textContent = 'Zoomed'; });
                 unzoomBtn.addEventListener('click', function (e) {
                     e.stopPropagation();
-                    if (self._zoomProxy && videoController) {
-                        videoController.resetZoom(self._zoomProxy);
+                    var view = state.views.find(function (v) { return v.name === self.viewName; });
+                    if (view && videoController) {
+                        videoController.resetZoom(view);
                     }
                 });
                 this.element.appendChild(unzoomBtn);
@@ -5645,6 +5636,7 @@
                             }
                         }
                     }
+                    panelRenderers.delete(event.id);
                     if (self.api.panels.length === 0) {
                         var emptyMsg = document.getElementById('videoDockEmpty');
                         if (emptyMsg) emptyMsg.classList.remove('hidden');
@@ -5694,14 +5686,26 @@
             if (interactionManager && state.views.length > 0) {
                 interactionManager.attach(state.views);
             }
-            // Initialize zoom for each view
+            // Initialize zoom and set up handlers for each docked view
             if (videoController) {
                 for (var i = 0; i < state.views.length; i++) {
-                    if (state.views[i].canvas) {
-                        videoController.initZoom(state.views[i]);
+                    var view = state.views[i];
+                    if (view.canvas) {
+                        videoController.initZoom(view);
+                        if (!view._zoomSetup) {
+                            view._zoomSetup = true;
+                            var cell = view.canvas.closest('.video-cell');
+                            if (cell) videoController.setupZoomHandlers(view, cell);
+                        }
                     }
                 }
             }
+            // Render current frame to newly created canvases and fit sizes
+            fitCanvasesToCells();
+            if (videoController) {
+                videoController.seekToFrame(state.currentFrame);
+            }
+            drawAllOverlays(state.currentFrame);
         }
 
         function renderDuplicatePanels() {
