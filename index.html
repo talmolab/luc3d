@@ -166,6 +166,13 @@
                 <label><input type="checkbox" id="visReprojections" checked> Reproj</label>
                 <label><input type="checkbox" id="visErrors" checked> Errors</label>
             </div>
+            <div class="toolbar-separator"></div>
+            <div class="toolbar-group">
+                <button class="toolbar-btn" id="tbRunQC" title="Run Quality Control analysis">QC</button>
+                <button class="toolbar-btn" id="tbPrevQC" title="Previous flagged frame (Shift+Q)">&lt;</button>
+                <button class="toolbar-btn" id="tbNextQC" title="Next flagged frame (Q)">&gt;</button>
+                <span class="qc-toolbar-badge" id="qcToolbarBadge" style="display:none;"></span>
+            </div>
             <button class="toolbar-btn" id="infoPanelToggleBtn" style="margin-left:auto;" title="Toggle info panel (I)">Hide Panel</button>
         </div>
 
@@ -227,6 +234,7 @@
                     <button class="panel-tab" data-tab="tabCameras">Cameras</button>
                     <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
                     <button class="panel-tab" data-tab="tabSession">Session</button>
+                    <button class="panel-tab" data-tab="tabQC">QC</button>
                 </div>
 
                 <!-- ==================== Instances Tab ==================== -->
@@ -580,6 +588,7 @@
                             <div><kbd>A</kbd> Toggle assignment mode</div>
                             <div><kbd>Enter</kbd> Create group (assign)</div>
                             <div><kbd>Alt+Drag</kbd> Move whole instance</div>
+                            <div><kbd>Q</kbd> Next QC issue (Shift: prev)</div>
                             <div><kbd>Space</kbd> Play/Pause</div>
                             <div><kbd>Left/Right</kbd> Prev/Next frame</div>
                             <div>Drag empty: Box zoom / Pan</div>
@@ -599,6 +608,92 @@
                         <label>Time Penalty <input type="range" min="0" max="5" step="0.1" value="1.0" id="trackerTimePenalty"><span id="trackerTimePenaltyVal">1.0</span></label>
                     </div>
                 </details>
+
+                <!-- ==================== QC Tab ==================== -->
+                <div class="panel-tab-content" id="tabQC">
+                    <!-- QC Summary -->
+                    <div class="info-section">
+                        <h3>Quality Control</h3>
+                        <div class="qc-summary" id="qcSummary">
+                            <div class="qc-not-run" id="qcNotRun">
+                                <div style="color:var(--text-muted);font-size:12px;margin-bottom:8px;">
+                                    Run QC analysis to check label quality across all triangulated frames.
+                                </div>
+                                <button class="btn btn-primary btn-sm" id="btnRunQC" style="width:100%;">Run QC Analysis</button>
+                            </div>
+                            <div class="qc-stats" id="qcStats" style="display:none;">
+                                <div class="qc-score-display" id="qcScoreDisplay">
+                                    <span class="qc-score-value" id="qcScoreValue">-</span>
+                                    <span class="qc-score-label">QC Score</span>
+                                </div>
+                                <div class="session-info-row">
+                                    <span class="label">Flagged Frames</span>
+                                    <span class="value" id="qcFlaggedCount">-</span>
+                                </div>
+                                <div class="session-info-row">
+                                    <span class="label">Total Issues</span>
+                                    <span class="value" id="qcIssueCount">-</span>
+                                </div>
+                                <div class="session-info-row">
+                                    <span class="label">Mean Reproj Error</span>
+                                    <span class="value" id="qcMeanError">-</span>
+                                </div>
+                                <div class="session-info-row">
+                                    <span class="label">P95 Reproj Error</span>
+                                    <span class="value" id="qcP95Error">-</span>
+                                </div>
+                                <div class="panel-button-row" style="margin-top:8px;">
+                                    <button class="panel-btn" id="btnRerunQC" title="Re-run QC analysis">Re-run</button>
+                                    <button class="panel-btn" id="btnPrevIssue" title="Previous flagged frame (Shift+Q)">Prev</button>
+                                    <button class="panel-btn" id="btnNextIssue" title="Next flagged frame (Q)">Next</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bodypart Errors by Camera (3D-specific insight) -->
+                    <div class="info-section" id="qcBodypartSection" style="display:none;">
+                        <h3>Bodypart Errors by Camera</h3>
+                        <div class="qc-bodypart-subtitle" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
+                            Bodyparts with outlier reprojection error in specific cameras
+                        </div>
+                        <div id="qcOutlierList"></div>
+                        <div id="qcCameraSummary" style="margin-top:8px;"></div>
+                    </div>
+
+                    <!-- Issue Breakdown by Type -->
+                    <div class="info-section" id="qcBreakdownSection" style="display:none;">
+                        <h3>Issues by Type</h3>
+                        <div id="qcBreakdown"></div>
+                    </div>
+
+                    <!-- Limb Length Stats -->
+                    <div class="info-section" id="qcLimbSection" style="display:none;">
+                        <h3>Limb Length Consistency</h3>
+                        <div id="qcLimbStats"></div>
+                    </div>
+
+                    <!-- Flagged Frame List -->
+                    <div class="info-section" id="qcIssueListSection" style="display:none;">
+                        <h3>Flagged Frames</h3>
+                        <div class="qc-filter-row" id="qcFilterRow">
+                            <select id="qcFilterType" style="font-size:11px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:2px 4px;">
+                                <option value="all">All Types</option>
+                                <option value="reprojection">Reprojection</option>
+                                <option value="miss">Missing</option>
+                                <option value="jitter">Jitter</option>
+                                <option value="inversion">Inversion</option>
+                            </select>
+                            <select id="qcFilterSeverity" style="font-size:11px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:2px 4px;">
+                                <option value="all">All Severity</option>
+                                <option value="high">High</option>
+                                <option value="medium">Medium</option>
+                                <option value="low">Low</option>
+                            </select>
+                        </div>
+                        <div class="qc-issue-list" id="qcIssueList"></div>
+                    </div>
+                </div>
 
                 <!-- Hidden legacy element for backward compat -->
                 <div class="instance-list" id="instanceList" style="display:none;"></div>
@@ -685,6 +780,7 @@
     <script src="timeline.js"></script>
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
+    <script src="qc.js"></script>
 
     <!-- sleap-io.js bridge: expose saveSlpToBytes and data model to window -->
     <script type="module">
@@ -737,6 +833,7 @@
             exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
             cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
             colorByIdentity: false,     // false = color by track, true = color by identity
+            qcResults: null,    // QC.runFullAnalysis() output
         };
 
         let videoController = null;
@@ -4100,6 +4197,17 @@
                         triangulateCurrentFrame();
                         break;
                     }
+                    case 'q':
+                    case 'Q':
+                        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+                            e.preventDefault();
+                            if (e.shiftKey) {
+                                qcPrevIssue();
+                            } else {
+                                qcNextIssue();
+                            }
+                        }
+                        break;
                 }
             });
 
@@ -4118,6 +4226,14 @@
             // ============================================
             // Visibility Tab
             // ============================================
+
+            // QC panel buttons
+            document.getElementById('btnRunQC').addEventListener('click', runQCAnalysis);
+            document.getElementById('btnRerunQC').addEventListener('click', runQCAnalysis);
+            document.getElementById('btnNextIssue').addEventListener('click', qcNextIssue);
+            document.getElementById('btnPrevIssue').addEventListener('click', qcPrevIssue);
+            document.getElementById('qcFilterType').addEventListener('change', updateQCIssueList);
+            document.getElementById('qcFilterSeverity').addEventListener('change', updateQCIssueList);
 
             // Slider value display + redraw
             function setupVisSlider(sliderId, valId, isTransparency) {
@@ -4306,6 +4422,11 @@
             document.getElementById('tbTriangulateAll').addEventListener('click', function () {
                 triangulateAllFrames();
             });
+
+            // QC toolbar buttons
+            document.getElementById('tbRunQC').addEventListener('click', runQCAnalysis);
+            document.getElementById('tbPrevQC').addEventListener('click', qcPrevIssue);
+            document.getElementById('tbNextQC').addEventListener('click', qcNextIssue);
 
             // Context menu for instance groups
             document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
@@ -6278,6 +6399,349 @@
                     timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
                 }
                 timeline.refreshTracks(state.session);
+            }
+        }
+
+        // ============================================
+        // Quality Control (QC) Functions
+        // ============================================
+
+        /**
+         * Run QC analysis on all triangulated frames.
+         * Auto-triangulates if needed, then opens the QC panel tab.
+         */
+        async function runQCAnalysis() {
+            if (!state.session) {
+                setStatus('No session loaded', 'warning');
+                return;
+            }
+
+            // Auto-triangulate all frames if not already done
+            if (state.triangulationResults.size === 0) {
+                setStatus('Triangulating all frames for QC...', 'info');
+                await triangulateAllFrames();
+            }
+
+            if (state.triangulationResults.size === 0) {
+                setStatus('No triangulation data — need ≥2 cameras with calibration', 'warning');
+                return;
+            }
+
+            console.log('[QC] Running full analysis on', state.triangulationResults.size, 'frames');
+            state.qcResults = QC.runFullAnalysis(state.session, state.triangulationResults);
+
+            var gs = state.qcResults.globalStats;
+            console.log('[QC] Complete:', gs.totalIssues, 'issues across',
+                gs.flaggedFrameCount, 'frames, mean score:', gs.meanScore);
+
+            // Auto-open info panel and switch to QC tab
+            var panel = document.getElementById('infoPanel');
+            if (panel.classList.contains('collapsed')) {
+                panel.classList.remove('collapsed');
+            }
+            document.querySelectorAll('.panel-tab').forEach(function (t) { t.classList.remove('active'); });
+            document.querySelectorAll('.panel-tab-content').forEach(function (c) { c.classList.remove('active'); });
+            var qcTabBtn = document.querySelector('.panel-tab[data-tab="tabQC"]');
+            if (qcTabBtn) qcTabBtn.classList.add('active');
+            var qcTabContent = document.getElementById('tabQC');
+            if (qcTabContent) qcTabContent.classList.add('active');
+
+            updateQCDisplay();
+            updateQCToolbarBadge();
+            setStatus('QC: ' + gs.totalIssues + ' issues in ' + gs.flaggedFrameCount + ' frames (score: ' + gs.meanScore + ')', 'info');
+        }
+
+        /**
+         * Update the toolbar QC badge showing flagged frame count.
+         */
+        function updateQCToolbarBadge() {
+            var badge = document.getElementById('qcToolbarBadge');
+            if (!state.qcResults) {
+                badge.style.display = 'none';
+                return;
+            }
+            var gs = state.qcResults.globalStats;
+            badge.style.display = '';
+            badge.textContent = gs.flaggedFrameCount + ' flagged';
+            if (gs.flaggedFrameCount === 0) {
+                badge.className = 'qc-toolbar-badge qc-badge-good';
+            } else if (gs.meanScore >= 50) {
+                badge.className = 'qc-toolbar-badge qc-badge-warn';
+            } else {
+                badge.className = 'qc-toolbar-badge qc-badge-bad';
+            }
+        }
+
+        /**
+         * Update the QC panel display with current results.
+         */
+        function updateQCDisplay() {
+            var results = state.qcResults;
+            if (!results) return;
+
+            var gs = results.globalStats;
+
+            // Show stats, hide "not run" message
+            document.getElementById('qcNotRun').style.display = 'none';
+            document.getElementById('qcStats').style.display = '';
+
+            // Score display
+            var scoreEl = document.getElementById('qcScoreValue');
+            scoreEl.textContent = gs.meanScore;
+            scoreEl.className = 'qc-score-value ' +
+                (gs.meanScore >= 80 ? 'qc-good' : gs.meanScore >= 50 ? 'qc-warn' : 'qc-bad');
+
+            // Summary stats
+            document.getElementById('qcFlaggedCount').textContent =
+                gs.flaggedFrameCount + ' / ' + gs.totalFrames;
+            document.getElementById('qcIssueCount').textContent = gs.totalIssues;
+            document.getElementById('qcMeanError').textContent =
+                gs.meanReprojError != null ? gs.meanReprojError.toFixed(2) + ' px' : '-';
+            document.getElementById('qcP95Error').textContent =
+                gs.errorP95 != null ? gs.errorP95.toFixed(2) + ' px' : '-';
+
+            // Bodypart × Camera outlier analysis
+            var bodypartSection = document.getElementById('qcBodypartSection');
+            var outlierListDiv = document.getElementById('qcOutlierList');
+            var cameraSummaryDiv = document.getElementById('qcCameraSummary');
+            outlierListDiv.textContent = '';
+            cameraSummaryDiv.textContent = '';
+            var bce = results.bodypartCameraErrors;
+            if (bce && (bce.outliers.length > 0 || Object.keys(bce.perCameraSummary).length > 0)) {
+                bodypartSection.style.display = '';
+
+                // Render outliers — bodyparts with error concentrated in one camera
+                if (bce.outliers.length > 0) {
+                    for (var oi = 0; oi < bce.outliers.length; oi++) {
+                        var outlier = bce.outliers[oi];
+                        var oRow = document.createElement('div');
+                        oRow.className = 'qc-outlier-row';
+                        // Bodypart name
+                        var kpSpan = document.createElement('span');
+                        kpSpan.className = 'qc-outlier-kp';
+                        kpSpan.textContent = outlier.keypointName;
+                        oRow.appendChild(kpSpan);
+                        // Outlier camera with error
+                        var errSpan = document.createElement('span');
+                        errSpan.className = 'qc-outlier-err';
+                        errSpan.textContent = outlier.outlierMean.toFixed(1) + 'px in ' + outlier.outlierCam;
+                        oRow.appendChild(errSpan);
+                        outlierListDiv.appendChild(oRow);
+                        // Other cameras comparison
+                        var compSpan = document.createElement('div');
+                        compSpan.className = 'qc-outlier-compare';
+                        var compParts = [];
+                        for (var oci = 0; oci < outlier.otherCams.length; oci++) {
+                            compParts.push(outlier.otherCams[oci].cam + ': ' +
+                                outlier.otherCams[oci].mean.toFixed(1) + 'px');
+                        }
+                        compSpan.textContent = 'vs ' + compParts.join(', ');
+                        outlierListDiv.appendChild(compSpan);
+                    }
+                } else {
+                    var noOutlier = document.createElement('div');
+                    noOutlier.style.cssText = 'font-size:11px;color:var(--text-muted);padding:4px 0;';
+                    noOutlier.textContent = 'No per-camera outliers detected';
+                    outlierListDiv.appendChild(noOutlier);
+                }
+
+                // Per-camera summary
+                var camNames = Object.keys(bce.perCameraSummary);
+                if (camNames.length > 0) {
+                    var camHeader = document.createElement('div');
+                    camHeader.style.cssText = 'font-size:11px;color:var(--text-secondary);margin-bottom:4px;font-weight:600;';
+                    camHeader.textContent = 'Per-Camera Mean Error';
+                    cameraSummaryDiv.appendChild(camHeader);
+                    for (var sci = 0; sci < camNames.length; sci++) {
+                        var cs = bce.perCameraSummary[camNames[sci]];
+                        var csRow = document.createElement('div');
+                        csRow.className = 'session-info-row';
+                        var csLabel = document.createElement('span');
+                        csLabel.className = 'label';
+                        csLabel.style.fontSize = '11px';
+                        csLabel.textContent = camNames[sci];
+                        csRow.appendChild(csLabel);
+                        var csVal = document.createElement('span');
+                        csVal.className = 'value';
+                        csVal.style.fontSize = '11px';
+                        csVal.textContent = cs.mean.toFixed(2) + 'px (P95: ' + cs.p95.toFixed(1) + 'px)';
+                        // Color-code based on mean error
+                        if (cs.mean > 10) {
+                            csVal.style.color = 'var(--error-color, #f56565)';
+                        } else if (cs.mean > 5) {
+                            csVal.style.color = 'var(--warning-color, #ecc94b)';
+                        } else {
+                            csVal.style.color = 'var(--success-color, #48bb78)';
+                        }
+                        csRow.appendChild(csVal);
+                        cameraSummaryDiv.appendChild(csRow);
+                    }
+                }
+            } else {
+                bodypartSection.style.display = 'none';
+            }
+
+            // Issue breakdown by type
+            var breakdownSection = document.getElementById('qcBreakdownSection');
+            var breakdownDiv = document.getElementById('qcBreakdown');
+            breakdownDiv.textContent = '';
+            var types = Object.keys(gs.issuesByType);
+            if (types.length > 0) {
+                breakdownSection.style.display = '';
+                for (var i = 0; i < types.length; i++) {
+                    var row = document.createElement('div');
+                    row.className = 'session-info-row';
+                    var typeLabel = document.createElement('span');
+                    typeLabel.className = 'label';
+                    var badge = document.createElement('span');
+                    badge.className = 'qc-type-badge qc-type-' + types[i];
+                    badge.textContent = types[i];
+                    typeLabel.appendChild(badge);
+                    row.appendChild(typeLabel);
+                    var countSpan = document.createElement('span');
+                    countSpan.className = 'value';
+                    countSpan.textContent = gs.issuesByType[types[i]];
+                    row.appendChild(countSpan);
+                    breakdownDiv.appendChild(row);
+                }
+            } else {
+                breakdownSection.style.display = 'none';
+            }
+
+            // Limb length stats
+            var limbSection = document.getElementById('qcLimbSection');
+            var limbDiv = document.getElementById('qcLimbStats');
+            limbDiv.textContent = '';
+            var skeleton = state.session.skeleton;
+            var limbStats = results.limbLengthStats;
+            var hasLimbData = false;
+            for (var trackIdx in limbStats) {
+                var ls = limbStats[trackIdx];
+                if (ls.flaggedEdges.length > 0 || ls.perEdge.some(function(e) { return e.mean != null; })) {
+                    hasLimbData = true;
+                    for (var ei = 0; ei < ls.perEdge.length; ei++) {
+                        var edge = ls.perEdge[ei];
+                        if (edge.mean == null) continue;
+                        var edgePair = skeleton.edges[ei];
+                        var nodeName1 = skeleton.nodes[edgePair[0]] || 'node_' + edgePair[0];
+                        var nodeName2 = skeleton.nodes[edgePair[1]] || 'node_' + edgePair[1];
+                        var row = document.createElement('div');
+                        row.className = 'session-info-row';
+                        var labelSpan = document.createElement('span');
+                        labelSpan.className = 'label';
+                        labelSpan.style.fontSize = '11px';
+                        labelSpan.textContent = nodeName1 + ' - ' + nodeName2;
+                        row.appendChild(labelSpan);
+                        var valueSpan = document.createElement('span');
+                        valueSpan.className = 'value';
+                        valueSpan.style.fontSize = '11px';
+                        var cvText = edge.cv != null ? (edge.cv * 100).toFixed(1) + '%' : '-';
+                        valueSpan.textContent = edge.mean.toFixed(1) + ' (CV: ' + cvText + ')';
+                        if (ls.flaggedEdges.indexOf(ei) >= 0) {
+                            valueSpan.style.color = 'var(--warning-color)';
+                        }
+                        row.appendChild(valueSpan);
+                        limbDiv.appendChild(row);
+                    }
+                }
+            }
+            limbSection.style.display = hasLimbData ? '' : 'none';
+
+            // Issue list
+            updateQCIssueList();
+        }
+
+        /**
+         * Update the filterable issue list in the QC panel.
+         */
+        function updateQCIssueList() {
+            var results = state.qcResults;
+            if (!results) return;
+
+            var listSection = document.getElementById('qcIssueListSection');
+            var listDiv = document.getElementById('qcIssueList');
+            listDiv.textContent = '';
+
+            var filterType = document.getElementById('qcFilterType').value;
+            var filterSeverity = document.getElementById('qcFilterSeverity').value;
+
+            var issues = results.sortedIssues.filter(function (issue) {
+                if (filterType !== 'all' && issue.type !== filterType) return false;
+                if (filterSeverity !== 'all' && issue.severity !== filterSeverity) return false;
+                return true;
+            });
+
+            listSection.style.display = issues.length > 0 ? '' : 'none';
+
+            // Cap display at 200 items for performance
+            var maxItems = Math.min(issues.length, 200);
+            for (var i = 0; i < maxItems; i++) {
+                var issue = issues[i];
+                var row = document.createElement('div');
+                row.className = 'qc-issue-row';
+                row.setAttribute('data-frame', issue.frameIdx);
+                row.addEventListener('click', (function (frameIdx) {
+                    return function () {
+                        if (videoController) {
+                            videoController.seekToFrame(frameIdx);
+                        }
+                    };
+                })(issue.frameIdx));
+
+                // Severity indicator
+                var dot = document.createElement('span');
+                dot.className = 'qc-severity-dot qc-severity-' + issue.severity;
+                row.appendChild(dot);
+
+                // Frame number
+                var frameSpan = document.createElement('span');
+                frameSpan.className = 'qc-issue-frame';
+                frameSpan.textContent = 'F' + issue.frameIdx;
+                row.appendChild(frameSpan);
+
+                // Type badge
+                var typeBadge = document.createElement('span');
+                typeBadge.className = 'qc-type-badge qc-type-' + issue.type;
+                typeBadge.textContent = issue.type;
+                row.appendChild(typeBadge);
+
+                // Description
+                var desc = document.createElement('span');
+                desc.className = 'qc-issue-desc';
+                desc.textContent = issue.description;
+                desc.title = issue.description;
+                row.appendChild(desc);
+
+                listDiv.appendChild(row);
+            }
+
+            if (issues.length > maxItems) {
+                var moreDiv = document.createElement('div');
+                moreDiv.style.cssText = 'font-size:11px;color:var(--text-muted);padding:4px 0;';
+                moreDiv.textContent = '... and ' + (issues.length - maxItems) + ' more';
+                listDiv.appendChild(moreDiv);
+            }
+        }
+
+        /**
+         * Navigate to the next flagged frame.
+         */
+        function qcNextIssue() {
+            if (!state.qcResults || state.qcResults.flaggedFrames.size === 0) return;
+            var next = QC.nextFlaggedFrame(state.qcResults.flaggedFrames, state.currentFrame);
+            if (next != null && videoController) {
+                videoController.seekToFrame(next);
+            }
+        }
+
+        /**
+         * Navigate to the previous flagged frame.
+         */
+        function qcPrevIssue() {
+            if (!state.qcResults || state.qcResults.flaggedFrames.size === 0) return;
+            var prev = QC.prevFlaggedFrame(state.qcResults.flaggedFrames, state.currentFrame);
+            if (prev != null && videoController) {
+                videoController.seekToFrame(prev);
             }
         }
 
