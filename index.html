@@ -6710,7 +6710,15 @@
                 return true;
             });
 
-            listSection.style.display = issues.length > 0 ? '' : 'none';
+            listSection.style.display = '';
+
+            if (issues.length === 0) {
+                var emptyDiv = document.createElement('div');
+                emptyDiv.style.cssText = 'font-size:11px;color:var(--text-muted);padding:8px 0;';
+                emptyDiv.textContent = 'No ' + (filterType !== 'all' ? filterType + ' ' : '') + 'issues found.';
+                listDiv.appendChild(emptyDiv);
+                return;
+            }
 
             // Cap display at 200 items for performance
             var maxItems = Math.min(issues.length, 200);
