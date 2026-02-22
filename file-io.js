@@ -495,7 +495,7 @@ function buildSlpExportData(session, views) {
                     const entry = {
                         x: pt ? pt[0] : NaN,
                         y: pt ? pt[1] : NaN,
-                        visible: pt != null,
+                        visible: pt != null && !(inst.occluded && inst.occluded[n]),
                         complete: pt != null,
                     };
                     if (isUser) {

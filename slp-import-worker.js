@@ -289,24 +289,28 @@ async function parseSlp(file) {
                     if (!pts) continue;
 
                     var points = [];
+                    var occludedFlags = [];
                     for (var ki = ptStart; ki < ptEnd && ki < ptStart + numNodes; ki++) {
-                        if (ki >= pts.x.length) { points.push(null); continue; }
+                        if (ki >= pts.x.length) { points.push(null); occludedFlags.push(false); continue; }
                         var px = Number(pts.x[ki]);
                         var py = Number(pts.y[ki]);
                         var pv = pts.visible[ki];
-                        if (pv && !isNaN(px) && !isNaN(py)) {
+                        if (!isNaN(px) && !isNaN(py)) {
                             points.push([px, py]);
+                            occludedFlags.push(!pv);  // visible=false with valid coords = occluded
                         } else {
                             points.push(null);
+                            occludedFlags.push(false);
                         }
                     }
-                    while (points.length < numNodes) points.push(null);
+                    while (points.length < numNodes) { points.push(null); occludedFlags.push(false); }
 
                     instances.push({
                         trackIdx: trackIdx,
                         score: score,
                         type: instType === 1 ? 'predicted' : 'user',
                         points: points,
+                        occluded: occludedFlags,
                     });
                 }
 
