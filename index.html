@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/dockview-core/dist/styles/dockview.css">
     <!-- MP4 demuxing -->
     <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.js"></script>
     <!-- Three.js for 3D viewport (v0.147 is the last version with examples/js/) -->
@@ -19,8 +20,9 @@
     <div class="app-container">
         <!-- Loading overlay -->
         <div class="loading-overlay" id="loadingOverlay">
-            <div class="spinner"></div>
+            <div class="spinner" id="loadingSpinner"></div>
             <div id="loadingStatus">Initializing...</div>
+            <button class="btn" id="loadingDismiss" style="display:none;margin-top:12px;">Dismiss</button>
         </div>
 
         <!-- Menu Bar -->
@@ -79,7 +81,7 @@
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
                 </div>
             </div>
-            <img src="lucid.jpg" alt="LUCID" style="margin-left:auto; height:100%; padding:2px 8px; box-sizing:border-box;">
+            <div class="menu-item" id="menuLoadDemoBar" style="cursor:pointer;">Load Demo</div>
         </div>
 
         <!-- Toolbar -->
@@ -125,51 +127,45 @@
                     <input type="checkbox" id="toggleLabels" checked> Labels
                 </label>
             </div>
+            <button class="toolbar-btn" id="infoPanelToggleBtn" style="margin-left:auto;" title="Toggle info panel (I)">Hide Panel</button>
         </div>
 
         <!-- Main content: video grid + 3D viewport + info panel -->
         <div class="main-content">
             <!-- Video Grid Section (left/center) -->
             <div class="video-grid-section">
-                <div class="video-grid" id="videoGrid">
-                    <div class="video-cell" id="cell-back">
-                        <span class="view-label">back</span>
-                        <div class="canvas-wrapper">
-                            <canvas id="canvas-back"></canvas>
-                            <canvas class="overlay-canvas" id="overlay-back"></canvas>
-                        </div>
+                <!-- View strip sidebar (scrollable list of video thumbnails) -->
+                <div class="view-strip" id="viewStrip">
+                    <div class="view-strip-header">Views</div>
+                    <div class="view-strip-list" id="viewStripList">
+                        <!-- Populated dynamically -->
                     </div>
-                    <div class="video-cell" id="cell-mid">
-                        <span class="view-label">mid</span>
-                        <div class="canvas-wrapper">
-                            <canvas id="canvas-mid"></canvas>
-                            <canvas class="overlay-canvas" id="overlay-mid"></canvas>
-                        </div>
-                    </div>
-                    <div class="video-cell" id="cell-side">
-                        <span class="view-label">side</span>
-                        <div class="canvas-wrapper">
-                            <canvas id="canvas-side"></canvas>
-                            <canvas class="overlay-canvas" id="overlay-side"></canvas>
-                        </div>
-                    </div>
-                    <div class="video-cell" id="cell-top">
-                        <span class="view-label">top</span>
-                        <div class="canvas-wrapper">
-                            <canvas id="canvas-top"></canvas>
-                            <canvas class="overlay-canvas" id="overlay-top"></canvas>
-                        </div>
+                </div>
+
+                <!-- Main video viewing area (split-panel dock) -->
+                <div class="video-dock" id="videoDock">
+                    <div class="video-dock-empty" id="videoDockEmpty">
+                        <div class="dock-empty-icon">&#128249;</div>
+                        <div id="dockEmptyText">Load Videos</div>
+                        <div id="dockEmptySubtext" style="font-size:11px;margin-top:4px;color:var(--text-muted);">Use File &gt; Load Videos or click Load Demo</div>
                     </div>
                 </div>
             </div>
+
+            <!-- Split handle: video grid | 3D viewport -->
+            <div class="split-handle vertical" id="splitHandle1"></div>
 
             <!-- 3D Viewport (center-right) -->
             <div class="viewport3d-container" id="viewport3dContainer">
                 <div id="viewport3dCanvas" style="width:100%;height:100%;"></div>
             </div>
 
-            <!-- Info Panel (right sidebar) -->
-            <div class="info-panel" id="infoPanel">
+            <!-- Split handle: 3D viewport | info panel -->
+            <div class="split-handle vertical" id="splitHandle2"></div>
+
+            <!-- Info Panel wrapper (toggle button + panel) -->
+            <div class="info-panel-wrapper" id="infoPanelWrapper">
+                <div class="info-panel" id="infoPanel">
                 <!-- Tab bar -->
                 <div class="panel-tabs">
                     <button class="panel-tab active" data-tab="tabInstances">Instances</button>
@@ -408,6 +404,7 @@
                 <!-- Hidden legacy element for backward compat -->
                 <div class="instance-list" id="instanceList" style="display:none;"></div>
             </div>
+            </div><!-- end info-panel-wrapper -->
         </div>
 
         <!-- Timeline -->
@@ -436,9 +433,9 @@
                 <div class="seekbar-thumb" id="seekbarThumb"></div>
             </div>
 
-            <div class="fps-display" id="fpsDisplay">- fps</div>
-
-            <button class="btn btn-sm" id="btnTogglePanel" title="Toggle info panel (I)">Info</button>
+            <div class="fps-pill" title="Double-click to edit FPS">
+                <span class="fps-display" id="fpsDisplay"></span>
+            </div>
         </div>
 
         <!-- Status Bar -->
@@ -475,7 +472,9 @@
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
 
-    <script>
+    <script type="module">
+        import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core/+esm';
+
         // Quick diagnostic: verify external scripts loaded
         if (typeof parseSlpH5 !== 'function') console.error('[LOAD] file-io.js did not load! parseSlpH5 is missing.');
         if (typeof Skeleton !== 'function') console.error('[LOAD] pose-data.js did not load!');
@@ -529,17 +528,21 @@
                 setupPanelTabs();
                 setupSkeletonEditing();
                 setupInteraction();
+                try {
+                    paneManager.init(document.getElementById('videoDock'));
+                } catch (dockErr) {
+                    console.error('Dockview init failed:', dockErr);
+                }
+                setupSplitHandles();
                 setupTimeline();
                 setupMenus();
 
-                showWelcomeOverlay();
-
                 hideLoading();
-                setStatus('Ready - load videos and calibration to begin', 'success');
+                setStatus('Ready - load videos via File menu or click Load Demo', 'success');
 
             } catch (err) {
                 console.error('Initialization failed:', err);
-                showLoading('Error: ' + err.message);
+                showLoadingError('Error: ' + err.message);
                 setStatus('Error', 'error');
             }
         }
@@ -557,40 +560,28 @@
         }
 
         /**
-         * Show a welcome overlay in the video grid when no videos are loaded.
+         * Show/hide loading overlay helpers
          */
-        function showWelcomeOverlay() {
-            const gridEl = document.getElementById('videoGrid');
-            if (!gridEl) return;
-
-            // Remove hardcoded cells if present and no views
-            if (state.views.length === 0) {
-                gridEl.innerHTML = '';
-            }
-
-            let overlay = document.getElementById('welcomeOverlay');
-            if (!overlay) {
-                overlay = document.createElement('div');
-                overlay.id = 'welcomeOverlay';
-                overlay.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;color:var(--text-muted);font-size:14px;text-align:center;padding:40px;grid-column:1/-1;grid-row:1/-1;';
-                overlay.innerHTML = '<div style="font-size:24px;margin-bottom:12px;opacity:0.5;">Multi-View Pose Proofreader</div>'
-                    + '<div style="margin-bottom:20px;">Load videos and calibration to begin</div>'
-                    + '<div style="font-size:12px;line-height:2;opacity:0.7;">'
-                    + 'File &rarr; Load Videos... &nbsp;(add video files)<br>'
-                    + 'File &rarr; Load Calibration... &nbsp;(add camera calibration)<br>'
-                    + 'File &rarr; Load Demo Session &nbsp;(try with synthetic data)'
-                    + '</div>';
-                gridEl.appendChild(overlay);
-            }
-            overlay.style.display = 'flex';
-        }
-
         /**
-         * Hide the welcome overlay (called when views are created).
+         * Hide the welcome/empty overlay (dock empty state is handled by paneManager).
          */
         function hideWelcomeOverlay() {
-            const overlay = document.getElementById('welcomeOverlay');
-            if (overlay) overlay.style.display = 'none';
+            var emptyMsg = document.getElementById('videoDockEmpty');
+            if (emptyMsg) emptyMsg.classList.add('hidden');
+        }
+
+        function showLoadingError(msg) {
+            var overlay = document.getElementById('loadingOverlay');
+            var spinner = document.getElementById('loadingSpinner');
+            var status = document.getElementById('loadingStatus');
+            var dismiss = document.getElementById('loadingDismiss');
+            if (overlay) overlay.style.display = '';
+            if (spinner) spinner.style.display = 'none';
+            if (status) status.textContent = msg;
+            if (dismiss) {
+                dismiss.style.display = '';
+                dismiss.onclick = function () { hideLoading(); };
+            }
         }
 
         /**
@@ -600,44 +591,29 @@
         async function loadDemoSession() {
             showLoading('Loading demo videos...');
             try {
-                // Rebuild the video grid cells (welcome overlay may have cleared them)
-                const gridEl = document.getElementById('videoGrid');
-                gridEl.innerHTML = '';
-                const gridViews = buildVideoGrid(gridEl, VIEW_NAMES);
-
-                // Load videos into the rebuilt cells
+                // Load videos and create view objects (no grid cells needed - dockview creates them)
                 const basePath = 'sample_session/';
                 for (let i = 0; i < VIEW_NAMES.length; i++) {
                     const name = VIEW_NAMES[i];
                     const url = basePath + name + '.mp4';
                     showLoading('Loading ' + name + '.mp4...');
 
-                    const gv = gridViews[i];
-                    const canvas = gv.canvas;
-                    const overlayCanvas = gv.overlayCanvas;
-                    const ctx = canvas.getContext('2d');
-                    const overlayCtx = overlayCanvas.getContext('2d');
-
                     const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
                     await decoder.init(url);
 
                     const vw = decoder.videoTrack.video.width;
                     const vh = decoder.videoTrack.video.height;
-                    canvas.width = vw;
-                    canvas.height = vh;
-                    overlayCanvas.width = vw;
-                    overlayCanvas.height = vh;
 
                     const view = {
                         name: name,
                         decoder: decoder,
-                        canvas: canvas,
-                        ctx: ctx,
-                        overlayCanvas: overlayCanvas,
-                        overlayCtx: overlayCtx,
+                        canvas: null,     // Will be created by VideoPaneRenderer
+                        ctx: null,
+                        overlayCanvas: null,
+                        overlayCtx: null,
                         videoWidth: vw,
                         videoHeight: vh,
-                        wrapper: gv.wrapper,
+                        wrapper: null,
                     };
 
                     state.views.push(view);
@@ -668,11 +644,14 @@
                 showLoading('Computing triangulation...');
                 precomputeTriangulation();
 
-                hideWelcomeOverlay();
+                // Populate view strip and add all views to dock
+                populateViewStrip();
+                paneManager.addAllViews();
+
                 rebuildVideoController();
-                fitCanvasesToCells();
                 setup3DViewport();
                 updateInfoPanel();
+                updateFpsDisplay();
 
                 await videoController.seekToFrame(0);
 
@@ -685,75 +664,7 @@
             }
         }
 
-        async function initVideos() {
-            const basePath = 'sample_session/';
-
-            for (let i = 0; i < VIEW_NAMES.length; i++) {
-                const name = VIEW_NAMES[i];
-                const url = basePath + name + '.mp4';
-
-                showLoading('Loading ' + name + '.mp4...');
-
-                const canvas = document.getElementById('canvas-' + name);
-                const overlayCanvas = document.getElementById('overlay-' + name);
-                const ctx = canvas.getContext('2d');
-                const overlayCtx = overlayCanvas.getContext('2d');
-
-                const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
-                await decoder.init(url);
-
-                // Set canvas dimensions to match video
-                const vw = decoder.videoTrack.video.width;
-                const vh = decoder.videoTrack.video.height;
-                canvas.width = vw;
-                canvas.height = vh;
-                overlayCanvas.width = vw;
-                overlayCanvas.height = vh;
-
-                // Get the canvas-wrapper parent for zoom transforms
-                const wrapper = canvas.parentElement;
-
-                const view = {
-                    name: name,
-                    decoder: decoder,
-                    canvas: canvas,
-                    ctx: ctx,
-                    overlayCanvas: overlayCanvas,
-                    overlayCtx: overlayCtx,
-                    videoWidth: vw,
-                    videoHeight: vh,
-                    wrapper: wrapper,
-                };
-
-                state.views.push(view);
-
-                // Also track in videoFiles so the Videos table stays in sync
-                state.videoFiles.push({
-                    file: null,
-                    name: name,
-                    decoder: decoder,
-                    videoWidth: vw,
-                    videoHeight: vh,
-                    frameCount: decoder.samples.length,
-                    assignedCamera: name,
-                });
-
-                if (i === 0) {
-                    state.totalFrames = decoder.samples.length;
-                    state.fps = decoder.videoTrack.duration > 0
-                        ? decoder.samples.length / (decoder.videoTrack.duration / decoder.videoTrack.timescale)
-                        : 30;
-                }
-            }
-
-            // Create video controller
-            videoController = new VideoController(state, {
-                updateSeekbar: updateSeekbar,
-                drawOverlays: drawAllOverlays,
-                onPlaybackStateChange: onPlaybackStateChange,
-                log: window.logMessage,
-            });
-        }
+        // initVideos() removed — loadDemoSession() handles demo data with dockview
 
         // ============================================
         // Triangulation
@@ -1606,6 +1517,12 @@
                 loadDemoSession();
             });
 
+            // Standalone "Load Demo" menu bar button
+            document.getElementById('menuLoadDemoBar').addEventListener('click', function () {
+                closeMenus();
+                loadDemoSession();
+            });
+
             document.getElementById('menuSaveSkeleton').addEventListener('click', function () {
                 closeMenus();
                 document.getElementById('btnSaveSkeleton').click();
@@ -1877,9 +1794,6 @@
                 }
             }
 
-            // Info panel toggle
-            document.getElementById('btnTogglePanel').addEventListener('click', toggleInfoPanel);
-
             // Overlay toggles - redraw on change
             const toggleIds = ['toggleDetected', 'toggleReprojected', 'toggleErrors', 'toggleLabels'];
             for (const id of toggleIds) {
@@ -1978,7 +1892,17 @@
         }
 
         function toggleInfoPanel() {
-            document.getElementById('infoPanel').classList.toggle('collapsed');
+            var wrapper = document.getElementById('infoPanelWrapper');
+            wrapper.classList.toggle('collapsed');
+            updateInfoPanelToggleBtn();
+        }
+
+        function updateInfoPanelToggleBtn() {
+            var wrapper = document.getElementById('infoPanelWrapper');
+            var btn = document.getElementById('infoPanelToggleBtn');
+            if (btn) {
+                btn.textContent = wrapper.classList.contains('collapsed') ? 'Show Panel' : 'Hide Panel';
+            }
         }
 
         function toggle3DViewport() {
@@ -2041,37 +1965,12 @@
         }
 
         function updateVideoGridDisplay() {
-            const gridEl = document.getElementById('videoGrid');
-            if (!gridEl) return;
-
-            if (state.viewMode === 'grid') {
-                // Show all cells, restore grid layout
-                var cols = Math.ceil(Math.sqrt(state.views.length));
-                gridEl.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
-                gridEl.style.gridTemplateRows = '';
-                state.views.forEach(function (v) {
-                    var cell = v.canvas.closest('.video-cell');
-                    if (cell) cell.style.display = '';
-                });
-                // Remove view indicator if present
-                var indicator = document.getElementById('viewModeIndicator');
-                if (indicator) indicator.remove();
-            } else {
-                // Single-view mode: show only the active view
-                gridEl.style.gridTemplateColumns = '1fr';
-                gridEl.style.gridTemplateRows = '1fr';
-                state.views.forEach(function (v, i) {
-                    var cell = v.canvas.closest('.video-cell');
-                    if (cell) cell.style.display = (i === state.singleViewIndex) ? '' : 'none';
-                });
-                // Show view indicator
-                showViewIndicator();
-            }
-
-            // Trigger canvas resize after layout change
+            // With dockview, view mode switching is handled by showing/hiding panels.
+            // For now, just trigger canvas resize.
             setTimeout(function () {
+                fitCanvasesToCells();
                 for (var i = 0; i < state.views.length; i++) {
-                    if (videoController) videoController.initZoom(state.views[i]);
+                    if (videoController && state.views[i].canvas) videoController.initZoom(state.views[i]);
                 }
             }, 100);
         }
@@ -2087,10 +1986,10 @@
             indicator.textContent = state.views[state.singleViewIndex].name +
                 ' (' + (state.singleViewIndex + 1) + '/' + state.views.length + ')';
 
-            var gridEl = document.getElementById('videoGrid');
-            if (gridEl) {
-                gridEl.style.position = 'relative';
-                gridEl.appendChild(indicator);
+            var dockEl = document.getElementById('videoDock');
+            if (dockEl) {
+                dockEl.style.position = 'relative';
+                dockEl.appendChild(indicator);
             }
         }
 
@@ -2815,6 +2714,7 @@
                     }
                 }
                 if (created > 0) {
+                    populateViewStrip();
                     rebuildVideoController();
                     fitCanvasesToCells();
                     populateSessionAssignTable();
@@ -3276,10 +3176,10 @@
                 viewport3d.addCameraPyramids();
             }
 
-            // Clear the video grid and show welcome overlay
-            var gridEl = document.getElementById('videoGrid');
-            if (gridEl) gridEl.innerHTML = '';
-            showWelcomeOverlay();
+            // Clear the dock panels and view strip, show empty state
+            paneManager.clearAll();
+            var stripList = document.getElementById('viewStripList');
+            if (stripList) stripList.innerHTML = '';
 
             // Reset frame counter display
             var curFrameEl = document.getElementById('currentFrame');
@@ -3576,8 +3476,8 @@
                         videoController = null;
                     }
                     state.views = [];
-                    var gridEl = document.getElementById('videoGrid');
-                    if (gridEl) gridEl.innerHTML = '';
+                    state.videoFiles = [];
+                    paneManager.clearAll();
                 }
 
                 // Match videos to cameras using manifest
@@ -3642,16 +3542,44 @@
                     fitCanvasesToCells();
                 }
 
-                // Seek to first labeled frame or frame 0
-                if (videoController && state.views.length > 0) {
-                    var firstFrame = 0;
-                    for (var [fIdx] of state.session.frameGroups) {
-                        firstFrame = fIdx;
-                        break;
+                    // For any still-unassigned video, try exact camera name match
+                    for (var vi = 0; vi < state.videoFiles.length; vi++) {
+                        var vf2 = state.videoFiles[vi];
+                        if (!vf2.assignedCamera && cameraNames.indexOf(vf2.name) >= 0) {
+                            vf2.assignedCamera = vf2.name;
+                        }
                     }
-                    state.currentFrame = firstFrame;
-                    await videoController.seekToFrame(firstFrame);
-                }
+
+                    // Create views for assigned videos
+                    showLoading('Creating views...');
+                    for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
+                        var vf3 = state.videoFiles[vi2];
+                        if (vf3.assignedCamera) {
+                            var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
+                            if (!hasView) {
+                                createViewForVideoFile(vf3);
+                            }
+                        }
+                    }
+
+                    updateTotalFrames();
+                    if (state.views.length > 0) {
+                        populateViewStrip();
+                        hideWelcomeOverlay();
+                        rebuildVideoController();
+                        fitCanvasesToCells();
+                    }
+
+                    // Seek to first labeled frame or frame 0
+                    if (videoController && state.views.length > 0) {
+                        var firstFrame = 0;
+                        for (var [fIdx] of state.session.frameGroups) {
+                            firstFrame = fIdx;
+                            break;
+                        }
+                        state.currentFrame = firstFrame;
+                        await videoController.seekToFrame(firstFrame);
+                    }
 
                 // 3. Set up 3D viewport
                 if (viewport3d) {
@@ -4002,17 +3930,20 @@
                                 if (oldName !== vf2.assignedCamera) {
                                     console.log('[calibration] Renaming view "' + oldName + '" -> "' + vf2.assignedCamera + '"');
                                     state.views[vIdx].name = vf2.assignedCamera;
-                                    // Update DOM element IDs and labels
-                                    var cell = document.getElementById('cell-' + oldName);
-                                    if (cell) {
-                                        cell.id = 'cell-' + vf2.assignedCamera;
-                                        var lbl = cell.querySelector('.view-label');
-                                        if (lbl) lbl.textContent = vf2.assignedCamera;
+                                    // Update dock panel data attributes and tab titles
+                                    var cells = document.querySelectorAll('.video-cell[data-view-name="' + oldName + '"]');
+                                    cells.forEach(function (cell) {
+                                        cell.setAttribute('data-view-name', vf2.assignedCamera);
+                                    });
+                                    // Update dockview panel titles
+                                    if (paneManager.api) {
+                                        for (var panel of paneManager.api.panels) {
+                                            if (panel.params?.viewName === oldName) {
+                                                panel.api.updateParameters({ viewName: vf2.assignedCamera });
+                                                panel.setTitle(vf2.assignedCamera);
+                                            }
+                                        }
                                     }
-                                    var canvasEl = document.getElementById('canvas-' + oldName);
-                                    if (canvasEl) canvasEl.id = 'canvas-' + vf2.assignedCamera;
-                                    var overlayEl = document.getElementById('overlay-' + oldName);
-                                    if (overlayEl) overlayEl.id = 'overlay-' + vf2.assignedCamera;
                                     // Rename camera keys in all session data (FrameGroups, InstanceGroups, etc.)
                                     if (state.session) {
                                         state.session.renameCameraInAllData(oldName, vf2.assignedCamera);
@@ -4156,6 +4087,7 @@
                 updateTotalFrames();
 
                 if (newViewsCreated) {
+                    populateViewStrip();
                     hideWelcomeOverlay();
                     rebuildVideoController();
                     fitCanvasesToCells();
@@ -4268,87 +4200,49 @@
         function createViewForVideoFile(videoFile) {
             if (!videoFile.assignedCamera) return null;
 
-            // Build grid cell for this view
-            var gridEl = document.getElementById('videoGrid');
             var name = videoFile.assignedCamera;
 
-            var cell = document.createElement('div');
-            cell.className = 'video-cell';
-            cell.id = 'cell-' + name;
-
-            var label = document.createElement('span');
-            label.className = 'view-label';
-            label.textContent = name;
-
-            var wrapper = document.createElement('div');
-            wrapper.className = 'canvas-wrapper';
-
-            var canvas = document.createElement('canvas');
-            canvas.id = 'canvas-' + name;
-
-            var overlayCanvas = document.createElement('canvas');
-            overlayCanvas.className = 'overlay-canvas';
-            overlayCanvas.id = 'overlay-' + name;
-
-            wrapper.appendChild(canvas);
-            wrapper.appendChild(overlayCanvas);
-            cell.appendChild(label);
-            cell.appendChild(wrapper);
-            gridEl.appendChild(cell);
-
-            // Set canvas dimensions (internal resolution)
-            canvas.width = videoFile.videoWidth;
-            canvas.height = videoFile.videoHeight;
-            overlayCanvas.width = videoFile.videoWidth;
-            overlayCanvas.height = videoFile.videoHeight;
-
+            // Create view data object (canvases created by VideoPaneRenderer)
             var view = {
                 name: name,
                 decoder: videoFile.decoder,
-                canvas: canvas,
-                ctx: canvas.getContext('2d'),
-                overlayCanvas: overlayCanvas,
-                overlayCtx: overlayCanvas.getContext('2d'),
+                canvas: null,
+                ctx: null,
+                overlayCanvas: null,
+                overlayCtx: null,
                 videoWidth: videoFile.videoWidth,
                 videoHeight: videoFile.videoHeight,
-                wrapper: wrapper,
+                wrapper: null,
             };
 
             state.views.push(view);
-            updateGridLayout();
+
+            // Add to dock and view strip
+            paneManager.addVideoPanel(name);
+
             return view;
         }
 
         /**
-         * Update grid layout based on all .video-cell elements (views + prompt cells).
+         * Update grid layout — no-op with dockview (layout managed by dock system).
          */
         function updateGridLayout() {
-            var gridEl = document.getElementById('videoGrid');
-            var allCells = gridEl.querySelectorAll('.video-cell');
-            var count = allCells.length;
-            if (count === 0) return;
-            var cols = Math.ceil(Math.sqrt(count));
-            var rows = Math.ceil(count / cols);
-            gridEl.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
-            gridEl.style.gridTemplateRows = 'repeat(' + rows + ', 1fr)';
+            // Dockview manages panel layout
         }
 
         /**
          * Create a per-cell video prompt in the grid for a camera that needs a video loaded.
          */
         function createVideoPromptCell(cameraName, referencedFilename) {
-            var gridEl = document.getElementById('videoGrid');
+            var dockEl = document.getElementById('videoDock');
 
             var cell = document.createElement('div');
-            cell.className = 'video-cell';
+            cell.className = 'video-cell video-prompt-cell';
             cell.id = 'cell-' + cameraName;
-
-            var label = document.createElement('span');
-            label.className = 'view-label';
-            label.textContent = cameraName;
+            cell.style.cssText = 'display:flex;align-items:center;justify-content:center;min-height:200px;';
 
             var promptDiv = document.createElement('div');
-            promptDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;background:var(--bg-secondary,#1e1e1e);border:1px dashed var(--border,#444);';
+            promptDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;background:var(--bg-secondary,#1e1e1e);border:1px dashed var(--border,#444);border-radius:4px;';
 
             var camLabel = document.createElement('div');
             camLabel.style.cssText = 'font-size:16px;font-weight:600;color:var(--text-primary,#e0e0e0);margin-bottom:4px;';
@@ -4422,25 +4316,28 @@
             });
 
             promptDiv.appendChild(btn);
-            cell.appendChild(label);
             cell.appendChild(promptDiv);
-            gridEl.appendChild(cell);
 
-            updateGridLayout();
+            // Hide the dock empty message and append the prompt cell directly
+            hideWelcomeOverlay();
+            dockEl.appendChild(cell);
         }
 
         /**
-         * Fit all canvases to their grid cells while maintaining video aspect ratio.
-         * Called on resize and after views are created.
+         * Fit all canvases to their cells while maintaining video aspect ratio.
+         * With dockview, CSS handles basic sizing via max-width/max-height,
+         * but we still need to ensure canvas display dimensions are correct.
          */
         function fitCanvasesToCells() {
             for (var i = 0; i < state.views.length; i++) {
                 var view = state.views[i];
-                var wrapper = view.wrapper;
-                if (!wrapper) continue;
+                if (!view.canvas || !view.wrapper) continue;
 
-                var cellW = wrapper.clientWidth;
-                var cellH = wrapper.clientHeight;
+                var cell = view.canvas.closest('.video-cell');
+                if (!cell) continue;
+
+                var cellW = cell.clientWidth;
+                var cellH = cell.clientHeight;
                 if (cellW <= 0 || cellH <= 0) continue;
 
                 var videoAR = view.videoWidth / view.videoHeight;
@@ -4448,11 +4345,9 @@
 
                 var cssW, cssH;
                 if (videoAR > cellAR) {
-                    // Video is wider than cell - fit to width
                     cssW = cellW;
                     cssH = cellW / videoAR;
                 } else {
-                    // Video is taller than cell - fit to height
                     cssH = cellH;
                     cssW = cellH * videoAR;
                 }
@@ -4462,14 +4357,14 @@
 
                 view.canvas.style.width = cssW + 'px';
                 view.canvas.style.height = cssH + 'px';
-                view.overlayCanvas.style.width = cssW + 'px';
-                view.overlayCanvas.style.height = cssH + 'px';
+                if (view.overlayCanvas) {
+                    view.overlayCanvas.style.width = cssW + 'px';
+                    view.overlayCanvas.style.height = cssH + 'px';
+                }
             }
-            // Keep 3D viewport in sync with layout changes
             if (viewport3d) viewport3d.resize();
         }
 
-        // Refit canvases on window resize
         window.addEventListener('resize', fitCanvasesToCells);
 
         function rebuildVideoController() {
@@ -4802,8 +4697,7 @@
                 }
                 state.views = [];
                 state.videoFiles = [];
-                var gridEl = document.getElementById('videoGrid');
-                if (gridEl) gridEl.innerHTML = '';
+                paneManager.clearAll();
 
                 var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
 
@@ -4974,6 +4868,7 @@
 
                 updateTotalFrames();
                 if (state.views.length > 0) {
+                    populateViewStrip();
                     hideWelcomeOverlay();
                     rebuildVideoController();
                     fitCanvasesToCells();
@@ -5242,6 +5137,7 @@
                         createViewForVideoFile(mVideoEntry);
                     }
 
+                    populateViewStrip();
                     updateTotalFrames();
                     rebuildVideoController();
                     requestAnimationFrame(function () { fitCanvasesToCells(); });
@@ -5338,7 +5234,7 @@
                                 console.error('[add-slp] Failed to load ' + amvFile.name + ':', amvErr);
                             }
                         }
-                        updateGridLayout();
+                        populateViewStrip();
                         updateTotalFrames();
                         rebuildVideoController();
                         requestAnimationFrame(function () { fitCanvasesToCells(); });
@@ -5387,9 +5283,9 @@
                 if (timeline) timeline.setData(state.session);
 
                 hideLoading();
-                var gridCellCount = document.querySelectorAll('#videoGrid .video-cell').length;
-                console.log('[add-slp] Done. Grid cells: ' + gridCellCount + ', Views: ' + state.views.length);
-                setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames merged. Grid: ' + gridCellCount + ' cells', 'success');
+                var dockPanelCount = paneManager.api ? paneManager.api.panels.length : 0;
+                console.log('[add-slp] Done. Dock panels: ' + dockPanelCount + ', Views: ' + state.views.length);
+                setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames merged. Panels: ' + dockPanelCount, 'success');
             } catch (err) {
                 console.error('[add-slp] FATAL:', err);
                 hideLoading();
@@ -5484,15 +5380,14 @@
             document.querySelectorAll('.video-cell.camera-highlighted').forEach(function (el) {
                 el.classList.remove('camera-highlighted');
             });
-            // Add highlight to matching cell
-            const cell = document.getElementById('cell-' + cameraName);
-            if (cell) {
+            // Add highlight to matching cell(s) by data attribute
+            var cells = document.querySelectorAll('.video-cell[data-view-name="' + cameraName + '"]');
+            cells.forEach(function (cell) {
                 cell.classList.add('camera-highlighted');
-                // Auto-remove after 2 seconds
                 setTimeout(function () {
                     cell.classList.remove('camera-highlighted');
                 }, 2000);
-            }
+            });
         }
 
         // ============================================
@@ -5545,6 +5440,552 @@
             document.body.removeChild(a);
             setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
         }
+
+        // ============================================
+        // Dockview Pane Manager
+        // ============================================
+
+        const panelRenderers = new Map(); // panelId -> VideoPaneRenderer
+
+        class VideoPaneRenderer {
+            constructor() {
+                this.element = document.createElement('div');
+                this.element.className = 'video-cell';
+                this.element.style.cssText = 'position:relative;width:100%;height:100%;';
+                this.viewName = null;
+                this.panelId = '';
+                this._panelApi = null;
+                this._zoomProxy = null;
+                this._unzoomBtn = null;
+            }
+
+            init(params) {
+                this.viewName = params.params?.viewName ?? null;
+                this.panelId = params.api.id;
+                this._panelApi = params.api;
+
+                this.element.id = 'cell-' + this.panelId;
+                this.element.setAttribute('data-view-name', this.viewName || '');
+
+                var self = this;
+
+                // Unzoom button
+                var unzoomBtn = document.createElement('button');
+                unzoomBtn.className = 'unzoom-btn';
+                unzoomBtn.textContent = 'Zoomed';
+                unzoomBtn.title = 'Click to reset zoom';
+                unzoomBtn.style.display = 'none';
+                unzoomBtn.addEventListener('mouseenter', function () { unzoomBtn.textContent = 'Unzoom'; });
+                unzoomBtn.addEventListener('mouseleave', function () { unzoomBtn.textContent = 'Zoomed'; });
+                unzoomBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    if (self._zoomProxy && videoController) {
+                        videoController.resetZoom(self._zoomProxy);
+                    }
+                });
+                this.element.appendChild(unzoomBtn);
+                this._unzoomBtn = unzoomBtn;
+
+                // Canvas wrapper
+                var view = state.views.find(function (v) { return v.name === self.viewName; });
+                if (view) {
+                    var wrapper = document.createElement('div');
+                    wrapper.className = 'canvas-wrapper';
+
+                    var canvas = document.createElement('canvas');
+                    canvas.id = 'canvas-' + this.panelId;
+                    canvas.width = view.videoWidth;
+                    canvas.height = view.videoHeight;
+
+                    var overlayCanvas = document.createElement('canvas');
+                    overlayCanvas.className = 'overlay-canvas';
+                    overlayCanvas.id = 'overlay-' + this.panelId;
+                    overlayCanvas.width = view.videoWidth;
+                    overlayCanvas.height = view.videoHeight;
+
+                    wrapper.appendChild(canvas);
+                    wrapper.appendChild(overlayCanvas);
+                    this.element.appendChild(wrapper);
+
+                    // Update view references
+                    view.canvas = canvas;
+                    view.ctx = canvas.getContext('2d');
+                    view.overlayCanvas = overlayCanvas;
+                    view.overlayCtx = overlayCanvas.getContext('2d');
+                    view.wrapper = wrapper;
+                }
+
+                panelRenderers.set(this.panelId, this);
+                requestAnimationFrame(function () { refreshPaneInteractions(); });
+            }
+
+            update(event) {
+                if (event.params.viewName !== undefined && event.params.viewName !== this.viewName) {
+                    this.viewName = event.params.viewName;
+                    this.element.setAttribute('data-view-name', this.viewName);
+
+                    var oldWrapper = this.element.querySelector('.canvas-wrapper');
+                    if (oldWrapper) oldWrapper.remove();
+
+                    var self = this;
+                    var view = state.views.find(function (v) { return v.name === self.viewName; });
+                    if (view) {
+                        var wrapper = document.createElement('div');
+                        wrapper.className = 'canvas-wrapper';
+                        var canvas = document.createElement('canvas');
+                        canvas.id = 'canvas-' + this.panelId;
+                        canvas.width = view.videoWidth;
+                        canvas.height = view.videoHeight;
+                        var overlayCanvas = document.createElement('canvas');
+                        overlayCanvas.className = 'overlay-canvas';
+                        overlayCanvas.id = 'overlay-' + this.panelId;
+                        overlayCanvas.width = view.videoWidth;
+                        overlayCanvas.height = view.videoHeight;
+                        wrapper.appendChild(canvas);
+                        wrapper.appendChild(overlayCanvas);
+                        this.element.appendChild(wrapper);
+                        view.canvas = canvas;
+                        view.ctx = canvas.getContext('2d');
+                        view.overlayCanvas = overlayCanvas;
+                        view.overlayCtx = overlayCanvas.getContext('2d');
+                        view.wrapper = wrapper;
+                    }
+                    requestAnimationFrame(function () { refreshPaneInteractions(); });
+                }
+            }
+
+            dispose() {
+                panelRenderers.delete(this.panelId);
+                requestAnimationFrame(function () { refreshPaneInteractions(); });
+            }
+
+            getViewName() {
+                return this.viewName;
+            }
+        }
+
+        function mapPositionToDirection(position) {
+            if (position === 'left') return 'left';
+            if (position === 'right') return 'right';
+            if (position === 'top') return 'above';
+            if (position === 'bottom') return 'below';
+            return 'within';
+        }
+
+        function updateStripItemStatus(viewName, inDock) {
+            var items = document.querySelectorAll('.view-strip-item[data-view-name="' + viewName + '"]');
+            items.forEach(function (item) {
+                var dot = item.querySelector('.strip-status');
+                if (dot) {
+                    dot.style.display = inDock ? '' : 'none';
+                    dot.className = 'strip-status' + (inDock ? ' in-dock' : '');
+                }
+            });
+        }
+
+        const paneManager = {
+            dockview: null,
+            api: null,
+            panelCounter: 0,
+            dockedViews: new Map(),
+
+            init(container) {
+                var theme = Object.assign({}, themeDark, {
+                    name: 'mv-dark',
+                    className: 'dockview-theme-abyss',
+                });
+
+                this.dockview = new DockviewComponent(container, {
+                    theme: theme,
+                    createComponent: function (_options) {
+                        return new VideoPaneRenderer();
+                    },
+                    disableFloatingGroups: true,
+                });
+                this.api = this.dockview.api;
+
+                var self = this;
+
+                // Accept external drags from view strip
+                this.api.onUnhandledDragOverEvent(function (event) {
+                    if (event.nativeEvent.dataTransfer &&
+                        event.nativeEvent.dataTransfer.types.includes('text/plain')) {
+                        event.accept();
+                    }
+                });
+
+                // Handle external drops
+                this.api.onDidDrop(function (event) {
+                    var viewName = event.nativeEvent.dataTransfer
+                        ? event.nativeEvent.dataTransfer.getData('text/plain')
+                        : null;
+                    if (!viewName) return;
+                    var direction = mapPositionToDirection(event.position);
+                    var position;
+                    if (event.group) {
+                        position = { referenceGroup: event.group.id, direction: direction };
+                    } else {
+                        position = { direction: direction };
+                    }
+                    self.addVideoPanel(viewName, position);
+                });
+
+                // Track panel removal
+                this.api.onDidRemovePanel(function (event) {
+                    var renderer = panelRenderers.get(event.id);
+                    if (renderer) {
+                        var viewName = renderer.getViewName();
+                        if (viewName) {
+                            var count = (self.dockedViews.get(viewName) || 1) - 1;
+                            if (count <= 0) {
+                                self.dockedViews.delete(viewName);
+                                updateStripItemStatus(viewName, false);
+                            } else {
+                                self.dockedViews.set(viewName, count);
+                            }
+                        }
+                    }
+                    if (self.api.panels.length === 0) {
+                        var emptyMsg = document.getElementById('videoDockEmpty');
+                        if (emptyMsg) emptyMsg.classList.remove('hidden');
+                    }
+                });
+            },
+
+            addVideoPanel(viewName, position) {
+                var count = this.dockedViews.get(viewName) || 0;
+                this.dockedViews.set(viewName, count + 1);
+                this.panelCounter++;
+                var id = 'video-' + viewName + '-' + this.panelCounter;
+
+                this.api.addPanel({
+                    id: id,
+                    component: 'video-canvas',
+                    title: viewName,
+                    params: { viewName: viewName },
+                    position: position,
+                });
+
+                var emptyMsg = document.getElementById('videoDockEmpty');
+                if (emptyMsg) emptyMsg.classList.add('hidden');
+
+                updateStripItemStatus(viewName, true);
+            },
+
+            addAllViews() {
+                for (var i = 0; i < state.views.length; i++) {
+                    this.addVideoPanel(state.views[i].name);
+                }
+            },
+
+            clearAll() {
+                var panels = this.api ? Array.from(this.api.panels) : [];
+                for (var i = 0; i < panels.length; i++) {
+                    panels[i].api.close();
+                }
+                this.dockedViews.clear();
+                var emptyMsg = document.getElementById('videoDockEmpty');
+                if (emptyMsg) emptyMsg.classList.remove('hidden');
+            },
+        };
+
+        function refreshPaneInteractions() {
+            // Re-attach interaction manager to current views after panel changes
+            if (interactionManager && state.views.length > 0) {
+                interactionManager.attach(state.views);
+            }
+            // Initialize zoom for each view
+            if (videoController) {
+                for (var i = 0; i < state.views.length; i++) {
+                    if (state.views[i].canvas) {
+                        videoController.initZoom(state.views[i]);
+                    }
+                }
+            }
+        }
+
+        function renderDuplicatePanels() {
+            var primaryCanvases = new Map();
+            for (var i = 0; i < state.views.length; i++) {
+                var view = state.views[i];
+                if (view.canvas) primaryCanvases.set(view.name, view);
+            }
+
+            for (var entry of panelRenderers) {
+                var panelId = entry[0];
+                var renderer = entry[1];
+                var viewName = renderer.getViewName();
+                var primaryView = primaryCanvases.get(viewName);
+                if (!primaryView || !primaryView.canvas) continue;
+
+                var panelCanvas = renderer.element.querySelector('canvas:not(.overlay-canvas)');
+                var panelOverlay = renderer.element.querySelector('.overlay-canvas');
+
+                if (panelCanvas && panelCanvas !== primaryView.canvas) {
+                    var ctx = panelCanvas.getContext('2d');
+                    try { ctx.drawImage(primaryView.canvas, 0, 0, panelCanvas.width, panelCanvas.height); }
+                    catch (e) { /* canvas not ready */ }
+                }
+
+                if (panelOverlay && primaryView.overlayCanvas && panelOverlay !== primaryView.overlayCanvas) {
+                    var octx = panelOverlay.getContext('2d');
+                    try { octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height); }
+                    catch (e) { /* canvas not ready */ }
+                }
+            }
+        }
+
+        // ============================================
+        // View Strip
+        // ============================================
+
+        function populateViewStrip() {
+            var list = document.getElementById('viewStripList');
+            list.textContent = '';
+
+            for (var idx = 0; idx < state.views.length; idx++) {
+                (function (view) {
+                    var item = document.createElement('div');
+                    item.className = 'view-strip-item';
+                    item.setAttribute('data-view-name', view.name);
+                    item.draggable = true;
+
+                    var thumb = document.createElement('div');
+                    thumb.className = 'strip-thumb';
+                    var thumbCanvas = document.createElement('canvas');
+                    thumbCanvas.width = 48;
+                    thumbCanvas.height = 36;
+                    thumb.appendChild(thumbCanvas);
+
+                    var label = document.createElement('div');
+                    label.className = 'strip-label';
+                    label.textContent = view.name;
+
+                    var status = document.createElement('div');
+                    status.className = 'strip-status';
+                    status.style.display = 'none';
+
+                    item.appendChild(thumb);
+                    item.appendChild(label);
+                    item.appendChild(status);
+
+                    item.addEventListener('dragstart', function (e) {
+                        e.dataTransfer.setData('text/plain', view.name);
+                        e.dataTransfer.effectAllowed = 'move';
+                        item.classList.add('dragging');
+                    });
+
+                    item.addEventListener('dragend', function () {
+                        item.classList.remove('dragging');
+                    });
+
+                    item.addEventListener('dblclick', function () {
+                        paneManager.addVideoPanel(view.name);
+                    });
+
+                    list.appendChild(item);
+
+                    requestAnimationFrame(function () {
+                        updateViewStripThumbnail(view, thumbCanvas);
+                    });
+                })(state.views[idx]);
+            }
+        }
+
+        function updateViewStripThumbnail(view, thumbCanvas) {
+            if (!view.canvas || !thumbCanvas) return;
+            var ctx = thumbCanvas.getContext('2d');
+            try {
+                ctx.drawImage(view.canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
+            } catch (e) { /* not ready */ }
+        }
+
+        function updateAllStripThumbnails() {
+            var items = document.querySelectorAll('.view-strip-item');
+            items.forEach(function (item) {
+                var viewName = item.getAttribute('data-view-name');
+                var view = state.views.find(function (v) { return v.name === viewName; });
+                var thumbCanvas = item.querySelector('.strip-thumb canvas');
+                if (view && thumbCanvas) {
+                    updateViewStripThumbnail(view, thumbCanvas);
+                }
+            });
+        }
+
+        // ============================================
+        // Split Handles
+        // ============================================
+
+        function setupDragHandle(handle, onDrag) {
+            handle.addEventListener('mousedown', function (e) {
+                e.preventDefault();
+                var startX = e.clientX;
+                handle.classList.add('dragging');
+
+                // Create ghost line
+                var ghost = document.createElement('div');
+                ghost.className = 'split-ghost-line';
+                ghost.style.left = e.clientX + 'px';
+                ghost.style.top = '0';
+                ghost.style.height = '100vh';
+                document.body.appendChild(ghost);
+
+                function onMouseMove(ev) {
+                    ghost.style.left = ev.clientX + 'px';
+                }
+
+                function onMouseUp(ev) {
+                    handle.classList.remove('dragging');
+                    ghost.remove();
+                    document.removeEventListener('mousemove', onMouseMove);
+                    document.removeEventListener('mouseup', onMouseUp);
+                    var totalDeltaX = ev.clientX - startX;
+                    onDrag(totalDeltaX);
+                }
+
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        }
+
+        function setupSplitHandles() {
+            var viewport3dEl = document.getElementById('viewport3dContainer');
+            var handle1 = document.getElementById('splitHandle1');
+            var handle2 = document.getElementById('splitHandle2');
+
+            setupDragHandle(handle1, function (totalDeltaX) {
+                if (viewport3dEl.classList.contains('collapsed')) return;
+                var currentWidth = viewport3dEl.offsetWidth;
+                var newWidth = Math.max(150, currentWidth - totalDeltaX);
+                viewport3dEl.style.width = newWidth + 'px';
+                if (viewport3d) {
+                    setTimeout(function () { viewport3d.resize(); }, 0);
+                }
+            });
+
+            setupDragHandle(handle2, function (totalDeltaX) {
+                var wrapperEl = document.getElementById('infoPanelWrapper');
+                if (wrapperEl.classList.contains('collapsed')) return;
+                var panelEl = document.getElementById('infoPanel');
+                var currentWidth = panelEl.offsetWidth;
+                var newWidth = Math.max(200, currentWidth - totalDeltaX);
+                panelEl.style.width = newWidth + 'px';
+                panelEl.style.minWidth = newWidth + 'px';
+            });
+
+            var infoPanelWrapper = document.getElementById('infoPanelWrapper');
+
+            function updateHandleVisibility() {
+                var vpCollapsed = viewport3dEl.classList.contains('collapsed');
+                var wrapperCollapsed = infoPanelWrapper.classList.contains('collapsed');
+                handle1.classList.toggle('hidden', vpCollapsed);
+                handle2.classList.toggle('hidden', wrapperCollapsed);
+                updateInfoPanelToggleBtn();
+            }
+
+            var observer = new MutationObserver(updateHandleVisibility);
+            observer.observe(viewport3dEl, { attributes: true, attributeFilter: ['class'] });
+            observer.observe(infoPanelWrapper, { attributes: true, attributeFilter: ['class'] });
+            updateHandleVisibility();
+
+            // Wire up the toggle button
+            document.getElementById('infoPanelToggleBtn').addEventListener('click', toggleInfoPanel);
+        }
+
+        // ============================================
+        // Editable Frame Number
+        // ============================================
+
+        (function () {
+            var frameEl = document.getElementById('currentFrame');
+            if (!frameEl) return;
+            frameEl.addEventListener('dblclick', function (e) {
+                e.stopPropagation();
+                var currentVal = state.currentFrame;
+                var input = document.createElement('input');
+                input.type = 'text';
+                input.value = currentVal;
+                input.style.cssText = 'width:60px;font-family:inherit;font-size:inherit;' +
+                    'color:var(--text-primary);background:var(--bg-tertiary);border:1px solid var(--accent);' +
+                    'border-radius:3px;padding:0 4px;text-align:center;outline:none;';
+
+                frameEl.textContent = '';
+                frameEl.appendChild(input);
+                input.focus();
+                input.select();
+
+                function commit() {
+                    var raw = input.value.trim();
+                    var num = parseInt(raw, 10);
+                    if (!isNaN(num) && num >= 0 && num < state.totalFrames) {
+                        if (videoController) videoController.seekToFrame(num);
+                    }
+                    frameEl.textContent = state.currentFrame;
+                }
+
+                function cancel() {
+                    frameEl.textContent = state.currentFrame;
+                }
+
+                input.addEventListener('keydown', function (ev) {
+                    if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+                    if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+                });
+                input.addEventListener('blur', commit);
+            });
+        })();
+
+        // ============================================
+        // Editable FPS Pill
+        // ============================================
+
+        function updateFpsDisplay() {
+            var fpsEl = document.getElementById('fpsDisplay');
+            if (fpsEl) fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
+        }
+
+        (function () {
+            var fpsEl = document.getElementById('fpsDisplay');
+            if (!fpsEl) return;
+            fpsEl.addEventListener('dblclick', function (e) {
+                e.stopPropagation();
+                var currentFps = state.fps || 30;
+                var input = document.createElement('input');
+                input.type = 'text';
+                input.value = currentFps.toFixed(1);
+                input.style.cssText = 'width:50px;font-family:inherit;font-size:inherit;' +
+                    'color:var(--text-primary);background:var(--bg-tertiary);border:1px solid var(--accent);' +
+                    'border-radius:3px;padding:0 4px;text-align:center;outline:none;';
+
+                fpsEl.textContent = '';
+                fpsEl.appendChild(input);
+                input.focus();
+                input.select();
+
+                function commit() {
+                    var raw = input.value.trim();
+                    var num = parseFloat(raw);
+                    if (raw !== '' && !isNaN(num) && num > 0 && num <= 1000) {
+                        state.fps = num;
+                        if (videoController && state.isPlaying) {
+                            videoController.stopPlayback();
+                            videoController.startPlayback();
+                        }
+                    }
+                    fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
+                }
+
+                function cancel() {
+                    fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
+                }
+
+                input.addEventListener('keydown', function (ev) {
+                    if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+                    if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+                });
+                input.addEventListener('blur', commit);
+            });
+        })();
 
         // ============================================
         // Start

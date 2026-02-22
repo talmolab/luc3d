@@ -204,9 +204,147 @@ body {
 .video-grid-section {
   flex: 1;
   display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* --------------------------------------------------------------------------
+   View Strip (left sidebar with video thumbnails)
+   -------------------------------------------------------------------------- */
+
+.view-strip {
+  width: 64px;
+  min-width: 64px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.view-strip-header {
+  padding: 6px 0;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.view-strip-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+.view-strip-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px;
+  margin: 2px 4px;
+  border-radius: 4px;
+  cursor: grab;
+  transition: background var(--transition-fast);
+  position: relative;
+}
+
+.view-strip-item:hover {
+  background: var(--bg-button);
+}
+
+.view-strip-item.active {
+  background: var(--accent-dim);
+  outline: 1px solid var(--accent);
+}
+
+.view-strip-item.dragging {
+  opacity: 0.5;
+}
+
+.view-strip-item .strip-thumb {
+  width: 48px;
+  height: 36px;
+  background: #111;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.view-strip-item .strip-thumb canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.view-strip-item .strip-label {
+  font-size: 9px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  text-align: center;
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-strip-item .strip-status {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success-color);
+}
+
+.view-strip-item .strip-status.in-dock {
+  background: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Video Dock (main viewing area)
+   -------------------------------------------------------------------------- */
+
+.video-dock {
+  flex: 1;
+  display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  position: relative;
+}
+
+.video-dock-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.video-dock-empty.hidden {
+  display: none;
+}
+
+.dock-empty-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+  opacity: 0.4;
 }
 
 /* --------------------------------------------------------------------------
@@ -236,18 +374,28 @@ body {
 }
 
 /* --------------------------------------------------------------------------
-   Video Grid (2x2)
+   Dockview Integration
    -------------------------------------------------------------------------- */
 
-.video-grid {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-  gap: 2px;
-  background: #000000;
-  min-width: 0;
-  min-height: 0;
+.video-dock .dv-dockview {
+  width: 100%;
+  height: 100%;
+}
+
+.dockview-theme-abyss {
+  --dv-background-color: #1a1a1a;
+  --dv-activegroup-visiblepanel-tab-background-color: #2a2a2a;
+  --dv-activegroup-hiddenpanel-tab-background-color: #222222;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #252525;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #1e1e1e;
+  --dv-tab-font-size: 11px;
+  --dv-paneview-header-border-color: #3a3a3a;
+  --dv-separator-border: #3a3a3a;
+}
+
+.dv-dockview .video-cell {
+  position: absolute;
+  inset: 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -265,19 +413,24 @@ body {
 
 .video-cell .canvas-wrapper {
   position: relative;
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 100%;
+  display: inline-block;
+  max-width: 100%;
+  max-height: 100%;
   line-height: 0;
 }
 
 .video-cell .canvas-wrapper canvas {
-  grid-area: 1 / 1;
   display: block;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .video-cell .canvas-wrapper .overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: auto;
   cursor: default;
 }
@@ -320,8 +473,7 @@ body {
   z-index: 11;
 }
 
-.video-cell.zoomed::after {
-  content: "ZOOMED";
+.unzoom-btn {
   position: absolute;
   top: 8px;
   right: 8px;
@@ -333,8 +485,14 @@ body {
   letter-spacing: 0.8px;
   border: 1px solid var(--accent);
   border-radius: 3px;
-  pointer-events: none;
+  cursor: pointer;
   z-index: 6;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.unzoom-btn:hover {
+  background: var(--accent);
+  color: #ffffff;
 }
 
 /* --------------------------------------------------------------------------
@@ -502,6 +660,14 @@ body {
 .frame-display .current-frame {
   color: var(--text-primary);
   font-weight: 600;
+  cursor: default;
+  padding: 0 2px;
+  border-radius: 3px;
+  transition: background var(--transition-fast);
+}
+
+.frame-display .current-frame:hover {
+  background: var(--bg-tertiary);
 }
 
 /* Transport controls */
@@ -602,14 +768,33 @@ body {
   height: 8px;
 }
 
+/* FPS pill */
+.fps-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  cursor: default;
+  user-select: none;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.fps-pill:hover {
+  border-color: var(--border-light);
+  background: var(--bg-button);
+}
+
 /* FPS display */
 .fps-display {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 12px;
   color: var(--text-muted);
   white-space: nowrap;
-  min-width: 60px;
-  text-align: right;
+  min-width: 40px;
+  text-align: center;
 }
 
 /* --------------------------------------------------------------------------
@@ -620,22 +805,14 @@ body {
   width: var(--info-panel-width);
   min-width: var(--info-panel-width);
   background: var(--bg-secondary);
-  border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
   flex-shrink: 0;
+  flex: 1;
   transition: width var(--transition-normal), min-width var(--transition-normal),
     opacity var(--transition-normal);
-}
-
-.info-panel.collapsed {
-  width: 0;
-  min-width: 0;
-  opacity: 0;
-  overflow: hidden;
-  border-left: none;
 }
 
 /* Info sections */
@@ -721,6 +898,10 @@ body {
   border-bottom: 2px solid transparent;
   cursor: pointer;
   transition: color var(--transition-fast), border-color var(--transition-fast);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .panel-tab:hover {
@@ -1247,20 +1428,57 @@ input[type="range"]::-moz-range-track {
   background: var(--border-color);
   flex-shrink: 0;
   transition: background 0.15s;
+  position: relative;
+  z-index: 5;
 }
 
-.split-handle:hover {
+.split-handle:hover,
+.split-handle.dragging {
   background: var(--accent);
 }
 
 .split-handle.vertical {
-  width: 4px;
+  width: 5px;
   cursor: col-resize;
 }
 
 .split-handle.horizontal {
-  height: 4px;
+  height: 5px;
   cursor: row-resize;
+}
+
+/* Hide split handles when adjacent panel is collapsed */
+.split-handle.hidden {
+  display: none;
+}
+
+/* Ghost line shown during split handle drag */
+.split-ghost-line {
+  position: fixed;
+  width: 3px;
+  background: var(--accent);
+  z-index: 9999;
+  pointer-events: none;
+  box-shadow: 0 0 8px rgba(102, 126, 234, 0.6);
+}
+
+/* --------------------------------------------------------------------------
+   Info Panel Wrapper & Toggle Button
+   -------------------------------------------------------------------------- */
+
+.info-panel-wrapper {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-color);
+}
+
+.info-panel-wrapper.collapsed .info-panel {
+  width: 0;
+  min-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  border-left: none;
 }
 
 /* --------------------------------------------------------------------------
@@ -1325,7 +1543,7 @@ kbd {
    -------------------------------------------------------------------------- */
 
 @media (max-width: 900px) {
-  .info-panel {
+  .info-panel-wrapper {
     position: absolute;
     right: 0;
     top: 0;
@@ -1334,7 +1552,7 @@ kbd {
     box-shadow: -4px 0 16px rgba(0, 0, 0, 0.5);
   }
 
-  .info-panel.collapsed {
+  .info-panel-wrapper.collapsed {
     box-shadow: none;
   }
 }
@@ -1345,9 +1563,14 @@ kbd {
     min-width: 100%;
   }
 
-  .video-grid {
-    grid-template-columns: 1fr;
-    grid-template-rows: repeat(4, 1fr);
+  .view-strip {
+    width: 48px;
+    min-width: 48px;
+  }
+
+  .view-strip-item .strip-thumb {
+    width: 36px;
+    height: 27px;
   }
 
   .controls-bar {
