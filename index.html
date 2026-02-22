@@ -465,14 +465,14 @@
 
     <!-- Module scripts (order matters: dependencies first) -->
     <script src="video.js?v=4"></script>
-    <script src="pose-data.js"></script>
-    <script src="triangulation.js"></script>
+    <script src="pose-data.js?v=5"></script>
+    <script src="triangulation.js?v=5"></script>
     <script src="demo-data.js"></script>
-    <script src="overlays.js"></script>
-    <script src="interaction.js"></script>
+    <script src="overlays.js?v=5"></script>
+    <script src="interaction.js?v=5"></script>
     <script src="viewport3d.js"></script>
     <script src="timeline.js"></script>
-    <script src="file-io.js?v=4"></script>
+    <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
 
     <script>
@@ -1299,8 +1299,36 @@
                 },
 
                 onNodeVisibilityToggled: function (viewName, instanceGroup, nodeIdx) {
+                    const inst = instanceGroup.getInstance(viewName);
                     const nodeName = state.session.skeleton.nodes[nodeIdx] || 'node ' + nodeIdx;
-                    setStatus('Toggled visibility: ' + nodeName + ' in ' + viewName);
+                    const isOccluded = inst && inst.occluded && inst.occluded[nodeIdx];
+                    setStatus(nodeName + ': ' + (isOccluded ? 'occluded' : 'visible'));
+
+                    instanceGroup.markDirty();
+
+                    // Re-triangulate
+                    if (state.session.cameras.length >= 2) {
+                        var result = triangulateAndReproject(instanceGroup, state.session.cameras);
+                        instanceGroup.points3d = result.points3d;
+                        instanceGroup.reprojections = result.reprojections;
+                        instanceGroup.observedPoints = {};
+                        for (var cn of instanceGroup.cameraNames) {
+                            var cinst = instanceGroup.getInstance(cn);
+                            instanceGroup.observedPoints[cn] = cinst ? cinst.points : null;
+                        }
+                        instanceGroup.markClean();
+                    }
+
+                    // Update 3D viewport
+                    if (viewport3d) {
+                        var groups = getInstanceGroupsForFrame(state.currentFrame);
+                        viewport3d.setFrame(groups);
+                    }
+
+                    // Update timeline
+                    if (timeline) {
+                        timeline.setFrameModified(state.currentFrame, true);
+                    }
                 },
 
                 onInstanceDeleted: function (frameIdx, group) {
@@ -3385,6 +3413,7 @@
                                     type: inst.type,
                                     score: inst.score,
                                     modified: inst.modified,
+                                    occluded: inst.occluded,
                                 };
                             }
                             frameData.instanceGroups.push(groupData);
@@ -3401,6 +3430,7 @@
                             type: unlinked.instance.type || 'user',
                             score: unlinked.instance.score || 1.0,
                             modified: unlinked.instance.modified || false,
+                            occluded: unlinked.instance.occluded,
                         });
                     }
                 }
@@ -3705,6 +3735,7 @@
                                     instData.score || 1.0
                                 );
                                 inst.modified = instData.modified || false;
+                                if (instData.occluded) inst.occluded = instData.occluded;
                                 group.addInstance(camName, inst);
                                 fg.addInstance(camName, inst);
                             }
@@ -3725,6 +3756,7 @@
                                 ulData.score || 1.0
                             );
                             ulInst.modified = ulData.modified || false;
+                            if (ulData.occluded) ulInst.occluded = ulData.occluded;
                             var unlinked = new UnlinkedInstance(ulInst, ulData.cameraName);
                             fg.addUnlinkedInstance(ulData.cameraName, unlinked);
                         }
@@ -4713,12 +4745,14 @@
                     }
                     for (var ii2 = 0; ii2 < fd2.instances.length; ii2++) {
                         var instData = fd2.instances[ii2];
-                        fg.addInstance(camName, new Instance(
+                        var inst = new Instance(
                             instData.points,
                             instData.trackIdx >= 0 ? instData.trackIdx : 0,
                             instData.type || 'predicted',
                             instData.score || 0
-                        ));
+                        );
+                        if (instData.occluded) inst.occluded = instData.occluded;
+                        fg.addInstance(camName, inst);
                     }
                     if (fi > 0 && fi % BATCH === 0) {
                         showLoading('Building session (' + fi + '/' + totalFrames + ')...');
