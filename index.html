@@ -6771,6 +6771,83 @@
         }
 
         /**
+         * Set up draggable threshold lines on QC histogram canvases.
+         */
+        (function setupHistogramThresholdDrag() {
+            var dragConfigs = [
+                { canvasId: 'qcHistReproj',   threshKey: 'reproj',     distKey: 'reproj',     title: 'Reprojection (px)', color: '#6b7280' },
+                { canvasId: 'qcHistVelocity',  threshKey: 'velocity',   distKey: 'velocity',   title: 'Velocity (u/f)',    color: '#fbbf24' },
+                { canvasId: 'qcHistLimb',      threshKey: 'limbZScore',  distKey: 'limbZScore', title: 'Limb Z-Score',      color: '#22c55e' },
+            ];
+
+            for (var di = 0; di < dragConfigs.length; di++) {
+                (function (cfg) {
+                    var canvas = document.getElementById(cfg.canvasId);
+                    var dragging = false;
+
+                    function xToValue(e) {
+                        var layout = canvas._histLayout;
+                        if (!layout) return null;
+                        var rect = canvas.getBoundingClientRect();
+                        var scaleX = canvas.width / rect.width;
+                        var px = (e.clientX - rect.left) * scaleX;
+                        var frac = (px - layout.padLeft) / layout.plotWidth;
+                        frac = Math.max(0.01, Math.min(1, frac));
+                        return frac * layout.displayMax;
+                    }
+
+                    function isNearThreshold(e) {
+                        var layout = canvas._histLayout;
+                        if (!layout || !state.qcResults) return false;
+                        var thresh = state.qcResults.autoThresholds[cfg.threshKey];
+                        var rect = canvas.getBoundingClientRect();
+                        var scaleX = canvas.width / rect.width;
+                        var px = (e.clientX - rect.left) * scaleX;
+                        var threshPx = layout.padLeft + (thresh / layout.displayMax) * layout.plotWidth;
+                        return Math.abs(px - threshPx) < 10;
+                    }
+
+                    canvas.addEventListener('mousemove', function (e) {
+                        if (dragging) {
+                            var val = xToValue(e);
+                            if (val == null || !state.qcResults) return;
+                            state.qcResults.autoThresholds[cfg.threshKey] = val;
+                            var dist = state.qcResults.distributions[cfg.distKey];
+                            QC.drawHistogram(canvas, dist, val, { title: cfg.title, color: cfg.color });
+                        } else {
+                            canvas.style.cursor = isNearThreshold(e) ? 'ew-resize' : '';
+                        }
+                    });
+
+                    canvas.addEventListener('mousedown', function (e) {
+                        if (isNearThreshold(e)) {
+                            dragging = true;
+                            e.preventDefault();
+                        }
+                    });
+
+                    window.addEventListener('mouseup', function () {
+                        if (dragging) {
+                            dragging = false;
+                            canvas.style.cursor = '';
+                            // Re-run analysis with the user's thresholds
+                            if (state.qcResults && state.session) {
+                                var overrides = {};
+                                var thresh = state.qcResults.autoThresholds;
+                                overrides[cfg.threshKey] = thresh[cfg.threshKey];
+                                state.qcResults = QC.runFullAnalysis(
+                                    state.session, state.triangulationResults,
+                                    { overrideThresholds: thresh }
+                                );
+                                updateQCPanel();
+                            }
+                        }
+                    });
+                })(dragConfigs[di]);
+            }
+        })();
+
+        /**
          * Navigate to the next flagged frame.
          */
         function qcNextIssue() {

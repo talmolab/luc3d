@@ -982,7 +982,7 @@ var QC = (function () {
             ctx.fillStyle = '#888';
             ctx.font = '10px monospace';
             ctx.fillText('No data', 4, h / 2);
-            return;
+            return { displayMax: 0 };
         }
 
         var sorted = values.slice().sort(function (a, b) { return a - b; });
@@ -990,6 +990,8 @@ var QC = (function () {
         var displayMax = percentile(sorted, 99);
         if (displayMax <= 0) displayMax = sorted[sorted.length - 1] || 1;
 
+        var padLeft = 4;
+        var plotWidth = w - 8;
         var numBins = Math.min(40, Math.max(10, Math.floor(w / 6)));
         var binWidth = displayMax / numBins;
         var bins = new Array(numBins).fill(0);
@@ -1006,13 +1008,13 @@ var QC = (function () {
         var titleHeight = 14;
         var plotTop = titleHeight;
         var plotHeight = h - titleHeight - 4;
-        var barW = (w - 8) / numBins;
+        var barW = plotWidth / numBins;
 
         // Title
         if (options.title) {
             ctx.fillStyle = '#ccc';
             ctx.font = '10px monospace';
-            ctx.fillText(options.title, 4, 10);
+            ctx.fillText(options.title, padLeft, 10);
         }
 
         // Bars
@@ -1022,23 +1024,32 @@ var QC = (function () {
 
         for (var bi = 0; bi < numBins; bi++) {
             var barH = (bins[bi] / maxCount) * plotHeight;
-            var x = 4 + bi * barW;
+            var x = padLeft + bi * barW;
             var y = plotTop + plotHeight - barH;
             ctx.fillStyle = bi >= thresholdBinIdx ? outlierColor : baseColor;
             ctx.fillRect(x, y, Math.max(1, barW - 1), barH);
         }
 
         // Threshold line
-        var threshX = 4 + (threshold / displayMax) * (w - 8);
-        if (threshX > 4 && threshX < w - 4) {
+        var threshX = padLeft + (threshold / displayMax) * plotWidth;
+        if (threshX > padLeft && threshX < padLeft + plotWidth) {
             ctx.strokeStyle = '#f97316';
             ctx.setLineDash([3, 2]);
-            ctx.lineWidth = 1;
+            ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.moveTo(threshX, plotTop);
             ctx.lineTo(threshX, plotTop + plotHeight);
             ctx.stroke();
             ctx.setLineDash([]);
+
+            // Threshold value label
+            ctx.fillStyle = '#f97316';
+            ctx.font = '9px monospace';
+            var threshLabel = threshold.toFixed(1);
+            var labelW = ctx.measureText(threshLabel).width;
+            var labelX = threshX + 3;
+            if (labelX + labelW > w - 2) labelX = threshX - labelW - 3;
+            ctx.fillText(threshLabel, labelX, plotTop + 10);
         }
 
         // Outlier count label
@@ -1053,6 +1064,15 @@ var QC = (function () {
             ctx.fillText(outlierCount + ' outlier' + (outlierCount > 1 ? 's' : ''), w - 4, 10);
             ctx.textAlign = 'left';
         }
+
+        // Store layout info on canvas for drag interaction
+        canvas._histLayout = {
+            displayMax: displayMax,
+            padLeft: padLeft,
+            plotWidth: plotWidth,
+        };
+
+        return { displayMax: displayMax };
     }
 
     // --------------------------------------------------
@@ -1371,8 +1391,15 @@ var QC = (function () {
             });
         }
 
-        // Auto-thresholds
+        // Auto-thresholds (allow caller overrides)
         var autoThresholds = computeAutoThresholds(distributions, autoThresholdConfig);
+        if (config.overrideThresholds) {
+            var ot = config.overrideThresholds;
+            var otKeys = Object.keys(ot);
+            for (var oti = 0; oti < otKeys.length; oti++) {
+                autoThresholds[otKeys[oti]] = ot[otKeys[oti]];
+            }
+        }
 
         // Per-frame analysis
         var frameIssues = new Map();
