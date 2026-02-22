@@ -789,14 +789,14 @@ function parseAnalysisH5(f, filename) {
                 pointScores = psDs.value;
                 pointScoresShape = psDs.shape;
             }
-        } catch (e) {}
+        } catch (e) { }
 
         // --- Read instance scores (optional) ---
         var instanceScores = null;
         try {
             var isDs = f.get('instance_scores');
             if (isDs) { instanceScores = isDs.value; }
-        } catch (e) {}
+        } catch (e) { }
 
         // --- Read track occupancy (optional) ---
         var trackOccupancy = null;
@@ -807,7 +807,7 @@ function parseAnalysisH5(f, filename) {
                 trackOccupancy = toDs.value;
                 trackOccShape = toDs.shape;
             }
-        } catch (e) {}
+        } catch (e) { }
 
         // --- Build frames array ---
         progress('Building frame data...');
@@ -920,8 +920,8 @@ function parseAnalysisH5(f, filename) {
         });
 
     } catch (err) {
-        try { f.close(); } catch (e) {}
-        try { FS.unmount('/work'); } catch (e) {}
+        try { f.close(); } catch (e) { }
+        try { FS.unmount('/work'); } catch (e) { }
         var errMsg = (err.message || String(err));
         if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
         postMessage({ type: 'error', message: errMsg });
