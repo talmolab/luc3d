@@ -37,6 +37,7 @@
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
                     <div class="menu-dropdown-item" id="menuLoadSession">Load Session...</div>
+                    <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Session Folder...</div>
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
@@ -1489,6 +1490,11 @@
             document.getElementById('menuLoadSession').addEventListener('click', function () {
                 closeMenus();
                 handleLoadSession();
+            });
+
+            document.getElementById('menuLoadSessionFolder').addEventListener('click', function () {
+                closeMenus();
+                handleLoadSessionFolder();
             });
 
             document.getElementById('menuLoadSlp').addEventListener('click', function () {
@@ -4507,6 +4513,431 @@
             } catch (err) {
                 console.error('Failed to load session:', err);
                 setStatus('Session error: ' + err.message, 'error');
+            }
+        }
+
+        // ============================================
+        // Session Folder Import
+        // ============================================
+
+        /**
+         * Show a popup for unmatched SLP files, letting user pick a video for each.
+         * Returns a Map<slpFile, videoFile> of user-selected matches.
+         */
+        function showUnmatchedSlpPopup(unmatchedSlps, availableVideoFiles) {
+            return new Promise(function (resolve) {
+                var overlay = document.createElement('div');
+                overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+
+                var card = document.createElement('div');
+                card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;';
+
+                var title = document.createElement('div');
+                title.style.cssText = 'color:#fff;font-size:18px;font-weight:600;margin-bottom:4px;';
+                title.textContent = 'Unmatched SLP Files';
+                card.appendChild(title);
+
+                var sub = document.createElement('div');
+                sub.style.cssText = 'color:#aaa;font-size:13px;margin-bottom:16px;';
+                sub.textContent = 'These SLP files have no matching video. Select a video for each or skip.';
+                card.appendChild(sub);
+
+                var table = document.createElement('table');
+                table.style.cssText = 'width:100%;border-collapse:collapse;';
+
+                var thead = document.createElement('thead');
+                thead.innerHTML = '<tr style="color:#aaa;font-size:12px;text-align:left;"><th style="padding:6px 8px;">SLP File</th><th style="padding:6px 8px;">Video</th></tr>';
+                table.appendChild(thead);
+
+                var tbody = document.createElement('tbody');
+                var selections = new Map(); // slpIndex -> File|null
+
+                for (var si = 0; si < unmatchedSlps.length; si++) {
+                    (function (idx) {
+                        var slp = unmatchedSlps[idx];
+                        var tr = document.createElement('tr');
+                        tr.style.cssText = 'border-top:1px solid var(--border,#333);';
+
+                        var tdName = document.createElement('td');
+                        tdName.style.cssText = 'padding:8px;color:#e0e0e0;font-size:13px;';
+                        tdName.textContent = slp.name;
+                        tr.appendChild(tdName);
+
+                        var tdBtn = document.createElement('td');
+                        tdBtn.style.cssText = 'padding:8px;';
+
+                        var pickBtn = document.createElement('button');
+                        pickBtn.style.cssText = 'padding:6px 14px;font-size:12px;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:4px;';
+                        pickBtn.textContent = 'Select Video...';
+
+                        var label = document.createElement('span');
+                        label.style.cssText = 'color:#aaa;font-size:12px;margin-left:8px;';
+                        label.textContent = '(none)';
+
+                        pickBtn.addEventListener('click', async function () {
+                            var files = await pickVideoFiles();
+                            if (files.length > 0) {
+                                selections.set(idx, files[0]);
+                                label.textContent = files[0].name;
+                                label.style.color = '#4a9eff';
+                            }
+                        });
+
+                        tdBtn.appendChild(pickBtn);
+                        tdBtn.appendChild(label);
+                        tr.appendChild(tdBtn);
+                        tbody.appendChild(tr);
+                    })(si);
+                }
+                table.appendChild(tbody);
+                card.appendChild(table);
+
+                var btnRow = document.createElement('div');
+                btnRow.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:16px;';
+
+                var skipBtn = document.createElement('button');
+                skipBtn.style.cssText = 'padding:10px 24px;font-size:14px;cursor:pointer;background:var(--bg-tertiary,#333);color:#ccc;border:1px solid var(--border,#444);border-radius:6px;';
+                skipBtn.textContent = 'Skip Unmatched';
+                skipBtn.addEventListener('click', function () {
+                    overlay.remove();
+                    resolve(selections);
+                });
+
+                var doneBtn = document.createElement('button');
+                doneBtn.style.cssText = 'padding:10px 24px;font-size:14px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
+                doneBtn.textContent = 'Continue';
+                doneBtn.addEventListener('click', function () {
+                    overlay.remove();
+                    resolve(selections);
+                });
+
+                btnRow.appendChild(skipBtn);
+                btnRow.appendChild(doneBtn);
+                card.appendChild(btnRow);
+                overlay.appendChild(card);
+                document.body.appendChild(overlay);
+            });
+        }
+
+        async function handleLoadSessionFolder() {
+            try {
+                setStatus('Pick session folder...', 'warning');
+                var allFiles = await pickFolder();
+                if (allFiles.length === 0) {
+                    setStatus('No folder selected', 'warning');
+                    return;
+                }
+
+                showLoading('Scanning folder...');
+
+                // Categorize files by subfolder
+                var calibFile = null;
+                var videoFiles = [];
+                var slpFiles = [];
+                var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
+
+                for (var fi = 0; fi < allFiles.length; fi++) {
+                    var file = allFiles[fi];
+                    var relPath = file.webkitRelativePath || file.name;
+                    // Split into path parts (skip the root folder name)
+                    var parts = relPath.split('/');
+                    if (parts.length < 2) continue;
+                    var subPath = parts.slice(1).join('/').toLowerCase();
+                    var fileName = parts[parts.length - 1];
+                    var fileNameLower = fileName.toLowerCase();
+
+                    // Check for calibration at root level
+                    if (parts.length === 2 && (fileNameLower === 'calibration.toml' || fileNameLower === 'calibration.json')) {
+                        calibFile = file;
+                    }
+                    // Check for videos in videos/ subfolder
+                    else if (subPath.startsWith('videos/') && parts.length === 3) {
+                        var ext = fileNameLower.substring(fileNameLower.lastIndexOf('.'));
+                        if (videoExtensions.indexOf(ext) >= 0) {
+                            videoFiles.push(file);
+                        }
+                    }
+                    // Check for SLP files in slp/ subfolder
+                    else if (subPath.startsWith('slp/') && parts.length === 3) {
+                        if (fileNameLower.endsWith('.slp') || fileNameLower.endsWith('.h5')) {
+                            slpFiles.push(file);
+                        }
+                    }
+                }
+
+                console.log('[session-folder] Found:', {
+                    calibration: calibFile ? calibFile.name : null,
+                    videos: videoFiles.map(function (f) { return f.name; }),
+                    slps: slpFiles.map(function (f) { return f.name; }),
+                });
+
+                if (slpFiles.length === 0) {
+                    hideLoading();
+                    setStatus('No SLP files found in slp/ subfolder', 'error');
+                    return;
+                }
+
+                // 1. Load calibration if found
+                var cameras = [];
+                if (calibFile) {
+                    showLoading('Loading calibration...');
+                    var calibText = await calibFile.text();
+                    try {
+                        if (calibFile.name.toLowerCase().endsWith('.toml')) {
+                            cameras = parseCalibrationTOML(calibText);
+                        } else {
+                            cameras = parseCalibrationJSON(calibText);
+                        }
+                        console.log('[session-folder] Loaded ' + cameras.length + ' cameras from calibration');
+                    } catch (calibErr) {
+                        console.error('[session-folder] Calibration parse error:', calibErr);
+                        setStatus('Warning: calibration parse failed — load separately later', 'warning');
+                    }
+                } else {
+                    console.log('[session-folder] No calibration file found — can be loaded separately');
+                }
+
+                // 2. Match SLPs to videos by filename stem
+                var matchedPairs = []; // { slpFile, videoFile }
+                var unmatchedSlps = [];
+                var usedVideoIndices = new Set();
+
+                for (var si = 0; si < slpFiles.length; si++) {
+                    var slpFile = slpFiles[si];
+                    var slpStem = slpFile.name.replace(/\.[^.]+$/, '').toLowerCase();
+
+                    var matchedVideo = null;
+                    for (var vi = 0; vi < videoFiles.length; vi++) {
+                        if (usedVideoIndices.has(vi)) continue;
+                        var videoStem = videoFiles[vi].name.replace(/\.[^.]+$/, '').toLowerCase();
+                        if (slpStem === videoStem) {
+                            matchedVideo = videoFiles[vi];
+                            usedVideoIndices.add(vi);
+                            break;
+                        }
+                    }
+
+                    if (matchedVideo) {
+                        matchedPairs.push({ slpFile: slpFile, videoFile: matchedVideo });
+                    } else {
+                        unmatchedSlps.push(slpFile);
+                    }
+                }
+
+                console.log('[session-folder] Matched:', matchedPairs.length, 'Unmatched:', unmatchedSlps.length);
+
+                // 3. Handle unmatched SLPs — show popup for user to assign videos
+                if (unmatchedSlps.length > 0) {
+                    hideLoading();
+                    var userSelections = await showUnmatchedSlpPopup(unmatchedSlps, videoFiles);
+                    for (var [idx, videoFile] of userSelections) {
+                        if (videoFile) {
+                            matchedPairs.push({ slpFile: unmatchedSlps[idx], videoFile: videoFile });
+                        }
+                    }
+                }
+
+                // 4. Load each SLP + matched video
+                // Reset state for new session
+                if (state.session || state.views.length > 0) {
+                    if (videoController && state.isPlaying) videoController.pause();
+                    videoController = null;
+                    state.views = [];
+                    state.videoFiles = [];
+                    paneManager.clearAll();
+                    var stripList = document.getElementById('viewStripList');
+                    if (stripList) stripList.innerHTML = '';
+                }
+
+                var firstSession = null;
+
+                for (var pi = 0; pi < matchedPairs.length; pi++) {
+                    var pair = matchedPairs[pi];
+                    var pairStem = pair.slpFile.name.replace(/\.[^.]+$/, '');
+
+                    showLoading('Loading SLP: ' + pair.slpFile.name + ' (' + (pi + 1) + '/' + matchedPairs.length + ')...');
+
+                    // Parse SLP
+                    var slpData;
+                    try {
+                        slpData = await parseSlpH5(pair.slpFile, function (msg) {
+                            showLoading(msg);
+                        });
+                    } catch (parseErr) {
+                        console.error('[session-folder] Failed to parse ' + pair.slpFile.name + ':', parseErr);
+                        setStatus('Failed to parse ' + pair.slpFile.name + ': ' + parseErr.message, 'error');
+                        continue;
+                    }
+
+                    // Extract camera info from SLP
+                    var slpCameras = [];
+                    if (slpData.sessions && slpData.sessions.length > 0) {
+                        var sess = slpData.sessions[0];
+                        if (sess.calibration && sess.calibration.cameras) {
+                            for (var ci = 0; ci < sess.calibration.cameras.length; ci++) {
+                                var cc = sess.calibration.cameras[ci];
+                                slpCameras.push(new Camera(
+                                    cc.name || ('cam_' + ci),
+                                    cc.matrix || [[1,0,0],[0,1,0],[0,0,1]],
+                                    cc.distortions || [0,0,0,0,0],
+                                    cc.rotation || [0,0,0],
+                                    cc.translation || [0,0,0],
+                                    cc.size || [640,480]
+                                ));
+                            }
+                        }
+                    }
+
+                    // Use calibration file cameras if available, otherwise SLP cameras
+                    var sessionCameras = cameras.length > 0 ? cameras : slpCameras;
+
+                    // Build skeleton
+                    var skeleton;
+                    if (slpData.skeleton) {
+                        skeleton = new Skeleton(
+                            slpData.skeleton.name || 'skeleton',
+                            slpData.skeleton.nodes || [],
+                            slpData.skeleton.edges || []
+                        );
+                    } else {
+                        skeleton = new Skeleton('skeleton', [], []);
+                    }
+
+                    // Build session if first SLP, or merge into existing
+                    var tracks = slpData.tracks || ['track_0'];
+
+                    if (!state.session) {
+                        state.session = new Session(sessionCameras, skeleton, tracks);
+                        firstSession = state.session;
+                    }
+
+                    // Add frames from SLP data
+                    if (slpData.frames) {
+                        for (var fri = 0; fri < slpData.frames.length; fri++) {
+                            var frameData = slpData.frames[fri];
+                            var frameIdx = frameData.frame_idx !== undefined ? frameData.frame_idx : fri;
+
+                            if (!state.session.frameGroups.has(frameIdx)) {
+                                state.session.addFrameGroup(new FrameGroup(frameIdx));
+                            }
+                            var fg = state.session.getFrameGroup(frameIdx);
+
+                            if (frameData.instances) {
+                                for (var ii = 0; ii < frameData.instances.length; ii++) {
+                                    var inst = frameData.instances[ii];
+                                    var videoIdx = inst.video_idx !== undefined ? inst.video_idx : 0;
+
+                                    // Map video_idx to camera name
+                                    var camName = null;
+                                    if (slpData.videos && slpData.videos[videoIdx]) {
+                                        var vRef = slpData.videos[videoIdx];
+                                        var refFn = vRef.sourceFilename || vRef.filename || '';
+                                        camName = refFn.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '');
+                                    }
+                                    if (!camName && sessionCameras[videoIdx]) {
+                                        camName = sessionCameras[videoIdx].name;
+                                    }
+                                    if (!camName) camName = pairStem;
+
+                                    var points = inst.points || [];
+                                    var trackIdx = inst.track_idx !== undefined ? inst.track_idx : 0;
+                                    var instType = inst.from_predicted !== undefined ? 'predicted' : 'user';
+                                    var score = inst.score !== undefined ? inst.score : 1.0;
+
+                                    var instance = new Instance(points, trackIdx, instType, score);
+                                    fg.addInstance(camName, instance);
+                                }
+                            }
+                        }
+                    }
+
+                    // Load the matched video
+                    showLoading('Loading video: ' + pair.videoFile.name + '...');
+                    try {
+                        var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                        await decoder.init(pair.videoFile);
+
+                        var vw = decoder.videoTrack.video.width;
+                        var vh = decoder.videoTrack.video.height;
+                        var camName2 = pairStem;
+
+                        // If a camera with this name exists, use it
+                        var matchedCam = sessionCameras.find(function (c) {
+                            return c.name.toLowerCase() === camName2.toLowerCase();
+                        });
+                        if (matchedCam) camName2 = matchedCam.name;
+
+                        state.videoFiles.push({
+                            file: pair.videoFile,
+                            name: camName2,
+                            decoder: decoder,
+                            videoWidth: vw,
+                            videoHeight: vh,
+                            frameCount: decoder.samples.length,
+                            assignedCamera: camName2,
+                        });
+
+                        // Ensure camera exists in session
+                        if (!state.session.cameras.some(function (c) { return c.name === camName2; })) {
+                            state.session.cameras.push(
+                                new Camera(camName2, [[600,0,320],[0,600,240],[0,0,1]],
+                                    [0,0,0,0,0], [0,0,0], [0,0,0], [vw, vh])
+                            );
+                        }
+
+                        // Create view data (not added to dock — user drags from strip)
+                        state.views.push({
+                            name: camName2,
+                            decoder: decoder,
+                            canvas: null,
+                            ctx: null,
+                            overlayCanvas: null,
+                            overlayCtx: null,
+                            videoWidth: vw,
+                            videoHeight: vh,
+                            wrapper: null,
+                        });
+
+                        if (state.totalFrames === 0 || decoder.samples.length > state.totalFrames) {
+                            state.totalFrames = decoder.samples.length;
+                        }
+                        if (state.fps === 0 || state.fps === 30) {
+                            state.fps = decoder.videoTrack.duration > 0
+                                ? decoder.samples.length / (decoder.videoTrack.duration / decoder.videoTrack.timescale)
+                                : 30;
+                        }
+                    } catch (vidErr) {
+                        console.error('[session-folder] Failed to load video ' + pair.videoFile.name + ':', vidErr);
+                    }
+                }
+
+                // 5. Finalize
+                if (state.views.length > 0) {
+                    populateViewStrip();
+                    rebuildVideoController();
+                    updateTotalFrames();
+                    fitCanvasesToCells();
+                }
+
+                // Set up 3D viewport
+                if (state.session && state.session.cameras.length > 0) {
+                    setup3DViewport();
+                }
+
+                precomputeTriangulation();
+                updateInfoPanel();
+                updateFpsDisplay();
+
+                hideLoading();
+
+                var statusMsg = 'Loaded ' + matchedPairs.length + ' SLP/video pair(s)';
+                if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
+                setStatus(statusMsg, 'success');
+
+            } catch (err) {
+                console.error('[session-folder] Error:', err);
+                hideLoading();
+                setStatus('Session folder error: ' + err.message, 'error');
             }
         }
 

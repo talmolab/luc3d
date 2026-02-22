@@ -66,6 +66,47 @@ function pickFiles(options) {
     });
 }
 
+/**
+ * Pick a folder using webkitdirectory. Returns an array of File objects
+ * with webkitRelativePath set (e.g., "folder/videos/back.mp4").
+ */
+function pickFolder() {
+    return new Promise(function (resolve) {
+        var resolved = false;
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.webkitdirectory = true;
+
+        function done(files) {
+            if (resolved) return;
+            resolved = true;
+            resolve(files);
+        }
+
+        input.addEventListener('change', function () {
+            done(input.files ? Array.from(input.files) : []);
+        });
+
+        input.addEventListener('cancel', function () {
+            done([]);
+        });
+
+        var focusTimer = null;
+        function onFocus() {
+            clearTimeout(focusTimer);
+            focusTimer = setTimeout(function () {
+                window.removeEventListener('focus', onFocus);
+                done([]);
+            }, 500);
+        }
+        setTimeout(function () {
+            if (!resolved) window.addEventListener('focus', onFocus);
+        }, 100);
+
+        input.click();
+    });
+}
+
 // ============================================
 // TOML calibration parser
 // ============================================

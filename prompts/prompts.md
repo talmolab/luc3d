@@ -34,3 +34,18 @@ So, when the user clicks on 'Load Demo', there should not be any videos loaded i
 Remove the feature where double clicking on the video unzooms it. Instead, I want blue text to pop-up on the top right corner of the video that says 'Zoomed'. When the user's cursor hovers over the text, it says 'Unzoom', and clicking on it unzooms the window. This feature is implemented in `/root/vast/joshua/vibes/mv-gui`, please look through the files there for a reference,
 
 There is currently a bug where dragged and dropped videos are not being rendered in ViewWin. Please render dragged and dropped videos.
+
+## 
+
+# Prompt 4
+
+Currently, the project can load SLP files. I want to stream line this process. Make a new option in File --> 'Load Session Folder'. Clicking on the button will allow the user to select a **folder**. The folder should have this layout:
+```
+folder/
+├── calibration.toml
+├── videos/
+│   ├── *.mp4 [or any other video format]
+└── slp/
+    ├── *.slp
+```
+For each slp loaded, automatically load in the corresponding video in the `videos` folder. The names of the files should be identical except for their file extension. If there is no calibration.toml, allow the user to pass it in separately later. For any SLP files that do not have matching `mp4` (or any other video format) files, put them in a list. Then, show a pop-up table that mentions the SLP files that do not have corresponding videos and allow the user to select a video for each SLP file. Once the user selects a video for each SLP file, proceed back to the website
