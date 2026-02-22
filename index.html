@@ -1336,9 +1336,22 @@
 
         function setup3DViewport() {
             const container = document.getElementById('viewport3dCanvas');
-            if (!container || !state.session) return;
+            if (!container || !state.session) {
+                console.warn('[3D] setup3DViewport: skipping -', !container ? 'no container' : 'no session');
+                return;
+            }
+
+            // Make sure the viewport3d container is visible
+            var vp3dContainer = document.getElementById('viewport3dContainer');
+            if (vp3dContainer) {
+                vp3dContainer.classList.remove('collapsed');
+                vp3dContainer.style.display = '';
+            }
 
             try {
+                console.log('[3D] Creating Viewport3D with', state.session.cameras.length, 'cameras,',
+                    'skeleton:', state.session.skeleton.nodes.length, 'nodes');
+
                 viewport3d = new Viewport3D(container, {
                     cameras: state.session.cameras,
                     skeleton: state.session.skeleton,
@@ -1346,15 +1359,20 @@
                     onCameraClicked: highlightVideoCell,
                 });
 
-                // Show initial frame's 3D points
+                console.log('[3D] Viewport3D created successfully');
+
+                // Show initial frame's 3D points, then fit camera to see everything
                 update3DViewport(state.currentFrame);
 
-                // Fit camera to see everything
+                // Fit after a short delay to ensure skeleton meshes are in the scene
                 setTimeout(function () {
-                    if (viewport3d) viewport3d.fitToScene();
-                }, 500);
+                    if (viewport3d) {
+                        viewport3d.fitToScene();
+                        console.log('[3D] fitToScene complete (deferred)');
+                    }
+                }, 200);
             } catch (err) {
-                console.error('Failed to initialize 3D viewport:', err);
+                console.error('[3D] Failed to initialize 3D viewport:', err);
                 // Hide the container if Three.js fails
                 document.getElementById('viewport3dContainer').style.display = 'none';
             }
@@ -1362,13 +1380,23 @@
 
         function update3DViewport(frameIdx) {
             if (!viewport3d) {
-                console.warn('[3D] viewport3d is null - 3D viewport not initialized');
-                return;
+                if (state.session) {
+                    console.log('[3D] Auto-initializing 3D viewport');
+                    setup3DViewport();
+                }
+                if (!viewport3d) {
+                    console.warn('[3D] viewport3d still null after auto-init attempt');
+                    return;
+                }
             }
             const groups = getInstanceGroupsForFrame(frameIdx);
             const groupsWithPts = groups.filter(g => g.points3d && g.points3d.length > 0);
             console.log('[3D] update3DViewport frame', frameIdx,
                 '| groups:', groups.length, '| with points3d:', groupsWithPts.length);
+            if (groupsWithPts.length > 0) {
+                var samplePt = groupsWithPts[0].points3d.find(function(p) { return p != null; });
+                console.log('[3D] Sample 3D point:', samplePt);
+            }
             viewport3d.setFrame(groups);
         }
 
@@ -3435,126 +3463,163 @@
                     cameras = _restoreLegacySession(data);
                 }
 
-                // 2. Load videos — force selection
+                // 2. Load videos — check if already loaded, only prompt for missing ones
                 hideLoading();
-                var manifestInfo = (data.videoManifest || []).map(function (m) { return m.filename; }).filter(Boolean).join(', ') || '(unknown)';
-                var videoFiles = await forceVideoSelection(manifestInfo);
+                var videoManifest = data.videoManifest || [];
+                var cameraNames = cameras.map(function (c) { return c.name; });
+                var manifestFilenames = videoManifest.map(function (m) { return m.filename; }).filter(Boolean);
 
-                if (videoFiles.length > 0) {
-                    // Clear any stale views/videoFiles from a previous session
+                // Check which manifest videos are already loaded in state.videoFiles
+                var alreadyLoaded = [];
+                var missingFilenames = [];
+                for (var mfi = 0; mfi < manifestFilenames.length; mfi++) {
+                    var mfName = manifestFilenames[mfi];
+                    var found = (state.videoFiles || []).find(function (vf) { return vf.name === mfName; });
+                    if (found) {
+                        alreadyLoaded.push(found);
+                    } else {
+                        missingFilenames.push(mfName);
+                    }
+                }
+
+                var needsVideoPrompt = missingFilenames.length > 0 || manifestFilenames.length === 0;
+
+                if (needsVideoPrompt) {
+                    var manifestInfo = missingFilenames.length > 0
+                        ? 'Need: ' + missingFilenames.join(', ')
+                        : (manifestFilenames.join(', ') || '(unknown)');
+                    var videoFiles = await forceVideoSelection(manifestInfo);
+
+                    if (videoFiles.length > 0) {
+                        // Clear stale views (but keep already-loaded videoFiles)
+                        if (videoController) {
+                            if (state.isPlaying) videoController.pause();
+                            videoController = null;
+                        }
+                        state.views = [];
+                        var gridEl = document.getElementById('videoGrid');
+                        if (gridEl) gridEl.innerHTML = '';
+
+                        // If we had no prior videos, start fresh
+                        if (alreadyLoaded.length === 0) {
+                            state.videoFiles = [];
+                        }
+
+                        var failedVideos = [];
+                        for (var i = 0; i < videoFiles.length; i++) {
+                            var file = videoFiles[i];
+                            var stem = file.name.replace(/\.[^.]+$/, '');
+
+                            // Skip if already loaded
+                            var alreadyHave = state.videoFiles.find(function (vf) { return vf.name === stem; });
+                            if (alreadyHave) continue;
+
+                            showLoading('Loading ' + file.name + ' (' + (i + 1) + '/' + videoFiles.length + ')...');
+                            try {
+                                var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                                await decoder.init(file);
+
+                                var vw = decoder.videoTrack.video.width;
+                                var vh = decoder.videoTrack.video.height;
+
+                                state.videoFiles.push({
+                                    file: file,
+                                    name: stem,
+                                    decoder: decoder,
+                                    videoWidth: vw,
+                                    videoHeight: vh,
+                                    frameCount: decoder.samples.length,
+                                    assignedCamera: null,
+                                });
+                            } catch (videoErr) {
+                                console.error('Failed to load ' + file.name + ':', videoErr);
+                                failedVideos.push(stem);
+                            }
+                        }
+                    }
+                } else {
+                    // All videos already loaded — just clear views to rebuild them
+                    console.log('[load-project] All ' + alreadyLoaded.length + ' videos already loaded, skipping prompt');
                     if (videoController) {
                         if (state.isPlaying) videoController.pause();
                         videoController = null;
                     }
                     state.views = [];
-                    state.videoFiles = [];
                     var gridEl = document.getElementById('videoGrid');
                     if (gridEl) gridEl.innerHTML = '';
+                }
 
-                    var videoManifest = data.videoManifest || [];
-                    var failedVideos = [];
-
-                    for (var i = 0; i < videoFiles.length; i++) {
-                        var file = videoFiles[i];
-                        var stem = file.name.replace(/\.[^.]+$/, '');
-
-                        showLoading('Loading ' + file.name + ' (' + (i + 1) + '/' + videoFiles.length + ')...');
-                        try {
-                            var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
-                            await decoder.init(file);
-
-                            var vw = decoder.videoTrack.video.width;
-                            var vh = decoder.videoTrack.video.height;
-
-                            state.videoFiles.push({
-                                file: file,
-                                name: stem,
-                                decoder: decoder,
-                                videoWidth: vw,
-                                videoHeight: vh,
-                                frameCount: decoder.samples.length,
-                                assignedCamera: null,
-                            });
-                        } catch (videoErr) {
-                            console.error('Failed to load ' + file.name + ':', videoErr);
-                            failedVideos.push(stem);
+                // Match videos to cameras using manifest
+                for (var mi = 0; mi < videoManifest.length; mi++) {
+                    var entry = videoManifest[mi];
+                    if (!entry.filename || !entry.assignedCamera) continue;
+                    for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
+                        var vf = state.videoFiles[vfi];
+                        if (!vf.assignedCamera && vf.name === entry.filename) {
+                            vf.assignedCamera = entry.assignedCamera;
+                            break;
                         }
                     }
+                }
 
-                    // Match videos to cameras using manifest, then auto-assign
-                    var cameraNames = cameras.map(function (c) { return c.name; });
-                    for (var mi = 0; mi < videoManifest.length; mi++) {
-                        var entry = videoManifest[mi];
-                        if (!entry.filename || !entry.assignedCamera) continue;
-                        for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
-                            var vf = state.videoFiles[vfi];
-                            if (!vf.assignedCamera && vf.name === entry.filename) {
-                                vf.assignedCamera = entry.assignedCamera;
+                // Resolve stale manifest camera names
+                for (var ri = 0; ri < state.videoFiles.length; ri++) {
+                    var rvf = state.videoFiles[ri];
+                    if (rvf.assignedCamera && cameraNames.indexOf(rvf.assignedCamera) < 0) {
+                        var rvfLower = rvf.assignedCamera.toLowerCase();
+                        for (var rci = 0; rci < cameraNames.length; rci++) {
+                            var rcamLower = cameraNames[rci].toLowerCase();
+                            var rUsed = state.videoFiles.some(function (other) {
+                                return other !== rvf && other.assignedCamera === cameraNames[rci];
+                            });
+                            if (rUsed) continue;
+                            if (rvfLower === rcamLower || rvfLower.indexOf(rcamLower) >= 0 || rcamLower.indexOf(rvfLower) >= 0) {
+                                console.log('[load-project] Resolved manifest camera "' + rvf.assignedCamera + '" -> "' + cameraNames[rci] + '"');
+                                rvf.assignedCamera = cameraNames[rci];
                                 break;
                             }
                         }
                     }
+                }
 
-                    // Resolve stale manifest camera names that don't match current calibration
-                    // (e.g., manifest has assignedCamera="CamA" but camera is named "A")
-                    for (var ri = 0; ri < state.videoFiles.length; ri++) {
-                        var rvf = state.videoFiles[ri];
-                        if (rvf.assignedCamera && cameraNames.indexOf(rvf.assignedCamera) < 0) {
-                            var rvfLower = rvf.assignedCamera.toLowerCase();
-                            for (var rci = 0; rci < cameraNames.length; rci++) {
-                                var rcamLower = cameraNames[rci].toLowerCase();
-                                var rUsed = state.videoFiles.some(function (other) {
-                                    return other !== rvf && other.assignedCamera === cameraNames[rci];
-                                });
-                                if (rUsed) continue;
-                                if (rvfLower === rcamLower || rvfLower.indexOf(rcamLower) >= 0 || rcamLower.indexOf(rvfLower) >= 0) {
-                                    console.log('[load-project] Resolved manifest camera "' + rvf.assignedCamera + '" -> "' + cameraNames[rci] + '"');
-                                    rvf.assignedCamera = cameraNames[rci];
-                                    break;
-                                }
-                            }
+                autoAssignVideosToCameras();
+
+                // For any still-unassigned video, try exact camera name match
+                for (var vi = 0; vi < state.videoFiles.length; vi++) {
+                    var vf2 = state.videoFiles[vi];
+                    if (!vf2.assignedCamera && cameraNames.indexOf(vf2.name) >= 0) {
+                        vf2.assignedCamera = vf2.name;
+                    }
+                }
+
+                // Create views for assigned videos
+                showLoading('Creating views...');
+                for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
+                    var vf3 = state.videoFiles[vi2];
+                    if (vf3.assignedCamera) {
+                        var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
+                        if (!hasView) {
+                            createViewForVideoFile(vf3);
                         }
                     }
+                }
 
-                    autoAssignVideosToCameras();
+                updateTotalFrames();
+                if (state.views.length > 0) {
+                    hideWelcomeOverlay();
+                    rebuildVideoController();
+                    fitCanvasesToCells();
+                }
 
-                    // For any still-unassigned video, try exact camera name match
-                    for (var vi = 0; vi < state.videoFiles.length; vi++) {
-                        var vf2 = state.videoFiles[vi];
-                        if (!vf2.assignedCamera && cameraNames.indexOf(vf2.name) >= 0) {
-                            vf2.assignedCamera = vf2.name;
-                        }
+                // Seek to first labeled frame or frame 0
+                if (videoController && state.views.length > 0) {
+                    var firstFrame = 0;
+                    for (var [fIdx] of state.session.frameGroups) {
+                        firstFrame = fIdx;
+                        break;
                     }
-
-                    // Create views for assigned videos
-                    showLoading('Creating views...');
-                    for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
-                        var vf3 = state.videoFiles[vi2];
-                        if (vf3.assignedCamera) {
-                            var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
-                            if (!hasView) {
-                                createViewForVideoFile(vf3);
-                            }
-                        }
-                    }
-
-                    updateTotalFrames();
-                    if (state.views.length > 0) {
-                        hideWelcomeOverlay();
-                        rebuildVideoController();
-                        fitCanvasesToCells();
-                    }
-
-                    // Seek to first labeled frame or frame 0
-                    if (videoController && state.views.length > 0) {
-                        var firstFrame = 0;
-                        for (var [fIdx] of state.session.frameGroups) {
-                            firstFrame = fIdx;
-                            break;
-                        }
-                        state.currentFrame = firstFrame;
-                        await videoController.seekToFrame(firstFrame);
-                    }
+                    state.currentFrame = firstFrame;
+                    await videoController.seekToFrame(firstFrame);
                 }
 
                 // 3. Set up 3D viewport
@@ -3562,8 +3627,8 @@
                     viewport3d.cameras = cameras;
                     viewport3d.skeleton = state.session.skeleton;
                     viewport3d.addCameraPyramids();
-                    viewport3d.fitToScene();
                     viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                    viewport3d.fitToScene();
                 } else {
                     setup3DViewport();
                 }
@@ -3937,12 +4002,16 @@
                 // Rebuild the 3D viewport with new cameras
                 if (viewport3d) {
                     viewport3d.cameras = cameras;
+                    viewport3d.skeleton = state.session.skeleton;
                     viewport3d.addCameraPyramids();
+                    viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
                     viewport3d.fitToScene();
                 } else {
                     setup3DViewport();
                 }
 
+                // Re-draw overlays to reflect any camera name changes
+                drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
                 setStatus('Loaded ' + cameras.length + ' cameras', 'success');
             } catch (err) {
@@ -4890,8 +4959,8 @@
                         viewport3d.cameras = cameras;
                         viewport3d.skeleton = skeleton;
                         viewport3d.addCameraPyramids();
-                        viewport3d.fitToScene();
                         viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                        viewport3d.fitToScene();
                     } else {
                         setup3DViewport();
                     }
@@ -5250,8 +5319,8 @@
                     viewport3d.cameras = state.session.cameras;
                     viewport3d.skeleton = state.session.skeleton;
                     viewport3d.addCameraPyramids();
-                    viewport3d.fitToScene();
                     viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                    viewport3d.fitToScene();
                 }
 
                 drawAllOverlays(state.currentFrame);
