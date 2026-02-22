@@ -673,6 +673,17 @@
                         <div id="qcLimbStats"></div>
                     </div>
 
+                    <!-- Outlier Thresholds Histograms -->
+                    <div class="info-section" id="qcHistogramSection" style="display:none;">
+                        <h3>Outlier Thresholds</h3>
+                        <div id="qcHistogramGrid" style="display:grid;gap:8px;">
+                            <canvas id="qcHistReproj" width="280" height="90"></canvas>
+                            <canvas id="qcHistEpipolar" width="280" height="90"></canvas>
+                            <canvas id="qcHistVelocity" width="280" height="90"></canvas>
+                            <canvas id="qcHistLimb" width="280" height="90"></canvas>
+                        </div>
+                    </div>
+
                     <!-- Flagged Frame List -->
                     <div class="info-section" id="qcIssueListSection" style="display:none;">
                         <h3>Flagged Frames</h3>
@@ -683,6 +694,9 @@
                                 <option value="miss">Missing</option>
                                 <option value="jitter">Jitter</option>
                                 <option value="inversion">Inversion</option>
+                                <option value="epipolar">Epipolar</option>
+                                <option value="limb_outlier">Limb Outlier</option>
+                                <option value="swap">Swap</option>
                             </select>
                             <select id="qcFilterSeverity" style="font-size:11px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:2px 4px;">
                                 <option value="all">All Severity</option>
@@ -6646,6 +6660,30 @@
                 }
             }
             limbSection.style.display = hasLimbData ? '' : 'none';
+
+            // Histograms
+            var histSection = document.getElementById('qcHistogramSection');
+            if (results.distributions && results.autoThresholds) {
+                var dist = results.distributions;
+                var thresh = results.autoThresholds;
+                var hasAnyDist = dist.reproj.length > 0 || dist.epipolar.length > 0 ||
+                    dist.velocity.length > 0 || dist.limbZScore.length > 0;
+                if (hasAnyDist) {
+                    histSection.style.display = '';
+                    QC.drawHistogram(document.getElementById('qcHistReproj'),
+                        dist.reproj, thresh.reproj, { title: 'Reprojection (px)', color: '#6b7280' });
+                    QC.drawHistogram(document.getElementById('qcHistEpipolar'),
+                        dist.epipolar, thresh.epipolar, { title: 'Epipolar (px)', color: '#6366f1' });
+                    QC.drawHistogram(document.getElementById('qcHistVelocity'),
+                        dist.velocity, thresh.velocity, { title: 'Velocity (u/f)', color: '#fbbf24' });
+                    QC.drawHistogram(document.getElementById('qcHistLimb'),
+                        dist.limbZScore, thresh.limbZScore, { title: 'Limb Z-Score', color: '#22c55e' });
+                } else {
+                    histSection.style.display = 'none';
+                }
+            } else {
+                histSection.style.display = 'none';
+            }
 
             // Issue list
             updateQCIssueList();

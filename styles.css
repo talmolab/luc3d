@@ -2564,6 +2564,16 @@ kbd {
   color: #f97316;
 }
 
+.qc-type-epipolar {
+  background: rgba(99, 102, 241, 0.2);
+  color: #6366f1;
+}
+
+.qc-type-limb_outlier {
+  background: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+
 /* QC Severity Dots */
 .qc-severity-dot {
   display: inline-block;

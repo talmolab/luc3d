@@ -448,5 +448,303 @@
             assertEqual(results.globalStats.totalIssues, 0, 'no issues');
             assertEqual(results.globalStats.meanScore, 100, 'empty analysis should score 100');
         });
+
+        // ============================================
+        // Fundamental Matrix & Epipolar Distance
+        // ============================================
+
+        it('computeFundamentalMatrix: produces 3x3 rank-2 matrix', function () {
+            // Two cameras: identity and translated
+            var P1 = [[500, 0, 256, 0], [0, 500, 256, 0], [0, 0, 1, 0]];
+            var P2 = [[500, 0, 256, -5000], [0, 500, 256, 0], [0, 0, 1, 0]];
+
+            var F = QC.computeFundamentalMatrix(P1, P2);
+
+            assert(F !== null, 'F should not be null');
+            assertEqual(F.length, 3, 'F should have 3 rows');
+            assertEqual(F[0].length, 3, 'F should have 3 cols');
+
+            // F should be rank-2 (det ~ 0)
+            var det = F[0][0] * (F[1][1] * F[2][2] - F[1][2] * F[2][1])
+                    - F[0][1] * (F[1][0] * F[2][2] - F[1][2] * F[2][0])
+                    + F[0][2] * (F[1][0] * F[2][1] - F[1][1] * F[2][0]);
+            assert(Math.abs(det) < 0.1, 'det(F) should be ~0 for rank-2, got: ' + det);
+        });
+
+        it('computeEpipolarDistance: corresponding points have low distance', function () {
+            // Simple stereo pair: P1 = K[I|0], P2 = K[I|t]
+            var P1 = [[500, 0, 256, 0], [0, 500, 256, 0], [0, 0, 1, 0]];
+            var P2 = [[500, 0, 256, -5000], [0, 500, 256, 0], [0, 0, 1, 0]];
+
+            var F = QC.computeFundamentalMatrix(P1, P2);
+            assert(F !== null, 'F should exist');
+
+            // A 3D point [0, 0, 10] projects to:
+            // P1: [500*0/10+256, 500*0/10+256] = [256, 256]
+            // P2: [500*0/10+256-500, 500*0/10+256] = [-244, 256] => with -5000 offset
+            // Actually let me just project properly
+            var X = [0, 0, 10, 1];
+            var x1 = [P1[0][0]*X[0] + P1[0][1]*X[1] + P1[0][2]*X[2] + P1[0][3]*X[3],
+                       P1[1][0]*X[0] + P1[1][1]*X[1] + P1[1][2]*X[2] + P1[1][3]*X[3]];
+            var w1 = P1[2][0]*X[0] + P1[2][1]*X[1] + P1[2][2]*X[2] + P1[2][3]*X[3];
+            x1[0] /= w1; x1[1] /= w1;
+
+            var x2 = [P2[0][0]*X[0] + P2[0][1]*X[1] + P2[0][2]*X[2] + P2[0][3]*X[3],
+                       P2[1][0]*X[0] + P2[1][1]*X[1] + P2[1][2]*X[2] + P2[1][3]*X[3]];
+            var w2 = P2[2][0]*X[0] + P2[2][1]*X[1] + P2[2][2]*X[2] + P2[2][3]*X[3];
+            x2[0] /= w2; x2[1] /= w2;
+
+            var d = QC.computeEpipolarDistance(F, x1, x2);
+            assert(d < 1.0, 'corresponding points should have low epipolar distance, got: ' + d);
+        });
+
+        it('computeEpipolarDistance: mismatched points have high distance', function () {
+            var P1 = [[500, 0, 256, 0], [0, 500, 256, 0], [0, 0, 1, 0]];
+            var P2 = [[500, 0, 256, -5000], [0, 500, 256, 0], [0, 0, 1, 0]];
+
+            var F = QC.computeFundamentalMatrix(P1, P2);
+            assert(F !== null, 'F should exist');
+
+            // Two unrelated points
+            var d = QC.computeEpipolarDistance(F, [100, 200], [400, 50]);
+            assert(d > 1.0, 'unrelated points should have higher epipolar distance, got: ' + d);
+        });
+
+        // ============================================
+        // Limb Length Outliers
+        // ============================================
+
+        it('computeLimbLengthOutliers: flags extreme frame', function () {
+            var edges = [[0, 1]];
+            var triResults = new Map();
+
+            // 10 normal frames + 1 extreme
+            for (var f = 0; f < 10; f++) {
+                triResults.set(f, [{ group: { trackIdx: 0 }, points3d: [[0, 0, 0], [10, 0, 0]] }]);
+            }
+            triResults.set(10, [{ group: { trackIdx: 0 }, points3d: [[0, 0, 0], [50, 0, 0]] }]);
+
+            var limbStats = QC.computeLimbLengthStats(triResults, edges, 0);
+            var outliers = QC.computeLimbLengthOutliers(limbStats);
+
+            assert(outliers.flaggedFrames.size >= 1, 'should flag at least 1 frame');
+            assert(outliers.flaggedFrames.has(10), 'frame 10 should be flagged');
+            assert(outliers.allZScores.length > 0, 'should have z-scores');
+        });
+
+        it('computeLimbLengthOutliers: no flags for consistent data', function () {
+            var edges = [[0, 1]];
+            var triResults = new Map();
+
+            for (var f = 0; f < 10; f++) {
+                triResults.set(f, [{ group: { trackIdx: 0 }, points3d: [[0, 0, 0], [10, 0, 0]] }]);
+            }
+
+            var limbStats = QC.computeLimbLengthStats(triResults, edges, 0);
+            var outliers = QC.computeLimbLengthOutliers(limbStats);
+
+            assertEqual(outliers.flaggedFrames.size, 0, 'consistent data should have no flags');
+        });
+
+        // ============================================
+        // Swap Detection
+        // ============================================
+
+        it('detectSwaps: detects crossed identities', function () {
+            // Two instances where detections are swapped relative to reprojections
+            var groupA = new InstanceGroup(1, 0);
+            groupA.addInstance('CamA', new Instance([[100, 100], [200, 200]], 0, 'user', 1));
+
+            var groupB = new InstanceGroup(2, 1);
+            groupB.addInstance('CamA', new Instance([[300, 300], [400, 400]], 0, 'user', 2));
+
+            var frameResults = [
+                {
+                    group: groupA,
+                    points3d: [[1, 1, 10], [2, 2, 10]],
+                    reprojections: { 'CamA': [[300, 300], [400, 400]] },  // A's reproj looks like B's position
+                    errors: { 'CamA': [250, 250] },
+                    meanError: 250,
+                },
+                {
+                    group: groupB,
+                    points3d: [[3, 3, 10], [4, 4, 10]],
+                    reprojections: { 'CamA': [[100, 100], [200, 200]] },  // B's reproj looks like A's position
+                    errors: { 'CamA': [250, 250] },
+                    meanError: 250,
+                },
+            ];
+
+            var cameras = [{ name: 'CamA' }];
+            var issues = QC.detectSwaps(frameResults, cameras, 2);
+
+            assert(issues.length >= 1, 'should detect swap, got: ' + issues.length);
+            assertEqual(issues[0].type, 'swap', 'issue type should be swap');
+        });
+
+        it('detectSwaps: no swap for single instance', function () {
+            var group = new InstanceGroup(1, 0);
+            group.addInstance('CamA', new Instance([[100, 100]], 0, 'user', 1));
+
+            var frameResults = [{
+                group: group,
+                points3d: [[1, 1, 10]],
+                reprojections: { 'CamA': [[101, 101]] },
+                errors: { 'CamA': [1.4] },
+                meanError: 1.4,
+            }];
+
+            var issues = QC.detectSwaps(frameResults, [{ name: 'CamA' }], 1);
+            assertEqual(issues.length, 0, 'single instance should have no swaps');
+        });
+
+        // ============================================
+        // Auto-Thresholds
+        // ============================================
+
+        it('computeAutoThresholds: correct percentile', function () {
+            var values = [];
+            for (var i = 1; i <= 100; i++) values.push(i);
+            var distributions = {
+                reproj: values,
+                epipolar: values,
+                velocity: values,
+                limbZScore: values,
+            };
+
+            var thresholds = QC.computeAutoThresholds(distributions, { percentile: 95 });
+
+            assertApprox(thresholds.reproj, 95.05, 0.5, 'P95 of 1-100 should be ~95');
+            assertApprox(thresholds.epipolar, 95.05, 0.5, 'P95 epipolar');
+            assertApprox(thresholds.velocity, 95.05, 0.5, 'P95 velocity');
+            assertApprox(thresholds.limbZScore, 95.05, 0.5, 'P95 limbZScore');
+        });
+
+        it('computeAutoThresholds: empty distributions', function () {
+            var distributions = { reproj: [], epipolar: [] };
+            var thresholds = QC.computeAutoThresholds(distributions);
+
+            assertEqual(thresholds.reproj, Infinity, 'empty reproj → Infinity');
+            assertEqual(thresholds.epipolar, Infinity, 'empty epipolar → Infinity');
+        });
+
+        // ============================================
+        // Histogram Renderer
+        // ============================================
+
+        it('drawHistogram: renders without error', function () {
+            var canvas = document.createElement('canvas');
+            canvas.width = 280;
+            canvas.height = 90;
+
+            // Should not throw
+            QC.drawHistogram(canvas, [1, 2, 3, 4, 5, 10, 15, 20], 12, { title: 'Test', color: '#6b7280' });
+
+            var ctx = canvas.getContext('2d');
+            assert(ctx !== null, 'canvas context should exist after drawing');
+        });
+
+        it('drawHistogram: handles empty values', function () {
+            var canvas = document.createElement('canvas');
+            canvas.width = 280;
+            canvas.height = 90;
+
+            QC.drawHistogram(canvas, [], 10, { title: 'Empty' });
+            // Should not throw, just show "No data"
+            assert(true, 'drawHistogram with empty data should not throw');
+        });
+
+        // ============================================
+        // Integration: runFullAnalysis with new fields
+        // ============================================
+
+        it('runFullAnalysis: includes new fields (distributions, autoThresholds)', function () {
+            var skeleton = new Skeleton('test', ['a', 'b', 'c'], [[0, 1], [1, 2]]);
+            var cam1 = new Camera('CamA',
+                [[500, 0, 256], [0, 500, 256], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [512, 512]);
+            var cam2 = new Camera('CamB',
+                [[500, 0, 256], [0, 500, 256], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0.5, 0, 0], [10, 0, 0], [512, 512]);
+            var session = new Session([cam1, cam2], skeleton, ['track_0']);
+
+            var group = new InstanceGroup(1, 0);
+            group.addInstance('CamA', new Instance([[100, 100], [200, 200], [300, 100]], 0, 'user', 1));
+            group.addInstance('CamB', new Instance([[110, 105], [210, 210], [305, 105]], 0, 'user', 1));
+
+            var triResults = new Map();
+            triResults.set(0, [{
+                group: group,
+                points3d: [[1, 2, 10], [3, 4, 12], [5, 1, 11]],
+                reprojections: {
+                    'CamA': [[101, 101], [201, 201], [301, 101]],
+                    'CamB': [[111, 106], [211, 211], [306, 106]],
+                },
+                errors: {
+                    'CamA': [1.41, 1.41, 1.41],
+                    'CamB': [1.41, 1.41, 1.41],
+                },
+                meanError: 1.41,
+            }]);
+
+            var results = QC.runFullAnalysis(session, triResults);
+
+            // New fields should exist
+            assert(results.distributions, 'should have distributions');
+            assert(Array.isArray(results.distributions.reproj), 'distributions.reproj should be array');
+            assert(Array.isArray(results.distributions.epipolar), 'distributions.epipolar should be array');
+            assert(Array.isArray(results.distributions.velocity), 'distributions.velocity should be array');
+            assert(Array.isArray(results.distributions.limbZScore), 'distributions.limbZScore should be array');
+
+            assert(results.autoThresholds, 'should have autoThresholds');
+            assert(typeof results.autoThresholds.reproj === 'number', 'autoThresholds.reproj should be number');
+
+            assert(results.fundamentalMatrices, 'should have fundamentalMatrices');
+            assert(results.limbOutlierStats, 'should have limbOutlierStats');
+        });
+
+        // ============================================
+        // classifyErrors with new error types
+        // ============================================
+
+        it('classifyErrors: epipolar issue', function () {
+            var reprojMetrics = {
+                meanError: 2.0, maxError: 3.0,
+                perKeypoint: [2.0], perCamera: {},
+                outlierKeypoints: [], severity: 'low',
+            };
+            var completenessMetrics = {
+                missingKeypoints: [], severity: 'low', overallCompleteness: 1.0,
+            };
+            var extra = {
+                epipolarInfo: { flaggedKeypoints: [0] },
+            };
+
+            var issues = QC.classifyErrors(reprojMetrics, completenessMetrics, null, null, ['nose'], extra);
+
+            var epiIssues = issues.filter(function (i) { return i.type === 'epipolar'; });
+            assertEqual(epiIssues.length, 1, 'should detect 1 epipolar issue');
+            assert(epiIssues[0].keypoints.indexOf(0) >= 0, 'keypoint 0 should be flagged');
+        });
+
+        it('classifyErrors: limb outlier issue', function () {
+            var reprojMetrics = {
+                meanError: 2.0, maxError: 3.0,
+                perKeypoint: [2.0], perCamera: {},
+                outlierKeypoints: [], severity: 'low',
+            };
+            var completenessMetrics = {
+                missingKeypoints: [], severity: 'low', overallCompleteness: 1.0,
+            };
+            var extra = {
+                limbOutlierInfo: [{ edgeIdx: 0, length: 50, zScore: 4.5 }],
+            };
+
+            var issues = QC.classifyErrors(reprojMetrics, completenessMetrics, null, null, ['nose'], extra);
+
+            var limbIssues = issues.filter(function (i) { return i.type === 'limb_outlier'; });
+            assertEqual(limbIssues.length, 1, 'should detect 1 limb outlier issue');
+            assert(limbIssues[0].description.indexOf('z=4.5') >= 0, 'should mention z-score');
+        });
     });
 })();
