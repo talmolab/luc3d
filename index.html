@@ -4636,44 +4636,76 @@
                 var slpFiles = [];
                 var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
 
+                // Log all files for debugging
+                console.log('[session-folder] All files in folder (' + allFiles.length + '):');
+                for (var di = 0; di < allFiles.length; di++) {
+                    console.log('  ' + (allFiles[di].webkitRelativePath || allFiles[di].name));
+                }
+
                 for (var fi = 0; fi < allFiles.length; fi++) {
                     var file = allFiles[fi];
                     var relPath = file.webkitRelativePath || file.name;
-                    // Split into path parts (skip the root folder name)
                     var parts = relPath.split('/');
                     if (parts.length < 2) continue;
+                    // Build subpath from all parts after root folder, lowercased
                     var subPath = parts.slice(1).join('/').toLowerCase();
                     var fileName = parts[parts.length - 1];
                     var fileNameLower = fileName.toLowerCase();
 
-                    // Check for calibration at root level
-                    if (parts.length === 2 && (fileNameLower === 'calibration.toml' || fileNameLower === 'calibration.json')) {
+                    // Check for calibration at root level (any .toml or .json with "calib" in name)
+                    if (parts.length === 2 && (fileNameLower.endsWith('.toml') || fileNameLower.endsWith('.json'))
+                        && fileNameLower.indexOf('calib') >= 0) {
                         calibFile = file;
                     }
-                    // Check for videos in videos/ subfolder
-                    else if (subPath.startsWith('videos/') && parts.length === 3) {
+                    // Check for videos — case-insensitive subfolder match at any depth
+                    else if (subPath.match(/^videos?\//i)) {
                         var ext = fileNameLower.substring(fileNameLower.lastIndexOf('.'));
                         if (videoExtensions.indexOf(ext) >= 0) {
                             videoFiles.push(file);
                         }
                     }
-                    // Check for SLP files in slp/ subfolder
-                    else if (subPath.startsWith('slp/') && parts.length === 3) {
+                    // Check for SLP files — case-insensitive subfolder match at any depth
+                    else if (subPath.match(/^slps?\//i)) {
                         if (fileNameLower.endsWith('.slp') || fileNameLower.endsWith('.h5')) {
                             slpFiles.push(file);
                         }
                     }
                 }
 
-                console.log('[session-folder] Found:', {
+                // Fallback: if no videos or slps found in named subfolders, search entire tree
+                if (videoFiles.length === 0 || slpFiles.length === 0) {
+                    console.log('[session-folder] Subfolder scan incomplete (videos: ' + videoFiles.length + ', slps: ' + slpFiles.length + '), scanning entire folder tree...');
+                    for (var fi2 = 0; fi2 < allFiles.length; fi2++) {
+                        var file2 = allFiles[fi2];
+                        var fn2 = (file2.name || '').toLowerCase();
+                        if (videoFiles.length === 0) {
+                            var ext2 = fn2.substring(fn2.lastIndexOf('.'));
+                            if (videoExtensions.indexOf(ext2) >= 0) {
+                                videoFiles.push(file2);
+                            }
+                        }
+                        if (slpFiles.length === 0) {
+                            if (fn2.endsWith('.slp') || fn2.endsWith('.h5')) {
+                                slpFiles.push(file2);
+                            }
+                        }
+                    }
+                }
+
+                console.log('[session-folder] Categorization result:', {
                     calibration: calibFile ? calibFile.name : null,
-                    videos: videoFiles.map(function (f) { return f.name; }),
-                    slps: slpFiles.map(function (f) { return f.name; }),
+                    videos: videoFiles.map(function (f) { return f.webkitRelativePath || f.name; }),
+                    slps: slpFiles.map(function (f) { return f.webkitRelativePath || f.name; }),
                 });
 
+                if (slpFiles.length === 0 && videoFiles.length === 0) {
+                    hideLoading();
+                    setStatus('No SLP or video files found in folder', 'error');
+                    return;
+                }
                 if (slpFiles.length === 0) {
                     hideLoading();
-                    setStatus('No SLP files found in slp/ subfolder', 'error');
+                    setStatus('No SLP files found in folder (found ' + videoFiles.length + ' video(s))', 'error');
                     return;
                 }
 

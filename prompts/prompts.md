@@ -49,3 +49,22 @@ folder/
     ├── *.slp
 ```
 For each slp loaded, automatically load in the corresponding video in the `videos` folder. The names of the files should be identical except for their file extension. If there is no calibration.toml, allow the user to pass it in separately later. For any SLP files that do not have matching `mp4` (or any other video format) files, put them in a list. Then, show a pop-up table that mentions the SLP files that do not have corresponding videos and allow the user to select a video for each SLP file. Once the user selects a video for each SLP file, proceed back to the website
+
+## 
+
+# Prompt 5
+
+I uploaded my a sessions folder with the correct file layout, but no SLP or video files got loaded into the editor. This is the error shown in the console:
+
+```
+global.js:1 GET api/browser_extension/user response: {"error":{"errors":["Invalid Authorization"]},"isKamiApiSuccessfulResponse":false}
+(anonymous) @ global.js:1Understand this error
+
+global.js:1 Error fetching user data for Floating K visibility: Error: unexpected_response
+    at global.js:1:6092
+    at async ge (global.js:1:6833)
+    at async _e (global.js:1:8117)
+    at async Promise.all (:8090/index 0)
+```
+
+Please allow folders to be uploaded

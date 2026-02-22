@@ -76,6 +76,9 @@ function pickFolder() {
         var input = document.createElement('input');
         input.type = 'file';
         input.webkitdirectory = true;
+        // Firefox compat
+        input.setAttribute('directory', '');
+        input.setAttribute('mozdirectory', '');
 
         function done(files) {
             if (resolved) return;
@@ -84,24 +87,17 @@ function pickFolder() {
         }
 
         input.addEventListener('change', function () {
+            console.log('[pickFolder] change event, files:', input.files ? input.files.length : 0);
             done(input.files ? Array.from(input.files) : []);
         });
 
         input.addEventListener('cancel', function () {
+            console.log('[pickFolder] cancel event');
             done([]);
         });
 
-        var focusTimer = null;
-        function onFocus() {
-            clearTimeout(focusTimer);
-            focusTimer = setTimeout(function () {
-                window.removeEventListener('focus', onFocus);
-                done([]);
-            }, 500);
-        }
-        setTimeout(function () {
-            if (!resolved) window.addEventListener('focus', onFocus);
-        }, 100);
+        // No focus-based cancel detection — folder dialogs can take a long time
+        // and the focus event fires too early, causing premature cancellation.
 
         input.click();
     });
