@@ -4,8 +4,8 @@ Label Unification and Correspondence in 3D Annotation GUI in Web Browser
 # LUCID — Label Unification and Correspondence in 3D
 
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
-<img width="1567" height="488" alt="image" src="https://github.com/user-attachments/assets/5df1e3f3-2b1a-47c1-8084-22f176e4ecea" />
 
+![LUCID](https://github.com/user-attachments/assets/d4f44671-d144-4150-a4d5-a3692bd3ddd9)
 
 ![GUI image](https://github.com/user-attachments/assets/d102ab51-6951-4100-8df5-b64d390e98cd)
 
