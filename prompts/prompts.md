@@ -123,3 +123,15 @@ Some UI changes:
 - When a user selects a window (**not** during identity automatic assignment), highlight the camera in the 3D viewer.
 
 - The assign button isn't on the main screen; please add it next to the `Create Group` button
+
+
+##
+
+# Prompt 10
+
+I still don't see the `Assign` drop down menu on the screen. Currently the UI layout looks like
+```
+│ +Inst -Inst │ CreateGroup Unlink│ Triangulate Triangulate All│ NodeSize Label │ │ ☐Detected ☐Reproj ☐Errors ☐Labels           [Hide Panel] (Toolbar)│
+```
+
+Please have the `Assign` drop down menu next to the `CreateGroup` button

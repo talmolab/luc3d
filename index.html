@@ -94,15 +94,14 @@
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
-                <div class="toolbar-dropdown" id="tbAssignDropdown">
-                    <button class="toolbar-btn" id="tbAssign" title="Assignment mode">Assign &#9662;</button>
-                    <div class="toolbar-dropdown-menu" id="tbAssignMenu">
-                        <div class="toolbar-dropdown-item" id="tbAssignManual">Manual</div>
-                        <div class="toolbar-dropdown-item" id="tbAssignAutomatic">Automatic</div>
-                    </div>
-                </div>
+                <button class="toolbar-btn" id="tbAssign" title="Assignment mode">Assign &#9662;</button>
                 <button class="toolbar-btn" id="tbCreateGroup" title="Create group from assignment (Enter)">Create Group</button>
                 <button class="toolbar-btn" id="tbUnlinkGroup" title="Unlink selected group">Unlink</button>
+            </div>
+            <!-- Assign dropdown menu (positioned absolutely via JS) -->
+            <div class="toolbar-dropdown-menu" id="tbAssignMenu" style="display:none;position:fixed;z-index:200;">
+                <div class="toolbar-dropdown-item" id="tbAssignManual">Manual</div>
+                <div class="toolbar-dropdown-item" id="tbAssignAutomatic">Automatic</div>
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
@@ -1850,22 +1849,31 @@
                 if (interactionManager) interactionManager._deleteSelected();
             });
             // Assign dropdown toggle
+            // Assign dropdown: position menu below button on click
             document.getElementById('tbAssign').addEventListener('click', function (e) {
                 e.stopPropagation();
-                var dropdown = document.getElementById('tbAssignDropdown');
-                dropdown.classList.toggle('open');
+                var menu = document.getElementById('tbAssignMenu');
+                var isOpen = menu.style.display !== 'none';
+                if (isOpen) {
+                    menu.style.display = 'none';
+                } else {
+                    var rect = e.currentTarget.getBoundingClientRect();
+                    menu.style.left = rect.left + 'px';
+                    menu.style.top = rect.bottom + 2 + 'px';
+                    menu.style.display = 'block';
+                }
             });
             document.addEventListener('click', function () {
-                var dropdown = document.getElementById('tbAssignDropdown');
-                if (dropdown) dropdown.classList.remove('open');
+                var menu = document.getElementById('tbAssignMenu');
+                if (menu) menu.style.display = 'none';
             });
             document.getElementById('tbAssignManual').addEventListener('click', function () {
-                document.getElementById('tbAssignDropdown').classList.remove('open');
+                document.getElementById('tbAssignMenu').style.display = 'none';
                 if (interactionManager) interactionManager.setAssignmentMode();
                 drawAllOverlays(state.currentFrame);
             });
             document.getElementById('tbAssignAutomatic').addEventListener('click', function () {
-                document.getElementById('tbAssignDropdown').classList.remove('open');
+                document.getElementById('tbAssignMenu').style.display = 'none';
                 startAutoAssignment();
             });
 
