@@ -85,3 +85,16 @@ Visual UI Changes
 
 Interaction Changes
 - After uploading the SLP files, I could not click or move around the pose estimations. I can create and delete instances, but the instance that are already defined from the SLP files are not interactable. Please load the pose estimations from SLP files as instances editable by the user
+
+##
+
+# Prompt 7
+
+**I am going to make some UI changes**
+
+- There are some ViewWin UI bugs. First, when I have multiple windows of the same camera view, the zooming feature is impaired. To fix this, do not allow multiple instances of a video to be shown on the screen. Make sure the zooming feauture is not affected
+- I want the highlight feature to go around the border of each video rather than the window itself.
+
+- Make the right panel disappear when I click on `Hide Panel`
+- Add a button that can collapse the timeline
+- Now, when you load a project or multiple videos, I want you to display them all in a grid. Do **not** hard code any grid. I want you to use the current framework, but initialize the videos in a way that is convenint for the user. You can think of the best way to display them. For instance, if there are 4 videos they should be in a 2x2 grid. If there are 6 videos, they should be in a 2x3 grid. if there are 7 videos, there should be 4 in the top row and 3 on the bottom row. For 8 rows, they should be aligned in a 2x4 grid.

@@ -437,6 +437,8 @@
             <div class="fps-pill" title="Double-click to edit FPS">
                 <span class="fps-display" id="fpsDisplay"></span>
             </div>
+
+            <button class="toolbar-btn" id="timelineToggleBtn" title="Toggle timeline" style="font-size:11px;padding:2px 8px;">Timeline</button>
         </div>
 
         <!-- Status Bar -->
@@ -645,8 +647,9 @@
                 showLoading('Computing triangulation...');
                 precomputeTriangulation();
 
-                // Populate view strip only — dock stays empty until user drags videos in
+                // Populate view strip and auto-arrange in grid
                 populateViewStrip();
+                paneManager.addAllViewsAsGrid();
 
                 rebuildVideoController();
                 setup3DViewport();
@@ -1659,6 +1662,14 @@
             document.getElementById('btnPlay').addEventListener('click', function () { if (videoController) videoController.togglePlayback(); });
             document.getElementById('btnNext').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame + 1); });
             document.getElementById('btnLast').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.totalFrames - 1); });
+
+            // Timeline toggle button
+            document.getElementById('timelineToggleBtn').addEventListener('click', function () {
+                toggleTimeline();
+                var container = document.getElementById('timelineContainer');
+                this.textContent = container.classList.contains('collapsed') ? 'Timeline' : 'Timeline';
+                this.classList.toggle('active', !container.classList.contains('collapsed'));
+            });
 
             // Seekbar scrubbing (delegates to current videoController)
             (function () {
@@ -4094,6 +4105,7 @@
 
                 if (newViewsCreated) {
                     populateViewStrip();
+                    paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
                     fitCanvasesToCells();
                 }
@@ -4975,6 +4987,7 @@
                 // 6. Finalize
                 if (state.views.length > 0) {
                     populateViewStrip();
+                    paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
                     updateTotalFrames();
                     fitCanvasesToCells();
@@ -5370,6 +5383,7 @@
                 updateTotalFrames();
                 if (state.views.length > 0) {
                     populateViewStrip();
+                    paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
                     fitCanvasesToCells();
                 }
@@ -6167,6 +6181,21 @@
             },
 
             addVideoPanel(viewName, position) {
+                // Prevent duplicate panels for the same view
+                if (this.dockedViews.has(viewName) && this.dockedViews.get(viewName) > 0) {
+                    // Already docked — activate the existing panel instead
+                    if (this.api) {
+                        var panels = Array.from(this.api.panels);
+                        for (var pi = 0; pi < panels.length; pi++) {
+                            var renderer = panelRenderers.get(panels[pi].id);
+                            if (renderer && renderer.getViewName() === viewName) {
+                                panels[pi].api.setActive();
+                                return;
+                            }
+                        }
+                    }
+                    return;
+                }
                 var count = this.dockedViews.get(viewName) || 0;
                 this.dockedViews.set(viewName, count + 1);
                 this.panelCounter++;
@@ -6189,6 +6218,88 @@
             addAllViews() {
                 for (var i = 0; i < state.views.length; i++) {
                     this.addVideoPanel(state.views[i].name);
+                }
+            },
+
+            /**
+             * Add all views arranged in an optimal grid layout.
+             * n<=3: 1 row. n<=8: 2 rows. n<=15: 3 rows.
+             * Top row gets ceil(n/rows) items, remaining rows fill the rest.
+             */
+            addAllViewsAsGrid() {
+                var views = state.views;
+                var n = views.length;
+                if (n === 0) return;
+
+                // Calculate grid dimensions
+                var rows, cols;
+                if (n <= 3)       { rows = 1; }
+                else if (n <= 8)  { rows = 2; }
+                else              { rows = 3; }
+                cols = Math.ceil(n / rows);
+
+                // Build grid of view names (row-major, top row first)
+                var grid = [];
+                var idx = 0;
+                for (var r = 0; r < rows; r++) {
+                    grid[r] = [];
+                    // Top row gets ceil(n/rows), remaining rows get the rest evenly
+                    var rowCount = (r === 0) ? cols : Math.ceil((n - cols) / (rows - 1));
+                    if (r === rows - 1) rowCount = n - idx; // last row gets remainder
+                    for (var c = 0; c < rowCount && idx < n; c++) {
+                        grid[r][c] = views[idx].name;
+                        idx++;
+                    }
+                }
+
+                // Track panel IDs for positioning
+                var panelIds = []; // panelIds[r][c] = panel id string
+                for (var r2 = 0; r2 < grid.length; r2++) {
+                    panelIds[r2] = [];
+                }
+
+                var self = this;
+
+                // Helper to add a single panel (bypasses duplicate check for grid init)
+                function addGridPanel(viewName, position) {
+                    self.dockedViews.set(viewName, (self.dockedViews.get(viewName) || 0) + 1);
+                    self.panelCounter++;
+                    var id = 'video-' + viewName + '-' + self.panelCounter;
+                    self.api.addPanel({
+                        id: id,
+                        component: 'video-canvas',
+                        title: viewName,
+                        params: { viewName: viewName },
+                        position: position,
+                    });
+                    var emptyMsg = document.getElementById('videoDockEmpty');
+                    if (emptyMsg) emptyMsg.classList.add('hidden');
+                    updateStripItemStatus(viewName, true);
+                    return id;
+                }
+
+                // Add first row: left to right
+                for (var c1 = 0; c1 < grid[0].length; c1++) {
+                    if (c1 === 0) {
+                        panelIds[0][0] = addGridPanel(grid[0][0]);
+                    } else {
+                        panelIds[0][c1] = addGridPanel(grid[0][c1], {
+                            referencePanel: panelIds[0][c1 - 1],
+                            direction: 'right',
+                        });
+                    }
+                }
+
+                // Add subsequent rows: below the corresponding column in the row above
+                for (var r3 = 1; r3 < grid.length; r3++) {
+                    for (var c3 = 0; c3 < grid[r3].length; c3++) {
+                        // Reference the panel directly above
+                        var refCol = Math.min(c3, panelIds[r3 - 1].length - 1);
+                        panelIds[r3][c3] = addGridPanel(grid[r3][c3], {
+                            referencePanel: panelIds[r3 - 1][refCol],
+                            direction: 'below',
+                        });
+                    }
                 }
             },
 

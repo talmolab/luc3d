@@ -473,9 +473,10 @@ body {
   z-index: 11;
 }
 
-.video-cell.video-selected {
+.video-cell.video-selected .canvas-wrapper {
   outline: 2px solid rgba(255, 221, 68, 0.5);
   outline-offset: -2px;
+  border-radius: 2px;
 }
 
 .unzoom-btn {
@@ -1476,6 +1477,10 @@ input[type="range"]::-moz-range-track {
   flex-direction: column;
   flex-shrink: 0;
   border-left: 1px solid var(--border-color);
+}
+
+.info-panel-wrapper.collapsed {
+  border-left: none;
 }
 
 .info-panel-wrapper.collapsed .info-panel {
