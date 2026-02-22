@@ -1,8 +1,8 @@
 # luc3d (Label Unification and Correspondence in 3D Annotation GUI)
 Label Unification and Correspondence in 3D Annotation GUI in Web Browser
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
-<img width="1567" height="488" alt="image" src="https://github.com/user-attachments/assets/5df1e3f3-2b1a-47c1-8084-22f176e4ecea" />
 
+![LUCID](https://github.com/user-attachments/assets/d4f44671-d144-4150-a4d5-a3692bd3ddd9)
 
 ![lucidGUI](https://github.com/user-attachments/assets/bc89788a-bf2b-4816-89ff-b23fa4ef0b5b)
 
