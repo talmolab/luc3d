@@ -5256,11 +5256,35 @@
                                         break;
                                     }
                                 }
-                                // Fallback: match by camera name
+                                // Fallback: match by camera name (exact)
                                 if (!amvCam) {
                                     for (var aci3 = 0; aci3 < cameras.length; aci3++) {
                                         if (cameras[aci3].name.toLowerCase() === amvStemLower) {
                                             amvCam = cameras[aci3].name;
+                                            break;
+                                        }
+                                    }
+                                }
+                                // Fallback: substring match between video name and camera name
+                                if (!amvCam) {
+                                    for (var aci4 = 0; aci4 < cameras.length; aci4++) {
+                                        var aci4Lower = cameras[aci4].name.toLowerCase();
+                                        var aci4Used = state.videoFiles.some(function (o) { return o.assignedCamera === cameras[aci4].name; });
+                                        if (aci4Used) continue;
+                                        if (amvStemLower.indexOf(aci4Lower) >= 0 || aci4Lower.indexOf(amvStemLower) >= 0) {
+                                            amvCam = cameras[aci4].name;
+                                            console.log('[add-slp] Substring-matched video "' + amvStem + '" to camera "' + amvCam + '"');
+                                            break;
+                                        }
+                                    }
+                                }
+                                // Fallback: assign to first newly-added camera that has no video yet
+                                if (!amvCam) {
+                                    for (var aci5 = 0; aci5 < cameras.length; aci5++) {
+                                        var aci5Used = state.videoFiles.some(function (o) { return o.assignedCamera === cameras[aci5].name; });
+                                        if (!aci5Used) {
+                                            amvCam = cameras[aci5].name;
+                                            console.log('[add-slp] Index-fallback assigned video "' + amvStem + '" to camera "' + amvCam + '"');
                                             break;
                                         }
                                     }
