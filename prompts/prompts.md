@@ -109,3 +109,17 @@ Interaction Changes
 * Convert the `Assign` button to a drop down menu. Include the options 'Automatic' and 'Manual'. The functionality of the 'manual' option should be what is currently the assign button. 
 * For the `Automatic` option in `Assign`, first display a toast (pop up message ) that says "Select the views for automatic Identity Assignment". Make this message persist with the buttons 'Cancel' or 'Continue'. Temporarily remove the yellow highlight around the currently selected border. Now, allow the user to select or deselect each window for identity assignment. Selected windows will be highlighted in red. When the user presses the `continue` button, run Epipolar matching and the Hungarian algorithm to run automatic identity assignment for the selected views. If no views are selected, then let the user know they they did not select any views and automatic assignment was not run.
 * Once automatic assignment is run, color the labels for each animal of the same identity with the same color
+
+
+##
+
+# Prompt 9
+
+Some UI changes:
+
+- Set the default node size to 1
+- Create a new side bar for the label size, and allow the label size to be independent of node size
+- When the user collapses or extends the info panel, re-render the 3D visualizer so that it is centered in the new window size
+- When a user selects a window (**not** during identity automatic assignment), highlight the camera in the 3D viewer.
+
+- The assign button isn't on the main screen; please add it next to the `Create Group` button

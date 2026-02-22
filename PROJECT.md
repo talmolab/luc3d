@@ -169,11 +169,23 @@ cd /root/vast/joshua/lucid
 python3 -m http.server 8080 --bind 0.0.0.0
 
 # The app is now available at:
-#   http://localhost:8080/
+http://localhost:8080/
 #
 # If accessing from your local machine via SSH tunnel:
-#   ssh -L 8080:localhost:8080 <user>@<cluster-host>
-#   Then open http://localhost:8080/ in your browser
+ssh -L 8080:localhost:8080 <user>@<cluster-host>
+
+# Then open in your browser:
+http://localhost:8080
+
+# Stop the server:
+# Press Ctrl+C in the terminal where it's running
+
+# If running in the background (e.g. started with &), find and kill it:
+#   lsof -i :8080          # find the PID
+#   kill <PID>             # stop it
+#
+# Or as a one-liner:
+#   kill $(lsof -t -i :8080)
 ```
 
 To run the test suite, navigate to `http://localhost:8080/tests/test-runner.html`.

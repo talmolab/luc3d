@@ -685,6 +685,32 @@ class Viewport3D {
     }
 
     /**
+     * Highlight a camera by name in the 3D viewport.
+     * Pass null to clear all highlights.
+     * @param {string|null} cameraName
+     */
+    highlightCamera(cameraName) {
+        if (!this._cameraGroup) return;
+        var self = this;
+        this._cameraGroup.traverse(function (child) {
+            if (child.material) {
+                var name = child.name || '';
+                var belongsToCamera = name === 'camera_' + cameraName ||
+                    name === 'label_' + cameraName ||
+                    name === 'camSphere_' + cameraName;
+                if (cameraName && belongsToCamera) {
+                    child.material.color.set(0xff4444);
+                    child.material.opacity = 1.0;
+                } else {
+                    // Reset to default yellow
+                    child.material.color.set(0xffdd44);
+                    child.material.opacity = name.startsWith('camSphere_') ? 0.8 : 0.7;
+                }
+            }
+        });
+    }
+
+    /**
      * Handle container resize. Updates renderer and camera aspect ratio.
      */
     resize() {

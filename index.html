@@ -115,9 +115,13 @@
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <label class="toolbar-btn" style="cursor:default;font-size:12px;">
-                    Node Size <span id="nodeSizeValue">8</span>
+                    Node Size <span id="nodeSizeValue">1</span>
                 </label>
-                <input type="range" id="nodeSizeSlider" min="1" max="20" value="8" step="1" style="width:80px;">
+                <input type="range" id="nodeSizeSlider" min="1" max="20" value="1" step="1" style="width:80px;">
+                <label class="toolbar-btn" style="cursor:default;font-size:12px;margin-left:6px;">
+                    Label <span id="labelSizeValue">11</span>
+                </label>
+                <input type="range" id="labelSizeSlider" min="0" max="24" value="11" step="1" style="width:60px;">
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
@@ -1071,6 +1075,7 @@
             const showErrors = document.getElementById('toggleErrors').checked;
             const showLabels = document.getElementById('toggleLabels').checked;
             const nodeSize = parseInt(document.getElementById('nodeSizeSlider').value) || 4;
+            const labelSize = parseInt(document.getElementById('labelSizeSlider').value) || 11;
 
             // Get interaction state — only show selection highlight if the
             // selected group belongs to the current frame
@@ -1125,6 +1130,7 @@
                     showErrors: showErrors,
                     showLabels: showLabels,
                     nodeSize: nodeSize,
+                    labelSize: labelSize,
                     lineWidth: Math.max(2, Math.round(nodeSize / 2)),
                     videoWidth: view.videoWidth,
                     videoHeight: view.videoHeight,
@@ -1830,6 +1836,11 @@
                 document.getElementById('nodeSizeValue').textContent = nodeSizeSlider.value;
                 drawAllOverlays(state.currentFrame);
             });
+            var labelSizeSlider = document.getElementById('labelSizeSlider');
+            labelSizeSlider.addEventListener('input', function () {
+                document.getElementById('labelSizeValue').textContent = labelSizeSlider.value;
+                drawAllOverlays(state.currentFrame);
+            });
 
             // Toolbar buttons
             document.getElementById('tbAddInstance').addEventListener('click', function () {
@@ -1934,6 +1945,12 @@
             var wrapper = document.getElementById('infoPanelWrapper');
             wrapper.classList.toggle('collapsed');
             updateInfoPanelToggleBtn();
+            // Re-render 3D visualizer after CSS transition completes
+            if (viewport3d) {
+                setTimeout(function () { viewport3d.resize(); }, 350);
+            }
+            // Also refit video canvases to new available space
+            setTimeout(function () { fitCanvasesToCells(); }, 350);
         }
 
         function updateInfoPanelToggleBtn() {
@@ -6360,16 +6377,22 @@
                     self.addVideoPanel(viewName, position);
                 });
 
-                // Track active panel — highlight selected video
+                // Track active panel — highlight selected video + camera in 3D
                 this.api.onDidActivePanelChange(function (event) {
                     document.querySelectorAll('.video-cell.video-selected').forEach(function (el) {
                         el.classList.remove('video-selected');
                     });
+                    var activeViewName = null;
                     if (event && event.id) {
                         var renderer = panelRenderers.get(event.id);
                         if (renderer && renderer.element) {
                             renderer.element.classList.add('video-selected');
+                            activeViewName = renderer.getViewName();
                         }
+                    }
+                    // Highlight corresponding camera in 3D viewer (skip during auto-assignment)
+                    if (viewport3d && !autoAssignState) {
+                        viewport3d.highlightCamera(activeViewName);
                     }
                 });
 

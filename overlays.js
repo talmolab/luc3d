@@ -130,6 +130,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
 
     const color = options.color || getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
+    const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
     const alpha = options.alpha != null ? options.alpha : 1.0;
     const showLabels = !!options.showLabels;
@@ -239,10 +240,9 @@ function drawSkeleton(ctx, instance, skeleton, options) {
         ctx.globalAlpha = 1.0;
         ctx.fillStyle = '#ffffff';
         ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-        // Font size = 3x the node radius. Since nodeSize is already scaled
-        // to canvas coordinates, this ensures labels are always visible and
-        // proportional to the node display size.
-        var fontSize = Math.max(10, Math.round(nodeSize * 3));
+        // Use independent label size (scaled to canvas coordinates)
+        var fontSize = Math.round(baseLabelSize * scale);
+        if (fontSize <= 0) { ctx.globalAlpha = savedAlpha; return; }
         ctx.lineWidth = Math.max(1, Math.round(nodeSize * 0.5));
         ctx.font = 'bold ' + fontSize + 'px sans-serif';
         ctx.textBaseline = 'bottom';
@@ -748,6 +748,7 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
     const trackNames = options.trackNames || [];
     const selectedInstanceIdx = options.selectedInstanceIdx != null ? options.selectedInstanceIdx : -1;
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
+    const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
 
     const vw = options.videoWidth;
     const vh = options.videoHeight;
@@ -789,20 +790,22 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
             : ('Track ' + (inst.trackIdx != null ? inst.trackIdx : instIdx));
         const color = getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx);
 
-        ctx.font = 'bold ' + Math.round(11 * scale) + 'px sans-serif';
+        var fontSize = Math.round(baseLabelSize * scale);
+        if (fontSize <= 0) continue; // label size 0 = hidden
+        ctx.font = 'bold ' + fontSize + 'px sans-serif';
         ctx.textBaseline = 'bottom';
 
         // Background pill for track label
         const textWidth = ctx.measureText(trackName).width;
         const pillPad = 3 * scale;
         const pillX = firstCp.x - pillPad;
-        const pillY = firstCp.y - nodeSize * 2 - (11 * scale) - pillPad;
+        const pillY = firstCp.y - nodeSize * 2 - fontSize - pillPad;
         ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
         ctx.beginPath();
         if (ctx.roundRect) {
-            ctx.roundRect(pillX, pillY, textWidth + pillPad * 2, 11 * scale + pillPad * 2, 3);
+            ctx.roundRect(pillX, pillY, textWidth + pillPad * 2, fontSize + pillPad * 2, 3);
         } else {
-            ctx.rect(pillX, pillY, textWidth + pillPad * 2, 11 * scale + pillPad * 2);
+            ctx.rect(pillX, pillY, textWidth + pillPad * 2, fontSize + pillPad * 2);
         }
         ctx.fill();
 
@@ -1136,6 +1139,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     const showLegend      = options.showLegend !== false;
     const nodeSize        = options.nodeSize != null ? options.nodeSize : 4;
     const lineWidth       = options.lineWidth != null ? options.lineWidth : 2;
+    const labelSize       = options.labelSize != null ? options.labelSize : 11;
     const showLabels      = !!options.showLabels;
 
     const selectedInstanceGroup = options.selectedInstanceGroup || null;
@@ -1154,6 +1158,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     const renderOpts = {
         nodeSize: nodeSize,
         lineWidth: lineWidth,
+        labelSize: labelSize,
         videoWidth: videoW,
         videoHeight: videoH,
         canvasWidth: canvasW,
