@@ -69,6 +69,18 @@ async function parseSlp(file) {
 
         progress('Reading metadata...');
 
+        // --- Detect analysis H5 format ---
+        // Analysis H5 files have a top-level 'tracks' dataset but no 'metadata' group.
+        var hasTracksDs = false;
+        var hasMetadata = false;
+        try { hasTracksDs = !!f.get('tracks'); } catch (e) { }
+        try { hasMetadata = !!f.get('metadata'); } catch (e) { }
+        if (hasTracksDs && !hasMetadata) {
+            progress('Detected SLEAP analysis H5 format');
+            parseAnalysisH5(f, file.name);
+            return;
+        }
+
         // --- Metadata ---
         var metadataGroup = null;
         try { metadataGroup = f.get('metadata'); } catch (e) {
@@ -228,7 +240,7 @@ async function parseSlp(file) {
 
         var instancesData = readColumnar(f, 'instances',
             ['instance_id', 'instance_type', 'frame_id', 'skeleton', 'track',
-             'from_predicted', 'score', 'point_id_start', 'point_id_end', 'tracking_score']);
+                'from_predicted', 'score', 'point_id_start', 'point_id_end', 'tracking_score']);
 
         var pointsData = readPoints(f, 'points', ['x', 'y', 'visible', 'complete']);
         var predPointsData = readPoints(f, 'pred_points', ['x', 'y', 'visible', 'complete', 'score']);
@@ -337,7 +349,255 @@ async function parseSlp(file) {
         });
 
     } catch (err) {
-        try { FS.unmount('/work'); } catch (e) {}
+        try { FS.unmount('/work'); } catch (e) { }
+        var errMsg = (err.message || String(err));
+        if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
+        postMessage({ type: 'error', message: errMsg });
+    }
+}
+
+// --- Analysis H5 parsing ---
+
+function parseAnalysisH5(f, filename) {
+    try {
+        // --- Read node names ---
+        var nodeNamesDs = f.get('node_names');
+        var nodeNames = [];
+        if (nodeNamesDs) {
+            var nnVal = nodeNamesDs.value;
+            for (var i = 0; i < nnVal.length; i++) {
+                nodeNames.push(String(nnVal[i]));
+            }
+        }
+        var nNodes = nodeNames.length;
+        progress('Nodes: ' + nNodes + ' — ' + nodeNames.slice(0, 5).join(', ') + (nNodes > 5 ? '...' : ''));
+
+        // --- Read track names ---
+        var trackNamesDs = f.get('track_names');
+        var trackNames = [];
+        if (trackNamesDs) {
+            var tnVal = trackNamesDs.value;
+            for (var ti = 0; ti < tnVal.length; ti++) {
+                trackNames.push(String(tnVal[ti]));
+            }
+        }
+        // nTracks will be determined from the tracks dataset shape below,
+        // since track_names can be empty for single-instance models
+        progress('Track names: ' + (trackNames.length > 0 ? trackNames.join(', ') : '(none — single instance)'));
+
+        // --- Read edges ---
+        var edges = [];
+        try {
+            var edgeIndsDs = f.get('edge_inds');
+            if (edgeIndsDs) {
+                var eiVal = edgeIndsDs.value;
+                var eiShape = edgeIndsDs.shape;
+                // Stored as [2, n_edges] (transposed) or [n_edges, 2]
+                if (eiShape.length === 2) {
+                    if (eiShape[0] === 2 && eiShape[1] !== 2) {
+                        // Transposed: [2, n_edges]
+                        var nEdges = eiShape[1];
+                        for (var ei = 0; ei < nEdges; ei++) {
+                            edges.push([Number(eiVal[ei]), Number(eiVal[nEdges + ei])]);
+                        }
+                    } else {
+                        // Normal: [n_edges, 2]
+                        var nEdges2 = eiShape[0];
+                        for (var ei2 = 0; ei2 < nEdges2; ei2++) {
+                            edges.push([Number(eiVal[ei2 * 2]), Number(eiVal[ei2 * 2 + 1])]);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            progress('Warning: could not read edge_inds: ' + e.message);
+        }
+        progress('Edges: ' + edges.length);
+
+        // --- Read tracks data ---
+        var tracksDs = f.get('tracks');
+        if (!tracksDs) {
+            throw new Error('No tracks dataset found in analysis H5');
+        }
+        var tracksVal = tracksDs.value;
+        var tracksShape = tracksDs.shape; // Expected: [n_tracks, 2, n_nodes, n_frames] (transposed)
+        progress('tracks shape: [' + tracksShape.join(', ') + ']');
+
+        // Determine orientation and extract dimensions
+        // nTracks is derived from the shape, not track_names (which can be empty)
+        var nTracks, nFrames, transposed;
+        if (tracksShape.length === 4) {
+            if (tracksShape[1] === 2 && tracksShape[2] === nNodes) {
+                // Transposed (MATLAB/default): [n_tracks, 2, n_nodes, n_frames]
+                transposed = true;
+                nTracks = tracksShape[0];
+                nFrames = tracksShape[3];
+            } else if (tracksShape[2] === 2 && tracksShape[1] === nNodes) {
+                // Non-transposed: [n_frames, n_nodes, 2, n_tracks]
+                transposed = false;
+                nTracks = tracksShape[3];
+                nFrames = tracksShape[0];
+            } else {
+                // Fallback: assume transposed
+                transposed = true;
+                nTracks = tracksShape[0];
+                nFrames = tracksShape[3];
+                progress('Warning: unexpected tracks shape, assuming transposed layout');
+            }
+        } else {
+            throw new Error('Unexpected tracks dimensionality: ' + tracksShape.length);
+        }
+        progress('nTracks: ' + nTracks + ', nFrames: ' + nFrames + ', transposed: ' + transposed);
+
+        // Backfill track names if empty
+        if (trackNames.length === 0) {
+            for (var tni = 0; tni < nTracks; tni++) {
+                trackNames.push(nTracks === 1 ? 'track' : 'track_' + tni);
+            }
+        }
+
+        // --- Read point scores (optional) ---
+        var pointScores = null;
+        var pointScoresShape = null;
+        try {
+            var psDs = f.get('point_scores');
+            if (psDs) {
+                pointScores = psDs.value;
+                pointScoresShape = psDs.shape;
+            }
+        } catch (e) { }
+
+        // --- Read instance scores (optional) ---
+        var instanceScores = null;
+        try {
+            var isDs = f.get('instance_scores');
+            if (isDs) { instanceScores = isDs.value; }
+        } catch (e) { }
+
+        // --- Read track occupancy (optional) ---
+        var trackOccupancy = null;
+        var trackOccShape = null;
+        try {
+            var toDs = f.get('track_occupancy');
+            if (toDs) {
+                trackOccupancy = toDs.value;
+                trackOccShape = toDs.shape;
+            }
+        } catch (e) { }
+
+        // --- Build frames array ---
+        progress('Building frame data...');
+        var frames = [];
+        for (var fr = 0; fr < nFrames; fr++) {
+            var instances = [];
+            for (var tr = 0; tr < nTracks; tr++) {
+                // Check occupancy if available
+                if (trackOccupancy) {
+                    // track_occupancy shape: [n_frames, n_tracks]
+                    var occIdx = fr * nTracks + tr;
+                    if (occIdx < trackOccupancy.length && !trackOccupancy[occIdx]) {
+                        continue;
+                    }
+                }
+
+                var points = [];
+                var hasAnyPoint = false;
+                for (var nd = 0; nd < nNodes; nd++) {
+                    var x, y;
+                    if (transposed) {
+                        // Shape [n_tracks, 2, n_nodes, n_frames]
+                        // index(t, c, n, f) = t*(2*N*F) + c*(N*F) + n*F + f
+                        var baseT = tr * (2 * nNodes * nFrames);
+                        x = Number(tracksVal[baseT + 0 * (nNodes * nFrames) + nd * nFrames + fr]);
+                        y = Number(tracksVal[baseT + 1 * (nNodes * nFrames) + nd * nFrames + fr]);
+                    } else {
+                        // Shape [n_frames, n_nodes, 2, n_tracks]
+                        // index(f, n, c, t) = f*(N*2*T) + n*(2*T) + c*T + t
+                        var baseF = fr * (nNodes * 2 * nTracks);
+                        x = Number(tracksVal[baseF + nd * (2 * nTracks) + 0 * nTracks + tr]);
+                        y = Number(tracksVal[baseF + nd * (2 * nTracks) + 1 * nTracks + tr]);
+                    }
+
+                    if (!isNaN(x) && !isNaN(y)) {
+                        points.push([x, y]);
+                        hasAnyPoint = true;
+                    } else {
+                        points.push(null);
+                    }
+                }
+
+                if (!hasAnyPoint) continue;
+
+                // Get instance score if available
+                var instScore = 0;
+                if (instanceScores) {
+                    // instance_scores shape: [n_tracks, n_frames] (transposed)
+                    var scoreIdx = tr * nFrames + fr;
+                    if (scoreIdx < instanceScores.length) {
+                        instScore = Number(instanceScores[scoreIdx]);
+                        if (isNaN(instScore)) instScore = 0;
+                    }
+                }
+
+                instances.push({
+                    trackIdx: tr,
+                    score: instScore,
+                    type: 'predicted',
+                    points: points,
+                });
+            }
+
+            if (instances.length > 0) {
+                frames.push({ frameIdx: fr, videoIdx: 0, instances: instances });
+            }
+        }
+
+        progress('Built ' + frames.length + ' frames with pose data');
+
+        // --- Build video entry from filename ---
+        // Strip .analysis.h5 or .h5 to get a base name
+        var vidName = filename;
+        vidName = vidName.replace(/\.analysis\.h5$/i, '').replace(/\.h5$/i, '');
+        // Try to extract the original video filename from SLEAP's naming convention:
+        // model_name.predictions.ORIGINAL_VIDEO_NAME.analysis.h5
+        var predIdx = vidName.indexOf('.predictions.');
+        var sourceVideo = null;
+        if (predIdx >= 0) {
+            sourceVideo = vidName.substring(predIdx + '.predictions.'.length);
+        }
+        var videos = [{
+            index: 0,
+            filename: sourceVideo || vidName,
+            sourceFilename: sourceVideo ? vidName : null,
+            backendType: 'AnalysisH5',
+            shape: null,
+            embedded: false,
+            dataset: null,
+        }];
+
+        // --- Build skeleton ---
+        var skelName = 'skeleton';
+        var skeleton = { name: skelName, nodes: nodeNames, edges: edges };
+
+        f.close();
+        try { FS.unmount('/work'); } catch (e) { /* ignore */ }
+
+        progress('Done! Sending results...');
+
+        postMessage({
+            type: 'result',
+            data: {
+                skeleton: skeleton,
+                tracks: trackNames,
+                frames: frames,
+                videos: videos,
+                sessions: [],
+            }
+        });
+
+    } catch (err) {
+        try { f.close(); } catch (e) { }
+        try { FS.unmount('/work'); } catch (e) { }
         var errMsg = (err.message || String(err));
         if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
         postMessage({ type: 'error', message: errMsg });
