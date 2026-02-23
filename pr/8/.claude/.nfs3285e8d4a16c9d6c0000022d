@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:sleap.ai)",
+      "WebFetch(domain:docs.sleap.ai)",
+      "WebFetch(domain:github.com)",
+      "Bash(python3:*)",
+      "Bash(node:*)",
+      "Bash(git stash:*)",
+      "Bash(git checkout:*)",
+      "Bash(grep:*)",
+      "Bash(fuser:*)",
+      "Bash(sleep 2:*)",
+      "Bash(ss:*)",
+      "Bash(pkill:*)"
+    ]
+  }
+}
