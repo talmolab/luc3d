@@ -1522,13 +1522,27 @@ var QC = (function () {
             }
         });
 
-        // Epipolar: sample a subset of frames for distribution (full scan is too expensive at 180k+)
+        // Epipolar: sample a random subset of frames for distribution + per-frame flagging
+        // (full scan is too expensive at 180k+ frames)
         var hasFMatrices = Object.keys(fundamentalMatrices).length > 0;
-        var EPI_SAMPLE_MAX = 2000;
-        var EPI_PER_FRAME_MAX = 10000; // skip per-frame epipolar above this
+        var EPI_SAMPLE_MAX = 5000;
+        var epiSampleSet = new Set();
         if (hasFMatrices) {
-            var epiStep = Math.max(1, Math.floor(numTotalFrames / EPI_SAMPLE_MAX));
-            for (var efi = 0; efi < numTotalFrames; efi += epiStep) {
+            if (numTotalFrames <= EPI_SAMPLE_MAX) {
+                // Small dataset: check all frames
+                for (var eai = 0; eai < numTotalFrames; eai++) epiSampleSet.add(eai);
+            } else {
+                // Large dataset: randomly sample EPI_SAMPLE_MAX frame indices
+                // Use stride + jitter to get good coverage across the full range
+                var epiStride = numTotalFrames / EPI_SAMPLE_MAX;
+                for (var esi = 0; esi < EPI_SAMPLE_MAX; esi++) {
+                    var baseIdx = Math.floor(esi * epiStride);
+                    var jitter = Math.floor(Math.random() * Math.min(epiStride, numTotalFrames - baseIdx));
+                    epiSampleSet.add(Math.min(baseIdx + jitter, numTotalFrames - 1));
+                }
+            }
+            // Pre-compute distribution from sample
+            epiSampleSet.forEach(function (efi) {
                 var efResults = frameEntries[efi][1];
                 for (var er = 0; er < efResults.length; er++) {
                     var eGroup = efResults[er].group;
@@ -1538,7 +1552,7 @@ var QC = (function () {
                         distributions.epipolar.push(epi.meanDistance);
                     }
                 }
-            }
+            });
         }
 
         // Auto-thresholds (allow caller overrides)
@@ -1679,9 +1693,9 @@ var QC = (function () {
                     }
                 }
 
-                // Epipolar metrics — only for small datasets (very expensive per-frame)
+                // Epipolar metrics — computed on sampled frames only
                 var epipolarInfo = null;
-                if (hasFMatrices && numTotalFrames <= EPI_PER_FRAME_MAX && group && group.getInstance) {
+                if (hasFMatrices && epiSampleSet.has(fe) && group && group.getInstance) {
                     epipolarInfo = computeEpipolarMetrics(group, cameras, fundamentalMatrices, numKeypoints);
                     var epiThresh = autoThresholds.epipolar != null ? autoThresholds.epipolar : Infinity;
                     var flaggedKps = [];
