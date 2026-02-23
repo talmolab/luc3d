@@ -6816,7 +6816,70 @@
         }
 
         /**
+         * Group consecutive frames with the same issue type/track/severity into runs.
+         * Returns an array of run objects, each with a randomly picked representative frame.
+         */
+        function _groupConsecutiveIssues(issues) {
+            if (issues.length === 0) return [];
+
+            // Sort by type, then track, then severity, then frame
+            var sorted = issues.slice().sort(function (a, b) {
+                if (a.type !== b.type) return a.type < b.type ? -1 : 1;
+                if (a.trackIdx !== b.trackIdx) return a.trackIdx - b.trackIdx;
+                if (a.severity !== b.severity) return a.severity < b.severity ? -1 : 1;
+                return a.frameIdx - b.frameIdx;
+            });
+
+            var runs = [];
+            var currentRun = null;
+
+            for (var i = 0; i < sorted.length; i++) {
+                var issue = sorted[i];
+                if (currentRun &&
+                    issue.type === currentRun.type &&
+                    issue.trackIdx === currentRun.trackIdx &&
+                    issue.severity === currentRun.severity &&
+                    issue.frameIdx <= currentRun.endFrame + 2) {
+                    // Extend current run (allow gap of 1 frame)
+                    currentRun.endFrame = issue.frameIdx;
+                    currentRun.frames.push(issue.frameIdx);
+                    currentRun.issues.push(issue);
+                } else {
+                    // Start a new run
+                    currentRun = {
+                        type: issue.type,
+                        trackIdx: issue.trackIdx,
+                        severity: issue.severity,
+                        startFrame: issue.frameIdx,
+                        endFrame: issue.frameIdx,
+                        frames: [issue.frameIdx],
+                        issues: [issue],
+                    };
+                    runs.push(currentRun);
+                }
+            }
+
+            // Pick a random representative from each run and sort by severity then run start
+            var severityOrder = { high: 0, medium: 1, low: 2 };
+            for (var ri = 0; ri < runs.length; ri++) {
+                var run = runs[ri];
+                var randIdx = Math.floor(Math.random() * run.issues.length);
+                run.representative = run.issues[randIdx];
+            }
+            runs.sort(function (a, b) {
+                var sa = severityOrder[a.severity] != null ? severityOrder[a.severity] : 3;
+                var sb = severityOrder[b.severity] != null ? severityOrder[b.severity] : 3;
+                if (sa !== sb) return sa - sb;
+                return a.startFrame - b.startFrame;
+            });
+
+            return runs;
+        }
+
+        /**
          * Update the filterable issue list in the QC panel.
+         * Groups consecutive frames with the same problem into ranges and
+         * picks a random representative frame from each range.
          */
         function updateQCIssueList() {
             var results = state.qcResults;
@@ -6845,52 +6908,65 @@
                 return;
             }
 
-            // Cap display at 200 items for performance
-            var maxItems = Math.min(issues.length, 200);
+            // Group consecutive frames into runs
+            var runs = _groupConsecutiveIssues(issues);
+
+            // Cap display at 200 runs for performance
+            var maxItems = Math.min(runs.length, 200);
             for (var i = 0; i < maxItems; i++) {
-                var issue = issues[i];
+                var run = runs[i];
+                var rep = run.representative;
                 var row = document.createElement('div');
                 row.className = 'qc-issue-row';
-                row.setAttribute('data-frame', issue.frameIdx);
+                row.setAttribute('data-frame', rep.frameIdx);
                 row.addEventListener('click', (function (frameIdx) {
                     return function () {
                         if (videoController) {
                             videoController.seekToFrame(frameIdx);
                         }
                     };
-                })(issue.frameIdx));
+                })(rep.frameIdx));
 
                 // Severity indicator
                 var dot = document.createElement('span');
-                dot.className = 'qc-severity-dot qc-severity-' + issue.severity;
+                dot.className = 'qc-severity-dot qc-severity-' + run.severity;
                 row.appendChild(dot);
 
-                // Frame number
+                // Frame number / range
                 var frameSpan = document.createElement('span');
                 frameSpan.className = 'qc-issue-frame';
-                frameSpan.textContent = 'F' + issue.frameIdx;
+                if (run.startFrame === run.endFrame) {
+                    frameSpan.textContent = 'F' + run.startFrame;
+                } else {
+                    frameSpan.textContent = 'F' + run.startFrame + '-' + run.endFrame;
+                    frameSpan.title = run.frames.length + ' frames, showing F' + rep.frameIdx;
+                }
                 row.appendChild(frameSpan);
 
                 // Type badge
                 var typeBadge = document.createElement('span');
-                typeBadge.className = 'qc-type-badge qc-type-' + issue.type;
-                typeBadge.textContent = issue.type;
+                typeBadge.className = 'qc-type-badge qc-type-' + run.type;
+                typeBadge.textContent = run.type;
                 row.appendChild(typeBadge);
 
-                // Description
+                // Description (from representative) + frame count if range
                 var desc = document.createElement('span');
                 desc.className = 'qc-issue-desc';
-                desc.textContent = issue.description;
-                desc.title = issue.description;
+                var descText = rep.description;
+                if (run.frames.length > 1) {
+                    descText += ' (' + run.frames.length + ' frames)';
+                }
+                desc.textContent = descText;
+                desc.title = descText;
                 row.appendChild(desc);
 
                 listDiv.appendChild(row);
             }
 
-            if (issues.length > maxItems) {
+            if (runs.length > maxItems) {
                 var moreDiv = document.createElement('div');
                 moreDiv.style.cssText = 'font-size:11px;color:var(--text-muted);padding:4px 0;';
-                moreDiv.textContent = '... and ' + (issues.length - maxItems) + ' more';
+                moreDiv.textContent = '... and ' + (runs.length - maxItems) + ' more groups';
                 listDiv.appendChild(moreDiv);
             }
         }
