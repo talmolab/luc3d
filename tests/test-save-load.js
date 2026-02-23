@@ -404,4 +404,105 @@
         });
     });
 
+
+    // ---- v3 NDJSON format tests ----
+
+    /**
+     * Build v3 NDJSON string (mirrors saveProject v3 logic).
+     */
+    function buildProjectNdjson(projectData) {
+        var header = Object.assign({}, projectData, { version: 3 });
+        delete header.frames;
+        var lines = [JSON.stringify(header)];
+
+        var frameKeys = Object.keys(projectData.frames);
+        for (var fi = 0; fi < frameKeys.length; fi++) {
+            var fk = frameKeys[fi];
+            var frameData = Object.assign({ frame: parseInt(fk) }, projectData.frames[fk]);
+            lines.push(JSON.stringify(frameData));
+        }
+
+        return lines.join('\n') + '\n';
+    }
+
+    describe('Project Save — v3 NDJSON Format', function () {
+
+        it('produces valid NDJSON with one line per frame', function () {
+            var data = makeProjectData(3, 2, 4);
+            var ndjson = buildProjectNdjson(data);
+            var lines = ndjson.trim().split('\n');
+
+            // 1 header + 3 frame lines
+            assertEqual(lines.length, 4);
+
+            // Each line is valid JSON
+            for (var i = 0; i < lines.length; i++) {
+                assertNotNull(JSON.parse(lines[i]));
+            }
+        });
+
+        it('header line has version 3 and no frames', function () {
+            var data = makeProjectData(2, 2, 3);
+            var ndjson = buildProjectNdjson(data);
+            var header = JSON.parse(ndjson.split('\n')[0]);
+
+            assertEqual(header.version, 3);
+            assertEqual(header.skeleton.name, 'test');
+            assertEqual(header.cameras.length, 2);
+            assertTrue(header.frames === undefined);
+        });
+
+        it('frame lines contain frame index and instance data', function () {
+            var data = makeProjectData(2, 2, 3);
+            var ndjson = buildProjectNdjson(data);
+            var lines = ndjson.trim().split('\n');
+
+            var frame0 = JSON.parse(lines[1]);
+            assertEqual(frame0.frame, 0);
+            assertGreaterThan(frame0.instanceGroups.length, 0);
+            assertNotNull(frame0.instanceGroups[0].instances);
+        });
+
+        it('round-trips instance data identically to v2', function () {
+            var data = makeProjectData(3, 2, 4);
+
+            // Build v2 JSON and extract frames
+            var v2json = buildProjectJson(data);
+            var v2parsed = JSON.parse(v2json);
+
+            // Build v3 NDJSON and extract frames
+            var ndjson = buildProjectNdjson(data);
+            var lines = ndjson.trim().split('\n');
+
+            for (var i = 1; i < lines.length; i++) {
+                var v3frame = JSON.parse(lines[i]);
+                var fIdx = String(v3frame.frame);
+                var v2frame = v2parsed.frames[fIdx];
+
+                // Instance groups should match
+                assertEqual(v3frame.instanceGroups.length, v2frame.instanceGroups.length);
+                if (v3frame.instanceGroups.length > 0) {
+                    var v3group = v3frame.instanceGroups[0];
+                    var v2group = v2frame.instanceGroups[0];
+                    assertEqual(v3group.trackIdx, v2group.trackIdx);
+                    assertEqual(
+                        JSON.stringify(v3group.instances),
+                        JSON.stringify(v2group.instances)
+                    );
+                }
+            }
+        });
+
+        it('handles empty project', function () {
+            var data = makeProjectData(0, 2, 4);
+            var ndjson = buildProjectNdjson(data);
+            var lines = ndjson.trim().split('\n');
+
+            // Just the header line
+            assertEqual(lines.length, 1);
+            var header = JSON.parse(lines[0]);
+            assertEqual(header.version, 3);
+        });
+    });
+
 })();

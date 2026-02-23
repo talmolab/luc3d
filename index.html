@@ -6956,16 +6956,18 @@
                         if (dragging) {
                             dragging = false;
                             canvas.style.cursor = '';
-                            // Re-run analysis with the user's thresholds
-                            if (state.qcResults && state.session) {
+                            // Redraw all histograms with updated thresholds (no full re-run)
+                            if (state.qcResults) {
+                                var dist = state.qcResults.distributions;
                                 var thresh = state.qcResults.autoThresholds;
-                                (async function () {
-                                    state.qcResults = await QC.runFullAnalysis(
-                                        state.session, state.triangulationResults,
-                                        { overrideThresholds: thresh }
-                                    );
-                                    updateQCDisplay();
-                                })();
+                                QC.drawHistogram(document.getElementById('qcHistReproj'),
+                                    dist.reproj, thresh.reproj, { title: 'Reprojection (px)', color: '#6b7280' });
+                                QC.drawHistogram(document.getElementById('qcHistEpipolar'),
+                                    dist.epipolar, thresh.epipolar, { title: 'Epipolar (px)', color: '#6366f1' });
+                                QC.drawHistogram(document.getElementById('qcHistVelocity'),
+                                    dist.velocity, thresh.velocity, { title: 'Velocity (u/f)', color: '#fbbf24' });
+                                QC.drawHistogram(document.getElementById('qcHistLimb'),
+                                    dist.limbZScore, thresh.limbZScore, { title: 'Limb Z-Score', color: '#22c55e' });
                             }
                         }
                     });
@@ -8985,7 +8987,59 @@
             }
         }
 
-        function saveProject() {
+        /**
+         * Serialize one frame's data to a plain object (shared by v2 and v3 save).
+         */
+        function _serializeFrame(frameIdx, fg, session) {
+            var frameData = {
+                frame: frameIdx,
+                instanceGroups: [],
+                unlinkedInstances: [],
+            };
+            var trackMap = session.instanceGroups.get(frameIdx);
+            if (trackMap) {
+                for (var [trackIdx, groups] of trackMap) {
+                    for (var gi = 0; gi < groups.length; gi++) {
+                        var group = groups[gi];
+                        var groupData = {
+                            id: group.id,
+                            trackIdx: group.trackIdx,
+                            instances: {},
+                            points3d: group.points3d || null,
+                        };
+                        for (var [camName, inst] of group.instances) {
+                            groupData.instances[camName] = {
+                                points: inst.points,
+                                trackIdx: inst.trackIdx,
+                                type: inst.type,
+                                score: inst.score,
+                                modified: inst.modified,
+                            };
+                        }
+                        frameData.instanceGroups.push(groupData);
+                    }
+                }
+            }
+            for (var [ulCamName, unlinkedList] of fg.unlinkedInstances) {
+                for (var ui = 0; ui < unlinkedList.length; ui++) {
+                    var unlinked = unlinkedList[ui];
+                    frameData.unlinkedInstances.push({
+                        cameraName: ulCamName,
+                        points: unlinked.instance.points,
+                        type: unlinked.instance.type || 'user',
+                        score: unlinked.instance.score || 1.0,
+                        modified: unlinked.instance.modified || false,
+                    });
+                }
+            }
+            return frameData;
+        }
+
+        /**
+         * Save project as NDJSON (v3) — one JSON line per frame.
+         * Memory-efficient: only one batch of frame strings in memory at a time.
+         */
+        async function saveProject() {
             if (!state.session) {
                 setStatus('No session to save', 'error');
                 return;
@@ -9046,10 +9100,14 @@
                 setStatus('Project saved (v3, ' + state.sessions.length + ' sessions)', 'success');
                 return;
             }
-            // else: fall through to existing v2 save code below...
+            // else: fall through to single-session NDJSON save below...
 
-            var projectData = {
-                version: 2,
+            var totalFrames = state.session.frameGroups.size;
+            showLoading('Saving project... (0 / ' + totalFrames + ' frames)');
+
+            // Build header line (v3 NDJSON: first line is header, rest are frames)
+            var headerObj = {
+                version: 3,
                 skeleton: {
                     name: state.session.skeleton.name,
                     nodes: state.session.skeleton.nodes,
@@ -9070,87 +9128,42 @@
                 videoManifest: (state.videoFiles || []).map(function (vf) {
                     return { filename: vf.name, assignedCamera: vf.assignedCamera || null };
                 }),
-                frames: {},
             };
 
-            // Serialize each frame
-            for (const [frameIdx, fg] of state.session.frameGroups) {
-                const frameData = {
-                    instanceGroups: [],
-                    unlinkedInstances: [],
-                };
+            // Blob-from-sub-Blobs: accumulate strings in batches, convert each batch
+            // to a sub-Blob, then build the final Blob from sub-Blobs.
+            // This keeps peak string memory to ~5 MB regardless of total file size.
+            var subBlobs = [new Blob([JSON.stringify(headerObj) + '\n'])];
+            var batch = [];
+            var batchBytes = 0;
+            var frameCount = 0;
+            var BATCH_LIMIT = 5 * 1024 * 1024; // 5 MB per sub-blob
 
-                // Serialize instance groups
-                const groups = state.session.instanceGroups.get(frameIdx) || [];
-                for (const group of groups) {
-                    const groupData = {
-                        id: group.id,
-                        identityId: group.identityId != null ? group.identityId : -1,
-                        instances: {},
-                        points3d: group.points3d || null,
-                        reprojections: group.reprojections || null,
-                        observedPoints: group.observedPoints || null,
-                        dirty: group.dirty || false,
-                    };
-                    if (group.usedCameras) {
-                        groupData.usedCameras = Array.from(group.usedCameras);
-                    }
-                    for (const [camName, inst] of group.instances) {
-                        const instData = {
-                            points: inst.points,
-                            trackIdx: inst.trackIdx,
-                            type: inst.type,
-                            score: inst.score,
-                            modified: inst.modified,
-                            occluded: inst.occluded,
-                        };
-                        if (inst.nulledNodes && inst.nulledNodes.size > 0) {
-                            instData.nulledNodes = Array.from(inst.nulledNodes);
-                        }
-                        groupData.instances[camName] = instData;
-                    }
-                    frameData.instanceGroups.push(groupData);
+            for (var [frameIdx, fg] of state.session.frameGroups) {
+                var line = JSON.stringify(_serializeFrame(frameIdx, fg, state.session)) + '\n';
+                batch.push(line);
+                batchBytes += line.length;
+                frameCount++;
+
+                if (batchBytes >= BATCH_LIMIT) {
+                    subBlobs.push(new Blob(batch));
+                    batch = [];
+                    batchBytes = 0;
+                    showLoading('Saving project... (' + frameCount + ' / ' + totalFrames + ' frames)');
+                    await new Promise(function (r) { setTimeout(r, 0); });
                 }
-
-                // Serialize unlinked instances
-                for (const [camName, unlinkedList] of fg.unlinkedInstances) {
-                    for (const unlinked of unlinkedList) {
-                        const ulData = {
-                            cameraName: camName,
-                            points: unlinked.instance.points,
-                            trackIdx: unlinked.instance.trackIdx,
-                            type: unlinked.instance.type || 'user',
-                            score: unlinked.instance.score || 1.0,
-                            modified: unlinked.instance.modified || false,
-                            occluded: unlinked.instance.occluded,
-                        };
-                        if (unlinked.instance.nulledNodes && unlinked.instance.nulledNodes.size > 0) {
-                            ulData.nulledNodes = Array.from(unlinked.instance.nulledNodes);
-                        }
-                        frameData.unlinkedInstances.push(ulData);
-                    }
-                }
-
-                projectData.frames[frameIdx] = frameData;
+            }
+            if (batch.length > 0) {
+                subBlobs.push(new Blob(batch));
+                batch = null;
             }
 
-            // Build blob in chunks to avoid "invalid string length" on large sessions
-            var header = Object.assign({}, projectData);
-            delete header.frames;
-            var headerJson = JSON.stringify(header);
-            // Strip closing "}" so we can append frames
-            headerJson = headerJson.slice(0, -1) + ',"frames":{';
+            showLoading('Creating download...');
+            await new Promise(function (r) { setTimeout(r, 0); });
 
-            var blobParts = [headerJson];
-            var frameKeys = Object.keys(projectData.frames);
-            for (var bfi = 0; bfi < frameKeys.length; bfi++) {
-                var fk = frameKeys[bfi];
-                var prefix = bfi > 0 ? ',' : '';
-                blobParts.push(prefix + JSON.stringify(fk) + ':' + JSON.stringify(projectData.frames[fk]));
-            }
-            blobParts.push('}}');
+            var blob = new Blob(subBlobs, { type: 'application/json' });
+            subBlobs = null;
 
-            var blob = new Blob(blobParts, { type: 'application/json' });
             var url = URL.createObjectURL(blob);
             var a = document.createElement('a');
             a.href = url;
@@ -9158,13 +9171,14 @@
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            // Large projects can be 200+ MB — give browser plenty of time to finish download
             setTimeout(function () { URL.revokeObjectURL(url); }, 120000);
 
-            setStatus('Project saved (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
+            hideLoading();
+            setStatus('Project saved (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB, ' + frameCount + ' frames)', 'success');
 
             } catch (err) {
                 console.error('Save project failed:', err);
+                hideLoading();
                 setStatus('Save failed: ' + err.message, 'error');
             }
         }
@@ -9186,47 +9200,66 @@
                     return handleLoadSlpFile(file);
                 }
 
-                var fileSize = file.size;
-                if (fileSize > 50 * 1024 * 1024) {
-                    if (!confirm('Project file is ' + (fileSize / 1024 / 1024).toFixed(0) + 'MB — this may be slow. Continue?')) {
-                        setStatus('Load cancelled', 'warning');
-                        return;
-                    }
+                showLoading('Reading project file...');
+                await new Promise(function (r) { setTimeout(r, 0); });
+
+                var cameras, videoManifest;
+
+                // Detect format: v3 NDJSON (first line is header with version:3)
+                // vs v2/legacy (single JSON object)
+                var probe = await file.slice(0, 10000).text();
+                var firstNL = probe.indexOf('\n');
+                var isV3 = false;
+                if (firstNL > 0 && firstNL < 5000) {
+                    try {
+                        var headerProbe = JSON.parse(probe.substring(0, firstNL));
+                        if (headerProbe.version >= 3) isV3 = true;
+                    } catch (e) { /* not v3 */ }
                 }
-                showLoading('Loading project (' + (fileSize / 1024 / 1024).toFixed(1) + ' MB)...');
 
-                const text = await file.text();
-                showLoading('Parsing project...');
-                const data = JSON.parse(text);
-
-                // 1. Restore session data (cameras, skeleton, instances, groups)
-                var cameras;
-                if (data.version === 3) {
-                    cameras = _restoreProjectV3(data);
-                } else if (data.version === 2) {
-                    cameras = _restoreProjectV2(data);
+                if (isV3) {
+                    // v3 NDJSON: stream-parse file in chunks (low memory)
+                    var result = await _restoreProjectV3(file);
+                    cameras = result.cameras;
+                    videoManifest = result.videoManifest;
                 } else {
-                    cameras = _restoreLegacySession(data);
+                    // v2/legacy: full JSON.parse (backward compat)
+                    showLoading('Parsing JSON...');
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                    var data;
+                    try {
+                        data = await new Response(file).json();
+                    } catch (parseErr) {
+                        throw new Error('Failed to parse JSON: ' + parseErr.message);
+                    }
+                    showLoading('Restoring session data...');
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                    if (data.version === 3 && data.sessions) {
+                        cameras = _restoreProjectV3MultiSession(data);
+                        // Collect video manifests from all sessions
+                        videoManifest = [];
+                        for (var vsi = 0; vsi < data.sessions.length; vsi++) {
+                            var sessManifest = data.sessions[vsi].videoManifest || [];
+                            for (var vmi = 0; vmi < sessManifest.length; vmi++) {
+                                sessManifest[vmi]._sessionIdx = vsi;
+                                videoManifest.push(sessManifest[vmi]);
+                            }
+                        }
+                    } else if (data.version === 2) {
+                        cameras = await _restoreProjectV2(data);
+                        videoManifest = (data && data.videoManifest) || [];
+                    } else {
+                        cameras = _restoreLegacySession(data);
+                        videoManifest = (data && data.videoManifest) || [];
+                    }
+                    data = null;
                 }
 
                 // 2. Load videos — check if already loaded, only prompt for missing ones
                 hideLoading();
 
-                // For V3 projects, collect video manifests from all sessions
-                var videoManifest = data.videoManifest || [];
-                if (data.version === 3 && data.sessions) {
-                    videoManifest = [];
-                    for (var vsi = 0; vsi < data.sessions.length; vsi++) {
-                        var sessManifest = data.sessions[vsi].videoManifest || [];
-                        for (var vmi = 0; vmi < sessManifest.length; vmi++) {
-                            sessManifest[vmi]._sessionIdx = vsi;
-                            videoManifest.push(sessManifest[vmi]);
-                        }
-                    }
-                }
-
-                // For V3, use active session's cameras; for V2, use the single session's cameras
-                var activeCameras = (data.version === 3 && state.sessions[state.activeSessionIdx])
+                // For multi-session V3, use active session's cameras; otherwise use restored cameras
+                var activeCameras = (state.sessions.length > 1 && state.sessions[state.activeSessionIdx])
                     ? state.sessions[state.activeSessionIdx].cameras
                     : cameras;
                 var cameraNames = activeCameras.map(function (c) { return c.name; });
@@ -9255,15 +9288,17 @@
                 state.views = [];
                 paneManager.clearAll();
 
-                if (data.version === 3 && data.sessions && needsVideoPrompt) {
-                    // V3: prompt for session folders — with parent directory option
-                    var v3AllSessionNames = data.sessions.map(function (sd, idx) { return sd.name || ('Session ' + (idx + 1)); });
+                if (state.sessions.length > 1 && needsVideoPrompt) {
+                    // V3 multi-session: prompt for session folders — with parent directory option
+                    var v3AllSessionNames = state.sessions.map(function (sess, idx) { return sess.name || ('Session ' + (idx + 1)); });
                     var v3ParentFilesMap = null; // Map<sessionName, File[]> from parent dir pick
 
-                    for (var psi = 0; psi < data.sessions.length; psi++) {
-                        var sessData = data.sessions[psi];
-                        var sessName = sessData.name || ('Session ' + (psi + 1));
-                        var sessCameras = (sessData.videoManifest || []).map(function (m) { return m.assignedCamera; }).filter(Boolean);
+                    for (var psi = 0; psi < state.sessions.length; psi++) {
+                        var sessName = state.sessions[psi].name || ('Session ' + (psi + 1));
+                        // Get camera names from the manifest entries for this session
+                        var sessCameras = videoManifest
+                            .filter(function (m) { return m._sessionIdx === psi; })
+                            .map(function (m) { return m.assignedCamera; }).filter(Boolean);
 
                         var folderFiles;
                         if (v3ParentFilesMap && v3ParentFilesMap.has(sessName)) {
@@ -9506,7 +9541,7 @@
             }
         }
 
-        function _restoreProjectV3(data) {
+        function _restoreProjectV3MultiSession(data) {
             state.sessions = [];
             state.triangulationResults = new Map();
             var allCameras = null;
@@ -9535,10 +9570,140 @@
         }
 
         /**
+         * Restore one frame's data into a session (shared by v2 and v3 loaders).
+         */
+        function _restoreOneFrame(session, frameIdx, frameData) {
+            var fg = new FrameGroup(frameIdx);
+
+            if (frameData.instanceGroups) {
+                if (!session.instanceGroups.has(frameIdx)) {
+                    session.instanceGroups.set(frameIdx, new Map());
+                }
+                var trackMap = session.instanceGroups.get(frameIdx);
+
+                for (var gi = 0; gi < frameData.instanceGroups.length; gi++) {
+                    var groupData = frameData.instanceGroups[gi];
+                    var group = new InstanceGroup(groupData.id || Date.now(), groupData.trackIdx);
+                    if (groupData.points3d) {
+                        group.points3d = groupData.points3d;
+                    }
+
+                    for (var camName in groupData.instances) {
+                        var instData = groupData.instances[camName];
+                        var inst = new Instance(
+                            instData.points,
+                            instData.trackIdx || groupData.trackIdx,
+                            instData.type || 'user',
+                            instData.score || 1.0
+                        );
+                        inst.modified = instData.modified || false;
+                        group.addInstance(camName, inst);
+                        fg.addInstance(camName, inst);
+                    }
+
+                    if (!trackMap.has(group.trackIdx)) {
+                        trackMap.set(group.trackIdx, []);
+                    }
+                    trackMap.get(group.trackIdx).push(group);
+                }
+            }
+
+            if (frameData.unlinkedInstances) {
+                for (var ui = 0; ui < frameData.unlinkedInstances.length; ui++) {
+                    var ulData = frameData.unlinkedInstances[ui];
+                    var ulInst = new Instance(
+                        ulData.points, 0,
+                        ulData.type || 'user',
+                        ulData.score || 1.0
+                    );
+                    ulInst.modified = ulData.modified || false;
+                    var unlinked = new UnlinkedInstance(ulInst, ulData.cameraName);
+                    fg.addUnlinkedInstance(ulData.cameraName, unlinked);
+                }
+            }
+
+            session.addFrameGroup(fg);
+        }
+
+        /**
+         * Restore from v3 NDJSON format by reading the file in chunks.
+         * Peak memory: ~50 MB text chunk + session data (NOT the full file).
+         * @param {File} file
+         * @returns {{cameras: Camera[], videoManifest: Object[]}}
+         */
+        async function _restoreProjectV3(file) {
+            // Read header (first line — already probed, but re-read cleanly)
+            var headerEnd = -1;
+            var headerChunk = await file.slice(0, 50000).text();
+            headerEnd = headerChunk.indexOf('\n');
+            var header = JSON.parse(headerChunk.substring(0, headerEnd));
+            headerChunk = null;
+
+            var cameras = [];
+            if (header.cameras) {
+                cameras = parseCalibrationJSON(JSON.stringify({ cameras: header.cameras }));
+            }
+            var skeleton = header.skeleton
+                ? new Skeleton(header.skeleton.name || 'skeleton', header.skeleton.nodes || [], header.skeleton.edges || [])
+                : createDemoSkeleton();
+            var tracks = header.tracks || ['track_0'];
+            var session = new Session(cameras, skeleton, tracks);
+
+            // Stream-read remaining file in chunks, parse line by line
+            var CHUNK_SIZE = 50 * 1024 * 1024; // 50 MB
+            var offset = headerEnd + 1; // start after header line
+            var leftover = '';
+            var frameCount = 0;
+            var fileSize = file.size;
+
+            while (offset < fileSize) {
+                var end = Math.min(offset + CHUNK_SIZE, fileSize);
+                var chunk = await file.slice(offset, end).text();
+                var combined = leftover + chunk;
+                chunk = null; // free
+                var lines = combined.split('\n');
+                leftover = lines.pop(); // last element may be incomplete
+
+                for (var li = 0; li < lines.length; li++) {
+                    var line = lines[li];
+                    if (line.length === 0) continue;
+                    var frameData = JSON.parse(line);
+                    var frameIdx = frameData.frame;
+                    _restoreOneFrame(session, frameIdx, frameData);
+                    frameCount++;
+                }
+                lines = null;
+                combined = null;
+
+                offset = end;
+                showLoading('Loading frames... (' + frameCount + ' / ~' + Math.round(fileSize / (offset / Math.max(frameCount, 1))) + ')');
+                await new Promise(function (r) { setTimeout(r, 0); });
+            }
+
+            // Process any remaining leftover
+            if (leftover && leftover.length > 0) {
+                try {
+                    var lastFrame = JSON.parse(leftover);
+                    _restoreOneFrame(session, lastFrame.frame, lastFrame);
+                    frameCount++;
+                } catch (e) { /* ignore trailing whitespace/empty */ }
+            }
+            leftover = null;
+
+            state.session = session;
+            state.triangulationResults = new Map();
+
+            _resolveInstanceCameraNames(session, cameras, header.videoManifest || []);
+
+            console.log('[load-project] v3 NDJSON: loaded ' + frameCount + ' frames from ' + (fileSize / 1024 / 1024).toFixed(1) + ' MB');
+            return { cameras: cameras, videoManifest: header.videoManifest || [] };
+        }
+
+        /**
          * Restore session data from a v2 project JSON. Sets state.session.
          * @returns {Camera[]} parsed cameras
          */
-        function _restoreProjectV2(data) {
+        async function _restoreProjectV2(data) {
             var cameras = [];
             if (data.cameras) {
                 cameras = parseCalibrationJSON(JSON.stringify({ cameras: data.cameras }));
@@ -9578,9 +9743,13 @@
             }
 
             if (data.frames) {
-                for (var frameIdxStr in data.frames) {
+                var frameKeys = Object.keys(data.frames);
+                var totalFrames = frameKeys.length;
+                for (var fki = 0; fki < frameKeys.length; fki++) {
+                    var frameIdxStr = frameKeys[fki];
                     var frameIdx = parseInt(frameIdxStr);
                     var frameData = data.frames[frameIdxStr];
+
                     var fg = new FrameGroup(frameIdx);
 
                     if (frameData.instanceGroups) {
@@ -9665,6 +9834,14 @@
                     }
 
                     session.addFrameGroup(fg);
+
+                    // Free the parsed frame data as we go to reduce peak memory
+                    delete data.frames[frameIdxStr];
+
+                    if ((fki + 1) % 1000 === 0) {
+                        showLoading('Restoring frames... (' + (fki + 1) + ' / ' + totalFrames + ')');
+                        await new Promise(function (r) { setTimeout(r, 0); });
+                    }
                 }
             }
 
@@ -10226,8 +10403,17 @@
                         overlay.remove();
                         resolve(files);
                     }
-                    // If cancelled / empty, overlay stays — user must pick files
                 });
+
+                // Skip button — allow proceeding without videos
+                var skipBtn = document.createElement('button');
+                skipBtn.style.cssText = 'padding:10px 24px;font-size:14px;cursor:pointer;background:transparent;color:#aaa;border:1px solid #555;border-radius:8px;margin-top:12px;';
+                skipBtn.textContent = 'Skip — continue without videos';
+                skipBtn.addEventListener('click', function () {
+                    overlay.remove();
+                    resolve([]);
+                });
+                overlay.appendChild(skipBtn);
 
                 document.body.appendChild(overlay);
             });
