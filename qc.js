@@ -224,8 +224,9 @@ var QC = (function () {
         var fMatrices = {};
         for (var i = 0; i < cameras.length; i++) {
             for (var j = i + 1; j < cameras.length; j++) {
-                var P1 = cameras[i].projectionMatrix();
-                var P2 = cameras[j].projectionMatrix();
+                // projectionMatrix is a getter (property), not a function
+                var P1 = cameras[i].projectionMatrix;
+                var P2 = cameras[j].projectionMatrix;
                 var F = computeFundamentalMatrix(P1, P2);
                 if (F) {
                     var key = cameras[i].name + '|' + cameras[j].name;
@@ -254,6 +255,148 @@ var QC = (function () {
      *   severity: 'low'|'medium'|'high'
      * }}
      */
+    /**
+     * Recompute per-camera reprojection errors from group.points3d + cameras.
+     * Used when errors weren't stored during triangulateAll (memory optimization).
+     */
+    /**
+     * Subsample an array to at most n elements using stride sampling.
+     * Preserves distribution shape better than random sampling.
+     */
+    function _subsample(arr, n) {
+        if (arr.length <= n) return arr;
+        var step = arr.length / n;
+        var result = new Array(n);
+        for (var i = 0; i < n; i++) {
+            result[i] = arr[Math.floor(i * step)];
+        }
+        return result;
+    }
+
+    function _recomputeErrors(group, cameras, projMatrices) {
+        if (!group || !group.points3d) return null;
+        var numKp = group.points3d.length;
+        var errors = {};
+        var totalErr = 0;
+        var totalCount = 0;
+        for (var c = 0; c < cameras.length; c++) {
+            var camName = cameras[c].name;
+            var inst = group.getInstance(camName);
+            var observed = [];
+            for (var k = 0; k < numKp; k++) {
+                if (inst && inst.points && inst.points[k] != null) {
+                    observed.push(inst.points[k]);
+                } else {
+                    observed.push(null);
+                }
+            }
+            // Use existing reprojections if available, otherwise compute
+            var reproj;
+            if (group.reprojections && group.reprojections[camName]) {
+                reproj = group.reprojections[camName];
+            } else {
+                reproj = reprojectPoints(group.points3d, projMatrices ? projMatrices[c] : cameras[c].projectionMatrix);
+            }
+            errors[camName] = computeReprojectionErrors(observed, reproj);
+            for (var k2 = 0; k2 < errors[camName].length; k2++) {
+                if (errors[camName][k2] != null) {
+                    totalErr += errors[camName][k2];
+                    totalCount++;
+                }
+            }
+        }
+        return { errors: errors, meanError: totalCount > 0 ? totalErr / totalCount : null };
+    }
+
+    /**
+     * Finalize a pre-built bodypart-camera error table (same stats as
+     * computePerKeypointCameraErrors but table was built inline during QC).
+     */
+    function _finalizeBpCamTable(table, nodeNames, cameraNames) {
+        var allKpIndices = Object.keys(table).map(Number).sort(function (a, b) { return a - b; });
+        for (var t = 0; t < allKpIndices.length; t++) {
+            var ki = allKpIndices[t];
+            var cams = Object.keys(table[ki]);
+            for (var ci = 0; ci < cams.length; ci++) {
+                var cam = cams[ci];
+                var errs = table[ki][cam].errors;
+                var sorted = errs.slice().sort(function (a, b) { return a - b; });
+                table[ki][cam].mean = mean(errs);
+                table[ki][cam].median = median(errs);
+                // Use sorted array for max — Math.max.apply blows stack on 180k+ elements
+                table[ki][cam].max = sorted.length > 0 ? sorted[sorted.length - 1] : 0;
+                table[ki][cam].p95 = percentile(sorted, 95);
+                table[ki][cam].count = errs.length;
+                // Free raw errors — stats are computed, no need to keep 180k-entry arrays
+                table[ki][cam].errors = null;
+            }
+        }
+        var outliers = [];
+        for (var oi = 0; oi < allKpIndices.length; oi++) {
+            var kIdx = allKpIndices[oi];
+            var kCams = Object.keys(table[kIdx]);
+            if (kCams.length < 2) continue;
+            var camMeans = [];
+            for (var cj = 0; cj < kCams.length; cj++) {
+                camMeans.push({ cam: kCams[cj], mean: table[kIdx][kCams[cj]].mean });
+            }
+            camMeans.sort(function (a, b) { return a.mean - b.mean; });
+            var worst = camMeans[camMeans.length - 1];
+            var otherMeans = [];
+            for (var om = 0; om < camMeans.length - 1; om++) {
+                otherMeans.push(camMeans[om].mean);
+            }
+            var otherMed = median(otherMeans);
+            if (worst.mean > 5 && (otherMed < 2 || worst.mean > otherMed * 3)) {
+                var otherCams = [];
+                for (var oc = 0; oc < camMeans.length - 1; oc++) {
+                    otherCams.push({ cam: camMeans[oc].cam, mean: camMeans[oc].mean });
+                }
+                outliers.push({
+                    keypointIdx: kIdx,
+                    keypointName: nodeNames[kIdx] || ('node_' + kIdx),
+                    outlierCam: worst.cam,
+                    outlierMean: worst.mean,
+                    otherCams: otherCams,
+                });
+            }
+        }
+        outliers.sort(function (a, b) { return b.outlierMean - a.outlierMean; });
+        var perCameraSummary = {};
+        for (var sci = 0; sci < cameraNames.length; sci++) {
+            var camName = cameraNames[sci];
+            // Compute per-camera stats using running sums instead of concat
+            // (avoids building multi-million entry arrays)
+            var camTotal = 0;
+            var camCount = 0;
+            var camMax = 0;
+            for (var ski = 0; ski < allKpIndices.length; ski++) {
+                var kk = allKpIndices[ski];
+                if (table[kk] && table[kk][camName]) {
+                    var entry = table[kk][camName];
+                    camTotal += entry.mean * entry.count;
+                    camCount += entry.count;
+                    if (entry.max > camMax) camMax = entry.max;
+                }
+            }
+            if (camCount > 0) {
+                perCameraSummary[camName] = {
+                    mean: camTotal / camCount,
+                    median: null, // not available without full array (acceptable trade-off)
+                    p95: null,    // not available without full array
+                    count: camCount,
+                };
+            }
+        }
+        return {
+            table: table,
+            outliers: outliers,
+            nodeNames: nodeNames,
+            cameraNames: cameraNames,
+            perCameraSummary: perCameraSummary,
+        };
+    }
+
     function computeReprojMetrics(triResult, config) {
         config = config || DEFAULT_CONFIG.reprojError;
         var result = {
@@ -364,10 +507,10 @@ var QC = (function () {
     function computeLimbLengthStats(triResults, edges, trackIdx, config) {
         config = config || DEFAULT_CONFIG.limbLength;
 
-        // Collect limb lengths per edge across all frames
+        // Running sums for online mean/stddev computation (avoids 28 MB value arrays)
         var perEdge = [];
         for (var e = 0; e < edges.length; e++) {
-            perEdge.push({ values: [] });
+            perEdge.push({ sum: 0, sumSq: 0, count: 0 });
         }
 
         var allLengths = new Map();
@@ -376,41 +519,46 @@ var QC = (function () {
             for (var r = 0; r < frameResults.length; r++) {
                 var res = frameResults[r];
                 if (res.group && res.group.trackIdx !== trackIdx) continue;
-                if (!res.points3d) continue;
+                var pts3d = res.points3d || (res.group && res.group.points3d);
+                if (!pts3d) continue;
 
-                var lengths = computeLimbLengths(res.points3d, edges);
+                var lengths = computeLimbLengths(pts3d, edges);
                 allLengths.set(frameIdx, lengths);
 
                 for (var ei = 0; ei < lengths.length; ei++) {
                     if (lengths[ei] != null) {
-                        perEdge[ei].values.push(lengths[ei]);
+                        perEdge[ei].sum += lengths[ei];
+                        perEdge[ei].sumSq += lengths[ei] * lengths[ei];
+                        perEdge[ei].count++;
                     }
                 }
             }
         });
 
-        // Compute stats per edge
+        // Compute stats per edge from running sums
         var flaggedEdges = [];
         for (var ei = 0; ei < perEdge.length; ei++) {
-            var vals = perEdge[ei].values;
-            if (vals.length >= 2) {
-                perEdge[ei].mean = mean(vals);
-                perEdge[ei].stddev = stddev(vals);
-                perEdge[ei].cv = perEdge[ei].mean > 0
-                    ? perEdge[ei].stddev / perEdge[ei].mean
-                    : 0;
-                if (perEdge[ei].cv > config.cvThreshold) {
+            var pe = perEdge[ei];
+            if (pe.count >= 2) {
+                pe.mean = pe.sum / pe.count;
+                pe.stddev = Math.sqrt((pe.sumSq - pe.sum * pe.sum / pe.count) / (pe.count - 1));
+                pe.cv = pe.mean > 0 ? pe.stddev / pe.mean : 0;
+                if (pe.cv > config.cvThreshold) {
                     flaggedEdges.push(ei);
                 }
-            } else if (vals.length === 1) {
-                perEdge[ei].mean = vals[0];
-                perEdge[ei].stddev = 0;
-                perEdge[ei].cv = 0;
+            } else if (pe.count === 1) {
+                pe.mean = pe.sum;
+                pe.stddev = 0;
+                pe.cv = 0;
             } else {
-                perEdge[ei].mean = null;
-                perEdge[ei].stddev = null;
-                perEdge[ei].cv = null;
+                pe.mean = null;
+                pe.stddev = null;
+                pe.cv = null;
             }
+            // Clean up running sums — not needed after stats computed
+            delete pe.sum;
+            delete pe.sumSq;
+            delete pe.count;
         }
 
         return {
@@ -446,8 +594,9 @@ var QC = (function () {
             for (var r = 0; r < frameResults.length; r++) {
                 var res = frameResults[r];
                 if (res.group && res.group.trackIdx !== trackIdx) continue;
-                if (!res.points3d) continue;
-                framePoints.push({ frameIdx: frameIdx, points3d: res.points3d });
+                var pts3d = res.points3d || (res.group && res.group.points3d);
+                if (!pts3d) continue;
+                framePoints.push({ frameIdx: frameIdx, points3d: pts3d });
             }
         });
 
@@ -463,13 +612,8 @@ var QC = (function () {
             };
         }
 
-        // Compute velocities between consecutive frames
-        var perKeypoint = [];
-        for (var k = 0; k < numKeypoints; k++) {
-            perKeypoint.push({ velocities: [], frameIndices: [] });
-        }
+        // Compute per-frame mean velocities (memory-efficient: no per-keypoint arrays)
         var meanVelocities = [];
-        var allVelocities = [];
 
         for (var i = 1; i < framePoints.length; i++) {
             var prev = framePoints[i - 1];
@@ -477,33 +621,37 @@ var QC = (function () {
             var dt = curr.frameIdx - prev.frameIdx;
             if (dt <= 0) continue;
 
-            var frameVelocities = [];
+            var velSum = 0;
+            var velCount = 0;
             for (var k = 0; k < numKeypoints; k++) {
                 var pp = prev.points3d[k];
                 var cp = curr.points3d[k];
                 if (pp && cp) {
-                    var v = dist3d(pp, cp) / dt;
-                    perKeypoint[k].velocities.push(v);
-                    perKeypoint[k].frameIndices.push(curr.frameIdx);
-                    frameVelocities.push(v);
-                    allVelocities.push(v);
+                    velSum += dist3d(pp, cp) / dt;
+                    velCount++;
                 }
             }
             meanVelocities.push({
                 frameIdx: curr.frameIdx,
-                velocity: frameVelocities.length > 0 ? mean(frameVelocities) : null,
+                velocity: velCount > 0 ? velSum / velCount : null,
             });
         }
 
-        // Determine velocity threshold
+        // Determine velocity threshold from per-frame mean velocities
         var threshold;
         if (config.maxVelocity != null) {
             threshold = config.maxVelocity;
-        } else if (allVelocities.length > 0) {
-            var sorted = allVelocities.slice().sort(function (a, b) { return a - b; });
-            threshold = percentile(sorted, config.velocityPercentile);
         } else {
-            threshold = Infinity;
+            var validVels = [];
+            for (var tvi = 0; tvi < meanVelocities.length; tvi++) {
+                if (meanVelocities[tvi].velocity != null) validVels.push(meanVelocities[tvi].velocity);
+            }
+            if (validVels.length > 0) {
+                validVels.sort(function (a, b) { return a - b; });
+                threshold = percentile(validVels, config.velocityPercentile);
+            } else {
+                threshold = Infinity;
+            }
         }
 
         // Flag frames where mean velocity exceeds threshold
@@ -521,7 +669,7 @@ var QC = (function () {
 
         return {
             frameIndices: framePoints.map(function (fp) { return fp.frameIdx; }),
-            perKeypoint: perKeypoint,
+            perKeypoint: null, // freed for memory — not used by UI
             meanVelocity: meanVelocities,
             maxVelocity: maxV,
             flaggedFrames: flaggedFrames,
@@ -740,21 +888,11 @@ var QC = (function () {
 
     /**
      * Compute epipolar distance metrics for a single InstanceGroup across camera pairs.
-     *
-     * @param {InstanceGroup} group - the instance group
-     * @param {Camera[]} cameras - all cameras
-     * @param {Object} fMatrices - pre-computed fundamental matrices { 'camA|camB': F }
-     * @param {number} numKeypoints
-     * @returns {{
-     *   perKeypoint: (number|null)[],
-     *   flaggedKeypoints: number[],
-     *   allDistances: number[],
-     *   pairDistances: Object[]
-     * }}
+     * Lightweight: only returns perKeypoint averages and mean distance (no per-pair arrays).
      */
     function computeEpipolarMetrics(group, cameras, fMatrices, numKeypoints) {
-        var allDistances = [];
-        var pairDistances = [];
+        var distSum = 0;
+        var distCount = 0;
         var perKeypointSums = new Array(numKeypoints);
         var perKeypointCounts = new Array(numKeypoints);
         for (var k = 0; k < numKeypoints; k++) {
@@ -778,15 +916,10 @@ var QC = (function () {
                     if (p1 == null || p2 == null) continue;
 
                     var d = computeEpipolarDistance(F, p1, p2);
-                    allDistances.push(d);
+                    distSum += d;
+                    distCount++;
                     perKeypointSums[ki] += d;
                     perKeypointCounts[ki]++;
-                    pairDistances.push({
-                        cam1: cameras[i].name,
-                        cam2: cameras[j].name,
-                        keypoint: ki,
-                        distance: d,
-                    });
                 }
             }
         }
@@ -803,8 +936,7 @@ var QC = (function () {
         return {
             perKeypoint: perKeypoint,
             flaggedKeypoints: [], // filled in by caller after auto-threshold
-            allDistances: allDistances,
-            pairDistances: pairDistances,
+            meanDistance: distCount > 0 ? distSum / distCount : null,
         };
     }
 
@@ -879,16 +1011,18 @@ var QC = (function () {
             for (var b = a + 1; b < frameResults.length; b++) {
                 var resA = frameResults[a];
                 var resB = frameResults[b];
-                if (!resA.reprojections || !resB.reprojections) continue;
                 if (!resA.group || !resB.group) continue;
+                var reprojA = resA.reprojections || (resA.group && resA.group.reprojections);
+                var reprojB = resB.reprojections || (resB.group && resB.group.reprojections);
+                if (!reprojA || !reprojB) continue;
 
                 var swapCount = 0;
                 var swapKeypoints = [];
 
-                var camNames = Object.keys(resA.reprojections);
+                var camNames = Object.keys(reprojA);
                 for (var ci = 0; ci < camNames.length; ci++) {
                     var cam = camNames[ci];
-                    if (!resB.reprojections[cam]) continue;
+                    if (!reprojB[cam]) continue;
 
                     var instA = resA.group.getInstance ? resA.group.getInstance(cam) : null;
                     var instB = resB.group.getInstance ? resB.group.getInstance(cam) : null;
@@ -897,14 +1031,14 @@ var QC = (function () {
                     for (var ki = 0; ki < numKeypoints; ki++) {
                         var detA = instA.points[ki];
                         var detB = instB.points[ki];
-                        var reprojA = resA.reprojections[cam][ki];
-                        var reprojB = resB.reprojections[cam][ki];
-                        if (!detA || !detB || !reprojA || !reprojB) continue;
+                        var rpA = reprojA[cam][ki];
+                        var rpB = reprojB[cam][ki];
+                        if (!detA || !detB || !rpA || !rpB) continue;
 
                         // Distance from A's detection to A's reprojection vs B's reprojection
-                        var dxAA = detA[0] - reprojA[0], dyAA = detA[1] - reprojA[1];
+                        var dxAA = detA[0] - rpA[0], dyAA = detA[1] - rpA[1];
                         var dAA = Math.sqrt(dxAA * dxAA + dyAA * dyAA);
-                        var dxAB = detA[0] - reprojB[0], dyAB = detA[1] - reprojB[1];
+                        var dxAB = detA[0] - rpB[0], dyAB = detA[1] - rpB[1];
                         var dAB = Math.sqrt(dxAB * dxAB + dyAB * dyAB);
 
                         // If A's detection is closer to B's reprojection by a margin
@@ -1284,7 +1418,7 @@ var QC = (function () {
      *   sortedIssues: Object[]
      * }}
      */
-    function runFullAnalysis(session, triangulationResults, config) {
+    async function runFullAnalysis(session, triangulationResults, config, progressCallback) {
         config = config || {};
         var reprojConfig = config.reprojError || DEFAULT_CONFIG.reprojError;
         var limbConfig = config.limbLength || DEFAULT_CONFIG.limbLength;
@@ -1300,6 +1434,12 @@ var QC = (function () {
         var numKeypoints = skeleton.nodes.length;
         var edges = skeleton.edges;
 
+        // Cache projection matrices once (getter does matrix multiply each call)
+        var projMatrices = [];
+        for (var pci = 0; pci < cameras.length; pci++) {
+            projMatrices.push(cameras[pci].projectionMatrix);
+        }
+
         // Determine unique track indices
         var trackIndices = new Set();
         triangulationResults.forEach(function (frameResults) {
@@ -1313,7 +1453,7 @@ var QC = (function () {
         // Pre-compute fundamental matrices (once per session)
         var fundamentalMatrices = {};
         var hasProjMatrices = cameras.length >= 2 &&
-            typeof cameras[0].projectionMatrix === 'function';
+            cameras[0].projectionMatrix != null;
         if (hasProjMatrices) {
             try {
                 fundamentalMatrices = computeFundamentalMatrices(cameras);
@@ -1346,17 +1486,23 @@ var QC = (function () {
             );
         });
 
+        // Convert Map to array for iteration (can't await inside forEach)
+        var frameEntries = [];
+        triangulationResults.forEach(function (v, k) { frameEntries.push([k, v]); });
+        var numTotalFrames = frameEntries.length;
+
         // First pass: collect all metric distributions for auto-thresholding
         var distributions = { reproj: [], epipolar: [], velocity: [], limbZScore: [] };
 
         // Reproj
-        triangulationResults.forEach(function (frameResults) {
-            for (var r = 0; r < frameResults.length; r++) {
-                if (frameResults[r].meanError != null) {
-                    distributions.reproj.push(frameResults[r].meanError);
+        for (var dri = 0; dri < frameEntries.length; dri++) {
+            var drResults = frameEntries[dri][1];
+            for (var drr = 0; drr < drResults.length; drr++) {
+                if (drResults[drr].meanError != null) {
+                    distributions.reproj.push(drResults[drr].meanError);
                 }
             }
-        });
+        }
 
         // Velocity
         trackIndices.forEach(function (trackIdx) {
@@ -1376,19 +1522,23 @@ var QC = (function () {
             }
         });
 
-        // Epipolar: compute for all groups (first pass to gather distribution)
+        // Epipolar: sample a subset of frames for distribution (full scan is too expensive at 180k+)
         var hasFMatrices = Object.keys(fundamentalMatrices).length > 0;
+        var EPI_SAMPLE_MAX = 2000;
+        var EPI_PER_FRAME_MAX = 10000; // skip per-frame epipolar above this
         if (hasFMatrices) {
-            triangulationResults.forEach(function (frameResults) {
-                for (var r = 0; r < frameResults.length; r++) {
-                    var group = frameResults[r].group;
-                    if (!group || !group.getInstance) continue;
-                    var epi = computeEpipolarMetrics(group, cameras, fundamentalMatrices, numKeypoints);
-                    for (var di = 0; di < epi.allDistances.length; di++) {
-                        distributions.epipolar.push(epi.allDistances[di]);
+            var epiStep = Math.max(1, Math.floor(numTotalFrames / EPI_SAMPLE_MAX));
+            for (var efi = 0; efi < numTotalFrames; efi += epiStep) {
+                var efResults = frameEntries[efi][1];
+                for (var er = 0; er < efResults.length; er++) {
+                    var eGroup = efResults[er].group;
+                    if (!eGroup || !eGroup.getInstance) continue;
+                    var epi = computeEpipolarMetrics(eGroup, cameras, fundamentalMatrices, numKeypoints);
+                    if (epi.meanDistance != null) {
+                        distributions.epipolar.push(epi.meanDistance);
                     }
                 }
-            });
+            }
         }
 
         // Auto-thresholds (allow caller overrides)
@@ -1401,6 +1551,19 @@ var QC = (function () {
             }
         }
 
+        // Build lookup Maps for temporal stats (avoid O(N²) linear scans in per-frame loop)
+        var velocityByFrame = {};  // trackIdx -> Map(frameIdx -> velocity)
+        var jitterFrameSets = {};  // trackIdx -> Set(frameIdx)
+        trackIndices.forEach(function (trackIdx) {
+            var ts = temporalStats[trackIdx];
+            var velMap = new Map();
+            for (var vi = 0; vi < ts.meanVelocity.length; vi++) {
+                velMap.set(ts.meanVelocity[vi].frameIdx, ts.meanVelocity[vi].velocity);
+            }
+            velocityByFrame[trackIdx] = velMap;
+            jitterFrameSets[trackIdx] = new Set(ts.flaggedFrames);
+        });
+
         // Per-frame analysis
         var frameIssues = new Map();
         var frameSummaries = new Map();
@@ -1412,7 +1575,6 @@ var QC = (function () {
         var errorP95 = allErrors.length > 0 ? percentile(allErrors, 95) : 10;
 
         // Use auto-threshold for reprojection outlier detection instead of fixed threshold.
-        // This ensures only the extreme tail gets flagged, not every frame above a fixed cutoff.
         var effectiveReprojHigh = autoThresholds.reproj != null && isFinite(autoThresholds.reproj)
             ? autoThresholds.reproj
             : reprojConfig.high;
@@ -1424,9 +1586,38 @@ var QC = (function () {
 
         var totalFrames = 0;
         var totalScore = 0;
+        var bpCamTable = {}; // bodypart-camera error table built inline
+        var QC_YIELD_EVERY = 500;
 
-        triangulationResults.forEach(function (frameResults, frameIdx) {
+        for (var fe = 0; fe < frameEntries.length; fe++) {
+            var frameIdx = frameEntries[fe][0];
+            var frameResults = frameEntries[fe][1];
             var frameIssueList = [];
+
+            // Temporarily compute reprojections + errors for this frame
+            // (cleared at end of frame to avoid accumulating ~1 GB across all frames)
+            var tempReprojGroups = [];
+            for (var rp = 0; rp < frameResults.length; rp++) {
+                var rpRes = frameResults[rp];
+                var rpGroup = rpRes.group;
+                if (rpGroup && rpGroup.points3d && !rpGroup.reprojections) {
+                    var reproj = {};
+                    for (var rc = 0; rc < cameras.length; rc++) {
+                        reproj[cameras[rc].name] = reprojectPoints(
+                            rpGroup.points3d, projMatrices[rc]
+                        );
+                    }
+                    rpGroup.reprojections = reproj;
+                    tempReprojGroups.push(rpGroup);
+                }
+                if (!rpRes.errors && rpGroup) {
+                    var recomp = _recomputeErrors(rpGroup, cameras, projMatrices);
+                    if (recomp) {
+                        rpRes.errors = recomp.errors;
+                        if (rpRes.meanError == null) rpRes.meanError = recomp.meanError;
+                    }
+                }
+            }
 
             // Swap detection (multi-instance per frame)
             var swapIssues = detectSwaps(frameResults, cameras, numKeypoints, swapConfig);
@@ -1435,6 +1626,15 @@ var QC = (function () {
                 var res = frameResults[r];
                 var group = res.group;
                 var trackIdx = group ? group.trackIdx : 0;
+
+                // Errors already recomputed above if needed
+                if (!res.errors && group) {
+                    var recomp2 = _recomputeErrors(group, cameras, projMatrices);
+                    if (recomp2) {
+                        res.errors = recomp2.errors;
+                        if (res.meanError == null) res.meanError = recomp2.meanError;
+                    }
+                }
 
                 // Reprojection metrics (using auto-threshold for outlier detection)
                 var reprojMetrics = computeReprojMetrics(res, effectiveReprojConfig);
@@ -1455,21 +1655,18 @@ var QC = (function () {
                     };
                 }
 
-                // Temporal info for this frame
+                // Temporal info for this frame (O(1) Set lookup instead of O(N) indexOf)
                 var isJitter = false;
                 var jitterKeypoints = [];
-                if (temporalStats[trackIdx]) {
-                    var ts = temporalStats[trackIdx];
-                    if (ts.flaggedFrames.indexOf(frameIdx) >= 0) {
-                        isJitter = true;
-                    }
+                if (jitterFrameSets[trackIdx] && jitterFrameSets[trackIdx].has(frameIdx)) {
+                    isJitter = true;
                 }
 
                 // Limb length CV for this frame
                 var limbCV = null;
                 if (limbLengthStats[trackIdx]) {
                     var ll = limbLengthStats[trackIdx];
-                    var frameLengths = ll.allLengths.get(frameIdx);
+                    var frameLengths = ll.allLengths ? ll.allLengths.get(frameIdx) : null;
                     if (frameLengths) {
                         var cvs = [];
                         for (var ei = 0; ei < frameLengths.length; ei++) {
@@ -1482,11 +1679,10 @@ var QC = (function () {
                     }
                 }
 
-                // Epipolar metrics for this group
+                // Epipolar metrics — only for small datasets (very expensive per-frame)
                 var epipolarInfo = null;
-                if (hasFMatrices && group && group.getInstance) {
+                if (hasFMatrices && numTotalFrames <= EPI_PER_FRAME_MAX && group && group.getInstance) {
                     epipolarInfo = computeEpipolarMetrics(group, cameras, fundamentalMatrices, numKeypoints);
-                    // Flag keypoints above auto-threshold
                     var epiThresh = autoThresholds.epipolar != null ? autoThresholds.epipolar : Infinity;
                     var flaggedKps = [];
                     for (var eki = 0; eki < epipolarInfo.perKeypoint.length; eki++) {
@@ -1507,18 +1703,13 @@ var QC = (function () {
                     }
                 }
 
-                // Velocity at this frame
+                // Velocity at this frame (O(1) Map lookup instead of O(N) linear scan)
                 var velocity = null;
                 var velThreshold = null;
-                if (temporalStats[trackIdx]) {
-                    var ts2 = temporalStats[trackIdx];
-                    velThreshold = ts2.threshold;
-                    for (var vi = 0; vi < ts2.meanVelocity.length; vi++) {
-                        if (ts2.meanVelocity[vi].frameIdx === frameIdx) {
-                            velocity = ts2.meanVelocity[vi].velocity;
-                            break;
-                        }
-                    }
+                if (velocityByFrame[trackIdx]) {
+                    var velVal = velocityByFrame[trackIdx].get(frameIdx);
+                    velocity = velVal != null ? velVal : null;
+                    velThreshold = temporalStats[trackIdx] ? temporalStats[trackIdx].threshold : null;
                 }
 
                 // Classify errors (with raw per-camera data + new metrics)
@@ -1578,7 +1769,39 @@ var QC = (function () {
             if (frameIssueList.length > 0) {
                 frameIssues.set(frameIdx, frameIssueList);
             }
-        });
+
+            // Accumulate bodypart-camera errors before freeing
+            for (var bce = 0; bce < frameResults.length; bce++) {
+                var bceRes = frameResults[bce];
+                if (!bceRes.errors) continue;
+                var bceCams = Object.keys(bceRes.errors);
+                for (var bci = 0; bci < bceCams.length; bci++) {
+                    var bceCam = bceCams[bci];
+                    var bceErrs = bceRes.errors[bceCam];
+                    for (var bki = 0; bki < bceErrs.length; bki++) {
+                        if (bceErrs[bki] == null) continue;
+                        if (!bpCamTable[bki]) bpCamTable[bki] = {};
+                        if (!bpCamTable[bki][bceCam]) bpCamTable[bki][bceCam] = { errors: [] };
+                        bpCamTable[bki][bceCam].errors.push(bceErrs[bki]);
+                    }
+                }
+            }
+
+            // Free temporary reprojections to avoid accumulating memory
+            for (var trg = 0; trg < tempReprojGroups.length; trg++) {
+                tempReprojGroups[trg].reprojections = null;
+            }
+            // Free temporary errors too
+            for (var tre = 0; tre < frameResults.length; tre++) {
+                frameResults[tre].errors = null;
+            }
+
+            // Yield periodically to keep UI responsive
+            if (fe > 0 && fe % QC_YIELD_EVERY === 0) {
+                if (progressCallback) progressCallback(fe, frameEntries.length);
+                await new Promise(function (resolve) { setTimeout(resolve, 4); });
+            }
+        }
 
         // Sort issues: high severity first, then by frame index
         var severityOrder = { high: 0, medium: 1, low: 2 };
@@ -1606,25 +1829,53 @@ var QC = (function () {
             globalStats.issuesByType[t] = (globalStats.issuesByType[t] || 0) + 1;
         }
 
-        // Per-keypoint per-camera error analysis (the 3D-specific insight)
+        // Per-keypoint per-camera error analysis — built from bpCamTable
+        // accumulated during the per-frame loop above
         var cameraNames = cameras.map(function (c) { return c.name; });
-        var bodypartCameraErrors = computePerKeypointCameraErrors(
-            triangulationResults, skeleton.nodes, cameraNames
-        );
+        var bodypartCameraErrors = _finalizeBpCamTable(bpCamTable, skeleton.nodes, cameraNames);
+
+        // ---- Memory cleanup: free heavy intermediates no longer needed ----
+        // The UI reads from frameIssues/frameSummaries/globalStats/distributions/autoThresholds.
+        trackIndices.forEach(function (trackIdx) {
+            var lls = limbLengthStats[trackIdx];
+            if (lls) {
+                lls.allLengths = null;           // 28.8 MB Map
+            }
+            var ts = temporalStats[trackIdx];
+            if (ts) {
+                ts.perKeypoint = null;           // 28.8 MB velocity arrays
+                ts.meanVelocity = null;          // 180k-entry array
+                ts.flaggedFrames = null;         // already in jitterFrameSets
+            }
+            var lo = limbOutlierStats[trackIdx];
+            if (lo) {
+                lo.allZScores = null;            // 23 MB z-score array
+            }
+        });
+        velocityByFrame = null; // free lookup Maps
+        jitterFrameSets = null; // free lookup Sets
+        allErrors = null; // free sorted reproj array
+
+        // Subsample large distribution arrays — histograms only need ~10k points
+        var MAX_HIST_SAMPLES = 10000;
+        var distKeys = ['reproj', 'limbZScore', 'velocity', 'epipolar'];
+        for (var dki = 0; dki < distKeys.length; dki++) {
+            var dk = distKeys[dki];
+            if (distributions[dk].length > MAX_HIST_SAMPLES) {
+                distributions[dk] = _subsample(distributions[dk], MAX_HIST_SAMPLES);
+            }
+        }
 
         return {
             frameIssues: frameIssues,
             frameSummaries: frameSummaries,
             globalStats: globalStats,
-            limbLengthStats: limbLengthStats,
-            temporalStats: temporalStats,
             flaggedFrames: flaggedFrames,
             sortedIssues: allSortedIssues,
             bodypartCameraErrors: bodypartCameraErrors,
             distributions: distributions,
             autoThresholds: autoThresholds,
-            fundamentalMatrices: fundamentalMatrices,
-            limbOutlierStats: limbOutlierStats,
+            limbLengthStats: limbLengthStats, // lightweight: allLengths + values already freed
         };
     }
 

@@ -795,7 +795,7 @@
     <script src="timeline.js"></script>
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
-    <script src="qc.js"></script>
+    <script src="qc.js?v=6"></script>
 
     <!-- sleap-io.js bridge: expose saveSlpToBytes and data model to window -->
     <script type="module">
@@ -1358,8 +1358,6 @@
 
                     frameResults.push({
                         group: group,
-                        points3d: result.points3d,
-                        reprojections: result.reprojections,
                         errors: result.errors,
                         meanError: result.meanError,
                     });
@@ -1376,7 +1374,7 @@
                 console.log('[triangulate] Group result:',
                     '| cameras in group:', fr.group.cameraNames,
                     '| has reprojections:', Object.keys(fr.group.reprojections || {}),
-                    '| points3d valid:', (fr.points3d || []).filter(p => p != null).length);
+                    '| points3d valid:', (fr.group.points3d || []).filter(p => p != null).length);
             }
 
             // Show reproj/error UI elements now that triangulation has been run
@@ -1441,8 +1439,9 @@
             showLoading('Triangulating ' + frameIndices.length + ' frames...');
             var totalTriangulated = 0;
             var totalGroups = 0;
-            var totalErrors = [];
-            var YIELD_EVERY = 100;
+            var errorSum = 0;
+            var errorCount = 0;
+            var BATCH_SIZE = 50;
 
             for (var fi = 0; fi < frameIndices.length; fi++) {
                 var frameIdx = frameIndices[fi];
@@ -1491,7 +1490,10 @@
 
                         var result = triangulateAndReproject(group, groupCameras2);
 
-                        group.reprojections = result.reprojections;
+                        // Only keep points3d on the group — reprojections, errors,
+                        // observedPoints, usedCameras, and filled instances are
+                        // recomputed on-demand for the current frame to avoid
+                        // ~1.8 GB of tiny arrays across 180k groups.
                         group.points3d = result.points3d;
                         storeReprojectedInstances(group, result, cameras);
                         group.observedPoints = {};
@@ -1511,14 +1513,12 @@
 
                         frameResults.push({
                             group: group,
-                            points3d: result.points3d,
-                            reprojections: result.reprojections,
-                            errors: result.errors,
                             meanError: result.meanError,
                         });
 
                         if (result.meanError != null) {
-                            totalErrors.push(result.meanError);
+                            errorSum += result.meanError;
+                            errorCount++;
                         }
                     }
 
@@ -1527,10 +1527,10 @@
                     totalTriangulated++;
                 }
 
-                // Yield to UI periodically
-                if (fi > 0 && fi % YIELD_EVERY === 0) {
-                    showLoading('Triangulating... ' + fi + '/' + frameIndices.length + ' frames');
-                    await new Promise(function (r) { setTimeout(r, 0); });
+                // Yield to UI and GC periodically
+                if (fi > 0 && fi % BATCH_SIZE === 0) {
+                    showLoading('Triangulating... ' + fi + '/' + frameIndices.length + ' frames (' + totalGroups + ' groups)');
+                    await new Promise(function (r) { setTimeout(r, 4); });
                 }
             }
 
@@ -1543,9 +1543,7 @@
             if (viewport3d) viewport3d.fitToScene();
 
             hideLoading();
-            var avgError = totalErrors.length > 0
-                ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
-                : 'N/A';
+            var avgError = errorCount > 0 ? (errorSum / errorCount).toFixed(2) : 'N/A';
             setStatus('Triangulated ' + totalTriangulated + ' frames (' + totalGroups + ' groups, avg error: ' + avgError + 'px)', 'success');
             console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
 
@@ -2122,6 +2120,91 @@
             updateInfoPanel();
         }
 
+        /**
+         * Lazily compute reprojections, errors, and filled instances for a
+         * single frame's groups.  Called on-demand when displaying a frame
+         * so we never hold this data for all 180k frames at once.
+         */
+        function _ensureFrameReprojections(frameIdx) {
+            if (!state.session) return;
+            var cameras = state.session.cameras;
+            if (!cameras || cameras.length < 2) return;
+            var trackMap = state.session.instanceGroups.get(frameIdx);
+            if (!trackMap) return;
+
+            for (var [trackIdx, groups] of trackMap) {
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var group = groups[gi];
+                    if (!group.points3d || group.reprojections) continue;
+
+                    // Recompute reprojections from points3d + camera matrices
+                    var reprojections = {};
+                    for (var c = 0; c < cameras.length; c++) {
+                        reprojections[cameras[c].name] = reprojectPoints(
+                            group.points3d, cameras[c].projectionMatrix
+                        );
+                    }
+                    group.reprojections = reprojections;
+
+                    // Rebuild observedPoints / usedCameras
+                    group.observedPoints = {};
+                    group.usedCameras = new Set();
+                    for (var ck = 0; ck < cameras.length; ck++) {
+                        var camInst = group.getInstance(cameras[ck].name);
+                        if (camInst) {
+                            group.observedPoints[cameras[ck].name] = camInst.points;
+                            if (camInst.points.some(function (p) { return p != null; })) {
+                                group.usedCameras.add(cameras[ck].name);
+                            }
+                        }
+                    }
+
+                    // Fill missing views with reprojected predictions
+                    for (var cl = 0; cl < cameras.length; cl++) {
+                        if (!group.getInstance(cameras[cl].name) && reprojections[cameras[cl].name]) {
+                            var reprojPts = reprojections[cameras[cl].name];
+                            var filledInstance = new Instance(
+                                reprojPts.map(function (p) { return p ? [p[0], p[1]] : null; }),
+                                group.trackIdx,
+                                'predicted',
+                                0.5
+                            );
+                            group.addInstance(cameras[cl].name, filledInstance);
+                            var fg = state.session.getFrameGroup(frameIdx);
+                            if (fg) fg.addInstance(cameras[cl].name, filledInstance);
+                        }
+                    }
+                }
+            }
+
+            // Also ensure errors exist in triangulationResults for this frame
+            var results = state.triangulationResults.get(frameIdx);
+            if (results) {
+                for (var ri = 0; ri < results.length; ri++) {
+                    var r = results[ri];
+                    if (r.errors || !r.group || !r.group.points3d) continue;
+                    // Recompute per-camera errors
+                    var errors = {};
+                    for (var c2 = 0; c2 < cameras.length; c2++) {
+                        var camName = cameras[c2].name;
+                        var inst = r.group.getInstance(camName);
+                        var observed = [];
+                        var numKp = r.group.points3d.length;
+                        for (var k = 0; k < numKp; k++) {
+                            if (inst && inst.points && inst.points[k] != null) {
+                                observed.push(inst.points[k]);
+                            } else {
+                                observed.push(null);
+                            }
+                        }
+                        var reproj = r.group.reprojections[camName];
+                        errors[camName] = computeReprojectionErrors(observed, reproj);
+                    }
+                    r.errors = errors;
+                }
+            }
+        }
+
         // ============================================
         // Helper: get instance groups for a frame
         // ============================================
@@ -2313,6 +2396,9 @@
             if (editGroupState && frameIdx !== state.currentFrame) {
                 finishEditGroup();
             }
+
+            // Lazily compute reprojections/fills for this frame if needed
+            _ensureFrameReprojections(frameIdx);
 
             const frameGroup = state.session.getFrameGroup(frameIdx);
             const instanceGroups = getInstanceGroupsForFrame(frameIdx);
@@ -6442,8 +6528,27 @@
                 return;
             }
 
-            console.log('[QC] Running full analysis on', state.triangulationResults.size, 'frames');
-            state.qcResults = QC.runFullAnalysis(state.session, state.triangulationResults);
+            var numFrames = state.triangulationResults.size;
+            console.log('[QC] Running full analysis on', numFrames, 'frames');
+            showLoading('Running QC analysis... 0/' + numFrames + ' frames');
+
+            try {
+                state.qcResults = await QC.runFullAnalysis(
+                    state.session,
+                    state.triangulationResults,
+                    null,
+                    function (done, total) {
+                        showLoading('Running QC analysis... ' + done + '/' + total + ' frames');
+                    }
+                );
+            } catch (err) {
+                console.error('[QC] Analysis failed:', err);
+                hideLoading();
+                setStatus('QC analysis failed: ' + err.message, 'error');
+                return;
+            }
+
+            hideLoading();
 
             var gs = state.qcResults.globalStats;
             console.log('[QC] Complete:', gs.totalIssues, 'issues across',
@@ -6579,7 +6684,8 @@
                         var csVal = document.createElement('span');
                         csVal.className = 'value';
                         csVal.style.fontSize = '11px';
-                        csVal.textContent = cs.mean.toFixed(2) + 'px (P95: ' + cs.p95.toFixed(1) + 'px)';
+                        csVal.textContent = cs.mean.toFixed(2) + 'px' +
+                            (cs.p95 != null ? ' (P95: ' + cs.p95.toFixed(1) + 'px)' : '');
                         // Color-code based on mean error
                         if (cs.mean > 10) {
                             csVal.style.color = 'var(--error-color, #f56565)';
@@ -6596,7 +6702,7 @@
                 bodypartSection.style.display = 'none';
             }
 
-            // Issue breakdown by type
+            // Issue breakdown by type — clickable to filter issue list
             var breakdownSection = document.getElementById('qcBreakdownSection');
             var breakdownDiv = document.getElementById('qcBreakdown');
             breakdownDiv.textContent = '';
@@ -6605,7 +6711,26 @@
                 breakdownSection.style.display = '';
                 for (var i = 0; i < types.length; i++) {
                     var row = document.createElement('div');
-                    row.className = 'session-info-row';
+                    row.className = 'session-info-row qc-type-row';
+                    row.style.cursor = 'pointer';
+                    row.setAttribute('data-type', types[i]);
+                    row.addEventListener('click', (function (typeName) {
+                        return function () {
+                            var filterEl = document.getElementById('qcFilterType');
+                            // Toggle: click same type again to reset to "all"
+                            filterEl.value = filterEl.value === typeName ? 'all' : typeName;
+                            updateQCIssueList();
+                            // Highlight active type row
+                            var allRows = breakdownDiv.querySelectorAll('.qc-type-row');
+                            for (var ri = 0; ri < allRows.length; ri++) {
+                                allRows[ri].style.background = allRows[ri].getAttribute('data-type') === filterEl.value
+                                    ? 'rgba(102, 126, 234, 0.15)' : '';
+                            }
+                            // Scroll issue list into view
+                            var listSection = document.getElementById('qcIssueListSection');
+                            if (listSection) listSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        };
+                    })(types[i]));
                     var typeLabel = document.createElement('span');
                     typeLabel.className = 'label';
                     var badge = document.createElement('span');
@@ -6628,7 +6753,7 @@
             var limbDiv = document.getElementById('qcLimbStats');
             limbDiv.textContent = '';
             var skeleton = state.session.skeleton;
-            var limbStats = results.limbLengthStats;
+            var limbStats = results.limbLengthStats || {};
             var hasLimbData = false;
             for (var trackIdx in limbStats) {
                 var ls = limbStats[trackIdx];
@@ -6775,7 +6900,8 @@
          */
         (function setupHistogramThresholdDrag() {
             var dragConfigs = [
-                { canvasId: 'qcHistReproj',   threshKey: 'reproj',     distKey: 'reproj',     title: 'Reprojection (px)', color: '#6b7280' },
+                { canvasId: 'qcHistReproj',    threshKey: 'reproj',     distKey: 'reproj',     title: 'Reprojection (px)', color: '#6b7280' },
+                { canvasId: 'qcHistEpipolar',  threshKey: 'epipolar',   distKey: 'epipolar',   title: 'Epipolar (px)',     color: '#6366f1' },
                 { canvasId: 'qcHistVelocity',  threshKey: 'velocity',   distKey: 'velocity',   title: 'Velocity (u/f)',    color: '#fbbf24' },
                 { canvasId: 'qcHistLimb',      threshKey: 'limbZScore',  distKey: 'limbZScore', title: 'Limb Z-Score',      color: '#22c55e' },
             ];
@@ -6832,14 +6958,14 @@
                             canvas.style.cursor = '';
                             // Re-run analysis with the user's thresholds
                             if (state.qcResults && state.session) {
-                                var overrides = {};
                                 var thresh = state.qcResults.autoThresholds;
-                                overrides[cfg.threshKey] = thresh[cfg.threshKey];
-                                state.qcResults = QC.runFullAnalysis(
-                                    state.session, state.triangulationResults,
-                                    { overrideThresholds: thresh }
-                                );
-                                updateQCPanel();
+                                (async function () {
+                                    state.qcResults = await QC.runFullAnalysis(
+                                        state.session, state.triangulationResults,
+                                        { overrideThresholds: thresh }
+                                    );
+                                    updateQCDisplay();
+                                })();
                             }
                         }
                     });
@@ -7893,14 +8019,20 @@
                 let totalCount = 0;
                 for (const r of results) {
                     if (r.meanError != null) {
-                        for (const camName in r.errors) {
-                            for (const err of r.errors[camName]) {
-                                if (err != null) {
-                                    totalErr += err;
-                                    if (err > maxError) maxError = err;
-                                    totalCount++;
+                        if (r.errors) {
+                            for (const camName in r.errors) {
+                                for (const err of r.errors[camName]) {
+                                    if (err != null) {
+                                        totalErr += err;
+                                        if (err > maxError) maxError = err;
+                                        totalCount++;
+                                    }
                                 }
                             }
+                        } else {
+                            // Lightweight path: only meanError stored (after triangulateAll)
+                            totalErr += r.meanError;
+                            totalCount++;
                         }
                     }
                 }
@@ -9026,7 +9158,8 @@
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+            // Large projects can be 200+ MB — give browser plenty of time to finish download
+            setTimeout(function () { URL.revokeObjectURL(url); }, 120000);
 
             setStatus('Project saved (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
 

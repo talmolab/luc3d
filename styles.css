@@ -2574,6 +2574,12 @@ kbd {
   color: #22c55e;
 }
 
+/* Clickable type rows in breakdown */
+.qc-type-row:hover {
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: 3px;
+}
+
 /* QC Severity Dots */
 .qc-severity-dot {
   display: inline-block;
