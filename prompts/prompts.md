@@ -179,3 +179,13 @@ I am currently using the directory `/root/vast/joshua/slap/claude-sleap-files` t
 - The coloring scheme is showing green, which is good, but `instance_0` is blue instead of red as mentioned in color pallete mentioned in PROJECT.md. When the user either clicks on a track or on the track label in the `instance` tab, all the other corresponding tracks in different views should have their skeleton change to a slightly brigher color
 
 - When the user clicks on triangulation, run it only using the views they have used to make group assignments. i.e. either the views they used for epipolar geometry or for manual assignment.
+
+
+## 
+# Prompt 16
+
+- I can see the highlight around the border now. The zoom feature is too restrictive; currently it forces the video to fit the window size when any side is about to zoom out of frame.
+- The video should stop zooming out when **both** sides of the video are starting to become smaller than the frame they are in. So for a rectangular video in a square viewing window, it's okay if the height or width does not entirely fit the window, as long as one of them are still within the boundaries.
+- Ask me questions for clarification if needed
+
+- Another UI is that the the toast is in the correct bar, but is it displayed on the right hand side of the screen. Please put it in the center of the bar and wrap it around a rectangular highlight. Choose a highlight color you think fill fit the website asethetic
