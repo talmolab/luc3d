@@ -473,10 +473,17 @@ body {
   z-index: 11;
 }
 
-.video-cell.video-selected .canvas-wrapper {
+/* When not zoomed: highlight around the video frame (canvas-wrapper) */
+.video-cell.video-selected:not(.zoomed) .canvas-wrapper {
   outline: 2px solid rgba(255, 221, 68, 0.5);
   outline-offset: -2px;
   border-radius: 2px;
+}
+
+/* When zoomed: highlight around the window (video-cell) */
+.video-cell.video-selected.zoomed {
+  outline: 2px solid rgba(255, 221, 68, 0.5);
+  outline-offset: -2px;
 }
 
 .unzoom-btn {
@@ -1439,21 +1446,14 @@ input[type="range"]::-moz-range-track {
 
 /* Auto-assignment toast */
 .auto-assign-toast {
-  position: fixed;
-  top: 48px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--bg-secondary);
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  padding: 12px 20px;
-  z-index: 10000;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
-  gap: 16px;
-  font-size: 13px;
+  gap: 12px;
+  margin-left: auto;
+  padding: 0 12px;
+  font-size: 12px;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .auto-assign-toast button {
@@ -1477,7 +1477,12 @@ input[type="range"]::-moz-range-track {
 }
 
 /* Red highlight for auto-assignment view selection */
-.video-cell.auto-assign-selected .canvas-wrapper {
+.video-cell.auto-assign-selected:not(.zoomed) .canvas-wrapper {
+  outline: 3px solid #ef4444;
+  outline-offset: -3px;
+}
+
+.video-cell.auto-assign-selected.zoomed {
   outline: 3px solid #ef4444;
   outline-offset: -3px;
   border-radius: 2px;

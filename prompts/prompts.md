@@ -141,6 +141,13 @@ Please have the `Assign` drop down menu next to the `CreateGroup` button
 
 # Prompt 11
 
-- 
-
 Now, I can see the `Assign` drop down menu, but both `manual` or `automatic` buttons don't do anything. Let's first focus on the `automatic` button. Remember that when the user clicks on the `automatic` button, a persistent toast widget should appear on the screen. The toast widget should read 'please choose the views for automatic assignment' with two buttons, `Cancel` and `Continue`. The user should be able to toggle each view yes/no, indicated by their highlight in red (yes) or no highlight (no). Then, if the user presses `Continue`, then epipolar geometry and hungarian algorithm should calcualate identity assignments across frames and give the same identities the same color. Please refer to Prompt 8 in this file.
+
+
+## 
+# Prompt 12
+
+- First, I want to mention UI. When there is yellow highlight around the currently selected video, please add highlight either around the video frame itself if the entire frame is visible. If any side of the video frame is not visible because of zoom, then add highlight to the window the video is in. This applies to the red highlight when selecting epipolar geometry
+- Please move the toast widget up to the same bar that includes `File`, `Edit`, `View`, and `Load Demo` buttons
+- When epipolar geometry runs, identity assignments across views should match color, i.e. you should be changing the color of the skeleton.
+- Once identities across views are grouped, they should all have a label with the associated track name mentioned in the `instance` tab

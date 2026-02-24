@@ -2033,13 +2033,13 @@
                 el.classList.remove('video-selected');
             });
 
-            // Create toast
+            // Create toast in menu bar
             var toast = document.createElement('div');
             toast.className = 'auto-assign-toast';
-            toast.innerHTML = '<span>Select the views for automatic Identity Assignment</span>' +
+            toast.innerHTML = '<span>Select views for automatic Identity Assignment</span>' +
                 '<button id="autoAssignCancel">Cancel</button>' +
                 '<button id="autoAssignContinue" class="primary">Continue</button>';
-            document.body.appendChild(toast);
+            document.getElementById('menuBar').appendChild(toast);
 
             autoAssignState = { selectedViews: new Set(), toast: toast };
 

@@ -1181,6 +1181,14 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                     color: getTrackColor(inst.trackIdx != null ? inst.trackIdx : i),
                 }));
             }
+
+            // 2a. Draw track name labels on detected instances
+            if (showLabels) {
+                const trackNames = session && session.tracks ? session.tracks : [];
+                drawInstanceLabels(ctx, viewInstances, skeleton, viewName, Object.assign({}, renderOpts, {
+                    trackNames: trackNames,
+                }));
+            }
         }
     }
 
