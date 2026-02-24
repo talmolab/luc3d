@@ -205,3 +205,27 @@ I am currently using the directory `/root/vast/joshua/slap/claude-sleap-files` t
 
 - The skeleton should be already defined by the SLP files, so in the info->skeleton tab, please remove user capability to edit the nodes. The user should still be able to edit the edges, so unchange the edges. Move the edges portion above the nodes section
 - If the user loads a skeleton file (should be formatted as a `json`) into the info->skeleton tab, or one is provided in the sessions folder (it should include the word `skeleton` in the name with the `json` extension), then override the current skeleton or the one in the SLP files with the user provided one.
+
+##
+# Prompt 18
+
+**Goal:** Enable automatic identity assignment across a user-defined range of frames.
+
+**Flyout Menu:**
+Add a flyout menu to the right of `Assign -> Automatic` with two options: `Current Frame` and `Multiple Frames`. `Current Frame` retains the existing automatic identity assignment behavior.
+
+`Multiple Frames` Modal:
+Clicking `Multiple Frames` opens a non-dismissable modal. The modal has two states:
+
+State 1 — Identity assignment not yet run on current frame:
+
+* Display the message: "Run identity assignment on the current frame before running on multiple frames."
+* Show a `Continue` button that dismisses the modal.
+
+State 2 — Identity assignment already run on current frame:
+
+* Title: "Choose Frames for Identity Assignment"
+* Range slider: A dual-handle slider for selecting start and end frame indices. Min/max values correspond to the video's frame range. Handles initialize at the extremes. The start handle must never exceed or overlap the end handle.
+* Text fields: Two editable text fields displaying the current start and end values, synced bidirectionally with the slider handles. Reject invalid input (non-positive, non-integer, or start > end).
+* `Cancel`: Dismisses the modal and cancels the operation.
+* `Continue`: Runs identity assignment on the selected frame range using the views currently selected for the current frame. Display a real-time progress bar showing the fraction of completed frames.

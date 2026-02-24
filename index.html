@@ -101,7 +101,12 @@
             <!-- Assign dropdown menu (positioned absolutely via JS) -->
             <div class="toolbar-dropdown-menu" id="tbAssignMenu" style="display:none;position:fixed;z-index:10000;">
                 <div class="toolbar-dropdown-item" id="tbAssignManual">Manual</div>
-                <div class="toolbar-dropdown-item" id="tbAssignAutomatic">Automatic</div>
+                <div class="toolbar-dropdown-item has-flyout" id="tbAssignAutomatic">Automatic &#9656;
+                    <div class="toolbar-flyout-menu" id="tbAutoFlyout">
+                        <div class="toolbar-dropdown-item" id="tbAutoCurrentFrame">Current Frame</div>
+                        <div class="toolbar-dropdown-item" id="tbAutoMultipleFrames">Multiple Frames</div>
+                    </div>
+                </div>
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
@@ -502,6 +507,8 @@
             session: null,      // Session object from pose-data.js
             keypoints3d: null,  // Raw 3D keypoints from demo-data.js
             triangulationResults: new Map(), // frameIdx -> [{ group, points3d, reprojections, errors, meanError }]
+            lastAutoAssignViews: null,  // Array of view names used for last auto-assignment
+            lastAutoAssignFrame: null,  // Frame index where last auto-assignment was run
         };
 
         let videoController = null;
@@ -1844,10 +1851,19 @@
                 }
                 drawAllOverlays(state.currentFrame);
             });
+            // Automatic flyout: prevent parent menu from closing when hovering into flyout
             document.getElementById('tbAssignAutomatic').addEventListener('click', function (e) {
+                e.stopPropagation();
+            });
+            document.getElementById('tbAutoCurrentFrame').addEventListener('click', function (e) {
                 e.stopPropagation();
                 document.getElementById('tbAssignMenu').style.display = 'none';
                 startAutoAssignment();
+            });
+            document.getElementById('tbAutoMultipleFrames').addEventListener('click', function (e) {
+                e.stopPropagation();
+                document.getElementById('tbAssignMenu').style.display = 'none';
+                showMultiFrameModal();
             });
 
             // Create Group button
@@ -2202,6 +2218,9 @@
             }
 
             if (groupsCreated > 0) {
+                // Track which views and frame were used for multi-frame support
+                state.lastAutoAssignViews = selectedViewNames.slice();
+                state.lastAutoAssignFrame = state.currentFrame;
                 // Force full overlay redraw so skeleton colors update
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
@@ -2212,6 +2231,187 @@
             } else {
                 setStatus('No matching identities found across selected views', 'warning');
             }
+            return groupsCreated;
+        }
+
+        // ============================================
+        // Multi-Frame Assignment Modal
+        // ============================================
+
+        function showMultiFrameModal() {
+            // Determine state: has auto-assignment been run on current frame?
+            var hasAssignment = state.lastAutoAssignViews && state.lastAutoAssignViews.length >= 2 &&
+                state.lastAutoAssignFrame === state.currentFrame;
+
+            var overlay = document.createElement('div');
+            overlay.className = 'multi-frame-modal-overlay';
+
+            var modal = document.createElement('div');
+            modal.className = 'multi-frame-modal';
+
+            if (!hasAssignment) {
+                // State 1: assignment not yet run on current frame
+                modal.innerHTML =
+                    '<h3>Multiple Frames — Identity Assignment</h3>' +
+                    '<p>Run identity assignment on the current frame before running on multiple frames.</p>' +
+                    '<div class="modal-actions">' +
+                    '<button class="primary" id="mfModalContinue">Continue</button>' +
+                    '</div>';
+                overlay.appendChild(modal);
+                document.body.appendChild(overlay);
+                document.getElementById('mfModalContinue').addEventListener('click', function () {
+                    overlay.remove();
+                });
+            } else {
+                // State 2: assignment already run — show range picker
+                var maxFrame = state.totalFrames - 1;
+                modal.innerHTML =
+                    '<h3>Choose Frames for Identity Assignment</h3>' +
+                    '<p>Select the frame range to run automatic identity assignment. ' +
+                    'Views used: ' + state.lastAutoAssignViews.join(', ') + '</p>' +
+                    '<div class="range-slider-container">' +
+                    '  <div class="range-slider-track"></div>' +
+                    '  <div class="range-slider-fill" id="mfSliderFill"></div>' +
+                    '  <input type="range" id="mfRangeStart" min="0" max="' + maxFrame + '" value="0">' +
+                    '  <input type="range" id="mfRangeEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+                    '</div>' +
+                    '<div class="frame-inputs-row">' +
+                    '  <label>Start</label>' +
+                    '  <input type="number" id="mfInputStart" min="0" max="' + maxFrame + '" value="0">' +
+                    '  <span class="separator">—</span>' +
+                    '  <label>End</label>' +
+                    '  <input type="number" id="mfInputEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+                    '</div>' +
+                    '<div class="multi-frame-progress" id="mfProgress" style="display:none;">' +
+                    '  <div class="progress-label" id="mfProgressLabel">0 / 0 frames</div>' +
+                    '  <div class="progress-bar-track"><div class="progress-bar-fill" id="mfProgressFill" style="width:0%"></div></div>' +
+                    '</div>' +
+                    '<div class="modal-actions" id="mfActions">' +
+                    '  <button id="mfCancel">Cancel</button>' +
+                    '  <button class="primary" id="mfContinue">Continue</button>' +
+                    '</div>';
+
+                overlay.appendChild(modal);
+                document.body.appendChild(overlay);
+
+                var rangeStart = document.getElementById('mfRangeStart');
+                var rangeEnd = document.getElementById('mfRangeEnd');
+                var inputStart = document.getElementById('mfInputStart');
+                var inputEnd = document.getElementById('mfInputEnd');
+                var sliderFill = document.getElementById('mfSliderFill');
+
+                function updateSliderFill() {
+                    var s = parseInt(rangeStart.value);
+                    var e = parseInt(rangeEnd.value);
+                    var max = parseInt(rangeStart.max) || 1;
+                    var leftPct = (s / max) * 100;
+                    var rightPct = (e / max) * 100;
+                    sliderFill.style.left = leftPct + '%';
+                    sliderFill.style.width = (rightPct - leftPct) + '%';
+                }
+
+                function syncSliders() {
+                    var s = parseInt(rangeStart.value);
+                    var e = parseInt(rangeEnd.value);
+                    // Enforce start <= end
+                    if (s > e) {
+                        rangeStart.value = e;
+                        s = e;
+                    }
+                    inputStart.value = s;
+                    inputEnd.value = e;
+                    updateSliderFill();
+                }
+
+                rangeStart.addEventListener('input', syncSliders);
+                rangeEnd.addEventListener('input', syncSliders);
+
+                inputStart.addEventListener('change', function () {
+                    var v = parseInt(inputStart.value);
+                    if (isNaN(v) || v < 0) v = 0;
+                    if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
+                    if (v > maxFrame) v = maxFrame;
+                    inputStart.value = v;
+                    rangeStart.value = v;
+                    syncSliders();
+                });
+
+                inputEnd.addEventListener('change', function () {
+                    var v = parseInt(inputEnd.value);
+                    if (isNaN(v) || v < 0) v = 0;
+                    if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
+                    if (v > maxFrame) v = maxFrame;
+                    inputEnd.value = v;
+                    rangeEnd.value = v;
+                    syncSliders();
+                });
+
+                updateSliderFill();
+
+                document.getElementById('mfCancel').addEventListener('click', function () {
+                    overlay.remove();
+                });
+
+                document.getElementById('mfContinue').addEventListener('click', function () {
+                    var startFrame = parseInt(inputStart.value);
+                    var endFrame = parseInt(inputEnd.value);
+                    if (isNaN(startFrame) || isNaN(endFrame) || startFrame > endFrame) {
+                        return;
+                    }
+                    // Hide action buttons, show progress
+                    document.getElementById('mfActions').style.display = 'none';
+                    document.getElementById('mfProgress').style.display = 'block';
+                    // Disable inputs
+                    rangeStart.disabled = true;
+                    rangeEnd.disabled = true;
+                    inputStart.disabled = true;
+                    inputEnd.disabled = true;
+
+                    runMultiFrameAssignment(startFrame, endFrame, state.lastAutoAssignViews, overlay);
+                });
+            }
+        }
+
+        async function runMultiFrameAssignment(startFrame, endFrame, viewNames, overlayEl) {
+            var totalFrames = endFrame - startFrame + 1;
+            var progressLabel = document.getElementById('mfProgressLabel');
+            var progressFill = document.getElementById('mfProgressFill');
+            var completed = 0;
+            var assigned = 0;
+
+            for (var f = startFrame; f <= endFrame; f++) {
+                // Seek to frame
+                await videoController.seekToFrame(f);
+
+                // Run assignment on this frame
+                var groupsCreated = runAutomaticAssignment(viewNames);
+                if (groupsCreated > 0) assigned++;
+
+                completed++;
+                var pct = Math.round((completed / totalFrames) * 100);
+                if (progressLabel) progressLabel.textContent = completed + ' / ' + totalFrames + ' frames';
+                if (progressFill) progressFill.style.width = pct + '%';
+
+                // Yield to UI for progress bar updates
+                await new Promise(function (r) { setTimeout(r, 0); });
+            }
+
+            // Done — show summary and close button
+            if (progressLabel) {
+                progressLabel.textContent = 'Done — assigned identities on ' + assigned + ' of ' + totalFrames + ' frames';
+            }
+
+            // Replace progress with close button
+            var actionsEl = document.getElementById('mfActions');
+            if (actionsEl) {
+                actionsEl.innerHTML = '<button class="primary" id="mfClose">Close</button>';
+                actionsEl.style.display = 'flex';
+                document.getElementById('mfClose').addEventListener('click', function () {
+                    overlayEl.remove();
+                });
+            }
+
+            setStatus('Multi-frame assignment complete: ' + assigned + '/' + totalFrames + ' frames assigned', 'success');
         }
 
         // ============================================
