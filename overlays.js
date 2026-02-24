@@ -118,6 +118,15 @@ function hexToRgb(hex) {
     };
 }
 
+/** Lighten a hex color by a factor (0-1). factor=0.4 means 40% closer to white. */
+function brightenColor(hex, factor) {
+    const rgb = hexToRgb(hex);
+    const r = Math.min(255, Math.round(rgb.r + (255 - rgb.r) * factor));
+    const g = Math.min(255, Math.round(rgb.g + (255 - rgb.g) * factor));
+    const b = Math.min(255, Math.round(rgb.b + (255 - rgb.b) * factor));
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
 // ============================================
 // Skeleton rendering
 // ============================================
@@ -1193,8 +1202,14 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         if (viewInstances) {
             for (let i = 0; i < viewInstances.length; i++) {
                 const inst = viewInstances[i];
+                var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
+                // Brighten skeleton if it belongs to the selected group
+                var isSelected = selectedInstanceGroup &&
+                    selectedInstanceGroup.getInstance &&
+                    selectedInstanceGroup.getInstance(viewName) === inst;
+                var drawColor = isSelected ? brightenColor(baseColor, 0.4) : baseColor;
                 drawSkeleton(ctx, inst, skeleton, Object.assign({}, renderOpts, {
-                    color: getTrackColor(inst.trackIdx != null ? inst.trackIdx : i),
+                    color: drawColor,
                 }));
             }
 

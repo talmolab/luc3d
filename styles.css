@@ -480,10 +480,14 @@ body {
   border-radius: 2px;
 }
 
-/* When zoomed: highlight via border (visible even when overflow clips content) */
-.video-cell.video-selected.zoomed {
+/* When zoomed: highlight via pseudo-element overlay (always visible, above transformed content) */
+.video-cell.video-selected.zoomed::after {
+  content: '';
+  position: absolute;
+  inset: 0;
   border: 2px solid rgba(255, 221, 68, 0.5);
-  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 18;
 }
 
 .unzoom-btn {
@@ -1482,9 +1486,14 @@ input[type="range"]::-moz-range-track {
   outline-offset: -3px;
 }
 
-.video-cell.auto-assign-selected.zoomed {
+/* When zoomed: red highlight via pseudo-element overlay */
+.video-cell.auto-assign-selected.zoomed::after {
+  content: '';
+  position: absolute;
+  inset: 0;
   border: 3px solid #ef4444;
-  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 18;
 }
 
 /* Ghost line shown during split handle drag */

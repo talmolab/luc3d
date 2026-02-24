@@ -1268,6 +1268,15 @@ class VideoController {
         }
     }
 
+    /** Snap scale to exactly 1.0 if within tolerance, and reset offsets at min zoom */
+    _clampZoom(z) {
+        if (z.scale < 1.001) {
+            z.scale = 1.0;
+            z.offsetX = 0;
+            z.offsetY = 0;
+        }
+    }
+
     zoomVideo(view, factor, cssX, cssY) {
         if (!view.zoom) this.initZoom(view);
 
@@ -1283,11 +1292,7 @@ class VideoController {
         }
 
         z.scale = newScale;
-        // At min zoom, reset offsets to prevent drift
-        if (z.scale <= 1.0) {
-            z.offsetX = 0;
-            z.offsetY = 0;
-        }
+        this._clampZoom(z);
         this.applyZoom(view);
     }
 
@@ -1325,11 +1330,7 @@ class VideoController {
         z.offsetX = containerW / 2 - contentCenterX * clampedScale;
         z.offsetY = containerH / 2 - contentCenterY * clampedScale;
         z.scale = clampedScale;
-        // At min zoom, reset offsets to prevent drift
-        if (z.scale <= 1.0) {
-            z.offsetX = 0;
-            z.offsetY = 0;
-        }
+        this._clampZoom(z);
 
         this.applyZoom(view);
     }
@@ -1421,7 +1422,7 @@ class VideoController {
                 view.zoom.offsetX += dx;
                 view.zoom.offsetY += dy;
                 // At min zoom, don't allow panning — reset offsets
-                if (view.zoom.scale <= 1.0) {
+                if (view.zoom.scale < 1.001) {
                     view.zoom.offsetX = 0;
                     view.zoom.offsetY = 0;
                 }

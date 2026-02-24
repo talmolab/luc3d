@@ -785,23 +785,28 @@
                         continue;
                     }
 
-                    const result = triangulateAndReproject(group, cameras);
+                    // Only use cameras that have instances in this group (assigned views)
+                    const groupCamNames = group.cameraNames;
+                    const groupCameras = cameras.filter(c => groupCamNames.indexOf(c.name) >= 0);
+
+                    const result = triangulateAndReproject(group, groupCameras);
 
                     // Check for NaN in points3d
                     const hasNaN = result.points3d.some(p => p && (isNaN(p[0]) || isNaN(p[1]) || isNaN(p[2])));
                     const validPts = result.points3d.filter(p => p != null).length;
                     console.log('[triangulate] points3d:', validPts, 'valid /', result.points3d.length,
                         '| hasNaN:', hasNaN, '| meanError:', result.meanError,
+                        '| cameras used:', groupCamNames,
                         '| sample:', result.points3d.find(p => p != null));
                     if (hasNaN) {
                         console.error('[triangulate] WARNING: NaN in 3D points! Check calibration matrices.');
-                        for (const cam of cameras) {
+                        for (const cam of groupCameras) {
                             console.log('[triangulate] Camera', cam.name, 'P=', cam.projectionMatrix);
                         }
                     }
 
                     // Log reprojections per camera
-                    for (const cam of cameras) {
+                    for (const cam of groupCameras) {
                         const reproj = result.reprojections[cam.name];
                         const validReproj = reproj ? reproj.filter(p => p != null).length : 0;
                         console.log('[triangulate] Reprojection', cam.name, ':', validReproj, 'pts',
@@ -812,7 +817,7 @@
                     group.points3d = result.points3d;
                     group.observedPoints = {};
                     group.usedCameras = new Set();
-                    for (const cam of cameras) {
+                    for (const cam of groupCameras) {
                         const inst = group.getInstance(cam.name);
                         if (inst) {
                             group.observedPoints[cam.name] = inst.points;
@@ -820,31 +825,6 @@
                             if (hasAny) group.usedCameras.add(cam.name);
                         }
                     }
-
-                    // Fill missing views with reprojected predictions
-                    let filledCount = 0;
-                    for (const cam of cameras) {
-                        if (!group.getInstance(cam.name) && result.reprojections[cam.name]) {
-                            const reprojPts = result.reprojections[cam.name];
-                            const filledInstance = new Instance(
-                                reprojPts.map(function (p) { return p ? [p[0], p[1]] : null; }),
-                                group.trackIdx,
-                                'predicted',
-                                0.5
-                            );
-                            group.addInstance(cam.name, filledInstance);
-
-                            // Also add to FrameGroup for overlay rendering
-                            const fg = state.session.getFrameGroup(frameIdx);
-                            if (fg) {
-                                fg.addInstance(cam.name, filledInstance);
-                            }
-                            filledCount++;
-                            console.log('[triangulate] Filled missing view:', cam.name,
-                                '| pts:', filledInstance.points.filter(p => p != null).length);
-                        }
-                    }
-                    console.log('[triangulate] Filled', filledCount, 'missing views');
 
                     group.markClean();
 
@@ -969,35 +949,23 @@
 
                         if (viewsWithLabels < 2) continue;
 
-                        var result = triangulateAndReproject(group, cameras);
+                        // Only use cameras that have instances in this group (assigned views)
+                        var groupCamNames2 = group.cameraNames;
+                        var groupCameras2 = cameras.filter(function (c) { return groupCamNames2.indexOf(c.name) >= 0; });
+
+                        var result = triangulateAndReproject(group, groupCameras2);
 
                         group.reprojections = result.reprojections;
                         group.points3d = result.points3d;
                         group.observedPoints = {};
                         group.usedCameras = new Set();
-                        for (var ck = 0; ck < cameras.length; ck++) {
-                            var camInst = group.getInstance(cameras[ck].name);
+                        for (var ck = 0; ck < groupCameras2.length; ck++) {
+                            var camInst = group.getInstance(groupCameras2[ck].name);
                             if (camInst) {
-                                group.observedPoints[cameras[ck].name] = camInst.points;
+                                group.observedPoints[groupCameras2[ck].name] = camInst.points;
                                 if (camInst.points.some(function (p) { return p != null; })) {
-                                    group.usedCameras.add(cameras[ck].name);
+                                    group.usedCameras.add(groupCameras2[ck].name);
                                 }
-                            }
-                        }
-
-                        // Fill missing views with reprojected predictions
-                        for (var cl = 0; cl < cameras.length; cl++) {
-                            if (!group.getInstance(cameras[cl].name) && result.reprojections[cameras[cl].name]) {
-                                var reprojPts = result.reprojections[cameras[cl].name];
-                                var filledInstance = new Instance(
-                                    reprojPts.map(function (p) { return p ? [p[0], p[1]] : null; }),
-                                    group.trackIdx,
-                                    'predicted',
-                                    0.5
-                                );
-                                group.addInstance(cameras[cl].name, filledInstance);
-                                var fg = state.session.getFrameGroup(frameIdx);
-                                if (fg) fg.addInstance(cameras[cl].name, filledInstance);
                             }
                         }
 
@@ -2138,12 +2106,19 @@
             }
 
             // Now collect unlinked instances per selected view
+            // Sort by original trackIdx so instance_0 (trackIdx=0) maps to group 0 (red)
             var viewUnlinked = {}; // viewName -> UnlinkedInstance[]
             for (var vi = 0; vi < selectedViewNames.length; vi++) {
                 var vn = selectedViewNames[vi];
                 var ul = fg.getUnlinkedInstances(vn);
                 if (ul && ul.length > 0) {
-                    viewUnlinked[vn] = ul.slice();
+                    var sorted = ul.slice();
+                    sorted.sort(function (a, b) {
+                        var ta = a.instance.trackIdx != null ? a.instance.trackIdx : 9999;
+                        var tb = b.instance.trackIdx != null ? b.instance.trackIdx : 9999;
+                        return ta - tb;
+                    });
+                    viewUnlinked[vn] = sorted;
                 }
             }
 

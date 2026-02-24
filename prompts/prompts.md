@@ -169,3 +169,13 @@ I am currently using the directory `/root/vast/joshua/slap/claude-sleap-files` t
 - The highlight or zoom function is not working properly. The highlight is not visible for clipped sides of the video. The videos can also zoom out way past the size of the window
 
 - After running automatic identity assignment, the color of the skeletons do not change. Please ensure that the colors are updated. Also, there are 2 mice in the views that I choose, but only one mouse (track) is defined. For automatic assignment, the number of tracks should be the minimum number of tracks out of all the selected views the user selected.
+
+
+##
+# Prompt 15
+
+- The highlight or zoom function is still not working properly. The highlight is not visible for clipped sides of the video. The videos can also zoom out way past the size of the window. Please make a tester and reieratively solve this.
+
+- The coloring scheme is showing green, which is good, but `instance_0` is blue instead of red as mentioned in color pallete mentioned in PROJECT.md. When the user either clicks on a track or on the track label in the `instance` tab, all the other corresponding tracks in different views should have their skeleton change to a slightly brigher color
+
+- When the user clicks on triangulation, run it only using the views they have used to make group assignments. i.e. either the views they used for epipolar geometry or for manual assignment.
