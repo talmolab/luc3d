@@ -299,25 +299,6 @@
                 <!-- ==================== Skeleton Tab ==================== -->
                 <div class="panel-tab-content" id="tabSkeleton">
                     <div class="info-section">
-                        <h3>Nodes</h3>
-                        <table class="data-table" id="skeletonNodesTable">
-                            <thead>
-                                <tr>
-                                    <th>#</th>
-                                    <th>Name</th>
-                                    <th style="width:30px"></th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
-                        <div class="panel-button-row" style="margin-top:6px">
-                            <input type="text" id="newNodeName" placeholder="New node name"
-                                style="flex:1;padding:3px 6px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:3px;">
-                            <button class="panel-btn" id="btnAddNode" title="Add skeleton node">+ Node</button>
-                        </div>
-                    </div>
-
-                    <div class="info-section">
                         <h3>Edges</h3>
                         <table class="data-table" id="skeletonEdgesTable">
                             <thead>
@@ -338,8 +319,21 @@
                         </div>
                     </div>
 
+                    <div class="info-section">
+                        <h3>Nodes</h3>
+                        <table class="data-table" id="skeletonNodesTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Name</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+
                     <div style="margin-top:10px;display:flex;gap:6px">
-                        <button class="panel-btn" id="btnLoadSkeleton" title="Load skeleton from SLEAP .json file" style="flex:1">Load Skeleton</button>
+                        <button class="panel-btn" id="btnLoadSkeleton" title="Load skeleton from JSON file" style="flex:1">Load Skeleton</button>
                         <button class="panel-btn" id="btnSaveSkeleton" title="Save skeleton in SLEAP format" style="flex:1">Save Skeleton</button>
                     </div>
                 </div>
@@ -2540,7 +2534,7 @@
             if (!state.session) return;
             const sk = state.session.skeleton;
 
-            // Nodes
+            // Nodes (read-only — defined by SLP or loaded skeleton file)
             const nodesTbody = document.querySelector('#skeletonNodesTable tbody');
             nodesTbody.textContent = '';
             sk.nodes.forEach(function (name, i) {
@@ -2551,51 +2545,9 @@
 
                 const tdName = document.createElement('td');
                 tdName.textContent = name;
-                tdName.style.cursor = 'pointer';
-                tdName.title = 'Click to rename';
-                tdName.addEventListener('dblclick', function () {
-                    const input = document.createElement('input');
-                    input.type = 'text';
-                    input.value = sk.nodes[i];
-                    input.style.cssText = 'width:100%;padding:1px 3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--accent);color:var(--text-primary);border-radius:2px;';
-                    tdName.textContent = '';
-                    tdName.appendChild(input);
-                    input.focus();
-                    input.select();
-                    const finish = function () {
-                        const newName = input.value.trim();
-                        if (newName && newName !== sk.nodes[i]) {
-                            sk.nodes[i] = newName;
-                        }
-                        populateSkeletonTable();
-                        drawAllOverlays(state.currentFrame);
-                    };
-                    input.addEventListener('blur', finish);
-                    input.addEventListener('keydown', function (e) {
-                        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-                        if (e.key === 'Escape') { input.value = sk.nodes[i]; input.blur(); }
-                    });
-                });
-
-                const tdDel = document.createElement('td');
-                const delBtn = document.createElement('button');
-                delBtn.textContent = '\u00d7';
-                delBtn.className = 'panel-btn';
-                delBtn.style.cssText = 'padding:0 5px;font-size:14px;line-height:1;min-width:0;color:var(--error);';
-                delBtn.title = 'Remove node (cascades to all instances)';
-                delBtn.addEventListener('click', function () {
-                    if (!confirm('Remove node "' + sk.nodes[i] + '"? This will affect all instances.')) return;
-                    sk.removeNode(i);
-                    state.session.propagateNodeRemoved(i);
-                    populateSkeletonTable();
-                    drawAllOverlays(state.currentFrame);
-                    updateInfoPanel();
-                });
-                tdDel.appendChild(delBtn);
 
                 tr.appendChild(tdIdx);
                 tr.appendChild(tdName);
-                tr.appendChild(tdDel);
                 nodesTbody.appendChild(tr);
             });
 
@@ -2657,26 +2609,6 @@
         }
 
         function setupSkeletonEditing() {
-            // Add Node button
-            document.getElementById('btnAddNode').addEventListener('click', function () {
-                ensureSession();
-                const input = document.getElementById('newNodeName');
-                const name = input.value.trim();
-                if (!name) { input.focus(); return; }
-                state.session.skeleton.addNode(name);
-                state.session.propagateNodeAdded();
-                input.value = '';
-                populateSkeletonTable();
-                drawAllOverlays(state.currentFrame);
-                updateInfoPanel();
-            });
-            // Enter key in node name input
-            document.getElementById('newNodeName').addEventListener('keydown', function (e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    document.getElementById('btnAddNode').click();
-                }
-            });
             // Add Edge button
             document.getElementById('btnAddEdge').addEventListener('click', function () {
                 ensureSession();
@@ -4928,6 +4860,7 @@
 
                 // Categorize files by subfolder
                 var calibFile = null;
+                var skeletonFile = null;
                 var videoFiles = [];
                 var slpFiles = [];
                 var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
@@ -4952,6 +4885,10 @@
                     if (parts.length === 2 && (fileNameLower.endsWith('.toml') || fileNameLower.endsWith('.json'))
                         && fileNameLower.indexOf('calib') >= 0) {
                         calibFile = file;
+                    }
+                    // Check for skeleton JSON at root level (any .json with "skeleton" in name)
+                    else if (fileNameLower.endsWith('.json') && fileNameLower.indexOf('skeleton') >= 0) {
+                        skeletonFile = file;
                     }
                     // Check for videos — case-insensitive subfolder match at any depth
                     else if (subPath.match(/^videos?\//i)) {
@@ -4990,6 +4927,7 @@
 
                 console.log('[session-folder] Categorization result:', {
                     calibration: calibFile ? calibFile.name : null,
+                    skeleton: skeletonFile ? skeletonFile.name : null,
                     videos: videoFiles.map(function (f) { return f.webkitRelativePath || f.name; }),
                     slps: slpFiles.map(function (f) { return f.webkitRelativePath || f.name; }),
                 });
@@ -5276,6 +5214,23 @@
                         }
                     }
                     console.log('[session-folder] Built instance groups for', state.session.frameGroups.size, 'frames');
+                }
+
+                // 5b. Load skeleton JSON override if found in session folder
+                if (skeletonFile && state.session) {
+                    try {
+                        showLoading('Loading skeleton file...');
+                        var skelText = await skeletonFile.text();
+                        var loadedSkeleton = parseSkeletonJSON(skelText);
+                        if (loadedSkeleton && loadedSkeleton.nodes.length > 0) {
+                            state.session.skeleton = loadedSkeleton;
+                            console.log('[session-folder] Overrode skeleton from ' + skeletonFile.name +
+                                ': ' + loadedSkeleton.nodes.length + ' nodes, ' + loadedSkeleton.edges.length + ' edges');
+                            setStatus('Loaded skeleton from ' + skeletonFile.name, 'success');
+                        }
+                    } catch (skelErr) {
+                        console.error('[session-folder] Skeleton file parse error:', skelErr);
+                    }
                 }
 
                 // 6. Finalize
