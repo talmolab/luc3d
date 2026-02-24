@@ -189,3 +189,19 @@ I am currently using the directory `/root/vast/joshua/slap/claude-sleap-files` t
 - Ask me questions for clarification if needed
 
 - Another UI is that the the toast is in the correct bar, but is it displayed on the right hand side of the screen. Please put it in the center of the bar and wrap it around a rectangular highlight. Choose a highlight color you think fill fit the website asethetic
+
+##
+# Prompt 17
+
+1. Commit the current state of the project. Please write include the following capabilites
+
+    - Automatic identity assignment with user selected windows
+    - Triangulation using user selected windows
+    - Highlight around windows
+    - Skeleton not changed
+
+
+2. Move on to these following instructions once you're finished with the commit.
+
+- The skeleton should be already defined by the SLP files, so in the info->skeleton tab, please remove user capability to edit the nodes. The user should still be able to edit the edges, so unchange the edges. Move the edges portion above the nodes section
+- If the user loads a skeleton file (should be formatted as a `json`) into the info->skeleton tab, or one is provided in the sessions folder (it should include the word `skeleton` in the name with the `json` extension), then override the current skeleton or the one in the SLP files with the user provided one.
