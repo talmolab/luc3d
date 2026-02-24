@@ -1,7 +1,7 @@
-# lucid (Label Unification and Correspondence in 3D Annotation GUI)
+# luc3d (Label Unification and Correspondence in 3D Annotation GUI)
 Label Unification and Correspondence in 3D Annotation GUI in Web Browser
 
-# LUCID — Label Unification and Correspondence in 3D
+# LUC3D — Label Unification and Correspondence in 3D
 
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
