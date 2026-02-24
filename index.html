@@ -5377,43 +5377,20 @@
                     }
                 }
 
-                // 5. Build InstanceGroups from FrameGroup instances
-                // Each InstanceGroup maps one instance per camera. If a camera has
-                // multiple instances with the same trackIdx we must not overwrite —
-                // put extras as unlinked so automatic assignment can match them later.
+                // 5. Move all loaded instances to the unlinked pool
+                // Identity assignment is NOT run automatically — user triggers it
+                // through the Assign menu. All instances start as unlinked.
                 if (state.session) {
-                    showLoading('Building instance groups...');
+                    showLoading('Preparing instances...');
                     for (var [fgIdx, fgObj] of state.session.frameGroups) {
-                        var trackInstances = new Map(); // trackIdx -> [{camName, instance}]
                         for (var [cn, instances] of fgObj.instances) {
                             for (var instItem of instances) {
-                                var tIdx = instItem.trackIdx >= 0 ? instItem.trackIdx : 0;
-                                if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
-                                trackInstances.get(tIdx).push({ camName: cn, instance: instItem });
-                            }
-                        }
-                        if (trackInstances.size > 0) {
-                            state.session.instanceGroups.set(fgIdx, new Map());
-                            var trackMap3 = state.session.instanceGroups.get(fgIdx);
-                            for (var [trkIdx, entries] of trackInstances) {
-                                var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trkIdx, trkIdx);
-                                var usedCameras = new Set();
-                                for (var e2 of entries) {
-                                    if (usedCameras.has(e2.camName)) {
-                                        // Duplicate camera in same track — put as unlinked
-                                        var ulInst = new UnlinkedInstance(e2.instance, e2.camName);
-                                        fgObj.addUnlinkedInstance(e2.camName, ulInst);
-                                        continue;
-                                    }
-                                    usedCameras.add(e2.camName);
-                                    group.addInstance(e2.camName, e2.instance);
-                                }
-                                if (!trackMap3.has(trkIdx)) trackMap3.set(trkIdx, []);
-                                trackMap3.get(trkIdx).push(group);
+                                var ulInst = new UnlinkedInstance(instItem, cn);
+                                fgObj.addUnlinkedInstance(cn, ulInst);
                             }
                         }
                     }
-                    console.log('[session-folder] Built instance groups for', state.session.frameGroups.size, 'frames');
+                    console.log('[session-folder] Prepared unlinked instances for', state.session.frameGroups.size, 'frames');
                 }
 
                 // 5b. Load skeleton JSON override if found in session folder

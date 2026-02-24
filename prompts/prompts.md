@@ -229,3 +229,9 @@ State 2 — Identity assignment already run on current frame:
 * Text fields: Two editable text fields displaying the current start and end values, synced bidirectionally with the slider handles. Reject invalid input (non-positive, non-integer, or start > end).
 * `Cancel`: Dismisses the modal and cancels the operation.
 * `Continue`: Runs identity assignment on the selected frame range using the views currently selected for the current frame. Display a real-time progress bar showing the fraction of completed frames.
+
+
+##
+# Prompt 19
+
+**Bug Fix**: Identity assignment is currently running automatically when a session folder is loaded. Remove this behavior — identity assignment should only run when explicitly triggered by the user through the `Assign` menu
