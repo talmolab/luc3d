@@ -1283,6 +1283,11 @@ class VideoController {
         }
 
         z.scale = newScale;
+        // At min zoom, reset offsets to prevent drift
+        if (z.scale <= 1.0) {
+            z.offsetX = 0;
+            z.offsetY = 0;
+        }
         this.applyZoom(view);
     }
 
@@ -1320,6 +1325,11 @@ class VideoController {
         z.offsetX = containerW / 2 - contentCenterX * clampedScale;
         z.offsetY = containerH / 2 - contentCenterY * clampedScale;
         z.scale = clampedScale;
+        // At min zoom, reset offsets to prevent drift
+        if (z.scale <= 1.0) {
+            z.offsetX = 0;
+            z.offsetY = 0;
+        }
 
         this.applyZoom(view);
     }
@@ -1410,6 +1420,11 @@ class VideoController {
 
                 view.zoom.offsetX += dx;
                 view.zoom.offsetY += dy;
+                // At min zoom, don't allow panning — reset offsets
+                if (view.zoom.scale <= 1.0) {
+                    view.zoom.offsetX = 0;
+                    view.zoom.offsetY = 0;
+                }
                 self.applyZoom(view);
                 return;
             }

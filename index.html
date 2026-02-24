@@ -2153,8 +2153,16 @@
                 return;
             }
 
-            // Use first view with unlinked instances as reference
+            // Use the view with the MINIMUM instance count as the reference.
+            // This ensures the number of tracks equals the min across selected views.
             var refView = viewNames[0];
+            var minCount = viewUnlinked[refView].length;
+            for (var vci = 1; vci < viewNames.length; vci++) {
+                if (viewUnlinked[viewNames[vci]].length < minCount) {
+                    minCount = viewUnlinked[viewNames[vci]].length;
+                    refView = viewNames[vci];
+                }
+            }
             var refInstances = viewUnlinked[refView];
 
             // For each other view, build cost matrix using triangulation reprojection error
@@ -2168,8 +2176,9 @@
                 assignments[ri][refView] = refInstances[ri];
             }
 
-            for (var ovi = 1; ovi < viewNames.length; ovi++) {
+            for (var ovi = 0; ovi < viewNames.length; ovi++) {
                 var otherView = viewNames[ovi];
+                if (otherView === refView) continue;
                 var otherInstances = viewUnlinked[otherView];
                 var nRef = refInstances.length;
                 var nOther = otherInstances.length;
@@ -2213,15 +2222,18 @@
                     var group = state.session.createGroupFromUnlinked(
                         state.currentFrame, assignedUnlinked
                     );
-                    // Update instance trackIdx to match group for consistent coloring
+                    // Update instance trackIdx on both the group's map AND the
+                    // FrameGroup's instances array (same objects by reference)
+                    var newTrackIdx = group.trackIdx;
                     for (var [camName, inst] of group.instances) {
-                        inst.trackIdx = group.trackIdx;
+                        inst.trackIdx = newTrackIdx;
                     }
                     groupsCreated++;
                 }
             }
 
             if (groupsCreated > 0) {
+                // Force full overlay redraw so skeleton colors update
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
                 if (viewport3d) {
@@ -5253,10 +5265,13 @@
                 }
 
                 // 5. Build InstanceGroups from FrameGroup instances
+                // Each InstanceGroup maps one instance per camera. If a camera has
+                // multiple instances with the same trackIdx we must not overwrite —
+                // put extras as unlinked so automatic assignment can match them later.
                 if (state.session) {
                     showLoading('Building instance groups...');
                     for (var [fgIdx, fgObj] of state.session.frameGroups) {
-                        var trackInstances = new Map();
+                        var trackInstances = new Map(); // trackIdx -> [{camName, instance}]
                         for (var [cn, instances] of fgObj.instances) {
                             for (var instItem of instances) {
                                 var tIdx = instItem.trackIdx >= 0 ? instItem.trackIdx : 0;
@@ -5269,7 +5284,17 @@
                             var trackMap3 = state.session.instanceGroups.get(fgIdx);
                             for (var [trkIdx, entries] of trackInstances) {
                                 var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trkIdx, trkIdx);
-                                for (var e2 of entries) group.addInstance(e2.camName, e2.instance);
+                                var usedCameras = new Set();
+                                for (var e2 of entries) {
+                                    if (usedCameras.has(e2.camName)) {
+                                        // Duplicate camera in same track — put as unlinked
+                                        var ulInst = new UnlinkedInstance(e2.instance, e2.camName);
+                                        fgObj.addUnlinkedInstance(e2.camName, ulInst);
+                                        continue;
+                                    }
+                                    usedCameras.add(e2.camName);
+                                    group.addInstance(e2.camName, e2.instance);
+                                }
                                 if (!trackMap3.has(trkIdx)) trackMap3.set(trkIdx, []);
                                 trackMap3.get(trkIdx).push(group);
                             }

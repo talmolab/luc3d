@@ -159,3 +159,13 @@ Now, I can see the `Assign` drop down menu, but both `manual` or `automatic` but
 - When a video is zoomed in, there no highlights on the clipped side. Please add the highlight
 - Disable zooming out if the entire video can currently fit in the current window (i.e. it's fine if one direction of the video doesn't completely fit, but at least the width/height should be maxed out). There are no limits for zooming in though.
 - For epipolar matching color, please use visible, pleasant colors. Start with the primary colors: red, blue, green, orange, etc.., then consider adding more various shades colors as then number of separate entities increase. Include your color palette plan in PROJECT.md
+
+##
+
+# Prompt 14
+
+I am currently using the directory `/root/vast/joshua/slap/claude-sleap-files` to load in an session. Please use this as well to determine if the website is working properly.
+
+- The highlight or zoom function is not working properly. The highlight is not visible for clipped sides of the video. The videos can also zoom out way past the size of the window
+
+- After running automatic identity assignment, the color of the skeletons do not change. Please ensure that the colors are updated. Also, there are 2 mice in the views that I choose, but only one mouse (track) is defined. For automatic assignment, the number of tracks should be the minimum number of tracks out of all the selected views the user selected.
