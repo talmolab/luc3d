@@ -799,6 +799,48 @@ body {
   transition: width 0.15s ease;
 }
 
+/* Modal layout: range row with views list */
+.modal-range-row {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.modal-range-row .frame-inputs-row {
+  margin: 0;
+}
+
+.modal-views-section {
+  min-width: 100px;
+}
+
+.modal-views-section label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.modal-view-list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+/* Error message in modal */
+.multi-frame-error {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: rgba(220, 53, 69, 0.12);
+  border: 1px solid rgba(220, 53, 69, 0.3);
+  border-radius: 4px;
+  color: #f87171;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .toolbar-separator {
   width: 1px;
   height: 20px;

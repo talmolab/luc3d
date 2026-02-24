@@ -64,9 +64,9 @@
                     <div class="menu-dropdown-item" id="menuUnlinkGroup">Unlink Group <span
                             class="shortcut-hint">U</span></div>
                     <div class="menu-separator"></div>
-                    <div class="menu-dropdown-item" id="menuTriangulate">Triangulate <span
+                    <div class="menu-dropdown-item" id="menuTriangulate">Triangulate Current Frame <span
                             class="shortcut-hint">T</span></div>
-                    <div class="menu-dropdown-item" id="menuTriangulateAll">Triangulate All Frames</div>
+                    <div class="menu-dropdown-item" id="menuTriangulateMulti">Triangulate Multiple Frames</div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -110,10 +110,11 @@
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbTriangulate"
-                    title="Triangulate from labeled views (T)">Triangulate</button>
-                <button class="toolbar-btn" id="tbTriangulateAll"
-                    title="Triangulate all frames in session">Triangulate All</button>
+                <button class="toolbar-btn" id="tbTriangulate" title="Triangulate">Triangulate &#9662;</button>
+                <div class="toolbar-dropdown-menu" id="tbTriangulateMenu" style="display:none;position:fixed;z-index:10000;">
+                    <div class="toolbar-dropdown-item" id="tbTriangCurrentFrame">Current Frame</div>
+                    <div class="toolbar-dropdown-item" id="tbTriangMultipleFrames">Multiple Frames</div>
+                </div>
                 <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
             <div class="toolbar-separator"></div>
@@ -1418,9 +1419,9 @@
                 triangulateCurrentFrame();
             });
 
-            document.getElementById('menuTriangulateAll').addEventListener('click', function () {
+            document.getElementById('menuTriangulateMulti').addEventListener('click', function () {
                 closeMenus();
-                triangulateAllFrames();
+                showTriangulateMultiFrameModal();
             });
 
             document.getElementById('menuToggle3D').addEventListener('click', function () {
@@ -1823,6 +1824,8 @@
                 e.stopPropagation();
                 var menu = document.getElementById('tbAssignMenu');
                 var isOpen = menu.style.display !== 'none';
+                // Close other menus
+                document.getElementById('tbTriangulateMenu').style.display = 'none';
                 if (isOpen) {
                     menu.style.display = 'none';
                 } else {
@@ -1835,6 +1838,8 @@
             document.addEventListener('click', function () {
                 var menu = document.getElementById('tbAssignMenu');
                 if (menu) menu.style.display = 'none';
+                var triMenu = document.getElementById('tbTriangulateMenu');
+                if (triMenu) triMenu.style.display = 'none';
             });
             // Prevent clicks inside dropdown from bubbling to document close handlers
             document.getElementById('tbAssignMenu').addEventListener('click', function (e) {
@@ -1875,12 +1880,34 @@
                 unlinkGroup();
             });
 
-            document.getElementById('tbTriangulate').addEventListener('click', function () {
+            // Triangulate dropdown toggle
+            document.getElementById('tbTriangulate').addEventListener('click', function (e) {
+                e.stopPropagation();
+                var menu = document.getElementById('tbTriangulateMenu');
+                var isOpen = menu.style.display !== 'none';
+                // Close other menus
+                document.getElementById('tbAssignMenu').style.display = 'none';
+                if (isOpen) {
+                    menu.style.display = 'none';
+                } else {
+                    var rect = e.currentTarget.getBoundingClientRect();
+                    menu.style.left = rect.left + 'px';
+                    menu.style.top = rect.bottom + 2 + 'px';
+                    menu.style.display = 'block';
+                }
+            });
+            document.getElementById('tbTriangulateMenu').addEventListener('click', function (e) {
+                e.stopPropagation();
+            });
+            document.getElementById('tbTriangCurrentFrame').addEventListener('click', function (e) {
+                e.stopPropagation();
+                document.getElementById('tbTriangulateMenu').style.display = 'none';
                 triangulateCurrentFrame();
             });
-
-            document.getElementById('tbTriangulateAll').addEventListener('click', function () {
-                triangulateAllFrames();
+            document.getElementById('tbTriangMultipleFrames').addEventListener('click', function (e) {
+                e.stopPropagation();
+                document.getElementById('tbTriangulateMenu').style.display = 'none';
+                showTriangulateMultiFrameModal();
             });
 
             // Context menu for instance groups
@@ -2265,22 +2292,31 @@
             } else {
                 // State 2: assignment already run — show range picker
                 var maxFrame = state.totalFrames - 1;
+                var viewsList = '<ul class="modal-view-list">';
+                for (var vli = 0; vli < state.lastAutoAssignViews.length; vli++) {
+                    viewsList += '<li>' + state.lastAutoAssignViews[vli] + '</li>';
+                }
+                viewsList += '</ul>';
+
                 modal.innerHTML =
                     '<h3>Choose Frames for Identity Assignment</h3>' +
-                    '<p>Select the frame range to run automatic identity assignment. ' +
-                    'Views used: ' + state.lastAutoAssignViews.join(', ') + '</p>' +
                     '<div class="range-slider-container">' +
                     '  <div class="range-slider-track"></div>' +
                     '  <div class="range-slider-fill" id="mfSliderFill"></div>' +
                     '  <input type="range" id="mfRangeStart" min="0" max="' + maxFrame + '" value="0">' +
                     '  <input type="range" id="mfRangeEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
                     '</div>' +
+                    '<div class="modal-range-row">' +
                     '<div class="frame-inputs-row">' +
                     '  <label>Start</label>' +
                     '  <input type="number" id="mfInputStart" min="0" max="' + maxFrame + '" value="0">' +
                     '  <span class="separator">—</span>' +
                     '  <label>End</label>' +
                     '  <input type="number" id="mfInputEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+                    '</div>' +
+                    '<div class="modal-views-section">' +
+                    '  <label>Views</label>' + viewsList +
+                    '</div>' +
                     '</div>' +
                     '<div class="multi-frame-progress" id="mfProgress" style="display:none;">' +
                     '  <div class="progress-label" id="mfProgressLabel">0 / 0 frames</div>' +
@@ -2412,6 +2448,316 @@
             }
 
             setStatus('Multi-frame assignment complete: ' + assigned + '/' + totalFrames + ' frames assigned', 'success');
+        }
+
+        // ============================================
+        // Multi-Frame Triangulation Modal
+        // ============================================
+
+        /**
+         * Condense an array of frame indices into human-readable ranges.
+         * e.g. [10,11,12,13,15,23,40,41,42] -> "10–13, 15, 23, 40–42"
+         */
+        function condenseMissingFrames(frames) {
+            if (frames.length === 0) return '';
+            frames.sort(function (a, b) { return a - b; });
+            var ranges = [];
+            var start = frames[0];
+            var end = frames[0];
+            for (var i = 1; i < frames.length; i++) {
+                if (frames[i] === end + 1) {
+                    end = frames[i];
+                } else {
+                    ranges.push(start === end ? '' + start : start + '–' + end);
+                    start = frames[i];
+                    end = frames[i];
+                }
+            }
+            ranges.push(start === end ? '' + start : start + '–' + end);
+            return ranges.join(', ');
+        }
+
+        function showTriangulateMultiFrameModal() {
+            if (!state.session) {
+                setStatus('No session loaded', 'warning');
+                return;
+            }
+            if (state.session.cameras.length < 2) {
+                setStatus('Need at least 2 cameras for triangulation', 'warning');
+                return;
+            }
+
+            var overlay = document.createElement('div');
+            overlay.className = 'multi-frame-modal-overlay';
+
+            var modal = document.createElement('div');
+            modal.className = 'multi-frame-modal';
+
+            var maxFrame = state.totalFrames - 1;
+
+            // Build camera views list from session cameras
+            var viewsList = '<ul class="modal-view-list">';
+            for (var ci = 0; ci < state.session.cameras.length; ci++) {
+                viewsList += '<li>' + state.session.cameras[ci].name + '</li>';
+            }
+            viewsList += '</ul>';
+
+            modal.innerHTML =
+                '<h3>Choose Frames for Triangulation</h3>' +
+                '<div class="range-slider-container">' +
+                '  <div class="range-slider-track"></div>' +
+                '  <div class="range-slider-fill" id="tfSliderFill"></div>' +
+                '  <input type="range" id="tfRangeStart" min="0" max="' + maxFrame + '" value="0">' +
+                '  <input type="range" id="tfRangeEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+                '</div>' +
+                '<div class="modal-range-row">' +
+                '<div class="frame-inputs-row">' +
+                '  <label>Start</label>' +
+                '  <input type="number" id="tfInputStart" min="0" max="' + maxFrame + '" value="0">' +
+                '  <span class="separator">—</span>' +
+                '  <label>End</label>' +
+                '  <input type="number" id="tfInputEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+                '</div>' +
+                '<div class="modal-views-section">' +
+                '  <label>Cameras</label>' + viewsList +
+                '</div>' +
+                '</div>' +
+                '<div class="multi-frame-error" id="tfError" style="display:none;"></div>' +
+                '<div class="multi-frame-progress" id="tfProgress" style="display:none;">' +
+                '  <div class="progress-label" id="tfProgressLabel">0 / 0 frames</div>' +
+                '  <div class="progress-bar-track"><div class="progress-bar-fill" id="tfProgressFill" style="width:0%"></div></div>' +
+                '</div>' +
+                '<div class="modal-actions" id="tfActions">' +
+                '  <button id="tfCancel">Cancel</button>' +
+                '  <button class="primary" id="tfContinue">Continue</button>' +
+                '</div>';
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            var rangeStart = document.getElementById('tfRangeStart');
+            var rangeEnd = document.getElementById('tfRangeEnd');
+            var inputStart = document.getElementById('tfInputStart');
+            var inputEnd = document.getElementById('tfInputEnd');
+            var sliderFill = document.getElementById('tfSliderFill');
+
+            function updateSliderFill() {
+                var s = parseInt(rangeStart.value);
+                var e = parseInt(rangeEnd.value);
+                var max = parseInt(rangeStart.max) || 1;
+                var leftPct = (s / max) * 100;
+                var rightPct = (e / max) * 100;
+                sliderFill.style.left = leftPct + '%';
+                sliderFill.style.width = (rightPct - leftPct) + '%';
+            }
+
+            function syncSliders() {
+                var s = parseInt(rangeStart.value);
+                var e = parseInt(rangeEnd.value);
+                if (s > e) {
+                    rangeStart.value = e;
+                    s = e;
+                }
+                inputStart.value = s;
+                inputEnd.value = e;
+                updateSliderFill();
+                // Clear error when range changes
+                document.getElementById('tfError').style.display = 'none';
+            }
+
+            rangeStart.addEventListener('input', syncSliders);
+            rangeEnd.addEventListener('input', syncSliders);
+
+            inputStart.addEventListener('change', function () {
+                var v = parseInt(inputStart.value);
+                if (isNaN(v) || v < 0) v = 0;
+                if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
+                if (v > maxFrame) v = maxFrame;
+                inputStart.value = v;
+                rangeStart.value = v;
+                syncSliders();
+            });
+
+            inputEnd.addEventListener('change', function () {
+                var v = parseInt(inputEnd.value);
+                if (isNaN(v) || v < 0) v = 0;
+                if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
+                if (v > maxFrame) v = maxFrame;
+                inputEnd.value = v;
+                rangeEnd.value = v;
+                syncSliders();
+            });
+
+            updateSliderFill();
+
+            document.getElementById('tfCancel').addEventListener('click', function () {
+                overlay.remove();
+            });
+
+            document.getElementById('tfContinue').addEventListener('click', function () {
+                var startFrame = parseInt(inputStart.value);
+                var endFrame = parseInt(inputEnd.value);
+                if (isNaN(startFrame) || isNaN(endFrame) || startFrame > endFrame) {
+                    return;
+                }
+
+                // Validate: check all frames in range have identity assignment
+                var missingFrames = [];
+                for (var f = startFrame; f <= endFrame; f++) {
+                    var trackMap = state.session.instanceGroups.get(f);
+                    if (!trackMap || trackMap.size === 0) {
+                        missingFrames.push(f);
+                    }
+                }
+
+                if (missingFrames.length > 0) {
+                    var errorEl = document.getElementById('tfError');
+                    if (missingFrames.length === 1) {
+                        errorEl.textContent = 'Frame ' + missingFrames[0] + ' does not have identity assignment.';
+                    } else {
+                        errorEl.textContent = 'Frames [' + condenseMissingFrames(missingFrames) + '] do not have identity assignment.';
+                    }
+                    errorEl.style.display = 'block';
+                    return;
+                }
+
+                // Hide error, action buttons; show progress
+                document.getElementById('tfError').style.display = 'none';
+                document.getElementById('tfActions').style.display = 'none';
+                document.getElementById('tfProgress').style.display = 'block';
+                rangeStart.disabled = true;
+                rangeEnd.disabled = true;
+                inputStart.disabled = true;
+                inputEnd.disabled = true;
+
+                runMultiFrameTriangulation(startFrame, endFrame, overlay);
+            });
+        }
+
+        async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
+            var totalFrames = endFrame - startFrame + 1;
+            var progressLabel = document.getElementById('tfProgressLabel');
+            var progressFill = document.getElementById('tfProgressFill');
+            var cameras = state.session.cameras;
+            var completed = 0;
+            var triangulated = 0;
+            var totalGroups = 0;
+            var totalErrors = [];
+
+            for (var f = startFrame; f <= endFrame; f++) {
+                var trackMap = state.session.instanceGroups.get(f);
+                if (trackMap) {
+                    var frameResults = [];
+
+                    for (var [trackIdx, groups] of trackMap) {
+                        for (var gi = 0; gi < groups.length; gi++) {
+                            var group = groups[gi];
+
+                            // Resolve camera name mismatches
+                            var groupKeys = group.cameraNames;
+                            for (var ki = 0; ki < groupKeys.length; ki++) {
+                                var gk = groupKeys[ki];
+                                if (!cameras.some(function (c) { return c.name === gk; })) {
+                                    var gkLower = gk.toLowerCase();
+                                    for (var ci = 0; ci < cameras.length; ci++) {
+                                        var camLower = cameras[ci].name.toLowerCase();
+                                        if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
+                                            if (!group.getInstance(cameras[ci].name)) {
+                                                var inst = group.getInstance(gk);
+                                                group.instances.delete(gk);
+                                                group.instances.set(cameras[ci].name, inst);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Count views with labels
+                            var viewsWithLabels = 0;
+                            for (var cj = 0; cj < cameras.length; cj++) {
+                                var inst2 = group.getInstance(cameras[cj].name);
+                                if (inst2 && inst2.points && inst2.points.some(function (p) { return p != null; })) {
+                                    viewsWithLabels++;
+                                }
+                            }
+                            if (viewsWithLabels < 2) continue;
+
+                            var groupCamNames = group.cameraNames;
+                            var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
+                            var result = triangulateAndReproject(group, groupCameras);
+
+                            group.reprojections = result.reprojections;
+                            group.points3d = result.points3d;
+                            group.observedPoints = {};
+                            group.usedCameras = new Set();
+                            for (var ck = 0; ck < groupCameras.length; ck++) {
+                                var camInst = group.getInstance(groupCameras[ck].name);
+                                if (camInst) {
+                                    group.observedPoints[groupCameras[ck].name] = camInst.points;
+                                    if (camInst.points.some(function (p) { return p != null; })) {
+                                        group.usedCameras.add(groupCameras[ck].name);
+                                    }
+                                }
+                            }
+                            group.markClean();
+                            totalGroups++;
+
+                            frameResults.push({
+                                group: group,
+                                points3d: result.points3d,
+                                reprojections: result.reprojections,
+                                errors: result.errors,
+                                meanError: result.meanError,
+                            });
+
+                            if (result.meanError != null) {
+                                totalErrors.push(result.meanError);
+                            }
+                        }
+                    }
+
+                    if (frameResults.length > 0) {
+                        state.triangulationResults.set(f, frameResults);
+                        triangulated++;
+                    }
+                }
+
+                completed++;
+                var pct = Math.round((completed / totalFrames) * 100);
+                if (progressLabel) progressLabel.textContent = completed + ' / ' + totalFrames + ' frames';
+                if (progressFill) progressFill.style.width = pct + '%';
+
+                // Yield to UI for progress bar updates every 50 frames
+                if (completed % 50 === 0) {
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+            }
+
+            // Update display for current frame
+            drawAllOverlays(state.currentFrame);
+            update3DViewport(state.currentFrame);
+            if (viewport3d) viewport3d.fitToScene();
+
+            var avgError = totalErrors.length > 0
+                ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
+                : 'N/A';
+
+            // Show summary and close button
+            if (progressLabel) {
+                progressLabel.textContent = 'Done — triangulated ' + triangulated + ' frames (' + totalGroups + ' groups, avg error: ' + avgError + 'px)';
+            }
+
+            var actionsEl = document.getElementById('tfActions');
+            if (actionsEl) {
+                actionsEl.innerHTML = '<button class="primary" id="tfClose">Close</button>';
+                actionsEl.style.display = 'flex';
+                document.getElementById('tfClose').addEventListener('click', function () {
+                    overlayEl.remove();
+                });
+            }
+
+            setStatus('Multi-frame triangulation complete: ' + triangulated + '/' + totalFrames + ' frames, avg error: ' + avgError + 'px', 'success');
         }
 
         // ============================================

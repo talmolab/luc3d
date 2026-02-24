@@ -235,3 +235,23 @@ State 2 — Identity assignment already run on current frame:
 # Prompt 19
 
 **Bug Fix**: Identity assignment is currently running automatically when a session folder is loaded. Remove this behavior — identity assignment should only run when explicitly triggered by the user through the `Assign` menu
+
+##
+# Prompt 20
+**UI Update: Camera Views in Modal**
+In the `Assign -> Automatic -> Multiple Frames` modal, display the selected camera views as a bulleted list to the right of the `End` text field.
+
+**Triangulate Flyout Menu:**
+Refactor `Triangulate` into a dropdown menu with two options: `Current Frame` and `Multiple Frames`.
+
+`Current Frame` retains the existing `Triangulate` functionality.
+`Multiple Frames` replaces the existing `Triangulate All` button. Remove `Triangulate All`.
+
+**`Multiple Frames` Modal (Triangulation):**
+Mirror the identity assignment `Multiple Frames` modal (dual-handle range slider, synced text fields, camera view list, `Cancel`/`Continue` buttons, and progress bar), but for triangulation instead.
+Validation — Missing Identity Assignment:
+At the start of running triangulation, check that all frames in the selected range have identity assignment completed. If not:
+* Single frame: Display an error: "Frame [X] does not have identity assignment."
+* Multiple frames: Display the missing frames as condensed range(s), e.g., "Frames [10–15, 23, 40–42] do not have identity assignment."
+
+Error handling: If triangulation fails due to missing identity assignment, cancel the triangulation, display the error message, and keep the modal open so the user can adjust the frame range.
