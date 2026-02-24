@@ -99,7 +99,7 @@
                 <button class="toolbar-btn" id="tbUnlinkGroup" title="Unlink selected group">Unlink</button>
             </div>
             <!-- Assign dropdown menu (positioned absolutely via JS) -->
-            <div class="toolbar-dropdown-menu" id="tbAssignMenu" style="display:none;position:fixed;z-index:200;">
+            <div class="toolbar-dropdown-menu" id="tbAssignMenu" style="display:none;position:fixed;z-index:10000;">
                 <div class="toolbar-dropdown-item" id="tbAssignManual">Manual</div>
                 <div class="toolbar-dropdown-item" id="tbAssignAutomatic">Automatic</div>
             </div>
@@ -1867,12 +1867,23 @@
                 var menu = document.getElementById('tbAssignMenu');
                 if (menu) menu.style.display = 'none';
             });
-            document.getElementById('tbAssignManual').addEventListener('click', function () {
+            // Prevent clicks inside dropdown from bubbling to document close handlers
+            document.getElementById('tbAssignMenu').addEventListener('click', function (e) {
+                e.stopPropagation();
+            });
+            document.getElementById('tbAssignManual').addEventListener('click', function (e) {
+                e.stopPropagation();
                 document.getElementById('tbAssignMenu').style.display = 'none';
-                if (interactionManager) interactionManager.setAssignmentMode();
+                if (interactionManager) {
+                    interactionManager.setAssignmentMode();
+                    var isOn = interactionManager.assignmentMode;
+                    document.getElementById('tbAssign').classList.toggle('active', isOn);
+                    setStatus(isOn ? 'Assignment mode ON — click instances to select, Enter to group' : 'Assignment mode OFF', 'info');
+                }
                 drawAllOverlays(state.currentFrame);
             });
-            document.getElementById('tbAssignAutomatic').addEventListener('click', function () {
+            document.getElementById('tbAssignAutomatic').addEventListener('click', function (e) {
+                e.stopPropagation();
                 document.getElementById('tbAssignMenu').style.display = 'none';
                 startAutoAssignment();
             });
@@ -1994,23 +2005,26 @@
 
         function startAutoAssignment() {
             if (!state.session || state.views.length === 0) {
-                setStatus('No session loaded', 'warning');
+                setStatus('No session loaded — load a project first', 'warning');
                 return;
             }
 
-            // Check for unlinked instances
+            // Check that there are instances on this frame (linked or unlinked)
             var fg = state.session.getFrameGroup(state.currentFrame);
             if (!fg) {
                 setStatus('No instances on current frame', 'warning');
                 return;
             }
-            var hasUnlinked = false;
+            var hasInstances = false;
             for (var v = 0; v < state.views.length; v++) {
-                var ul = fg.getUnlinkedInstances(state.views[v].name);
-                if (ul && ul.length > 0) { hasUnlinked = true; break; }
+                var vn = state.views[v].name;
+                var ul = fg.getUnlinkedInstances(vn);
+                if (ul && ul.length > 0) { hasInstances = true; break; }
+                var linked = fg.instances.get(vn);
+                if (linked && linked.length > 0) { hasInstances = true; break; }
             }
-            if (!hasUnlinked) {
-                setStatus('No unlinked instances to assign on this frame', 'warning');
+            if (!hasInstances) {
+                setStatus('No instances on current frame to assign', 'warning');
                 return;
             }
 
@@ -2029,9 +2043,16 @@
 
             autoAssignState = { selectedViews: new Set(), toast: toast };
 
-            // Add click listeners to video cells for view selection
+            // Add transparent click overlays on each video cell for view selection
+            // This overlay sits above the canvas and interaction layer to capture clicks
             document.querySelectorAll('.video-cell').forEach(function (cell) {
-                cell._autoAssignClick = function () {
+                var overlay = document.createElement('div');
+                overlay.className = 'auto-assign-overlay';
+                overlay.style.cssText = 'position:absolute;inset:0;z-index:20;cursor:pointer;';
+                cell.appendChild(overlay);
+                cell._autoAssignOverlay = overlay;
+                overlay.addEventListener('click', function (e) {
+                    e.stopPropagation();
                     var viewName = cell.getAttribute('data-view-name');
                     if (!viewName) return;
                     if (autoAssignState.selectedViews.has(viewName)) {
@@ -2041,8 +2062,7 @@
                         autoAssignState.selectedViews.add(viewName);
                         cell.classList.add('auto-assign-selected');
                     }
-                };
-                cell.addEventListener('click', cell._autoAssignClick);
+                });
             });
 
             toast.querySelector('#autoAssignCancel').addEventListener('click', function () {
@@ -2068,14 +2088,24 @@
             if (autoAssignState.toast && autoAssignState.toast.parentNode) {
                 autoAssignState.toast.parentNode.removeChild(autoAssignState.toast);
             }
-            // Remove red highlights and click listeners
+            // Remove red highlights and click overlay divs
             document.querySelectorAll('.video-cell').forEach(function (cell) {
                 cell.classList.remove('auto-assign-selected');
-                if (cell._autoAssignClick) {
-                    cell.removeEventListener('click', cell._autoAssignClick);
-                    delete cell._autoAssignClick;
+                if (cell._autoAssignOverlay) {
+                    cell._autoAssignOverlay.remove();
+                    delete cell._autoAssignOverlay;
                 }
             });
+            // Restore yellow selection highlight on active panel
+            if (paneManager && paneManager.api) {
+                var activePanel = paneManager.api.activePanel;
+                if (activePanel) {
+                    var activeRenderer = panelRenderers.get(activePanel.id);
+                    if (activeRenderer) {
+                        activeRenderer.element.classList.add('video-selected');
+                    }
+                }
+            }
             autoAssignState = null;
         }
 
@@ -2085,7 +2115,29 @@
             if (!fg) return;
             var cameras = state.session.cameras;
 
-            // Collect unlinked instances per selected view
+            if (!cameras || cameras.length < 2) {
+                setStatus('Need calibration with at least 2 cameras for automatic assignment', 'warning');
+                return;
+            }
+
+            // First, unlink any existing groups that contain instances in selected views
+            // This returns them to the unlinked pool so they can be re-matched
+            var existingGroups = state.session.getInstanceGroupsForFrame(state.currentFrame);
+            var groupsToUnlink = [];
+            for (var egi = 0; egi < existingGroups.length; egi++) {
+                var eg = existingGroups[egi];
+                for (var svni = 0; svni < selectedViewNames.length; svni++) {
+                    if (eg.getInstance(selectedViewNames[svni])) {
+                        groupsToUnlink.push(eg);
+                        break;
+                    }
+                }
+            }
+            for (var gui = 0; gui < groupsToUnlink.length; gui++) {
+                state.session.unlinkGroup(state.currentFrame, groupsToUnlink[gui]);
+            }
+
+            // Now collect unlinked instances per selected view
             var viewUnlinked = {}; // viewName -> UnlinkedInstance[]
             for (var vi = 0; vi < selectedViewNames.length; vi++) {
                 var vn = selectedViewNames[vi];
@@ -2097,7 +2149,7 @@
 
             var viewNames = Object.keys(viewUnlinked);
             if (viewNames.length < 2) {
-                setStatus('Need unlinked instances in at least 2 selected views', 'warning');
+                setStatus('Need instances in at least 2 selected views for matching', 'warning');
                 return;
             }
 
@@ -4140,6 +4192,7 @@
             dot.className = 'status-dot';
             if (type === 'error') dot.classList.add('error');
             else if (type === 'warning') dot.classList.add('warning');
+            else if (type === 'success') dot.classList.add('success');
         }
 
         // ============================================

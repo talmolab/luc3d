@@ -135,3 +135,12 @@ I still don't see the `Assign` drop down menu on the screen. Currently the UI la
 ```
 
 Please have the `Assign` drop down menu next to the `CreateGroup` button
+
+
+## 
+
+# Prompt 11
+
+- 
+
+Now, I can see the `Assign` drop down menu, but both `manual` or `automatic` buttons don't do anything. Let's first focus on the `automatic` button. Remember that when the user clicks on the `automatic` button, a persistent toast widget should appear on the screen. The toast widget should read 'please choose the views for automatic assignment' with two buttons, `Cancel` and `Continue`. The user should be able to toggle each view yes/no, indicated by their highlight in red (yes) or no highlight (no). Then, if the user presses `Continue`, then epipolar geometry and hungarian algorithm should calcualate identity assignments across frames and give the same identities the same color. Please refer to Prompt 8 in this file.
