@@ -1273,7 +1273,7 @@ class VideoController {
 
         var z = view.zoom;
         var oldScale = z.scale;
-        var newScale = Math.max(0.25, Math.min(10, oldScale * factor));
+        var newScale = Math.max(1.0, Math.min(10, oldScale * factor));
 
         if (cssX !== undefined && cssY !== undefined) {
             var contentX = (cssX - z.offsetX) / oldScale;
@@ -1313,7 +1313,7 @@ class VideoController {
         var contentH = contentY2 - contentY1;
 
         var newScale = Math.min(containerW / contentW, containerH / contentH);
-        var clampedScale = Math.max(0.25, Math.min(10, newScale));
+        var clampedScale = Math.max(1.0, Math.min(10, newScale));
 
         var contentCenterX = (contentX1 + contentX2) / 2;
         var contentCenterY = (contentY1 + contentY2) / 2;

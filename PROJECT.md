@@ -74,6 +74,25 @@ Load calibration (.toml/.json) → Camera objects (intrinsics + extrinsics)
 - **Timeline**: Canvas-based track occupancy with frame markers. Click/drag to seek, scroll to zoom, middle-click to pan.
 - **Single-view mode**: Press `V` to toggle between grid and single-view mode. `Shift+V` cycles through views. `G` returns to grid mode.
 
+## Identity Color Palette
+
+Track/identity colors used for skeleton rendering and labels (`overlays.js`). Primary colors appear first for common use cases; shades expand for larger identity counts.
+
+| Index | Hex | Color | Category |
+|-------|-----|-------|----------|
+| 0 | `#e53e3e` | Red | Primary |
+| 1 | `#3182ce` | Blue | Primary |
+| 2 | `#38a169` | Green | Primary |
+| 3 | `#dd6b20` | Orange | Primary |
+| 4 | `#805ad5` | Purple | Primary |
+| 5 | `#d69e2e` | Gold | Primary |
+| 6 | `#00b5d8` | Cyan | Primary |
+| 7 | `#e53e9f` | Magenta | Primary |
+| 8-15 | Dark variants | Darker shades of the 8 primaries |
+| 16-23 | Light variants | Lighter shades of the 8 primaries |
+
+The palette cycles after 24 colors. For most multi-animal experiments (2-8 subjects), the first 8 highly distinct primaries are sufficient.
+
 ## File Reference
 
 ### Core application

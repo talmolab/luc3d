@@ -6,16 +6,32 @@
  * All functions are globals (no imports/exports).
  */
 
-// Track colors (8-color palette from slp-viewer, cycling)
+// Track colors — primary colors first, then distinct shades (24-color palette)
 const TRACK_COLORS = [
-    '#667eea',  // blue
-    '#4ade80',  // green
-    '#fbbf24',  // yellow
-    '#f472b6',  // pink
-    '#06b6d4',  // cyan
-    '#f97316',  // orange
-    '#a855f7',  // purple
-    '#ef4444',  // red
+    '#e53e3e',  // red
+    '#3182ce',  // blue
+    '#38a169',  // green
+    '#dd6b20',  // orange
+    '#805ad5',  // purple
+    '#d69e2e',  // gold
+    '#00b5d8',  // cyan
+    '#e53e9f',  // magenta
+    '#c53030',  // dark red
+    '#2b6cb0',  // dark blue
+    '#276749',  // dark green
+    '#c05621',  // burnt orange
+    '#6b46c1',  // dark purple
+    '#b7791f',  // dark gold
+    '#0987a0',  // teal
+    '#b83280',  // dark magenta
+    '#fc8181',  // light red
+    '#63b3ed',  // light blue
+    '#68d391',  // light green
+    '#f6ad55',  // light orange
+    '#b794f4',  // light purple
+    '#faf089',  // light yellow
+    '#76e4f7',  // light cyan
+    '#f687b3',  // pink
 ];
 
 function getTrackColor(trackIdx) {

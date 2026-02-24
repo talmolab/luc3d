@@ -151,3 +151,11 @@ Now, I can see the `Assign` drop down menu, but both `manual` or `automatic` but
 - Please move the toast widget up to the same bar that includes `File`, `Edit`, `View`, and `Load Demo` buttons
 - When epipolar geometry runs, identity assignments across views should match color, i.e. you should be changing the color of the skeleton.
 - Once identities across views are grouped, they should all have a label with the associated track name mentioned in the `instance` tab
+
+##
+
+# Prompt 13
+
+- When a video is zoomed in, there no highlights on the clipped side. Please add the highlight
+- Disable zooming out if the entire video can currently fit in the current window (i.e. it's fine if one direction of the video doesn't completely fit, but at least the width/height should be maxed out). There are no limits for zooming in though.
+- For epipolar matching color, please use visible, pleasant colors. Start with the primary colors: red, blue, green, orange, etc.., then consider adding more various shades colors as then number of separate entities increase. Include your color palette plan in PROJECT.md
