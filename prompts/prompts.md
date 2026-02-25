@@ -255,3 +255,11 @@ At the start of running triangulation, check that all frames in the selected ran
 * Multiple frames: Display the missing frames as condensed range(s), e.g., "Frames [10–15, 23, 40–42] do not have identity assignment."
 
 Error handling: If triangulation fails due to missing identity assignment, cancel the triangulation, display the error message, and keep the modal open so the user can adjust the frame range.
+
+
+##
+# Prompt 21
+
+**UI CHANGE**
+
+3D Viewer — Camera Orientation Indicator: Add a blue line from each camera's center to its top-facing vertex to indicate the camera's "up" direction.

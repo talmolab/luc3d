@@ -320,6 +320,27 @@ class Viewport3D {
             wireframe.name = 'camera_' + cam.name;
             this._cameraGroup.add(wireframe);
 
+            // --- Blue "up" direction line: camera center to top edge midpoint ---
+            const topMid = [
+                (corners[0][0] + corners[1][0]) / 2,
+                (corners[0][1] + corners[1][1]) / 2,
+                (corners[0][2] + corners[1][2]) / 2,
+            ];
+            const upLineGeo = new THREE.BufferGeometry();
+            upLineGeo.setAttribute('position',
+                new THREE.Float32BufferAttribute([
+                    camPos[0], camPos[1], camPos[2],
+                    topMid[0], topMid[1], topMid[2],
+                ], 3));
+            const upLineMat = new THREE.LineBasicMaterial({
+                color: 0x4488ff,
+                transparent: true,
+                opacity: 0.9,
+            });
+            const upLine = new THREE.LineSegments(upLineGeo, upLineMat);
+            upLine.name = 'camUp_' + cam.name;
+            this._cameraGroup.add(upLine);
+
             // --- Camera label sprite ---
             const label = this._createTextSprite(cam.name, {
                 fontSize: 28,
@@ -695,12 +716,18 @@ class Viewport3D {
         this._cameraGroup.traverse(function (child) {
             if (child.material) {
                 var name = child.name || '';
+                var isUpLine = name.startsWith('camUp_');
                 var belongsToCamera = name === 'camera_' + cameraName ||
                     name === 'label_' + cameraName ||
-                    name === 'camSphere_' + cameraName;
+                    name === 'camSphere_' + cameraName ||
+                    name === 'camUp_' + cameraName;
                 if (cameraName && belongsToCamera) {
-                    child.material.color.set(0xff4444);
+                    child.material.color.set(isUpLine ? 0x66aaff : 0xff4444);
                     child.material.opacity = 1.0;
+                } else if (isUpLine) {
+                    // Reset up-line to blue
+                    child.material.color.set(0x4488ff);
+                    child.material.opacity = 0.9;
                 } else {
                     // Reset to default yellow
                     child.material.color.set(0xffdd44);
