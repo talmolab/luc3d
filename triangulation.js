@@ -485,7 +485,9 @@ function triangulateAndReproject(instanceGroup, cameras) {
         const obsForKeypoint = [];
         for (let c = 0; c < cameraNames.length; c++) {
             const inst = instanceGroup.getInstance(cameraNames[c]);
-            if (inst && inst.points && inst.points[k] != null && !(inst.occluded && inst.occluded[k])) {
+            // Skip nulled nodes — they are excluded from triangulation
+            const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
+            if (inst && inst.points && inst.points[k] != null && !isNulled) {
                 const cam = cameraMap[cameraNames[c]];
                 if (cam && cam.undistortPoint) {
                     obsForKeypoint.push(cam.undistortPoint(inst.points[k]));
@@ -518,7 +520,8 @@ function triangulateAndReproject(instanceGroup, cameras) {
         const inst = instanceGroup.getInstance(camName);
         const observed = [];
         for (let k = 0; k < numKeypoints; k++) {
-            if (inst && inst.points && inst.points[k] != null && !(inst.occluded && inst.occluded[k])) {
+            const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
+            if (inst && inst.points && inst.points[k] != null && !isNulled) {
                 observed.push(inst.points[k]);
             } else {
                 observed.push(null);

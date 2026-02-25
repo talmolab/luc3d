@@ -290,3 +290,45 @@ When viewing from a camera's perspective, temporarily hide the vertex lines and 
 **Bug Fix:** `Show Camera View` still has no effect on the 3D viewer. Ensure the 3D viewer's camera is programmatically controllable — you may need to access the viewer's camera object directly to set its position, orientation, and look-at target.
 
 Note: The server may not have programmatic control over the 3D viewer's camera. You will need to expose an interface that allows the backend to set the 3D viewer's camera position, orientation, and look-at target.
+
+##
+# Prompt 24
+
+**Node Behavior:**
+- Right-clicking a skeletal node should set its value to NaN.
+
+**Label Rendering:**
+- Label size should be controlled by the Label Size slider only, independent of node size.
+- Labels should be positioned to minimize overlap with other labels. Reference `/root/vast/joshua/sleap/sleap/gui/overlays/instance.py` for label placement logic.
+- Labels appear blurry after zooming. Re-render labels at the current zoom level once the user stops zooming (debounce the re-render).
+
+**UI Fixes:**
+- `Node Size` slider: add a space between the label name and the value.
+- Rename the `Label` slider to `Label Size` and add a space between the name and value.
+- When viewing from a camera's perspective, also temporarily hide the 3D camera sphere they don't obstruct the view.
+
+
+Bug Fix:
+* On SLP file or folder load, hide Reproj and Error columns/fields — there is no reprojection or error data to display at load time.
+
+##
+# Prompt 25
+
+**Revert — Reproj/Error Checkboxes:**
+Keep `Reproj` and `Error` checkboxes visible in the toolbar. Just uncheck them by default on SLP file or folder load.
+
+**Bug Fix — Label Size:**
+Label size is still being controlled by the `Node Size` slider. Decouple it — label size should only respond to the `Label Size` slider.
+
+**Revert — Non-Visible Nodes:**
+Revert non-visible nodes from `NaN` to `null`. `null` nodes should still be visible in the skeleton, but render their node and label as grayed out.
+Bug Fix — Label Overlap:
+Labels still have significant overlap. Revisit the label placement logic — ensure labels are repositioned to avoid collisions. Reference `/root/vast/joshua/sleap/sleap/gui/overlays/instance.py` for an existing implementation.
+
+##
+# Prompt 25
+**Git: Rebase and PR**
+
+Rebase this branch onto `main` and resolve any conflicts.
+Force-push the rebased branch to remote.
+Open a pull request against `main`. In the PR description, summarize the major changes compared to `main` — group by feature (e.g., flyout menus, multi-frame assignment/triangulation, 3D viewer camera controls, label rendering, etc.).

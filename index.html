@@ -120,11 +120,11 @@
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <label class="toolbar-btn" style="cursor:default;font-size:12px;">
-                    Node Size <span id="nodeSizeValue">1</span>
+                    Node Size&nbsp;<span id="nodeSizeValue">1</span>
                 </label>
                 <input type="range" id="nodeSizeSlider" min="1" max="20" value="1" step="1" style="width:80px;">
                 <label class="toolbar-btn" style="cursor:default;font-size:12px;margin-left:6px;">
-                    Label <span id="labelSizeValue">11</span>
+                    Label Size&nbsp;<span id="labelSizeValue">11</span>
                 </label>
                 <input type="range" id="labelSizeSlider" min="0" max="24" value="11" step="1" style="width:60px;">
             </div>
@@ -134,10 +134,10 @@
                     <input type="checkbox" id="toggleDetected" checked> Detected
                 </label>
                 <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
-                    <input type="checkbox" id="toggleReprojected" checked> Reproj
+                    <input type="checkbox" id="toggleReprojected"> Reproj
                 </label>
                 <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
-                    <input type="checkbox" id="toggleErrors" checked> Errors
+                    <input type="checkbox" id="toggleErrors"> Errors
                 </label>
                 <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
                     <input type="checkbox" id="toggleLabels" checked> Labels
@@ -195,7 +195,7 @@
                 <!-- ==================== Instances Tab ==================== -->
                 <div class="panel-tab-content active" id="tabInstances">
                     <!-- Reprojection Error -->
-                    <div class="info-section">
+                    <div class="info-section" id="reprojErrorSection" style="display:none">
                         <h3>Reprojection Error</h3>
                         <div class="error-display" id="errorDisplay">-</div>
                         <div id="perCameraErrors"></div>
@@ -216,7 +216,7 @@
                                     <th>Track</th>
                                     <th>Views</th>
                                     <th>Type</th>
-                                    <th>Error</th>
+                                    <th class="reproj-error-col" style="display:none">Error</th>
                                     <th style="width:24px;"></th>
                                 </tr>
                             </thead>
@@ -565,12 +565,19 @@
         /**
          * Create a minimal video controller for empty state (no views loaded yet).
          */
+        var _zoomRedrawTimer = null;
         function setupEmptyVideoController() {
             videoController = new VideoController(state, {
                 updateSeekbar: updateSeekbar,
                 drawOverlays: drawAllOverlays,
                 onPlaybackStateChange: onPlaybackStateChange,
                 log: window.logMessage,
+                onZoomChange: function () {
+                    clearTimeout(_zoomRedrawTimer);
+                    _zoomRedrawTimer = setTimeout(function () {
+                        drawAllOverlays(state.currentFrame);
+                    }, 200);
+                },
             });
         }
 
@@ -680,6 +687,28 @@
         // initVideos() removed — loadDemoSession() handles demo data with dockview
 
         // ============================================
+        // Reproj/Error visibility
+        // ============================================
+
+        function setReprojErrorVisible(visible) {
+            var display = visible ? '' : 'none';
+            var el = document.getElementById('reprojErrorSection');
+            if (el) el.style.display = display;
+            // Error column header and cells
+            var cols = document.querySelectorAll('.reproj-error-col');
+            for (var i = 0; i < cols.length; i++) {
+                cols[i].style.display = display;
+            }
+            // Check the checkboxes when triangulation data is available
+            if (visible) {
+                var reproj = document.getElementById('toggleReprojected');
+                if (reproj) reproj.checked = true;
+                var errors = document.getElementById('toggleErrors');
+                if (errors) errors.checked = true;
+            }
+        }
+
+        // ============================================
         // Triangulation
         // ============================================
 
@@ -772,7 +801,7 @@
                     for (const cam of cameras) {
                         const inst = group.getInstance(cam.name);
                         if (inst && inst.points) {
-                            const hasAny = inst.points.some(p => p != null);
+                            const hasAny = inst.points.some((p, idx) => p != null && !(inst.nulledNodes && inst.nulledNodes.has(idx)));
                             if (hasAny) viewsWithLabels++;
                             camStatus[cam.name] = hasAny ? 'labeled' : 'empty';
                         } else {
@@ -854,6 +883,9 @@
                     '| has reprojections:', Object.keys(fr.group.reprojections || {}),
                     '| points3d valid:', (fr.points3d || []).filter(p => p != null).length);
             }
+
+            // Show reproj/error UI elements now that triangulation has been run
+            setReprojErrorVisible(true);
 
             // Update displays
             drawAllOverlays(frameIdx);
@@ -945,7 +977,7 @@
                         var viewsWithLabels = 0;
                         for (var cj = 0; cj < cameras.length; cj++) {
                             var inst2 = group.getInstance(cameras[cj].name);
-                            if (inst2 && inst2.points && inst2.points.some(function (p) { return p != null; })) {
+                            if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
                                 viewsWithLabels++;
                             }
                         }
@@ -1000,6 +1032,9 @@
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
             }
+
+            // Show reproj/error UI elements
+            setReprojErrorVisible(true);
 
             // Update display for current frame
             drawAllOverlays(state.currentFrame);
@@ -1092,7 +1127,7 @@
                 }
 
                 // Get unlinked instances for this view
-                const viewUnlinked = frameGroup ? frameGroup.getUnlinkedInstances(view.name) : [];
+                const viewUnlinked = (showDetected && frameGroup) ? frameGroup.getUnlinkedInstances(view.name) : [];
 
                 drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
                     showDetected: showDetected,
@@ -1193,34 +1228,12 @@
                     }
                 },
 
-                onNodeVisibilityToggled: function (viewName, instanceGroup, nodeIdx) {
+                onNodeSetNull: function (viewName, instanceGroup, nodeIdx) {
                     const inst = instanceGroup.getInstance(viewName);
+                    const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(nodeIdx);
                     const nodeName = state.session.skeleton.nodes[nodeIdx] || 'node ' + nodeIdx;
-                    const isOccluded = inst && inst.occluded && inst.occluded[nodeIdx];
-                    setStatus(nodeName + ': ' + (isOccluded ? 'occluded' : 'visible'));
-
+                    setStatus((isNulled ? 'Nulled ' : 'Restored ') + nodeName + ' in ' + viewName);
                     instanceGroup.markDirty();
-
-                    // Re-triangulate
-                    if (state.session.cameras.length >= 2) {
-                        var result = triangulateAndReproject(instanceGroup, state.session.cameras);
-                        instanceGroup.points3d = result.points3d;
-                        instanceGroup.reprojections = result.reprojections;
-                        instanceGroup.observedPoints = {};
-                        for (var cn of instanceGroup.cameraNames) {
-                            var cinst = instanceGroup.getInstance(cn);
-                            instanceGroup.observedPoints[cn] = cinst ? cinst.points : null;
-                        }
-                        instanceGroup.markClean();
-                    }
-
-                    // Update 3D viewport
-                    if (viewport3d) {
-                        var groups = getInstanceGroupsForFrame(state.currentFrame);
-                        viewport3d.setFrame(groups);
-                    }
-
-                    // Update timeline
                     if (timeline) {
                         timeline.setFrameModified(state.currentFrame, true);
                     }
@@ -2682,7 +2695,7 @@
                             var viewsWithLabels = 0;
                             for (var cj = 0; cj < cameras.length; cj++) {
                                 var inst2 = group.getInstance(cameras[cj].name);
-                                if (inst2 && inst2.points && inst2.points.some(function (p) { return p != null; })) {
+                                if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
                                     viewsWithLabels++;
                                 }
                             }
@@ -3722,7 +3735,10 @@
 
                     // Error column
                     const tdError = document.createElement('td');
-                    tdError.className = 'mono';
+                    tdError.className = 'mono reproj-error-col';
+                    if (!state.triangulationResults || state.triangulationResults.size === 0) {
+                        tdError.style.display = 'none';
+                    }
                     if (results) {
                         const groupResult = results.find(function (r) { return r.group === group; });
                         if (groupResult && groupResult.meanError != null) {
@@ -5156,6 +5172,12 @@
                 drawOverlays: drawAllOverlays,
                 onPlaybackStateChange: onPlaybackStateChange,
                 log: window.logMessage,
+                onZoomChange: function () {
+                    clearTimeout(_zoomRedrawTimer);
+                    _zoomRedrawTimer = setTimeout(function () {
+                        drawAllOverlays(state.currentFrame);
+                    }, 200);
+                },
             });
 
             // Set up zoom handlers for views that have been docked (have canvases)
@@ -5739,6 +5761,9 @@
                                 var ulInst = new UnlinkedInstance(instItem, cn);
                                 fgObj.addUnlinkedInstance(cn, ulInst);
                             }
+                            // Clear the original instances so they aren't double-drawn
+                            // as "detected" solid-line skeletons
+                            fgObj.instances.set(cn, []);
                         }
                     }
                     console.log('[session-folder] Prepared unlinked instances for', state.session.frameGroups.size, 'frames');
@@ -6935,6 +6960,7 @@
                     // Highlight corresponding camera in 3D viewer (skip during auto-assignment)
                     if (viewport3d && !autoAssignState) {
                         viewport3d.highlightCamera(activeViewName);
+                        viewport3d.selectedCamera = activeViewName;
                     }
                 });
 

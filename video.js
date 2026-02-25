@@ -1349,6 +1349,7 @@ class VideoController {
         z.scale = newScale;
         this._constrainOffsets(z, view);
         this.applyZoom(view);
+        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
     resetZoom(view) {
@@ -1357,6 +1358,7 @@ class VideoController {
         view.zoom.offsetX = 0;
         view.zoom.offsetY = 0;
         this.applyZoom(view);
+        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
     zoomToRect(view, x1, y1, x2, y2, container) {
@@ -1389,6 +1391,7 @@ class VideoController {
         this._constrainOffsets(z, view);
 
         this.applyZoom(view);
+        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
     zoomAllVideos(factor) {

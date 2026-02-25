@@ -492,7 +492,7 @@ class Viewport3D {
      */
     _setDeclutter(cameraName, hide) {
         if (!this._cameraGroup) return;
-        var prefixes = ['camera_', 'label_', 'camUp_'];
+        var prefixes = ['camera_', 'label_', 'camUp_', 'camSphere_'];
         this._cameraGroup.traverse(function (child) {
             for (var p = 0; p < prefixes.length; p++) {
                 if (child.name === prefixes[p] + cameraName) {
@@ -604,6 +604,9 @@ class Viewport3D {
             self.threeCamera.up.lerpVectors(startUp, endUp, progress).normalize();
             self.threeCamera.fov = startFov + (targetFov - startFov) * progress;
             self.threeCamera.updateProjectionMatrix();
+
+            // Explicit render to ensure changes are visible
+            self.renderer.render(self.scene, self.threeCamera);
 
             if (rawT < 1) {
                 self._perspectiveAnimId = requestAnimationFrame(animate);

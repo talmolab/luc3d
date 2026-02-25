@@ -128,6 +128,79 @@ function brightenColor(hex, factor) {
 }
 
 // ============================================
+// SLEAP-style label placement
+// ============================================
+
+/**
+ * Compute label offset for a node using SLEAP-style placement.
+ * Finds the largest arc gap between connected edges and places the label
+ * at the bisector angle of that gap.
+ *
+ * @param {number} nodeIdx - Index of the node
+ * @param {Array} canvasPoints - Array of {x, y} or null for each node
+ * @param {Object} skeleton - Skeleton with .edges
+ * @param {string} labelText - The label text (for measuring width)
+ * @param {number} fontSize - Font size in canvas pixels
+ * @param {CanvasRenderingContext2D} ctx - Canvas context (for text measurement)
+ * @returns {{dx: number, dy: number}} Offset from node position
+ */
+function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, fontSize, ctx) {
+    var cp = canvasPoints[nodeIdx];
+    if (!cp) return { dx: fontSize * 0.3, dy: -fontSize * 0.3 };
+
+    // Measure label dimensions
+    var labelWidth = ctx.measureText(labelText).width;
+    var labelHeight = fontSize;
+
+    // Collect angles to neighboring nodes
+    var angles = [];
+    if (skeleton && skeleton.edges) {
+        for (var e = 0; e < skeleton.edges.length; e++) {
+            var edge = skeleton.edges[e];
+            var neighborIdx = -1;
+            if (edge[0] === nodeIdx) neighborIdx = edge[1];
+            else if (edge[1] === nodeIdx) neighborIdx = edge[0];
+            if (neighborIdx < 0) continue;
+            var np = canvasPoints[neighborIdx];
+            if (!np) continue;
+            angles.push(Math.atan2(np.y - cp.y, np.x - cp.x));
+        }
+    }
+
+    // Default: place to the upper-right if no neighbors
+    if (angles.length === 0) {
+        // SLEAP default: shift_angle=0 → shift_factor_x = 0.6-0.5=0.1, shift_factor_y = 0-0.5=-0.5
+        return { dx: labelWidth * 0.1, dy: labelHeight * -0.5 };
+    }
+
+    // Sort angles and find the largest arc gap (SLEAP algorithm)
+    angles.sort(function (a, b) { return a - b; });
+
+    // Append first angle + 2π for wrap-around
+    angles.push(angles[0] + Math.PI * 2);
+
+    var bestGapSize = 0;
+    var bestBisector = 0;
+    for (var i = 0; i < angles.length - 1; i++) {
+        var gapSize = angles[i + 1] - angles[i];
+        var bisector = (angles[i + 1] + angles[i]) / 2;
+        if (gapSize > bestGapSize) {
+            bestGapSize = gapSize;
+            bestBisector = bisector;
+        }
+    }
+
+    // Normalize bisector to [0, 2π)
+    bestBisector = bestBisector % (2 * Math.PI);
+
+    // SLEAP shift factors: (cos(angle) * 0.6) - 0.5
+    var shiftX = (Math.cos(bestBisector) * 0.6) - 0.5;
+    var shiftY = (Math.sin(bestBisector) * 0.6) - 0.5;
+
+    return { dx: labelWidth * shiftX, dy: labelHeight * shiftY };
+}
+
+// ============================================
 // Skeleton rendering
 // ============================================
 
@@ -173,6 +246,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
 
     const nodeSize = baseNodeSize * scale;
     const lineWidth = baseLineWidth * scale;
+    const nulledNodes = instance.nulledNodes || null;
 
     // Pre-compute canvas positions for each point
     const canvasPoints = new Array(points.length);
@@ -197,89 +271,99 @@ function drawSkeleton(ctx, instance, skeleton, options) {
 
     // --- 1. Draw edges ---
     if (skeleton.edges) {
-        ctx.lineWidth = lineWidth;
         ctx.lineCap = 'round';
-        for (let i = 0; i < skeleton.edges.length; i++) {
-            const edge = skeleton.edges[i];
-            const srcIdx = edge[0];
-            const dstIdx = edge[1];
-            const src = canvasPoints[srcIdx];
-            const dst = canvasPoints[dstIdx];
-            if (src && dst) {
-                const eitherOccluded = occluded[srcIdx] || occluded[dstIdx];
-                if (eitherOccluded) {
-                    ctx.strokeStyle = color;
-                    ctx.globalAlpha = alpha * 0.35;
-                    ctx.setLineDash([4 * scale, 4 * scale]);
-                } else {
-                    ctx.strokeStyle = color;
-                    ctx.globalAlpha = alpha;
-                    ctx.setLineDash([]);
+        // Draw normal edges first, then grayed edges
+        for (var pass = 0; pass < 2; pass++) {
+            ctx.lineWidth = lineWidth;
+            ctx.beginPath();
+            var hasStrokes = false;
+            for (let i = 0; i < skeleton.edges.length; i++) {
+                const edge = skeleton.edges[i];
+                const srcIdx = edge[0];
+                const dstIdx = edge[1];
+                const src = canvasPoints[srcIdx];
+                const dst = canvasPoints[dstIdx];
+                if (!src || !dst) continue;
+                var srcNulled = nulledNodes && nulledNodes.has(srcIdx);
+                var dstNulled = nulledNodes && nulledNodes.has(dstIdx);
+                var edgeGray = srcNulled || dstNulled;
+                if (pass === 0 && !edgeGray) {
+                    ctx.moveTo(src.x, src.y);
+                    ctx.lineTo(dst.x, dst.y);
+                    hasStrokes = true;
+                } else if (pass === 1 && edgeGray) {
+                    ctx.moveTo(src.x, src.y);
+                    ctx.lineTo(dst.x, dst.y);
+                    hasStrokes = true;
                 }
-                ctx.beginPath();
-                ctx.moveTo(src.x, src.y);
-                ctx.lineTo(dst.x, dst.y);
+            }
+            if (hasStrokes) {
+                if (pass === 0) {
+                    ctx.strokeStyle = color;
+                } else {
+                    ctx.strokeStyle = '#888888';
+                    ctx.globalAlpha = alpha * 0.4;
+                }
                 ctx.stroke();
+                if (pass === 1) ctx.globalAlpha = alpha;
             }
         }
-        ctx.setLineDash([]);
-        ctx.globalAlpha = alpha;
     }
 
     // --- 2. Draw nodes ---
+    // Normal nodes
+    ctx.fillStyle = color;
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
-        if (occluded[i]) {
-            // Occluded: draw node at reduced opacity with same color
-            ctx.globalAlpha = alpha * 0.35;
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Draw a small "X" over the node to indicate occlusion
-            ctx.globalAlpha = alpha * 0.7;
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = Math.max(1, lineWidth * 0.6);
-            var xArm = nodeSize * 0.7;
-            ctx.beginPath();
-            ctx.moveTo(cp.x - xArm, cp.y - xArm);
-            ctx.lineTo(cp.x + xArm, cp.y + xArm);
-            ctx.moveTo(cp.x + xArm, cp.y - xArm);
-            ctx.lineTo(cp.x - xArm, cp.y + xArm);
-            ctx.stroke();
-        } else {
-            ctx.fillStyle = color;
-            ctx.globalAlpha = alpha;
+        if (nulledNodes && nulledNodes.has(i)) continue;
+        ctx.beginPath();
+        ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    // Grayed-out (nulled) nodes
+    if (nulledNodes && nulledNodes.size > 0) {
+        ctx.fillStyle = '#888888';
+        ctx.globalAlpha = alpha * 0.4;
+        for (const ni of nulledNodes) {
+            const cp = canvasPoints[ni];
+            if (!cp) continue;
             ctx.beginPath();
             ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
             ctx.fill();
         }
+        ctx.globalAlpha = alpha;
     }
-    ctx.globalAlpha = alpha;
 
     // --- 3. Optional labels (SLEAP-style with dark outline) ---
     if (showLabels) {
         var savedAlpha = ctx.globalAlpha;
         ctx.globalAlpha = 1.0;
-        ctx.fillStyle = '#ffffff';
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
         // Use independent label size (scaled to canvas coordinates)
         var fontSize = Math.round(baseLabelSize * scale);
-        if (fontSize <= 0) { ctx.globalAlpha = savedAlpha; return; }
-        ctx.lineWidth = Math.max(1, Math.round(nodeSize * 0.5));
+        if (fontSize <= 0) { ctx.globalAlpha = savedAlpha; ctx.restore(); return; }
+        ctx.lineWidth = Math.max(1, Math.round(fontSize * 0.15));
         ctx.font = 'bold ' + fontSize + 'px sans-serif';
         ctx.textBaseline = 'bottom';
         ctx.textAlign = 'left';
-        var labelOffset = Math.round(nodeSize * 0.5);
         for (var li = 0; li < canvasPoints.length; li++) {
             var lp = canvasPoints[li];
             if (!lp) continue;
+            var isNulled = nulledNodes && nulledNodes.has(li);
             var node = skeleton.nodes ? skeleton.nodes[li] : undefined;
             var name = typeof node === 'string' ? node : (node && node.name ? node.name : 'node_' + li);
-            var tx = lp.x + nodeSize + labelOffset;
-            var ty = lp.y - labelOffset;
+            var labelOff = computeLabelOffset(li, canvasPoints, skeleton, name, fontSize, ctx);
+            var tx = lp.x + labelOff.dx;
+            var ty = lp.y + labelOff.dy;
+            if (isNulled) {
+                ctx.globalAlpha = 0.4;
+                ctx.fillStyle = '#888888';
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+            } else {
+                ctx.globalAlpha = 1.0;
+                ctx.fillStyle = '#ffffff';
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+            }
             ctx.strokeText(name, tx, ty);
             ctx.fillText(name, tx, ty);
         }
@@ -824,7 +908,8 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
         const textWidth = ctx.measureText(trackName).width;
         const pillPad = 3 * scale;
         const pillX = firstCp.x - pillPad;
-        const pillY = firstCp.y - nodeSize * 2 - fontSize - pillPad;
+        var labelYOffset = fontSize * 1.5;
+        const pillY = firstCp.y - labelYOffset - fontSize - pillPad;
         ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
         ctx.beginPath();
         if (ctx.roundRect) {
@@ -835,29 +920,53 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
         ctx.fill();
 
         ctx.fillStyle = color;
-        ctx.fillText(trackName, firstCp.x, firstCp.y - nodeSize * 2);
+        ctx.fillText(trackName, firstCp.x, firstCp.y - labelYOffset);
 
         // Draw node name labels for the selected instance
         if (instIdx === selectedInstanceIdx && skeleton && skeleton.nodes) {
-            ctx.font = Math.round(9 * scale) + 'px sans-serif';
+            var nodeFontSize = Math.round(baseLabelSize * scale);
+            if (nodeFontSize <= 0) continue;
+            ctx.font = nodeFontSize + 'px sans-serif';
             ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.lineWidth = Math.max(1, Math.round(nodeFontSize * 0.15));
             ctx.textBaseline = 'bottom';
+            ctx.textAlign = 'left';
+            // Build canvasPoints for label offset computation
+            var instCanvasPoints = new Array(inst.points.length);
             for (let n = 0; n < inst.points.length; n++) {
                 const pt = inst.points[n];
-                if (pt == null) continue;
-                let cp;
+                if (pt == null) { instCanvasPoints[n] = null; continue; }
                 if (toCanvas) {
-                    cp = toCanvas(pt[0], pt[1]);
+                    instCanvasPoints[n] = toCanvas(pt[0], pt[1]);
                 } else {
-                    cp = { x: pt[0], y: pt[1] };
+                    instCanvasPoints[n] = { x: pt[0], y: pt[1] };
                 }
+            }
+            var instNulled = inst.nulledNodes || null;
+            for (let n = 0; n < inst.points.length; n++) {
+                var cp = instCanvasPoints[n];
+                if (!cp) continue;
                 const nodeName = typeof skeleton.nodes[n] === 'string'
                     ? skeleton.nodes[n]
                     : (skeleton.nodes[n] && skeleton.nodes[n].name ? skeleton.nodes[n].name : '');
                 if (nodeName) {
-                    ctx.fillText(nodeName, cp.x + nodeSize + 2 * scale, cp.y - 2 * scale);
+                    var isNodeNulled = instNulled && instNulled.has(n);
+                    if (isNodeNulled) {
+                        ctx.globalAlpha = 0.4;
+                        ctx.fillStyle = '#888888';
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+                    } else {
+                        ctx.globalAlpha = 1.0;
+                        ctx.fillStyle = '#ffffff';
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+                    }
+                    var loff = computeLabelOffset(n, instCanvasPoints, skeleton, nodeName, nodeFontSize, ctx);
+                    ctx.strokeText(nodeName, cp.x + loff.dx, cp.y + loff.dy);
+                    ctx.fillText(nodeName, cp.x + loff.dx, cp.y + loff.dy);
                 }
             }
+            ctx.globalAlpha = 1.0;
         }
     }
 
@@ -984,6 +1093,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
+    const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
     const showLabels = options.showLabels !== false; // default true for unlinked
     const assignmentSelectedIds = options.assignmentSelectedIds || [];
     const assignmentColor = options.assignmentColor || '#fbbf24';
@@ -1083,23 +1193,23 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
             ctx.globalAlpha = 1.0;
             ctx.fillStyle = '#ffffff';
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-            // Font size = 3x the node radius. Since nodeSize is already scaled
-            // to canvas coordinates, labels are always proportional to nodes.
-            var fontSize = Math.max(10, Math.round(nodeSize * 3));
-            ctx.lineWidth = Math.max(1, Math.round(nodeSize * 0.5));
-            ctx.font = 'bold ' + fontSize + 'px sans-serif';
-            ctx.textBaseline = 'bottom';
-            ctx.textAlign = 'left';
-            var labelOffset = Math.round(nodeSize * 0.5);
-            for (var li = 0; li < canvasPoints.length; li++) {
-                var lp = canvasPoints[li];
-                if (!lp) continue;
-                var node2 = skeleton.nodes ? skeleton.nodes[li] : undefined;
-                var lname = typeof node2 === 'string' ? node2 : (node2 && node2.name ? node2.name : 'node_' + li);
-                var ltx = lp.x + nodeSize + labelOffset;
-                var lty = lp.y - labelOffset;
-                ctx.strokeText(lname, ltx, lty);
-                ctx.fillText(lname, ltx, lty);
+            var fontSize = Math.round(baseLabelSize * scale);
+            if (fontSize > 0) {
+                ctx.lineWidth = Math.max(1, Math.round(fontSize * 0.15));
+                ctx.font = 'bold ' + fontSize + 'px sans-serif';
+                ctx.textBaseline = 'bottom';
+                ctx.textAlign = 'left';
+                for (var li = 0; li < canvasPoints.length; li++) {
+                    var lp = canvasPoints[li];
+                    if (!lp) continue;
+                    var node2 = skeleton.nodes ? skeleton.nodes[li] : undefined;
+                    var lname = typeof node2 === 'string' ? node2 : (node2 && node2.name ? node2.name : 'node_' + li);
+                    var labelOff2 = computeLabelOffset(li, canvasPoints, skeleton, lname, fontSize, ctx);
+                    var ltx = lp.x + labelOff2.dx;
+                    var lty = lp.y + labelOff2.dy;
+                    ctx.strokeText(lname, ltx, lty);
+                    ctx.fillText(lname, ltx, lty);
+                }
             }
         }
 
