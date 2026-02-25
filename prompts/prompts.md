@@ -263,3 +263,30 @@ Error handling: If triangulation fails due to missing identity assignment, cance
 **UI CHANGE**
 
 3D Viewer — Camera Orientation Indicator: Add a blue line from each camera's center to its top-facing vertex to indicate the camera's "up" direction.
+
+##
+# Prompt 22
+
+**3D Viewer — Camera Selection:**
+Allow the user to click on cameras in the 3D viewer to select them. When a camera is selected, highlight its corresponding video panel with a yellow border (if the video exists).
+
+`Show Camera View` **Button**:
+Add a `Show Camera View` button in the top-right corner of the 3D viewer. Clicking it moves the viewport to the currently selected camera's perspective, oriented so the camera's up direction faces upward.
+Declutter on Zoom-In:
+When viewing from a camera's perspective, temporarily hide the vertex lines and camera label so they don't obstruct the view. Restore them once the user zooms out past a sufficient threshold — minor zoom adjustments near the camera's perspective should not toggle visibility.
+
+##
+# Prompt 22
+
+- First uncommit the most recent commit
+
+**Bug Fix**: `Show Camera View` button is not updating the 3D viewer. Clicking it should move the 3D viewer's camera to match the selected camera's position and orientation (up direction facing upward, vertex lines and label hidden until zoomed out). See Prompt 22 for full requirements.
+
+##
+# Prompt 23
+
+- First uncommit the most recent commit.
+
+**Bug Fix:** `Show Camera View` still has no effect on the 3D viewer. Ensure the 3D viewer's camera is programmatically controllable — you may need to access the viewer's camera object directly to set its position, orientation, and look-at target.
+
+Note: The server may not have programmatic control over the 3D viewer's camera. You will need to expose an interface that allows the backend to set the 3D viewer's camera position, orientation, and look-at target.

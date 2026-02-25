@@ -374,6 +374,26 @@ body {
   height: 100%;
 }
 
+.viewport3d-show-cam-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  padding: 4px 10px;
+  font-size: 11px;
+  background: rgba(30, 30, 30, 0.85);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.viewport3d-show-cam-btn:hover {
+  background: rgba(50, 50, 50, 0.95);
+  color: var(--text-primary);
+}
+
 /* --------------------------------------------------------------------------
    Dockview Integration
    -------------------------------------------------------------------------- */

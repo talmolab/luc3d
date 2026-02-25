@@ -174,6 +174,7 @@
             <!-- 3D Viewport (center-right) -->
             <div class="viewport3d-container" id="viewport3dContainer">
                 <div id="viewport3dCanvas" style="width:100%;height:100%;"></div>
+                <button class="viewport3d-show-cam-btn" id="btnShowCameraView" title="Show selected camera's perspective">Show Camera View</button>
             </div>
 
             <!-- Split handle: 3D viewport | info panel -->
@@ -1282,9 +1283,13 @@
                     onCameraClicked: highlightVideoCell,
                 });
 
-                console.log('[3D] Viewport3D created successfully');
+                // Wire up "Show Camera View" button
+                document.getElementById('btnShowCameraView').addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    if (viewport3d) viewport3d.showSelectedCameraView();
+                });
 
-                // Show initial frame's 3D points, then fit camera to see everything
+                // Show initial frame's 3D points
                 update3DViewport(state.currentFrame);
 
                 // Fit after a short delay to ensure skeleton meshes are in the scene
@@ -6665,13 +6670,11 @@
             document.querySelectorAll('.video-cell.camera-highlighted').forEach(function (el) {
                 el.classList.remove('camera-highlighted');
             });
-            // Add highlight to matching cell(s) by data attribute
+            if (!cameraName) return;
+            // Add persistent highlight to matching cell(s) by data attribute
             var cells = document.querySelectorAll('.video-cell[data-view-name="' + cameraName + '"]');
             cells.forEach(function (cell) {
                 cell.classList.add('camera-highlighted');
-                setTimeout(function () {
-                    cell.classList.remove('camera-highlighted');
-                }, 2000);
             });
         }
 
