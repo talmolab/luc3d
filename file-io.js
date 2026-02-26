@@ -66,6 +66,43 @@ function pickFiles(options) {
     });
 }
 
+/**
+ * Pick a folder using webkitdirectory. Returns an array of File objects
+ * with webkitRelativePath set (e.g., "folder/videos/back.mp4").
+ */
+function pickFolder() {
+    return new Promise(function (resolve) {
+        var resolved = false;
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.webkitdirectory = true;
+        // Firefox compat
+        input.setAttribute('directory', '');
+        input.setAttribute('mozdirectory', '');
+
+        function done(files) {
+            if (resolved) return;
+            resolved = true;
+            resolve(files);
+        }
+
+        input.addEventListener('change', function () {
+            console.log('[pickFolder] change event, files:', input.files ? input.files.length : 0);
+            done(input.files ? Array.from(input.files) : []);
+        });
+
+        input.addEventListener('cancel', function () {
+            console.log('[pickFolder] cancel event');
+            done([]);
+        });
+
+        // No focus-based cancel detection — folder dialogs can take a long time
+        // and the focus event fires too early, causing premature cancellation.
+
+        input.click();
+    });
+}
+
 // ============================================
 // TOML calibration parser
 // ============================================
