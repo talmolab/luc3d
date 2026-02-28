@@ -255,11 +255,10 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     // Screen-relative label sizing: scale baseLabelSize so labels appear the
     // same visual size regardless of canvas backing resolution.
     const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
-    const zoomScale = options.zoomScale || 1;
-    const adjustedLabelSize = Math.round(baseLabelSize * displayScale / zoomScale);
+    const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
 
-    const nodeSize = baseNodeSize / zoomScale;
-    const lineWidth = baseLineWidth / zoomScale;
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
     const nulledNodes = instance.nulledNodes || null;
 
     // Pre-compute canvas positions for each point
@@ -419,9 +418,8 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const zoomScale = options.zoomScale || 1;
-    const markerSize = baseNodeSize / zoomScale;  // half-extent of the X
-    const lineWidth = baseLineWidth / zoomScale;
+    const markerSize = baseNodeSize;  // half-extent of the X
+    const lineWidth = baseLineWidth;
 
     // Pre-compute canvas positions
     const canvasPoints = new Array(reprojectedPoints.length);
@@ -503,8 +501,7 @@ function drawReprojectionErrors(ctx, observedPoints, reprojectedPoints, options)
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const zoomScale = options.zoomScale || 1;
-    const lineWidth = Math.max(1, 1 * scale / zoomScale);
+    const lineWidth = Math.max(1, 1 * scale);
 
     ctx.save();
     ctx.globalAlpha = 0.9;
@@ -583,10 +580,9 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
         ? makeVideoToCanvasTransform(vw, vh, cw, ch)
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
-    const zoomScale = options.zoomScale || 1;
 
-    const nodeSize = baseNodeSize / zoomScale;
-    const lineWidth = baseLineWidth / zoomScale;
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
 
     // Pre-compute canvas positions
     const canvasPoints = new Array(points.length);
@@ -664,13 +660,13 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
     if (selectedNodeIdx >= 0 && selectedNodeIdx < canvasPoints.length && canvasPoints[selectedNodeIdx]) {
         const cp = canvasPoints[selectedNodeIdx];
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2 * scale / zoomScale;
+        ctx.lineWidth = 2 * scale;
         ctx.beginPath();
         ctx.arc(cp.x, cp.y, nodeSize * 2, 0, Math.PI * 2);
         ctx.stroke();
         // Inner colored ring
         ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5 * scale / zoomScale;
+        ctx.lineWidth = 1.5 * scale;
         ctx.beginPath();
         ctx.arc(cp.x, cp.y, nodeSize * 2.5, 0, Math.PI * 2);
         ctx.stroke();
@@ -711,9 +707,8 @@ function drawHoverHighlight(ctx, point, nodeIdx, options) {
         ? makeVideoToCanvasTransform(vw, vh, cw, ch)
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
-    const zoomScale = options.zoomScale || 1;
 
-    const nodeSize = baseNodeSize * scale / zoomScale;
+    const nodeSize = baseNodeSize * scale;
 
     let cp;
     if (toCanvas) {
@@ -734,7 +729,7 @@ function drawHoverHighlight(ctx, point, nodeIdx, options) {
 
     // White outline ring
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.lineWidth = 1.5 * scale / zoomScale;
+    ctx.lineWidth = 1.5 * scale;
     ctx.beginPath();
     ctx.arc(cp.x, cp.y, hoverRadius, 0, Math.PI * 2);
     ctx.stroke();
@@ -781,9 +776,8 @@ function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const zoomScale = options.zoomScale || 1;
-    const nodeSize = baseNodeSize / zoomScale;
-    const lineWidth = baseLineWidth / zoomScale;
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
 
     // Build canvas points with the dragged node at its new position
     const canvasPoints = new Array(points.length);
@@ -1139,11 +1133,10 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
     // Screen-relative label sizing
     const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
-    const zoomScale = options.zoomScale || 1;
-    const adjustedLabelSize = Math.round(baseLabelSize * displayScale / zoomScale);
+    const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
 
-    const nodeSize = baseNodeSize / zoomScale;
-    const lineWidth = baseLineWidth / zoomScale;
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
 
     const typeFilter = options.typeFilter || null;
 
@@ -1222,7 +1215,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
             if (canvasPoints[i]) { anchorCp = canvasPoints[i]; break; }
         }
         if (anchorCp) {
-            const badgeSize = 10 / zoomScale;
+            const badgeSize = 10;
             ctx.globalAlpha = 0.9;
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
             ctx.beginPath();
@@ -1344,7 +1337,6 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     const canvasH = options.canvasHeight != null ? options.canvasHeight : ctx.canvas.height;
     const videoW  = options.videoWidth;
     const videoH  = options.videoHeight;
-    const zoomScale = options.zoomScale || 1;
 
     const skeleton = session && session.skeleton ? session.skeleton : { nodes: [], edges: [] };
 
@@ -1354,7 +1346,6 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         videoHeight: videoH,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
-        zoomScale: zoomScale,
     };
 
     // Build per-type render option sets with geometry info
@@ -1526,7 +1517,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                 const hTrackColor = getTrackColor(
                     hGroup.trackIdx != null ? hGroup.trackIdx : 0
                 );
-                drawHoverHighlight(ctx, hInst.points[hNodeIdx], hNodeIdx, Object.assign({}, userRender, {
+                drawHoverHighlight(ctx, hInst.points[hNodeIdx], hNodeIdx, Object.assign({}, renderOpts, {
                     color: hTrackColor,
                 }));
             }
@@ -1540,7 +1531,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
         if (dragInst && dragInst.points) {
             drawDragPreview(ctx, dragInst.points, dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
-                Object.assign({}, userRender, { color: '#ffffff' }));
+                Object.assign({}, renderOpts, { color: '#ffffff' }));
         }
     }
 
