@@ -212,14 +212,20 @@ class InteractionManager {
         let best = null;
         let bestDist = threshold;
 
-        // Get actual node size from slider (matches what overlays.js renders)
-        const sliderEl = document.getElementById('nodeSizeSlider');
+        // Get actual node size from visibility tab slider
+        const sliderEl = document.getElementById('visUserNodeSize');
         const nodeSize = sliderEl ? parseInt(sliderEl.value) || 4 : 4;
 
         for (let g = 0; g < groups.length; g++) {
             const group = groups[g];
             const instance = group.getInstance(viewName);
             if (!instance || !instance.points) continue;
+
+            // Skip instances whose type is hidden via visibility checkboxes
+            var instType = instance.type || 'user';
+            if (instType === 'user' && !document.getElementById('visUser').checked) continue;
+            if (instType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
+            if (instType === 'reprojected' && !document.getElementById('visReprojections').checked) continue;
 
             for (let n = 0; n < instance.points.length; n++) {
                 const pt = instance.points[n];
@@ -257,6 +263,12 @@ class InteractionManager {
                 const group = groups[g];
                 const instance = group.getInstance(viewName);
                 if (!instance || !instance.points) continue;
+
+                // Skip hidden types in label hit testing too
+                var instType2 = instance.type || 'user';
+                if (instType2 === 'user' && !document.getElementById('visUser').checked) continue;
+                if (instType2 === 'predicted' && !document.getElementById('visPredicted').checked) continue;
+                if (instType2 === 'reprojected' && !document.getElementById('visReprojections').checked) continue;
 
                 for (let n = 0; n < instance.points.length; n++) {
                     const pt = instance.points[n];
@@ -319,14 +331,19 @@ class InteractionManager {
         let best = null;
         let bestDist = threshold;
 
-        // Get actual node size from slider (matches what overlays.js renders)
-        const sliderEl = document.getElementById('nodeSizeSlider');
+        // Get actual node size from visibility tab slider
+        const sliderEl = document.getElementById('visUserNodeSize');
         const nodeSize = sliderEl ? parseInt(sliderEl.value) || 4 : 4;
 
         for (let u = 0; u < unlinkedList.length; u++) {
             const ul = unlinkedList[u];
             const points = ul.instance.points;
             if (!points) continue;
+
+            // Skip instances whose type is hidden via visibility checkboxes
+            var ulType = ul.instance.type || 'user';
+            if (ulType === 'user' && !document.getElementById('visUser').checked) continue;
+            if (ulType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
 
             for (let n = 0; n < points.length; n++) {
                 const pt = points[n];
@@ -358,6 +375,11 @@ class InteractionManager {
                 const ul = unlinkedList[u];
                 const points = ul.instance.points;
                 if (!points) continue;
+
+                // Skip hidden types in label hit testing too
+                var ulType2 = ul.instance.type || 'user';
+                if (ulType2 === 'user' && !document.getElementById('visUser').checked) continue;
+                if (ulType2 === 'predicted' && !document.getElementById('visPredicted').checked) continue;
 
                 for (let n = 0; n < points.length; n++) {
                     const pt = points[n];
@@ -517,6 +539,9 @@ class InteractionManager {
             if (hit) {
                 // Only allow null toggle on the already-selected group
                 if (this.selectedInstanceGroup === hit.instanceGroup) {
+                    // Block null toggle for predicted instances
+                    var hitInstance = hit.instanceGroup.getInstance(viewName);
+                    if (hitInstance && hitInstance.type === 'predicted') return;
                     this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
                 } else {
                     // Select the group first; user must right-click again to toggle
@@ -569,16 +594,27 @@ class InteractionManager {
         // --- Linked node: select or drag ---
         if (useLinked) {
             this.selectedUnlinked = null;
-            // Only allow dragging if the instance is already selected
-            var alreadySelected = this.selectedInstanceGroup === linkedHit.instanceGroup;
-            this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
-            if (alreadySelected && canDrag) {
-                this._startDrag(viewName, linkedHit.instanceGroupIdx, linkedHit.nodeIdx,
-                    vx, vy, null, e.altKey ? linkedHit.instanceGroup.getInstance(viewName) : null);
+            var hitInst = linkedHit.instanceGroup.getInstance(viewName);
+            // Block drag for predicted and reprojected instances (select only)
+            if (hitInst && (hitInst.type === 'predicted' || hitInst.type === 'reprojected')) {
+                this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
+                this._requestRedraw();
+                e.preventDefault();
+                e.stopPropagation();
+                e._consumedByInteraction = true;
+                // Fall through to the end (no drag)
+            } else {
+                // Only allow dragging if the instance is already selected
+                var alreadySelected = this.selectedInstanceGroup === linkedHit.instanceGroup;
+                this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
+                if (alreadySelected && canDrag) {
+                    this._startDrag(viewName, linkedHit.instanceGroupIdx, linkedHit.nodeIdx,
+                        vx, vy, null, e.altKey ? linkedHit.instanceGroup.getInstance(viewName) : null);
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                e._consumedByInteraction = true;
             }
-            e.preventDefault();
-            e.stopPropagation();
-            e._consumedByInteraction = true;
 
         // --- Unlinked node in assignment mode: add to selection ---
         } else if (useUnlinked && this.assignmentMode) {
@@ -587,12 +623,30 @@ class InteractionManager {
             e.stopPropagation();
             e._consumedByInteraction = true;
 
+        // --- Unlinked node: double-click predicted → create user instance ---
+        } else if (useUnlinked && e.detail >= 2 && ulHit.unlinked.instance && ulHit.unlinked.instance.type === 'predicted') {
+            var predInst = ulHit.unlinked.instance;
+            var clonedPoints = predInst.points.map(function(pt) {
+                return pt != null ? [pt[0], pt[1]] : null;
+            });
+            var newInst = new Instance(clonedPoints, predInst.trackIdx, 'user', 1.0);
+            newInst.modified = true;
+            var newUl = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
+            this.select(null, -1);
+            this.selectedUnlinked = newUl;
+            e.preventDefault();
+            e.stopPropagation();
+            e._consumedByInteraction = true;
+            this._requestRedraw();
+
         // --- Unlinked node: select or drag ---
         } else if (useUnlinked) {
             var ulAlreadySelected = this.selectedUnlinked && this.selectedUnlinked.id === ulHit.unlinked.id;
             this.select(null, -1);
             this.selectedUnlinked = ulHit.unlinked;
-            if (ulAlreadySelected && canDrag) {
+            // Block drag for predicted unlinked instances (select only)
+            var ulInstType = ulHit.unlinked.instance ? ulHit.unlinked.instance.type : 'user';
+            if (ulAlreadySelected && canDrag && ulInstType !== 'predicted') {
                 this._startDrag(viewName, -1, ulHit.nodeIdx,
                     vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
             }

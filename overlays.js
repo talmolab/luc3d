@@ -232,6 +232,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
     const alpha = options.alpha != null ? options.alpha : 1.0;
     const showLabels = !!options.showLabels;
+    const dashed = !!options.dashed;
 
     const vw = options.videoWidth;
     const vh = options.videoHeight;
@@ -244,8 +245,13 @@ function drawSkeleton(ctx, instance, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const nodeSize = baseNodeSize * scale;
-    const lineWidth = baseLineWidth * scale;
+    // Screen-relative label sizing: scale baseLabelSize so labels appear the
+    // same visual size regardless of canvas backing resolution.
+    const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
+    const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
+
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
     const nulledNodes = instance.nulledNodes || null;
 
     // Pre-compute canvas positions for each point
@@ -272,6 +278,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     // --- 1. Draw edges ---
     if (skeleton.edges) {
         ctx.lineCap = 'round';
+        if (dashed) ctx.setLineDash([4, 4]);
         // Draw normal edges first, then grayed edges
         for (var pass = 0; pass < 2; pass++) {
             ctx.lineWidth = lineWidth;
@@ -308,6 +315,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
                 if (pass === 1) ctx.globalAlpha = alpha;
             }
         }
+        if (dashed) ctx.setLineDash([]);
     }
 
     // --- 2. Draw nodes ---
@@ -340,7 +348,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
         var savedAlpha = ctx.globalAlpha;
         ctx.globalAlpha = 1.0;
         // Use independent label size (scaled to canvas coordinates)
-        var fontSize = Math.round(baseLabelSize * scale);
+        var fontSize = adjustedLabelSize;
         if (fontSize <= 0) { ctx.globalAlpha = savedAlpha; ctx.restore(); return; }
         ctx.lineWidth = Math.max(1, Math.round(fontSize * 0.15));
         ctx.font = 'bold ' + fontSize + 'px sans-serif';
@@ -403,8 +411,8 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const markerSize = baseNodeSize * scale;  // half-extent of the X
-    const lineWidth = baseLineWidth * scale;
+    const markerSize = baseNodeSize;  // half-extent of the X
+    const lineWidth = baseLineWidth;
 
     // Pre-compute canvas positions
     const canvasPoints = new Array(reprojectedPoints.length);
@@ -429,7 +437,7 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
 
     // --- 1. Draw edges as dashed lines ---
     if (skeleton.edges) {
-        ctx.setLineDash([4 * scale, 4 * scale]);
+        ctx.setLineDash([4, 4]);
         ctx.beginPath();
         for (let i = 0; i < skeleton.edges.length; i++) {
             const edge = skeleton.edges[i];
@@ -566,8 +574,8 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const nodeSize = baseNodeSize * scale;
-    const lineWidth = baseLineWidth * scale;
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
 
     // Pre-compute canvas positions
     const canvasPoints = new Array(points.length);
@@ -761,8 +769,8 @@ function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const nodeSize = baseNodeSize * scale;
-    const lineWidth = baseLineWidth * scale;
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
 
     // Build canvas points with the dragged node at its new position
     const canvasPoints = new Array(points.length);
@@ -798,7 +806,7 @@ function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
             // Use dashed style for edges connected to the dragged node
             const connectsToDrag = (edge[0] === dragNodeIdx || edge[1] === dragNodeIdx);
             if (connectsToDrag) {
-                ctx.setLineDash([4 * scale, 4 * scale]);
+                ctx.setLineDash([4, 4]);
             } else {
                 ctx.setLineDash([]);
             }
@@ -825,7 +833,7 @@ function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
         const dp = canvasPoints[dragNodeIdx];
         ctx.globalAlpha = 0.7;
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2 * scale;
+        ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(dp.x, dp.y, nodeSize * 1.5, 0, Math.PI * 2);
         ctx.stroke();
@@ -870,7 +878,11 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const nodeSize = baseNodeSize * scale;
+    // Screen-relative label sizing
+    const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
+    const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
+
+    const nodeSize = baseNodeSize;
 
     ctx.save();
 
@@ -899,14 +911,14 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
             : ('Track ' + (inst.trackIdx != null ? inst.trackIdx : instIdx));
         const color = getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx);
 
-        var fontSize = Math.round(baseLabelSize * scale);
+        var fontSize = adjustedLabelSize;
         if (fontSize <= 0) continue; // label size 0 = hidden
         ctx.font = 'bold ' + fontSize + 'px sans-serif';
         ctx.textBaseline = 'bottom';
 
         // Background pill for track label
         const textWidth = ctx.measureText(trackName).width;
-        const pillPad = 3 * scale;
+        const pillPad = 3;
         const pillX = firstCp.x - pillPad;
         var labelYOffset = fontSize * 1.5;
         const pillY = firstCp.y - labelYOffset - fontSize - pillPad;
@@ -924,7 +936,7 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
 
         // Draw node name labels for the selected instance
         if (instIdx === selectedInstanceIdx && skeleton && skeleton.nodes) {
-            var nodeFontSize = Math.round(baseLabelSize * scale);
+            var nodeFontSize = adjustedLabelSize;
             if (nodeFontSize <= 0) continue;
             ctx.font = nodeFontSize + 'px sans-serif';
             ctx.fillStyle = '#ffffff';
@@ -1098,6 +1110,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     const assignmentSelectedIds = options.assignmentSelectedIds || [];
     const assignmentColor = options.assignmentColor || '#fbbf24';
     const selectedUnlinkedId = options.selectedUnlinkedId || null;
+    const predictedRender = options.predictedRender || null;
 
     const vw = options.videoWidth;
     const vh = options.videoHeight;
@@ -1109,8 +1122,13 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         ? makeVideoToCanvasTransform(vw, vh, cw, ch)
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
-    const nodeSize = baseNodeSize * scale;
-    const lineWidth = baseLineWidth * scale;
+
+    // Screen-relative label sizing
+    const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
+    const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
+
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
 
     for (let u = 0; u < unlinkedInstances.length; u++) {
         const ul = unlinkedInstances[u];
@@ -1118,11 +1136,16 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         const points = instance.points;
         if (!points || points.length === 0) continue;
 
+        // Use per-type render options for predicted instances
+        const isPredicted = instance.type === 'predicted';
+        const instNodeSize = isPredicted && predictedRender ? (predictedRender.nodeSize || nodeSize) : nodeSize;
+        const instLineWidth = isPredicted && predictedRender ? (predictedRender.lineWidth || lineWidth) : lineWidth;
+
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isEditSelected = selectedUnlinkedId != null && ul.id === selectedUnlinkedId;
         const isSelected = isAssignSelected || isEditSelected;
         const color = isAssignSelected ? assignmentColor : isEditSelected ? '#ffffff' : getTrackColor(instance.trackIdx != null ? instance.trackIdx : u);
-        const alpha = isSelected ? 0.95 : 0.5;
+        const alpha = isSelected ? 0.95 : (isPredicted && predictedRender ? (predictedRender.alpha || 0.5) : 0.5);
 
         // Pre-compute canvas positions
         const canvasPoints = new Array(points.length);
@@ -1142,9 +1165,9 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         // Dashed edges
         if (skeleton.edges) {
             ctx.strokeStyle = color;
-            ctx.lineWidth = lineWidth;
+            ctx.lineWidth = instLineWidth;
             ctx.lineCap = 'round';
-            ctx.setLineDash([4 * scale, 4 * scale]);
+            ctx.setLineDash([4, 4]);
             ctx.beginPath();
             for (let i = 0; i < skeleton.edges.length; i++) {
                 const edge = skeleton.edges[i];
@@ -1165,7 +1188,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
             const cp = canvasPoints[i];
             if (!cp) continue;
             ctx.beginPath();
-            ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
+            ctx.arc(cp.x, cp.y, instNodeSize, 0, Math.PI * 2);
             ctx.fill();
         }
 
@@ -1175,25 +1198,25 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
             if (canvasPoints[i]) { anchorCp = canvasPoints[i]; break; }
         }
         if (anchorCp) {
-            const badgeSize = Math.round(10 * scale);
+            const badgeSize = 10;
             ctx.globalAlpha = 0.9;
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
             ctx.beginPath();
-            ctx.arc(anchorCp.x - nodeSize * 2, anchorCp.y - nodeSize * 2, badgeSize, 0, Math.PI * 2);
+            ctx.arc(anchorCp.x - instNodeSize * 2, anchorCp.y - instNodeSize * 2, badgeSize, 0, Math.PI * 2);
             ctx.fill();
             ctx.fillStyle = '#fbbf24';
             ctx.font = 'bold ' + badgeSize + 'px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText('?', anchorCp.x - nodeSize * 2, anchorCp.y - nodeSize * 2);
+            ctx.fillText('?', anchorCp.x - instNodeSize * 2, anchorCp.y - instNodeSize * 2);
         }
 
-        // Node name labels
-        if (showLabels) {
+        // Node name labels (never for predicted instances)
+        if (showLabels && !isPredicted) {
             ctx.globalAlpha = 1.0;
             ctx.fillStyle = '#ffffff';
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-            var fontSize = Math.round(baseLabelSize * scale);
+            var fontSize = adjustedLabelSize;
             if (fontSize > 0) {
                 ctx.lineWidth = Math.max(1, Math.round(fontSize * 0.15));
                 ctx.font = 'bold ' + fontSize + 'px sans-serif';
@@ -1217,12 +1240,12 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         if (isSelected) {
             ctx.globalAlpha = 0.8;
             ctx.strokeStyle = isAssignSelected ? assignmentColor : '#ffffff';
-            ctx.lineWidth = 2 * scale;
+            ctx.lineWidth = 2;
             for (let i = 0; i < canvasPoints.length; i++) {
                 const cp = canvasPoints[i];
                 if (!cp) continue;
                 ctx.beginPath();
-                ctx.arc(cp.x, cp.y, nodeSize * 2, 0, Math.PI * 2);
+                ctx.arc(cp.x, cp.y, instNodeSize * 2, 0, Math.PI * 2);
                 ctx.stroke();
             }
         }
@@ -1268,14 +1291,25 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
  */
 function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, options) {
     options = options || {};
-    const showDetected    = options.showDetected !== false;
+
+    // Per-type visibility flags
+    const showUser        = options.showUser !== undefined ? options.showUser : (options.showDetected !== false);
+    const showPredicted   = options.showPredicted !== undefined ? options.showPredicted : (options.showDetected !== false);
     const showReprojected = options.showReprojected !== false;
     const showErrors      = options.showErrors !== false;
     const showLegend      = options.showLegend !== false;
-    const nodeSize        = options.nodeSize != null ? options.nodeSize : 4;
-    const lineWidth       = options.lineWidth != null ? options.lineWidth : 2;
-    const labelSize       = options.labelSize != null ? options.labelSize : 11;
-    const showLabels      = !!options.showLabels;
+
+    // Per-type rendering options (fall back to flat options for backward compat)
+    const defaultOpts = {
+        nodeSize: options.nodeSize != null ? options.nodeSize : 4,
+        lineWidth: options.lineWidth != null ? options.lineWidth : 2,
+        labelSize: options.labelSize != null ? options.labelSize : 11,
+        alpha: 1.0,
+        showLabels: !!options.showLabels,
+    };
+    const userOpts = options.userOpts || defaultOpts;
+    const predictedOpts = options.predictedOpts || Object.assign({}, defaultOpts, { showLabels: false });
+    const reprojOpts = options.reprojOpts || defaultOpts;
 
     const selectedInstanceGroup = options.selectedInstanceGroup || null;
     const selectedNodeIdx       = options.selectedNodeIdx != null ? options.selectedNodeIdx : -1;
@@ -1289,44 +1323,59 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
 
     const skeleton = session && session.skeleton ? session.skeleton : { nodes: [], edges: [] };
 
-    // Shared rendering options (passed to sub-functions)
-    const renderOpts = {
-        nodeSize: nodeSize,
-        lineWidth: lineWidth,
-        labelSize: labelSize,
+    // Shared geometry options (used for coordinate transforms)
+    const geoOpts = {
         videoWidth: videoW,
         videoHeight: videoH,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
-        showLabels: showLabels,
     };
+
+    // Build per-type render option sets with geometry info
+    function makeRenderOpts(typeOpts) {
+        return Object.assign({}, typeOpts, geoOpts);
+    }
+
+    var userRender = makeRenderOpts(userOpts);
+    var predictedRender = makeRenderOpts(predictedOpts);
+    var reprojRender = makeRenderOpts(reprojOpts);
 
     // 1. Clear overlay
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // 2. Draw detected skeletons
-    if (showDetected && frameGroup && frameGroup.instances) {
+    // 2. Draw detected skeletons (split by type)
+    if (frameGroup && frameGroup.instances) {
         const viewInstances = frameGroup.instances instanceof Map
             ? frameGroup.instances.get(viewName)
             : frameGroup.instances[viewName];
         if (viewInstances) {
+            var userInstances = [];
             for (let i = 0; i < viewInstances.length; i++) {
                 const inst = viewInstances[i];
+                const instType = inst.type || 'user';
+
+                // Skip if type not visible
+                if (instType === 'user' && !showUser) continue;
+                if (instType === 'predicted' && !showPredicted) continue;
+
+                var typeRender = instType === 'predicted' ? predictedRender : userRender;
+
                 var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
-                // Brighten skeleton if it belongs to the selected group
                 var isSelected = selectedInstanceGroup &&
                     selectedInstanceGroup.getInstance &&
                     selectedInstanceGroup.getInstance(viewName) === inst;
                 var drawColor = isSelected ? '#ffffff' : baseColor;
-                drawSkeleton(ctx, inst, skeleton, Object.assign({}, renderOpts, {
+                drawSkeleton(ctx, inst, skeleton, Object.assign({}, typeRender, {
                     color: drawColor,
                 }));
+
+                if (instType !== 'predicted') userInstances.push(inst);
             }
 
-            // 2a. Draw track name labels on detected instances
-            if (showLabels) {
+            // 2a. Draw track name labels (user instances only; predicted has no labels)
+            if (userOpts.showLabels && userInstances.length > 0) {
                 const trackNames = session && session.tracks ? session.tracks : [];
-                drawInstanceLabels(ctx, viewInstances, skeleton, viewName, Object.assign({}, renderOpts, {
+                drawInstanceLabels(ctx, userInstances, skeleton, viewName, Object.assign({}, userRender, {
                     trackNames: trackNames,
                 }));
             }
@@ -1336,32 +1385,55 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     // 2b. Draw unlinked instances (dashed, semi-transparent)
     const unlinkedInstances = options.unlinkedInstances || [];
     if (unlinkedInstances.length > 0) {
-        drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, renderOpts, {
+        drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, {
+            predictedRender: predictedRender,
             assignmentSelectedIds: options.assignmentSelectedIds || [],
             assignmentColor: '#fbbf24',
             selectedUnlinkedId: options.selectedUnlinkedId || null,
         }));
     }
 
-    // 3. Draw reprojected skeletons + error vectors
+    // 3. Draw reprojected instances + error vectors
     if (instanceGroups) {
         for (let g = 0; g < instanceGroups.length; g++) {
             const group = instanceGroups[g];
 
-            // Reprojected points for this camera
-            const reprojPts = group.reprojections ? group.reprojections[viewName] : null;
+            // Draw reprojected instances from the reprojectedInstances map
+            if (showReprojected && group.reprojectedInstances && group.reprojectedInstances.size > 0) {
+                const reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
+                if (reprojInst) {
+                    var baseColor = getTrackColor(group.trackIdx != null ? group.trackIdx : 0);
+                    drawSkeleton(ctx, reprojInst, skeleton, Object.assign({}, reprojRender, {
+                        color: baseColor,
+                        dashed: true,
+                    }));
 
-            if (showReprojected && reprojPts) {
-                drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, renderOpts, {
-                    color: '#ff6b6b',
-                }));
+                    // Labels for reprojected instances
+                    if (reprojOpts.showLabels) {
+                        const trackNames = session && session.tracks ? session.tracks : [];
+                        drawInstanceLabels(ctx, [reprojInst], skeleton, viewName, Object.assign({}, reprojRender, {
+                            trackNames: trackNames,
+                        }));
+                    }
+                }
+            }
+
+            // Fall back to raw reprojection data if no Instance objects exist
+            if (showReprojected && (!group.reprojectedInstances || group.reprojectedInstances.size === 0)) {
+                const reprojPts = group.reprojections ? group.reprojections[viewName] : null;
+                if (reprojPts) {
+                    drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
+                        color: getTrackColor(group.trackIdx != null ? group.trackIdx : 0),
+                    }));
+                }
             }
 
             // Error vectors: need both observed and reprojected
-            if (showErrors && reprojPts) {
+            const reprojPtsForErrors = group.reprojections ? group.reprojections[viewName] : null;
+            if (showErrors && reprojPtsForErrors) {
                 const observedPts = group.observedPoints ? group.observedPoints[viewName] : null;
                 if (observedPts) {
-                    drawReprojectionErrors(ctx, observedPts, reprojPts, renderOpts);
+                    drawReprojectionErrors(ctx, observedPts, reprojPtsForErrors, reprojRender);
                 }
             }
         }
@@ -1376,7 +1448,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             const trackColor = getTrackColor(
                 selectedInstanceGroup.trackIdx != null ? selectedInstanceGroup.trackIdx : 0
             );
-            drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, renderOpts, {
+            drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, userRender, {
                 color: '#ffffff',
                 selectedNodeIdx: selectedNodeIdx,
             }));
@@ -1417,7 +1489,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     // 7. Legend
     if (showLegend) {
         drawLegend(ctx, {
-            showDetected: showDetected,
+            showDetected: showUser || showPredicted,
             showReprojected: showReprojected,
             showErrors: showErrors,
         });

@@ -104,30 +104,11 @@
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
-            <div class="toolbar-group">
-                <label class="toolbar-btn" style="cursor:default;font-size:12px;">
-                    Node Size&nbsp;<span id="nodeSizeValue">1</span>
-                </label>
-                <input type="range" id="nodeSizeSlider" min="1" max="20" value="1" step="1" style="width:80px;">
-                <label class="toolbar-btn" style="cursor:default;font-size:12px;margin-left:6px;">
-                    Label Size&nbsp;<span id="labelSizeValue">11</span>
-                </label>
-                <input type="range" id="labelSizeSlider" min="0" max="24" value="11" step="1" style="width:60px;">
-            </div>
-            <div class="toolbar-separator"></div>
-            <div class="toolbar-group">
-                <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
-                    <input type="checkbox" id="toggleDetected" checked> Detected
-                </label>
-                <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
-                    <input type="checkbox" id="toggleReprojected"> Reproj
-                </label>
-                <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
-                    <input type="checkbox" id="toggleErrors"> Errors
-                </label>
-                <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
-                    <input type="checkbox" id="toggleLabels" checked> Labels
-                </label>
+            <div class="toolbar-group toolbar-checkboxes">
+                <label><input type="checkbox" id="visUser" checked> User</label>
+                <label><input type="checkbox" id="visPredicted" checked> Predicted</label>
+                <label><input type="checkbox" id="visReprojections" checked> Reproj</label>
+                <label><input type="checkbox" id="visErrors" checked> Errors</label>
             </div>
             <button class="toolbar-btn" id="infoPanelToggleBtn" style="margin-left:auto;" title="Toggle info panel (I)">Hide Panel</button>
         </div>
@@ -172,6 +153,7 @@
                 <!-- Tab bar -->
                 <div class="panel-tabs">
                     <button class="panel-tab active" data-tab="tabInstances">Instances</button>
+                    <button class="panel-tab" data-tab="tabVisibility">Visibility</button>
                     <button class="panel-tab" data-tab="tabVideos">Videos</button>
                     <button class="panel-tab" data-tab="tabCameras">Cameras</button>
                     <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
@@ -225,6 +207,69 @@
                             <tbody></tbody>
                         </table>
                         <div class="table-empty" id="unlinkedEmpty">No unlinked instances</div>
+                    </div>
+                </div>
+
+                <!-- ==================== Visibility Tab ==================== -->
+                <div class="panel-tab-content" id="tabVisibility">
+                    <h3>Rendering</h3>
+                    <div class="vis-section-header">User</div>
+                    <div class="vis-slider-row">
+                        <span>Node Size</span>
+                        <input type="range" id="visUserNodeSize" min="1" max="20" value="4" step="1">
+                        <span class="vis-val" id="visUserNodeSizeVal">4</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Weight</span>
+                        <input type="range" id="visUserEdgeWeight" min="1" max="10" value="2" step="1">
+                        <span class="vis-val" id="visUserEdgeWeightVal">2</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Transparency</span>
+                        <input type="range" id="visUserEdgeTrans" min="0" max="100" value="100" step="5">
+                        <span class="vis-val" id="visUserEdgeTransVal">1.0</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Size</span>
+                        <input type="range" id="visUserLabelSize" min="0" max="24" value="11" step="1">
+                        <span class="vis-val" id="visUserLabelSizeVal">11</span>
+                    </div>
+                    <div class="vis-section-header">Predicted</div>
+                    <div class="vis-slider-row">
+                        <span>Node Size</span>
+                        <input type="range" id="visPredNodeSize" min="1" max="20" value="4" step="1">
+                        <span class="vis-val" id="visPredNodeSizeVal">4</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Weight</span>
+                        <input type="range" id="visPredEdgeWeight" min="1" max="10" value="2" step="1">
+                        <span class="vis-val" id="visPredEdgeWeightVal">2</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Transparency</span>
+                        <input type="range" id="visPredEdgeTrans" min="0" max="100" value="100" step="5">
+                        <span class="vis-val" id="visPredEdgeTransVal">1.0</span>
+                    </div>
+                    <div class="vis-section-header">Reprojections</div>
+                    <div class="vis-slider-row">
+                        <span>Node Size</span>
+                        <input type="range" id="visReprojNodeSize" min="1" max="20" value="4" step="1">
+                        <span class="vis-val" id="visReprojNodeSizeVal">4</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Weight</span>
+                        <input type="range" id="visReprojEdgeWeight" min="1" max="10" value="2" step="1">
+                        <span class="vis-val" id="visReprojEdgeWeightVal">2</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Transparency</span>
+                        <input type="range" id="visReprojEdgeTrans" min="0" max="100" value="100" step="5">
+                        <span class="vis-val" id="visReprojEdgeTransVal">1.0</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Size</span>
+                        <input type="range" id="visReprojLabelSize" min="0" max="24" value="11" step="1">
+                        <span class="vis-val" id="visReprojLabelSizeVal">11</span>
                     </div>
                 </div>
 
@@ -446,6 +491,8 @@
                 </span>
             </div>
             <div class="status-right">
+                <span class="status-item" id="statusLabeledFrames">Labeled: 0</span>
+                <span class="status-item" id="statusTriangulatedFrames">Triangulated: 0</span>
                 <span class="status-item" id="statusInstances">Instances: -</span>
                 <span class="status-item" id="statusError">Error: -</span>
                 <span class="status-item" id="statusSelection">Selection: none</span>
@@ -464,8 +511,8 @@
     <script src="pose-data.js?v=5"></script>
     <script src="triangulation.js?v=5"></script>
     <script src="demo-data.js"></script>
-    <script src="overlays.js?v=5"></script>
-    <script src="interaction.js?v=5"></script>
+    <script src="overlays.js?v=8"></script>
+    <script src="interaction.js?v=6"></script>
     <script src="viewport3d.js"></script>
     <script src="timeline.js"></script>
     <script src="file-io.js?v=5"></script>
@@ -687,9 +734,9 @@
             }
             // Check the checkboxes when triangulation data is available
             if (visible) {
-                var reproj = document.getElementById('toggleReprojected');
+                var reproj = document.getElementById('visReprojections');
                 if (reproj) reproj.checked = true;
-                var errors = document.getElementById('toggleErrors');
+                var errors = document.getElementById('visErrors');
                 if (errors) errors.checked = true;
             }
         }
@@ -697,6 +744,27 @@
         // ============================================
         // Triangulation
         // ============================================
+
+        /**
+         * Create ReprojectedInstance objects from triangulation results and store
+         * them on the InstanceGroup.  Generates a reprojected instance for every
+         * camera that has calibration data (not just those used for triangulation).
+         */
+        function storeReprojectedInstances(group, triangulationResult, allCameras) {
+            if (!triangulationResult || !triangulationResult.points3d) return;
+            for (var ci = 0; ci < allCameras.length; ci++) {
+                var cam = allCameras[ci];
+                // Use existing reprojection if available, otherwise compute it
+                var reprojPts = triangulationResult.reprojections[cam.name];
+                if (!reprojPts && cam.projectionMatrix) {
+                    reprojPts = reprojectPoints(triangulationResult.points3d, cam.projectionMatrix);
+                }
+                if (reprojPts) {
+                    var reprojInstance = new Instance(reprojPts, group.trackIdx, 'reprojected', 1.0);
+                    group.addReprojectedInstance(cam.name, reprojInstance);
+                }
+            }
+        }
 
         function precomputeTriangulation() {
             if (!state.session) return;
@@ -713,6 +781,7 @@
                         // Store reprojections and observed points on the group for overlay rendering
                         group.reprojections = result.reprojections;
                         group.points3d = result.points3d;
+                        storeReprojectedInstances(group, result, cameras);
                         group.observedPoints = {};
                         for (const cam of cameras) {
                             const inst = group.getInstance(cam.name);
@@ -751,6 +820,7 @@
             var result = triangulateAndReproject(instanceGroup, groupCameras);
             instanceGroup.points3d = result.points3d;
             instanceGroup.reprojections = result.reprojections;
+            storeReprojectedInstances(instanceGroup, result, cameras);
             instanceGroup.observedPoints = {};
             for (var ci = 0; ci < groupCameras.length; ci++) {
                 var cam = groupCameras[ci];
@@ -866,6 +936,7 @@
 
                     group.reprojections = result.reprojections;
                     group.points3d = result.points3d;
+                    storeReprojectedInstances(group, result, cameras);
                     group.observedPoints = {};
                     group.usedCameras = new Set();
                     for (const cam of groupCameras) {
@@ -1011,6 +1082,7 @@
 
                         group.reprojections = result.reprojections;
                         group.points3d = result.points3d;
+                        storeReprojectedInstances(group, result, cameras);
                         group.observedPoints = {};
                         group.usedCameras = new Set();
                         for (var ck = 0; ck < groupCameras2.length; ck++) {
@@ -1088,18 +1160,42 @@
         // Overlay Drawing
         // ============================================
 
+        function getVisibilitySettings() {
+            return {
+                showUser: document.getElementById('visUser').checked,
+                showPredicted: document.getElementById('visPredicted').checked,
+                showReprojected: document.getElementById('visReprojections').checked,
+                showErrors: document.getElementById('visErrors').checked,
+                userOpts: {
+                    nodeSize: parseInt(document.getElementById('visUserNodeSize').value) || 4,
+                    lineWidth: parseInt(document.getElementById('visUserEdgeWeight').value) || 2,
+                    alpha: parseInt(document.getElementById('visUserEdgeTrans').value) / 100,
+                    labelSize: parseInt(document.getElementById('visUserLabelSize').value) || 11,
+                    showLabels: parseInt(document.getElementById('visUserLabelSize').value) > 0,
+                },
+                predictedOpts: {
+                    nodeSize: parseInt(document.getElementById('visPredNodeSize').value) || 4,
+                    lineWidth: parseInt(document.getElementById('visPredEdgeWeight').value) || 2,
+                    alpha: parseInt(document.getElementById('visPredEdgeTrans').value) / 100,
+                    showLabels: false,
+                },
+                reprojOpts: {
+                    nodeSize: parseInt(document.getElementById('visReprojNodeSize').value) || 4,
+                    lineWidth: parseInt(document.getElementById('visReprojEdgeWeight').value) || 2,
+                    alpha: parseInt(document.getElementById('visReprojEdgeTrans').value) / 100,
+                    labelSize: parseInt(document.getElementById('visReprojLabelSize').value) || 11,
+                    showLabels: parseInt(document.getElementById('visReprojLabelSize').value) > 0,
+                },
+            };
+        }
+
         function drawAllOverlays(frameIdx) {
             if (!state.session) return;
 
             const frameGroup = state.session.getFrameGroup(frameIdx);
             const instanceGroups = getInstanceGroupsForFrame(frameIdx);
 
-            const showDetected = document.getElementById('toggleDetected').checked;
-            const showReprojected = document.getElementById('toggleReprojected').checked;
-            const showErrors = document.getElementById('toggleErrors').checked;
-            const showLabels = document.getElementById('toggleLabels').checked;
-            const nodeSize = parseInt(document.getElementById('nodeSizeSlider').value) || 4;
-            const labelSize = parseInt(document.getElementById('labelSizeSlider').value) || 11;
+            var vis = getVisibilitySettings();
 
             // Get interaction state — only show selection highlight if the
             // selected group belongs to the current frame
@@ -1145,17 +1241,25 @@
                         '| fg keys:', overlayFrameGroup ? Object.keys(overlayFrameGroup.instances) : []);
                 }
 
-                // Get unlinked instances for this view
-                const viewUnlinked = (showDetected && frameGroup) ? frameGroup.getUnlinkedInstances(view.name) : [];
+                // Get unlinked instances for this view, filtered by type visibility
+                var viewUnlinked = [];
+                if (frameGroup && (vis.showUser || vis.showPredicted)) {
+                    var allUnlinked = frameGroup.getUnlinkedInstances(view.name) || [];
+                    for (var _ui = 0; _ui < allUnlinked.length; _ui++) {
+                        var _ulType = allUnlinked[_ui].instance.type || 'user';
+                        if (_ulType === 'predicted' && vis.showPredicted) viewUnlinked.push(allUnlinked[_ui]);
+                        else if (_ulType !== 'predicted' && vis.showUser) viewUnlinked.push(allUnlinked[_ui]);
+                    }
+                }
 
                 drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
-                    showDetected: showDetected,
-                    showReprojected: showReprojected,
-                    showErrors: showErrors,
-                    showLabels: showLabels,
-                    nodeSize: nodeSize,
-                    labelSize: labelSize,
-                    lineWidth: Math.max(2, Math.round(nodeSize / 2)),
+                    showUser: vis.showUser,
+                    showPredicted: vis.showPredicted,
+                    showReprojected: vis.showReprojected,
+                    showErrors: vis.showErrors,
+                    userOpts: vis.userOpts,
+                    predictedOpts: vis.predictedOpts,
+                    reprojOpts: vis.reprojOpts,
                     videoWidth: view.videoWidth,
                     videoHeight: view.videoHeight,
                     canvasWidth: view.overlayCanvas.width,
@@ -1245,9 +1349,33 @@
                     const trackName = state.session.tracks[instanceGroup.trackIdx] || 'Track ' + instanceGroup.trackIdx;
                     setStatus('Converted ' + trackName + ' to user instance', 'success');
 
+                    // Re-run triangulation if this group was previously triangulated
+                    if (instanceGroup.points3d) {
+                        var cameras = state.session.cameras;
+                        var groupCamNames = instanceGroup.cameraNames;
+                        var groupCameras = cameras.filter(function(c) {
+                            return groupCamNames.indexOf(c.name) >= 0;
+                        });
+                        if (groupCameras.length >= 2) {
+                            var result = triangulateAndReproject(instanceGroup, groupCameras);
+                            instanceGroup.points3d = result.points3d;
+                            instanceGroup.reprojections = result.reprojections;
+                            storeReprojectedInstances(instanceGroup, result, cameras);
+                            instanceGroup.observedPoints = {};
+                            for (var ci = 0; ci < groupCameras.length; ci++) {
+                                var cam = groupCameras[ci];
+                                var inst = instanceGroup.getInstance(cam.name);
+                                if (inst) instanceGroup.observedPoints[cam.name] = inst.points;
+                            }
+                            instanceGroup.markClean();
+                        }
+                    }
+
                     if (timeline) {
                         timeline.setFrameModified(state.currentFrame, true);
                     }
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
                 },
 
                 onNodeSetNull: function (viewName, instanceGroup, nodeIdx) {
@@ -1318,6 +1446,7 @@
                             var result = triangulateAndReproject(group, groupCameras);
                             group.points3d = result.points3d;
                             group.reprojections = result.reprojections;
+                            storeReprojectedInstances(group, result, cameras);
                             group.observedPoints = {};
                             for (var ci = 0; ci < groupCameras.length; ci++) {
                                 var cam = groupCameras[ci];
@@ -1893,22 +2022,45 @@
                 }
             }
 
-            // Overlay toggles - redraw on change
-            const toggleIds = ['toggleDetected', 'toggleReprojected', 'toggleErrors', 'toggleLabels'];
-            for (const id of toggleIds) {
-                document.getElementById(id).addEventListener('change', function () { drawAllOverlays(state.currentFrame); });
+            // ============================================
+            // Visibility Tab
+            // ============================================
+
+            // Slider value display + redraw
+            function setupVisSlider(sliderId, valId, isTransparency) {
+                var slider = document.getElementById(sliderId);
+                var val = document.getElementById(valId);
+                if (!slider || !val) return;
+                slider.addEventListener('input', function() {
+                    if (isTransparency) {
+                        val.textContent = (parseInt(slider.value) / 100).toFixed(1);
+                    } else {
+                        val.textContent = slider.value;
+                    }
+                    drawAllOverlays(state.currentFrame);
+                });
             }
 
-            // Node size slider
-            const nodeSizeSlider = document.getElementById('nodeSizeSlider');
-            nodeSizeSlider.addEventListener('input', function () {
-                document.getElementById('nodeSizeValue').textContent = nodeSizeSlider.value;
-                drawAllOverlays(state.currentFrame);
-            });
-            var labelSizeSlider = document.getElementById('labelSizeSlider');
-            labelSizeSlider.addEventListener('input', function () {
-                document.getElementById('labelSizeValue').textContent = labelSizeSlider.value;
-                drawAllOverlays(state.currentFrame);
+            setupVisSlider('visUserNodeSize', 'visUserNodeSizeVal');
+            setupVisSlider('visUserEdgeWeight', 'visUserEdgeWeightVal');
+            setupVisSlider('visUserEdgeTrans', 'visUserEdgeTransVal', true);
+            setupVisSlider('visUserLabelSize', 'visUserLabelSizeVal');
+            setupVisSlider('visPredNodeSize', 'visPredNodeSizeVal');
+            setupVisSlider('visPredEdgeWeight', 'visPredEdgeWeightVal');
+            setupVisSlider('visPredEdgeTrans', 'visPredEdgeTransVal', true);
+            setupVisSlider('visReprojNodeSize', 'visReprojNodeSizeVal');
+            setupVisSlider('visReprojEdgeWeight', 'visReprojEdgeWeightVal');
+            setupVisSlider('visReprojEdgeTrans', 'visReprojEdgeTransVal', true);
+            setupVisSlider('visReprojLabelSize', 'visReprojLabelSizeVal');
+
+            // Checkbox toggles
+            ['visUser', 'visPredicted', 'visReprojections', 'visErrors'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('change', function() {
+                        drawAllOverlays(state.currentFrame);
+                    });
+                }
             });
 
             // Toolbar buttons
@@ -2321,6 +2473,7 @@
                     var result = triangulateAndReproject(group, groupCameras);
                     group.points3d = result.points3d;
                     group.reprojections = result.reprojections;
+                    storeReprojectedInstances(group, result, cameras);
                     group.observedPoints = {};
                     for (var cc = 0; cc < groupCameras.length; cc++) {
                         var cam = groupCameras[cc];
@@ -2522,6 +2675,7 @@
                         var result = triangulateAndReproject(group, groupCameras);
                         group.points3d = result.points3d;
                         group.reprojections = result.reprojections;
+                        storeReprojectedInstances(group, result, cameras);
                         group.observedPoints = {};
                         for (var cci = 0; cci < groupCameras.length; cci++) {
                             var cam2 = groupCameras[cci];
@@ -3184,6 +3338,7 @@
 
                             group.reprojections = result.reprojections;
                             group.points3d = result.points3d;
+                            storeReprojectedInstances(group, result, cameras);
                             group.observedPoints = {};
                             group.usedCameras = new Set();
                             for (var ck = 0; ck < groupCameras.length; ck++) {
@@ -3915,6 +4070,44 @@
         }
 
         // ============================================
+        // Frame counters (status bar)
+        // ============================================
+
+        function updateFrameCounters() {
+            if (!state.session) return;
+
+            var labeledCount = 0;
+            var triangulatedCount = 0;
+
+            state.session.frameGroups.forEach(function(fg, frameIdx) {
+                // Labeled: frame has at least one UserInstance
+                var hasUser = false;
+                fg.instances.forEach(function(instList) {
+                    for (var i = 0; i < instList.length; i++) {
+                        if (instList[i].type === 'user') { hasUser = true; break; }
+                    }
+                });
+                if (hasUser) labeledCount++;
+
+                // Triangulated: frame has at least one InstanceGroup with points3d
+                var trackMap = state.session.instanceGroups.get(frameIdx);
+                if (trackMap) {
+                    outer:
+                    for (var groups of trackMap.values()) {
+                        for (var g = 0; g < groups.length; g++) {
+                            if (groups[g].points3d) { triangulatedCount++; break outer; }
+                        }
+                    }
+                }
+            });
+
+            var labeledEl = document.getElementById('statusLabeledFrames');
+            var triangulatedEl = document.getElementById('statusTriangulatedFrames');
+            if (labeledEl) labeledEl.textContent = 'Labeled: ' + labeledCount;
+            if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + triangulatedCount;
+        }
+
+        // ============================================
         // Session info (static, updated once)
         // ============================================
 
@@ -4168,8 +4361,21 @@
                 document.getElementById('instanceGroupsTable').style.display = '';
                 groupsEmpty.style.display = 'none';
 
-                for (let i = 0; i < instanceGroups.length; i++) {
-                    const group = instanceGroups[i];
+                // Sort by track name, then type priority: user > reprojected > predicted
+                var sortedGroups = instanceGroups.slice().sort(function(a, b) {
+                    var trackA = state.session.tracks[a.trackIdx] || '';
+                    var trackB = state.session.tracks[b.trackIdx] || '';
+                    if (trackA !== trackB) return trackA.localeCompare(trackB);
+                    var typePriority = { 'user': 0, 'reprojected': 1, 'predicted': 2 };
+                    var typeA = a.instances.values().next().value;
+                    var typeB = b.instances.values().next().value;
+                    var priA = typePriority[typeA ? typeA.type : 'user'] || 0;
+                    var priB = typePriority[typeB ? typeB.type : 'user'] || 0;
+                    return priA - priB;
+                });
+
+                for (let i = 0; i < sortedGroups.length; i++) {
+                    const group = sortedGroups[i];
                     const tr = document.createElement('tr');
 
                     // Highlight if selected
@@ -4261,6 +4467,56 @@
                     })(group);
 
                     groupsTbody.appendChild(tr);
+
+                    // Add reprojected instance row if this group has reprojected instances
+                    if (group.reprojectedInstances && group.reprojectedInstances.size > 0) {
+                        const rtr = document.createElement('tr');
+                        rtr.style.opacity = '0.75';
+
+                        const rtdTrack = document.createElement('td');
+                        const rdot = document.createElement('span');
+                        rdot.className = 'track-indicator';
+                        rdot.style.backgroundColor = getTrackColor(group.trackIdx);
+                        rdot.style.marginRight = '4px';
+                        rtdTrack.appendChild(rdot);
+                        rtdTrack.appendChild(document.createTextNode(trackName));
+
+                        const rtdViews = document.createElement('td');
+                        rtdViews.className = 'mono';
+                        rtdViews.textContent = group.reprojectedInstances.size + '/' + state.session.cameras.length;
+                        rtdViews.title = Array.from(group.reprojectedInstances.keys()).join(', ');
+
+                        const rtdType = document.createElement('td');
+                        const rbadge = document.createElement('span');
+                        rbadge.className = 'badge badge-reproj';
+                        rbadge.textContent = 'Reproj';
+                        rtdType.appendChild(rbadge);
+
+                        const rtdError = document.createElement('td');
+                        rtdError.className = 'mono reproj-error-col';
+                        if (!state.triangulationResults || state.triangulationResults.size === 0) {
+                            rtdError.style.display = 'none';
+                        }
+                        rtdError.textContent = '-';
+
+                        const rtdEmpty = document.createElement('td');
+                        rtdEmpty.style.padding = '0';
+
+                        rtr.appendChild(rtdTrack);
+                        rtr.appendChild(rtdViews);
+                        rtr.appendChild(rtdType);
+                        rtr.appendChild(rtdError);
+                        rtr.appendChild(rtdEmpty);
+
+                        // Click to select the parent group
+                        (function (g) {
+                            rtr.addEventListener('click', function () {
+                                if (interactionManager) interactionManager.select(g, -1);
+                            });
+                        })(group);
+
+                        groupsTbody.appendChild(rtr);
+                    }
                 }
             } else {
                 document.getElementById('instanceGroupsTable').style.display = 'none';
@@ -4338,6 +4594,8 @@
             document.getElementById('statusInstances').textContent = 'Instances: ' + numInstances;
             document.getElementById('statusError').textContent = 'Error: ' +
                 (meanError != null ? meanError.toFixed(2) + ' px' : '-');
+
+            updateFrameCounters();
         }
 
         function updateTriangulationBadge(type, text) {
@@ -6141,37 +6399,40 @@
                     if (slpData.frames) {
                         for (var fri = 0; fri < slpData.frames.length; fri++) {
                             var frameData = slpData.frames[fri];
-                            var frameIdx = frameData.frame_idx !== undefined ? frameData.frame_idx : fri;
+                            var frameIdx = frameData.frameIdx !== undefined ? frameData.frameIdx : (frameData.frame_idx !== undefined ? frameData.frame_idx : fri);
 
                             if (!state.session.frameGroups.has(frameIdx)) {
                                 state.session.addFrameGroup(new FrameGroup(frameIdx));
                             }
                             var fg = state.session.getFrameGroup(frameIdx);
 
+                            // videoIdx is on the frame, not on each instance
+                            var frameVideoIdx = frameData.videoIdx !== undefined ? frameData.videoIdx : (frameData.video_idx !== undefined ? frameData.video_idx : 0);
+
+                            // Map videoIdx to camera name
+                            var frameCamName = null;
+                            if (slpData.videos && slpData.videos[frameVideoIdx]) {
+                                var vRef = slpData.videos[frameVideoIdx];
+                                var refFn = vRef.sourceFilename || vRef.filename || '';
+                                frameCamName = refFn.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '');
+                            }
+                            if (!frameCamName && sessionCameras[frameVideoIdx]) {
+                                frameCamName = sessionCameras[frameVideoIdx].name;
+                            }
+                            if (!frameCamName) frameCamName = pairStem;
+
                             if (frameData.instances) {
                                 for (var ii = 0; ii < frameData.instances.length; ii++) {
                                     var inst = frameData.instances[ii];
-                                    var videoIdx = inst.video_idx !== undefined ? inst.video_idx : 0;
-
-                                    // Map video_idx to camera name
-                                    var camName = null;
-                                    if (slpData.videos && slpData.videos[videoIdx]) {
-                                        var vRef = slpData.videos[videoIdx];
-                                        var refFn = vRef.sourceFilename || vRef.filename || '';
-                                        camName = refFn.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '');
-                                    }
-                                    if (!camName && sessionCameras[videoIdx]) {
-                                        camName = sessionCameras[videoIdx].name;
-                                    }
-                                    if (!camName) camName = pairStem;
 
                                     var points = inst.points || [];
-                                    var trackIdx = inst.track_idx !== undefined ? inst.track_idx : 0;
-                                    var instType = inst.from_predicted !== undefined ? 'predicted' : 'user';
+                                    var trackIdx = inst.trackIdx !== undefined ? inst.trackIdx : (inst.track_idx !== undefined ? inst.track_idx : 0);
+                                    var instType = inst.type || (inst.from_predicted !== undefined ? 'predicted' : 'user');
                                     var score = inst.score !== undefined ? inst.score : 1.0;
 
                                     var instance = new Instance(points, trackIdx, instType, score);
-                                    fg.addInstance(camName, instance);
+                                    if (inst.occluded) instance.occluded = inst.occluded;
+                                    fg.addInstance(frameCamName, instance);
                                 }
                             }
                         }
@@ -6237,23 +6498,25 @@
                     }
                 }
 
-                // 5. Move all loaded instances to the unlinked pool
+                // 5. Move all loaded instances to the unlinked pool.
                 // Identity assignment is NOT run automatically — user triggers it
                 // through the Assign menu. All instances start as unlinked.
+                // Instance type (user/predicted) is preserved on the Instance object.
                 if (state.session) {
                     showLoading('Preparing instances...');
+                    var ulUserCount = 0, ulPredCount = 0;
                     for (var [fgIdx, fgObj] of state.session.frameGroups) {
                         for (var [cn, instances] of fgObj.instances) {
                             for (var instItem of instances) {
                                 var ulInst = new UnlinkedInstance(instItem, cn);
                                 fgObj.addUnlinkedInstance(cn, ulInst);
+                                if (instItem.type === 'predicted') ulPredCount++;
+                                else ulUserCount++;
                             }
-                            // Clear the original instances so they aren't double-drawn
-                            // as "detected" solid-line skeletons
                             fgObj.instances.set(cn, []);
                         }
                     }
-                    console.log('[session-folder] Prepared unlinked instances for', state.session.frameGroups.size, 'frames');
+                    console.log('[session-folder] Prepared unlinked instances:', ulUserCount, 'user,', ulPredCount, 'predicted');
                 }
 
                 // 5b. Load skeleton JSON override if found in session folder
@@ -6352,11 +6615,21 @@
                 }
 
                 var totalFrames = slpData.frames.length;
+                // Count instance types from parsed SLP data
+                var slpUserCount = 0, slpPredCount = 0;
+                for (var _ti = 0; _ti < slpData.frames.length; _ti++) {
+                    for (var _tj = 0; _tj < slpData.frames[_ti].instances.length; _tj++) {
+                        if (slpData.frames[_ti].instances[_tj].type === 'predicted') slpPredCount++;
+                        else slpUserCount++;
+                    }
+                }
                 console.log('[load-slp] Parsed OK:', {
                     skeleton: slpData.skeleton ? slpData.skeleton.nodes.length + ' nodes' : 'none',
                     tracks: slpData.tracks.length,
                     frames: totalFrames,
                     videos: slpData.videos.length,
+                    userInstances: slpUserCount,
+                    predictedInstances: slpPredCount,
                 });
 
                 showLoading('Building session (' + totalFrames + ' frames)...');
@@ -6751,11 +7024,20 @@
                     return;
                 }
 
+                var addSlpUserCount = 0, addSlpPredCount = 0;
+                for (var _ai = 0; _ai < slpData.frames.length; _ai++) {
+                    for (var _aj = 0; _aj < slpData.frames[_ai].instances.length; _aj++) {
+                        if (slpData.frames[_ai].instances[_aj].type === 'predicted') addSlpPredCount++;
+                        else addSlpUserCount++;
+                    }
+                }
                 console.log('[add-slp] Parsed OK:', {
                     skeleton: slpData.skeleton ? slpData.skeleton.nodes.length + ' nodes' : 'none',
                     tracks: slpData.tracks.length,
                     frames: slpData.frames.length,
                     videos: slpData.videos.length,
+                    userInstances: addSlpUserCount,
+                    predictedInstances: addSlpPredCount,
                 });
 
                 showLoading('Merging into session...');

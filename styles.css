@@ -1251,6 +1251,11 @@ body {
   color: #67e8f9;
 }
 
+.data-table .badge-reproj {
+  background: rgba(251, 146, 60, 0.4);
+  color: #fdba74;
+}
+
 .table-empty {
   padding: 10px 6px;
   font-size: 12px;
@@ -1906,4 +1911,51 @@ kbd {
     height: 30px;
     font-size: 12px;
   }
+}
+
+/* Visibility tab */
+.vis-section-header {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    padding: 6px 0 4px;
+    margin-top: 4px;
+    border-top: 1px solid var(--border-color);
+}
+.vis-section-header:first-of-type {
+    border-top: none;
+    margin-top: 0;
+}
+
+/* Toolbar checkboxes */
+.toolbar-checkboxes {
+    font-size: 11px;
+    gap: 8px;
+    color: var(--text-secondary);
+    align-items: center;
+}
+.toolbar-checkboxes label {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    cursor: pointer;
+}
+.vis-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+.vis-slider-row span:first-child {
+    flex: 0 0 100px;
+}
+.vis-slider-row input[type="range"] {
+    flex: 1;
+}
+.vis-val {
+    flex: 0 0 28px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
 }
