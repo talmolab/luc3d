@@ -572,6 +572,24 @@ class InteractionManager {
         var vx = coords[0], vy = coords[1];
         var frameIdx = state.currentFrame;
 
+        // --- Ctrl+Click / Meta+Click: treat as right-click (macOS trackpad) ---
+        if (e.button === 0 && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            if (this.assignmentMode) return;
+            var hit = this.findNearestNode(vx, vy, viewName, frameIdx);
+            if (hit) {
+                if (this.selectedInstanceGroup === hit.instanceGroup) {
+                    var hitInstance = hit.instanceGroup.getInstance(viewName);
+                    if (hitInstance && hitInstance.type === 'predicted') return;
+                    this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
+                } else {
+                    this.select(hit.instanceGroup, hit.nodeIdx);
+                    this._requestRedraw();
+                }
+            }
+            return;
+        }
+
         // --- Right-click: toggle node null (only if already selected) ---
         if (e.button === 2) {
             e.preventDefault();
