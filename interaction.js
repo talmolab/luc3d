@@ -786,7 +786,7 @@ class InteractionManager {
         // Only finalize if the drag actually moved
         const dx = info.currentPos[0] - info.startPos[0];
         const dy = info.currentPos[1] - info.startPos[1];
-        const didMove = Math.sqrt(dx * dx + dy * dy) > 0.5;
+        const didMove = info.thresholdMet && Math.sqrt(dx * dx + dy * dy) > 0.5;
 
         if (didMove) {
             // Determine the instance being dragged (linked or unlinked)
@@ -1137,6 +1137,7 @@ class InteractionManager {
             currentPos: [vx, vy],
             unlinked: unlinked,
             originalPoints: originalPoints,
+            thresholdMet: false,
         };
 
         // Install document-level listeners for the drag duration
@@ -1160,6 +1161,16 @@ class InteractionManager {
         var coords = this.canvasToVideo(e.clientX, e.clientY, info.viewName);
         var vx = coords[0], vy = coords[1];
         info.currentPos = [vx, vy];
+
+        // Require minimum movement before committing to a drag
+        if (!info.thresholdMet) {
+            var tdx = vx - info.startPos[0];
+            var tdy = vy - info.startPos[1];
+            if (Math.sqrt(tdx * tdx + tdy * tdy) < 3) {
+                return; // Don't update position yet
+            }
+            info.thresholdMet = true;
+        }
 
         // Determine the instance being dragged
         var instance = null;
