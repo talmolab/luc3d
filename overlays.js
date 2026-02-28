@@ -38,6 +38,12 @@ function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
 
+function getLineDashPattern(style) {
+    if (style === 'dotted') return [2, 3];
+    if (style === 'dashed') return [6, 4];
+    return []; // solid
+}
+
 // ============================================
 // Coordinate transforms
 // ============================================
@@ -232,7 +238,8 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
     const alpha = options.alpha != null ? options.alpha : 1.0;
     const showLabels = !!options.showLabels;
-    const dashed = !!options.dashed;
+    const lineStyle = options.lineStyle || (options.dashed ? 'dashed' : 'solid');
+    const dashPattern = getLineDashPattern(lineStyle);
 
     const vw = options.videoWidth;
     const vh = options.videoHeight;
@@ -278,7 +285,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     // --- 1. Draw edges ---
     if (skeleton.edges) {
         ctx.lineCap = 'round';
-        if (dashed) ctx.setLineDash([4, 4]);
+        if (dashPattern.length) ctx.setLineDash(dashPattern);
         // Draw normal edges first, then grayed edges
         for (var pass = 0; pass < 2; pass++) {
             ctx.lineWidth = lineWidth;
@@ -315,7 +322,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
                 if (pass === 1) ctx.globalAlpha = alpha;
             }
         }
-        if (dashed) ctx.setLineDash([]);
+        if (dashPattern.length) ctx.setLineDash([]);
     }
 
     // --- 2. Draw nodes ---
@@ -1098,6 +1105,7 @@ function drawInstanceTypeIndicator(ctx, points, type, options) {
  * @param {number}   [options.canvasHeight]
  * @param {number[]} [options.assignmentSelectedIds] - IDs of unlinked instances selected for assignment
  * @param {string}   [options.assignmentColor] - Color for assignment selection highlight
+ * @param {string}   [options.typeFilter] - If set, only draw instances matching this type ('user' or 'predicted')
  */
 function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     options = options || {};
@@ -1130,11 +1138,17 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     const nodeSize = baseNodeSize;
     const lineWidth = baseLineWidth;
 
+    const typeFilter = options.typeFilter || null;
+
     for (let u = 0; u < unlinkedInstances.length; u++) {
         const ul = unlinkedInstances[u];
         const instance = ul.instance;
         const points = instance.points;
         if (!points || points.length === 0) continue;
+
+        // Filter by type if typeFilter is set
+        const instType = instance.type || 'user';
+        if (typeFilter && instType !== typeFilter) continue;
 
         // Use per-type render options for predicted instances
         const isPredicted = instance.type === 'predicted';
@@ -1162,12 +1176,15 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         ctx.save();
         ctx.globalAlpha = alpha;
 
-        // Dashed edges
+        // Edges with per-type line style
         if (skeleton.edges) {
+            const instLineStyle = isPredicted && predictedRender && predictedRender.lineStyle
+                ? predictedRender.lineStyle : (options.lineStyle || 'dashed');
+            const instDashPattern = getLineDashPattern(instLineStyle);
             ctx.strokeStyle = color;
             ctx.lineWidth = instLineWidth;
             ctx.lineCap = 'round';
-            ctx.setLineDash([4, 4]);
+            if (instDashPattern.length) ctx.setLineDash(instDashPattern);
             ctx.beginPath();
             for (let i = 0; i < skeleton.edges.length; i++) {
                 const edge = skeleton.edges[i];
@@ -1179,7 +1196,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
                 }
             }
             ctx.stroke();
-            ctx.setLineDash([]);
+            if (instDashPattern.length) ctx.setLineDash([]);
         }
 
         // Semi-transparent nodes
@@ -1343,53 +1360,48 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     // 1. Clear overlay
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // 2. Draw detected skeletons (split by type)
+    // Gather view instances once for both passes
+    let viewInstances = null;
     if (frameGroup && frameGroup.instances) {
-        const viewInstances = frameGroup.instances instanceof Map
+        viewInstances = frameGroup.instances instanceof Map
             ? frameGroup.instances.get(viewName)
             : frameGroup.instances[viewName];
-        if (viewInstances) {
-            var userInstances = [];
-            for (let i = 0; i < viewInstances.length; i++) {
-                const inst = viewInstances[i];
-                const instType = inst.type || 'user';
+    }
 
-                // Skip if type not visible
-                if (instType === 'user' && !showUser) continue;
-                if (instType === 'predicted' && !showPredicted) continue;
+    const unlinkedInstances = options.unlinkedInstances || [];
+    const unlinkedOpts = {
+        lineStyle: userOpts.preLineStyle || 'dashed',
+        predictedRender: Object.assign({}, predictedRender, {
+            lineStyle: predictedOpts.preLineStyle || 'solid',
+        }),
+        assignmentSelectedIds: options.assignmentSelectedIds || [],
+        assignmentColor: '#fbbf24',
+        selectedUnlinkedId: options.selectedUnlinkedId || null,
+    };
 
-                var typeRender = instType === 'predicted' ? predictedRender : userRender;
+    // 2. Linked predicted instances (back layer)
+    if (viewInstances && showPredicted) {
+        for (let i = 0; i < viewInstances.length; i++) {
+            const inst = viewInstances[i];
+            const instType = inst.type || 'user';
+            if (instType !== 'predicted') continue;
 
-                var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
-                var isSelected = selectedInstanceGroup &&
-                    selectedInstanceGroup.getInstance &&
-                    selectedInstanceGroup.getInstance(viewName) === inst;
-                var drawColor = isSelected ? '#ffffff' : baseColor;
-                drawSkeleton(ctx, inst, skeleton, Object.assign({}, typeRender, {
-                    color: drawColor,
-                }));
-
-                if (instType !== 'predicted') userInstances.push(inst);
-            }
-
-            // 2a. Draw track name labels (user instances only; predicted has no labels)
-            if (userOpts.showLabels && userInstances.length > 0) {
-                const trackNames = session && session.tracks ? session.tracks : [];
-                drawInstanceLabels(ctx, userInstances, skeleton, viewName, Object.assign({}, userRender, {
-                    trackNames: trackNames,
-                }));
-            }
+            var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
+            var isSelected = selectedInstanceGroup &&
+                selectedInstanceGroup.getInstance &&
+                selectedInstanceGroup.getInstance(viewName) === inst;
+            var drawColor = isSelected ? '#ffffff' : baseColor;
+            drawSkeleton(ctx, inst, skeleton, Object.assign({}, predictedRender, {
+                color: drawColor,
+                lineStyle: predictedOpts.postLineStyle || 'solid',
+            }));
         }
     }
 
-    // 2b. Draw unlinked instances (dashed, semi-transparent)
-    const unlinkedInstances = options.unlinkedInstances || [];
+    // 2b. Unlinked predicted instances
     if (unlinkedInstances.length > 0) {
-        drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, {
-            predictedRender: predictedRender,
-            assignmentSelectedIds: options.assignmentSelectedIds || [],
-            assignmentColor: '#fbbf24',
-            selectedUnlinkedId: options.selectedUnlinkedId || null,
+        drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, unlinkedOpts, {
+            typeFilter: 'predicted',
         }));
     }
 
@@ -1405,7 +1417,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                     var baseColor = getTrackColor(group.trackIdx != null ? group.trackIdx : 0);
                     drawSkeleton(ctx, reprojInst, skeleton, Object.assign({}, reprojRender, {
                         color: baseColor,
-                        dashed: true,
+                        lineStyle: reprojOpts.lineStyle || 'dotted',
                     }));
 
                     // Labels for reprojected instances
@@ -1439,7 +1451,44 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }
     }
 
-    // 4. Selection highlight
+    // 4. Linked user instances (front layer) + user labels
+    if (viewInstances && showUser) {
+        var userInstances = [];
+        for (let i = 0; i < viewInstances.length; i++) {
+            const inst = viewInstances[i];
+            const instType = inst.type || 'user';
+            if (instType === 'predicted') continue;
+
+            var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
+            var isSelected = selectedInstanceGroup &&
+                selectedInstanceGroup.getInstance &&
+                selectedInstanceGroup.getInstance(viewName) === inst;
+            var drawColor = isSelected ? '#ffffff' : baseColor;
+            drawSkeleton(ctx, inst, skeleton, Object.assign({}, userRender, {
+                color: drawColor,
+                lineStyle: userOpts.postLineStyle || 'solid',
+            }));
+
+            userInstances.push(inst);
+        }
+
+        // 4a. Draw track name labels (user instances only)
+        if (userOpts.showLabels && userInstances.length > 0) {
+            const trackNames = session && session.tracks ? session.tracks : [];
+            drawInstanceLabels(ctx, userInstances, skeleton, viewName, Object.assign({}, userRender, {
+                trackNames: trackNames,
+            }));
+        }
+    }
+
+    // 4b. Unlinked user instances
+    if (unlinkedInstances.length > 0) {
+        drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, unlinkedOpts, {
+            typeFilter: 'user',
+        }));
+    }
+
+    // 5. Selection highlight
     if (selectedInstanceGroup) {
         const selInst = selectedInstanceGroup.getInstance
             ? selectedInstanceGroup.getInstance(viewName)
@@ -1455,7 +1504,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }
     }
 
-    // 5. Hover highlight
+    // 6. Hover highlight
     if (hoveredNode && hoveredNode.viewName === viewName && instanceGroups) {
         const hGroupIdx = hoveredNode.instanceGroupIdx;
         const hNodeIdx = hoveredNode.nodeIdx;
@@ -1475,7 +1524,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }
     }
 
-    // 6. Drag preview
+    // 7. Drag preview
     if (dragInfo && dragInfo.viewName === viewName && selectedInstanceGroup) {
         const dragInst = selectedInstanceGroup.getInstance
             ? selectedInstanceGroup.getInstance(viewName)
@@ -1486,7 +1535,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }
     }
 
-    // 7. Legend
+    // 8. Legend
     if (showLegend) {
         drawLegend(ctx, {
             showDetected: showUser || showPredicted,

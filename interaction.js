@@ -216,36 +216,50 @@ class InteractionManager {
         const sliderEl = document.getElementById('visUserNodeSize');
         const nodeSize = sliderEl ? parseInt(sliderEl.value) || 4 : 4;
 
-        for (let g = 0; g < groups.length; g++) {
-            const group = groups[g];
-            const instance = group.getInstance(viewName);
-            if (!instance || !instance.points) continue;
+        // Two-pass hit testing: user instances first (front), then predicted/reprojected (back)
+        // This ensures user instances are selected when overlapping predicted at the same position.
+        const typePassFilters = [
+            function(t) { return t !== 'predicted' && t !== 'reprojected'; }, // Pass 1: user instances
+            function(t) { return t === 'predicted' || t === 'reprojected'; }, // Pass 2: predicted + reprojected
+        ];
 
-            // Skip instances whose type is hidden via visibility checkboxes
-            var instType = instance.type || 'user';
-            if (instType === 'user' && !document.getElementById('visUser').checked) continue;
-            if (instType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
-            if (instType === 'reprojected' && !document.getElementById('visReprojections').checked) continue;
+        for (let pass = 0; pass < typePassFilters.length; pass++) {
+            for (let g = 0; g < groups.length; g++) {
+                const group = groups[g];
+                const instance = group.getInstance(viewName);
+                if (!instance || !instance.points) continue;
 
-            for (let n = 0; n < instance.points.length; n++) {
-                const pt = instance.points[n];
-                if (pt == null) continue;
+                // Skip instances whose type is hidden via visibility checkboxes
+                var instType = instance.type || 'user';
+                if (instType === 'user' && !document.getElementById('visUser').checked) continue;
+                if (instType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
+                if (instType === 'reprojected' && !document.getElementById('visReprojections').checked) continue;
 
-                const dx = pt[0] - videoX;
-                const dy = pt[1] - videoY;
-                const dist = Math.sqrt(dx * dx + dy * dy);
+                // Skip instances not matching this pass's type filter
+                if (!typePassFilters[pass](instType)) continue;
 
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    best = {
-                        instanceGroupIdx: g,
-                        instanceGroup: group,
-                        instanceIdx: g, // index within the groups array
-                        nodeIdx: n,
-                        distance: dist,
-                    };
+                for (let n = 0; n < instance.points.length; n++) {
+                    const pt = instance.points[n];
+                    if (pt == null) continue;
+
+                    const dx = pt[0] - videoX;
+                    const dy = pt[1] - videoY;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        best = {
+                            instanceGroupIdx: g,
+                            instanceGroup: group,
+                            instanceIdx: g, // index within the groups array
+                            nodeIdx: n,
+                            distance: dist,
+                        };
+                    }
                 }
             }
+            // If we found a user instance hit, return it immediately without checking predicted
+            if (best) return best;
         }
 
         // Secondary check: label regions (to the right of each node).
@@ -259,38 +273,45 @@ class InteractionManager {
             const labelOffsetX = 1.5 * nodeSize;
             const labelOffsetY = 0.5 * nodeSize;
 
-            for (let g = 0; g < groups.length; g++) {
-                const group = groups[g];
-                const instance = group.getInstance(viewName);
-                if (!instance || !instance.points) continue;
+            for (let pass = 0; pass < typePassFilters.length; pass++) {
+                for (let g = 0; g < groups.length; g++) {
+                    const group = groups[g];
+                    const instance = group.getInstance(viewName);
+                    if (!instance || !instance.points) continue;
 
-                // Skip hidden types in label hit testing too
-                var instType2 = instance.type || 'user';
-                if (instType2 === 'user' && !document.getElementById('visUser').checked) continue;
-                if (instType2 === 'predicted' && !document.getElementById('visPredicted').checked) continue;
-                if (instType2 === 'reprojected' && !document.getElementById('visReprojections').checked) continue;
+                    // Skip hidden types in label hit testing too
+                    var instType2 = instance.type || 'user';
+                    if (instType2 === 'user' && !document.getElementById('visUser').checked) continue;
+                    if (instType2 === 'predicted' && !document.getElementById('visPredicted').checked) continue;
+                    if (instType2 === 'reprojected' && !document.getElementById('visReprojections').checked) continue;
 
-                for (let n = 0; n < instance.points.length; n++) {
-                    const pt = instance.points[n];
-                    if (pt == null) continue;
+                    // Skip instances not matching this pass's type filter
+                    if (!typePassFilters[pass](instType2)) continue;
 
-                    const labelLeft = pt[0] + labelOffsetX;
-                    const labelRight = pt[0] + labelOffsetX + fontSize * 5;
-                    const labelTop = pt[1] - labelOffsetY - fontSize;
-                    const labelBottom = pt[1] + fontSize * 0.3;
+                    for (let n = 0; n < instance.points.length; n++) {
+                        const pt = instance.points[n];
+                        if (pt == null) continue;
 
-                    if (videoX >= labelLeft && videoX <= labelRight &&
-                        videoY >= labelTop && videoY <= labelBottom) {
-                        best = {
-                            instanceGroupIdx: g,
-                            instanceGroup: group,
-                            instanceIdx: g,
-                            nodeIdx: n,
-                            distance: 0,
-                        };
-                        return best;
+                        const labelLeft = pt[0] + labelOffsetX;
+                        const labelRight = pt[0] + labelOffsetX + fontSize * 5;
+                        const labelTop = pt[1] - labelOffsetY - fontSize;
+                        const labelBottom = pt[1] + fontSize * 0.3;
+
+                        if (videoX >= labelLeft && videoX <= labelRight &&
+                            videoY >= labelTop && videoY <= labelBottom) {
+                            best = {
+                                instanceGroupIdx: g,
+                                instanceGroup: group,
+                                instanceIdx: g,
+                                nodeIdx: n,
+                                distance: 0,
+                            };
+                            return best;
+                        }
                     }
                 }
+                // If we found a label hit in user pass, return immediately
+                if (best) return best;
             }
         }
 
@@ -335,33 +356,46 @@ class InteractionManager {
         const sliderEl = document.getElementById('visUserNodeSize');
         const nodeSize = sliderEl ? parseInt(sliderEl.value) || 4 : 4;
 
-        for (let u = 0; u < unlinkedList.length; u++) {
-            const ul = unlinkedList[u];
-            const points = ul.instance.points;
-            if (!points) continue;
+        // Two-pass hit testing: user instances first (front), then predicted (back)
+        const ulTypePassFilters = [
+            function(t) { return t !== 'predicted'; }, // Pass 1: user instances
+            function(t) { return t === 'predicted'; }, // Pass 2: predicted
+        ];
 
-            // Skip instances whose type is hidden via visibility checkboxes
-            var ulType = ul.instance.type || 'user';
-            if (ulType === 'user' && !document.getElementById('visUser').checked) continue;
-            if (ulType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
+        for (let pass = 0; pass < ulTypePassFilters.length; pass++) {
+            for (let u = 0; u < unlinkedList.length; u++) {
+                const ul = unlinkedList[u];
+                const points = ul.instance.points;
+                if (!points) continue;
 
-            for (let n = 0; n < points.length; n++) {
-                const pt = points[n];
-                if (pt == null) continue;
+                // Skip instances whose type is hidden via visibility checkboxes
+                var ulType = ul.instance.type || 'user';
+                if (ulType === 'user' && !document.getElementById('visUser').checked) continue;
+                if (ulType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
 
-                const dx = pt[0] - videoX;
-                const dy = pt[1] - videoY;
-                const dist = Math.sqrt(dx * dx + dy * dy);
+                // Skip instances not matching this pass's type filter
+                if (!ulTypePassFilters[pass](ulType)) continue;
 
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    best = {
-                        unlinked: ul,
-                        nodeIdx: n,
-                        distance: dist,
-                    };
+                for (let n = 0; n < points.length; n++) {
+                    const pt = points[n];
+                    if (pt == null) continue;
+
+                    const dx = pt[0] - videoX;
+                    const dy = pt[1] - videoY;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        best = {
+                            unlinked: ul,
+                            nodeIdx: n,
+                            distance: dist,
+                        };
+                    }
                 }
             }
+            // If we found a user instance hit, return it immediately without checking predicted
+            if (best) return best;
         }
 
         // Secondary check: label regions (to the right of each node).
@@ -371,35 +405,42 @@ class InteractionManager {
             const labelOffsetX = 1.5 * nodeSize;
             const labelOffsetY = 0.5 * nodeSize;
 
-            for (let u = 0; u < unlinkedList.length; u++) {
-                const ul = unlinkedList[u];
-                const points = ul.instance.points;
-                if (!points) continue;
+            for (let pass = 0; pass < ulTypePassFilters.length; pass++) {
+                for (let u = 0; u < unlinkedList.length; u++) {
+                    const ul = unlinkedList[u];
+                    const points = ul.instance.points;
+                    if (!points) continue;
 
-                // Skip hidden types in label hit testing too
-                var ulType2 = ul.instance.type || 'user';
-                if (ulType2 === 'user' && !document.getElementById('visUser').checked) continue;
-                if (ulType2 === 'predicted' && !document.getElementById('visPredicted').checked) continue;
+                    // Skip hidden types in label hit testing too
+                    var ulType2 = ul.instance.type || 'user';
+                    if (ulType2 === 'user' && !document.getElementById('visUser').checked) continue;
+                    if (ulType2 === 'predicted' && !document.getElementById('visPredicted').checked) continue;
 
-                for (let n = 0; n < points.length; n++) {
-                    const pt = points[n];
-                    if (pt == null) continue;
+                    // Skip instances not matching this pass's type filter
+                    if (!ulTypePassFilters[pass](ulType2)) continue;
 
-                    const labelLeft = pt[0] + labelOffsetX;
-                    const labelRight = pt[0] + labelOffsetX + fontSize * 5;
-                    const labelTop = pt[1] - labelOffsetY - fontSize;
-                    const labelBottom = pt[1] + fontSize * 0.3;
+                    for (let n = 0; n < points.length; n++) {
+                        const pt = points[n];
+                        if (pt == null) continue;
 
-                    if (videoX >= labelLeft && videoX <= labelRight &&
-                        videoY >= labelTop && videoY <= labelBottom) {
-                        best = {
-                            unlinked: ul,
-                            nodeIdx: n,
-                            distance: 0,
-                        };
-                        return best;
+                        const labelLeft = pt[0] + labelOffsetX;
+                        const labelRight = pt[0] + labelOffsetX + fontSize * 5;
+                        const labelTop = pt[1] - labelOffsetY - fontSize;
+                        const labelBottom = pt[1] + fontSize * 0.3;
+
+                        if (videoX >= labelLeft && videoX <= labelRight &&
+                            videoY >= labelTop && videoY <= labelBottom) {
+                            best = {
+                                unlinked: ul,
+                                nodeIdx: n,
+                                distance: 0,
+                            };
+                            return best;
+                        }
                     }
                 }
+                // If we found a label hit in user pass, return immediately
+                if (best) return best;
             }
         }
 
