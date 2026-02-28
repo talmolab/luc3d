@@ -64,17 +64,8 @@ class Viewport3D {
         /** @type {THREE.Raycaster} For picking camera objects */
         this._raycaster = null;
 
-        /** @type {string|null} Currently selected camera name */
-        this.selectedCamera = null;
-
-        /** @type {string|null} Camera whose perspective we are viewing (for declutter) */
-        this._viewingCamera = null;
-
         /** @type {number|null} Animation frame timer for perspective animation */
         this._perspectiveAnimId = null;
-
-        /** @type {boolean} True while perspective animation is running — suppresses controls.update() */
-        this._animatingPerspective = false;
 
         // Three.js objects
         /** @type {THREE.Scene} */
@@ -329,27 +320,6 @@ class Viewport3D {
             wireframe.name = 'camera_' + cam.name;
             this._cameraGroup.add(wireframe);
 
-            // --- Blue "up" direction line: camera center to top edge midpoint ---
-            const topMid = [
-                (corners[0][0] + corners[1][0]) / 2,
-                (corners[0][1] + corners[1][1]) / 2,
-                (corners[0][2] + corners[1][2]) / 2,
-            ];
-            const upLineGeo = new THREE.BufferGeometry();
-            upLineGeo.setAttribute('position',
-                new THREE.Float32BufferAttribute([
-                    camPos[0], camPos[1], camPos[2],
-                    topMid[0], topMid[1], topMid[2],
-                ], 3));
-            const upLineMat = new THREE.LineBasicMaterial({
-                color: 0x4488ff,
-                transparent: true,
-                opacity: 0.9,
-            });
-            const upLine = new THREE.LineSegments(upLineGeo, upLineMat);
-            upLine.name = 'camUp_' + cam.name;
-            this._cameraGroup.add(upLine);
-
             // --- Camera label sprite ---
             const label = this._createTextSprite(cam.name, {
                 fontSize: 28,
@@ -404,99 +374,14 @@ class Viewport3D {
 
             const intersects = this._raycaster.intersectObjects(meshes, false);
             if (intersects.length > 0) {
+                // Find which camera was hit by checking the object name
                 const hitObj = intersects[0].object;
                 const camName = this._getCameraNameFromObject(hitObj);
                 if (camName) {
-                    this.selectCamera(camName);
-                }
-            }
-        });
-
-        // Declutter: check distance to viewed camera on orbit changes
-        this.controls.addEventListener('change', () => {
-            this._checkDeclutter();
-        });
-    }
-
-    /**
-     * Select a camera by name. Highlights it in 3D and notifies the callback.
-     * @param {string} cameraName
-     */
-    selectCamera(cameraName) {
-        // Toggle if same camera clicked again
-        if (this.selectedCamera === cameraName) {
-            this.selectedCamera = null;
-            this.highlightCamera(null);
-            if (this.onCameraClicked) {
-                this.onCameraClicked(null);
-            }
-            return;
-        }
-        this.selectedCamera = cameraName;
-        this.highlightCamera(cameraName);
-        if (this.onCameraClicked) {
-            this.onCameraClicked(cameraName);
-        }
-    }
-
-    /**
-     * Animate to the selected camera's perspective.
-     * Called by the "Show Camera View" button.
-     */
-    showSelectedCameraView() {
-        if (!this.selectedCamera) return;
-        this._viewingCamera = this.selectedCamera;
-        this.animateToCameraPerspective(this.selectedCamera);
-        // Declutter after animation completes
-        setTimeout(() => { this._setDeclutter(this._viewingCamera, true); }, 550);
-    }
-
-    /**
-     * Check distance from three.js camera to the viewed camera.
-     * If close, hide that camera's geometry; if far, restore.
-     * @private
-     */
-    _checkDeclutter() {
-        if (!this._viewingCamera) return;
-        var cam = null;
-        for (var i = 0; i < this.cameras.length; i++) {
-            if (this.cameras[i].name === this._viewingCamera) {
-                cam = this.cameras[i];
-                break;
-            }
-        }
-        if (!cam) return;
-
-        var R = cam.rotationMatrix;
-        var t = cam.tvec;
-        var camPos = this._computeCameraPosition(R, t);
-        var dx = this.threeCamera.position.x - camPos[0];
-        var dy = this.threeCamera.position.y - camPos[1];
-        var dz = this.threeCamera.position.z - camPos[2];
-        var dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-        // Threshold: hide when within 80mm, show when beyond 120mm (hysteresis)
-        if (dist < 80) {
-            this._setDeclutter(this._viewingCamera, true);
-        } else if (dist > 120) {
-            this._setDeclutter(this._viewingCamera, false);
-            this._viewingCamera = null;
-        }
-    }
-
-    /**
-     * Show or hide camera geometry for declutter.
-     * @param {string} cameraName
-     * @param {boolean} hide - true to hide, false to show
-     * @private
-     */
-    _setDeclutter(cameraName, hide) {
-        if (!this._cameraGroup) return;
-        var prefixes = ['camera_', 'label_', 'camUp_', 'camSphere_'];
-        this._cameraGroup.traverse(function (child) {
-            for (var p = 0; p < prefixes.length; p++) {
-                if (child.name === prefixes[p] + cameraName) {
-                    child.visible = !hide;
+                    this.animateToCameraPerspective(camName);
+                    if (this.onCameraClicked) {
+                        this.onCameraClicked(camName);
+                    }
                 }
             }
         });
@@ -510,8 +395,8 @@ class Viewport3D {
      */
     _getCameraNameFromObject(obj) {
         if (!obj || !obj.name) return null;
-        // Objects are named: camera_NAME, label_NAME, camSphere_NAME, camUp_NAME
-        const prefixes = ['camSphere_', 'camera_', 'label_', 'camUp_'];
+        // Objects are named: camera_NAME, label_NAME, camSphere_NAME
+        const prefixes = ['camSphere_', 'camera_', 'label_'];
         for (const prefix of prefixes) {
             if (obj.name.startsWith(prefix)) {
                 return obj.name.substring(prefix.length);
@@ -588,40 +473,24 @@ class Viewport3D {
             cancelAnimationFrame(this._perspectiveAnimId);
         }
 
-        // Suppress orbit controls during animation to prevent fighting
-        this._animatingPerspective = true;
-        this.controls.enabled = false;
-
         const self = this;
         function animate() {
             const elapsed = performance.now() - startTime;
             const rawT = Math.min(1, elapsed / duration);
             // Ease in-out (smoothstep)
-            const progress = rawT * rawT * (3 - 2 * rawT);
+            const t = rawT * rawT * (3 - 2 * rawT);
 
-            self.threeCamera.position.lerpVectors(startPos, endPos, progress);
-            self.controls.target.copy(endTarget);  // Set target directly each frame
-            self.threeCamera.up.lerpVectors(startUp, endUp, progress).normalize();
-            self.threeCamera.fov = startFov + (targetFov - startFov) * progress;
+            self.threeCamera.position.lerpVectors(startPos, endPos, t);
+            self.controls.target.lerpVectors(startTarget, endTarget, t);
+            self.threeCamera.up.lerpVectors(startUp, endUp, t).normalize();
+            self.threeCamera.fov = startFov + (targetFov - startFov) * t;
             self.threeCamera.updateProjectionMatrix();
-
-            // Explicit render to ensure changes are visible
-            self.renderer.render(self.scene, self.threeCamera);
+            self.controls.update();
 
             if (rawT < 1) {
                 self._perspectiveAnimId = requestAnimationFrame(animate);
             } else {
                 self._perspectiveAnimId = null;
-                // Finalize: set exact end state
-                self.threeCamera.position.copy(endPos);
-                self.threeCamera.up.copy(endUp).normalize();
-                self.threeCamera.fov = targetFov;
-                self.threeCamera.updateProjectionMatrix();
-                self.controls.target.copy(endTarget);
-                // Re-enable orbit controls — reset internal state so it doesn't snap back
-                self.controls.enabled = true;
-                self._animatingPerspective = false;
-                self.controls.update();
             }
         }
 
@@ -816,38 +685,6 @@ class Viewport3D {
     }
 
     /**
-     * Highlight a camera by name in the 3D viewport.
-     * Pass null to clear all highlights.
-     * @param {string|null} cameraName
-     */
-    highlightCamera(cameraName) {
-        if (!this._cameraGroup) return;
-        var self = this;
-        this._cameraGroup.traverse(function (child) {
-            if (child.material) {
-                var name = child.name || '';
-                var isUpLine = name.startsWith('camUp_');
-                var belongsToCamera = name === 'camera_' + cameraName ||
-                    name === 'label_' + cameraName ||
-                    name === 'camSphere_' + cameraName ||
-                    name === 'camUp_' + cameraName;
-                if (cameraName && belongsToCamera) {
-                    child.material.color.set(isUpLine ? 0x66aaff : 0xff4444);
-                    child.material.opacity = 1.0;
-                } else if (isUpLine) {
-                    // Reset up-line to blue
-                    child.material.color.set(0x4488ff);
-                    child.material.opacity = 0.9;
-                } else {
-                    // Reset to default yellow
-                    child.material.color.set(0xffdd44);
-                    child.material.opacity = name.startsWith('camSphere_') ? 0.8 : 0.7;
-                }
-            }
-        });
-    }
-
-    /**
      * Handle container resize. Updates renderer and camera aspect ratio.
      */
     resize() {
@@ -1019,8 +856,7 @@ class Viewport3D {
 
         this._rafId = requestAnimationFrame(() => this._animate());
 
-        // Skip orbit controls update during perspective animation to prevent fighting
-        if (this.controls && !this._animatingPerspective) {
+        if (this.controls) {
             this.controls.update();
         }
 

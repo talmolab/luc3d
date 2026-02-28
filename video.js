@@ -949,7 +949,7 @@ class VideoController {
             var view = views[i];
             var videoFrame = frames[i];
 
-            if (videoFrame && view.ctx && view.canvas) {
+            if (videoFrame) {
                 // Draw video frame to the main canvas
                 view.ctx.drawImage(videoFrame, 0, 0, view.canvas.width, view.canvas.height);
             }
@@ -1261,73 +1261,11 @@ class VideoController {
 
         var cell = view.canvas ? view.canvas.closest('.video-cell') : null;
         if (cell) {
-            var isZoomed = Math.abs(z.scale - 1.0) > 0.01;
-            cell.classList.toggle('zoomed', isZoomed);
-            var unzoomBtn = cell.querySelector('.unzoom-btn');
-            if (unzoomBtn) unzoomBtn.style.display = isZoomed ? '' : 'none';
-        }
-    }
-
-    /**
-     * Compute the minimum zoom scale for a view.
-     * Allows zooming out until BOTH wrapper dimensions are smaller than the cell.
-     * As long as one dimension still fills the container, zooming out is permitted.
-     */
-    _getMinScale(view) {
-        var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
-        var container = view.canvas ? view.canvas.closest('.video-cell') : null;
-        if (!wrapper || !container) return 1.0;
-        // offsetWidth/Height give the untransformed CSS layout size
-        var wW = wrapper.offsetWidth;
-        var wH = wrapper.offsetHeight;
-        var cW = container.clientWidth;
-        var cH = container.clientHeight;
-        if (wW <= 0 || wH <= 0) return 1.0;
-        // Scale where width fills, and scale where height fills
-        var scaleW = cW / wW;
-        var scaleH = cH / wH;
-        // Allow zooming out until BOTH are smaller → stop at min of the two
-        // (the smaller ratio is where the last-filling dimension stops filling)
-        return Math.max(0.25, Math.min(scaleW, scaleH));
-    }
-
-    /**
-     * Constrain offsets so the video content stays reasonably positioned.
-     * When scaled content covers a dimension: allow panning within it.
-     * When it doesn't cover: center in that dimension.
-     */
-    _constrainOffsets(z, view) {
-        var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
-        var container = view.canvas ? view.canvas.closest('.video-cell') : null;
-        if (!wrapper || !container) return;
-        var wW = wrapper.offsetWidth;
-        var wH = wrapper.offsetHeight;
-        var cW = container.clientWidth;
-        var cH = container.clientHeight;
-        if (wW <= 0 || wH <= 0) return;
-        // The wrapper is flex-centered. Its CSS top-left is at:
-        var flexOffX = (cW - wW) / 2;
-        var flexOffY = (cH - wH) / 2;
-        // After transform: visual top-left = (flexOffX + ox, flexOffY + oy)
-        // Visual size = (wW * s, wH * s)
-        var scaledW = wW * z.scale;
-        var scaledH = wH * z.scale;
-        if (scaledW >= cW) {
-            // Width covers container — clamp so edges don't leave gaps
-            var maxOx = -flexOffX;
-            var minOx = cW - flexOffX - scaledW;
-            z.offsetX = Math.max(minOx, Math.min(maxOx, z.offsetX));
-        } else {
-            // Width doesn't cover — center horizontally
-            z.offsetX = (cW - scaledW) / 2 - flexOffX;
-        }
-        if (scaledH >= cH) {
-            var maxOy = -flexOffY;
-            var minOy = cH - flexOffY - scaledH;
-            z.offsetY = Math.max(minOy, Math.min(maxOy, z.offsetY));
-        } else {
-            // Height doesn't cover — center vertically
-            z.offsetY = (cH - scaledH) / 2 - flexOffY;
+            if (z.scale > 1.01 || Math.abs(z.offsetX) > 1 || Math.abs(z.offsetY) > 1) {
+                cell.classList.add('zoomed');
+            } else {
+                cell.classList.remove('zoomed');
+            }
         }
     }
 
@@ -1336,8 +1274,7 @@ class VideoController {
 
         var z = view.zoom;
         var oldScale = z.scale;
-        var minScale = this._getMinScale(view);
-        var newScale = Math.max(minScale, Math.min(10, oldScale * factor));
+        var newScale = Math.max(0.25, Math.min(10, oldScale * factor));
 
         if (cssX !== undefined && cssY !== undefined) {
             var contentX = (cssX - z.offsetX) / oldScale;
@@ -1347,9 +1284,7 @@ class VideoController {
         }
 
         z.scale = newScale;
-        this._constrainOffsets(z, view);
         this.applyZoom(view);
-        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
     resetZoom(view) {
@@ -1358,7 +1293,6 @@ class VideoController {
         view.zoom.offsetX = 0;
         view.zoom.offsetY = 0;
         this.applyZoom(view);
-        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
     zoomToRect(view, x1, y1, x2, y2, container) {
@@ -1380,18 +1314,15 @@ class VideoController {
         var contentH = contentY2 - contentY1;
 
         var newScale = Math.min(containerW / contentW, containerH / contentH);
-        var minScale = this._getMinScale(view);
-        var clampedScale = Math.max(minScale, Math.min(10, newScale));
+        var clampedScale = Math.max(0.25, Math.min(10, newScale));
 
         var contentCenterX = (contentX1 + contentX2) / 2;
         var contentCenterY = (contentY1 + contentY2) / 2;
         z.offsetX = containerW / 2 - contentCenterX * clampedScale;
         z.offsetY = containerH / 2 - contentCenterY * clampedScale;
         z.scale = clampedScale;
-        this._constrainOffsets(z, view);
 
         this.applyZoom(view);
-        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
     zoomAllVideos(factor) {
@@ -1420,6 +1351,16 @@ class VideoController {
             var cssY = e.clientY - rect.top;
             self.zoomVideo(view, factor, cssX, cssY);
         }, { passive: false });
+
+        // ---- Double-click to reset zoom ----
+        container.addEventListener("dblclick", function (e) {
+            if (view.zoom && (view.zoom.scale > 1.01 || view.zoom.scale < 0.99 ||
+                Math.abs(view.zoom.offsetX) > 1 || Math.abs(view.zoom.offsetY) > 1)) {
+                e.preventDefault();
+                e.stopPropagation();
+                self.resetZoom(view);
+            }
+        });
 
         // ---- Drag state for pan / box zoom ----
         var isPanning = false;
@@ -1460,9 +1401,9 @@ class VideoController {
 
         var isZoomed = function () {
             if (!view.zoom) return false;
-            // Consider zoomed if scale is meaningfully different from 1.0
-            // (either zoomed in OR zoomed out from CSS-fit)
-            return Math.abs(view.zoom.scale - 1.0) > 0.05;
+            return view.zoom.scale > 1.05 ||
+                Math.abs(view.zoom.offsetX) > 2 ||
+                Math.abs(view.zoom.offsetY) > 2;
         };
 
         document.addEventListener("mousemove", function (e) {
@@ -1480,7 +1421,6 @@ class VideoController {
 
                 view.zoom.offsetX += dx;
                 view.zoom.offsetY += dy;
-                self._constrainOffsets(view.zoom, view);
                 self.applyZoom(view);
                 return;
             }

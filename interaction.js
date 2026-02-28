@@ -39,7 +39,7 @@ class InteractionManager {
      * @param {Function} callbacks.onInstanceConverted - (instanceGroup) => void
      *   Called after a predicted instance is converted to a user instance
      *   (double-click interaction).
-     * @param {Function} callbacks.onNodeSetNull - (viewName, instanceGroup, nodeIdx) => void  (toggle null state)
+     * @param {Function} callbacks.onNodeVisibilityToggled - (viewName, instanceGroup, nodeIdx) => void
      *   Called after a right-click toggles a node's visibility.
      * @param {Function} callbacks.requestRedraw - () => void
      *   Triggers a full overlay redraw across all views.
@@ -495,7 +495,7 @@ class InteractionManager {
             e.preventDefault();
             var hit = this.findNearestNode(vx, vy, viewName, frameIdx);
             if (hit) {
-                this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
+                this._toggleNodeVisibility(viewName, hit.instanceGroup, hit.nodeIdx);
             }
             return;
         }
@@ -1110,29 +1110,28 @@ class InteractionManager {
     }
 
     /**
-     * Toggle a node's null state (right-click action).
-     * Nulled nodes keep their coordinates but are rendered grayed out
-     * and excluded from triangulation.
+     * Toggle a node's occlusion state (SLEAP-style).
+     * If the point has valid coordinates, toggles between visible and occluded.
+     * Occluded nodes keep their position but render differently and are
+     * excluded from 3D triangulation.
      *
      * @param {string} viewName
      * @param {InstanceGroup} group
      * @param {number} nodeIdx
      * @private
      */
-    _toggleNodeNull(viewName, group, nodeIdx) {
+    _toggleNodeVisibility(viewName, group, nodeIdx) {
         const instance = group.getInstance(viewName);
         if (!instance || !instance.points) return;
 
-        if (!instance.nulledNodes) instance.nulledNodes = new Set();
-
-        if (instance.nulledNodes.has(nodeIdx)) {
-            instance.nulledNodes.delete(nodeIdx);
-        } else {
-            instance.nulledNodes.add(nodeIdx);
+        if (instance.points[nodeIdx] != null) {
+            instance.toggleOccluded(nodeIdx);
+            instance.modified = true;
         }
+        // If the point is null, there's nothing to toggle.
 
-        if (this.callbacks.onNodeSetNull) {
-            this.callbacks.onNodeSetNull(viewName, group, nodeIdx);
+        if (this.callbacks.onNodeVisibilityToggled) {
+            this.callbacks.onNodeVisibilityToggled(viewName, group, nodeIdx);
         }
 
         this._requestRedraw();
@@ -1302,11 +1301,6 @@ class InteractionManager {
 
         const frameIdx = state.currentFrame;
         const group = state.session.createGroupFromUnlinked(frameIdx, this.assignmentSelection);
-
-        // Update instance trackIdx to match group for consistent coloring
-        for (const [camName, inst] of group.instances) {
-            inst.trackIdx = group.trackIdx;
-        }
 
         // Clear assignment mode
         this.assignmentSelection = [];

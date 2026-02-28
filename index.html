@@ -6,7 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
     <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/dockview-core/dist/styles/dockview.css">
     <!-- MP4 demuxing -->
     <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.js"></script>
     <!-- Three.js for 3D viewport (v0.147 is the last version with examples/js/) -->
@@ -20,9 +19,8 @@
     <div class="app-container">
         <!-- Loading overlay -->
         <div class="loading-overlay" id="loadingOverlay">
-            <div class="spinner" id="loadingSpinner"></div>
+            <div class="spinner"></div>
             <div id="loadingStatus">Initializing...</div>
-            <button class="btn" id="loadingDismiss" style="display:none;margin-top:12px;">Dismiss</button>
         </div>
 
         <!-- Menu Bar -->
@@ -37,7 +35,6 @@
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
                     <div class="menu-dropdown-item" id="menuLoadSession">Load Session...</div>
-                    <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Session Folder...</div>
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
@@ -64,9 +61,9 @@
                     <div class="menu-dropdown-item" id="menuUnlinkGroup">Unlink Group <span
                             class="shortcut-hint">U</span></div>
                     <div class="menu-separator"></div>
-                    <div class="menu-dropdown-item" id="menuTriangulate">Triangulate Current Frame <span
+                    <div class="menu-dropdown-item" id="menuTriangulate">Triangulate <span
                             class="shortcut-hint">T</span></div>
-                    <div class="menu-dropdown-item" id="menuTriangulateMulti">Triangulate Multiple Frames</div>
+                    <div class="menu-dropdown-item" id="menuTriangulateAll">Triangulate All Frames</div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -82,7 +79,7 @@
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
                 </div>
             </div>
-            <div class="menu-item" id="menuLoadDemoBar" style="cursor:pointer;">Load Demo</div>
+            <img src="lucid.jpg" alt="LUCID" style="margin-left:auto; height:100%; padding:2px 8px; box-sizing:border-box;">
         </div>
 
         <!-- Toolbar -->
@@ -94,39 +91,24 @@
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbAssign" title="Assignment mode">Assign &#9662;</button>
+                <button class="toolbar-btn" id="tbAssign" title="Toggle assignment mode (A)">Assign</button>
                 <button class="toolbar-btn" id="tbCreateGroup" title="Create group from assignment (Enter)">Create Group</button>
                 <button class="toolbar-btn" id="tbUnlinkGroup" title="Unlink selected group">Unlink</button>
             </div>
-            <!-- Assign dropdown menu (positioned absolutely via JS) -->
-            <div class="toolbar-dropdown-menu" id="tbAssignMenu" style="display:none;position:fixed;z-index:10000;">
-                <div class="toolbar-dropdown-item" id="tbAssignManual">Manual</div>
-                <div class="toolbar-dropdown-item has-flyout" id="tbAssignAutomatic">Automatic &#9656;
-                    <div class="toolbar-flyout-menu" id="tbAutoFlyout">
-                        <div class="toolbar-dropdown-item" id="tbAutoCurrentFrame">Current Frame</div>
-                        <div class="toolbar-dropdown-item" id="tbAutoMultipleFrames">Multiple Frames</div>
-                    </div>
-                </div>
-            </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbTriangulate" title="Triangulate">Triangulate &#9662;</button>
-                <div class="toolbar-dropdown-menu" id="tbTriangulateMenu" style="display:none;position:fixed;z-index:10000;">
-                    <div class="toolbar-dropdown-item" id="tbTriangCurrentFrame">Current Frame</div>
-                    <div class="toolbar-dropdown-item" id="tbTriangMultipleFrames">Multiple Frames</div>
-                </div>
+                <button class="toolbar-btn" id="tbTriangulate"
+                    title="Triangulate from labeled views (T)">Triangulate</button>
+                <button class="toolbar-btn" id="tbTriangulateAll"
+                    title="Triangulate all frames in session">Triangulate All</button>
                 <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <label class="toolbar-btn" style="cursor:default;font-size:12px;">
-                    Node Size&nbsp;<span id="nodeSizeValue">1</span>
+                    Node Size <span id="nodeSizeValue">8</span>
                 </label>
-                <input type="range" id="nodeSizeSlider" min="1" max="20" value="1" step="1" style="width:80px;">
-                <label class="toolbar-btn" style="cursor:default;font-size:12px;margin-left:6px;">
-                    Label Size&nbsp;<span id="labelSizeValue">11</span>
-                </label>
-                <input type="range" id="labelSizeSlider" min="0" max="24" value="11" step="1" style="width:60px;">
+                <input type="range" id="nodeSizeSlider" min="1" max="20" value="8" step="1" style="width:80px;">
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
@@ -134,55 +116,60 @@
                     <input type="checkbox" id="toggleDetected" checked> Detected
                 </label>
                 <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
-                    <input type="checkbox" id="toggleReprojected"> Reproj
+                    <input type="checkbox" id="toggleReprojected" checked> Reproj
                 </label>
                 <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
-                    <input type="checkbox" id="toggleErrors"> Errors
+                    <input type="checkbox" id="toggleErrors" checked> Errors
                 </label>
                 <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
                     <input type="checkbox" id="toggleLabels" checked> Labels
                 </label>
             </div>
-            <button class="toolbar-btn" id="infoPanelToggleBtn" style="margin-left:auto;" title="Toggle info panel (I)">Hide Panel</button>
         </div>
 
         <!-- Main content: video grid + 3D viewport + info panel -->
         <div class="main-content">
             <!-- Video Grid Section (left/center) -->
             <div class="video-grid-section">
-                <!-- View strip sidebar (scrollable list of video thumbnails) -->
-                <div class="view-strip" id="viewStrip">
-                    <div class="view-strip-header">Views</div>
-                    <div class="view-strip-list" id="viewStripList">
-                        <!-- Populated dynamically -->
+                <div class="video-grid" id="videoGrid">
+                    <div class="video-cell" id="cell-back">
+                        <span class="view-label">back</span>
+                        <div class="canvas-wrapper">
+                            <canvas id="canvas-back"></canvas>
+                            <canvas class="overlay-canvas" id="overlay-back"></canvas>
+                        </div>
                     </div>
-                </div>
-
-                <!-- Main video viewing area (split-panel dock) -->
-                <div class="video-dock" id="videoDock">
-                    <div class="video-dock-empty" id="videoDockEmpty">
-                        <div class="dock-empty-icon">&#128249;</div>
-                        <div id="dockEmptyText">Drag and Drop videos</div>
-                        <div id="dockEmptySubtext" style="font-size:11px;margin-top:4px;color:var(--text-muted);">Drag from the view strip or double-click to add</div>
+                    <div class="video-cell" id="cell-mid">
+                        <span class="view-label">mid</span>
+                        <div class="canvas-wrapper">
+                            <canvas id="canvas-mid"></canvas>
+                            <canvas class="overlay-canvas" id="overlay-mid"></canvas>
+                        </div>
+                    </div>
+                    <div class="video-cell" id="cell-side">
+                        <span class="view-label">side</span>
+                        <div class="canvas-wrapper">
+                            <canvas id="canvas-side"></canvas>
+                            <canvas class="overlay-canvas" id="overlay-side"></canvas>
+                        </div>
+                    </div>
+                    <div class="video-cell" id="cell-top">
+                        <span class="view-label">top</span>
+                        <div class="canvas-wrapper">
+                            <canvas id="canvas-top"></canvas>
+                            <canvas class="overlay-canvas" id="overlay-top"></canvas>
+                        </div>
                     </div>
                 </div>
             </div>
-
-            <!-- Split handle: video grid | 3D viewport -->
-            <div class="split-handle vertical" id="splitHandle1"></div>
 
             <!-- 3D Viewport (center-right) -->
             <div class="viewport3d-container" id="viewport3dContainer">
                 <div id="viewport3dCanvas" style="width:100%;height:100%;"></div>
-                <button class="viewport3d-show-cam-btn" id="btnShowCameraView" title="Show selected camera's perspective">Show Camera View</button>
             </div>
 
-            <!-- Split handle: 3D viewport | info panel -->
-            <div class="split-handle vertical" id="splitHandle2"></div>
-
-            <!-- Info Panel wrapper (toggle button + panel) -->
-            <div class="info-panel-wrapper" id="infoPanelWrapper">
-                <div class="info-panel" id="infoPanel">
+            <!-- Info Panel (right sidebar) -->
+            <div class="info-panel" id="infoPanel">
                 <!-- Tab bar -->
                 <div class="panel-tabs">
                     <button class="panel-tab active" data-tab="tabInstances">Instances</button>
@@ -195,7 +182,7 @@
                 <!-- ==================== Instances Tab ==================== -->
                 <div class="panel-tab-content active" id="tabInstances">
                     <!-- Reprojection Error -->
-                    <div class="info-section" id="reprojErrorSection" style="display:none">
+                    <div class="info-section">
                         <h3>Reprojection Error</h3>
                         <div class="error-display" id="errorDisplay">-</div>
                         <div id="perCameraErrors"></div>
@@ -216,7 +203,7 @@
                                     <th>Track</th>
                                     <th>Views</th>
                                     <th>Type</th>
-                                    <th class="reproj-error-col" style="display:none">Error</th>
+                                    <th>Error</th>
                                     <th style="width:24px;"></th>
                                 </tr>
                             </thead>
@@ -306,6 +293,25 @@
                 <!-- ==================== Skeleton Tab ==================== -->
                 <div class="panel-tab-content" id="tabSkeleton">
                     <div class="info-section">
+                        <h3>Nodes</h3>
+                        <table class="data-table" id="skeletonNodesTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Name</th>
+                                    <th style="width:30px"></th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="panel-button-row" style="margin-top:6px">
+                            <input type="text" id="newNodeName" placeholder="New node name"
+                                style="flex:1;padding:3px 6px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:3px;">
+                            <button class="panel-btn" id="btnAddNode" title="Add skeleton node">+ Node</button>
+                        </div>
+                    </div>
+
+                    <div class="info-section">
                         <h3>Edges</h3>
                         <table class="data-table" id="skeletonEdgesTable">
                             <thead>
@@ -326,21 +332,8 @@
                         </div>
                     </div>
 
-                    <div class="info-section">
-                        <h3>Nodes</h3>
-                        <table class="data-table" id="skeletonNodesTable">
-                            <thead>
-                                <tr>
-                                    <th>#</th>
-                                    <th>Name</th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-
                     <div style="margin-top:10px;display:flex;gap:6px">
-                        <button class="panel-btn" id="btnLoadSkeleton" title="Load skeleton from JSON file" style="flex:1">Load Skeleton</button>
+                        <button class="panel-btn" id="btnLoadSkeleton" title="Load skeleton from SLEAP .json file" style="flex:1">Load Skeleton</button>
                         <button class="panel-btn" id="btnSaveSkeleton" title="Save skeleton in SLEAP format" style="flex:1">Save Skeleton</button>
                     </div>
                 </div>
@@ -415,7 +408,6 @@
                 <!-- Hidden legacy element for backward compat -->
                 <div class="instance-list" id="instanceList" style="display:none;"></div>
             </div>
-            </div><!-- end info-panel-wrapper -->
         </div>
 
         <!-- Timeline -->
@@ -444,11 +436,9 @@
                 <div class="seekbar-thumb" id="seekbarThumb"></div>
             </div>
 
-            <div class="fps-pill" title="Double-click to edit FPS">
-                <span class="fps-display" id="fpsDisplay"></span>
-            </div>
+            <div class="fps-display" id="fpsDisplay">- fps</div>
 
-            <button class="toolbar-btn" id="timelineToggleBtn" title="Toggle timeline" style="font-size:11px;padding:2px 8px;">Timeline</button>
+            <button class="btn btn-sm" id="btnTogglePanel" title="Toggle info panel (I)">Info</button>
         </div>
 
         <!-- Status Bar -->
@@ -485,9 +475,7 @@
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
 
-    <script type="module">
-        import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core/+esm';
-
+    <script>
         // Quick diagnostic: verify external scripts loaded
         if (typeof parseSlpH5 !== 'function') console.error('[LOAD] file-io.js did not load! parseSlpH5 is missing.');
         if (typeof Skeleton !== 'function') console.error('[LOAD] pose-data.js did not load!');
@@ -509,8 +497,6 @@
             session: null,      // Session object from pose-data.js
             keypoints3d: null,  // Raw 3D keypoints from demo-data.js
             triangulationResults: new Map(), // frameIdx -> [{ group, points3d, reprojections, errors, meanError }]
-            lastAutoAssignViews: null,  // Array of view names used for last auto-assignment
-            lastAutoAssignFrame: null,  // Frame index where last auto-assignment was run
         };
 
         let videoController = null;
@@ -543,21 +529,17 @@
                 setupPanelTabs();
                 setupSkeletonEditing();
                 setupInteraction();
-                try {
-                    paneManager.init(document.getElementById('videoDock'));
-                } catch (dockErr) {
-                    console.error('Dockview init failed:', dockErr);
-                }
-                setupSplitHandles();
                 setupTimeline();
                 setupMenus();
 
+                showWelcomeOverlay();
+
                 hideLoading();
-                setStatus('Ready - load videos via File menu or click Load Demo', 'success');
+                setStatus('Ready - load videos and calibration to begin', 'success');
 
             } catch (err) {
                 console.error('Initialization failed:', err);
-                showLoadingError('Error: ' + err.message);
+                showLoading('Error: ' + err.message);
                 setStatus('Error', 'error');
             }
         }
@@ -565,45 +547,50 @@
         /**
          * Create a minimal video controller for empty state (no views loaded yet).
          */
-        var _zoomRedrawTimer = null;
         function setupEmptyVideoController() {
             videoController = new VideoController(state, {
                 updateSeekbar: updateSeekbar,
                 drawOverlays: drawAllOverlays,
                 onPlaybackStateChange: onPlaybackStateChange,
                 log: window.logMessage,
-                onZoomChange: function () {
-                    clearTimeout(_zoomRedrawTimer);
-                    _zoomRedrawTimer = setTimeout(function () {
-                        drawAllOverlays(state.currentFrame);
-                    }, 200);
-                },
             });
         }
 
         /**
-         * Show/hide loading overlay helpers
+         * Show a welcome overlay in the video grid when no videos are loaded.
          */
-        /**
-         * Hide the welcome/empty overlay (dock empty state is handled by paneManager).
-         */
-        function hideWelcomeOverlay() {
-            var emptyMsg = document.getElementById('videoDockEmpty');
-            if (emptyMsg) emptyMsg.classList.add('hidden');
+        function showWelcomeOverlay() {
+            const gridEl = document.getElementById('videoGrid');
+            if (!gridEl) return;
+
+            // Remove hardcoded cells if present and no views
+            if (state.views.length === 0) {
+                gridEl.innerHTML = '';
+            }
+
+            let overlay = document.getElementById('welcomeOverlay');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'welcomeOverlay';
+                overlay.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;color:var(--text-muted);font-size:14px;text-align:center;padding:40px;grid-column:1/-1;grid-row:1/-1;';
+                overlay.innerHTML = '<div style="font-size:24px;margin-bottom:12px;opacity:0.5;">Multi-View Pose Proofreader</div>'
+                    + '<div style="margin-bottom:20px;">Load videos and calibration to begin</div>'
+                    + '<div style="font-size:12px;line-height:2;opacity:0.7;">'
+                    + 'File &rarr; Load Videos... &nbsp;(add video files)<br>'
+                    + 'File &rarr; Load Calibration... &nbsp;(add camera calibration)<br>'
+                    + 'File &rarr; Load Demo Session &nbsp;(try with synthetic data)'
+                    + '</div>';
+                gridEl.appendChild(overlay);
+            }
+            overlay.style.display = 'flex';
         }
 
-        function showLoadingError(msg) {
-            var overlay = document.getElementById('loadingOverlay');
-            var spinner = document.getElementById('loadingSpinner');
-            var status = document.getElementById('loadingStatus');
-            var dismiss = document.getElementById('loadingDismiss');
-            if (overlay) overlay.style.display = '';
-            if (spinner) spinner.style.display = 'none';
-            if (status) status.textContent = msg;
-            if (dismiss) {
-                dismiss.style.display = '';
-                dismiss.onclick = function () { hideLoading(); };
-            }
+        /**
+         * Hide the welcome overlay (called when views are created).
+         */
+        function hideWelcomeOverlay() {
+            const overlay = document.getElementById('welcomeOverlay');
+            if (overlay) overlay.style.display = 'none';
         }
 
         /**
@@ -613,29 +600,44 @@
         async function loadDemoSession() {
             showLoading('Loading demo videos...');
             try {
-                // Load videos and create view objects (no grid cells needed - dockview creates them)
+                // Rebuild the video grid cells (welcome overlay may have cleared them)
+                const gridEl = document.getElementById('videoGrid');
+                gridEl.innerHTML = '';
+                const gridViews = buildVideoGrid(gridEl, VIEW_NAMES);
+
+                // Load videos into the rebuilt cells
                 const basePath = 'sample_session/';
                 for (let i = 0; i < VIEW_NAMES.length; i++) {
                     const name = VIEW_NAMES[i];
                     const url = basePath + name + '.mp4';
                     showLoading('Loading ' + name + '.mp4...');
 
+                    const gv = gridViews[i];
+                    const canvas = gv.canvas;
+                    const overlayCanvas = gv.overlayCanvas;
+                    const ctx = canvas.getContext('2d');
+                    const overlayCtx = overlayCanvas.getContext('2d');
+
                     const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
                     await decoder.init(url);
 
                     const vw = decoder.videoTrack.video.width;
                     const vh = decoder.videoTrack.video.height;
+                    canvas.width = vw;
+                    canvas.height = vh;
+                    overlayCanvas.width = vw;
+                    overlayCanvas.height = vh;
 
                     const view = {
                         name: name,
                         decoder: decoder,
-                        canvas: null,     // Will be created by VideoPaneRenderer
-                        ctx: null,
-                        overlayCanvas: null,
-                        overlayCtx: null,
+                        canvas: canvas,
+                        ctx: ctx,
+                        overlayCanvas: overlayCanvas,
+                        overlayCtx: overlayCtx,
                         videoWidth: vw,
                         videoHeight: vh,
-                        wrapper: null,
+                        wrapper: gv.wrapper,
                     };
 
                     state.views.push(view);
@@ -663,17 +665,16 @@
                 state.session = demoResult.session;
                 state.keypoints3d = demoResult.keypoints3d;
 
-                // Triangulation is NOT run automatically — user must trigger it
-                // after identity assignment via Edit > Triangulate
+                showLoading('Computing triangulation...');
+                precomputeTriangulation();
 
-                // Populate view strip and auto-arrange in grid
-                populateViewStrip();
-                paneManager.addAllViewsAsGrid();
-
+                hideWelcomeOverlay();
                 rebuildVideoController();
+                fitCanvasesToCells();
                 setup3DViewport();
                 updateInfoPanel();
-                updateFpsDisplay();
+
+                await videoController.seekToFrame(0);
 
                 hideLoading();
                 setStatus('Demo session loaded', 'success');
@@ -684,28 +685,74 @@
             }
         }
 
-        // initVideos() removed — loadDemoSession() handles demo data with dockview
+        async function initVideos() {
+            const basePath = 'sample_session/';
 
-        // ============================================
-        // Reproj/Error visibility
-        // ============================================
+            for (let i = 0; i < VIEW_NAMES.length; i++) {
+                const name = VIEW_NAMES[i];
+                const url = basePath + name + '.mp4';
 
-        function setReprojErrorVisible(visible) {
-            var display = visible ? '' : 'none';
-            var el = document.getElementById('reprojErrorSection');
-            if (el) el.style.display = display;
-            // Error column header and cells
-            var cols = document.querySelectorAll('.reproj-error-col');
-            for (var i = 0; i < cols.length; i++) {
-                cols[i].style.display = display;
+                showLoading('Loading ' + name + '.mp4...');
+
+                const canvas = document.getElementById('canvas-' + name);
+                const overlayCanvas = document.getElementById('overlay-' + name);
+                const ctx = canvas.getContext('2d');
+                const overlayCtx = overlayCanvas.getContext('2d');
+
+                const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                await decoder.init(url);
+
+                // Set canvas dimensions to match video
+                const vw = decoder.videoTrack.video.width;
+                const vh = decoder.videoTrack.video.height;
+                canvas.width = vw;
+                canvas.height = vh;
+                overlayCanvas.width = vw;
+                overlayCanvas.height = vh;
+
+                // Get the canvas-wrapper parent for zoom transforms
+                const wrapper = canvas.parentElement;
+
+                const view = {
+                    name: name,
+                    decoder: decoder,
+                    canvas: canvas,
+                    ctx: ctx,
+                    overlayCanvas: overlayCanvas,
+                    overlayCtx: overlayCtx,
+                    videoWidth: vw,
+                    videoHeight: vh,
+                    wrapper: wrapper,
+                };
+
+                state.views.push(view);
+
+                // Also track in videoFiles so the Videos table stays in sync
+                state.videoFiles.push({
+                    file: null,
+                    name: name,
+                    decoder: decoder,
+                    videoWidth: vw,
+                    videoHeight: vh,
+                    frameCount: decoder.samples.length,
+                    assignedCamera: name,
+                });
+
+                if (i === 0) {
+                    state.totalFrames = decoder.samples.length;
+                    state.fps = decoder.videoTrack.duration > 0
+                        ? decoder.samples.length / (decoder.videoTrack.duration / decoder.videoTrack.timescale)
+                        : 30;
+                }
             }
-            // Check the checkboxes when triangulation data is available
-            if (visible) {
-                var reproj = document.getElementById('toggleReprojected');
-                if (reproj) reproj.checked = true;
-                var errors = document.getElementById('toggleErrors');
-                if (errors) errors.checked = true;
-            }
+
+            // Create video controller
+            videoController = new VideoController(state, {
+                updateSeekbar: updateSeekbar,
+                drawOverlays: drawAllOverlays,
+                onPlaybackStateChange: onPlaybackStateChange,
+                log: window.logMessage,
+            });
         }
 
         // ============================================
@@ -801,7 +848,7 @@
                     for (const cam of cameras) {
                         const inst = group.getInstance(cam.name);
                         if (inst && inst.points) {
-                            const hasAny = inst.points.some((p, idx) => p != null && !(inst.nulledNodes && inst.nulledNodes.has(idx)));
+                            const hasAny = inst.points.some(p => p != null);
                             if (hasAny) viewsWithLabels++;
                             camStatus[cam.name] = hasAny ? 'labeled' : 'empty';
                         } else {
@@ -817,28 +864,23 @@
                         continue;
                     }
 
-                    // Only use cameras that have instances in this group (assigned views)
-                    const groupCamNames = group.cameraNames;
-                    const groupCameras = cameras.filter(c => groupCamNames.indexOf(c.name) >= 0);
-
-                    const result = triangulateAndReproject(group, groupCameras);
+                    const result = triangulateAndReproject(group, cameras);
 
                     // Check for NaN in points3d
                     const hasNaN = result.points3d.some(p => p && (isNaN(p[0]) || isNaN(p[1]) || isNaN(p[2])));
                     const validPts = result.points3d.filter(p => p != null).length;
                     console.log('[triangulate] points3d:', validPts, 'valid /', result.points3d.length,
                         '| hasNaN:', hasNaN, '| meanError:', result.meanError,
-                        '| cameras used:', groupCamNames,
                         '| sample:', result.points3d.find(p => p != null));
                     if (hasNaN) {
                         console.error('[triangulate] WARNING: NaN in 3D points! Check calibration matrices.');
-                        for (const cam of groupCameras) {
+                        for (const cam of cameras) {
                             console.log('[triangulate] Camera', cam.name, 'P=', cam.projectionMatrix);
                         }
                     }
 
                     // Log reprojections per camera
-                    for (const cam of groupCameras) {
+                    for (const cam of cameras) {
                         const reproj = result.reprojections[cam.name];
                         const validReproj = reproj ? reproj.filter(p => p != null).length : 0;
                         console.log('[triangulate] Reprojection', cam.name, ':', validReproj, 'pts',
@@ -849,7 +891,7 @@
                     group.points3d = result.points3d;
                     group.observedPoints = {};
                     group.usedCameras = new Set();
-                    for (const cam of groupCameras) {
+                    for (const cam of cameras) {
                         const inst = group.getInstance(cam.name);
                         if (inst) {
                             group.observedPoints[cam.name] = inst.points;
@@ -857,6 +899,31 @@
                             if (hasAny) group.usedCameras.add(cam.name);
                         }
                     }
+
+                    // Fill missing views with reprojected predictions
+                    let filledCount = 0;
+                    for (const cam of cameras) {
+                        if (!group.getInstance(cam.name) && result.reprojections[cam.name]) {
+                            const reprojPts = result.reprojections[cam.name];
+                            const filledInstance = new Instance(
+                                reprojPts.map(function (p) { return p ? [p[0], p[1]] : null; }),
+                                group.trackIdx,
+                                'predicted',
+                                0.5
+                            );
+                            group.addInstance(cam.name, filledInstance);
+
+                            // Also add to FrameGroup for overlay rendering
+                            const fg = state.session.getFrameGroup(frameIdx);
+                            if (fg) {
+                                fg.addInstance(cam.name, filledInstance);
+                            }
+                            filledCount++;
+                            console.log('[triangulate] Filled missing view:', cam.name,
+                                '| pts:', filledInstance.points.filter(p => p != null).length);
+                        }
+                    }
+                    console.log('[triangulate] Filled', filledCount, 'missing views');
 
                     group.markClean();
 
@@ -883,9 +950,6 @@
                     '| has reprojections:', Object.keys(fr.group.reprojections || {}),
                     '| points3d valid:', (fr.points3d || []).filter(p => p != null).length);
             }
-
-            // Show reproj/error UI elements now that triangulation has been run
-            setReprojErrorVisible(true);
 
             // Update displays
             drawAllOverlays(frameIdx);
@@ -977,30 +1041,42 @@
                         var viewsWithLabels = 0;
                         for (var cj = 0; cj < cameras.length; cj++) {
                             var inst2 = group.getInstance(cameras[cj].name);
-                            if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
+                            if (inst2 && inst2.points && inst2.points.some(function (p) { return p != null; })) {
                                 viewsWithLabels++;
                             }
                         }
 
                         if (viewsWithLabels < 2) continue;
 
-                        // Only use cameras that have instances in this group (assigned views)
-                        var groupCamNames2 = group.cameraNames;
-                        var groupCameras2 = cameras.filter(function (c) { return groupCamNames2.indexOf(c.name) >= 0; });
-
-                        var result = triangulateAndReproject(group, groupCameras2);
+                        var result = triangulateAndReproject(group, cameras);
 
                         group.reprojections = result.reprojections;
                         group.points3d = result.points3d;
                         group.observedPoints = {};
                         group.usedCameras = new Set();
-                        for (var ck = 0; ck < groupCameras2.length; ck++) {
-                            var camInst = group.getInstance(groupCameras2[ck].name);
+                        for (var ck = 0; ck < cameras.length; ck++) {
+                            var camInst = group.getInstance(cameras[ck].name);
                             if (camInst) {
-                                group.observedPoints[groupCameras2[ck].name] = camInst.points;
+                                group.observedPoints[cameras[ck].name] = camInst.points;
                                 if (camInst.points.some(function (p) { return p != null; })) {
-                                    group.usedCameras.add(groupCameras2[ck].name);
+                                    group.usedCameras.add(cameras[ck].name);
                                 }
+                            }
+                        }
+
+                        // Fill missing views with reprojected predictions
+                        for (var cl = 0; cl < cameras.length; cl++) {
+                            if (!group.getInstance(cameras[cl].name) && result.reprojections[cameras[cl].name]) {
+                                var reprojPts = result.reprojections[cameras[cl].name];
+                                var filledInstance = new Instance(
+                                    reprojPts.map(function (p) { return p ? [p[0], p[1]] : null; }),
+                                    group.trackIdx,
+                                    'predicted',
+                                    0.5
+                                );
+                                group.addInstance(cameras[cl].name, filledInstance);
+                                var fg = state.session.getFrameGroup(frameIdx);
+                                if (fg) fg.addInstance(cameras[cl].name, filledInstance);
                             }
                         }
 
@@ -1032,9 +1108,6 @@
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
             }
-
-            // Show reproj/error UI elements
-            setReprojErrorVisible(true);
 
             // Update display for current frame
             drawAllOverlays(state.currentFrame);
@@ -1080,7 +1153,6 @@
             const showErrors = document.getElementById('toggleErrors').checked;
             const showLabels = document.getElementById('toggleLabels').checked;
             const nodeSize = parseInt(document.getElementById('nodeSizeSlider').value) || 4;
-            const labelSize = parseInt(document.getElementById('labelSizeSlider').value) || 11;
 
             // Get interaction state — only show selection highlight if the
             // selected group belongs to the current frame
@@ -1105,7 +1177,6 @@
             }
 
             for (const view of state.views) {
-                if (!view.overlayCtx || !view.overlayCanvas) continue;
                 // Convert FrameGroup instances to the format expected by drawFrameOverlays
                 let overlayFrameGroup = null;
                 if (frameGroup) {
@@ -1127,7 +1198,7 @@
                 }
 
                 // Get unlinked instances for this view
-                const viewUnlinked = (showDetected && frameGroup) ? frameGroup.getUnlinkedInstances(view.name) : [];
+                const viewUnlinked = frameGroup ? frameGroup.getUnlinkedInstances(view.name) : [];
 
                 drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
                     showDetected: showDetected,
@@ -1135,7 +1206,6 @@
                     showErrors: showErrors,
                     showLabels: showLabels,
                     nodeSize: nodeSize,
-                    labelSize: labelSize,
                     lineWidth: Math.max(2, Math.round(nodeSize / 2)),
                     videoWidth: view.videoWidth,
                     videoHeight: view.videoHeight,
@@ -1228,12 +1298,34 @@
                     }
                 },
 
-                onNodeSetNull: function (viewName, instanceGroup, nodeIdx) {
+                onNodeVisibilityToggled: function (viewName, instanceGroup, nodeIdx) {
                     const inst = instanceGroup.getInstance(viewName);
-                    const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(nodeIdx);
                     const nodeName = state.session.skeleton.nodes[nodeIdx] || 'node ' + nodeIdx;
-                    setStatus((isNulled ? 'Nulled ' : 'Restored ') + nodeName + ' in ' + viewName);
+                    const isOccluded = inst && inst.occluded && inst.occluded[nodeIdx];
+                    setStatus(nodeName + ': ' + (isOccluded ? 'occluded' : 'visible'));
+
                     instanceGroup.markDirty();
+
+                    // Re-triangulate
+                    if (state.session.cameras.length >= 2) {
+                        var result = triangulateAndReproject(instanceGroup, state.session.cameras);
+                        instanceGroup.points3d = result.points3d;
+                        instanceGroup.reprojections = result.reprojections;
+                        instanceGroup.observedPoints = {};
+                        for (var cn of instanceGroup.cameraNames) {
+                            var cinst = instanceGroup.getInstance(cn);
+                            instanceGroup.observedPoints[cn] = cinst ? cinst.points : null;
+                        }
+                        instanceGroup.markClean();
+                    }
+
+                    // Update 3D viewport
+                    if (viewport3d) {
+                        var groups = getInstanceGroupsForFrame(state.currentFrame);
+                        viewport3d.setFrame(groups);
+                    }
+
+                    // Update timeline
                     if (timeline) {
                         timeline.setFrameModified(state.currentFrame, true);
                     }
@@ -1296,13 +1388,9 @@
                     onCameraClicked: highlightVideoCell,
                 });
 
-                // Wire up "Show Camera View" button
-                document.getElementById('btnShowCameraView').addEventListener('click', function (e) {
-                    e.stopPropagation();
-                    if (viewport3d) viewport3d.showSelectedCameraView();
-                });
+                console.log('[3D] Viewport3D created successfully');
 
-                // Show initial frame's 3D points
+                // Show initial frame's 3D points, then fit camera to see everything
                 update3DViewport(state.currentFrame);
 
                 // Fit after a short delay to ensure skeleton meshes are in the scene
@@ -1353,9 +1441,6 @@
                 totalFrames: state.totalFrames,
                 onFrameChange: function (frameIdx) {
                     if (videoController) {
-                        if (state.isPlaying) {
-                            videoController.stopPlayback();
-                        }
                         videoController.seekToFrame(frameIdx);
                     }
                 },
@@ -1437,9 +1522,9 @@
                 triangulateCurrentFrame();
             });
 
-            document.getElementById('menuTriangulateMulti').addEventListener('click', function () {
+            document.getElementById('menuTriangulateAll').addEventListener('click', function () {
                 closeMenus();
-                showTriangulateMultiFrameModal();
+                triangulateAllFrames();
             });
 
             document.getElementById('menuToggle3D').addEventListener('click', function () {
@@ -1497,11 +1582,6 @@
                 handleLoadSession();
             });
 
-            document.getElementById('menuLoadSessionFolder').addEventListener('click', function () {
-                closeMenus();
-                handleLoadSessionFolder();
-            });
-
             document.getElementById('menuLoadSlp').addEventListener('click', function () {
                 closeMenus();
                 if (state.session) {
@@ -1522,12 +1602,6 @@
             });
 
             document.getElementById('menuLoadDemo').addEventListener('click', function () {
-                closeMenus();
-                loadDemoSession();
-            });
-
-            // Standalone "Load Demo" menu bar button
-            document.getElementById('menuLoadDemoBar').addEventListener('click', function () {
                 closeMenus();
                 loadDemoSession();
             });
@@ -1661,14 +1735,6 @@
             document.getElementById('btnPlay').addEventListener('click', function () { if (videoController) videoController.togglePlayback(); });
             document.getElementById('btnNext').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame + 1); });
             document.getElementById('btnLast').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.totalFrames - 1); });
-
-            // Timeline toggle button
-            document.getElementById('timelineToggleBtn').addEventListener('click', function () {
-                toggleTimeline();
-                var container = document.getElementById('timelineContainer');
-                this.textContent = container.classList.contains('collapsed') ? 'Timeline' : 'Timeline';
-                this.classList.toggle('active', !container.classList.contains('collapsed'));
-            });
 
             // Seekbar scrubbing (delegates to current videoController)
             (function () {
@@ -1811,6 +1877,9 @@
                 }
             }
 
+            // Info panel toggle
+            document.getElementById('btnTogglePanel').addEventListener('click', toggleInfoPanel);
+
             // Overlay toggles - redraw on change
             const toggleIds = ['toggleDetected', 'toggleReprojected', 'toggleErrors', 'toggleLabels'];
             for (const id of toggleIds) {
@@ -1823,11 +1892,6 @@
                 document.getElementById('nodeSizeValue').textContent = nodeSizeSlider.value;
                 drawAllOverlays(state.currentFrame);
             });
-            var labelSizeSlider = document.getElementById('labelSizeSlider');
-            labelSizeSlider.addEventListener('input', function () {
-                document.getElementById('labelSizeValue').textContent = labelSizeSlider.value;
-                drawAllOverlays(state.currentFrame);
-            });
 
             // Toolbar buttons
             document.getElementById('tbAddInstance').addEventListener('click', function () {
@@ -1836,57 +1900,9 @@
             document.getElementById('tbDeleteInstance').addEventListener('click', function () {
                 if (interactionManager) interactionManager._deleteSelected();
             });
-            // Assign dropdown toggle
-            // Assign dropdown: position menu below button on click
-            document.getElementById('tbAssign').addEventListener('click', function (e) {
-                e.stopPropagation();
-                var menu = document.getElementById('tbAssignMenu');
-                var isOpen = menu.style.display !== 'none';
-                // Close other menus
-                document.getElementById('tbTriangulateMenu').style.display = 'none';
-                if (isOpen) {
-                    menu.style.display = 'none';
-                } else {
-                    var rect = e.currentTarget.getBoundingClientRect();
-                    menu.style.left = rect.left + 'px';
-                    menu.style.top = rect.bottom + 2 + 'px';
-                    menu.style.display = 'block';
-                }
-            });
-            document.addEventListener('click', function () {
-                var menu = document.getElementById('tbAssignMenu');
-                if (menu) menu.style.display = 'none';
-                var triMenu = document.getElementById('tbTriangulateMenu');
-                if (triMenu) triMenu.style.display = 'none';
-            });
-            // Prevent clicks inside dropdown from bubbling to document close handlers
-            document.getElementById('tbAssignMenu').addEventListener('click', function (e) {
-                e.stopPropagation();
-            });
-            document.getElementById('tbAssignManual').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbAssignMenu').style.display = 'none';
-                if (interactionManager) {
-                    interactionManager.setAssignmentMode();
-                    var isOn = interactionManager.assignmentMode;
-                    document.getElementById('tbAssign').classList.toggle('active', isOn);
-                    setStatus(isOn ? 'Assignment mode ON — click instances to select, Enter to group' : 'Assignment mode OFF', 'info');
-                }
+            document.getElementById('tbAssign').addEventListener('click', function () {
+                if (interactionManager) interactionManager.setAssignmentMode();
                 drawAllOverlays(state.currentFrame);
-            });
-            // Automatic flyout: prevent parent menu from closing when hovering into flyout
-            document.getElementById('tbAssignAutomatic').addEventListener('click', function (e) {
-                e.stopPropagation();
-            });
-            document.getElementById('tbAutoCurrentFrame').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbAssignMenu').style.display = 'none';
-                startAutoAssignment();
-            });
-            document.getElementById('tbAutoMultipleFrames').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbAssignMenu').style.display = 'none';
-                showMultiFrameModal();
             });
 
             // Create Group button
@@ -1898,34 +1914,12 @@
                 unlinkGroup();
             });
 
-            // Triangulate dropdown toggle
-            document.getElementById('tbTriangulate').addEventListener('click', function (e) {
-                e.stopPropagation();
-                var menu = document.getElementById('tbTriangulateMenu');
-                var isOpen = menu.style.display !== 'none';
-                // Close other menus
-                document.getElementById('tbAssignMenu').style.display = 'none';
-                if (isOpen) {
-                    menu.style.display = 'none';
-                } else {
-                    var rect = e.currentTarget.getBoundingClientRect();
-                    menu.style.left = rect.left + 'px';
-                    menu.style.top = rect.bottom + 2 + 'px';
-                    menu.style.display = 'block';
-                }
-            });
-            document.getElementById('tbTriangulateMenu').addEventListener('click', function (e) {
-                e.stopPropagation();
-            });
-            document.getElementById('tbTriangCurrentFrame').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbTriangulateMenu').style.display = 'none';
+            document.getElementById('tbTriangulate').addEventListener('click', function () {
                 triangulateCurrentFrame();
             });
-            document.getElementById('tbTriangMultipleFrames').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbTriangulateMenu').style.display = 'none';
-                showTriangulateMultiFrameModal();
+
+            document.getElementById('tbTriangulateAll').addEventListener('click', function () {
+                triangulateAllFrames();
             });
 
             // Context menu for instance groups
@@ -1984,23 +1978,7 @@
         }
 
         function toggleInfoPanel() {
-            var wrapper = document.getElementById('infoPanelWrapper');
-            wrapper.classList.toggle('collapsed');
-            updateInfoPanelToggleBtn();
-            // Re-render 3D visualizer after CSS transition completes
-            if (viewport3d) {
-                setTimeout(function () { viewport3d.resize(); }, 350);
-            }
-            // Also refit video canvases to new available space
-            setTimeout(function () { fitCanvasesToCells(); }, 350);
-        }
-
-        function updateInfoPanelToggleBtn() {
-            var wrapper = document.getElementById('infoPanelWrapper');
-            var btn = document.getElementById('infoPanelToggleBtn');
-            if (btn) {
-                btn.textContent = wrapper.classList.contains('collapsed') ? 'Show Panel' : 'Hide Panel';
-            }
+            document.getElementById('infoPanel').classList.toggle('collapsed');
         }
 
         function toggle3DViewport() {
@@ -2018,764 +1996,6 @@
             if (timeline && !container.classList.contains('collapsed')) {
                 setTimeout(function () { timeline.resize(); }, 300);
             }
-        }
-
-        // ============================================
-        // Automatic Identity Assignment
-        // ============================================
-
-        var autoAssignState = null; // { selectedViews: Set, toast: HTMLElement }
-
-        function startAutoAssignment() {
-            if (!state.session || state.views.length === 0) {
-                setStatus('No session loaded — load a project first', 'warning');
-                return;
-            }
-
-            // Check that there are instances on this frame (linked or unlinked)
-            var fg = state.session.getFrameGroup(state.currentFrame);
-            if (!fg) {
-                setStatus('No instances on current frame', 'warning');
-                return;
-            }
-            var hasInstances = false;
-            for (var v = 0; v < state.views.length; v++) {
-                var vn = state.views[v].name;
-                var ul = fg.getUnlinkedInstances(vn);
-                if (ul && ul.length > 0) { hasInstances = true; break; }
-                var linked = fg.instances.get(vn);
-                if (linked && linked.length > 0) { hasInstances = true; break; }
-            }
-            if (!hasInstances) {
-                setStatus('No instances on current frame to assign', 'warning');
-                return;
-            }
-
-            // Temporarily remove yellow selection highlight
-            document.querySelectorAll('.video-cell.video-selected').forEach(function (el) {
-                el.classList.remove('video-selected');
-            });
-
-            // Create toast in menu bar
-            var toast = document.createElement('div');
-            toast.className = 'auto-assign-toast';
-            toast.innerHTML = '<span>Select views for automatic Identity Assignment</span>' +
-                '<button id="autoAssignCancel">Cancel</button>' +
-                '<button id="autoAssignContinue" class="primary">Continue</button>';
-            document.getElementById('menuBar').appendChild(toast);
-
-            autoAssignState = { selectedViews: new Set(), toast: toast };
-
-            // Add transparent click overlays on each video cell for view selection
-            // This overlay sits above the canvas and interaction layer to capture clicks
-            document.querySelectorAll('.video-cell').forEach(function (cell) {
-                var overlay = document.createElement('div');
-                overlay.className = 'auto-assign-overlay';
-                overlay.style.cssText = 'position:absolute;inset:0;z-index:20;cursor:pointer;';
-                cell.appendChild(overlay);
-                cell._autoAssignOverlay = overlay;
-                overlay.addEventListener('click', function (e) {
-                    e.stopPropagation();
-                    var viewName = cell.getAttribute('data-view-name');
-                    if (!viewName) return;
-                    if (autoAssignState.selectedViews.has(viewName)) {
-                        autoAssignState.selectedViews.delete(viewName);
-                        cell.classList.remove('auto-assign-selected');
-                    } else {
-                        autoAssignState.selectedViews.add(viewName);
-                        cell.classList.add('auto-assign-selected');
-                    }
-                });
-            });
-
-            toast.querySelector('#autoAssignCancel').addEventListener('click', function () {
-                cleanupAutoAssignment();
-            });
-
-            toast.querySelector('#autoAssignContinue').addEventListener('click', function () {
-                var selectedViews = Array.from(autoAssignState.selectedViews);
-                cleanupAutoAssignment();
-
-                if (selectedViews.length < 2) {
-                    setStatus('Select at least 2 views for automatic assignment', 'warning');
-                    return;
-                }
-
-                runAutomaticAssignment(selectedViews);
-            });
-        }
-
-        function cleanupAutoAssignment() {
-            if (!autoAssignState) return;
-            // Remove toast
-            if (autoAssignState.toast && autoAssignState.toast.parentNode) {
-                autoAssignState.toast.parentNode.removeChild(autoAssignState.toast);
-            }
-            // Remove red highlights and click overlay divs
-            document.querySelectorAll('.video-cell').forEach(function (cell) {
-                cell.classList.remove('auto-assign-selected');
-                if (cell._autoAssignOverlay) {
-                    cell._autoAssignOverlay.remove();
-                    delete cell._autoAssignOverlay;
-                }
-            });
-            // Restore yellow selection highlight on active panel
-            if (paneManager && paneManager.api) {
-                var activePanel = paneManager.api.activePanel;
-                if (activePanel) {
-                    var activeRenderer = panelRenderers.get(activePanel.id);
-                    if (activeRenderer) {
-                        activeRenderer.element.classList.add('video-selected');
-                    }
-                }
-            }
-            autoAssignState = null;
-        }
-
-        function runAutomaticAssignment(selectedViewNames) {
-            if (!state.session) return;
-            var fg = state.session.getFrameGroup(state.currentFrame);
-            if (!fg) return;
-            var cameras = state.session.cameras;
-
-            if (!cameras || cameras.length < 2) {
-                setStatus('Need calibration with at least 2 cameras for automatic assignment', 'warning');
-                return;
-            }
-
-            // First, unlink any existing groups that contain instances in selected views
-            // This returns them to the unlinked pool so they can be re-matched
-            var existingGroups = state.session.getInstanceGroupsForFrame(state.currentFrame);
-            var groupsToUnlink = [];
-            for (var egi = 0; egi < existingGroups.length; egi++) {
-                var eg = existingGroups[egi];
-                for (var svni = 0; svni < selectedViewNames.length; svni++) {
-                    if (eg.getInstance(selectedViewNames[svni])) {
-                        groupsToUnlink.push(eg);
-                        break;
-                    }
-                }
-            }
-            for (var gui = 0; gui < groupsToUnlink.length; gui++) {
-                state.session.unlinkGroup(state.currentFrame, groupsToUnlink[gui]);
-            }
-
-            // Now collect unlinked instances per selected view
-            // Sort by original trackIdx so instance_0 (trackIdx=0) maps to group 0 (red)
-            var viewUnlinked = {}; // viewName -> UnlinkedInstance[]
-            for (var vi = 0; vi < selectedViewNames.length; vi++) {
-                var vn = selectedViewNames[vi];
-                var ul = fg.getUnlinkedInstances(vn);
-                if (ul && ul.length > 0) {
-                    var sorted = ul.slice();
-                    sorted.sort(function (a, b) {
-                        var ta = a.instance.trackIdx != null ? a.instance.trackIdx : 9999;
-                        var tb = b.instance.trackIdx != null ? b.instance.trackIdx : 9999;
-                        return ta - tb;
-                    });
-                    viewUnlinked[vn] = sorted;
-                }
-            }
-
-            var viewNames = Object.keys(viewUnlinked);
-            if (viewNames.length < 2) {
-                setStatus('Need instances in at least 2 selected views for matching', 'warning');
-                return;
-            }
-
-            // Use the view with the MINIMUM instance count as the reference.
-            // This ensures the number of tracks equals the min across selected views.
-            var refView = viewNames[0];
-            var minCount = viewUnlinked[refView].length;
-            for (var vci = 1; vci < viewNames.length; vci++) {
-                if (viewUnlinked[viewNames[vci]].length < minCount) {
-                    minCount = viewUnlinked[viewNames[vci]].length;
-                    refView = viewNames[vci];
-                }
-            }
-            var refInstances = viewUnlinked[refView];
-
-            // For each other view, build cost matrix using triangulation reprojection error
-            // Then use Hungarian to match reference instances to other view instances
-            // Result: groups of matched instances across views
-
-            // Track assignments: refIdx -> { viewName -> UnlinkedInstance }
-            var assignments = [];
-            for (var ri = 0; ri < refInstances.length; ri++) {
-                assignments[ri] = {};
-                assignments[ri][refView] = refInstances[ri];
-            }
-
-            for (var ovi = 0; ovi < viewNames.length; ovi++) {
-                var otherView = viewNames[ovi];
-                if (otherView === refView) continue;
-                var otherInstances = viewUnlinked[otherView];
-                var nRef = refInstances.length;
-                var nOther = otherInstances.length;
-
-                // Build cost matrix: cost[refIdx][otherIdx] = reprojection error
-                var costMatrix = [];
-                for (var a = 0; a < nRef; a++) {
-                    costMatrix[a] = [];
-                    for (var b = 0; b < nOther; b++) {
-                        // Create temporary group with instances from both views
-                        var tempGroup = new InstanceGroup(-1, 0);
-                        tempGroup.addInstance(refView, refInstances[a].instance);
-                        tempGroup.addInstance(otherView, otherInstances[b].instance);
-                        var result = triangulateAndReproject(tempGroup, cameras);
-                        costMatrix[a][b] = (result.meanError != null && isFinite(result.meanError))
-                            ? result.meanError : 1e6;
-                    }
-                }
-
-                // Run Hungarian algorithm
-                var matching = hungarianAlgorithm(costMatrix);
-                for (var mi = 0; mi < matching.length; mi++) {
-                    if (matching[mi] >= 0 && matching[mi] < nOther) {
-                        // Only accept if reprojection error is reasonable (< 50px)
-                        if (costMatrix[mi][matching[mi]] < 50) {
-                            assignments[mi][otherView] = otherInstances[matching[mi]];
-                        }
-                    }
-                }
-            }
-
-            // Create groups from assignments
-            var groupsCreated = 0;
-            for (var gi = 0; gi < assignments.length; gi++) {
-                var assignedUnlinked = [];
-                var viewKeys = Object.keys(assignments[gi]);
-                for (var vk = 0; vk < viewKeys.length; vk++) {
-                    assignedUnlinked.push(assignments[gi][viewKeys[vk]]);
-                }
-                if (assignedUnlinked.length >= 2) {
-                    var group = state.session.createGroupFromUnlinked(
-                        state.currentFrame, assignedUnlinked
-                    );
-                    // Update instance trackIdx on both the group's map AND the
-                    // FrameGroup's instances array (same objects by reference)
-                    var newTrackIdx = group.trackIdx;
-                    for (var [camName, inst] of group.instances) {
-                        inst.trackIdx = newTrackIdx;
-                    }
-                    groupsCreated++;
-                }
-            }
-
-            if (groupsCreated > 0) {
-                // Track which views and frame were used for multi-frame support
-                state.lastAutoAssignViews = selectedViewNames.slice();
-                state.lastAutoAssignFrame = state.currentFrame;
-                // Force full overlay redraw so skeleton colors update
-                drawAllOverlays(state.currentFrame);
-                updateInfoPanel();
-                if (viewport3d) {
-                    update3DViewport(state.currentFrame);
-                }
-                setStatus('Auto-assigned ' + groupsCreated + ' identity group(s) across ' + viewNames.length + ' views', 'success');
-            } else {
-                setStatus('No matching identities found across selected views', 'warning');
-            }
-            return groupsCreated;
-        }
-
-        // ============================================
-        // Multi-Frame Assignment Modal
-        // ============================================
-
-        function showMultiFrameModal() {
-            // Determine state: has auto-assignment been run on current frame?
-            var hasAssignment = state.lastAutoAssignViews && state.lastAutoAssignViews.length >= 2 &&
-                state.lastAutoAssignFrame === state.currentFrame;
-
-            var overlay = document.createElement('div');
-            overlay.className = 'multi-frame-modal-overlay';
-
-            var modal = document.createElement('div');
-            modal.className = 'multi-frame-modal';
-
-            if (!hasAssignment) {
-                // State 1: assignment not yet run on current frame
-                modal.innerHTML =
-                    '<h3>Multiple Frames — Identity Assignment</h3>' +
-                    '<p>Run identity assignment on the current frame before running on multiple frames.</p>' +
-                    '<div class="modal-actions">' +
-                    '<button class="primary" id="mfModalContinue">Continue</button>' +
-                    '</div>';
-                overlay.appendChild(modal);
-                document.body.appendChild(overlay);
-                document.getElementById('mfModalContinue').addEventListener('click', function () {
-                    overlay.remove();
-                });
-            } else {
-                // State 2: assignment already run — show range picker
-                var maxFrame = state.totalFrames - 1;
-                var viewsList = '<ul class="modal-view-list">';
-                for (var vli = 0; vli < state.lastAutoAssignViews.length; vli++) {
-                    viewsList += '<li>' + state.lastAutoAssignViews[vli] + '</li>';
-                }
-                viewsList += '</ul>';
-
-                modal.innerHTML =
-                    '<h3>Choose Frames for Identity Assignment</h3>' +
-                    '<div class="range-slider-container">' +
-                    '  <div class="range-slider-track"></div>' +
-                    '  <div class="range-slider-fill" id="mfSliderFill"></div>' +
-                    '  <input type="range" id="mfRangeStart" min="0" max="' + maxFrame + '" value="0">' +
-                    '  <input type="range" id="mfRangeEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
-                    '</div>' +
-                    '<div class="modal-range-row">' +
-                    '<div class="frame-inputs-row">' +
-                    '  <label>Start</label>' +
-                    '  <input type="number" id="mfInputStart" min="0" max="' + maxFrame + '" value="0">' +
-                    '  <span class="separator">—</span>' +
-                    '  <label>End</label>' +
-                    '  <input type="number" id="mfInputEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
-                    '</div>' +
-                    '<div class="modal-views-section">' +
-                    '  <label>Views</label>' + viewsList +
-                    '</div>' +
-                    '</div>' +
-                    '<div class="multi-frame-progress" id="mfProgress" style="display:none;">' +
-                    '  <div class="progress-label" id="mfProgressLabel">0 / 0 frames</div>' +
-                    '  <div class="progress-bar-track"><div class="progress-bar-fill" id="mfProgressFill" style="width:0%"></div></div>' +
-                    '</div>' +
-                    '<div class="modal-actions" id="mfActions">' +
-                    '  <button id="mfCancel">Cancel</button>' +
-                    '  <button class="primary" id="mfContinue">Continue</button>' +
-                    '</div>';
-
-                overlay.appendChild(modal);
-                document.body.appendChild(overlay);
-
-                var rangeStart = document.getElementById('mfRangeStart');
-                var rangeEnd = document.getElementById('mfRangeEnd');
-                var inputStart = document.getElementById('mfInputStart');
-                var inputEnd = document.getElementById('mfInputEnd');
-                var sliderFill = document.getElementById('mfSliderFill');
-
-                function updateSliderFill() {
-                    var s = parseInt(rangeStart.value);
-                    var e = parseInt(rangeEnd.value);
-                    var max = parseInt(rangeStart.max) || 1;
-                    var leftPct = (s / max) * 100;
-                    var rightPct = (e / max) * 100;
-                    sliderFill.style.left = leftPct + '%';
-                    sliderFill.style.width = (rightPct - leftPct) + '%';
-                }
-
-                function syncSliders() {
-                    var s = parseInt(rangeStart.value);
-                    var e = parseInt(rangeEnd.value);
-                    // Enforce start <= end
-                    if (s > e) {
-                        rangeStart.value = e;
-                        s = e;
-                    }
-                    inputStart.value = s;
-                    inputEnd.value = e;
-                    updateSliderFill();
-                }
-
-                rangeStart.addEventListener('input', syncSliders);
-                rangeEnd.addEventListener('input', syncSliders);
-
-                inputStart.addEventListener('change', function () {
-                    var v = parseInt(inputStart.value);
-                    if (isNaN(v) || v < 0) v = 0;
-                    if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
-                    if (v > maxFrame) v = maxFrame;
-                    inputStart.value = v;
-                    rangeStart.value = v;
-                    syncSliders();
-                });
-
-                inputEnd.addEventListener('change', function () {
-                    var v = parseInt(inputEnd.value);
-                    if (isNaN(v) || v < 0) v = 0;
-                    if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
-                    if (v > maxFrame) v = maxFrame;
-                    inputEnd.value = v;
-                    rangeEnd.value = v;
-                    syncSliders();
-                });
-
-                updateSliderFill();
-
-                document.getElementById('mfCancel').addEventListener('click', function () {
-                    overlay.remove();
-                });
-
-                document.getElementById('mfContinue').addEventListener('click', function () {
-                    var startFrame = parseInt(inputStart.value);
-                    var endFrame = parseInt(inputEnd.value);
-                    if (isNaN(startFrame) || isNaN(endFrame) || startFrame > endFrame) {
-                        return;
-                    }
-                    // Hide action buttons, show progress
-                    document.getElementById('mfActions').style.display = 'none';
-                    document.getElementById('mfProgress').style.display = 'block';
-                    // Disable inputs
-                    rangeStart.disabled = true;
-                    rangeEnd.disabled = true;
-                    inputStart.disabled = true;
-                    inputEnd.disabled = true;
-
-                    runMultiFrameAssignment(startFrame, endFrame, state.lastAutoAssignViews, overlay);
-                });
-            }
-        }
-
-        async function runMultiFrameAssignment(startFrame, endFrame, viewNames, overlayEl) {
-            var totalFrames = endFrame - startFrame + 1;
-            var progressLabel = document.getElementById('mfProgressLabel');
-            var progressFill = document.getElementById('mfProgressFill');
-            var completed = 0;
-            var assigned = 0;
-
-            for (var f = startFrame; f <= endFrame; f++) {
-                // Seek to frame
-                await videoController.seekToFrame(f);
-
-                // Run assignment on this frame
-                var groupsCreated = runAutomaticAssignment(viewNames);
-                if (groupsCreated > 0) assigned++;
-
-                completed++;
-                var pct = Math.round((completed / totalFrames) * 100);
-                if (progressLabel) progressLabel.textContent = completed + ' / ' + totalFrames + ' frames';
-                if (progressFill) progressFill.style.width = pct + '%';
-
-                // Yield to UI for progress bar updates
-                await new Promise(function (r) { setTimeout(r, 0); });
-            }
-
-            // Done — show summary and close button
-            if (progressLabel) {
-                progressLabel.textContent = 'Done — assigned identities on ' + assigned + ' of ' + totalFrames + ' frames';
-            }
-
-            // Replace progress with close button
-            var actionsEl = document.getElementById('mfActions');
-            if (actionsEl) {
-                actionsEl.innerHTML = '<button class="primary" id="mfClose">Close</button>';
-                actionsEl.style.display = 'flex';
-                document.getElementById('mfClose').addEventListener('click', function () {
-                    overlayEl.remove();
-                });
-            }
-
-            setStatus('Multi-frame assignment complete: ' + assigned + '/' + totalFrames + ' frames assigned', 'success');
-        }
-
-        // ============================================
-        // Multi-Frame Triangulation Modal
-        // ============================================
-
-        /**
-         * Condense an array of frame indices into human-readable ranges.
-         * e.g. [10,11,12,13,15,23,40,41,42] -> "10–13, 15, 23, 40–42"
-         */
-        function condenseMissingFrames(frames) {
-            if (frames.length === 0) return '';
-            frames.sort(function (a, b) { return a - b; });
-            var ranges = [];
-            var start = frames[0];
-            var end = frames[0];
-            for (var i = 1; i < frames.length; i++) {
-                if (frames[i] === end + 1) {
-                    end = frames[i];
-                } else {
-                    ranges.push(start === end ? '' + start : start + '–' + end);
-                    start = frames[i];
-                    end = frames[i];
-                }
-            }
-            ranges.push(start === end ? '' + start : start + '–' + end);
-            return ranges.join(', ');
-        }
-
-        function showTriangulateMultiFrameModal() {
-            if (!state.session) {
-                setStatus('No session loaded', 'warning');
-                return;
-            }
-            if (state.session.cameras.length < 2) {
-                setStatus('Need at least 2 cameras for triangulation', 'warning');
-                return;
-            }
-
-            var overlay = document.createElement('div');
-            overlay.className = 'multi-frame-modal-overlay';
-
-            var modal = document.createElement('div');
-            modal.className = 'multi-frame-modal';
-
-            var maxFrame = state.totalFrames - 1;
-
-            // Build camera views list from session cameras
-            var viewsList = '<ul class="modal-view-list">';
-            for (var ci = 0; ci < state.session.cameras.length; ci++) {
-                viewsList += '<li>' + state.session.cameras[ci].name + '</li>';
-            }
-            viewsList += '</ul>';
-
-            modal.innerHTML =
-                '<h3>Choose Frames for Triangulation</h3>' +
-                '<div class="range-slider-container">' +
-                '  <div class="range-slider-track"></div>' +
-                '  <div class="range-slider-fill" id="tfSliderFill"></div>' +
-                '  <input type="range" id="tfRangeStart" min="0" max="' + maxFrame + '" value="0">' +
-                '  <input type="range" id="tfRangeEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
-                '</div>' +
-                '<div class="modal-range-row">' +
-                '<div class="frame-inputs-row">' +
-                '  <label>Start</label>' +
-                '  <input type="number" id="tfInputStart" min="0" max="' + maxFrame + '" value="0">' +
-                '  <span class="separator">—</span>' +
-                '  <label>End</label>' +
-                '  <input type="number" id="tfInputEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
-                '</div>' +
-                '<div class="modal-views-section">' +
-                '  <label>Cameras</label>' + viewsList +
-                '</div>' +
-                '</div>' +
-                '<div class="multi-frame-error" id="tfError" style="display:none;"></div>' +
-                '<div class="multi-frame-progress" id="tfProgress" style="display:none;">' +
-                '  <div class="progress-label" id="tfProgressLabel">0 / 0 frames</div>' +
-                '  <div class="progress-bar-track"><div class="progress-bar-fill" id="tfProgressFill" style="width:0%"></div></div>' +
-                '</div>' +
-                '<div class="modal-actions" id="tfActions">' +
-                '  <button id="tfCancel">Cancel</button>' +
-                '  <button class="primary" id="tfContinue">Continue</button>' +
-                '</div>';
-
-            overlay.appendChild(modal);
-            document.body.appendChild(overlay);
-
-            var rangeStart = document.getElementById('tfRangeStart');
-            var rangeEnd = document.getElementById('tfRangeEnd');
-            var inputStart = document.getElementById('tfInputStart');
-            var inputEnd = document.getElementById('tfInputEnd');
-            var sliderFill = document.getElementById('tfSliderFill');
-
-            function updateSliderFill() {
-                var s = parseInt(rangeStart.value);
-                var e = parseInt(rangeEnd.value);
-                var max = parseInt(rangeStart.max) || 1;
-                var leftPct = (s / max) * 100;
-                var rightPct = (e / max) * 100;
-                sliderFill.style.left = leftPct + '%';
-                sliderFill.style.width = (rightPct - leftPct) + '%';
-            }
-
-            function syncSliders() {
-                var s = parseInt(rangeStart.value);
-                var e = parseInt(rangeEnd.value);
-                if (s > e) {
-                    rangeStart.value = e;
-                    s = e;
-                }
-                inputStart.value = s;
-                inputEnd.value = e;
-                updateSliderFill();
-                // Clear error when range changes
-                document.getElementById('tfError').style.display = 'none';
-            }
-
-            rangeStart.addEventListener('input', syncSliders);
-            rangeEnd.addEventListener('input', syncSliders);
-
-            inputStart.addEventListener('change', function () {
-                var v = parseInt(inputStart.value);
-                if (isNaN(v) || v < 0) v = 0;
-                if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
-                if (v > maxFrame) v = maxFrame;
-                inputStart.value = v;
-                rangeStart.value = v;
-                syncSliders();
-            });
-
-            inputEnd.addEventListener('change', function () {
-                var v = parseInt(inputEnd.value);
-                if (isNaN(v) || v < 0) v = 0;
-                if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
-                if (v > maxFrame) v = maxFrame;
-                inputEnd.value = v;
-                rangeEnd.value = v;
-                syncSliders();
-            });
-
-            updateSliderFill();
-
-            document.getElementById('tfCancel').addEventListener('click', function () {
-                overlay.remove();
-            });
-
-            document.getElementById('tfContinue').addEventListener('click', function () {
-                var startFrame = parseInt(inputStart.value);
-                var endFrame = parseInt(inputEnd.value);
-                if (isNaN(startFrame) || isNaN(endFrame) || startFrame > endFrame) {
-                    return;
-                }
-
-                // Validate: check all frames in range have identity assignment
-                var missingFrames = [];
-                for (var f = startFrame; f <= endFrame; f++) {
-                    var trackMap = state.session.instanceGroups.get(f);
-                    if (!trackMap || trackMap.size === 0) {
-                        missingFrames.push(f);
-                    }
-                }
-
-                if (missingFrames.length > 0) {
-                    var errorEl = document.getElementById('tfError');
-                    if (missingFrames.length === 1) {
-                        errorEl.textContent = 'Frame ' + missingFrames[0] + ' does not have identity assignment.';
-                    } else {
-                        errorEl.textContent = 'Frames [' + condenseMissingFrames(missingFrames) + '] do not have identity assignment.';
-                    }
-                    errorEl.style.display = 'block';
-                    return;
-                }
-
-                // Hide error, action buttons; show progress
-                document.getElementById('tfError').style.display = 'none';
-                document.getElementById('tfActions').style.display = 'none';
-                document.getElementById('tfProgress').style.display = 'block';
-                rangeStart.disabled = true;
-                rangeEnd.disabled = true;
-                inputStart.disabled = true;
-                inputEnd.disabled = true;
-
-                runMultiFrameTriangulation(startFrame, endFrame, overlay);
-            });
-        }
-
-        async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
-            var totalFrames = endFrame - startFrame + 1;
-            var progressLabel = document.getElementById('tfProgressLabel');
-            var progressFill = document.getElementById('tfProgressFill');
-            var cameras = state.session.cameras;
-            var completed = 0;
-            var triangulated = 0;
-            var totalGroups = 0;
-            var totalErrors = [];
-
-            for (var f = startFrame; f <= endFrame; f++) {
-                var trackMap = state.session.instanceGroups.get(f);
-                if (trackMap) {
-                    var frameResults = [];
-
-                    for (var [trackIdx, groups] of trackMap) {
-                        for (var gi = 0; gi < groups.length; gi++) {
-                            var group = groups[gi];
-
-                            // Resolve camera name mismatches
-                            var groupKeys = group.cameraNames;
-                            for (var ki = 0; ki < groupKeys.length; ki++) {
-                                var gk = groupKeys[ki];
-                                if (!cameras.some(function (c) { return c.name === gk; })) {
-                                    var gkLower = gk.toLowerCase();
-                                    for (var ci = 0; ci < cameras.length; ci++) {
-                                        var camLower = cameras[ci].name.toLowerCase();
-                                        if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
-                                            if (!group.getInstance(cameras[ci].name)) {
-                                                var inst = group.getInstance(gk);
-                                                group.instances.delete(gk);
-                                                group.instances.set(cameras[ci].name, inst);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Count views with labels
-                            var viewsWithLabels = 0;
-                            for (var cj = 0; cj < cameras.length; cj++) {
-                                var inst2 = group.getInstance(cameras[cj].name);
-                                if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
-                                    viewsWithLabels++;
-                                }
-                            }
-                            if (viewsWithLabels < 2) continue;
-
-                            var groupCamNames = group.cameraNames;
-                            var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
-                            var result = triangulateAndReproject(group, groupCameras);
-
-                            group.reprojections = result.reprojections;
-                            group.points3d = result.points3d;
-                            group.observedPoints = {};
-                            group.usedCameras = new Set();
-                            for (var ck = 0; ck < groupCameras.length; ck++) {
-                                var camInst = group.getInstance(groupCameras[ck].name);
-                                if (camInst) {
-                                    group.observedPoints[groupCameras[ck].name] = camInst.points;
-                                    if (camInst.points.some(function (p) { return p != null; })) {
-                                        group.usedCameras.add(groupCameras[ck].name);
-                                    }
-                                }
-                            }
-                            group.markClean();
-                            totalGroups++;
-
-                            frameResults.push({
-                                group: group,
-                                points3d: result.points3d,
-                                reprojections: result.reprojections,
-                                errors: result.errors,
-                                meanError: result.meanError,
-                            });
-
-                            if (result.meanError != null) {
-                                totalErrors.push(result.meanError);
-                            }
-                        }
-                    }
-
-                    if (frameResults.length > 0) {
-                        state.triangulationResults.set(f, frameResults);
-                        triangulated++;
-                    }
-                }
-
-                completed++;
-                var pct = Math.round((completed / totalFrames) * 100);
-                if (progressLabel) progressLabel.textContent = completed + ' / ' + totalFrames + ' frames';
-                if (progressFill) progressFill.style.width = pct + '%';
-
-                // Yield to UI for progress bar updates every 50 frames
-                if (completed % 50 === 0) {
-                    await new Promise(function (r) { setTimeout(r, 0); });
-                }
-            }
-
-            // Update display for current frame
-            drawAllOverlays(state.currentFrame);
-            update3DViewport(state.currentFrame);
-            if (viewport3d) viewport3d.fitToScene();
-
-            var avgError = totalErrors.length > 0
-                ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
-                : 'N/A';
-
-            // Show summary and close button
-            if (progressLabel) {
-                progressLabel.textContent = 'Done — triangulated ' + triangulated + ' frames (' + totalGroups + ' groups, avg error: ' + avgError + 'px)';
-            }
-
-            var actionsEl = document.getElementById('tfActions');
-            if (actionsEl) {
-                actionsEl.innerHTML = '<button class="primary" id="tfClose">Close</button>';
-                actionsEl.style.display = 'flex';
-                document.getElementById('tfClose').addEventListener('click', function () {
-                    overlayEl.remove();
-                });
-            }
-
-            setStatus('Multi-frame triangulation complete: ' + triangulated + '/' + totalFrames + ' frames, avg error: ' + avgError + 'px', 'success');
         }
 
         // ============================================
@@ -2821,12 +2041,37 @@
         }
 
         function updateVideoGridDisplay() {
-            // With dockview, view mode switching is handled by showing/hiding panels.
-            // For now, just trigger canvas resize.
+            const gridEl = document.getElementById('videoGrid');
+            if (!gridEl) return;
+
+            if (state.viewMode === 'grid') {
+                // Show all cells, restore grid layout
+                var cols = Math.ceil(Math.sqrt(state.views.length));
+                gridEl.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+                gridEl.style.gridTemplateRows = '';
+                state.views.forEach(function (v) {
+                    var cell = v.canvas.closest('.video-cell');
+                    if (cell) cell.style.display = '';
+                });
+                // Remove view indicator if present
+                var indicator = document.getElementById('viewModeIndicator');
+                if (indicator) indicator.remove();
+            } else {
+                // Single-view mode: show only the active view
+                gridEl.style.gridTemplateColumns = '1fr';
+                gridEl.style.gridTemplateRows = '1fr';
+                state.views.forEach(function (v, i) {
+                    var cell = v.canvas.closest('.video-cell');
+                    if (cell) cell.style.display = (i === state.singleViewIndex) ? '' : 'none';
+                });
+                // Show view indicator
+                showViewIndicator();
+            }
+
+            // Trigger canvas resize after layout change
             setTimeout(function () {
-                fitCanvasesToCells();
                 for (var i = 0; i < state.views.length; i++) {
-                    if (videoController && state.views[i].canvas) videoController.initZoom(state.views[i]);
+                    if (videoController) videoController.initZoom(state.views[i]);
                 }
             }, 100);
         }
@@ -2842,10 +2087,10 @@
             indicator.textContent = state.views[state.singleViewIndex].name +
                 ' (' + (state.singleViewIndex + 1) + '/' + state.views.length + ')';
 
-            var dockEl = document.getElementById('videoDock');
-            if (dockEl) {
-                dockEl.style.position = 'relative';
-                dockEl.appendChild(indicator);
+            var gridEl = document.getElementById('videoGrid');
+            if (gridEl) {
+                gridEl.style.position = 'relative';
+                gridEl.appendChild(indicator);
             }
         }
 
@@ -3098,7 +2343,7 @@
             if (!state.session) return;
             const sk = state.session.skeleton;
 
-            // Nodes (read-only — defined by SLP or loaded skeleton file)
+            // Nodes
             const nodesTbody = document.querySelector('#skeletonNodesTable tbody');
             nodesTbody.textContent = '';
             sk.nodes.forEach(function (name, i) {
@@ -3109,9 +2354,51 @@
 
                 const tdName = document.createElement('td');
                 tdName.textContent = name;
+                tdName.style.cursor = 'pointer';
+                tdName.title = 'Click to rename';
+                tdName.addEventListener('dblclick', function () {
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.value = sk.nodes[i];
+                    input.style.cssText = 'width:100%;padding:1px 3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--accent);color:var(--text-primary);border-radius:2px;';
+                    tdName.textContent = '';
+                    tdName.appendChild(input);
+                    input.focus();
+                    input.select();
+                    const finish = function () {
+                        const newName = input.value.trim();
+                        if (newName && newName !== sk.nodes[i]) {
+                            sk.nodes[i] = newName;
+                        }
+                        populateSkeletonTable();
+                        drawAllOverlays(state.currentFrame);
+                    };
+                    input.addEventListener('blur', finish);
+                    input.addEventListener('keydown', function (e) {
+                        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                        if (e.key === 'Escape') { input.value = sk.nodes[i]; input.blur(); }
+                    });
+                });
+
+                const tdDel = document.createElement('td');
+                const delBtn = document.createElement('button');
+                delBtn.textContent = '\u00d7';
+                delBtn.className = 'panel-btn';
+                delBtn.style.cssText = 'padding:0 5px;font-size:14px;line-height:1;min-width:0;color:var(--error);';
+                delBtn.title = 'Remove node (cascades to all instances)';
+                delBtn.addEventListener('click', function () {
+                    if (!confirm('Remove node "' + sk.nodes[i] + '"? This will affect all instances.')) return;
+                    sk.removeNode(i);
+                    state.session.propagateNodeRemoved(i);
+                    populateSkeletonTable();
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                });
+                tdDel.appendChild(delBtn);
 
                 tr.appendChild(tdIdx);
                 tr.appendChild(tdName);
+                tr.appendChild(tdDel);
                 nodesTbody.appendChild(tr);
             });
 
@@ -3173,6 +2460,26 @@
         }
 
         function setupSkeletonEditing() {
+            // Add Node button
+            document.getElementById('btnAddNode').addEventListener('click', function () {
+                ensureSession();
+                const input = document.getElementById('newNodeName');
+                const name = input.value.trim();
+                if (!name) { input.focus(); return; }
+                state.session.skeleton.addNode(name);
+                state.session.propagateNodeAdded();
+                input.value = '';
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+            // Enter key in node name input
+            document.getElementById('newNodeName').addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    document.getElementById('btnAddNode').click();
+                }
+            });
             // Add Edge button
             document.getElementById('btnAddEdge').addEventListener('click', function () {
                 ensureSession();
@@ -3508,7 +2815,6 @@
                     }
                 }
                 if (created > 0) {
-                    populateViewStrip();
                     rebuildVideoController();
                     fitCanvasesToCells();
                     populateSessionAssignTable();
@@ -3735,10 +3041,7 @@
 
                     // Error column
                     const tdError = document.createElement('td');
-                    tdError.className = 'mono reproj-error-col';
-                    if (!state.triangulationResults || state.triangulationResults.size === 0) {
-                        tdError.style.display = 'none';
-                    }
+                    tdError.className = 'mono';
                     if (results) {
                         const groupResult = results.find(function (r) { return r.group === group; });
                         if (groupResult && groupResult.meanError != null) {
@@ -3973,10 +3276,10 @@
                 viewport3d.addCameraPyramids();
             }
 
-            // Clear the dock panels and view strip, show empty state
-            paneManager.clearAll();
-            var stripList = document.getElementById('viewStripList');
-            if (stripList) stripList.innerHTML = '';
+            // Clear the video grid and show welcome overlay
+            var gridEl = document.getElementById('videoGrid');
+            if (gridEl) gridEl.innerHTML = '';
+            showWelcomeOverlay();
 
             // Reset frame counter display
             var curFrameEl = document.getElementById('currentFrame');
@@ -4273,8 +3576,8 @@
                         videoController = null;
                     }
                     state.views = [];
-                    state.videoFiles = [];
-                    paneManager.clearAll();
+                    var gridEl = document.getElementById('videoGrid');
+                    if (gridEl) gridEl.innerHTML = '';
                 }
 
                 // Match videos to cameras using manifest
@@ -4339,43 +3642,16 @@
                     fitCanvasesToCells();
                 }
 
-                    // For any still-unassigned video, try exact camera name match
-                    for (var vi = 0; vi < state.videoFiles.length; vi++) {
-                        var vf2 = state.videoFiles[vi];
-                        if (!vf2.assignedCamera && cameraNames.indexOf(vf2.name) >= 0) {
-                            vf2.assignedCamera = vf2.name;
-                        }
+                // Seek to first labeled frame or frame 0
+                if (videoController && state.views.length > 0) {
+                    var firstFrame = 0;
+                    for (var [fIdx] of state.session.frameGroups) {
+                        firstFrame = fIdx;
+                        break;
                     }
-
-                    // Create views for assigned videos
-                    showLoading('Creating views...');
-                    for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
-                        var vf3 = state.videoFiles[vi2];
-                        if (vf3.assignedCamera) {
-                            var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
-                            if (!hasView) {
-                                createViewForVideoFile(vf3);
-                            }
-                        }
-                    }
-
-                    updateTotalFrames();
-                    if (state.views.length > 0) {
-                        populateViewStrip();
-                        rebuildVideoController();
-                        fitCanvasesToCells();
-                    }
-
-                    // Seek to first labeled frame or frame 0
-                    if (videoController && state.views.length > 0) {
-                        var firstFrame = 0;
-                        for (var [fIdx] of state.session.frameGroups) {
-                            firstFrame = fIdx;
-                            break;
-                        }
-                        state.currentFrame = firstFrame;
-                        await videoController.seekToFrame(firstFrame);
-                    }
+                    state.currentFrame = firstFrame;
+                    await videoController.seekToFrame(firstFrame);
+                }
 
                 // 3. Set up 3D viewport
                 if (viewport3d) {
@@ -4678,7 +3954,6 @@
             dot.className = 'status-dot';
             if (type === 'error') dot.classList.add('error');
             else if (type === 'warning') dot.classList.add('warning');
-            else if (type === 'success') dot.classList.add('success');
         }
 
         // ============================================
@@ -4727,20 +4002,17 @@
                                 if (oldName !== vf2.assignedCamera) {
                                     console.log('[calibration] Renaming view "' + oldName + '" -> "' + vf2.assignedCamera + '"');
                                     state.views[vIdx].name = vf2.assignedCamera;
-                                    // Update dock panel data attributes and tab titles
-                                    var cells = document.querySelectorAll('.video-cell[data-view-name="' + oldName + '"]');
-                                    cells.forEach(function (cell) {
-                                        cell.setAttribute('data-view-name', vf2.assignedCamera);
-                                    });
-                                    // Update dockview panel titles
-                                    if (paneManager.api) {
-                                        for (var panel of paneManager.api.panels) {
-                                            if (panel.params?.viewName === oldName) {
-                                                panel.api.updateParameters({ viewName: vf2.assignedCamera });
-                                                panel.setTitle(vf2.assignedCamera);
-                                            }
-                                        }
+                                    // Update DOM element IDs and labels
+                                    var cell = document.getElementById('cell-' + oldName);
+                                    if (cell) {
+                                        cell.id = 'cell-' + vf2.assignedCamera;
+                                        var lbl = cell.querySelector('.view-label');
+                                        if (lbl) lbl.textContent = vf2.assignedCamera;
                                     }
+                                    var canvasEl = document.getElementById('canvas-' + oldName);
+                                    if (canvasEl) canvasEl.id = 'canvas-' + vf2.assignedCamera;
+                                    var overlayEl = document.getElementById('overlay-' + oldName);
+                                    if (overlayEl) overlayEl.id = 'overlay-' + vf2.assignedCamera;
                                     // Rename camera keys in all session data (FrameGroups, InstanceGroups, etc.)
                                     if (state.session) {
                                         state.session.renameCameraInAllData(oldName, vf2.assignedCamera);
@@ -4884,8 +4156,7 @@
                 updateTotalFrames();
 
                 if (newViewsCreated) {
-                    populateViewStrip();
-                    paneManager.addAllViewsAsGrid();
+                    hideWelcomeOverlay();
                     rebuildVideoController();
                     fitCanvasesToCells();
                 }
@@ -4997,46 +4268,87 @@
         function createViewForVideoFile(videoFile) {
             if (!videoFile.assignedCamera) return null;
 
+            // Build grid cell for this view
+            var gridEl = document.getElementById('videoGrid');
             var name = videoFile.assignedCamera;
 
-            // Create view data object (canvases created by VideoPaneRenderer)
+            var cell = document.createElement('div');
+            cell.className = 'video-cell';
+            cell.id = 'cell-' + name;
+
+            var label = document.createElement('span');
+            label.className = 'view-label';
+            label.textContent = name;
+
+            var wrapper = document.createElement('div');
+            wrapper.className = 'canvas-wrapper';
+
+            var canvas = document.createElement('canvas');
+            canvas.id = 'canvas-' + name;
+
+            var overlayCanvas = document.createElement('canvas');
+            overlayCanvas.className = 'overlay-canvas';
+            overlayCanvas.id = 'overlay-' + name;
+
+            wrapper.appendChild(canvas);
+            wrapper.appendChild(overlayCanvas);
+            cell.appendChild(label);
+            cell.appendChild(wrapper);
+            gridEl.appendChild(cell);
+
+            // Set canvas dimensions (internal resolution)
+            canvas.width = videoFile.videoWidth;
+            canvas.height = videoFile.videoHeight;
+            overlayCanvas.width = videoFile.videoWidth;
+            overlayCanvas.height = videoFile.videoHeight;
+
             var view = {
                 name: name,
                 decoder: videoFile.decoder,
-                canvas: null,
-                ctx: null,
-                overlayCanvas: null,
-                overlayCtx: null,
+                canvas: canvas,
+                ctx: canvas.getContext('2d'),
+                overlayCanvas: overlayCanvas,
+                overlayCtx: overlayCanvas.getContext('2d'),
                 videoWidth: videoFile.videoWidth,
                 videoHeight: videoFile.videoHeight,
-                wrapper: null,
+                wrapper: wrapper,
             };
 
             state.views.push(view);
-
+            updateGridLayout();
             return view;
         }
 
         /**
-         * Update grid layout — no-op with dockview (layout managed by dock system).
+         * Update grid layout based on all .video-cell elements (views + prompt cells).
          */
         function updateGridLayout() {
-            // Dockview manages panel layout
+            var gridEl = document.getElementById('videoGrid');
+            var allCells = gridEl.querySelectorAll('.video-cell');
+            var count = allCells.length;
+            if (count === 0) return;
+            var cols = Math.ceil(Math.sqrt(count));
+            var rows = Math.ceil(count / cols);
+            gridEl.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+            gridEl.style.gridTemplateRows = 'repeat(' + rows + ', 1fr)';
         }
 
         /**
          * Create a per-cell video prompt in the grid for a camera that needs a video loaded.
          */
         function createVideoPromptCell(cameraName, referencedFilename) {
-            var dockEl = document.getElementById('videoDock');
+            var gridEl = document.getElementById('videoGrid');
 
             var cell = document.createElement('div');
-            cell.className = 'video-cell video-prompt-cell';
+            cell.className = 'video-cell';
             cell.id = 'cell-' + cameraName;
-            cell.style.cssText = 'display:flex;align-items:center;justify-content:center;min-height:200px;';
+
+            var label = document.createElement('span');
+            label.className = 'view-label';
+            label.textContent = cameraName;
 
             var promptDiv = document.createElement('div');
-            promptDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;background:var(--bg-secondary,#1e1e1e);border:1px dashed var(--border,#444);border-radius:4px;';
+            promptDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;background:var(--bg-secondary,#1e1e1e);border:1px dashed var(--border,#444);';
 
             var camLabel = document.createElement('div');
             camLabel.style.cssText = 'font-size:16px;font-weight:600;color:var(--text-primary,#e0e0e0);margin-bottom:4px;';
@@ -5080,6 +4392,7 @@
                     createViewForVideoFile(videoFileEntry);
                     updateTotalFrames();
 
+                    hideWelcomeOverlay();
                     rebuildVideoController();
                     requestAnimationFrame(function () { fitCanvasesToCells(); });
 
@@ -5109,28 +4422,25 @@
             });
 
             promptDiv.appendChild(btn);
+            cell.appendChild(label);
             cell.appendChild(promptDiv);
+            gridEl.appendChild(cell);
 
-            // Hide the dock empty message and append the prompt cell directly
-            hideWelcomeOverlay();
-            dockEl.appendChild(cell);
+            updateGridLayout();
         }
 
         /**
-         * Fit all canvases to their cells while maintaining video aspect ratio.
-         * With dockview, CSS handles basic sizing via max-width/max-height,
-         * but we still need to ensure canvas display dimensions are correct.
+         * Fit all canvases to their grid cells while maintaining video aspect ratio.
+         * Called on resize and after views are created.
          */
         function fitCanvasesToCells() {
             for (var i = 0; i < state.views.length; i++) {
                 var view = state.views[i];
-                if (!view.canvas || !view.wrapper) continue;
+                var wrapper = view.wrapper;
+                if (!wrapper) continue;
 
-                var cell = view.canvas.closest('.video-cell');
-                if (!cell) continue;
-
-                var cellW = cell.clientWidth;
-                var cellH = cell.clientHeight;
+                var cellW = wrapper.clientWidth;
+                var cellH = wrapper.clientHeight;
                 if (cellW <= 0 || cellH <= 0) continue;
 
                 var videoAR = view.videoWidth / view.videoHeight;
@@ -5138,9 +4448,11 @@
 
                 var cssW, cssH;
                 if (videoAR > cellAR) {
+                    // Video is wider than cell - fit to width
                     cssW = cellW;
                     cssH = cellW / videoAR;
                 } else {
+                    // Video is taller than cell - fit to height
                     cssH = cellH;
                     cssW = cellH * videoAR;
                 }
@@ -5150,14 +4462,14 @@
 
                 view.canvas.style.width = cssW + 'px';
                 view.canvas.style.height = cssH + 'px';
-                if (view.overlayCanvas) {
-                    view.overlayCanvas.style.width = cssW + 'px';
-                    view.overlayCanvas.style.height = cssH + 'px';
-                }
+                view.overlayCanvas.style.width = cssW + 'px';
+                view.overlayCanvas.style.height = cssH + 'px';
             }
+            // Keep 3D viewport in sync with layout changes
             if (viewport3d) viewport3d.resize();
         }
 
+        // Refit canvases on window resize
         window.addEventListener('resize', fitCanvasesToCells);
 
         function rebuildVideoController() {
@@ -5172,17 +4484,11 @@
                 drawOverlays: drawAllOverlays,
                 onPlaybackStateChange: onPlaybackStateChange,
                 log: window.logMessage,
-                onZoomChange: function () {
-                    clearTimeout(_zoomRedrawTimer);
-                    _zoomRedrawTimer = setTimeout(function () {
-                        drawAllOverlays(state.currentFrame);
-                    }, 200);
-                },
             });
 
-            // Set up zoom handlers for views that have been docked (have canvases)
+            // Set up zoom handlers for new views (don't re-register UI listeners)
             for (const view of state.views) {
-                if (!view._zoomSetup && view.canvas) {
+                if (!view._zoomSetup) {
                     view._zoomSetup = true;
                     videoController.initZoom(view);
                     const cell = view.canvas.closest('.video-cell');
@@ -5314,523 +4620,6 @@
             } catch (err) {
                 console.error('Failed to load session:', err);
                 setStatus('Session error: ' + err.message, 'error');
-            }
-        }
-
-        // ============================================
-        // Session Folder Import
-        // ============================================
-
-        /**
-         * Show a popup for unmatched SLP files, letting user pick a video for each.
-         * Returns a Map<slpFile, videoFile> of user-selected matches.
-         */
-        function showUnmatchedSlpPopup(unmatchedSlps, availableVideoFiles) {
-            return new Promise(function (resolve) {
-                var overlay = document.createElement('div');
-                overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
-
-                var card = document.createElement('div');
-                card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;';
-
-                var title = document.createElement('div');
-                title.style.cssText = 'color:#fff;font-size:18px;font-weight:600;margin-bottom:4px;';
-                title.textContent = 'Unmatched SLP Files';
-                card.appendChild(title);
-
-                var sub = document.createElement('div');
-                sub.style.cssText = 'color:#aaa;font-size:13px;margin-bottom:16px;';
-                sub.textContent = 'These SLP files have no matching video. Select a video for each or skip.';
-                card.appendChild(sub);
-
-                var table = document.createElement('table');
-                table.style.cssText = 'width:100%;border-collapse:collapse;';
-
-                var thead = document.createElement('thead');
-                thead.innerHTML = '<tr style="color:#aaa;font-size:12px;text-align:left;"><th style="padding:6px 8px;">SLP File</th><th style="padding:6px 8px;">Video</th></tr>';
-                table.appendChild(thead);
-
-                var tbody = document.createElement('tbody');
-                var selections = new Map(); // slpIndex -> File|null
-
-                for (var si = 0; si < unmatchedSlps.length; si++) {
-                    (function (idx) {
-                        var slp = unmatchedSlps[idx];
-                        var tr = document.createElement('tr');
-                        tr.style.cssText = 'border-top:1px solid var(--border,#333);';
-
-                        var tdName = document.createElement('td');
-                        tdName.style.cssText = 'padding:8px;color:#e0e0e0;font-size:13px;';
-                        tdName.textContent = slp.name;
-                        tr.appendChild(tdName);
-
-                        var tdBtn = document.createElement('td');
-                        tdBtn.style.cssText = 'padding:8px;';
-
-                        var pickBtn = document.createElement('button');
-                        pickBtn.style.cssText = 'padding:6px 14px;font-size:12px;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:4px;';
-                        pickBtn.textContent = 'Select Video...';
-
-                        var label = document.createElement('span');
-                        label.style.cssText = 'color:#aaa;font-size:12px;margin-left:8px;';
-                        label.textContent = '(none)';
-
-                        pickBtn.addEventListener('click', async function () {
-                            var files = await pickVideoFiles();
-                            if (files.length > 0) {
-                                selections.set(idx, files[0]);
-                                label.textContent = files[0].name;
-                                label.style.color = '#4a9eff';
-                            }
-                        });
-
-                        tdBtn.appendChild(pickBtn);
-                        tdBtn.appendChild(label);
-                        tr.appendChild(tdBtn);
-                        tbody.appendChild(tr);
-                    })(si);
-                }
-                table.appendChild(tbody);
-                card.appendChild(table);
-
-                var btnRow = document.createElement('div');
-                btnRow.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:16px;';
-
-                var skipBtn = document.createElement('button');
-                skipBtn.style.cssText = 'padding:10px 24px;font-size:14px;cursor:pointer;background:var(--bg-tertiary,#333);color:#ccc;border:1px solid var(--border,#444);border-radius:6px;';
-                skipBtn.textContent = 'Skip Unmatched';
-                skipBtn.addEventListener('click', function () {
-                    overlay.remove();
-                    resolve(selections);
-                });
-
-                var doneBtn = document.createElement('button');
-                doneBtn.style.cssText = 'padding:10px 24px;font-size:14px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
-                doneBtn.textContent = 'Continue';
-                doneBtn.addEventListener('click', function () {
-                    overlay.remove();
-                    resolve(selections);
-                });
-
-                btnRow.appendChild(skipBtn);
-                btnRow.appendChild(doneBtn);
-                card.appendChild(btnRow);
-                overlay.appendChild(card);
-                document.body.appendChild(overlay);
-            });
-        }
-
-        async function handleLoadSessionFolder() {
-            try {
-                setStatus('Pick session folder...', 'warning');
-                var allFiles = await pickFolder();
-                if (allFiles.length === 0) {
-                    setStatus('No folder selected', 'warning');
-                    return;
-                }
-
-                showLoading('Scanning folder...');
-
-                // Categorize files by subfolder
-                var calibFile = null;
-                var skeletonFile = null;
-                var videoFiles = [];
-                var slpFiles = [];
-                var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
-
-                // Log all files for debugging
-                console.log('[session-folder] All files in folder (' + allFiles.length + '):');
-                for (var di = 0; di < allFiles.length; di++) {
-                    console.log('  ' + (allFiles[di].webkitRelativePath || allFiles[di].name));
-                }
-
-                for (var fi = 0; fi < allFiles.length; fi++) {
-                    var file = allFiles[fi];
-                    var relPath = file.webkitRelativePath || file.name;
-                    var parts = relPath.split('/');
-                    if (parts.length < 2) continue;
-                    // Build subpath from all parts after root folder, lowercased
-                    var subPath = parts.slice(1).join('/').toLowerCase();
-                    var fileName = parts[parts.length - 1];
-                    var fileNameLower = fileName.toLowerCase();
-
-                    // Check for calibration at root level (any .toml or .json with "calib" in name)
-                    if (parts.length === 2 && (fileNameLower.endsWith('.toml') || fileNameLower.endsWith('.json'))
-                        && fileNameLower.indexOf('calib') >= 0) {
-                        calibFile = file;
-                    }
-                    // Check for skeleton JSON at root level (any .json with "skeleton" in name)
-                    else if (fileNameLower.endsWith('.json') && fileNameLower.indexOf('skeleton') >= 0) {
-                        skeletonFile = file;
-                    }
-                    // Check for videos — case-insensitive subfolder match at any depth
-                    else if (subPath.match(/^videos?\//i)) {
-                        var ext = fileNameLower.substring(fileNameLower.lastIndexOf('.'));
-                        if (videoExtensions.indexOf(ext) >= 0) {
-                            videoFiles.push(file);
-                        }
-                    }
-                    // Check for SLP files — case-insensitive subfolder match at any depth
-                    else if (subPath.match(/^slps?\//i)) {
-                        if (fileNameLower.endsWith('.slp') || fileNameLower.endsWith('.h5')) {
-                            slpFiles.push(file);
-                        }
-                    }
-                }
-
-                // Fallback: if no videos or slps found in named subfolders, search entire tree
-                if (videoFiles.length === 0 || slpFiles.length === 0) {
-                    console.log('[session-folder] Subfolder scan incomplete (videos: ' + videoFiles.length + ', slps: ' + slpFiles.length + '), scanning entire folder tree...');
-                    for (var fi2 = 0; fi2 < allFiles.length; fi2++) {
-                        var file2 = allFiles[fi2];
-                        var fn2 = (file2.name || '').toLowerCase();
-                        if (videoFiles.length === 0) {
-                            var ext2 = fn2.substring(fn2.lastIndexOf('.'));
-                            if (videoExtensions.indexOf(ext2) >= 0) {
-                                videoFiles.push(file2);
-                            }
-                        }
-                        if (slpFiles.length === 0) {
-                            if (fn2.endsWith('.slp') || fn2.endsWith('.h5')) {
-                                slpFiles.push(file2);
-                            }
-                        }
-                    }
-                }
-
-                console.log('[session-folder] Categorization result:', {
-                    calibration: calibFile ? calibFile.name : null,
-                    skeleton: skeletonFile ? skeletonFile.name : null,
-                    videos: videoFiles.map(function (f) { return f.webkitRelativePath || f.name; }),
-                    slps: slpFiles.map(function (f) { return f.webkitRelativePath || f.name; }),
-                });
-
-                if (slpFiles.length === 0 && videoFiles.length === 0) {
-                    hideLoading();
-                    setStatus('No SLP or video files found in folder', 'error');
-                    return;
-                }
-                if (slpFiles.length === 0) {
-                    hideLoading();
-                    setStatus('No SLP files found in folder (found ' + videoFiles.length + ' video(s))', 'error');
-                    return;
-                }
-
-                // 1. Load calibration if found
-                var cameras = [];
-                if (calibFile) {
-                    showLoading('Loading calibration...');
-                    var calibText = await calibFile.text();
-                    try {
-                        if (calibFile.name.toLowerCase().endsWith('.toml')) {
-                            cameras = parseCalibrationTOML(calibText);
-                        } else {
-                            cameras = parseCalibrationJSON(calibText);
-                        }
-                        console.log('[session-folder] Loaded ' + cameras.length + ' cameras from calibration');
-                    } catch (calibErr) {
-                        console.error('[session-folder] Calibration parse error:', calibErr);
-                        setStatus('Warning: calibration parse failed — load separately later', 'warning');
-                    }
-                } else {
-                    console.log('[session-folder] No calibration file found — can be loaded separately');
-                }
-
-                // 2. Match SLPs to videos by filename stem
-                var matchedPairs = []; // { slpFile, videoFile }
-                var unmatchedSlps = [];
-                var usedVideoIndices = new Set();
-
-                for (var si = 0; si < slpFiles.length; si++) {
-                    var slpFile = slpFiles[si];
-                    var slpStem = slpFile.name.replace(/\.[^.]+$/, '').toLowerCase();
-
-                    var matchedVideo = null;
-                    for (var vi = 0; vi < videoFiles.length; vi++) {
-                        if (usedVideoIndices.has(vi)) continue;
-                        var videoStem = videoFiles[vi].name.replace(/\.[^.]+$/, '').toLowerCase();
-                        if (slpStem === videoStem) {
-                            matchedVideo = videoFiles[vi];
-                            usedVideoIndices.add(vi);
-                            break;
-                        }
-                    }
-
-                    if (matchedVideo) {
-                        matchedPairs.push({ slpFile: slpFile, videoFile: matchedVideo });
-                    } else {
-                        unmatchedSlps.push(slpFile);
-                    }
-                }
-
-                console.log('[session-folder] Matched:', matchedPairs.length, 'Unmatched:', unmatchedSlps.length);
-
-                // 3. Handle unmatched SLPs — show popup for user to assign videos
-                if (unmatchedSlps.length > 0) {
-                    hideLoading();
-                    var userSelections = await showUnmatchedSlpPopup(unmatchedSlps, videoFiles);
-                    for (var [idx, videoFile] of userSelections) {
-                        if (videoFile) {
-                            matchedPairs.push({ slpFile: unmatchedSlps[idx], videoFile: videoFile });
-                        }
-                    }
-                }
-
-                // 4. Load each SLP + matched video
-                // Reset state for new session
-                if (state.session || state.views.length > 0) {
-                    if (videoController && state.isPlaying) videoController.pause();
-                    videoController = null;
-                    state.views = [];
-                    state.videoFiles = [];
-                    paneManager.clearAll();
-                    var stripList = document.getElementById('viewStripList');
-                    if (stripList) stripList.innerHTML = '';
-                }
-
-                var firstSession = null;
-
-                for (var pi = 0; pi < matchedPairs.length; pi++) {
-                    var pair = matchedPairs[pi];
-                    var pairStem = pair.slpFile.name.replace(/\.[^.]+$/, '');
-
-                    showLoading('Loading SLP: ' + pair.slpFile.name + ' (' + (pi + 1) + '/' + matchedPairs.length + ')...');
-
-                    // Parse SLP
-                    var slpData;
-                    try {
-                        slpData = await parseSlpH5(pair.slpFile, function (msg) {
-                            showLoading(msg);
-                        });
-                    } catch (parseErr) {
-                        console.error('[session-folder] Failed to parse ' + pair.slpFile.name + ':', parseErr);
-                        setStatus('Failed to parse ' + pair.slpFile.name + ': ' + parseErr.message, 'error');
-                        continue;
-                    }
-
-                    // Extract camera info from SLP
-                    var slpCameras = [];
-                    if (slpData.sessions && slpData.sessions.length > 0) {
-                        var sess = slpData.sessions[0];
-                        if (sess.calibration && sess.calibration.cameras) {
-                            for (var ci = 0; ci < sess.calibration.cameras.length; ci++) {
-                                var cc = sess.calibration.cameras[ci];
-                                slpCameras.push(new Camera(
-                                    cc.name || ('cam_' + ci),
-                                    cc.matrix || [[1,0,0],[0,1,0],[0,0,1]],
-                                    cc.distortions || [0,0,0,0,0],
-                                    cc.rotation || [0,0,0],
-                                    cc.translation || [0,0,0],
-                                    cc.size || [640,480]
-                                ));
-                            }
-                        }
-                    }
-
-                    // Use calibration file cameras if available, otherwise SLP cameras
-                    var sessionCameras = cameras.length > 0 ? cameras : slpCameras;
-
-                    // Build skeleton
-                    var skeleton;
-                    if (slpData.skeleton) {
-                        skeleton = new Skeleton(
-                            slpData.skeleton.name || 'skeleton',
-                            slpData.skeleton.nodes || [],
-                            slpData.skeleton.edges || []
-                        );
-                    } else {
-                        skeleton = new Skeleton('skeleton', [], []);
-                    }
-
-                    // Build session if first SLP, or merge into existing
-                    var tracks = slpData.tracks || ['track_0'];
-
-                    if (!state.session) {
-                        state.session = new Session(sessionCameras, skeleton, tracks);
-                        firstSession = state.session;
-                    }
-
-                    // Add frames from SLP data
-                    if (slpData.frames) {
-                        for (var fri = 0; fri < slpData.frames.length; fri++) {
-                            var frameData = slpData.frames[fri];
-                            var frameIdx = frameData.frame_idx !== undefined ? frameData.frame_idx : fri;
-
-                            if (!state.session.frameGroups.has(frameIdx)) {
-                                state.session.addFrameGroup(new FrameGroup(frameIdx));
-                            }
-                            var fg = state.session.getFrameGroup(frameIdx);
-
-                            if (frameData.instances) {
-                                for (var ii = 0; ii < frameData.instances.length; ii++) {
-                                    var inst = frameData.instances[ii];
-                                    var videoIdx = inst.video_idx !== undefined ? inst.video_idx : 0;
-
-                                    // Map video_idx to camera name
-                                    var camName = null;
-                                    if (slpData.videos && slpData.videos[videoIdx]) {
-                                        var vRef = slpData.videos[videoIdx];
-                                        var refFn = vRef.sourceFilename || vRef.filename || '';
-                                        camName = refFn.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '');
-                                    }
-                                    if (!camName && sessionCameras[videoIdx]) {
-                                        camName = sessionCameras[videoIdx].name;
-                                    }
-                                    if (!camName) camName = pairStem;
-
-                                    var points = inst.points || [];
-                                    var trackIdx = inst.track_idx !== undefined ? inst.track_idx : 0;
-                                    var instType = inst.from_predicted !== undefined ? 'predicted' : 'user';
-                                    var score = inst.score !== undefined ? inst.score : 1.0;
-
-                                    var instance = new Instance(points, trackIdx, instType, score);
-                                    fg.addInstance(camName, instance);
-                                }
-                            }
-                        }
-                    }
-
-                    // Load the matched video
-                    showLoading('Loading video: ' + pair.videoFile.name + '...');
-                    try {
-                        var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
-                        await decoder.init(pair.videoFile);
-
-                        var vw = decoder.videoTrack.video.width;
-                        var vh = decoder.videoTrack.video.height;
-                        var camName2 = pairStem;
-
-                        // If a camera with this name exists, use it
-                        var matchedCam = sessionCameras.find(function (c) {
-                            return c.name.toLowerCase() === camName2.toLowerCase();
-                        });
-                        if (matchedCam) camName2 = matchedCam.name;
-
-                        state.videoFiles.push({
-                            file: pair.videoFile,
-                            name: camName2,
-                            decoder: decoder,
-                            videoWidth: vw,
-                            videoHeight: vh,
-                            frameCount: decoder.samples.length,
-                            assignedCamera: camName2,
-                        });
-
-                        // Ensure camera exists in session
-                        if (!state.session.cameras.some(function (c) { return c.name === camName2; })) {
-                            state.session.cameras.push(
-                                new Camera(camName2, [[600,0,320],[0,600,240],[0,0,1]],
-                                    [0,0,0,0,0], [0,0,0], [0,0,0], [vw, vh])
-                            );
-                        }
-
-                        // Create view data (not added to dock — user drags from strip)
-                        state.views.push({
-                            name: camName2,
-                            decoder: decoder,
-                            canvas: null,
-                            ctx: null,
-                            overlayCanvas: null,
-                            overlayCtx: null,
-                            videoWidth: vw,
-                            videoHeight: vh,
-                            wrapper: null,
-                        });
-
-                        if (state.totalFrames === 0 || decoder.samples.length > state.totalFrames) {
-                            state.totalFrames = decoder.samples.length;
-                        }
-                        if (state.fps === 0 || state.fps === 30) {
-                            state.fps = decoder.videoTrack.duration > 0
-                                ? decoder.samples.length / (decoder.videoTrack.duration / decoder.videoTrack.timescale)
-                                : 30;
-                        }
-                    } catch (vidErr) {
-                        console.error('[session-folder] Failed to load video ' + pair.videoFile.name + ':', vidErr);
-                    }
-                }
-
-                // 5. Move all loaded instances to the unlinked pool
-                // Identity assignment is NOT run automatically — user triggers it
-                // through the Assign menu. All instances start as unlinked.
-                if (state.session) {
-                    showLoading('Preparing instances...');
-                    for (var [fgIdx, fgObj] of state.session.frameGroups) {
-                        for (var [cn, instances] of fgObj.instances) {
-                            for (var instItem of instances) {
-                                var ulInst = new UnlinkedInstance(instItem, cn);
-                                fgObj.addUnlinkedInstance(cn, ulInst);
-                            }
-                            // Clear the original instances so they aren't double-drawn
-                            // as "detected" solid-line skeletons
-                            fgObj.instances.set(cn, []);
-                        }
-                    }
-                    console.log('[session-folder] Prepared unlinked instances for', state.session.frameGroups.size, 'frames');
-                }
-
-                // 5b. Load skeleton JSON override if found in session folder
-                if (skeletonFile && state.session) {
-                    try {
-                        showLoading('Loading skeleton file...');
-                        var skelText = await skeletonFile.text();
-                        var loadedSkeleton = parseSkeletonJSON(skelText);
-                        if (loadedSkeleton && loadedSkeleton.nodes.length > 0) {
-                            state.session.skeleton = loadedSkeleton;
-                            console.log('[session-folder] Overrode skeleton from ' + skeletonFile.name +
-                                ': ' + loadedSkeleton.nodes.length + ' nodes, ' + loadedSkeleton.edges.length + ' edges');
-                            setStatus('Loaded skeleton from ' + skeletonFile.name, 'success');
-                        }
-                    } catch (skelErr) {
-                        console.error('[session-folder] Skeleton file parse error:', skelErr);
-                    }
-                }
-
-                // 6. Finalize
-                if (state.views.length > 0) {
-                    populateViewStrip();
-                    paneManager.addAllViewsAsGrid();
-                    rebuildVideoController();
-                    updateTotalFrames();
-                    fitCanvasesToCells();
-                }
-
-                // Set up 3D viewport
-                if (state.session && state.session.cameras.length > 0) {
-                    setup3DViewport();
-                }
-
-                // Set up interaction manager for pose editing
-                if (state.session && !interactionManager) {
-                    setupInteraction();
-                }
-                if (interactionManager && state.views.length > 0) {
-                    interactionManager.detach();
-                    interactionManager.attach(state.views);
-                }
-
-                // Set up timeline
-                if (state.session && !timeline) {
-                    setupTimeline();
-                } else if (timeline) {
-                    timeline.setData(state.session);
-                    timeline.setTotalFrames(state.totalFrames);
-                }
-
-                // Triangulation is NOT run automatically — user triggers it
-                updateInfoPanel();
-                updateFpsDisplay();
-
-                hideLoading();
-
-                var statusMsg = 'Loaded ' + matchedPairs.length + ' SLP/video pair(s)';
-                if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
-                setStatus(statusMsg, 'success');
-
-            } catch (err) {
-                console.error('[session-folder] Error:', err);
-                hideLoading();
-                setStatus('Session folder error: ' + err.message, 'error');
             }
         }
 
@@ -6013,7 +4802,8 @@
                 }
                 state.views = [];
                 state.videoFiles = [];
-                paneManager.clearAll();
+                var gridEl = document.getElementById('videoGrid');
+                if (gridEl) gridEl.innerHTML = '';
 
                 var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
 
@@ -6184,8 +4974,7 @@
 
                 updateTotalFrames();
                 if (state.views.length > 0) {
-                    populateViewStrip();
-                    paneManager.addAllViewsAsGrid();
+                    hideWelcomeOverlay();
                     rebuildVideoController();
                     fitCanvasesToCells();
                 }
@@ -6453,7 +5242,6 @@
                         createViewForVideoFile(mVideoEntry);
                     }
 
-                    populateViewStrip();
                     updateTotalFrames();
                     rebuildVideoController();
                     requestAnimationFrame(function () { fitCanvasesToCells(); });
@@ -6550,7 +5338,7 @@
                                 console.error('[add-slp] Failed to load ' + amvFile.name + ':', amvErr);
                             }
                         }
-                        populateViewStrip();
+                        updateGridLayout();
                         updateTotalFrames();
                         rebuildVideoController();
                         requestAnimationFrame(function () { fitCanvasesToCells(); });
@@ -6572,7 +5360,8 @@
                     }
                 }
 
-                // Dock empty message is hidden by addVideoPanel when user drags videos in
+                // Ensure welcome overlay is hidden
+                hideWelcomeOverlay();
 
                 // Validate currentFrame is still valid
                 if (!state.session.frameGroups.has(state.currentFrame)) {
@@ -6598,9 +5387,9 @@
                 if (timeline) timeline.setData(state.session);
 
                 hideLoading();
-                var dockPanelCount = paneManager.api ? paneManager.api.panels.length : 0;
-                console.log('[add-slp] Done. Dock panels: ' + dockPanelCount + ', Views: ' + state.views.length);
-                setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames merged. Panels: ' + dockPanelCount, 'success');
+                var gridCellCount = document.querySelectorAll('#videoGrid .video-cell').length;
+                console.log('[add-slp] Done. Grid cells: ' + gridCellCount + ', Views: ' + state.views.length);
+                setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames merged. Grid: ' + gridCellCount + ' cells', 'success');
             } catch (err) {
                 console.error('[add-slp] FATAL:', err);
                 hideLoading();
@@ -6695,12 +5484,15 @@
             document.querySelectorAll('.video-cell.camera-highlighted').forEach(function (el) {
                 el.classList.remove('camera-highlighted');
             });
-            if (!cameraName) return;
-            // Add persistent highlight to matching cell(s) by data attribute
-            var cells = document.querySelectorAll('.video-cell[data-view-name="' + cameraName + '"]');
-            cells.forEach(function (cell) {
+            // Add highlight to matching cell
+            const cell = document.getElementById('cell-' + cameraName);
+            if (cell) {
                 cell.classList.add('camera-highlighted');
-            });
+                // Auto-remove after 2 seconds
+                setTimeout(function () {
+                    cell.classList.remove('camera-highlighted');
+                }, 2000);
+            }
         }
 
         // ============================================
@@ -6753,733 +5545,6 @@
             document.body.removeChild(a);
             setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
         }
-
-        // ============================================
-        // Dockview Pane Manager
-        // ============================================
-
-        const panelRenderers = new Map(); // panelId -> VideoPaneRenderer
-
-        class VideoPaneRenderer {
-            constructor() {
-                this.element = document.createElement('div');
-                this.element.className = 'video-cell';
-                this.element.style.cssText = 'position:relative;width:100%;height:100%;';
-                this.viewName = null;
-                this.panelId = '';
-                this._panelApi = null;
-                this._zoomProxy = null;
-                this._unzoomBtn = null;
-            }
-
-            init(params) {
-                this.viewName = params.params?.viewName ?? null;
-                this.panelId = params.api.id;
-                this._panelApi = params.api;
-
-                this.element.id = 'cell-' + this.panelId;
-                this.element.setAttribute('data-view-name', this.viewName || '');
-
-                var self = this;
-
-                // Unzoom button (shown when view is zoomed)
-                var unzoomBtn = document.createElement('button');
-                unzoomBtn.className = 'unzoom-btn';
-                unzoomBtn.textContent = 'Zoomed';
-                unzoomBtn.title = 'Click to reset zoom';
-                unzoomBtn.style.display = 'none';
-                unzoomBtn.addEventListener('mouseenter', function () { unzoomBtn.textContent = 'Unzoom'; });
-                unzoomBtn.addEventListener('mouseleave', function () { unzoomBtn.textContent = 'Zoomed'; });
-                unzoomBtn.addEventListener('click', function (e) {
-                    e.stopPropagation();
-                    var view = state.views.find(function (v) { return v.name === self.viewName; });
-                    if (view && videoController) {
-                        videoController.resetZoom(view);
-                    }
-                });
-                this.element.appendChild(unzoomBtn);
-                this._unzoomBtn = unzoomBtn;
-
-                // Canvas wrapper
-                var view = state.views.find(function (v) { return v.name === self.viewName; });
-                if (view) {
-                    var wrapper = document.createElement('div');
-                    wrapper.className = 'canvas-wrapper';
-
-                    var canvas = document.createElement('canvas');
-                    canvas.id = 'canvas-' + this.panelId;
-                    canvas.width = view.videoWidth;
-                    canvas.height = view.videoHeight;
-
-                    var overlayCanvas = document.createElement('canvas');
-                    overlayCanvas.className = 'overlay-canvas';
-                    overlayCanvas.id = 'overlay-' + this.panelId;
-                    overlayCanvas.width = view.videoWidth;
-                    overlayCanvas.height = view.videoHeight;
-
-                    wrapper.appendChild(canvas);
-                    wrapper.appendChild(overlayCanvas);
-                    this.element.appendChild(wrapper);
-
-                    // Update view references
-                    view.canvas = canvas;
-                    view.ctx = canvas.getContext('2d');
-                    view.overlayCanvas = overlayCanvas;
-                    view.overlayCtx = overlayCanvas.getContext('2d');
-                    view.wrapper = wrapper;
-                }
-
-                panelRenderers.set(this.panelId, this);
-                requestAnimationFrame(function () { refreshPaneInteractions(); });
-            }
-
-            update(event) {
-                if (event.params.viewName !== undefined && event.params.viewName !== this.viewName) {
-                    this.viewName = event.params.viewName;
-                    this.element.setAttribute('data-view-name', this.viewName);
-
-                    var oldWrapper = this.element.querySelector('.canvas-wrapper');
-                    if (oldWrapper) oldWrapper.remove();
-
-                    var self = this;
-                    var view = state.views.find(function (v) { return v.name === self.viewName; });
-                    if (view) {
-                        var wrapper = document.createElement('div');
-                        wrapper.className = 'canvas-wrapper';
-                        var canvas = document.createElement('canvas');
-                        canvas.id = 'canvas-' + this.panelId;
-                        canvas.width = view.videoWidth;
-                        canvas.height = view.videoHeight;
-                        var overlayCanvas = document.createElement('canvas');
-                        overlayCanvas.className = 'overlay-canvas';
-                        overlayCanvas.id = 'overlay-' + this.panelId;
-                        overlayCanvas.width = view.videoWidth;
-                        overlayCanvas.height = view.videoHeight;
-                        wrapper.appendChild(canvas);
-                        wrapper.appendChild(overlayCanvas);
-                        this.element.appendChild(wrapper);
-                        view.canvas = canvas;
-                        view.ctx = canvas.getContext('2d');
-                        view.overlayCanvas = overlayCanvas;
-                        view.overlayCtx = overlayCanvas.getContext('2d');
-                        view.wrapper = wrapper;
-                    }
-                    requestAnimationFrame(function () { refreshPaneInteractions(); });
-                }
-            }
-
-            dispose() {
-                panelRenderers.delete(this.panelId);
-                requestAnimationFrame(function () { refreshPaneInteractions(); });
-            }
-
-            getViewName() {
-                return this.viewName;
-            }
-        }
-
-        function mapPositionToDirection(position) {
-            if (position === 'left') return 'left';
-            if (position === 'right') return 'right';
-            if (position === 'top') return 'above';
-            if (position === 'bottom') return 'below';
-            return 'within';
-        }
-
-        function updateStripItemStatus(viewName, inDock) {
-            var items = document.querySelectorAll('.view-strip-item[data-view-name="' + viewName + '"]');
-            items.forEach(function (item) {
-                var dot = item.querySelector('.strip-status');
-                if (dot) {
-                    dot.style.display = inDock ? '' : 'none';
-                    dot.className = 'strip-status' + (inDock ? ' in-dock' : '');
-                }
-            });
-        }
-
-        const paneManager = {
-            dockview: null,
-            api: null,
-            panelCounter: 0,
-            dockedViews: new Map(),
-
-            init(container) {
-                var theme = Object.assign({}, themeDark, {
-                    name: 'mv-dark',
-                    className: 'dockview-theme-abyss',
-                });
-
-                this.dockview = new DockviewComponent(container, {
-                    theme: theme,
-                    createComponent: function (_options) {
-                        return new VideoPaneRenderer();
-                    },
-                    disableFloatingGroups: true,
-                });
-                this.api = this.dockview.api;
-
-                var self = this;
-
-                // Accept external drags from view strip
-                this.api.onUnhandledDragOverEvent(function (event) {
-                    if (event.nativeEvent.dataTransfer &&
-                        event.nativeEvent.dataTransfer.types.includes('text/plain')) {
-                        event.accept();
-                    }
-                });
-
-                // Handle external drops
-                this.api.onDidDrop(function (event) {
-                    var viewName = event.nativeEvent.dataTransfer
-                        ? event.nativeEvent.dataTransfer.getData('text/plain')
-                        : null;
-                    if (!viewName) return;
-                    var direction = mapPositionToDirection(event.position);
-                    var position;
-                    if (event.group) {
-                        position = { referenceGroup: event.group.id, direction: direction };
-                    } else {
-                        position = { direction: direction };
-                    }
-                    self.addVideoPanel(viewName, position);
-                });
-
-                // Track active panel — highlight selected video + camera in 3D
-                this.api.onDidActivePanelChange(function (event) {
-                    document.querySelectorAll('.video-cell.video-selected').forEach(function (el) {
-                        el.classList.remove('video-selected');
-                    });
-                    var activeViewName = null;
-                    if (event && event.id) {
-                        var renderer = panelRenderers.get(event.id);
-                        if (renderer && renderer.element) {
-                            renderer.element.classList.add('video-selected');
-                            activeViewName = renderer.getViewName();
-                        }
-                    }
-                    // Highlight corresponding camera in 3D viewer (skip during auto-assignment)
-                    if (viewport3d && !autoAssignState) {
-                        viewport3d.highlightCamera(activeViewName);
-                        viewport3d.selectedCamera = activeViewName;
-                    }
-                });
-
-                // Track panel removal
-                this.api.onDidRemovePanel(function (event) {
-                    var renderer = panelRenderers.get(event.id);
-                    if (renderer) {
-                        var viewName = renderer.getViewName();
-                        if (viewName) {
-                            var count = (self.dockedViews.get(viewName) || 1) - 1;
-                            if (count <= 0) {
-                                self.dockedViews.delete(viewName);
-                                updateStripItemStatus(viewName, false);
-                            } else {
-                                self.dockedViews.set(viewName, count);
-                            }
-                        }
-                    }
-                    panelRenderers.delete(event.id);
-                    if (self.api.panels.length === 0) {
-                        var emptyMsg = document.getElementById('videoDockEmpty');
-                        if (emptyMsg) emptyMsg.classList.remove('hidden');
-                    }
-                });
-            },
-
-            addVideoPanel(viewName, position) {
-                // Prevent duplicate panels for the same view
-                if (this.dockedViews.has(viewName) && this.dockedViews.get(viewName) > 0) {
-                    // Already docked — activate the existing panel instead
-                    if (this.api) {
-                        var panels = Array.from(this.api.panels);
-                        for (var pi = 0; pi < panels.length; pi++) {
-                            var renderer = panelRenderers.get(panels[pi].id);
-                            if (renderer && renderer.getViewName() === viewName) {
-                                panels[pi].api.setActive();
-                                return;
-                            }
-                        }
-                    }
-                    return;
-                }
-                var count = this.dockedViews.get(viewName) || 0;
-                this.dockedViews.set(viewName, count + 1);
-                this.panelCounter++;
-                var id = 'video-' + viewName + '-' + this.panelCounter;
-
-                this.api.addPanel({
-                    id: id,
-                    component: 'video-canvas',
-                    title: viewName,
-                    params: { viewName: viewName },
-                    position: position,
-                });
-
-                var emptyMsg = document.getElementById('videoDockEmpty');
-                if (emptyMsg) emptyMsg.classList.add('hidden');
-
-                updateStripItemStatus(viewName, true);
-            },
-
-            addAllViews() {
-                for (var i = 0; i < state.views.length; i++) {
-                    this.addVideoPanel(state.views[i].name);
-                }
-            },
-
-            /**
-             * Add all views arranged in an optimal grid layout.
-             * n<=3: 1 row. n<=8: 2 rows. n<=15: 3 rows.
-             * Top row gets ceil(n/rows) items, remaining rows fill the rest.
-             */
-            addAllViewsAsGrid() {
-                var views = state.views;
-                var n = views.length;
-                if (n === 0) return;
-
-                // Calculate grid dimensions
-                var rows, cols;
-                if (n <= 3)       { rows = 1; }
-                else if (n <= 8)  { rows = 2; }
-                else              { rows = 3; }
-                cols = Math.ceil(n / rows);
-
-                // Build grid of view names (row-major, top row first)
-                var grid = [];
-                var idx = 0;
-                for (var r = 0; r < rows; r++) {
-                    grid[r] = [];
-                    // Top row gets ceil(n/rows), remaining rows get the rest evenly
-                    var rowCount = (r === 0) ? cols : Math.ceil((n - cols) / (rows - 1));
-                    if (r === rows - 1) rowCount = n - idx; // last row gets remainder
-                    for (var c = 0; c < rowCount && idx < n; c++) {
-                        grid[r][c] = views[idx].name;
-                        idx++;
-                    }
-                }
-
-                // Track panel IDs for positioning
-                var panelIds = []; // panelIds[r][c] = panel id string
-                for (var r2 = 0; r2 < grid.length; r2++) {
-                    panelIds[r2] = [];
-                }
-
-                var self = this;
-
-                // Helper to add a single panel (bypasses duplicate check for grid init)
-                function addGridPanel(viewName, position) {
-                    self.dockedViews.set(viewName, (self.dockedViews.get(viewName) || 0) + 1);
-                    self.panelCounter++;
-                    var id = 'video-' + viewName + '-' + self.panelCounter;
-                    self.api.addPanel({
-                        id: id,
-                        component: 'video-canvas',
-                        title: viewName,
-                        params: { viewName: viewName },
-                        position: position,
-                    });
-                    var emptyMsg = document.getElementById('videoDockEmpty');
-                    if (emptyMsg) emptyMsg.classList.add('hidden');
-                    updateStripItemStatus(viewName, true);
-                    return id;
-                }
-
-                // Add first row: left to right
-                for (var c1 = 0; c1 < grid[0].length; c1++) {
-                    if (c1 === 0) {
-                        panelIds[0][0] = addGridPanel(grid[0][0]);
-                    } else {
-                        panelIds[0][c1] = addGridPanel(grid[0][c1], {
-                            referencePanel: panelIds[0][c1 - 1],
-                            direction: 'right',
-                        });
-                    }
-                }
-
-                // Add subsequent rows: below the corresponding column in the row above
-                for (var r3 = 1; r3 < grid.length; r3++) {
-                    for (var c3 = 0; c3 < grid[r3].length; c3++) {
-                        // Reference the panel directly above
-                        var refCol = Math.min(c3, panelIds[r3 - 1].length - 1);
-                        panelIds[r3][c3] = addGridPanel(grid[r3][c3], {
-                            referencePanel: panelIds[r3 - 1][refCol],
-                            direction: 'below',
-                        });
-                    }
-                }
-            },
-
-            clearAll() {
-                var panels = this.api ? Array.from(this.api.panels) : [];
-                for (var i = 0; i < panels.length; i++) {
-                    panels[i].api.close();
-                }
-                this.dockedViews.clear();
-                var emptyMsg = document.getElementById('videoDockEmpty');
-                if (emptyMsg) emptyMsg.classList.remove('hidden');
-            },
-        };
-
-        function refreshPaneInteractions() {
-            // Re-attach interaction manager to current views after panel changes
-            if (interactionManager && state.views.length > 0) {
-                interactionManager.attach(state.views);
-            }
-            // Initialize zoom and set up handlers for each docked view
-            if (videoController) {
-                for (var i = 0; i < state.views.length; i++) {
-                    var view = state.views[i];
-                    if (view.canvas) {
-                        videoController.initZoom(view);
-                        if (!view._zoomSetup) {
-                            view._zoomSetup = true;
-                            var cell = view.canvas.closest('.video-cell');
-                            if (cell) videoController.setupZoomHandlers(view, cell);
-                        }
-                    }
-                }
-            }
-            // Render current frame to newly created canvases and fit sizes
-            fitCanvasesToCells();
-            if (videoController) {
-                videoController.seekToFrame(state.currentFrame);
-            }
-            drawAllOverlays(state.currentFrame);
-        }
-
-        function renderDuplicatePanels() {
-            var primaryCanvases = new Map();
-            for (var i = 0; i < state.views.length; i++) {
-                var view = state.views[i];
-                if (view.canvas) primaryCanvases.set(view.name, view);
-            }
-
-            for (var entry of panelRenderers) {
-                var panelId = entry[0];
-                var renderer = entry[1];
-                var viewName = renderer.getViewName();
-                var primaryView = primaryCanvases.get(viewName);
-                if (!primaryView || !primaryView.canvas) continue;
-
-                var panelCanvas = renderer.element.querySelector('canvas:not(.overlay-canvas)');
-                var panelOverlay = renderer.element.querySelector('.overlay-canvas');
-
-                if (panelCanvas && panelCanvas !== primaryView.canvas) {
-                    var ctx = panelCanvas.getContext('2d');
-                    try { ctx.drawImage(primaryView.canvas, 0, 0, panelCanvas.width, panelCanvas.height); }
-                    catch (e) { /* canvas not ready */ }
-                }
-
-                if (panelOverlay && primaryView.overlayCanvas && panelOverlay !== primaryView.overlayCanvas) {
-                    var octx = panelOverlay.getContext('2d');
-                    try { octx.drawImage(primaryView.overlayCanvas, 0, 0, panelOverlay.width, panelOverlay.height); }
-                    catch (e) { /* canvas not ready */ }
-                }
-            }
-        }
-
-        // ============================================
-        // View Strip
-        // ============================================
-
-        function populateViewStrip() {
-            var list = document.getElementById('viewStripList');
-            list.textContent = '';
-
-            for (var idx = 0; idx < state.views.length; idx++) {
-                (function (view) {
-                    var item = document.createElement('div');
-                    item.className = 'view-strip-item';
-                    item.setAttribute('data-view-name', view.name);
-                    item.draggable = true;
-
-                    var thumb = document.createElement('div');
-                    thumb.className = 'strip-thumb';
-                    var thumbCanvas = document.createElement('canvas');
-                    thumbCanvas.width = 48;
-                    thumbCanvas.height = 36;
-                    thumb.appendChild(thumbCanvas);
-
-                    var label = document.createElement('div');
-                    label.className = 'strip-label';
-                    label.textContent = view.name;
-
-                    var status = document.createElement('div');
-                    status.className = 'strip-status';
-                    status.style.display = 'none';
-
-                    item.appendChild(thumb);
-                    item.appendChild(label);
-                    item.appendChild(status);
-
-                    item.addEventListener('dragstart', function (e) {
-                        e.dataTransfer.setData('text/plain', view.name);
-                        e.dataTransfer.effectAllowed = 'move';
-                        item.classList.add('dragging');
-                    });
-
-                    item.addEventListener('dragend', function () {
-                        item.classList.remove('dragging');
-                    });
-
-                    // Single click: if already in dock, select that panel
-                    item.addEventListener('click', function () {
-                        var count = paneManager.dockedViews.get(view.name) || 0;
-                        if (count > 0 && paneManager.api) {
-                            // Find and activate the first panel for this view
-                            var panels = Array.from(paneManager.api.panels);
-                            for (var pi = 0; pi < panels.length; pi++) {
-                                var renderer = panelRenderers.get(panels[pi].id);
-                                if (renderer && renderer.getViewName() === view.name) {
-                                    panels[pi].api.setActive();
-                                    return;
-                                }
-                            }
-                        }
-                    });
-
-                    // Double click: only add to dock if NOT already loaded
-                    item.addEventListener('dblclick', function () {
-                        var count = paneManager.dockedViews.get(view.name) || 0;
-                        if (count > 0 && paneManager.api) {
-                            // Already in dock — select it instead
-                            var panels = Array.from(paneManager.api.panels);
-                            for (var pi = 0; pi < panels.length; pi++) {
-                                var renderer = panelRenderers.get(panels[pi].id);
-                                if (renderer && renderer.getViewName() === view.name) {
-                                    panels[pi].api.setActive();
-                                    return;
-                                }
-                            }
-                        }
-                        paneManager.addVideoPanel(view.name);
-                    });
-
-                    list.appendChild(item);
-
-                    // Render first frame directly from decoder to thumbnail
-                    if (view.decoder) {
-                        view.decoder.getFrame(0).then(function (frame) {
-                            if (frame && thumbCanvas) {
-                                var ctx = thumbCanvas.getContext('2d');
-                                ctx.drawImage(frame, 0, 0, thumbCanvas.width, thumbCanvas.height);
-                            }
-                        }).catch(function () { /* decoder not ready */ });
-                    } else {
-                        requestAnimationFrame(function () {
-                            updateViewStripThumbnail(view, thumbCanvas);
-                        });
-                    }
-                })(state.views[idx]);
-            }
-        }
-
-        function updateViewStripThumbnail(view, thumbCanvas) {
-            if (!thumbCanvas) return;
-            // Prefer decoding first frame directly from decoder
-            if (view.decoder) {
-                view.decoder.getFrame(0).then(function (frame) {
-                    if (frame) {
-                        var ctx = thumbCanvas.getContext('2d');
-                        ctx.drawImage(frame, 0, 0, thumbCanvas.width, thumbCanvas.height);
-                    }
-                }).catch(function () { /* decoder not ready */ });
-                return;
-            }
-            if (!view.canvas) return;
-            var ctx = thumbCanvas.getContext('2d');
-            try {
-                ctx.drawImage(view.canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
-            } catch (e) { /* not ready */ }
-        }
-
-        function updateAllStripThumbnails() {
-            var items = document.querySelectorAll('.view-strip-item');
-            items.forEach(function (item) {
-                var viewName = item.getAttribute('data-view-name');
-                var view = state.views.find(function (v) { return v.name === viewName; });
-                var thumbCanvas = item.querySelector('.strip-thumb canvas');
-                if (view && thumbCanvas) {
-                    updateViewStripThumbnail(view, thumbCanvas);
-                }
-            });
-        }
-
-        // ============================================
-        // Split Handles
-        // ============================================
-
-        function setupDragHandle(handle, onDrag) {
-            handle.addEventListener('mousedown', function (e) {
-                e.preventDefault();
-                var startX = e.clientX;
-                handle.classList.add('dragging');
-
-                // Create ghost line
-                var ghost = document.createElement('div');
-                ghost.className = 'split-ghost-line';
-                ghost.style.left = e.clientX + 'px';
-                ghost.style.top = '0';
-                ghost.style.height = '100vh';
-                document.body.appendChild(ghost);
-
-                function onMouseMove(ev) {
-                    ghost.style.left = ev.clientX + 'px';
-                }
-
-                function onMouseUp(ev) {
-                    handle.classList.remove('dragging');
-                    ghost.remove();
-                    document.removeEventListener('mousemove', onMouseMove);
-                    document.removeEventListener('mouseup', onMouseUp);
-                    var totalDeltaX = ev.clientX - startX;
-                    onDrag(totalDeltaX);
-                }
-
-                document.addEventListener('mousemove', onMouseMove);
-                document.addEventListener('mouseup', onMouseUp);
-            });
-        }
-
-        function setupSplitHandles() {
-            var viewport3dEl = document.getElementById('viewport3dContainer');
-            var handle1 = document.getElementById('splitHandle1');
-            var handle2 = document.getElementById('splitHandle2');
-
-            setupDragHandle(handle1, function (totalDeltaX) {
-                if (viewport3dEl.classList.contains('collapsed')) return;
-                var currentWidth = viewport3dEl.offsetWidth;
-                var newWidth = Math.max(150, currentWidth - totalDeltaX);
-                viewport3dEl.style.width = newWidth + 'px';
-                if (viewport3d) {
-                    setTimeout(function () { viewport3d.resize(); }, 0);
-                }
-            });
-
-            setupDragHandle(handle2, function (totalDeltaX) {
-                var wrapperEl = document.getElementById('infoPanelWrapper');
-                if (wrapperEl.classList.contains('collapsed')) return;
-                var panelEl = document.getElementById('infoPanel');
-                var currentWidth = panelEl.offsetWidth;
-                var newWidth = Math.max(200, currentWidth - totalDeltaX);
-                panelEl.style.width = newWidth + 'px';
-                panelEl.style.minWidth = newWidth + 'px';
-            });
-
-            var infoPanelWrapper = document.getElementById('infoPanelWrapper');
-
-            function updateHandleVisibility() {
-                var vpCollapsed = viewport3dEl.classList.contains('collapsed');
-                var wrapperCollapsed = infoPanelWrapper.classList.contains('collapsed');
-                handle1.classList.toggle('hidden', vpCollapsed);
-                handle2.classList.toggle('hidden', wrapperCollapsed);
-                updateInfoPanelToggleBtn();
-            }
-
-            var observer = new MutationObserver(updateHandleVisibility);
-            observer.observe(viewport3dEl, { attributes: true, attributeFilter: ['class'] });
-            observer.observe(infoPanelWrapper, { attributes: true, attributeFilter: ['class'] });
-            updateHandleVisibility();
-
-            // Wire up the toggle button
-            document.getElementById('infoPanelToggleBtn').addEventListener('click', toggleInfoPanel);
-        }
-
-        // ============================================
-        // Editable Frame Number
-        // ============================================
-
-        (function () {
-            var frameEl = document.getElementById('currentFrame');
-            if (!frameEl) return;
-            frameEl.addEventListener('dblclick', function (e) {
-                e.stopPropagation();
-                var currentVal = state.currentFrame;
-                var input = document.createElement('input');
-                input.type = 'text';
-                input.value = currentVal;
-                input.style.cssText = 'width:60px;font-family:inherit;font-size:inherit;' +
-                    'color:var(--text-primary);background:var(--bg-tertiary);border:1px solid var(--accent);' +
-                    'border-radius:3px;padding:0 4px;text-align:center;outline:none;';
-
-                frameEl.textContent = '';
-                frameEl.appendChild(input);
-                input.focus();
-                input.select();
-
-                function commit() {
-                    var raw = input.value.trim();
-                    var num = parseInt(raw, 10);
-                    if (!isNaN(num) && num >= 0 && num < state.totalFrames) {
-                        if (videoController) videoController.seekToFrame(num);
-                    }
-                    frameEl.textContent = state.currentFrame;
-                }
-
-                function cancel() {
-                    frameEl.textContent = state.currentFrame;
-                }
-
-                input.addEventListener('keydown', function (ev) {
-                    if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
-                    if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
-                });
-                input.addEventListener('blur', commit);
-            });
-        })();
-
-        // ============================================
-        // Editable FPS Pill
-        // ============================================
-
-        function updateFpsDisplay() {
-            var fpsEl = document.getElementById('fpsDisplay');
-            if (fpsEl) fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
-        }
-
-        (function () {
-            var fpsEl = document.getElementById('fpsDisplay');
-            if (!fpsEl) return;
-            fpsEl.addEventListener('dblclick', function (e) {
-                e.stopPropagation();
-                var currentFps = state.fps || 30;
-                var input = document.createElement('input');
-                input.type = 'text';
-                input.value = currentFps.toFixed(1);
-                input.style.cssText = 'width:50px;font-family:inherit;font-size:inherit;' +
-                    'color:var(--text-primary);background:var(--bg-tertiary);border:1px solid var(--accent);' +
-                    'border-radius:3px;padding:0 4px;text-align:center;outline:none;';
-
-                fpsEl.textContent = '';
-                fpsEl.appendChild(input);
-                input.focus();
-                input.select();
-
-                function commit() {
-                    var raw = input.value.trim();
-                    var num = parseFloat(raw);
-                    if (raw !== '' && !isNaN(num) && num > 0 && num <= 1000) {
-                        state.fps = num;
-                        if (videoController && state.isPlaying) {
-                            videoController.stopPlayback();
-                            videoController.startPlayback();
-                        }
-                    }
-                    fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
-                }
-
-                function cancel() {
-                    fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
-                }
-
-                input.addEventListener('keydown', function (ev) {
-                    if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
-                    if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
-                });
-                input.addEventListener('blur', commit);
-            });
-        })();
 
         // ============================================
         // Start
