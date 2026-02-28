@@ -234,6 +234,22 @@
                         <input type="range" id="visUserLabelSize" min="0" max="24" value="11" step="1">
                         <span class="vis-val" id="visUserLabelSizeVal">11</span>
                     </div>
+                    <div class="vis-line-style-row">
+                        <span>Pre-ID Edge</span>
+                        <div class="line-style-options" id="visUserPreLineStyle" data-value="dashed">
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn active" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Post-ID Edge</span>
+                        <div class="line-style-options" id="visUserPostLineStyle" data-value="solid">
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
+                    </div>
                     <div class="vis-section-header">Predicted</div>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
@@ -249,6 +265,22 @@
                         <span>Edge Transparency</span>
                         <input type="range" id="visPredEdgeTrans" min="0" max="100" value="100" step="5">
                         <span class="vis-val" id="visPredEdgeTransVal">1.0</span>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Pre-ID Edge</span>
+                        <div class="line-style-options" id="visPredPreLineStyle" data-value="solid">
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Post-ID Edge</span>
+                        <div class="line-style-options" id="visPredPostLineStyle" data-value="solid">
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
                     </div>
                     <div class="vis-section-header">Reprojections</div>
                     <div class="vis-slider-row">
@@ -270,6 +302,14 @@
                         <span>Label Size</span>
                         <input type="range" id="visReprojLabelSize" min="0" max="24" value="11" step="1">
                         <span class="vis-val" id="visReprojLabelSizeVal">11</span>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Edge Style</span>
+                        <div class="line-style-options" id="visReprojLineStyle" data-value="dotted">
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
                     </div>
                 </div>
 
@@ -1172,12 +1212,16 @@
                     alpha: parseInt(document.getElementById('visUserEdgeTrans').value) / 100,
                     labelSize: parseInt(document.getElementById('visUserLabelSize').value) || 11,
                     showLabels: parseInt(document.getElementById('visUserLabelSize').value) > 0,
+                    preLineStyle: document.getElementById('visUserPreLineStyle').getAttribute('data-value') || 'dashed',
+                    postLineStyle: document.getElementById('visUserPostLineStyle').getAttribute('data-value') || 'solid',
                 },
                 predictedOpts: {
                     nodeSize: parseInt(document.getElementById('visPredNodeSize').value) || 4,
                     lineWidth: parseInt(document.getElementById('visPredEdgeWeight').value) || 2,
                     alpha: parseInt(document.getElementById('visPredEdgeTrans').value) / 100,
                     showLabels: false,
+                    preLineStyle: document.getElementById('visPredPreLineStyle').getAttribute('data-value') || 'solid',
+                    postLineStyle: document.getElementById('visPredPostLineStyle').getAttribute('data-value') || 'solid',
                 },
                 reprojOpts: {
                     nodeSize: parseInt(document.getElementById('visReprojNodeSize').value) || 4,
@@ -1185,6 +1229,7 @@
                     alpha: parseInt(document.getElementById('visReprojEdgeTrans').value) / 100,
                     labelSize: parseInt(document.getElementById('visReprojLabelSize').value) || 11,
                     showLabels: parseInt(document.getElementById('visReprojLabelSize').value) > 0,
+                    lineStyle: document.getElementById('visReprojLineStyle').getAttribute('data-value') || 'dotted',
                 },
             };
         }
@@ -2061,6 +2106,17 @@
                         drawAllOverlays(state.currentFrame);
                     });
                 }
+            });
+
+            // Line style buttons
+            document.querySelectorAll('.line-style-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var container = btn.closest('.line-style-options');
+                    container.querySelectorAll('.line-style-btn').forEach(function(b) { b.classList.remove('active'); });
+                    btn.classList.add('active');
+                    container.setAttribute('data-value', btn.getAttribute('data-style'));
+                    drawAllOverlays(state.currentFrame);
+                });
             });
 
             // Toolbar buttons

@@ -1959,3 +1959,36 @@ kbd {
     text-align: right;
     font-variant-numeric: tabular-nums;
 }
+.vis-line-style-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+.vis-line-style-row span:first-child {
+    flex: 0 0 100px;
+}
+.line-style-options {
+    display: flex;
+    gap: 4px;
+}
+.line-style-btn {
+    background: none;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    padding: 2px 4px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+}
+.line-style-btn:hover {
+    border-color: var(--text-secondary);
+}
+.line-style-btn.active {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--text-primary);
+}

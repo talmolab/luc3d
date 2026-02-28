@@ -15,6 +15,7 @@ __pycache__/
 # Local data
 tempdata/
 sample_session/
+prompts/
 
 # Editor
 *.swp
