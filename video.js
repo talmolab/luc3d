@@ -1361,6 +1361,12 @@ class VideoController {
         if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
+    reapplyZoom(view) {
+        if (!view.zoom) return;
+        this._constrainOffsets(view.zoom, view);
+        this.applyZoom(view);
+    }
+
     zoomToRect(view, x1, y1, x2, y2, container) {
         if (!view.zoom) this.initZoom(view);
 

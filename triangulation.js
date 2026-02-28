@@ -415,6 +415,29 @@ function computeMeanReprojectionError(observed2d, reprojected2d) {
 }
 
 
+/**
+ * Compute mean Euclidean distance between two sets of 2D keypoints.
+ * Used for temporal tracking cost matrix — comparing projected 3D targets
+ * with observed 2D detections.
+ *
+ * @param {(number[]|null)[]} pointsA - Array of [x,y] or null
+ * @param {(number[]|null)[]} pointsB - Array of [x,y] or null
+ * @returns {number} Mean pixel distance, or Infinity if no valid pairs
+ */
+function computeInstanceDistance(pointsA, pointsB) {
+    var totalDist = 0, count = 0;
+    var len = Math.min(pointsA.length, pointsB.length);
+    for (var i = 0; i < len; i++) {
+        if (pointsA[i] != null && pointsB[i] != null) {
+            var dx = pointsA[i][0] - pointsB[i][0];
+            var dy = pointsA[i][1] - pointsB[i][1];
+            totalDist += Math.sqrt(dx * dx + dy * dy);
+            count++;
+        }
+    }
+    return count > 0 ? totalDist / count : Infinity;
+}
+
 // ============================================
 // Triangulation + Reprojection pipeline
 // ============================================

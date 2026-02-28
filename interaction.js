@@ -71,6 +71,9 @@ class InteractionManager {
         /** @type {boolean} Whether a drag is in progress */
         this.isDragging = false;
 
+        /** @type {boolean} Whether drag is allowed (set true on mouseup, false on mousedown) */
+        this._canDrag = false;
+
         /**
          * Details of the active drag, or null.
          * @type {{
@@ -404,17 +407,30 @@ class InteractionManager {
      * @param {UnlinkedInstance} unlinked
      */
     addToAssignmentSelection(unlinked) {
-        // Check if we already have one from this camera
+        // Check if we already have one from this camera — reject duplicates
         for (let i = 0; i < this.assignmentSelection.length; i++) {
             if (this.assignmentSelection[i].cameraName === unlinked.cameraName) {
-                // Replace it
-                this.assignmentSelection[i] = unlinked;
-                this._requestRedraw();
+                if (this.assignmentSelection[i].id === unlinked.id) {
+                    // Toggle off: clicking the same instance removes it
+                    this.assignmentSelection.splice(i, 1);
+                    this._requestRedraw();
+                    if (this.callbacks.onAssignmentSelectionChanged) {
+                        this.callbacks.onAssignmentSelectionChanged(this.assignmentSelection.length);
+                    }
+                    return;
+                }
+                // Different instance from same camera — reject
+                if (this.callbacks.onAssignmentError) {
+                    this.callbacks.onAssignmentError('Multiple instances from the same view cannot be assigned to a group.');
+                }
                 return;
             }
         }
         this.assignmentSelection.push(unlinked);
         this._requestRedraw();
+        if (this.callbacks.onAssignmentSelectionChanged) {
+            this.callbacks.onAssignmentSelectionChanged(this.assignmentSelection.length);
+        }
     }
 
     /**
@@ -486,16 +502,27 @@ class InteractionManager {
             this._endDrag();
         }
 
+        var canDrag = this._canDrag;
+        this._canDrag = false;
+
         var coords = this.canvasToVideo(e.clientX, e.clientY, viewName);
         var vx = coords[0], vy = coords[1];
         var frameIdx = state.currentFrame;
 
-        // --- Right-click: toggle node visibility ---
+        // --- Right-click: toggle node null (only if already selected) ---
         if (e.button === 2) {
             e.preventDefault();
+            if (this.assignmentMode) return;
             var hit = this.findNearestNode(vx, vy, viewName, frameIdx);
             if (hit) {
-                this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
+                // Only allow null toggle on the already-selected group
+                if (this.selectedInstanceGroup === hit.instanceGroup) {
+                    this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
+                } else {
+                    // Select the group first; user must right-click again to toggle
+                    this.select(hit.instanceGroup, hit.nodeIdx);
+                    this._requestRedraw();
+                }
             }
             return;
         }
@@ -524,6 +551,14 @@ class InteractionManager {
             useUnlinked = true;
         }
 
+        // --- In assignment mode, ignore linked node clicks entirely ---
+        if (this.assignmentMode && useLinked && !useUnlinked) {
+            e.preventDefault();
+            e.stopPropagation();
+            e._consumedByInteraction = true;
+            return;
+        }
+
         // --- Double-click on linked instance: convert predicted -> user ---
         if (e.detail >= 2 && useLinked) {
             this._convertToUserInstance(linkedHit.instanceGroup);
@@ -531,15 +566,16 @@ class InteractionManager {
             return;
         }
 
-        // --- Linked node: select + drag ---
+        // --- Linked node: select or drag ---
         if (useLinked) {
             this.selectedUnlinked = null;
-            if (this.assignmentMode) {
-                this.setAssignmentMode(false);
-            }
+            // Only allow dragging if the instance is already selected
+            var alreadySelected = this.selectedInstanceGroup === linkedHit.instanceGroup;
             this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
-            this._startDrag(viewName, linkedHit.instanceGroupIdx, linkedHit.nodeIdx,
-                vx, vy, null, e.altKey ? linkedHit.instanceGroup.getInstance(viewName) : null);
+            if (alreadySelected && canDrag) {
+                this._startDrag(viewName, linkedHit.instanceGroupIdx, linkedHit.nodeIdx,
+                    vx, vy, null, e.altKey ? linkedHit.instanceGroup.getInstance(viewName) : null);
+            }
             e.preventDefault();
             e.stopPropagation();
             e._consumedByInteraction = true;
@@ -551,21 +587,23 @@ class InteractionManager {
             e.stopPropagation();
             e._consumedByInteraction = true;
 
-        // --- Unlinked node: select + drag ---
+        // --- Unlinked node: select or drag ---
         } else if (useUnlinked) {
+            var ulAlreadySelected = this.selectedUnlinked && this.selectedUnlinked.id === ulHit.unlinked.id;
             this.select(null, -1);
             this.selectedUnlinked = ulHit.unlinked;
-            this._startDrag(viewName, -1, ulHit.nodeIdx,
-                vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
+            if (ulAlreadySelected && canDrag) {
+                this._startDrag(viewName, -1, ulHit.nodeIdx,
+                    vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
+            }
             e.preventDefault();
             e.stopPropagation();
             e._consumedByInteraction = true;
 
-        // --- Clicked empty space: clear selection ---
+        // --- Clicked empty space: clear selection (but don't exit assignment mode) ---
         } else {
-            this.clearSelection();
-            if (this.assignmentMode) {
-                this.setAssignmentMode(false);
+            if (!this.assignmentMode) {
+                this.clearSelection();
             }
         }
 
@@ -769,6 +807,9 @@ class InteractionManager {
                 e.preventDefault();
                 if (this.assignmentMode) {
                     this.setAssignmentMode(false);
+                    if (this.callbacks.onAssignmentCancelled) {
+                        this.callbacks.onAssignmentCancelled();
+                    }
                 } else {
                     this.clearSelection();
                 }
@@ -788,9 +829,12 @@ class InteractionManager {
 
             case 'a':
             case 'A': {
-                if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+                // Don't toggle assignment mode if already active (managed by toast)
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && !this.assignmentMode) {
                     e.preventDefault();
-                    this.setAssignmentMode();
+                    if (this.callbacks.onAssignmentRequested) {
+                        this.callbacks.onAssignmentRequested();
+                    }
                 }
                 break;
             }
@@ -839,6 +883,9 @@ class InteractionManager {
      *   The view objects containing overlay canvases.
      */
     attach(views) {
+        // Remove any previously-bound handlers so we never stack duplicates
+        this.detach();
+
         if (!views || views.length === 0) return;
 
         var self = this;
@@ -855,6 +902,11 @@ class InteractionManager {
                 return {
                     mousedown: function (e) { self.onMouseDown(e, vn); },
                     mousemove: function (e) { self.onMouseMove(e, vn); },
+                    mouseup: function (e) {
+                        if (!self.isDragging) {
+                            self._canDrag = true;
+                        }
+                    },
                     mouseleave: function () { self.onMouseLeave(vn); },
                     contextmenu: function (e) { e.preventDefault(); },
                 };
@@ -862,6 +914,7 @@ class InteractionManager {
 
             canvas.addEventListener('mousedown', handlers.mousedown);
             canvas.addEventListener('mousemove', handlers.mousemove);
+            canvas.addEventListener('mouseup', handlers.mouseup);
             canvas.addEventListener('mouseleave', handlers.mouseleave);
             canvas.addEventListener('contextmenu', handlers.contextmenu);
 
@@ -882,6 +935,7 @@ class InteractionManager {
             var h = entry.handlers;
             canvas.removeEventListener('mousedown', h.mousedown);
             canvas.removeEventListener('mousemove', h.mousemove);
+            canvas.removeEventListener('mouseup', h.mouseup);
             canvas.removeEventListener('mouseleave', h.mouseleave);
             canvas.removeEventListener('contextmenu', h.contextmenu);
         }
@@ -1315,6 +1369,11 @@ class InteractionManager {
         // Select the newly created group
         this.select(group, -1);
         this._requestRedraw();
+
+        // Notify host to clean up toast and refresh UI
+        if (this.callbacks.onAssignmentGroupCreated) {
+            this.callbacks.onAssignmentGroupCreated(group);
+        }
     }
 
     /**

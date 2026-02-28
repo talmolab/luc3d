@@ -1121,7 +1121,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isEditSelected = selectedUnlinkedId != null && ul.id === selectedUnlinkedId;
         const isSelected = isAssignSelected || isEditSelected;
-        const color = isAssignSelected ? assignmentColor : isEditSelected ? '#60a5fa' : getTrackColor(instance.trackIdx != null ? instance.trackIdx : u);
+        const color = isAssignSelected ? assignmentColor : isEditSelected ? '#ffffff' : getTrackColor(instance.trackIdx != null ? instance.trackIdx : u);
         const alpha = isSelected ? 0.95 : 0.5;
 
         // Pre-compute canvas positions
@@ -1216,7 +1216,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         // Selection ring (assignment = yellow, edit = blue)
         if (isSelected) {
             ctx.globalAlpha = 0.8;
-            ctx.strokeStyle = isAssignSelected ? assignmentColor : '#60a5fa';
+            ctx.strokeStyle = isAssignSelected ? assignmentColor : '#ffffff';
             ctx.lineWidth = 2 * scale;
             for (let i = 0; i < canvasPoints.length; i++) {
                 const cp = canvasPoints[i];
@@ -1317,7 +1317,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                 var isSelected = selectedInstanceGroup &&
                     selectedInstanceGroup.getInstance &&
                     selectedInstanceGroup.getInstance(viewName) === inst;
-                var drawColor = isSelected ? brightenColor(baseColor, 0.4) : baseColor;
+                var drawColor = isSelected ? '#ffffff' : baseColor;
                 drawSkeleton(ctx, inst, skeleton, Object.assign({}, renderOpts, {
                     color: drawColor,
                 }));
@@ -1377,7 +1377,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                 selectedInstanceGroup.trackIdx != null ? selectedInstanceGroup.trackIdx : 0
             );
             drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, renderOpts, {
-                color: trackColor,
+                color: '#ffffff',
                 selectedNodeIdx: selectedNodeIdx,
             }));
         }
@@ -1409,11 +1409,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
         if (dragInst && dragInst.points) {
-            const dragTrackColor = getTrackColor(
-                selectedInstanceGroup.trackIdx != null ? selectedInstanceGroup.trackIdx : 0
-            );
             drawDragPreview(ctx, dragInst.points, dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
-                Object.assign({}, renderOpts, { color: dragTrackColor }));
+                Object.assign({}, renderOpts, { color: '#ffffff' }));
         }
     }
 
