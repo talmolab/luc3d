@@ -617,6 +617,18 @@ body {
   background: var(--accent-dim);
 }
 
+.toolbar-dropdown-label {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: default;
+  user-select: none;
+}
+
+.toolbar-dropdown-sub {
+  padding-left: 24px;
+}
+
 /* Flyout submenu for nested dropdown items */
 .toolbar-dropdown-item.has-flyout {
   position: relative;
@@ -814,9 +826,81 @@ body {
 
 .multi-frame-progress .progress-bar-fill {
   height: 100%;
-  background: var(--accent-color);
+  background: #4a9eff;
   border-radius: 4px;
   transition: width 0.15s ease;
+}
+
+/* SLP Export Modal */
+.slp-export-modal {
+  min-width: 500px;
+}
+
+.slp-export-table-container {
+  max-height: 250px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.slp-export-table {
+  width: 100%;
+}
+
+.slp-export-row {
+  cursor: pointer;
+}
+
+.slp-export-row:hover {
+  background: var(--accent-dim);
+}
+
+.slp-export-row.slp-export-selected {
+  outline: 2px solid var(--accent-color);
+}
+
+.slp-export-row.slp-has-edits {
+  background: rgba(76, 175, 80, 0.12);
+}
+
+.slp-export-row.slp-has-edits.slp-export-selected {
+  background: rgba(76, 175, 80, 0.2);
+}
+
+.slp-export-options {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.slp-export-filename-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.slp-export-filename-row input {
+  flex: 1;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.slp-export-note {
+  margin: 8px 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.slp-export-note code {
+  font-size: 11px;
+  color: var(--text-primary);
 }
 
 /* Modal layout: range row with views list */
@@ -1914,12 +1998,16 @@ kbd {
 }
 
 /* Visibility tab */
+#tabVisibility {
+    padding: 8px 10px;
+}
 .vis-section-header {
     font-size: 11px;
     font-weight: 600;
     color: var(--text-primary);
     padding: 6px 0 4px;
-    margin-top: 4px;
+    margin-top: 10px;
+    margin-bottom: 6px;
     border-top: 1px solid var(--border-color);
 }
 .vis-section-header:first-of-type {
@@ -1944,7 +2032,7 @@ kbd {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     font-size: 11px;
     color: var(--text-secondary);
 }
@@ -1963,7 +2051,7 @@ kbd {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     font-size: 11px;
     color: var(--text-secondary);
 }

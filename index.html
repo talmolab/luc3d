@@ -46,8 +46,8 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
                     <div class="menu-dropdown-item" id="menuExportLabels">Export Labels (JSON)</div>
-                    <div class="menu-dropdown-item" id="menuExportSlp">Export SLP (JSON)</div>
-                    <div class="menu-dropdown-item" id="menuExportSlpH5">Export SLP (H5)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlpPerCam">Export SLP (Per Camera)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlp">Export SLP (All Views)</div>
                     <div class="menu-dropdown-item" id="menuExportPoints3d">Export 3D Points (JSON)</div>
                     <div class="menu-dropdown-item" id="menuExportPoints3dH5">Export 3D Points (H5)</div>
                     <div class="menu-dropdown-item" id="menuExportReprojH5">Export Reprojections (H5)</div>
@@ -100,7 +100,9 @@
             <!-- Triangulate dropdown menu (positioned absolutely via JS) -->
             <div class="toolbar-dropdown-menu" id="tbAssignMenu" style="display:none;position:fixed;z-index:10000;">
                 <div class="toolbar-dropdown-item" id="tbAssignManual">Manual</div>
-                <div class="toolbar-dropdown-item" id="tbAssignAutomatic">Automatic</div>
+                <div class="toolbar-dropdown-label">Automatic</div>
+                <div class="toolbar-dropdown-item toolbar-dropdown-sub" id="tbAssignSingleFrame">Single Frame</div>
+                <div class="toolbar-dropdown-item toolbar-dropdown-sub" id="tbAssignMultiFrame">Multi-Frame</div>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
@@ -216,13 +218,13 @@
                     <div class="vis-section-header">User</div>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
-                        <input type="range" id="visUserNodeSize" min="1" max="20" value="4" step="1">
-                        <span class="vis-val" id="visUserNodeSizeVal">4</span>
+                        <input type="range" id="visUserNodeSize" min="1" max="20" value="11" step="1">
+                        <span class="vis-val" id="visUserNodeSizeVal">11</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Weight</span>
-                        <input type="range" id="visUserEdgeWeight" min="1" max="10" value="2" step="1">
-                        <span class="vis-val" id="visUserEdgeWeightVal">2</span>
+                        <input type="range" id="visUserEdgeWeight" min="1" max="10" value="3" step="1">
+                        <span class="vis-val" id="visUserEdgeWeightVal">3</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Transparency</span>
@@ -231,15 +233,15 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Label Size</span>
-                        <input type="range" id="visUserLabelSize" min="0" max="24" value="11" step="1">
-                        <span class="vis-val" id="visUserLabelSizeVal">11</span>
+                        <input type="range" id="visUserLabelSize" min="0" max="24" value="12" step="1">
+                        <span class="vis-val" id="visUserLabelSizeVal">12</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Pre-ID Edge</span>
-                        <div class="line-style-options" id="visUserPreLineStyle" data-value="dashed">
-                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                        <div class="line-style-options" id="visUserPreLineStyle" data-value="solid">
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
                             <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn active" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
@@ -253,8 +255,8 @@
                     <div class="vis-section-header">Predicted</div>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
-                        <input type="range" id="visPredNodeSize" min="1" max="20" value="4" step="1">
-                        <span class="vis-val" id="visPredNodeSizeVal">4</span>
+                        <input type="range" id="visPredNodeSize" min="1" max="20" value="5" step="1">
+                        <span class="vis-val" id="visPredNodeSizeVal">5</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Weight</span>
@@ -263,35 +265,35 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Transparency</span>
-                        <input type="range" id="visPredEdgeTrans" min="0" max="100" value="100" step="5">
-                        <span class="vis-val" id="visPredEdgeTransVal">1.0</span>
+                        <input type="range" id="visPredEdgeTrans" min="0" max="100" value="60" step="5">
+                        <span class="vis-val" id="visPredEdgeTransVal">0.6</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Pre-ID Edge</span>
-                        <div class="line-style-options" id="visPredPreLineStyle" data-value="solid">
-                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                        <div class="line-style-options" id="visPredPreLineStyle" data-value="dotted">
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
                             <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Post-ID Edge</span>
-                        <div class="line-style-options" id="visPredPostLineStyle" data-value="solid">
-                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                        <div class="line-style-options" id="visPredPostLineStyle" data-value="dotted">
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
                             <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-section-header">Reprojections</div>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
-                        <input type="range" id="visReprojNodeSize" min="1" max="20" value="4" step="1">
-                        <span class="vis-val" id="visReprojNodeSizeVal">4</span>
+                        <input type="range" id="visReprojNodeSize" min="1" max="20" value="1" step="1">
+                        <span class="vis-val" id="visReprojNodeSizeVal">1</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Weight</span>
-                        <input type="range" id="visReprojEdgeWeight" min="1" max="10" value="2" step="1">
-                        <span class="vis-val" id="visReprojEdgeWeightVal">2</span>
+                        <input type="range" id="visReprojEdgeWeight" min="1" max="10" value="3" step="1">
+                        <span class="vis-val" id="visReprojEdgeWeightVal">3</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Transparency</span>
@@ -300,15 +302,15 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Label Size</span>
-                        <input type="range" id="visReprojLabelSize" min="0" max="24" value="11" step="1">
-                        <span class="vis-val" id="visReprojLabelSizeVal">11</span>
+                        <input type="range" id="visReprojLabelSize" min="0" max="24" value="0" step="1">
+                        <span class="vis-val" id="visReprojLabelSizeVal">0</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Edge Style</span>
-                        <div class="line-style-options" id="visReprojLineStyle" data-value="dotted">
+                        <div class="line-style-options" id="visReprojLineStyle" data-value="dashed">
                             <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
-                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn active" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
                 </div>
@@ -1266,6 +1268,19 @@
 
             for (const view of state.views) {
                 if (!view.overlayCtx || !view.overlayCanvas) continue;
+
+                // Resize overlay canvas to match zoom level for sharp rendering.
+                // Higher internal resolution at higher zoom keeps sizes constant
+                // in screen pixels: the CSS transform scales the display, and the
+                // increased resolution compensates so drawn sizes don't change.
+                var zs = view.zoom ? view.zoom.scale : 1;
+                var targetW = Math.round(view.videoWidth * zs);
+                var targetH = Math.round(view.videoHeight * zs);
+                if (view.overlayCanvas.width !== targetW || view.overlayCanvas.height !== targetH) {
+                    view.overlayCanvas.width = targetW;
+                    view.overlayCanvas.height = targetH;
+                }
+
                 // Convert FrameGroup instances to the format expected by drawFrameOverlays
                 let overlayFrameGroup = null;
                 if (frameGroup) {
@@ -1275,15 +1290,6 @@
                     for (const [camName, instances] of frameGroup.instances) {
                         overlayFrameGroup.instances[camName] = instances;
                     }
-                }
-
-                // Debug: log what we're about to draw for this view
-                const fgInstCount = overlayFrameGroup ? (overlayFrameGroup.instances[view.name] || []).length : 0;
-                const groupReproj = instanceGroups.filter(g => g.reprojections && g.reprojections[view.name]);
-                if (fgInstCount > 0 || groupReproj.length > 0) {
-                    console.log('[overlay]', view.name, '| instances:', fgInstCount,
-                        '| groups with reproj:', groupReproj.length,
-                        '| fg keys:', overlayFrameGroup ? Object.keys(overlayFrameGroup.instances) : []);
                 }
 
                 // Get unlinked instances for this view, filtered by type visibility
@@ -1798,18 +1804,37 @@
                 exportLabels();
             });
 
-            document.getElementById('menuExportSlp').addEventListener('click', function () {
+            document.getElementById('menuExportSlp').addEventListener('click', async function () {
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
                 const data = buildSlpExportData(state.session, state.views);
+
+                // Try server-side conversion first
+                try {
+                    const resp = await fetch('/convert-slp', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data),
+                    });
+                    if (resp.ok) {
+                        const slpBlob = await resp.blob();
+                        downloadBlob(slpBlob, 'labels_export.slp');
+                        setStatus('SLP exported: labels_export.slp', 'success');
+                        return;
+                    }
+                } catch (e) {
+                    // Server unavailable — fall back to JSON
+                }
+
+                // Fallback: download as JSON
                 downloadJSON(data, 'labels_export.slp.json');
-                setStatus('SLP data exported (JSON format)', 'success');
+                setStatus('SLP JSON exported \u2014 convert with: python scripts/json_to_slp.py labels_export.slp.json output.slp', 'success');
             });
 
-            document.getElementById('menuExportSlpH5').addEventListener('click', function () {
+            document.getElementById('menuExportSlpPerCam').addEventListener('click', function () {
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
-                exportSlpH5();
+                showSlpExportModal();
             });
 
             document.getElementById('menuExportPoints3d').addEventListener('click', function () {
@@ -2013,45 +2038,96 @@
                             e.preventDefault();
                         }
                         break;
-                    case 't':
-                    case 'T':
-                        if (!e.ctrlKey && !e.metaKey) {
-                            triangulateCurrentFrame();
-                            e.preventDefault();
-                        }
-                        break;
                     case '3':
                         if (!e.ctrlKey && !e.metaKey) {
                             toggle3DViewport();
                             e.preventDefault();
                         }
                         break;
-                    case 'a':
-                    case 'A':
-                        if (!e.ctrlKey && !e.metaKey) {
-                            if (interactionManager) interactionManager.setAssignmentMode();
-                            drawAllOverlays(state.currentFrame);
+                }
+            });
+
+            // --- New keyboard shortcuts (Prompt 36) ---
+            document.addEventListener('keydown', function (e) {
+                // --- Cmd/Ctrl shortcuts (work even in inputs) ---
+                if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+                    switch (e.key) {
+                        case 'j':
+                        case 'J': {
+                            // Focus frame index input
                             e.preventDefault();
+                            var frameEl = document.getElementById('currentFrame');
+                            if (frameEl) frameEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+                            break;
+                        }
+                        case 'o':
+                        case 'O': {
+                            // Load session folder
+                            e.preventDefault();
+                            handleLoadSessionFolder();
+                            break;
+                        }
+                    }
+                    return;
+                }
+
+                // --- Plain key shortcuts (skip when typing in inputs or any modifier held) ---
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+
+                switch (e.key) {
+                    case 'Enter': {
+                        // Click the visible Continue/Group button in any active modal/toast
+                        var continueBtn = null;
+                        ['mfContinue', 'tfContinue', 'autoAssignContinue', 'manualAssignGroup'].forEach(function (id) {
+                            if (continueBtn) return;
+                            var btn = document.getElementById(id);
+                            if (btn && btn.offsetParent !== null) continueBtn = btn;
+                        });
+                        if (continueBtn) {
+                            e.preventDefault();
+                            continueBtn.click();
                         }
                         break;
-                    case 'v':
-                    case 'V':
-                        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+                    }
+                    case 'Escape': {
+                        // Click the visible Cancel button in any active modal/toast
+                        var cancelBtn = null;
+                        ['mfCancel', 'tfCancel', 'autoAssignCancel', 'manualAssignCancel'].forEach(function (id) {
+                            if (cancelBtn) return;
+                            var btn = document.getElementById(id);
+                            if (btn && btn.offsetParent !== null) cancelBtn = btn;
+                        });
+                        if (cancelBtn) {
                             e.preventDefault();
-                            if (e.shiftKey) {
-                                cycleSingleView(-1);
-                            } else {
-                                toggleViewMode();
-                            }
+                            cancelBtn.click();
                         }
                         break;
-                    case 'g':
-                    case 'G':
-                        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-                            e.preventDefault();
-                            setGridMode();
-                        }
+                    }
+                    case 'u': {
+                        e.preventDefault();
+                        var visUser = document.getElementById('visUser');
+                        if (visUser) { visUser.checked = !visUser.checked; visUser.dispatchEvent(new Event('change', { bubbles: true })); }
                         break;
+                    }
+                    case 'p': {
+                        e.preventDefault();
+                        var visPred = document.getElementById('visPredicted');
+                        if (visPred) { visPred.checked = !visPred.checked; visPred.dispatchEvent(new Event('change', { bubbles: true })); }
+                        break;
+                    }
+                    case 'r': {
+                        e.preventDefault();
+                        var visReproj = document.getElementById('visReprojections');
+                        if (visReproj) { visReproj.checked = !visReproj.checked; visReproj.dispatchEvent(new Event('change', { bubbles: true })); }
+                        break;
+                    }
+                    case 'e': {
+                        e.preventDefault();
+                        var visErrors = document.getElementById('visErrors');
+                        if (visErrors) { visErrors.checked = !visErrors.checked; visErrors.dispatchEvent(new Event('change', { bubbles: true })); }
+                        break;
+                    }
                 }
             });
 
@@ -2153,8 +2229,14 @@
                 document.getElementById('tbAssignMenu').style.display = 'none';
                 startManualAssignment();
             });
-            // Automatic: directly opens multi-frame modal
-            document.getElementById('tbAssignAutomatic').addEventListener('click', function (e) {
+            // Single Frame: immediate triangulation on current frame
+            document.getElementById('tbAssignSingleFrame').addEventListener('click', function (e) {
+                e.stopPropagation();
+                document.getElementById('tbAssignMenu').style.display = 'none';
+                runSingleFrameTriangulation();
+            });
+            // Multi-Frame: opens modal for batch processing
+            document.getElementById('tbAssignMultiFrame').addEventListener('click', function (e) {
                 e.stopPropagation();
                 document.getElementById('tbAssignMenu').style.display = 'none';
                 showMultiFrameModal();
@@ -2235,17 +2317,20 @@
                 var gridWidth = videoGridSection.offsetWidth;
                 videoGridSection.style.flex = '0 0 ' + gridWidth + 'px';
 
+                // Read the target info panel width from CSS before expanding
+                var infoPanelTarget = parseInt(getComputedStyle(document.documentElement)
+                    .getPropertyValue('--info-panel-width')) || 300;
+                infoPanelTarget += 1; // +1 for border
+
+                // Shrink viewport3d immediately (before transition starts)
+                var currentVpWidth = viewport3dEl.offsetWidth;
+                viewport3dEl.style.width = Math.max(150, currentVpWidth - infoPanelTarget) + 'px';
+
                 wrapper.classList.remove('collapsed');
-                // After info panel renders, shrink viewport3d and unlock video grid
+                // Unlock video grid after the CSS transition completes (250ms)
                 setTimeout(function () {
-                    var infoPanelWidth = infoPanel.offsetWidth + 1;
-                    var currentVpWidth = viewport3dEl.offsetWidth;
-                    viewport3dEl.style.width = Math.max(150, currentVpWidth - infoPanelWidth) + 'px';
-                    // Restore video-grid-section flex behavior after layout settles
-                    requestAnimationFrame(function () {
-                        videoGridSection.style.flex = '';
-                    });
-                }, 10);
+                    videoGridSection.style.flex = '';
+                }, 300);
             }
 
             updateInfoPanelToggleBtn();
@@ -2264,10 +2349,22 @@
 
         function toggle3DViewport() {
             const container = document.getElementById('viewport3dContainer');
-            container.classList.toggle('collapsed');
-            // Trigger resize after toggling
-            if (viewport3d && !container.classList.contains('collapsed')) {
-                setTimeout(function () { viewport3d.resize(); }, 300);
+            var isCollapsing = !container.classList.contains('collapsed');
+            if (isCollapsing) {
+                // Save current width so we can restore it when expanding
+                container._savedWidth = container.style.width || '';
+                // Clear inline width so the CSS .collapsed { width: 0 } rule takes effect
+                container.style.width = '';
+                container.classList.add('collapsed');
+            } else {
+                container.classList.remove('collapsed');
+                // Restore the inline width that was set before collapsing
+                if (container._savedWidth) {
+                    container.style.width = container._savedWidth;
+                }
+                if (viewport3d) {
+                    setTimeout(function () { viewport3d.resize(); }, 300);
+                }
             }
         }
 
@@ -2759,6 +2856,68 @@
         }
 
         // ============================================
+        // Single-Frame Automatic Triangulation
+        // ============================================
+
+        /**
+         * Single-frame automatic triangulation.
+         * Checks current frame and previous frame for existing identity assignment.
+         * If found, reuses those views. Otherwise, shows view selection toast.
+         * Runs assignment + triangulation immediately (no progress bar).
+         */
+        function runSingleFrameTriangulation() {
+            if (!state.session || state.views.length === 0) {
+                setStatus('No session loaded — load a project first', 'warning');
+                return;
+            }
+            if (!state.session.cameras || state.session.cameras.length < 2) {
+                setStatus('Need calibration with at least 2 cameras', 'warning');
+                return;
+            }
+
+            var frameIdx = state.currentFrame;
+
+            // Check current frame for existing identity assignment
+            var existingGroups = state.session.getInstanceGroupsForFrame(frameIdx);
+            var hasAssignment = existingGroups && existingGroups.length > 0;
+
+            // Derive views from current frame's groups
+            if (hasAssignment) {
+                if (!state.lastAutoAssignViews || state.lastAutoAssignViews.length < 2) {
+                    var viewSet = new Set();
+                    for (var i = 0; i < existingGroups.length; i++) {
+                        var cams = existingGroups[i].cameraNames;
+                        for (var j = 0; j < cams.length; j++) viewSet.add(cams[j]);
+                    }
+                    state.lastAutoAssignViews = Array.from(viewSet);
+                }
+            }
+
+            // Check previous frame for existing identity assignment
+            if (!hasAssignment && frameIdx > 0) {
+                var prevGroups = state.session.getInstanceGroupsForFrame(frameIdx - 1);
+                if (prevGroups && prevGroups.length > 0) {
+                    hasAssignment = true;
+                    var viewSet2 = new Set();
+                    for (var i2 = 0; i2 < prevGroups.length; i2++) {
+                        var cams2 = prevGroups[i2].cameraNames;
+                        for (var j2 = 0; j2 < cams2.length; j2++) viewSet2.add(cams2[j2]);
+                    }
+                    state.lastAutoAssignViews = Array.from(viewSet2);
+                }
+            }
+
+            if (hasAssignment && state.lastAutoAssignViews && state.lastAutoAssignViews.length >= 2) {
+                // Assignment exists — run immediately
+                runAutomaticAssignment(state.lastAutoAssignViews);
+                triangulateCurrentFrame();
+            } else {
+                // No assignment — show view selection toast (single frame mode)
+                startViewSelectionForFrames(frameIdx, frameIdx, true);
+            }
+        }
+
+        // ============================================
         // Multi-Frame Assignment Modal
         // ============================================
 
@@ -2793,9 +2952,6 @@
 
             modal.innerHTML =
                 '<h3>Choose Frames for Identity Assignment</h3>' +
-                '<div class="modal-single-frame-row">' +
-                '  <label><input type="checkbox" id="mfSingleFrame"> Single Frame</label>' +
-                '</div>' +
                 '<div class="range-slider-container">' +
                 '  <div class="range-slider-track"></div>' +
                 '  <div class="range-slider-fill" id="mfSliderFill"></div>' +
@@ -2832,7 +2988,6 @@
             var inputStart = document.getElementById('mfInputStart');
             var inputEnd = document.getElementById('mfInputEnd');
             var sliderFill = document.getElementById('mfSliderFill');
-            var singleFrameCb = document.getElementById('mfSingleFrame');
 
             function updateSliderFill() {
                 var s = parseInt(rangeStart.value);
@@ -2847,10 +3002,6 @@
             function syncSliders() {
                 var s = parseInt(rangeStart.value);
                 var e = parseInt(rangeEnd.value);
-                if (singleFrameCb.checked) {
-                    e = s;
-                    rangeEnd.value = s;
-                }
                 if (s > e) {
                     rangeStart.value = e;
                     s = e;
@@ -2860,62 +3011,26 @@
                 updateSliderFill();
             }
 
-            rangeStart.addEventListener('input', function () {
-                if (singleFrameCb.checked) rangeEnd.value = rangeStart.value;
-                syncSliders();
-            });
-            rangeEnd.addEventListener('input', function () {
-                if (singleFrameCb.checked) rangeStart.value = rangeEnd.value;
-                syncSliders();
-            });
-
-            // Single Frame checkbox
-            singleFrameCb.addEventListener('change', function () {
-                if (singleFrameCb.checked) {
-                    // Collapse to current frame
-                    rangeStart.value = currentFrame;
-                    rangeEnd.value = currentFrame;
-                    inputStart.value = currentFrame;
-                    inputEnd.value = currentFrame;
-                } else {
-                    // Offset start/end by 1, clamped
-                    var cur = parseInt(inputStart.value);
-                    var newStart = cur;
-                    var newEnd = Math.min(maxFrame, cur + 1);
-                    if (newStart === newEnd && newStart > 0) newStart = newStart - 1;
-                    rangeStart.value = newStart;
-                    rangeEnd.value = newEnd;
-                    inputStart.value = newStart;
-                    inputEnd.value = newEnd;
-                }
-                updateSliderFill();
-            });
+            rangeStart.addEventListener('input', syncSliders);
+            rangeEnd.addEventListener('input', syncSliders);
 
             inputStart.addEventListener('change', function () {
                 var v = parseInt(inputStart.value);
                 if (isNaN(v) || v < 0) v = 0;
-                if (!singleFrameCb.checked && v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
+                if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
                 if (v > maxFrame) v = maxFrame;
                 inputStart.value = v;
                 rangeStart.value = v;
-                if (singleFrameCb.checked) {
-                    rangeEnd.value = v;
-                    inputEnd.value = v;
-                }
                 syncSliders();
             });
 
             inputEnd.addEventListener('change', function () {
                 var v = parseInt(inputEnd.value);
                 if (isNaN(v) || v < 0) v = 0;
-                if (!singleFrameCb.checked && v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
+                if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
                 if (v > maxFrame) v = maxFrame;
                 inputEnd.value = v;
                 rangeEnd.value = v;
-                if (singleFrameCb.checked) {
-                    rangeStart.value = v;
-                    inputStart.value = v;
-                }
                 syncSliders();
             });
 
@@ -2930,7 +3045,10 @@
                 var endFrame = parseInt(inputEnd.value);
                 if (isNaN(startFrame) || isNaN(endFrame) || startFrame > endFrame) return;
 
-                var isSingleFrame = singleFrameCb.checked;
+                if (startFrame === endFrame) {
+                    setStatus('Start and end frames must differ for multi-frame — use Single Frame for one frame', 'warning');
+                    return;
+                }
 
                 // Check if the first frame already has identity assignment
                 var hasAssignment = false;
@@ -2961,12 +3079,11 @@
                     rangeEnd.disabled = true;
                     inputStart.disabled = true;
                     inputEnd.disabled = true;
-                    singleFrameCb.disabled = true;
                     runMultiFrameAssignment(startFrame, endFrame, state.lastAutoAssignViews, overlay);
                 } else {
                     // No assignment on first frame — dismiss modal, enter view selection
                     overlay.remove();
-                    startViewSelectionForFrames(startFrame, endFrame, isSingleFrame);
+                    startViewSelectionForFrames(startFrame, endFrame, false);
                 }
             });
         }
@@ -3153,6 +3270,179 @@
             }
 
             setStatus('Multi-frame assignment complete: ' + assigned + '/' + totalFrames + ' frames assigned', 'success');
+        }
+
+        // ============================================
+        // SLP Per-Camera Export Modal
+        // ============================================
+
+        function showSlpExportModal() {
+            var overlay = document.createElement('div');
+            overlay.className = 'multi-frame-modal-overlay';
+
+            var modal = document.createElement('div');
+            modal.className = 'multi-frame-modal slp-export-modal';
+
+            // Build table rows from state.videoFiles that have SLP sources
+            var slpEntries = [];
+            for (var i = 0; i < state.videoFiles.length; i++) {
+                var vf = state.videoFiles[i];
+                if (!vf.slpFilename) continue;
+                var camName = vf.name;
+                var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
+
+                // Compute default output filename with version
+                var versionMatch = stem.match(/_3D_v(\d+)$/);
+                var nextVersion = versionMatch ? parseInt(versionMatch[1]) + 1 : 1;
+                var baseStem = versionMatch ? stem.replace(/_3D_v\d+$/, '') : stem;
+                var outputName = baseStem + '_3D_v' + nextVersion + '.slp';
+
+                // Check if this camera has edits (UserInstances or ReprojectedInstances)
+                var hasEdits = false;
+                for (var [frameIdx, fg] of state.session.frameGroups) {
+                    var camInstances = fg.instances.get(camName);
+                    if (camInstances) {
+                        for (var ci = 0; ci < camInstances.length; ci++) {
+                            if (camInstances[ci].type === 'user') { hasEdits = true; break; }
+                        }
+                    }
+                    if (hasEdits) break;
+                    // Check reprojected instances
+                    var trackMap = state.session.instanceGroups.get(frameIdx);
+                    if (trackMap) {
+                        for (var [tIdx, groups] of trackMap) {
+                            for (var gi = 0; gi < groups.length; gi++) {
+                                if (groups[gi].getReprojectedInstance(camName)) {
+                                    hasEdits = true; break;
+                                }
+                            }
+                            if (hasEdits) break;
+                        }
+                    }
+                    if (hasEdits) break;
+                }
+
+                slpEntries.push({
+                    camName: camName,
+                    slpFilename: vf.slpFilename,
+                    outputName: outputName,
+                    hasEdits: hasEdits,
+                    videoFile: vf,
+                });
+            }
+
+            if (slpEntries.length === 0) {
+                setStatus('No SLP files loaded — load a session folder with SLP files first', 'warning');
+                return;
+            }
+
+            // Build table HTML
+            var tableRows = '';
+            for (var ei = 0; ei < slpEntries.length; ei++) {
+                var entry = slpEntries[ei];
+                var rowClass = entry.hasEdits ? 'slp-export-row slp-has-edits' : 'slp-export-row';
+                tableRows +=
+                    '<tr class="' + rowClass + '" data-idx="' + ei + '">' +
+                    '<td>' + entry.slpFilename + '</td>' +
+                    '<td>' + entry.outputName + '</td>' +
+                    '</tr>';
+            }
+
+            modal.innerHTML =
+                '<h3>Export SLP File</h3>' +
+                '<div class="slp-export-table-container">' +
+                '<table class="data-table slp-export-table">' +
+                '<thead><tr><th>Source SLP</th><th>Output Filename</th></tr></thead>' +
+                '<tbody>' + tableRows + '</tbody>' +
+                '</table>' +
+                '</div>' +
+                '<div class="slp-export-options">' +
+                '<label><input type="checkbox" id="slpExportReprojAsUser"> Save Reprojections as UserInstance</label>' +
+                '</div>' +
+                '<div class="slp-export-filename-row">' +
+                '<label>Output Filename</label>' +
+                '<input type="text" id="slpExportFilename" value="" placeholder="Select an SLP file above">' +
+                '</div>' +
+                '<div class="slp-export-note">' +
+                'Requires server: <code>python server.py</code> (with h5py, numpy installed). Falls back to JSON if server unavailable.' +
+                '</div>' +
+                '<div class="modal-actions">' +
+                '<button id="slpExportCancel">Cancel</button>' +
+                '<button class="primary" id="slpExportBtn" disabled>Export</button>' +
+                '</div>';
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            // State
+            var selectedIdx = -1;
+            var filenameInput = document.getElementById('slpExportFilename');
+
+            // Row click selection
+            var rows = modal.querySelectorAll('.slp-export-row');
+            rows.forEach(function (row) {
+                row.addEventListener('click', function () {
+                    rows.forEach(function (r) { r.classList.remove('slp-export-selected'); });
+                    row.classList.add('slp-export-selected');
+                    selectedIdx = parseInt(row.getAttribute('data-idx'));
+                    filenameInput.value = slpEntries[selectedIdx].outputName;
+                    document.getElementById('slpExportBtn').disabled = false;
+                });
+            });
+
+            // Cancel
+            document.getElementById('slpExportCancel').addEventListener('click', function () {
+                overlay.remove();
+            });
+
+            // Export
+            document.getElementById('slpExportBtn').addEventListener('click', async function () {
+                if (selectedIdx < 0) return;
+                var entry = slpEntries[selectedIdx];
+                var outputFilename = filenameInput.value.trim() || entry.outputName;
+                var reprojAsUser = document.getElementById('slpExportReprojAsUser').checked;
+
+                document.getElementById('slpExportBtn').disabled = true;
+                document.getElementById('slpExportBtn').textContent = 'Exporting...';
+
+                try {
+                    var data = buildPerCameraSlpJson(
+                        state.session, entry.camName, reprojAsUser, entry.videoFile
+                    );
+
+                    // Try server-side conversion first
+                    var slpFilename = outputFilename.replace(/\.slp\.json$/, '.slp');
+                    if (!slpFilename.endsWith('.slp')) slpFilename = outputFilename;
+                    try {
+                        var resp = await fetch('/convert-slp', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(data),
+                        });
+                        if (resp.ok) {
+                            var slpBlob = await resp.blob();
+                            downloadBlob(slpBlob, slpFilename);
+                            setStatus('Exported ' + slpFilename, 'success');
+                            overlay.remove();
+                            return;
+                        }
+                    } catch (e) {
+                        // Server unavailable — fall back to JSON
+                    }
+
+                    // Fallback: download as JSON
+                    var jsonFilename = slpFilename.replace(/\.slp$/, '.slp.json');
+                    var jsonBlob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    downloadBlob(jsonBlob, jsonFilename);
+                    setStatus('Exported JSON — convert with: python scripts/json_to_slp.py ' + jsonFilename + ' output.slp', 'success');
+                    overlay.remove();
+                } catch (err) {
+                    console.error('[slp-export]', err);
+                    setStatus('Export failed: ' + err.message, 'error');
+                    document.getElementById('slpExportBtn').disabled = false;
+                    document.getElementById('slpExportBtn').textContent = 'Export';
+                }
+            });
         }
 
         // ============================================
@@ -6518,6 +6808,7 @@
                             videoHeight: vh,
                             frameCount: decoder.samples.length,
                             assignedCamera: camName2,
+                            slpFilename: pair.slpFile.name,
                         });
 
                         // Ensure camera exists in session
@@ -7531,18 +7822,6 @@
         // ============================================
         // H5 Export wrappers
         // ============================================
-
-        async function exportSlpH5() {
-            try {
-                setStatus('Building SLP H5...', 'warning');
-                const blob = await buildSlpH5(state.session, state.views);
-                downloadBlob(blob, 'labels.slp');
-                setStatus('SLP H5 exported', 'success');
-            } catch (err) {
-                console.error('SLP H5 export failed:', err);
-                setStatus('SLP H5 error: ' + err.message, 'error');
-            }
-        }
 
         async function exportPoints3dH5() {
             try {
