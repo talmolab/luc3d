@@ -916,7 +916,8 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
         const trackName = inst.trackIdx != null && trackNames[inst.trackIdx]
             ? trackNames[inst.trackIdx]
             : ('Track ' + (inst.trackIdx != null ? inst.trackIdx : instIdx));
-        const color = getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx);
+        const instType = inst.type || 'user';
+        const color = instType === 'predicted' ? '#3b82f6' : instType === 'reprojected' ? '#ef4444' : '#22c55e';
 
         var fontSize = adjustedLabelSize;
         if (fontSize <= 0) continue; // label size 0 = hidden
@@ -1064,7 +1065,7 @@ function drawInstanceTypeIndicator(ctx, points, type, options) {
     const badgeY = anchorCp.y - badgeH;
 
     // Badge background
-    const bgColor = type === 'predicted' ? 'rgba(168, 85, 247, 0.7)' : 'rgba(6, 182, 212, 0.7)';
+    const bgColor = type === 'predicted' ? 'rgba(59, 130, 246, 0.8)' : 'rgba(239, 68, 68, 0.8)';
     ctx.fillStyle = bgColor;
     ctx.beginPath();
     if (ctx.roundRect) {
@@ -1158,7 +1159,8 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isEditSelected = selectedUnlinkedId != null && ul.id === selectedUnlinkedId;
         const isSelected = isAssignSelected || isEditSelected;
-        const color = isAssignSelected ? assignmentColor : isEditSelected ? '#ffffff' : getTrackColor(instance.trackIdx != null ? instance.trackIdx : u);
+        const defaultColor = isPredicted ? '#3b82f6' : '#22c55e';  // blue for predicted, green for user
+        const color = (isAssignSelected || isEditSelected) ? assignmentColor : defaultColor;
         const alpha = isSelected ? 0.95 : (isPredicted && predictedRender ? (predictedRender.alpha || 0.5) : 0.5);
 
         // Pre-compute canvas positions
@@ -1426,18 +1428,18 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         selectedUnlinkedId: options.selectedUnlinkedId || null,
     };
 
-    // 2. Linked predicted instances (back layer)
+    // 2. Linked predicted instances (back layer) — blue
+    var predictedColor = '#3b82f6';  // blue for predictions
     if (viewInstances && showPredicted) {
         for (let i = 0; i < viewInstances.length; i++) {
             const inst = viewInstances[i];
             const instType = inst.type || 'user';
             if (instType !== 'predicted') continue;
 
-            var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
             var isSelected = selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
-            var drawColor = isSelected ? '#ffffff' : baseColor;
+            var drawColor = isSelected ? '#60a5fa' : predictedColor;  // lighter blue when selected
             drawSkeleton(ctx, inst, skeleton, Object.assign({}, predictedRender, {
                 color: drawColor,
                 lineStyle: predictedOpts.postLineStyle || 'solid',
@@ -1452,7 +1454,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }));
     }
 
-    // 3. Draw reprojected instances + error vectors
+    // 3. Draw reprojected instances + error vectors — red Xs
+    var reprojColor = '#ef4444';  // red for reprojections
     if (instanceGroups) {
         for (let g = 0; g < instanceGroups.length; g++) {
             const group = instanceGroups[g];
@@ -1461,10 +1464,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (showReprojected && group.reprojectedInstances && group.reprojectedInstances.size > 0) {
                 const reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
                 if (reprojInst) {
-                    var baseColor = getTrackColor(group.trackIdx != null ? group.trackIdx : 0);
-                    drawSkeleton(ctx, reprojInst, skeleton, Object.assign({}, reprojRender, {
-                        color: baseColor,
-                        lineStyle: reprojOpts.lineStyle || 'dotted',
+                    drawReprojectedSkeleton(ctx, reprojInst.points, skeleton, Object.assign({}, reprojRender, {
+                        color: reprojColor,
                     }));
 
                     // Labels for reprojected instances
@@ -1482,7 +1483,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                 const reprojPts = group.reprojections ? group.reprojections[viewName] : null;
                 if (reprojPts) {
                     drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
-                        color: getTrackColor(group.trackIdx != null ? group.trackIdx : 0),
+                        color: reprojColor,
                     }));
                 }
             }
@@ -1498,7 +1499,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }
     }
 
-    // 4. Linked user instances (front layer) + user labels
+    // 4. Linked user instances (front layer) + user labels — green
+    var userColor = '#22c55e';  // green for user labels
     if (viewInstances && showUser) {
         var userInstances = [];
         for (let i = 0; i < viewInstances.length; i++) {
@@ -1506,11 +1508,10 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             const instType = inst.type || 'user';
             if (instType === 'predicted') continue;
 
-            var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
             var isSelected = selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
-            var drawColor = isSelected ? '#ffffff' : baseColor;
+            var drawColor = isSelected ? '#4ade80' : userColor;  // lighter green when selected
             drawSkeleton(ctx, inst, skeleton, Object.assign({}, userRender, {
                 color: drawColor,
                 lineStyle: userOpts.postLineStyle || 'solid',
@@ -1541,11 +1542,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
         if (selInst && selInst.points) {
-            const trackColor = getTrackColor(
-                selectedInstanceGroup.trackIdx != null ? selectedInstanceGroup.trackIdx : 0
-            );
             drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, userRender, {
-                color: '#ffffff',
+                color: '#4ade80',  // lighter green for selection highlight
                 selectedNodeIdx: selectedNodeIdx,
             }));
         }
@@ -1561,11 +1559,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                 ? hGroup.getInstance(viewName)
                 : (hGroup.instances ? hGroup.instances[viewName] : null);
             if (hInst && hInst.points && hNodeIdx >= 0 && hNodeIdx < hInst.points.length && hInst.points[hNodeIdx]) {
-                const hTrackColor = getTrackColor(
-                    hGroup.trackIdx != null ? hGroup.trackIdx : 0
-                );
                 drawHoverHighlight(ctx, hInst.points[hNodeIdx], hNodeIdx, Object.assign({}, renderOpts, {
-                    color: hTrackColor,
+                    color: '#4ade80',  // lighter green for hover
                 }));
             }
         }
