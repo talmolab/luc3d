@@ -363,8 +363,8 @@
                     // Canvas -> Video (reverse)
                     var scaleX = tc.vw / tc.cw;
                     var scaleY = tc.vh / tc.ch;
-                    var recoveredVx = canvasCoords[0] * scaleX;
-                    var recoveredVy = canvasCoords[1] * scaleY;
+                    var recoveredVx = canvasCoords.x * scaleX;
+                    var recoveredVy = canvasCoords.y * scaleY;
 
                     assertApprox(recoveredVx, vx, 1.0,
                         'Round-trip X at ' + vx + ',' + vy + ' (' + tc.vw + 'x' + tc.vh + '->' + tc.cw + 'x' + tc.ch + ')');
