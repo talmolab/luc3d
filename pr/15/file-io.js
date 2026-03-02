@@ -425,22 +425,44 @@ function exportCalibrationTOML(cameras) {
  * @returns {{ skeletons: Object[], nodes: Object[] }}
  */
 function serializeSkeleton(skeleton) {
+    // Global node list with names (matches SLEAP-io nodes_dicts format)
     const nodes = skeleton.nodes.map(function (name) {
-        return { name: name };
+        return { name: name, weight: 1.0 };
     });
 
-    const links = skeleton.edges.map(function (edge) {
+    // Build links with proper py/reduce and py/id edge type format
+    const links = skeleton.edges.map(function (edge, i) {
+        var edgeType;
+        if (i === 0) {
+            edgeType = {
+                'py/reduce': [
+                    {'py/type': 'sleap.skeleton.EdgeType'},
+                    {'py/tuple': [1]}
+                ]
+            };
+        } else {
+            edgeType = {'py/id': 1};
+        }
         return {
+            edge_insert_idx: i,
+            key: 0,
             source: edge[0],
             target: edge[1],
-            type: { 'py/tuple': [1] },
+            type: edgeType,
         };
     });
 
+    // Skeleton node indices (matches SLEAP-io skeleton_dicts format)
+    const skelNodes = skeleton.nodes.map(function (name, i) {
+        return { id: i };
+    });
+
     const skeletons = [{
+        directed: true,
+        graph: { name: skeleton.name, num_edges_inserted: skeleton.edges.length },
         links: links,
-        name: skeleton.name,
-        graph: { name: skeleton.name },
+        multigraph: true,
+        nodes: skelNodes,
     }];
 
     return { skeletons: skeletons, nodes: nodes };
@@ -779,151 +801,177 @@ function h5FileToBlob(filename) {
     return new Blob([bytes], { type: 'application/x-hdf5' });
 }
 
-// ============================================
-// SLP HDF5 export (in-browser)
-// ============================================
-
 /**
- * Build a SLEAP .slp HDF5 file as a Blob.
- * Ports json_to_slp.py logic to JavaScript using h5wasm.
+ * Build a per-camera SLP export data object (for conversion to .slp via server or json_to_slp.py).
  *
  * @param {Session} session
- * @param {Object[]} views - View objects with name, videoWidth, videoHeight
- * @returns {Promise<Blob>} The .slp file as a Blob
+ * @param {string} cameraName - The camera/view to export
+ * @param {boolean} reprojAsUser - If true, export ReprojectedInstances as user (type=0)
+ * @param {Object} videoFileInfo - Entry from state.videoFiles with videoWidth/videoHeight
+ * @returns {Object} SLP export data object
  */
-async function buildSlpH5(session, views) {
-    const mod = await initH5wasm();
-    const fname = 'export_labels.slp';
+function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo) {
+    // Skeleton metadata
+    var skelData = serializeSkeleton(session.skeleton);
+    var metadata = {
+        version: '2.0.0',
+        skeletons: skelData.skeletons,
+        nodes: skelData.nodes,
+        provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+    };
 
-    // Build the JSON intermediate data (reuse existing function)
-    const data = buildSlpExportData(session, views);
+    // Single video entry for this camera
+    var vw = videoFileInfo.videoWidth || 0;
+    var vh = videoFileInfo.videoHeight || 0;
+    var videoFilename = videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4');
+    var videos = [{
+        filename: videoFilename,
+        backend: {
+            type: 'MediaVideo',
+            shape: [videoFileInfo.frameCount || 0, vh, vw, 1],
+            filename: videoFilename,
+        },
+    }];
 
-    // Create an in-memory HDF5 file
-    const f = new mod.File(fname, 'w');
+    // Tracks
+    var tracks = session.tracks.slice();
 
-    try {
-        // /metadata group with attributes
-        const metaGroup = f.create_group('metadata');
-        metaGroup.create_attribute('format_id', data.format_id || 1.4, null, '<d');
-        metaGroup.create_attribute('json', JSON.stringify(data.metadata));
+    // Build frames, instances, points arrays for this camera only
+    var frames = [];
+    var instances = [];
+    var points = [];
+    var predPoints = [];
+    var frameId = 0;
+    var instanceId = 0;
+    var numNodes = session.skeleton.nodes.length;
 
-        // JSON string datasets
-        f.create_dataset({name: 'videos_json', data: [JSON.stringify(data.videos || [])]});
-        f.create_dataset({name: 'tracks_json', data: [JSON.stringify(data.tracks || [])]});
-        f.create_dataset({name: 'suggestions_json', data: [JSON.stringify(data.suggestions || [])]});
-        f.create_dataset({name: 'sessions_json', data: [JSON.stringify(data.sessions || [])]});
+    // Get all frame indices, sorted
+    var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
 
-        // /frames - split into separate datasets per field
-        var frames = data.frames || [];
-        if (frames.length > 0) {
-            var framesGroup = f.create_group('frames');
-            var fFrameId = new Float64Array(frames.length);
-            var fVideo = new Float64Array(frames.length);
-            var fFrameIdx = new Float64Array(frames.length);
-            var fInstStart = new Float64Array(frames.length);
-            var fInstEnd = new Float64Array(frames.length);
-            for (var i = 0; i < frames.length; i++) {
-                fFrameId[i] = frames[i].frame_id;
-                fVideo[i] = frames[i].video;
-                fFrameIdx[i] = frames[i].frame_idx;
-                fInstStart[i] = frames[i].instance_id_start;
-                fInstEnd[i] = frames[i].instance_id_end;
+    for (var fi = 0; fi < allFrameIndices.length; fi++) {
+        var frameIdx = allFrameIndices[fi];
+        var fg = session.frameGroups.get(frameIdx);
+        var camInstances = fg.instances.get(cameraName) || [];
+
+        // Also collect reprojected instances for this frame+camera
+        var reprojInstances = [];
+        var trackMap = session.instanceGroups.get(frameIdx);
+        if (trackMap) {
+            for (var [trackIdx, groups] of trackMap) {
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                    if (reprojInst) {
+                        reprojInstances.push(reprojInst);
+                    }
+                }
             }
-            framesGroup.create_dataset({name: 'frame_id', data: fFrameId});
-            framesGroup.create_dataset({name: 'video', data: fVideo});
-            framesGroup.create_dataset({name: 'frame_idx', data: fFrameIdx});
-            framesGroup.create_dataset({name: 'instance_id_start', data: fInstStart});
-            framesGroup.create_dataset({name: 'instance_id_end', data: fInstEnd});
         }
 
-        // /instances - split into separate datasets per field
-        var instances = data.instances || [];
-        if (instances.length > 0) {
-            var instGroup = f.create_group('instances');
-            var iId = new Float64Array(instances.length);
-            var iType = new Float64Array(instances.length);
-            var iFrameId = new Float64Array(instances.length);
-            var iSkeleton = new Float64Array(instances.length);
-            var iTrack = new Float64Array(instances.length);
-            var iFromPred = new Float64Array(instances.length);
-            var iScore = new Float64Array(instances.length);
-            var iPtStart = new Float64Array(instances.length);
-            var iPtEnd = new Float64Array(instances.length);
-            var iTrackScore = new Float64Array(instances.length);
-            for (var j = 0; j < instances.length; j++) {
-                var inst = instances[j];
-                iId[j] = inst.instance_id;
-                iType[j] = inst.instance_type;
-                iFrameId[j] = inst.frame_id;
-                iSkeleton[j] = inst.skeleton;
-                iTrack[j] = inst.track;
-                iFromPred[j] = inst.from_predicted;
-                iScore[j] = inst.score;
-                iPtStart[j] = inst.point_id_start;
-                iPtEnd[j] = inst.point_id_end;
-                iTrackScore[j] = inst.tracking_score;
+        // Skip frames with no instances for this camera
+        if (camInstances.length === 0 && reprojInstances.length === 0) continue;
+
+        var instIdStart = instanceId;
+
+        // Write user and predicted instances
+        for (var ii = 0; ii < camInstances.length; ii++) {
+            var inst = camInstances[ii];
+            var isUser = (inst.type === 'user');
+            var pointIdStart = isUser ? points.length : predPoints.length;
+
+            for (var n = 0; n < numNodes; n++) {
+                var pt = inst.points[n];
+                var entry = {
+                    x: pt ? pt[0] : null,
+                    y: pt ? pt[1] : null,
+                    visible: pt != null && !(inst.occluded && inst.occluded[n]),
+                    complete: pt != null,
+                };
+                if (isUser) {
+                    points.push(entry);
+                } else {
+                    entry.score = inst.score || 0;
+                    predPoints.push(entry);
+                }
             }
-            instGroup.create_dataset({name: 'instance_id', data: iId});
-            instGroup.create_dataset({name: 'instance_type', data: iType});
-            instGroup.create_dataset({name: 'frame_id', data: iFrameId});
-            instGroup.create_dataset({name: 'skeleton', data: iSkeleton});
-            instGroup.create_dataset({name: 'track', data: iTrack});
-            instGroup.create_dataset({name: 'from_predicted', data: iFromPred});
-            instGroup.create_dataset({name: 'score', data: iScore});
-            instGroup.create_dataset({name: 'point_id_start', data: iPtStart});
-            instGroup.create_dataset({name: 'point_id_end', data: iPtEnd});
-            instGroup.create_dataset({name: 'tracking_score', data: iTrackScore});
+
+            var pointIdEnd = isUser ? points.length : predPoints.length;
+
+            instances.push({
+                instance_id: instanceId,
+                instance_type: isUser ? 0 : 1,
+                frame_id: frameId,
+                skeleton: 0,
+                track: inst.trackIdx >= 0 ? inst.trackIdx : -1,
+                from_predicted: -1,
+                score: isUser ? 0 : (inst.score || 0),
+                point_id_start: pointIdStart,
+                point_id_end: pointIdEnd,
+                tracking_score: 0,
+            });
+            instanceId++;
         }
 
-        // /points
-        var points = data.points || [];
-        if (points.length > 0) {
-            var ptGroup = f.create_group('points');
-            var ptX = new Float64Array(points.length);
-            var ptY = new Float64Array(points.length);
-            var ptVisible = new Uint8Array(points.length);
-            var ptComplete = new Uint8Array(points.length);
-            for (var pi = 0; pi < points.length; pi++) {
-                ptX[pi] = isNaN(points[pi].x) ? NaN : points[pi].x;
-                ptY[pi] = isNaN(points[pi].y) ? NaN : points[pi].y;
-                ptVisible[pi] = points[pi].visible ? 1 : 0;
-                ptComplete[pi] = points[pi].complete ? 1 : 0;
+        // Write reprojected instances
+        for (var ri = 0; ri < reprojInstances.length; ri++) {
+            var rInst = reprojInstances[ri];
+            var asUser = reprojAsUser;
+            var rPointIdStart = asUser ? points.length : predPoints.length;
+
+            for (var rn = 0; rn < numNodes; rn++) {
+                var rpt = rInst.points[rn];
+                var rEntry = {
+                    x: rpt ? rpt[0] : null,
+                    y: rpt ? rpt[1] : null,
+                    visible: rpt != null,
+                    complete: rpt != null,
+                };
+                if (asUser) {
+                    points.push(rEntry);
+                } else {
+                    rEntry.score = rInst.score || 1.0;
+                    predPoints.push(rEntry);
+                }
             }
-            ptGroup.create_dataset({name: 'x', data: ptX});
-            ptGroup.create_dataset({name: 'y', data: ptY});
-            ptGroup.create_dataset({name: 'visible', data: ptVisible});
-            ptGroup.create_dataset({name: 'complete', data: ptComplete});
+
+            var rPointIdEnd = asUser ? points.length : predPoints.length;
+
+            instances.push({
+                instance_id: instanceId,
+                instance_type: asUser ? 0 : 1,
+                frame_id: frameId,
+                skeleton: 0,
+                track: rInst.trackIdx >= 0 ? rInst.trackIdx : -1,
+                from_predicted: -1,
+                score: asUser ? 0 : (rInst.score || 1.0),
+                point_id_start: rPointIdStart,
+                point_id_end: rPointIdEnd,
+                tracking_score: 0,
+            });
+            instanceId++;
         }
 
-        // /pred_points
-        var predPoints = data.pred_points || [];
-        if (predPoints.length > 0) {
-            var ppGroup = f.create_group('pred_points');
-            var ppX = new Float64Array(predPoints.length);
-            var ppY = new Float64Array(predPoints.length);
-            var ppVisible = new Uint8Array(predPoints.length);
-            var ppComplete = new Uint8Array(predPoints.length);
-            var ppScore = new Float64Array(predPoints.length);
-            for (var ppi = 0; ppi < predPoints.length; ppi++) {
-                ppX[ppi] = isNaN(predPoints[ppi].x) ? NaN : predPoints[ppi].x;
-                ppY[ppi] = isNaN(predPoints[ppi].y) ? NaN : predPoints[ppi].y;
-                ppVisible[ppi] = predPoints[ppi].visible ? 1 : 0;
-                ppComplete[ppi] = predPoints[ppi].complete ? 1 : 0;
-                ppScore[ppi] = predPoints[ppi].score || 0;
-            }
-            ppGroup.create_dataset({name: 'x', data: ppX});
-            ppGroup.create_dataset({name: 'y', data: ppY});
-            ppGroup.create_dataset({name: 'visible', data: ppVisible});
-            ppGroup.create_dataset({name: 'complete', data: ppComplete});
-            ppGroup.create_dataset({name: 'score', data: ppScore});
-        }
-
-        f.close();
-        return h5FileToBlob(fname);
-    } catch (err) {
-        f.close();
-        throw err;
+        frames.push({
+            frame_id: frameId,
+            video: 0,  // Single video, always index 0
+            frame_idx: frameIdx,
+            instance_id_start: instIdStart,
+            instance_id_end: instanceId,
+        });
+        frameId++;
     }
+
+    return {
+        format_id: 1.4,
+        metadata: metadata,
+        videos: videos,
+        tracks: tracks,
+        suggestions: [],
+        sessions: [],
+        frames: frames,
+        instances: instances,
+        points: points,
+        pred_points: predPoints,
+    };
 }
 
 // ============================================

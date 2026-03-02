@@ -158,9 +158,12 @@ class InteractionManager {
         const displayX = clientX - rect.left;
         const displayY = clientY - rect.top;
 
-        // Convert from display pixels to canvas intrinsic pixels (= video pixels)
-        const videoX = displayX * (canvas.width / rect.width);
-        const videoY = displayY * (canvas.height / rect.height);
+        // Convert from display pixels to video pixels.
+        // Use view.videoWidth rather than canvas.width so that the mapping
+        // is correct even when the overlay canvas internal resolution differs
+        // from the video resolution (e.g. when scaled up for zoom).
+        const videoX = displayX * ((view.videoWidth || canvas.width) / rect.width);
+        const videoY = displayY * ((view.videoHeight || canvas.height) / rect.height);
         return [videoX, videoY];
     }
 
@@ -169,11 +172,31 @@ class InteractionManager {
     // ======================================================================
 
     /**
-     * Find the nearest visible node to the given video-space position in a
-     * specific camera view at a given frame.
+     * Compute the shortest distance from point (px, py) to a line segment
+     * defined by endpoints (ax, ay) and (bx, by).
+     * @returns {number} Distance in the same coordinate space.
+     */
+    _pointToSegmentDist(px, py, ax, ay, bx, by) {
+        const dx = bx - ax;
+        const dy = by - ay;
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq === 0) return Math.sqrt((px - ax) * (px - ax) + (py - ay) * (py - ay));
+        // Project point onto segment, clamped to [0,1]
+        var t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        const projX = ax + t * dx;
+        const projY = ay + t * dy;
+        return Math.sqrt((px - projX) * (px - projX) + (py - projY) * (py - projY));
+    }
+
+    /**
+     * Find the nearest visible node or edge to the given video-space position
+     * in a specific camera view at a given frame.
      *
-     * Searches through all instance groups at frameIdx for the given view
-     * and returns the closest non-null point within the hit threshold.
+     * Hit testing checks nodes first (using visual node size as threshold),
+     * then skeleton edges (using edge weight as threshold). Clicking empty
+     * space between nodes/edges returns null.
      *
      * @param {number} videoX - X coordinate in video pixels
      * @param {number} videoY - Y coordinate in video pixels
@@ -191,11 +214,8 @@ class InteractionManager {
         const groups = this._getInstanceGroups(frameIdx);
         if (!groups || groups.length === 0) return null;
 
-        // Compute a scale-aware hit threshold. The base threshold (12) is
-        // in CSS pixels. Convert to video pixels so the clickable area
-        // feels consistent regardless of the display size and zoom level.
-        // Use getBoundingClientRect() which includes CSS transforms.
-        let threshold = this.hitThreshold;
+        // Compute a display-to-video scale factor so thresholds feel consistent
+        // regardless of display size and zoom level.
         let displayToVideo = 1;
         const state = this._getState();
         if (state) {
@@ -203,24 +223,32 @@ class InteractionManager {
             if (view && view.overlayCanvas) {
                 const rect = view.overlayCanvas.getBoundingClientRect();
                 if (rect.width > 0) {
-                    displayToVideo = view.overlayCanvas.width / rect.width;
-                    threshold = this.hitThreshold * displayToVideo;
+                    displayToVideo = (view.videoWidth || view.overlayCanvas.width) / rect.width;
                 }
             }
         }
 
-        let best = null;
-        let bestDist = threshold;
-
-        // Get actual node size from visibility tab slider
+        // Node threshold = visual node size (video px) + screen-space padding (3 CSS px → video px)
         const sliderEl = document.getElementById('visUserNodeSize');
         const nodeSize = sliderEl ? parseInt(sliderEl.value) || 4 : 4;
+        const nodeThreshold = nodeSize + 1 * displayToVideo;
+
+        // Edge threshold = edge weight (video px) + screen-space padding (3 CSS px → video px)
+        const edgeSliderEl = document.getElementById('visUserEdgeWeight');
+        const edgeWeight = edgeSliderEl ? parseInt(edgeSliderEl.value) || 2 : 2;
+        const edgeThreshold = edgeWeight + 1 * displayToVideo;
+
+        // Get skeleton edges for edge hit testing
+        const skeleton = (state && state.session) ? state.session.skeleton : null;
+        const edges = skeleton ? skeleton.edges : null;
+
+        let best = null;
+        let bestDist = Infinity;
 
         // Two-pass hit testing: user instances first (front), then predicted/reprojected (back)
-        // This ensures user instances are selected when overlapping predicted at the same position.
         const typePassFilters = [
-            function(t) { return t !== 'predicted' && t !== 'reprojected'; }, // Pass 1: user instances
-            function(t) { return t === 'predicted' || t === 'reprojected'; }, // Pass 2: predicted + reprojected
+            function(t) { return t !== 'predicted' && t !== 'reprojected'; },
+            function(t) { return t === 'predicted' || t === 'reprojected'; },
         ];
 
         for (let pass = 0; pass < typePassFilters.length; pass++) {
@@ -238,6 +266,7 @@ class InteractionManager {
                 // Skip instances not matching this pass's type filter
                 if (!typePassFilters[pass](instType)) continue;
 
+                // --- Node hit testing ---
                 for (let n = 0; n < instance.points.length; n++) {
                     const pt = instance.points[n];
                     if (pt == null) continue;
@@ -246,73 +275,44 @@ class InteractionManager {
                     const dy = pt[1] - videoY;
                     const dist = Math.sqrt(dx * dx + dy * dy);
 
-                    if (dist < bestDist) {
+                    if (dist < nodeThreshold && dist < bestDist) {
                         bestDist = dist;
                         best = {
                             instanceGroupIdx: g,
                             instanceGroup: group,
-                            instanceIdx: g, // index within the groups array
+                            instanceIdx: g,
                             nodeIdx: n,
                             distance: dist,
                         };
                     }
                 }
-            }
-            // If we found a user instance hit, return it immediately without checking predicted
-            if (best) return best;
-        }
 
-        // Secondary check: label regions (to the right of each node).
-        // Allows clicking on a node's label text to select/drag that node.
-        // Overlay canvas internal size = video size, so rendering scale = 1.
-        // Labels in overlays.js are drawn at:
-        //   tx = pt.x + nodeSize + nodeSize*0.5, ty = pt.y - nodeSize*0.5
-        //   fontSize = max(10, nodeSize * 3), textBaseline = 'bottom'
-        if (!best) {
-            const fontSize = Math.max(10, nodeSize * 3);
-            const labelOffsetX = 1.5 * nodeSize;
-            const labelOffsetY = 0.5 * nodeSize;
+                // --- Edge hit testing (only if no node was hit for this instance) ---
+                if (edges && !best) {
+                    for (let ei = 0; ei < edges.length; ei++) {
+                        const edge = edges[ei];
+                        const ptA = instance.points[edge[0]];
+                        const ptB = instance.points[edge[1]];
+                        if (ptA == null || ptB == null) continue;
 
-            for (let pass = 0; pass < typePassFilters.length; pass++) {
-                for (let g = 0; g < groups.length; g++) {
-                    const group = groups[g];
-                    const instance = group.getInstance(viewName);
-                    if (!instance || !instance.points) continue;
+                        const edgeDist = this._pointToSegmentDist(
+                            videoX, videoY, ptA[0], ptA[1], ptB[0], ptB[1]);
 
-                    // Skip hidden types in label hit testing too
-                    var instType2 = instance.type || 'user';
-                    if (instType2 === 'user' && !document.getElementById('visUser').checked) continue;
-                    if (instType2 === 'predicted' && !document.getElementById('visPredicted').checked) continue;
-                    if (instType2 === 'reprojected' && !document.getElementById('visReprojections').checked) continue;
-
-                    // Skip instances not matching this pass's type filter
-                    if (!typePassFilters[pass](instType2)) continue;
-
-                    for (let n = 0; n < instance.points.length; n++) {
-                        const pt = instance.points[n];
-                        if (pt == null) continue;
-
-                        const labelLeft = pt[0] + labelOffsetX;
-                        const labelRight = pt[0] + labelOffsetX + fontSize * 5;
-                        const labelTop = pt[1] - labelOffsetY - fontSize;
-                        const labelBottom = pt[1] + fontSize * 0.3;
-
-                        if (videoX >= labelLeft && videoX <= labelRight &&
-                            videoY >= labelTop && videoY <= labelBottom) {
+                        if (edgeDist < edgeThreshold && edgeDist < bestDist) {
+                            bestDist = edgeDist;
                             best = {
                                 instanceGroupIdx: g,
                                 instanceGroup: group,
                                 instanceIdx: g,
-                                nodeIdx: n,
-                                distance: 0,
+                                nodeIdx: -1, // edge hit, no specific node
+                                distance: edgeDist,
                             };
-                            return best;
                         }
                     }
                 }
-                // If we found a label hit in user pass, return immediately
-                if (best) return best;
             }
+            // If we found a hit in the user pass, return immediately
+            if (best) return best;
         }
 
         return best;
@@ -337,29 +337,37 @@ class InteractionManager {
         const unlinkedList = fg.getUnlinkedInstances(viewName);
         if (!unlinkedList || unlinkedList.length === 0) return null;
 
-        // Compute threshold using getBoundingClientRect() which includes CSS transforms
-        let threshold = this.hitThreshold;
+        // Compute display-to-video scale factor
         let displayToVideo = 1;
         const view = this._findView(state, viewName);
         if (view && view.overlayCanvas) {
             const rect = view.overlayCanvas.getBoundingClientRect();
             if (rect.width > 0) {
-                displayToVideo = view.overlayCanvas.width / rect.width;
-                threshold = this.hitThreshold * displayToVideo;
+                displayToVideo = (view.videoWidth || view.overlayCanvas.width) / rect.width;
             }
         }
 
-        let best = null;
-        let bestDist = threshold;
-
-        // Get actual node size from visibility tab slider
+        // Node threshold = visual node size (video px) + screen-space padding (3 CSS px → video px)
         const sliderEl = document.getElementById('visUserNodeSize');
         const nodeSize = sliderEl ? parseInt(sliderEl.value) || 4 : 4;
+        const nodeThreshold = nodeSize + 1 * displayToVideo;
+
+        // Edge threshold = edge weight (video px) + screen-space padding (3 CSS px → video px)
+        const edgeSliderEl = document.getElementById('visUserEdgeWeight');
+        const edgeWeight = edgeSliderEl ? parseInt(edgeSliderEl.value) || 2 : 2;
+        const edgeThreshold = edgeWeight + 1 * displayToVideo;
+
+        // Get skeleton edges for edge hit testing
+        const skeleton = state.session.skeleton;
+        const edges = skeleton ? skeleton.edges : null;
+
+        let best = null;
+        let bestDist = Infinity;
 
         // Two-pass hit testing: user instances first (front), then predicted (back)
         const ulTypePassFilters = [
-            function(t) { return t !== 'predicted'; }, // Pass 1: user instances
-            function(t) { return t === 'predicted'; }, // Pass 2: predicted
+            function(t) { return t !== 'predicted'; },
+            function(t) { return t === 'predicted'; },
         ];
 
         for (let pass = 0; pass < ulTypePassFilters.length; pass++) {
@@ -368,14 +376,13 @@ class InteractionManager {
                 const points = ul.instance.points;
                 if (!points) continue;
 
-                // Skip instances whose type is hidden via visibility checkboxes
                 var ulType = ul.instance.type || 'user';
                 if (ulType === 'user' && !document.getElementById('visUser').checked) continue;
                 if (ulType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
 
-                // Skip instances not matching this pass's type filter
                 if (!ulTypePassFilters[pass](ulType)) continue;
 
+                // --- Node hit testing ---
                 for (let n = 0; n < points.length; n++) {
                     const pt = points[n];
                     if (pt == null) continue;
@@ -384,7 +391,7 @@ class InteractionManager {
                     const dy = pt[1] - videoY;
                     const dist = Math.sqrt(dx * dx + dy * dy);
 
-                    if (dist < bestDist) {
+                    if (dist < nodeThreshold && dist < bestDist) {
                         bestDist = dist;
                         best = {
                             unlinked: ul,
@@ -393,55 +400,30 @@ class InteractionManager {
                         };
                     }
                 }
-            }
-            // If we found a user instance hit, return it immediately without checking predicted
-            if (best) return best;
-        }
 
-        // Secondary check: label regions (to the right of each node).
-        // Overlay canvas internal size = video size, so rendering scale = 1.
-        if (!best) {
-            const fontSize = Math.max(10, nodeSize * 3);
-            const labelOffsetX = 1.5 * nodeSize;
-            const labelOffsetY = 0.5 * nodeSize;
+                // --- Edge hit testing (only if no node was hit for this instance) ---
+                if (edges && !best) {
+                    for (let ei = 0; ei < edges.length; ei++) {
+                        const edge = edges[ei];
+                        const ptA = points[edge[0]];
+                        const ptB = points[edge[1]];
+                        if (ptA == null || ptB == null) continue;
 
-            for (let pass = 0; pass < ulTypePassFilters.length; pass++) {
-                for (let u = 0; u < unlinkedList.length; u++) {
-                    const ul = unlinkedList[u];
-                    const points = ul.instance.points;
-                    if (!points) continue;
+                        const edgeDist = this._pointToSegmentDist(
+                            videoX, videoY, ptA[0], ptA[1], ptB[0], ptB[1]);
 
-                    // Skip hidden types in label hit testing too
-                    var ulType2 = ul.instance.type || 'user';
-                    if (ulType2 === 'user' && !document.getElementById('visUser').checked) continue;
-                    if (ulType2 === 'predicted' && !document.getElementById('visPredicted').checked) continue;
-
-                    // Skip instances not matching this pass's type filter
-                    if (!ulTypePassFilters[pass](ulType2)) continue;
-
-                    for (let n = 0; n < points.length; n++) {
-                        const pt = points[n];
-                        if (pt == null) continue;
-
-                        const labelLeft = pt[0] + labelOffsetX;
-                        const labelRight = pt[0] + labelOffsetX + fontSize * 5;
-                        const labelTop = pt[1] - labelOffsetY - fontSize;
-                        const labelBottom = pt[1] + fontSize * 0.3;
-
-                        if (videoX >= labelLeft && videoX <= labelRight &&
-                            videoY >= labelTop && videoY <= labelBottom) {
+                        if (edgeDist < edgeThreshold && edgeDist < bestDist) {
+                            bestDist = edgeDist;
                             best = {
                                 unlinked: ul,
-                                nodeIdx: n,
-                                distance: 0,
+                                nodeIdx: -1,
+                                distance: edgeDist,
                             };
-                            return best;
                         }
                     }
                 }
-                // If we found a label hit in user pass, return immediately
-                if (best) return best;
             }
+            if (best) return best;
         }
 
         return best;
@@ -572,11 +554,21 @@ class InteractionManager {
         var vx = coords[0], vy = coords[1];
         var frameIdx = state.currentFrame;
 
-        // --- Right-click: toggle node null (only if already selected) ---
-        if (e.button === 2) {
+        // --- Right-click / Ctrl+click (macOS trackpad): toggle node null ---
+        if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
             e.preventDefault();
             if (this.assignmentMode) return;
+
+            // Check both linked (InstanceGroup) and unlinked instances
             var hit = this.findNearestNode(vx, vy, viewName, frameIdx);
+            var ulHit = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx);
+
+            // Prefer whichever is closer
+            if (hit && ulHit) {
+                if (ulHit.distance < hit.distance) hit = null;
+                else ulHit = null;
+            }
+
             if (hit) {
                 // Only allow null toggle on the already-selected group
                 if (this.selectedInstanceGroup === hit.instanceGroup) {
@@ -589,6 +581,17 @@ class InteractionManager {
                     this.select(hit.instanceGroup, hit.nodeIdx);
                     this._requestRedraw();
                 }
+            } else if (ulHit) {
+                var ulInst = ulHit.unlinked.instance;
+                if (ulInst && ulInst.type === 'predicted') return;
+                // Toggle null directly on the unlinked instance
+                if (!ulInst.nulledNodes) ulInst.nulledNodes = new Set();
+                if (ulInst.nulledNodes.has(ulHit.nodeIdx)) {
+                    ulInst.nulledNodes.delete(ulHit.nodeIdx);
+                } else {
+                    ulInst.nulledNodes.add(ulHit.nodeIdx);
+                }
+                this._requestRedraw();
             }
             return;
         }
@@ -625,11 +628,17 @@ class InteractionManager {
             return;
         }
 
-        // --- Double-click on linked instance: convert predicted -> user ---
+        // --- Double-click on linked predicted instance: clone as user group ---
         if (e.detail >= 2 && useLinked) {
-            this._convertToUserInstance(linkedHit.instanceGroup);
-            this._requestRedraw();
-            return;
+            var firstGroupInst = linkedHit.instanceGroup.instances.values().next().value;
+            if (firstGroupInst && firstGroupInst.type === 'predicted') {
+                // Clone predicted group as a new user group, keeping original intact
+                if (this.callbacks.onClonePredictedGroup) {
+                    this.callbacks.onClonePredictedGroup(linkedHit.instanceGroup);
+                }
+                this._requestRedraw();
+                return;
+            }
         }
 
         // --- Linked node: select or drag ---
@@ -786,7 +795,7 @@ class InteractionManager {
         // Only finalize if the drag actually moved
         const dx = info.currentPos[0] - info.startPos[0];
         const dy = info.currentPos[1] - info.startPos[1];
-        const didMove = Math.sqrt(dx * dx + dy * dy) > 0.5;
+        const didMove = info.thresholdMet && Math.sqrt(dx * dx + dy * dy) > 0.5;
 
         if (didMove) {
             // Determine the instance being dragged (linked or unlinked)
@@ -866,10 +875,9 @@ class InteractionManager {
     /**
      * Handle keydown events for interaction shortcuts.
      *
-     * - Tab: cycle through instance groups in the current frame.
      * - Delete / Backspace: delete the selected instance (via callback).
-     * - Escape: clear selection.
      * - N: add a new empty instance at the current frame (via callback).
+     * - C: create group from assignment selection.
      *
      * @param {KeyboardEvent} e
      */
@@ -883,32 +891,12 @@ class InteractionManager {
         if (!state) return;
 
         switch (e.key) {
-            case 'Tab': {
-                e.preventDefault();
-                this._cycleSelection(e.shiftKey);
-                break;
-            }
-
             case 'Delete':
             case 'Backspace': {
                 if (this.selectedInstanceGroup || this.selectedUnlinked) {
                     e.preventDefault();
                     this._deleteSelected(e.shiftKey);
                 }
-                break;
-            }
-
-            case 'Escape': {
-                e.preventDefault();
-                if (this.assignmentMode) {
-                    this.setAssignmentMode(false);
-                    if (this.callbacks.onAssignmentCancelled) {
-                        this.callbacks.onAssignmentCancelled();
-                    }
-                } else {
-                    this.clearSelection();
-                }
-                this._requestRedraw();
                 break;
             }
 
@@ -922,43 +910,12 @@ class InteractionManager {
                 break;
             }
 
-            case 'a':
-            case 'A': {
-                // Don't toggle assignment mode if already active (managed by toast)
-                if (!e.ctrlKey && !e.metaKey && !e.altKey && !this.assignmentMode) {
-                    e.preventDefault();
-                    if (this.callbacks.onAssignmentRequested) {
-                        this.callbacks.onAssignmentRequested();
-                    }
-                }
-                break;
-            }
-
-            case 'Enter': {
-                if (this.assignmentMode && this.assignmentSelection.length >= 1) {
-                    e.preventDefault();
-                    this._createGroupFromAssignment();
-                }
-                break;
-            }
-
             case 'c':
             case 'C': {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey) {
                     if (this.assignmentMode && this.assignmentSelection.length >= 1) {
                         e.preventDefault();
                         this._createGroupFromAssignment();
-                    }
-                }
-                break;
-            }
-
-            case 'u':
-            case 'U': {
-                if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-                    if (this.selectedInstanceGroup) {
-                        e.preventDefault();
-                        this._unlinkSelectedGroup();
                     }
                 }
                 break;
@@ -1137,6 +1094,7 @@ class InteractionManager {
             currentPos: [vx, vy],
             unlinked: unlinked,
             originalPoints: originalPoints,
+            thresholdMet: false,
         };
 
         // Install document-level listeners for the drag duration
@@ -1160,6 +1118,16 @@ class InteractionManager {
         var coords = this.canvasToVideo(e.clientX, e.clientY, info.viewName);
         var vx = coords[0], vy = coords[1];
         info.currentPos = [vx, vy];
+
+        // Require minimum movement before committing to a drag
+        if (!info.thresholdMet) {
+            var tdx = vx - info.startPos[0];
+            var tdy = vy - info.startPos[1];
+            if (Math.sqrt(tdx * tdx + tdy * tdy) < 3) {
+                return; // Don't update position yet
+            }
+            info.thresholdMet = true;
+        }
 
         // Determine the instance being dragged
         var instance = null;

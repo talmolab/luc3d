@@ -1173,6 +1173,8 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
             }
         }
 
+        const nulledNodes = instance.nulledNodes || null;
+
         ctx.save();
         ctx.globalAlpha = alpha;
 
@@ -1181,32 +1183,67 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
             const instLineStyle = isPredicted && predictedRender && predictedRender.lineStyle
                 ? predictedRender.lineStyle : (options.lineStyle || 'dashed');
             const instDashPattern = getLineDashPattern(instLineStyle);
-            ctx.strokeStyle = color;
             ctx.lineWidth = instLineWidth;
             ctx.lineCap = 'round';
             if (instDashPattern.length) ctx.setLineDash(instDashPattern);
-            ctx.beginPath();
-            for (let i = 0; i < skeleton.edges.length; i++) {
-                const edge = skeleton.edges[i];
-                const src = canvasPoints[edge[0]];
-                const dst = canvasPoints[edge[1]];
-                if (src && dst) {
-                    ctx.moveTo(src.x, src.y);
-                    ctx.lineTo(dst.x, dst.y);
+            // Two-pass: normal edges, then grayed (nulled) edges
+            for (var ePass = 0; ePass < 2; ePass++) {
+                ctx.beginPath();
+                var hasEdgeStrokes = false;
+                for (let i = 0; i < skeleton.edges.length; i++) {
+                    const edge = skeleton.edges[i];
+                    const src = canvasPoints[edge[0]];
+                    const dst = canvasPoints[edge[1]];
+                    if (!src || !dst) continue;
+                    var srcNulled = nulledNodes && nulledNodes.has(edge[0]);
+                    var dstNulled = nulledNodes && nulledNodes.has(edge[1]);
+                    var edgeGray = srcNulled || dstNulled;
+                    if (ePass === 0 && !edgeGray) {
+                        ctx.moveTo(src.x, src.y);
+                        ctx.lineTo(dst.x, dst.y);
+                        hasEdgeStrokes = true;
+                    } else if (ePass === 1 && edgeGray) {
+                        ctx.moveTo(src.x, src.y);
+                        ctx.lineTo(dst.x, dst.y);
+                        hasEdgeStrokes = true;
+                    }
+                }
+                if (hasEdgeStrokes) {
+                    if (ePass === 0) {
+                        ctx.strokeStyle = color;
+                    } else {
+                        ctx.strokeStyle = '#888888';
+                        ctx.globalAlpha = alpha * 0.4;
+                    }
+                    ctx.stroke();
+                    if (ePass === 1) ctx.globalAlpha = alpha;
                 }
             }
-            ctx.stroke();
             if (instDashPattern.length) ctx.setLineDash([]);
         }
 
-        // Semi-transparent nodes
+        // Normal nodes
         ctx.fillStyle = color;
         for (let i = 0; i < canvasPoints.length; i++) {
             const cp = canvasPoints[i];
             if (!cp) continue;
+            if (nulledNodes && nulledNodes.has(i)) continue;
             ctx.beginPath();
             ctx.arc(cp.x, cp.y, instNodeSize, 0, Math.PI * 2);
             ctx.fill();
+        }
+        // Grayed-out (nulled) nodes
+        if (nulledNodes && nulledNodes.size > 0) {
+            ctx.fillStyle = '#888888';
+            ctx.globalAlpha = alpha * 0.4;
+            for (const ni of nulledNodes) {
+                const cp = canvasPoints[ni];
+                if (!cp) continue;
+                ctx.beginPath();
+                ctx.arc(cp.x, cp.y, instNodeSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = alpha;
         }
 
         // "?" badge near the first visible point
@@ -1242,11 +1279,21 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
                 for (var li = 0; li < canvasPoints.length; li++) {
                     var lp = canvasPoints[li];
                     if (!lp) continue;
+                    var isLabelNulled = nulledNodes && nulledNodes.has(li);
                     var node2 = skeleton.nodes ? skeleton.nodes[li] : undefined;
                     var lname = typeof node2 === 'string' ? node2 : (node2 && node2.name ? node2.name : 'node_' + li);
                     var labelOff2 = computeLabelOffset(li, canvasPoints, skeleton, lname, fontSize, ctx);
                     var ltx = lp.x + labelOff2.dx;
                     var lty = lp.y + labelOff2.dy;
+                    if (isLabelNulled) {
+                        ctx.globalAlpha = 0.4;
+                        ctx.fillStyle = '#888888';
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+                    } else {
+                        ctx.globalAlpha = 1.0;
+                        ctx.fillStyle = '#ffffff';
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+                    }
                     ctx.strokeText(lname, ltx, lty);
                     ctx.fillText(lname, ltx, lty);
                 }
