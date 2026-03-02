@@ -430,25 +430,14 @@ function serializeSkeleton(skeleton) {
         return { name: name, weight: 1.0 };
     });
 
-    // Build links with proper py/reduce and py/id edge type format
+    // Build links with SLEAP-compatible edge type format
     const links = skeleton.edges.map(function (edge, i) {
-        var edgeType;
-        if (i === 0) {
-            edgeType = {
-                'py/reduce': [
-                    {'py/type': 'sleap.skeleton.EdgeType'},
-                    {'py/tuple': [1]}
-                ]
-            };
-        } else {
-            edgeType = {'py/id': 1};
-        }
         return {
             edge_insert_idx: i,
             key: 0,
             source: edge[0],
             target: edge[1],
-            type: edgeType,
+            type: { 'py/tuple': [1] },
         };
     });
 
@@ -462,6 +451,7 @@ function serializeSkeleton(skeleton) {
         graph: { name: skeleton.name, num_edges_inserted: skeleton.edges.length },
         links: links,
         multigraph: true,
+        name: skeleton.name,
         nodes: skelNodes,
     }];
 
