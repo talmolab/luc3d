@@ -95,14 +95,10 @@
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbAssign" title="Triangulation">Triangulate &#9662;</button>
-            </div>
-            <!-- Triangulate dropdown menu (positioned absolutely via JS) -->
-            <div class="toolbar-dropdown-menu" id="tbAssignMenu" style="display:none;position:fixed;z-index:10000;">
-                <div class="toolbar-dropdown-item" id="tbAssignManual">Manual</div>
-                <div class="toolbar-dropdown-label">Automatic</div>
-                <div class="toolbar-dropdown-item toolbar-dropdown-sub" id="tbAssignSingleFrame">Single Frame</div>
-                <div class="toolbar-dropdown-item toolbar-dropdown-sub" id="tbAssignMultiFrame">Multi-Frame</div>
+                <button class="toolbar-btn" id="tbGroup" title="Group selected instances (C)">Group</button>
+                <button class="toolbar-btn" id="tbTriangulate" title="Triangulate current frame">Triangulate</button>
+                <button class="toolbar-btn" id="tbAutoSingle" title="Auto assign + triangulate current frame">Auto Single</button>
+                <button class="toolbar-btn" id="tbAutoMulti" title="Auto assign + triangulate frame range">Auto Multi</button>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
@@ -1260,10 +1256,10 @@
             const assignmentSelectedIds = interactionManager ? interactionManager.getAssignmentSelectedIds() : [];
             const selectedUnlinked = interactionManager ? interactionManager.selectedUnlinked : null;
 
-            // Update assignment toolbar state
-            const tbAssign = document.getElementById('tbAssign');
-            if (tbAssign) {
-                tbAssign.classList.toggle('active', assignmentMode);
+            // Update assignment toolbar state — highlight Group button when in assignment mode
+            const tbGroup = document.getElementById('tbGroup');
+            if (tbGroup) {
+                tbGroup.classList.toggle('active', assignmentMode);
             }
 
             for (const view of state.views) {
@@ -1385,15 +1381,12 @@
                     }
                     instanceGroup.markDirty();
 
-                    // Auto-recalculate reprojection if group was previously triangulated
-                    reTriangulateGroup(instanceGroup);
-
                     // Mark frame as modified in timeline
                     if (timeline) {
                         timeline.setFrameModified(state.currentFrame, true);
                     }
 
-                    setStatus('Node moved in ' + viewName, 'success');
+                    setStatus('Node moved in ' + viewName + ' — press Triangulate to update', 'success');
                 },
 
                 onInstanceConverted: function (instanceGroup) {
@@ -1456,15 +1449,83 @@
                     updateInfoPanel();
                 },
 
+                onConvertReprojection: function (group, viewName) {
+                    // Add a user instance to the existing group from its reprojection
+                    var reprojInst = group.getReprojectedInstance
+                        ? group.getReprojectedInstance(viewName) : null;
+                    if (!reprojInst || !reprojInst.points) {
+                        setStatus('No reprojection to convert in ' + viewName, 'warning');
+                        return;
+                    }
+                    var clonedPoints = reprojInst.points.map(function(pt) {
+                        return pt != null ? [pt[0], pt[1]] : null;
+                    });
+                    var userInst = new Instance(clonedPoints, group.trackIdx, 'user', 1.0);
+                    userInst.modified = true;
+                    group.addInstance(viewName, userInst);
+
+                    // Also add to the FrameGroup so it renders in overlays
+                    var frameIdx = state.currentFrame;
+                    var fg = state.session.frameGroups.get(frameIdx);
+                    if (fg) fg.addInstance(viewName, userInst);
+
+                    // Re-triangulate the group now that it has a new user instance
+                    var cameras = state.session.cameras;
+                    var groupCamNames = group.cameraNames;
+                    var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
+                    if (groupCameras.length >= 2) {
+                        var result = triangulateAndReproject(group, groupCameras);
+                        group.reprojections = result.reprojections;
+                        group.points3d = result.points3d;
+                        storeReprojectedInstances(group, result, cameras);
+                        group.observedPoints = {};
+                        for (var ci = 0; ci < groupCameras.length; ci++) {
+                            var cam = groupCameras[ci];
+                            var inst = group.getInstance(cam.name);
+                            if (inst) {
+                                group.observedPoints[cam.name] = inst.points;
+                            }
+                        }
+                        group.markClean();
+
+                        // Update triangulation results for this frame
+                        var frameResults = state.triangulationResults.get(frameIdx) || [];
+                        var newEntry = {
+                            group: group,
+                            points3d: result.points3d,
+                            reprojections: result.reprojections,
+                            errors: result.errors,
+                            meanError: result.meanError,
+                        };
+                        var replaced = false;
+                        for (var ri = 0; ri < frameResults.length; ri++) {
+                            if (frameResults[ri].group === group) {
+                                frameResults[ri] = newEntry;
+                                replaced = true;
+                                break;
+                            }
+                        }
+                        if (!replaced) frameResults.push(newEntry);
+                        state.triangulationResults.set(frameIdx, frameResults);
+                        setReprojErrorVisible(true);
+                    }
+
+                    var trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
+                    setStatus('Added user instance to ' + trackName + ' in ' + viewName, 'success');
+
+                    if (interactionManager) interactionManager.select(group, -1);
+                    if (timeline) timeline.setFrameModified(frameIdx, true);
+                    drawAllOverlays(frameIdx);
+                    update3DViewport(frameIdx);
+                    updateInfoPanel();
+                },
+
                 onNodeSetNull: function (viewName, instanceGroup, nodeIdx) {
                     const inst = instanceGroup.getInstance(viewName);
                     const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(nodeIdx);
                     const nodeName = state.session.skeleton.nodes[nodeIdx] || 'node ' + nodeIdx;
-                    setStatus((isNulled ? 'Nulled ' : 'Restored ') + nodeName + ' in ' + viewName);
+                    setStatus((isNulled ? 'Nulled ' : 'Restored ') + nodeName + ' in ' + viewName + ' — press Triangulate to update');
                     instanceGroup.markDirty();
-
-                    // Auto-recalculate reprojection if group was previously triangulated
-                    reTriangulateGroup(instanceGroup);
 
                     if (timeline) {
                         timeline.setFrameModified(state.currentFrame, true);
@@ -1495,14 +1556,8 @@
                 },
 
                 onAssignmentSelectionChanged: function (count) {
-                    if (!manualAssignState) return;
-                    var textEl = document.getElementById('manualAssignToastText');
-                    if (textEl) {
-                        var totalUnlinked = getTotalUnlinkedCount();
-                        textEl.textContent = 'Frame ' + state.currentFrame +
-                            '. Select instances for manual Identity Assignment. Instances Selected: ' +
-                            count + '/' + totalUnlinked;
-                    }
+                    var totalUnlinked = getTotalUnlinkedCount();
+                    setStatus('Assignment: ' + count + '/' + totalUnlinked + ' instances selected', 'info');
                 },
 
                 onAssignmentError: function (message) {
@@ -1510,45 +1565,61 @@
                 },
 
                 onAssignmentGroupCreated: function (group) {
-                    cleanupManualAssignment();
                     var trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
 
-                    // Triangulate the newly created group
+                    // Auto-triangulate the new group
+                    var frameIdx = state.currentFrame;
                     var cameras = state.session.cameras;
-                    if (cameras && cameras.length >= 2) {
-                        var groupCamNames = group.cameraNames;
-                        var groupCameras = cameras.filter(function (c) {
-                            return groupCamNames.indexOf(c.name) >= 0;
-                        });
-                        if (groupCameras.length >= 2) {
-                            var result = triangulateAndReproject(group, groupCameras);
-                            group.points3d = result.points3d;
-                            group.reprojections = result.reprojections;
-                            storeReprojectedInstances(group, result, cameras);
-                            group.observedPoints = {};
-                            for (var ci = 0; ci < groupCameras.length; ci++) {
-                                var cam = groupCameras[ci];
-                                var inst = group.getInstance(cam.name);
-                                if (inst) group.observedPoints[cam.name] = inst.points;
+                    var groupCamNames = group.cameraNames;
+                    var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
+                    if (groupCameras.length >= 2) {
+                        var result = triangulateAndReproject(group, groupCameras);
+                        group.reprojections = result.reprojections;
+                        group.points3d = result.points3d;
+                        storeReprojectedInstances(group, result, cameras);
+                        group.observedPoints = {};
+                        for (var ci = 0; ci < groupCameras.length; ci++) {
+                            var cam = groupCameras[ci];
+                            var inst = group.getInstance(cam.name);
+                            if (inst) {
+                                group.observedPoints[cam.name] = inst.points;
                             }
-                            group.markClean();
                         }
+                        group.markClean();
+                        // Replace existing entry for this group, or add new one
+                        var frameResults = state.triangulationResults.get(frameIdx) || [];
+                        var newEntry = {
+                            group: group,
+                            points3d: result.points3d,
+                            reprojections: result.reprojections,
+                            errors: result.errors,
+                            meanError: result.meanError,
+                        };
+                        var replaced = false;
+                        for (var ri = 0; ri < frameResults.length; ri++) {
+                            if (frameResults[ri].group === group) {
+                                frameResults[ri] = newEntry;
+                                replaced = true;
+                                break;
+                            }
+                        }
+                        if (!replaced) frameResults.push(newEntry);
+                        state.triangulationResults.set(frameIdx, frameResults);
+                        setReprojErrorVisible(true);
+                        setStatus('Created & triangulated group: ' + trackName + ' (error: ' + (result.meanError != null ? result.meanError.toFixed(2) + 'px' : 'N/A') + ')', 'success');
+                    } else {
+                        setStatus('Created group: ' + trackName, 'success');
                     }
 
-                    setStatus('Created group: ' + trackName, 'success');
-                    if (timeline) timeline.setFrameModified(state.currentFrame, true);
-                    if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
-                    drawAllOverlays(state.currentFrame);
+                    if (timeline) timeline.setFrameModified(frameIdx, true);
+                    if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(frameIdx));
+                    drawAllOverlays(frameIdx);
+                    update3DViewport(frameIdx);
                     updateInfoPanel();
                 },
 
                 onAssignmentCancelled: function () {
-                    cleanupManualAssignment();
                     drawAllOverlays(state.currentFrame);
-                },
-
-                onAssignmentRequested: function () {
-                    startManualAssignment();
                 },
             });
 
@@ -2155,6 +2226,18 @@
                         if (visErrors) { visErrors.checked = !visErrors.checked; visErrors.dispatchEvent(new Event('change', { bubbles: true })); }
                         break;
                     }
+                    case 'v': {
+                        e.preventDefault();
+                        toggleViewMode();
+                        showViewIndicator();
+                        break;
+                    }
+                    case 'g': {
+                        e.preventDefault();
+                        setGridMode();
+                        showViewIndicator();
+                        break;
+                    }
                 }
             });
 
@@ -2230,42 +2313,34 @@
                 if (interactionManager) interactionManager._deleteSelected();
             });
             // Triangulate dropdown: position menu below button on click
-            document.getElementById('tbAssign').addEventListener('click', function (e) {
-                e.stopPropagation();
-                var menu = document.getElementById('tbAssignMenu');
-                var isOpen = menu.style.display !== 'none';
-                if (isOpen) {
-                    menu.style.display = 'none';
+            // Group button: toggle assignment mode, or finalize group if selection exists
+            document.getElementById('tbGroup').addEventListener('click', function () {
+                if (!interactionManager) return;
+                if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 1) {
+                    // Already in assignment mode with selection — create the group
+                    interactionManager._createGroupFromAssignment();
+                } else if (interactionManager.assignmentMode) {
+                    // In assignment mode but no selection — exit
+                    interactionManager.setAssignmentMode(false);
+                    setStatus('Assignment mode cancelled', 'info');
+                    drawAllOverlays(state.currentFrame);
                 } else {
-                    var rect = e.currentTarget.getBoundingClientRect();
-                    menu.style.left = rect.left + 'px';
-                    menu.style.top = rect.bottom + 2 + 'px';
-                    menu.style.display = 'block';
+                    // Not in assignment mode — enter it
+                    interactionManager.setAssignmentMode(true);
+                    setStatus('Assignment mode: click instances across views, then click Group again', 'info');
+                    drawAllOverlays(state.currentFrame);
                 }
             });
-            document.addEventListener('click', function () {
-                var menu = document.getElementById('tbAssignMenu');
-                if (menu) menu.style.display = 'none';
+            // Triangulate button: triangulate all groups on current frame
+            document.getElementById('tbTriangulate').addEventListener('click', function () {
+                triangulateCurrentFrame();
             });
-            // Prevent clicks inside dropdown from bubbling to document close handlers
-            document.getElementById('tbAssignMenu').addEventListener('click', function (e) {
-                e.stopPropagation();
-            });
-            document.getElementById('tbAssignManual').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbAssignMenu').style.display = 'none';
-                startManualAssignment();
-            });
-            // Single Frame: immediate triangulation on current frame
-            document.getElementById('tbAssignSingleFrame').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbAssignMenu').style.display = 'none';
+            // Auto Single: automatic assignment + triangulation for current frame
+            document.getElementById('tbAutoSingle').addEventListener('click', function () {
                 runSingleFrameTriangulation();
             });
-            // Multi-Frame: opens modal for batch processing
-            document.getElementById('tbAssignMultiFrame').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbAssignMenu').style.display = 'none';
+            // Auto Multi: automatic assignment + triangulation for frame range
+            document.getElementById('tbAutoMulti').addEventListener('click', function () {
                 showMultiFrameModal();
             });
 
@@ -2407,8 +2482,6 @@
         // Manual Identity Assignment
         // ============================================
 
-        var manualAssignState = null; // { toast: HTMLElement }
-
         function getTotalUnlinkedCount() {
             if (!state.session) return 0;
             var fg = state.session.getFrameGroup(state.currentFrame);
@@ -2419,63 +2492,6 @@
                 if (ul) total += ul.length;
             }
             return total;
-        }
-
-        function cleanupManualAssignment() {
-            if (!manualAssignState) return;
-            if (manualAssignState.toast && manualAssignState.toast.parentNode) {
-                manualAssignState.toast.parentNode.removeChild(manualAssignState.toast);
-            }
-            manualAssignState = null;
-        }
-
-        function startManualAssignment() {
-            // Clean up any existing manual or auto assignment
-            cleanupManualAssignment();
-            cleanupAutoAssignment();
-
-            if (!state.session) return;
-            var fg = state.session.getFrameGroup(state.currentFrame);
-            if (!fg) {
-                setStatus('No frame data for manual assignment', 'warning');
-                return;
-            }
-
-            var totalUnlinked = getTotalUnlinkedCount();
-            if (totalUnlinked === 0) {
-                setStatus('No unlinked instances available for assignment', 'warning');
-                return;
-            }
-
-            // Enable assignment mode
-            interactionManager.setAssignmentMode(true);
-
-            // Create toast
-            var toast = document.createElement('div');
-            toast.className = 'auto-assign-toast';
-            toast.innerHTML =
-                '<span id="manualAssignToastText">Frame ' + state.currentFrame +
-                '. Select instances for manual Identity Assignment. Instances Selected: 0/' +
-                totalUnlinked + '</span>' +
-                '<button id="manualAssignCancel">Cancel</button>' +
-                '<button id="manualAssignGroup" class="primary">Group</button>';
-            document.getElementById('menuBar').appendChild(toast);
-
-            manualAssignState = { toast: toast };
-
-            toast.querySelector('#manualAssignCancel').addEventListener('click', function () {
-                interactionManager.setAssignmentMode(false);
-                cleanupManualAssignment();
-                drawAllOverlays(state.currentFrame);
-            });
-
-            toast.querySelector('#manualAssignGroup').addEventListener('click', function () {
-                if (!interactionManager || interactionManager.assignmentSelection.length < 1) {
-                    setStatus('Select at least one instance first', 'warning');
-                    return;
-                }
-                interactionManager._createGroupFromAssignment();
-            });
         }
 
         // ============================================
@@ -4223,6 +4239,10 @@
                             }
                             ensureSession();
                             state.session.skeleton = sk;
+                            if (viewport3d) {
+                                viewport3d.skeleton = sk;
+                                viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                            }
                             populateSkeletonTable();
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
@@ -5365,8 +5385,7 @@
                             videoController = null;
                         }
                         state.views = [];
-                        var gridEl = document.getElementById('videoGrid');
-                        if (gridEl) gridEl.innerHTML = '';
+                        paneManager.clearAll();
 
                         // If we had no prior videos, start fresh
                         if (alreadyLoaded.length === 0) {
@@ -5413,7 +5432,6 @@
                         videoController = null;
                     }
                     state.views = [];
-                    state.videoFiles = [];
                     paneManager.clearAll();
                 }
 
@@ -5475,47 +5493,22 @@
                 updateTotalFrames();
                 if (state.views.length > 0) {
                     hideWelcomeOverlay();
+                    populateViewStrip();
+                    paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
                     fitCanvasesToCells();
                 }
 
-                    // For any still-unassigned video, try exact camera name match
-                    for (var vi = 0; vi < state.videoFiles.length; vi++) {
-                        var vf2 = state.videoFiles[vi];
-                        if (!vf2.assignedCamera && cameraNames.indexOf(vf2.name) >= 0) {
-                            vf2.assignedCamera = vf2.name;
-                        }
+                // Seek to first labeled frame or frame 0
+                if (videoController && state.views.length > 0) {
+                    var firstFrame = 0;
+                    for (var [fIdx] of state.session.frameGroups) {
+                        firstFrame = fIdx;
+                        break;
                     }
-
-                    // Create views for assigned videos
-                    showLoading('Creating views...');
-                    for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
-                        var vf3 = state.videoFiles[vi2];
-                        if (vf3.assignedCamera) {
-                            var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
-                            if (!hasView) {
-                                createViewForVideoFile(vf3);
-                            }
-                        }
-                    }
-
-                    updateTotalFrames();
-                    if (state.views.length > 0) {
-                        populateViewStrip();
-                        rebuildVideoController();
-                        fitCanvasesToCells();
-                    }
-
-                    // Seek to first labeled frame or frame 0
-                    if (videoController && state.views.length > 0) {
-                        var firstFrame = 0;
-                        for (var [fIdx] of state.session.frameGroups) {
-                            firstFrame = fIdx;
-                            break;
-                        }
-                        state.currentFrame = firstFrame;
-                        await videoController.seekToFrame(firstFrame);
-                    }
+                    state.currentFrame = firstFrame;
+                    await videoController.seekToFrame(firstFrame);
+                }
 
                 // 3. Set up 3D viewport
                 if (viewport3d) {
