@@ -554,11 +554,21 @@ class InteractionManager {
         var vx = coords[0], vy = coords[1];
         var frameIdx = state.currentFrame;
 
-        // --- Right-click: toggle node null (only if already selected) ---
-        if (e.button === 2) {
+        // --- Right-click / Ctrl+click (macOS trackpad): toggle node null ---
+        if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
             e.preventDefault();
             if (this.assignmentMode) return;
+
+            // Check both linked (InstanceGroup) and unlinked instances
             var hit = this.findNearestNode(vx, vy, viewName, frameIdx);
+            var ulHit = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx);
+
+            // Prefer whichever is closer
+            if (hit && ulHit) {
+                if (ulHit.distance < hit.distance) hit = null;
+                else ulHit = null;
+            }
+
             if (hit) {
                 // Only allow null toggle on the already-selected group
                 if (this.selectedInstanceGroup === hit.instanceGroup) {
@@ -571,6 +581,17 @@ class InteractionManager {
                     this.select(hit.instanceGroup, hit.nodeIdx);
                     this._requestRedraw();
                 }
+            } else if (ulHit) {
+                var ulInst = ulHit.unlinked.instance;
+                if (ulInst && ulInst.type === 'predicted') return;
+                // Toggle null directly on the unlinked instance
+                if (!ulInst.nulledNodes) ulInst.nulledNodes = new Set();
+                if (ulInst.nulledNodes.has(ulHit.nodeIdx)) {
+                    ulInst.nulledNodes.delete(ulHit.nodeIdx);
+                } else {
+                    ulInst.nulledNodes.add(ulHit.nodeIdx);
+                }
+                this._requestRedraw();
             }
             return;
         }
@@ -607,11 +628,17 @@ class InteractionManager {
             return;
         }
 
-        // --- Double-click on linked instance: convert predicted -> user ---
+        // --- Double-click on linked predicted instance: clone as user group ---
         if (e.detail >= 2 && useLinked) {
-            this._convertToUserInstance(linkedHit.instanceGroup);
-            this._requestRedraw();
-            return;
+            var firstGroupInst = linkedHit.instanceGroup.instances.values().next().value;
+            if (firstGroupInst && firstGroupInst.type === 'predicted') {
+                // Clone predicted group as a new user group, keeping original intact
+                if (this.callbacks.onClonePredictedGroup) {
+                    this.callbacks.onClonePredictedGroup(linkedHit.instanceGroup);
+                }
+                this._requestRedraw();
+                return;
+            }
         }
 
         // --- Linked node: select or drag ---

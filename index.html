@@ -177,9 +177,9 @@
                         <div id="selectedInfo" style="font-size:12px;color:var(--text-secondary);">None</div>
                     </div>
 
-                    <!-- Linked Instance Groups -->
+                    <!-- Grouped Instances -->
                     <div class="info-section">
-                        <h3>Linked Groups</h3>
+                        <h3>Grouped Instances</h3>
                         <table class="data-table" id="instanceGroupsTable">
                             <thead>
                                 <tr>
@@ -192,23 +192,23 @@
                             </thead>
                             <tbody></tbody>
                         </table>
-                        <div class="table-empty" id="instanceGroupsEmpty">No linked groups</div>
+                        <div class="table-empty" id="instanceGroupsEmpty">No grouped instances</div>
                     </div>
 
-                    <!-- Unlinked Instances -->
+                    <!-- Ungrouped Instances -->
                     <div class="info-section">
-                        <h3>Unlinked Instances</h3>
+                        <h3>Ungrouped Instances</h3>
                         <table class="data-table" id="unlinkedTable">
                             <thead>
                                 <tr>
-                                    <th>Camera</th>
+                                    <th>Type</th>
                                     <th>Points</th>
                                     <th>Score</th>
                                 </tr>
                             </thead>
                             <tbody></tbody>
                         </table>
-                        <div class="table-empty" id="unlinkedEmpty">No unlinked instances</div>
+                        <div class="table-empty" id="unlinkedEmpty">No ungrouped instances</div>
                     </div>
                 </div>
 
@@ -1426,6 +1426,33 @@
                         timeline.setFrameModified(state.currentFrame, true);
                     }
                     drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                },
+
+                onClonePredictedGroup: function (predGroup) {
+                    // Clone the predicted group's instances as user instances in a new group
+                    var frameIdx = state.currentFrame;
+                    var unlinkedList = [];
+                    for (var [camName, inst] of predGroup.instances) {
+                        var clonedPoints = inst.points.map(function(pt) {
+                            return pt != null ? [pt[0], pt[1]] : null;
+                        });
+                        var userInst = new Instance(clonedPoints, predGroup.trackIdx, 'user', 1.0);
+                        userInst.modified = true;
+                        var ul = state.session.addUnlinkedInstance(frameIdx, camName, userInst);
+                        unlinkedList.push(ul);
+                    }
+                    if (unlinkedList.length > 0) {
+                        var newGroup = state.session.createGroupFromUnlinked(frameIdx, unlinkedList, predGroup.trackIdx);
+                        for (var [cn, ni] of newGroup.instances) {
+                            ni.trackIdx = newGroup.trackIdx;
+                        }
+                        if (interactionManager) interactionManager.select(newGroup, -1);
+                        var trackName = state.session.tracks[newGroup.trackIdx] || 'Track ' + newGroup.trackIdx;
+                        setStatus('Created user group ' + trackName + ' from predicted', 'success');
+                    }
+                    if (timeline) timeline.setFrameModified(frameIdx, true);
+                    drawAllOverlays(frameIdx);
                     updateInfoPanel();
                 },
 
@@ -4878,14 +4905,41 @@
             let hasUnlinked = false;
 
             if (fg) {
+                // Collect all unlinked instances, grouped by camera, filtered and sorted
                 for (const cam of state.session.cameras) {
                     const unlinkedList = fg.getUnlinkedInstances(cam.name);
-                    for (let u = 0; u < unlinkedList.length; u++) {
-                        hasUnlinked = true;
-                        const ul = unlinkedList[u];
+                    if (!unlinkedList || unlinkedList.length === 0) continue;
+
+                    // Filter out reprojected instances and sort: user above predicted
+                    var typePriority = { 'user': 0, 'predicted': 1 };
+                    var filtered = unlinkedList.filter(function (ul) {
+                        var t = ul.instance.type || 'user';
+                        return t !== 'reprojected';
+                    });
+                    filtered.sort(function (a, b) {
+                        var ta = typePriority[a.instance.type || 'user'] || 0;
+                        var tb = typePriority[b.instance.type || 'user'] || 0;
+                        return ta - tb;
+                    });
+
+                    if (filtered.length === 0) continue;
+                    hasUnlinked = true;
+
+                    // Camera header row
+                    var headerTr = document.createElement('tr');
+                    headerTr.className = 'unlinked-camera-header';
+                    var headerTd = document.createElement('td');
+                    headerTd.colSpan = 3;
+                    headerTd.textContent = cam.name;
+                    headerTd.style.cssText = 'font-weight:bold;color:var(--text-primary);font-size:11px;padding:4px 6px 2px;';
+                    headerTr.appendChild(headerTd);
+                    ulTbody.appendChild(headerTr);
+
+                    for (let u = 0; u < filtered.length; u++) {
+                        const ul = filtered[u];
                         const tr = document.createElement('tr');
 
-                        // Highlight if in assignment selection
+                        // Highlight if in assignment selection or selected in viewport
                         if (interactionManager && interactionManager.assignmentSelection) {
                             for (let s = 0; s < interactionManager.assignmentSelection.length; s++) {
                                 if (interactionManager.assignmentSelection[s].id === ul.id) {
@@ -4894,9 +4948,16 @@
                                 }
                             }
                         }
+                        if (interactionManager && interactionManager.selectedUnlinked && interactionManager.selectedUnlinked.id === ul.id) {
+                            tr.classList.add('selected');
+                        }
 
-                        const tdCam = document.createElement('td');
-                        tdCam.textContent = ul.cameraName;
+                        const tdType = document.createElement('td');
+                        var instType = ul.instance.type || 'user';
+                        var typeBadge = document.createElement('span');
+                        typeBadge.className = 'badge ' + (instType === 'predicted' ? 'badge-predicted' : 'badge-user');
+                        typeBadge.textContent = instType === 'predicted' ? 'Pred' : 'User';
+                        tdType.appendChild(typeBadge);
 
                         const tdPoints = document.createElement('td');
                         tdPoints.className = 'mono';
@@ -4907,7 +4968,7 @@
                         tdScore.className = 'mono';
                         tdScore.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
 
-                        tr.appendChild(tdCam);
+                        tr.appendChild(tdType);
                         tr.appendChild(tdPoints);
                         tr.appendChild(tdScore);
 
