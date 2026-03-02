@@ -1471,6 +1471,14 @@ class VideoController {
             return Math.abs(view.zoom.scale - 1.0) > 0.05;
         };
 
+        // ---- Double-click empty space to reset zoom ----
+        container.addEventListener("dblclick", function (e) {
+            if (e._consumedByInteraction || window.__mvguiDragging) return;
+            if (isZoomed()) {
+                self.resetZoom(view);
+            }
+        });
+
         document.addEventListener("mousemove", function (e) {
             // Skip if interaction manager owns the mouse
             if (window.__mvguiDragging) {
@@ -1491,7 +1499,7 @@ class VideoController {
                 return;
             }
 
-            if (leftDragPending) {
+            if (leftDragPending && !window.__mvguiDragging) {
                 var dx2 = e.clientX - dragStartX;
                 var dy2 = e.clientY - dragStartY;
                 if (Math.abs(dx2) < 3 && Math.abs(dy2) < 3) return;
