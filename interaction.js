@@ -557,7 +557,6 @@ class InteractionManager {
         // --- Right-click / Ctrl+click (macOS trackpad): toggle node null ---
         if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
             e.preventDefault();
-            if (this.assignmentMode) return;
 
             // Check both linked (InstanceGroup) and unlinked instances
             var hit = this.findNearestNode(vx, vy, viewName, frameIdx);
@@ -570,17 +569,12 @@ class InteractionManager {
             }
 
             if (hit) {
-                // Only allow null toggle on the already-selected group
-                if (this.selectedInstanceGroup === hit.instanceGroup) {
-                    // Block null toggle for predicted instances
-                    var hitInstance = hit.instanceGroup.getInstance(viewName);
-                    if (hitInstance && hitInstance.type === 'predicted') return;
-                    this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
-                } else {
-                    // Select the group first; user must right-click again to toggle
-                    this.select(hit.instanceGroup, hit.nodeIdx);
-                    this._requestRedraw();
-                }
+                // Block null toggle for predicted instances
+                var hitInstance = hit.instanceGroup.getInstance(viewName);
+                if (hitInstance && hitInstance.type === 'predicted') return;
+                // Select and toggle null in one action
+                this.select(hit.instanceGroup, hit.nodeIdx);
+                this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
             } else if (ulHit) {
                 var ulInst = ulHit.unlinked.instance;
                 if (ulInst && ulInst.type === 'predicted') return;
@@ -620,14 +614,6 @@ class InteractionManager {
             useUnlinked = true;
         }
 
-        // --- In assignment mode, ignore linked node clicks entirely ---
-        if (this.assignmentMode && useLinked && !useUnlinked) {
-            e.preventDefault();
-            e.stopPropagation();
-            e._consumedByInteraction = true;
-            return;
-        }
-
         // --- Double-click on linked predicted instance: clone as user group ---
         if (e.detail >= 2 && useLinked) {
             var firstGroupInst = linkedHit.instanceGroup.instances.values().next().value;
@@ -644,6 +630,14 @@ class InteractionManager {
         // --- Linked node: select or drag ---
         if (useLinked) {
             this.selectedUnlinked = null;
+            // Exit assignment mode if active
+            if (this.assignmentMode) {
+                this.assignmentSelection = [];
+                this.setAssignmentMode(false);
+                if (this.callbacks.onAssignmentCancelled) {
+                    this.callbacks.onAssignmentCancelled();
+                }
+            }
             var hitInst = linkedHit.instanceGroup.getInstance(viewName);
             // Block drag for predicted and reprojected instances (select only)
             if (hitInst && (hitInst.type === 'predicted' || hitInst.type === 'reprojected')) {
@@ -666,13 +660,6 @@ class InteractionManager {
                 e._consumedByInteraction = true;
             }
 
-        // --- Unlinked node in assignment mode: add to selection ---
-        } else if (useUnlinked && this.assignmentMode) {
-            this.addToAssignmentSelection(ulHit.unlinked);
-            e.preventDefault();
-            e.stopPropagation();
-            e._consumedByInteraction = true;
-
         // --- Unlinked node: double-click predicted → create user instance ---
         } else if (useUnlinked && e.detail >= 2 && ulHit.unlinked.instance && ulHit.unlinked.instance.type === 'predicted') {
             var predInst = ulHit.unlinked.instance;
@@ -689,14 +676,20 @@ class InteractionManager {
             e._consumedByInteraction = true;
             this._requestRedraw();
 
-        // --- Unlinked node: select or drag ---
+        // --- Unlinked node: select, auto-enter assignment mode, or drag ---
         } else if (useUnlinked) {
-            var ulAlreadySelected = this.selectedUnlinked && this.selectedUnlinked.id === ulHit.unlinked.id;
             this.select(null, -1);
             this.selectedUnlinked = ulHit.unlinked;
+            // Auto-enter assignment mode and add to selection
+            if (!this.assignmentMode) {
+                this.assignmentMode = true;
+                this.assignmentSelection = [];
+            }
+            this.addToAssignmentSelection(ulHit.unlinked);
+            // Still allow drag for repositioning
             // Block drag for predicted unlinked instances (select only)
             var ulInstType = ulHit.unlinked.instance ? ulHit.unlinked.instance.type : 'user';
-            if (ulAlreadySelected && canDrag && ulInstType !== 'predicted') {
+            if (canDrag && ulInstType !== 'predicted') {
                 this._startDrag(viewName, -1, ulHit.nodeIdx,
                     vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
             }
@@ -704,10 +697,19 @@ class InteractionManager {
             e.stopPropagation();
             e._consumedByInteraction = true;
 
-        // --- Clicked empty space: clear selection (but don't exit assignment mode) ---
+        // --- Clicked empty space: clear selection and exit assignment mode ---
         } else {
-            if (!this.assignmentMode) {
-                this.clearSelection();
+            if (this.assignmentMode) {
+                this.assignmentSelection = [];
+                this.setAssignmentMode(false);
+                if (this.callbacks.onAssignmentCancelled) {
+                    this.callbacks.onAssignmentCancelled();
+                }
+            }
+            this.clearSelection();
+            // Double-click on empty space: reset zoom
+            if (e.detail >= 2 && this.callbacks.onDoubleClickEmpty) {
+                this.callbacks.onDoubleClickEmpty(viewName);
             }
         }
 
@@ -1117,6 +1119,21 @@ class InteractionManager {
         var info = this.dragInfo;
         var coords = this.canvasToVideo(e.clientX, e.clientY, info.viewName);
         var vx = coords[0], vy = coords[1];
+
+        // Clamp to view bounds so nodes can't be dragged outside the video
+        var state = this._getState();
+        if (state) {
+            var view = this._findView(state, info.viewName);
+            if (view) {
+                var maxW = view.videoWidth || (view.overlayCanvas ? view.overlayCanvas.width : 0);
+                var maxH = view.videoHeight || (view.overlayCanvas ? view.overlayCanvas.height : 0);
+                if (vx < 0) vx = 0;
+                if (vy < 0) vy = 0;
+                if (maxW > 0 && vx > maxW) vx = maxW;
+                if (maxH > 0 && vy > maxH) vy = maxH;
+            }
+        }
+
         info.currentPos = [vx, vy];
 
         // Require minimum movement before committing to a drag
@@ -1134,7 +1151,7 @@ class InteractionManager {
         if (info.unlinked) {
             instance = info.unlinked.instance;
         } else {
-            var state = this._getState();
+            if (!state) state = this._getState();
             if (state) {
                 var groups = this._getInstanceGroups(state.currentFrame);
                 if (groups && groups.length > info.instanceGroupIdx) {

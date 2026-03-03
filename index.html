@@ -95,14 +95,9 @@
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbAssign" title="Triangulation">Triangulate &#9662;</button>
-            </div>
-            <!-- Triangulate dropdown menu (positioned absolutely via JS) -->
-            <div class="toolbar-dropdown-menu" id="tbAssignMenu" style="display:none;position:fixed;z-index:10000;">
-                <div class="toolbar-dropdown-item" id="tbAssignManual">Manual</div>
-                <div class="toolbar-dropdown-label">Automatic</div>
-                <div class="toolbar-dropdown-item toolbar-dropdown-sub" id="tbAssignSingleFrame">Single Frame</div>
-                <div class="toolbar-dropdown-item toolbar-dropdown-sub" id="tbAssignMultiFrame">Multi-Frame</div>
+                <button class="toolbar-btn" id="tbGroup" title="Group selected instances (C)">Group</button>
+                <button class="toolbar-btn" id="tbAutoSingle" title="Auto assign + triangulate current frame">Auto Single</button>
+                <button class="toolbar-btn" id="tbAutoMulti" title="Auto assign + triangulate frame range">Auto Multi</button>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
@@ -1261,10 +1256,8 @@
             const selectedUnlinked = interactionManager ? interactionManager.selectedUnlinked : null;
 
             // Update assignment toolbar state
-            const tbAssign = document.getElementById('tbAssign');
-            if (tbAssign) {
-                tbAssign.classList.toggle('active', assignmentMode);
-            }
+            var tbGroup = document.getElementById('tbGroup');
+            if (tbGroup) tbGroup.classList.toggle('active', assignmentMode);
 
             for (const view of state.views) {
                 if (!view.overlayCtx || !view.overlayCanvas) continue;
@@ -1513,26 +1506,42 @@
                     cleanupManualAssignment();
                     var trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
 
-                    // Triangulate the newly created group
+                    // Auto-triangulate the new group
+                    var frameIdx = state.currentFrame;
                     var cameras = state.session.cameras;
-                    if (cameras && cameras.length >= 2) {
-                        var groupCamNames = group.cameraNames;
-                        var groupCameras = cameras.filter(function (c) {
-                            return groupCamNames.indexOf(c.name) >= 0;
-                        });
-                        if (groupCameras.length >= 2) {
-                            var result = triangulateAndReproject(group, groupCameras);
-                            group.points3d = result.points3d;
-                            group.reprojections = result.reprojections;
-                            storeReprojectedInstances(group, result, cameras);
-                            group.observedPoints = {};
-                            for (var ci = 0; ci < groupCameras.length; ci++) {
-                                var cam = groupCameras[ci];
-                                var inst = group.getInstance(cam.name);
-                                if (inst) group.observedPoints[cam.name] = inst.points;
-                            }
-                            group.markClean();
+                    var groupCamNames = group.cameraNames;
+                    var groupCameras = cameras.filter(function (c) {
+                        return groupCamNames.indexOf(c.name) >= 0;
+                    });
+                    if (groupCameras.length >= 2) {
+                        var result = triangulateAndReproject(group, groupCameras);
+                        group.reprojections = result.reprojections;
+                        group.points3d = result.points3d;
+                        storeReprojectedInstances(group, result, cameras);
+                        group.observedPoints = {};
+                        for (var ci = 0; ci < groupCameras.length; ci++) {
+                            var cam = groupCameras[ci];
+                            var inst = group.getInstance(cam.name);
+                            if (inst) group.observedPoints[cam.name] = inst.points;
                         }
+                        group.markClean();
+
+                        // Replace existing entry for this group, or add new
+                        var frameResults = state.triangulationResults.get(frameIdx) || [];
+                        var newEntry = { group: group, points3d: result.points3d,
+                            reprojections: result.reprojections, errors: result.errors,
+                            meanError: result.meanError };
+                        var replaced = false;
+                        for (var ri = 0; ri < frameResults.length; ri++) {
+                            if (frameResults[ri].group === group) {
+                                frameResults[ri] = newEntry;
+                                replaced = true;
+                                break;
+                            }
+                        }
+                        if (!replaced) frameResults.push(newEntry);
+                        state.triangulationResults.set(frameIdx, frameResults);
+                        setReprojErrorVisible(true);
                     }
 
                     setStatus('Created group: ' + trackName, 'success');
@@ -1549,6 +1558,14 @@
 
                 onAssignmentRequested: function () {
                     startManualAssignment();
+                },
+
+                onDoubleClickEmpty: function (viewName) {
+                    if (!videoController) return;
+                    var view = state.views.find(function (v) { return v.name === viewName; });
+                    if (view) {
+                        videoController.resetZoom(view);
+                    }
                 },
             });
 
@@ -2155,6 +2172,18 @@
                         if (visErrors) { visErrors.checked = !visErrors.checked; visErrors.dispatchEvent(new Event('change', { bubbles: true })); }
                         break;
                     }
+                    case 'v': {
+                        e.preventDefault();
+                        toggleViewMode();
+                        showViewIndicator();
+                        break;
+                    }
+                    case 'g': {
+                        e.preventDefault();
+                        setGridMode();
+                        showViewIndicator();
+                        break;
+                    }
                 }
             });
 
@@ -2229,43 +2258,23 @@
             document.getElementById('tbDeleteInstance').addEventListener('click', function () {
                 if (interactionManager) interactionManager._deleteSelected();
             });
-            // Triangulate dropdown: position menu below button on click
-            document.getElementById('tbAssign').addEventListener('click', function (e) {
-                e.stopPropagation();
-                var menu = document.getElementById('tbAssignMenu');
-                var isOpen = menu.style.display !== 'none';
-                if (isOpen) {
-                    menu.style.display = 'none';
+            // Group button: toggle assignment mode or create group
+            document.getElementById('tbGroup').addEventListener('click', function () {
+                if (!interactionManager) return;
+                if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 1) {
+                    interactionManager._createGroupFromAssignment();
+                } else if (interactionManager.assignmentMode) {
+                    interactionManager.setAssignmentMode(false);
                 } else {
-                    var rect = e.currentTarget.getBoundingClientRect();
-                    menu.style.left = rect.left + 'px';
-                    menu.style.top = rect.bottom + 2 + 'px';
-                    menu.style.display = 'block';
+                    interactionManager.setAssignmentMode(true);
                 }
             });
-            document.addEventListener('click', function () {
-                var menu = document.getElementById('tbAssignMenu');
-                if (menu) menu.style.display = 'none';
-            });
-            // Prevent clicks inside dropdown from bubbling to document close handlers
-            document.getElementById('tbAssignMenu').addEventListener('click', function (e) {
-                e.stopPropagation();
-            });
-            document.getElementById('tbAssignManual').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbAssignMenu').style.display = 'none';
-                startManualAssignment();
-            });
-            // Single Frame: immediate triangulation on current frame
-            document.getElementById('tbAssignSingleFrame').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbAssignMenu').style.display = 'none';
+            // Auto Single: auto assign + triangulate current frame
+            document.getElementById('tbAutoSingle').addEventListener('click', function () {
                 runSingleFrameTriangulation();
             });
-            // Multi-Frame: opens modal for batch processing
-            document.getElementById('tbAssignMultiFrame').addEventListener('click', function (e) {
-                e.stopPropagation();
-                document.getElementById('tbAssignMenu').style.display = 'none';
+            // Auto Multi: auto assign + triangulate frame range
+            document.getElementById('tbAutoMulti').addEventListener('click', function () {
                 showMultiFrameModal();
             });
 
@@ -3826,14 +3835,39 @@
         }
 
         function updateVideoGridDisplay() {
-            // With dockview, view mode switching is handled by showing/hiding panels.
-            // For now, just trigger canvas resize.
-            setTimeout(function () {
-                fitCanvasesToCells();
-                for (var i = 0; i < state.views.length; i++) {
-                    if (videoController && state.views[i].canvas) videoController.initZoom(state.views[i]);
+            if (state.views.length === 0) return;
+            // Preserve zoom state across panel recreation
+            var savedZoom = {};
+            for (var zi = 0; zi < state.views.length; zi++) {
+                var zv = state.views[zi];
+                if (zv.zoom) {
+                    savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
                 }
-            }, 100);
+            }
+            if (state.viewMode === 'single') {
+                // Show only the selected view
+                var targetView = state.views[state.singleViewIndex];
+                if (targetView) {
+                    paneManager.clearAll();
+                    paneManager.addVideoPanel(targetView.name);
+                    refreshPaneInteractions();
+                }
+            } else {
+                // Grid mode: show all views
+                paneManager.clearAll();
+                paneManager.addAllViewsAsGrid();
+                refreshPaneInteractions();
+            }
+            // Restore zoom state
+            for (var ri = 0; ri < state.views.length; ri++) {
+                var rv = state.views[ri];
+                if (savedZoom[rv.name] && rv.zoom) {
+                    rv.zoom.scale = savedZoom[rv.name].scale;
+                    rv.zoom.offsetX = savedZoom[rv.name].offsetX;
+                    rv.zoom.offsetY = savedZoom[rv.name].offsetY;
+                    if (videoController) videoController.applyZoom(rv);
+                }
+            }
         }
 
         function showViewIndicator() {
@@ -5413,7 +5447,6 @@
                         videoController = null;
                     }
                     state.views = [];
-                    state.videoFiles = [];
                     paneManager.clearAll();
                 }
 
@@ -5475,47 +5508,22 @@
                 updateTotalFrames();
                 if (state.views.length > 0) {
                     hideWelcomeOverlay();
+                    populateViewStrip();
+                    paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
                     fitCanvasesToCells();
                 }
 
-                    // For any still-unassigned video, try exact camera name match
-                    for (var vi = 0; vi < state.videoFiles.length; vi++) {
-                        var vf2 = state.videoFiles[vi];
-                        if (!vf2.assignedCamera && cameraNames.indexOf(vf2.name) >= 0) {
-                            vf2.assignedCamera = vf2.name;
-                        }
+                // Seek to first labeled frame or frame 0
+                if (videoController && state.views.length > 0) {
+                    var firstFrame = 0;
+                    for (var [fIdx] of state.session.frameGroups) {
+                        firstFrame = fIdx;
+                        break;
                     }
-
-                    // Create views for assigned videos
-                    showLoading('Creating views...');
-                    for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
-                        var vf3 = state.videoFiles[vi2];
-                        if (vf3.assignedCamera) {
-                            var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
-                            if (!hasView) {
-                                createViewForVideoFile(vf3);
-                            }
-                        }
-                    }
-
-                    updateTotalFrames();
-                    if (state.views.length > 0) {
-                        populateViewStrip();
-                        rebuildVideoController();
-                        fitCanvasesToCells();
-                    }
-
-                    // Seek to first labeled frame or frame 0
-                    if (videoController && state.views.length > 0) {
-                        var firstFrame = 0;
-                        for (var [fIdx] of state.session.frameGroups) {
-                            firstFrame = fIdx;
-                            break;
-                        }
-                        state.currentFrame = firstFrame;
-                        await videoController.seekToFrame(firstFrame);
-                    }
+                    state.currentFrame = firstFrame;
+                    await videoController.seekToFrame(firstFrame);
+                }
 
                 // 3. Set up 3D viewport
                 if (viewport3d) {
@@ -8293,15 +8301,17 @@
                 interactionManager.attach(state.views);
             }
             // Initialize zoom and set up handlers for each docked view
+            // Only re-setup if the cell element changed (panel was recreated)
             if (videoController) {
                 for (var i = 0; i < state.views.length; i++) {
                     var view = state.views[i];
                     if (view.canvas) {
                         videoController.initZoom(view);
-                        if (!view._zoomSetup) {
+                        var cell = view.canvas.closest('.video-cell');
+                        if (cell && cell !== view._zoomCell) {
+                            view._zoomCell = cell;
                             view._zoomSetup = true;
-                            var cell = view.canvas.closest('.video-cell');
-                            if (cell) videoController.setupZoomHandlers(view, cell);
+                            videoController.setupZoomHandlers(view, cell);
                         }
                     }
                 }
