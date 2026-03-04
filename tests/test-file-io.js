@@ -159,7 +159,7 @@
             assertEqual(result.skeletons.length, 1);
             assertEqual(result.skeletons[0].name, 'mouse');
             assertEqual(result.skeletons[0].links.length, 2);
-            assertDeepEqual(result.skeletons[0].links[0].type, { 'py/tuple': [1] });
+            assertDeepEqual(result.skeletons[0].links[0].type, { 'py/reduce': [{ 'py/type': 'sleap.skeleton.EdgeType' }, { 'py/tuple': [1] }] });
         });
     });
 
