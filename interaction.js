@@ -58,6 +58,9 @@ class InteractionManager {
         /** @type {number} Currently selected node index (-1 = no node selected) */
         this.selectedNodeIdx = -1;
 
+        /** @type {boolean} Whether the selection targets the reprojected sub-entry */
+        this.selectedReprojected = false;
+
         /**
          * Node currently under the cursor, or null.
          * @type {{ viewName: string, instanceGroupIdx: number, nodeIdx: number }|null}
@@ -254,59 +257,76 @@ class InteractionManager {
         for (let pass = 0; pass < typePassFilters.length; pass++) {
             for (let g = 0; g < groups.length; g++) {
                 const group = groups[g];
-                const instance = group.getInstance(viewName);
-                if (!instance || !instance.points) continue;
 
-                // Skip instances whose type is hidden via visibility checkboxes
-                var instType = instance.type || 'user';
-                if (instType === 'user' && !document.getElementById('visUser').checked) continue;
-                if (instType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
-                if (instType === 'reprojected' && !document.getElementById('visReprojections').checked) continue;
-
-                // Skip instances not matching this pass's type filter
-                if (!typePassFilters[pass](instType)) continue;
-
-                // --- Node hit testing ---
-                for (let n = 0; n < instance.points.length; n++) {
-                    const pt = instance.points[n];
-                    if (pt == null) continue;
-
-                    const dx = pt[0] - videoX;
-                    const dy = pt[1] - videoY;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-
-                    if (dist < nodeThreshold && dist < bestDist) {
-                        bestDist = dist;
-                        best = {
-                            instanceGroupIdx: g,
-                            instanceGroup: group,
-                            instanceIdx: g,
-                            nodeIdx: n,
-                            distance: dist,
-                        };
+                // Collect candidate instances for this group in this view
+                var candidates = [];
+                var mainInst = group.getInstance(viewName);
+                if (mainInst && mainInst.points) {
+                    var mainType = mainInst.type || 'user';
+                    var mainVisible = (mainType === 'user' && document.getElementById('visUser').checked) ||
+                        (mainType === 'predicted' && document.getElementById('visPredicted').checked) ||
+                        (mainType === 'reprojected' && document.getElementById('visReprojections').checked);
+                    if (mainVisible && typePassFilters[pass](mainType)) {
+                        candidates.push({ inst: mainInst, isReproj: false });
+                    }
+                }
+                // Also consider reprojected instance (may coexist with main instance)
+                if (typePassFilters[pass]('reprojected') &&
+                    document.getElementById('visReprojections').checked) {
+                    var reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
+                    if (reprojInst && reprojInst.points) {
+                        candidates.push({ inst: reprojInst, isReproj: true });
                     }
                 }
 
-                // --- Edge hit testing (only if no node was hit for this instance) ---
-                if (edges && !best) {
-                    for (let ei = 0; ei < edges.length; ei++) {
-                        const edge = edges[ei];
-                        const ptA = instance.points[edge[0]];
-                        const ptB = instance.points[edge[1]];
-                        if (ptA == null || ptB == null) continue;
+                for (let ci = 0; ci < candidates.length; ci++) {
+                    var instance = candidates[ci].inst;
+                    var hitReprojected = candidates[ci].isReproj;
 
-                        const edgeDist = this._pointToSegmentDist(
-                            videoX, videoY, ptA[0], ptA[1], ptB[0], ptB[1]);
+                    // --- Node hit testing ---
+                    for (let n = 0; n < instance.points.length; n++) {
+                        const pt = instance.points[n];
+                        if (pt == null) continue;
 
-                        if (edgeDist < edgeThreshold && edgeDist < bestDist) {
-                            bestDist = edgeDist;
+                        const dx = pt[0] - videoX;
+                        const dy = pt[1] - videoY;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+
+                        if (dist < nodeThreshold && dist < bestDist) {
+                            bestDist = dist;
                             best = {
                                 instanceGroupIdx: g,
                                 instanceGroup: group,
                                 instanceIdx: g,
-                                nodeIdx: -1, // edge hit, no specific node
-                                distance: edgeDist,
+                                nodeIdx: n,
+                                distance: dist,
+                                hitReprojected: hitReprojected,
                             };
+                        }
+                    }
+
+                    // --- Edge hit testing (only if no node was hit for this instance) ---
+                    if (edges && !best) {
+                        for (let ei = 0; ei < edges.length; ei++) {
+                            const edge = edges[ei];
+                            const ptA = instance.points[edge[0]];
+                            const ptB = instance.points[edge[1]];
+                            if (ptA == null || ptB == null) continue;
+
+                            const edgeDist = this._pointToSegmentDist(
+                                videoX, videoY, ptA[0], ptA[1], ptB[0], ptB[1]);
+
+                            if (edgeDist < edgeThreshold && edgeDist < bestDist) {
+                                bestDist = edgeDist;
+                                best = {
+                                    instanceGroupIdx: g,
+                                    instanceGroup: group,
+                                    instanceIdx: g,
+                                    nodeIdx: -1, // edge hit, no specific node
+                                    distance: edgeDist,
+                                    hitReprojected: hitReprojected,
+                                };
+                            }
                         }
                     }
                 }
@@ -497,7 +517,7 @@ class InteractionManager {
      *   null to clear.
      * @param {number} [nodeIdx=-1] - Node index to select, or -1 for none.
      */
-    select(instanceGroup, nodeIdx) {
+    select(instanceGroup, nodeIdx, reprojected) {
         if (nodeIdx === undefined) nodeIdx = -1;
 
         const changed = (
@@ -507,6 +527,7 @@ class InteractionManager {
 
         this.selectedInstanceGroup = instanceGroup;
         this.selectedNodeIdx = nodeIdx;
+        this.selectedReprojected = !!reprojected;
 
         if (changed && this.callbacks.onSelectionChanged) {
             this.callbacks.onSelectionChanged(this.selectedInstanceGroup, this.selectedNodeIdx);
@@ -614,6 +635,15 @@ class InteractionManager {
             useUnlinked = true;
         }
 
+        // --- Double-click on reprojected instance: create user instance ---
+        if (e.detail >= 2 && useLinked && linkedHit.hitReprojected) {
+            if (this.callbacks.onDoubleClickReprojected) {
+                this.callbacks.onDoubleClickReprojected(linkedHit.instanceGroup, viewName);
+            }
+            this._requestRedraw();
+            return;
+        }
+
         // --- Double-click on linked predicted instance: clone as user group ---
         if (e.detail >= 2 && useLinked) {
             var firstGroupInst = linkedHit.instanceGroup.instances.values().next().value;
@@ -640,7 +670,15 @@ class InteractionManager {
             }
             var hitInst = linkedHit.instanceGroup.getInstance(viewName);
             // Block drag for predicted and reprojected instances (select only)
-            if (hitInst && (hitInst.type === 'predicted' || hitInst.type === 'reprojected')) {
+            if (linkedHit.hitReprojected) {
+                // Reprojected instance hit: select group with reprojected flag
+                this.select(linkedHit.instanceGroup, linkedHit.nodeIdx, true);
+                this._requestRedraw();
+                e.preventDefault();
+                e.stopPropagation();
+                e._consumedByInteraction = true;
+                // Fall through to the end (no drag)
+            } else if (hitInst && (hitInst.type === 'predicted' || hitInst.type === 'reprojected')) {
                 this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
                 this._requestRedraw();
                 e.preventDefault();

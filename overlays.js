@@ -326,15 +326,26 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     }
 
     // --- 2. Draw nodes ---
+    var nodeShape = options.nodeShape || 'circle';
     // Normal nodes
     ctx.fillStyle = color;
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
         if (nulledNodes && nulledNodes.has(i)) continue;
-        ctx.beginPath();
-        ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
-        ctx.fill();
+        if (nodeShape === 'x') {
+            var xr = nodeSize * 0.9;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = Math.max(1.5, nodeSize * 0.4);
+            ctx.beginPath();
+            ctx.moveTo(cp.x - xr, cp.y - xr); ctx.lineTo(cp.x + xr, cp.y + xr);
+            ctx.moveTo(cp.x + xr, cp.y - xr); ctx.lineTo(cp.x - xr, cp.y + xr);
+            ctx.stroke();
+        } else {
+            ctx.beginPath();
+            ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
     // Grayed-out (nulled) nodes
     if (nulledNodes && nulledNodes.size > 0) {
@@ -343,9 +354,19 @@ function drawSkeleton(ctx, instance, skeleton, options) {
         for (const ni of nulledNodes) {
             const cp = canvasPoints[ni];
             if (!cp) continue;
-            ctx.beginPath();
-            ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
-            ctx.fill();
+            if (nodeShape === 'x') {
+                var xr = nodeSize * 0.9;
+                ctx.strokeStyle = '#888888';
+                ctx.lineWidth = Math.max(1.5, nodeSize * 0.4);
+                ctx.beginPath();
+                ctx.moveTo(cp.x - xr, cp.y - xr); ctx.lineTo(cp.x + xr, cp.y + xr);
+                ctx.moveTo(cp.x + xr, cp.y - xr); ctx.lineTo(cp.x - xr, cp.y + xr);
+                ctx.stroke();
+            } else {
+                ctx.beginPath();
+                ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
         ctx.globalAlpha = alpha;
     }
@@ -1376,6 +1397,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     const reprojOpts = options.reprojOpts || defaultOpts;
 
     const selectedInstanceGroup = options.selectedInstanceGroup || null;
+    const selectedReprojected   = options.selectedReprojected || false;
     const selectedNodeIdx       = options.selectedNodeIdx != null ? options.selectedNodeIdx : -1;
     const hoveredNode           = options.hoveredNode || null;
     const dragInfo              = options.dragInfo || null;
@@ -1434,7 +1456,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (instType !== 'predicted') continue;
 
             var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
-            var isSelected = selectedInstanceGroup &&
+            var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
             var drawColor = isSelected ? '#ffffff' : baseColor;
@@ -1462,9 +1484,12 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                 const reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
                 if (reprojInst) {
                     var baseColor = getTrackColor(group.trackIdx != null ? group.trackIdx : 0);
+                    var isSelected = selectedReprojected && selectedInstanceGroup && selectedInstanceGroup === group;
+                    var drawColor = isSelected ? '#ffffff' : baseColor;
                     drawSkeleton(ctx, reprojInst, skeleton, Object.assign({}, reprojRender, {
-                        color: baseColor,
+                        color: drawColor,
                         lineStyle: reprojOpts.lineStyle || 'dotted',
+                        nodeShape: 'x',
                     }));
 
                     // Labels for reprojected instances
@@ -1507,7 +1532,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (instType === 'predicted') continue;
 
             var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
-            var isSelected = selectedInstanceGroup &&
+            var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
             var drawColor = isSelected ? '#ffffff' : baseColor;
@@ -1536,7 +1561,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     }
 
     // 5. Selection highlight
-    if (selectedInstanceGroup) {
+    if (selectedInstanceGroup && !selectedReprojected) {
         const selInst = selectedInstanceGroup.getInstance
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);

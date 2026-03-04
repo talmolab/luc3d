@@ -1428,7 +1428,7 @@ class VideoController {
         // ---- Mouse wheel zoom (cursor-centered) ----
         container.addEventListener("wheel", function (e) {
             e.preventDefault();
-            var factor = e.deltaY < 0 ? 1.05 : 1 / 1.05;
+            var factor = e.deltaY < 0 ? 1.10 : 1 / 1.10;
             var rect = container.getBoundingClientRect();
             var cssX = e.clientX - rect.left;
             var cssY = e.clientY - rect.top;
