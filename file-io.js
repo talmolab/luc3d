@@ -430,14 +430,15 @@ function serializeSkeleton(skeleton) {
         return { name: name, weight: 1.0 };
     });
 
-    // Build links with SLEAP-compatible edge type format
+    // Build links with SLEAP-compatible jsonpickle edge type format.
+    // py/reduce format matches what SLEAP's SkeletonSLPDecoder.decode() expects.
     const links = skeleton.edges.map(function (edge, i) {
         return {
             edge_insert_idx: i,
             key: 0,
             source: edge[0],
             target: edge[1],
-            type: { 'py/tuple': [1] },
+            type: { 'py/reduce': [{ 'py/type': 'sleap.skeleton.EdgeType' }, { 'py/tuple': [1] }] },
         };
     });
 
