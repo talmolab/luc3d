@@ -96,11 +96,7 @@ async function buildSlpH5(session, cameraName, instanceType, videoFileInfo) {
         for (var ti = 0; ti < session.tracks.length; ti++) {
             trackJsons.push(JSON.stringify([0, session.tracks[ti]]));
         }
-        if (trackJsons.length > 0) {
-            f.create_dataset({ name: 'tracks_json', data: trackJsons });
-        } else {
-            f.create_dataset({ name: 'tracks_json', data: [''] });
-        }
+        f.create_dataset({ name: 'tracks_json', data: trackJsons });
 
         // ---- /suggestions_json ----
         f.create_dataset({ name: 'suggestions_json', data: [''] });

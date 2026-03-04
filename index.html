@@ -46,8 +46,8 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
                     <div class="menu-dropdown-item" id="menuExportLabels">Export Labels (JSON)</div>
-                    <div class="menu-dropdown-item" id="menuExportSlpPerCam">Export SLP (Per Camera)</div>
-                    <div class="menu-dropdown-item" id="menuExportSlp">Export SLP (All Views)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlpLabels">Export Labels (SLP)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlpPredictions">Export Predictions (SLP)</div>
                     <div class="menu-dropdown-item" id="menuExportPoints3d">Export 3D Points (JSON)</div>
                     <div class="menu-dropdown-item" id="menuExportPoints3dH5">Export 3D Points (H5)</div>
                     <div class="menu-dropdown-item" id="menuExportReprojH5">Export Reprojections (H5)</div>
@@ -554,6 +554,7 @@
     <script src="viewport3d.js"></script>
     <script src="timeline.js"></script>
     <script src="file-io.js?v=5"></script>
+    <script src="slp-export.js"></script>
     <script src="slp-merge.js"></script>
 
     <script type="module">
@@ -1902,37 +1903,16 @@
                 exportLabels();
             });
 
-            document.getElementById('menuExportSlp').addEventListener('click', async function () {
+            document.getElementById('menuExportSlpLabels').addEventListener('click', async function () {
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
-                const data = buildSlpExportData(state.session, state.views);
-
-                // Try server-side conversion first
-                try {
-                    const resp = await fetch('/convert-slp', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(data),
-                    });
-                    if (resp.ok) {
-                        const slpBlob = await resp.blob();
-                        downloadBlob(slpBlob, 'labels_export.slp');
-                        setStatus('SLP exported: labels_export.slp', 'success');
-                        return;
-                    }
-                } catch (e) {
-                    // Server unavailable — fall back to JSON
-                }
-
-                // Fallback: download as JSON
-                downloadJSON(data, 'labels_export.slp.json');
-                setStatus('SLP JSON exported \u2014 convert with: python scripts/json_to_slp.py labels_export.slp.json output.slp', 'success');
+                await exportSlpPerCamera(state, 'user', setStatus);
             });
 
-            document.getElementById('menuExportSlpPerCam').addEventListener('click', function () {
+            document.getElementById('menuExportSlpPredictions').addEventListener('click', async function () {
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
-                showSlpExportModal();
+                await exportSlpPerCamera(state, 'predicted', setStatus);
             });
 
             document.getElementById('menuExportPoints3d').addEventListener('click', function () {
