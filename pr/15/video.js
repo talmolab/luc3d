@@ -1417,10 +1417,18 @@ class VideoController {
         if (!view.zoom) this.initZoom(view);
         var self = this;
 
+        // Remove previous document-level handlers to prevent stacking
+        if (view._zoomDocMoveHandler) {
+            document.removeEventListener("mousemove", view._zoomDocMoveHandler);
+        }
+        if (view._zoomDocUpHandler) {
+            document.removeEventListener("mouseup", view._zoomDocUpHandler);
+        }
+
         // ---- Mouse wheel zoom (cursor-centered) ----
         container.addEventListener("wheel", function (e) {
             e.preventDefault();
-            var factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+            var factor = e.deltaY < 0 ? 1.10 : 1 / 1.10;
             var rect = container.getBoundingClientRect();
             var cssX = e.clientX - rect.left;
             var cssY = e.clientY - rect.top;
@@ -1471,7 +1479,7 @@ class VideoController {
             return Math.abs(view.zoom.scale - 1.0) > 0.05;
         };
 
-        document.addEventListener("mousemove", function (e) {
+        view._zoomDocMoveHandler = function (e) {
             // Skip if interaction manager owns the mouse
             if (window.__mvguiDragging) {
                 leftDragPending = false;
@@ -1491,7 +1499,7 @@ class VideoController {
                 return;
             }
 
-            if (leftDragPending) {
+            if (leftDragPending && !window.__mvguiDragging) {
                 var dx2 = e.clientX - dragStartX;
                 var dy2 = e.clientY - dragStartY;
                 if (Math.abs(dx2) < 3 && Math.abs(dy2) < 3) return;
@@ -1529,9 +1537,9 @@ class VideoController {
                 boxOverlay.style.width = w + "px";
                 boxOverlay.style.height = h + "px";
             }
-        });
+        };
 
-        document.addEventListener("mouseup", function (e) {
+        view._zoomDocUpHandler = function (e) {
             leftDragPending = false;
 
             // Skip zoom actions if interaction manager owns the mouse
@@ -1558,6 +1566,9 @@ class VideoController {
 
                 self.zoomToRect(view, boxStartX, boxStartY, endX, endY, container);
             }
-        });
+        };
+
+        document.addEventListener("mousemove", view._zoomDocMoveHandler);
+        document.addEventListener("mouseup", view._zoomDocUpHandler);
     }
 }

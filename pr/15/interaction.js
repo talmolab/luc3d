@@ -58,6 +58,9 @@ class InteractionManager {
         /** @type {number} Currently selected node index (-1 = no node selected) */
         this.selectedNodeIdx = -1;
 
+        /** @type {boolean} Whether the selection targets the reprojected sub-entry */
+        this.selectedReprojected = false;
+
         /**
          * Node currently under the cursor, or null.
          * @type {{ viewName: string, instanceGroupIdx: number, nodeIdx: number }|null}
@@ -254,59 +257,76 @@ class InteractionManager {
         for (let pass = 0; pass < typePassFilters.length; pass++) {
             for (let g = 0; g < groups.length; g++) {
                 const group = groups[g];
-                const instance = group.getInstance(viewName);
-                if (!instance || !instance.points) continue;
 
-                // Skip instances whose type is hidden via visibility checkboxes
-                var instType = instance.type || 'user';
-                if (instType === 'user' && !document.getElementById('visUser').checked) continue;
-                if (instType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
-                if (instType === 'reprojected' && !document.getElementById('visReprojections').checked) continue;
-
-                // Skip instances not matching this pass's type filter
-                if (!typePassFilters[pass](instType)) continue;
-
-                // --- Node hit testing ---
-                for (let n = 0; n < instance.points.length; n++) {
-                    const pt = instance.points[n];
-                    if (pt == null) continue;
-
-                    const dx = pt[0] - videoX;
-                    const dy = pt[1] - videoY;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-
-                    if (dist < nodeThreshold && dist < bestDist) {
-                        bestDist = dist;
-                        best = {
-                            instanceGroupIdx: g,
-                            instanceGroup: group,
-                            instanceIdx: g,
-                            nodeIdx: n,
-                            distance: dist,
-                        };
+                // Collect candidate instances for this group in this view
+                var candidates = [];
+                var mainInst = group.getInstance(viewName);
+                if (mainInst && mainInst.points) {
+                    var mainType = mainInst.type || 'user';
+                    var mainVisible = (mainType === 'user' && document.getElementById('visUser').checked) ||
+                        (mainType === 'predicted' && document.getElementById('visPredicted').checked) ||
+                        (mainType === 'reprojected' && document.getElementById('visReprojections').checked);
+                    if (mainVisible && typePassFilters[pass](mainType)) {
+                        candidates.push({ inst: mainInst, isReproj: false });
+                    }
+                }
+                // Also consider reprojected instance (may coexist with main instance)
+                if (typePassFilters[pass]('reprojected') &&
+                    document.getElementById('visReprojections').checked) {
+                    var reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
+                    if (reprojInst && reprojInst.points) {
+                        candidates.push({ inst: reprojInst, isReproj: true });
                     }
                 }
 
-                // --- Edge hit testing (only if no node was hit for this instance) ---
-                if (edges && !best) {
-                    for (let ei = 0; ei < edges.length; ei++) {
-                        const edge = edges[ei];
-                        const ptA = instance.points[edge[0]];
-                        const ptB = instance.points[edge[1]];
-                        if (ptA == null || ptB == null) continue;
+                for (let ci = 0; ci < candidates.length; ci++) {
+                    var instance = candidates[ci].inst;
+                    var hitReprojected = candidates[ci].isReproj;
 
-                        const edgeDist = this._pointToSegmentDist(
-                            videoX, videoY, ptA[0], ptA[1], ptB[0], ptB[1]);
+                    // --- Node hit testing ---
+                    for (let n = 0; n < instance.points.length; n++) {
+                        const pt = instance.points[n];
+                        if (pt == null) continue;
 
-                        if (edgeDist < edgeThreshold && edgeDist < bestDist) {
-                            bestDist = edgeDist;
+                        const dx = pt[0] - videoX;
+                        const dy = pt[1] - videoY;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+
+                        if (dist < nodeThreshold && dist < bestDist) {
+                            bestDist = dist;
                             best = {
                                 instanceGroupIdx: g,
                                 instanceGroup: group,
                                 instanceIdx: g,
-                                nodeIdx: -1, // edge hit, no specific node
-                                distance: edgeDist,
+                                nodeIdx: n,
+                                distance: dist,
+                                hitReprojected: hitReprojected,
                             };
+                        }
+                    }
+
+                    // --- Edge hit testing (only if no node was hit for this instance) ---
+                    if (edges && !best) {
+                        for (let ei = 0; ei < edges.length; ei++) {
+                            const edge = edges[ei];
+                            const ptA = instance.points[edge[0]];
+                            const ptB = instance.points[edge[1]];
+                            if (ptA == null || ptB == null) continue;
+
+                            const edgeDist = this._pointToSegmentDist(
+                                videoX, videoY, ptA[0], ptA[1], ptB[0], ptB[1]);
+
+                            if (edgeDist < edgeThreshold && edgeDist < bestDist) {
+                                bestDist = edgeDist;
+                                best = {
+                                    instanceGroupIdx: g,
+                                    instanceGroup: group,
+                                    instanceIdx: g,
+                                    nodeIdx: -1, // edge hit, no specific node
+                                    distance: edgeDist,
+                                    hitReprojected: hitReprojected,
+                                };
+                            }
                         }
                     }
                 }
@@ -497,7 +517,7 @@ class InteractionManager {
      *   null to clear.
      * @param {number} [nodeIdx=-1] - Node index to select, or -1 for none.
      */
-    select(instanceGroup, nodeIdx) {
+    select(instanceGroup, nodeIdx, reprojected) {
         if (nodeIdx === undefined) nodeIdx = -1;
 
         const changed = (
@@ -507,6 +527,7 @@ class InteractionManager {
 
         this.selectedInstanceGroup = instanceGroup;
         this.selectedNodeIdx = nodeIdx;
+        this.selectedReprojected = !!reprojected;
 
         if (changed && this.callbacks.onSelectionChanged) {
             this.callbacks.onSelectionChanged(this.selectedInstanceGroup, this.selectedNodeIdx);
@@ -557,7 +578,6 @@ class InteractionManager {
         // --- Right-click / Ctrl+click (macOS trackpad): toggle node null ---
         if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
             e.preventDefault();
-            if (this.assignmentMode) return;
 
             // Check both linked (InstanceGroup) and unlinked instances
             var hit = this.findNearestNode(vx, vy, viewName, frameIdx);
@@ -570,17 +590,12 @@ class InteractionManager {
             }
 
             if (hit) {
-                // Only allow null toggle on the already-selected group
-                if (this.selectedInstanceGroup === hit.instanceGroup) {
-                    // Block null toggle for predicted instances
-                    var hitInstance = hit.instanceGroup.getInstance(viewName);
-                    if (hitInstance && hitInstance.type === 'predicted') return;
-                    this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
-                } else {
-                    // Select the group first; user must right-click again to toggle
-                    this.select(hit.instanceGroup, hit.nodeIdx);
-                    this._requestRedraw();
-                }
+                // Block null toggle for predicted instances
+                var hitInstance = hit.instanceGroup.getInstance(viewName);
+                if (hitInstance && hitInstance.type === 'predicted') return;
+                // Select and toggle null in one action
+                this.select(hit.instanceGroup, hit.nodeIdx);
+                this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
             } else if (ulHit) {
                 var ulInst = ulHit.unlinked.instance;
                 if (ulInst && ulInst.type === 'predicted') return;
@@ -620,11 +635,12 @@ class InteractionManager {
             useUnlinked = true;
         }
 
-        // --- In assignment mode, ignore linked node clicks entirely ---
-        if (this.assignmentMode && useLinked && !useUnlinked) {
-            e.preventDefault();
-            e.stopPropagation();
-            e._consumedByInteraction = true;
+        // --- Double-click on reprojected instance: create user instance ---
+        if (e.detail >= 2 && useLinked && linkedHit.hitReprojected) {
+            if (this.callbacks.onDoubleClickReprojected) {
+                this.callbacks.onDoubleClickReprojected(linkedHit.instanceGroup, viewName);
+            }
+            this._requestRedraw();
             return;
         }
 
@@ -644,9 +660,25 @@ class InteractionManager {
         // --- Linked node: select or drag ---
         if (useLinked) {
             this.selectedUnlinked = null;
+            // Exit assignment mode if active
+            if (this.assignmentMode) {
+                this.assignmentSelection = [];
+                this.setAssignmentMode(false);
+                if (this.callbacks.onAssignmentCancelled) {
+                    this.callbacks.onAssignmentCancelled();
+                }
+            }
             var hitInst = linkedHit.instanceGroup.getInstance(viewName);
             // Block drag for predicted and reprojected instances (select only)
-            if (hitInst && (hitInst.type === 'predicted' || hitInst.type === 'reprojected')) {
+            if (linkedHit.hitReprojected) {
+                // Reprojected instance hit: select group with reprojected flag
+                this.select(linkedHit.instanceGroup, linkedHit.nodeIdx, true);
+                this._requestRedraw();
+                e.preventDefault();
+                e.stopPropagation();
+                e._consumedByInteraction = true;
+                // Fall through to the end (no drag)
+            } else if (hitInst && (hitInst.type === 'predicted' || hitInst.type === 'reprojected')) {
                 this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
                 this._requestRedraw();
                 e.preventDefault();
@@ -666,13 +698,6 @@ class InteractionManager {
                 e._consumedByInteraction = true;
             }
 
-        // --- Unlinked node in assignment mode: add to selection ---
-        } else if (useUnlinked && this.assignmentMode) {
-            this.addToAssignmentSelection(ulHit.unlinked);
-            e.preventDefault();
-            e.stopPropagation();
-            e._consumedByInteraction = true;
-
         // --- Unlinked node: double-click predicted → create user instance ---
         } else if (useUnlinked && e.detail >= 2 && ulHit.unlinked.instance && ulHit.unlinked.instance.type === 'predicted') {
             var predInst = ulHit.unlinked.instance;
@@ -689,14 +714,20 @@ class InteractionManager {
             e._consumedByInteraction = true;
             this._requestRedraw();
 
-        // --- Unlinked node: select or drag ---
+        // --- Unlinked node: select, auto-enter assignment mode, or drag ---
         } else if (useUnlinked) {
-            var ulAlreadySelected = this.selectedUnlinked && this.selectedUnlinked.id === ulHit.unlinked.id;
             this.select(null, -1);
             this.selectedUnlinked = ulHit.unlinked;
+            // Auto-enter assignment mode and add to selection
+            if (!this.assignmentMode) {
+                this.assignmentMode = true;
+                this.assignmentSelection = [];
+            }
+            this.addToAssignmentSelection(ulHit.unlinked);
+            // Still allow drag for repositioning
             // Block drag for predicted unlinked instances (select only)
             var ulInstType = ulHit.unlinked.instance ? ulHit.unlinked.instance.type : 'user';
-            if (ulAlreadySelected && canDrag && ulInstType !== 'predicted') {
+            if (canDrag && ulInstType !== 'predicted') {
                 this._startDrag(viewName, -1, ulHit.nodeIdx,
                     vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
             }
@@ -704,10 +735,19 @@ class InteractionManager {
             e.stopPropagation();
             e._consumedByInteraction = true;
 
-        // --- Clicked empty space: clear selection (but don't exit assignment mode) ---
+        // --- Clicked empty space: clear selection and exit assignment mode ---
         } else {
-            if (!this.assignmentMode) {
-                this.clearSelection();
+            if (this.assignmentMode) {
+                this.assignmentSelection = [];
+                this.setAssignmentMode(false);
+                if (this.callbacks.onAssignmentCancelled) {
+                    this.callbacks.onAssignmentCancelled();
+                }
+            }
+            this.clearSelection();
+            // Double-click on empty space: reset zoom
+            if (e.detail >= 2 && this.callbacks.onDoubleClickEmpty) {
+                this.callbacks.onDoubleClickEmpty(viewName);
             }
         }
 
@@ -1117,6 +1157,21 @@ class InteractionManager {
         var info = this.dragInfo;
         var coords = this.canvasToVideo(e.clientX, e.clientY, info.viewName);
         var vx = coords[0], vy = coords[1];
+
+        // Clamp to view bounds so nodes can't be dragged outside the video
+        var state = this._getState();
+        if (state) {
+            var view = this._findView(state, info.viewName);
+            if (view) {
+                var maxW = view.videoWidth || (view.overlayCanvas ? view.overlayCanvas.width : 0);
+                var maxH = view.videoHeight || (view.overlayCanvas ? view.overlayCanvas.height : 0);
+                if (vx < 0) vx = 0;
+                if (vy < 0) vy = 0;
+                if (maxW > 0 && vx > maxW) vx = maxW;
+                if (maxH > 0 && vy > maxH) vy = maxH;
+            }
+        }
+
         info.currentPos = [vx, vy];
 
         // Require minimum movement before committing to a drag
@@ -1134,7 +1189,7 @@ class InteractionManager {
         if (info.unlinked) {
             instance = info.unlinked.instance;
         } else {
-            var state = this._getState();
+            if (!state) state = this._getState();
             if (state) {
                 var groups = this._getInstanceGroups(state.currentFrame);
                 if (groups && groups.length > info.instanceGroupIdx) {
