@@ -553,8 +553,8 @@
     <script src="interaction.js?v=6"></script>
     <script src="viewport3d.js"></script>
     <script src="timeline.js"></script>
-    <script src="file-io.js?v=5"></script>
-    <script src="slp-export.js"></script>
+    <script src="file-io.js?v=6"></script>
+    <script src="slp-export.js?v=4"></script>
     <script src="slp-merge.js"></script>
 
     <script type="module">
@@ -1431,6 +1431,19 @@
                         var clonedPoints = inst.points.map(function(pt) {
                             return pt != null ? [pt[0], pt[1]] : null;
                         });
+                        // Fill missing nodes near centroid so user can place them
+                        var cx2 = 0, cy2 = 0, cnt2 = 0;
+                        for (var pi2 = 0; pi2 < clonedPoints.length; pi2++) {
+                            if (clonedPoints[pi2]) { cx2 += clonedPoints[pi2][0]; cy2 += clonedPoints[pi2][1]; cnt2++; }
+                        }
+                        if (cnt2 > 0) {
+                            cx2 /= cnt2; cy2 /= cnt2;
+                            for (var pi3 = 0; pi3 < clonedPoints.length; pi3++) {
+                                if (!clonedPoints[pi3]) {
+                                    clonedPoints[pi3] = [cx2 + (pi3 - clonedPoints.length / 2) * 10, cy2];
+                                }
+                            }
+                        }
                         var userInst = new Instance(clonedPoints, predGroup.trackIdx, 'user', 1.0);
                         userInst.modified = true;
                         var ul = state.session.addUnlinkedInstance(frameIdx, camName, userInst);
@@ -7606,6 +7619,13 @@
                     populateViewStrip();
                     updateTotalFrames();
                     rebuildVideoController();
+                    // Add newly created views to dock grid
+                    for (var edpi = 0; edpi < cameras.length; edpi++) {
+                        var edpName = cameras[edpi].name;
+                        if (state.views.some(function (v) { return v.name === edpName; })) {
+                            paneManager.addVideoPanel(edpName);
+                        }
+                    }
                     requestAnimationFrame(function () { fitCanvasesToCells(); });
 
                     if (videoController) {
@@ -7694,6 +7714,7 @@
                                     frameCount: amvDec.samples.length,
                                     assignedCamera: amvCam,
                                 };
+                                console.log('[add-slp] Video entry:', amvStem, '→ assignedCamera:', amvCam);
                                 state.videoFiles.push(amvEntry);
                                 if (amvCam) createViewForVideoFile(amvEntry);
                             } catch (amvErr) {
@@ -7703,6 +7724,17 @@
                         populateViewStrip();
                         updateTotalFrames();
                         rebuildVideoController();
+                        // Add newly created views to dock grid
+                        console.log('[add-slp] Adding panels for cameras:', cameras.map(function(c){return c.name;}), 'views:', state.views.map(function(v){return v.name;}));
+                        for (var adpi = 0; adpi < cameras.length; adpi++) {
+                            var adpName = cameras[adpi].name;
+                            if (state.views.some(function (v) { return v.name === adpName; })) {
+                                console.log('[add-slp] Adding panel for:', adpName);
+                                paneManager.addVideoPanel(adpName);
+                            } else {
+                                console.warn('[add-slp] No view found for camera:', adpName);
+                            }
+                        }
                         requestAnimationFrame(function () { fitCanvasesToCells(); });
                         if (videoController) {
                             await videoController.seekToFrame(state.currentFrame);
