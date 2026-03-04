@@ -684,10 +684,8 @@ class InteractionManager {
             } else {
                 // Select and start drag (drag threshold prevents accidental movement)
                 this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
-                if (canDrag) {
-                    this._startDrag(viewName, linkedHit.instanceGroupIdx, linkedHit.nodeIdx,
-                        vx, vy, null, e.altKey ? linkedHit.instanceGroup.getInstance(viewName) : null);
-                }
+                this._startDrag(viewName, linkedHit.instanceGroupIdx, linkedHit.nodeIdx,
+                    vx, vy, null, e.altKey ? linkedHit.instanceGroup.getInstance(viewName) : null);
                 e.preventDefault();
                 e.stopPropagation();
                 e._consumedByInteraction = true;
@@ -719,11 +717,9 @@ class InteractionManager {
                 this.assignmentSelection = [];
             }
             this.addToAssignmentSelection(ulHit.unlinked);
-            // Still allow drag for repositioning
-            if (canDrag) {
-                this._startDrag(viewName, -1, ulHit.nodeIdx,
-                    vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
-            }
+            // Always allow drag for repositioning
+            this._startDrag(viewName, -1, ulHit.nodeIdx,
+                vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
             e.preventDefault();
             e.stopPropagation();
             e._consumedByInteraction = true;
@@ -1356,6 +1352,25 @@ class InteractionManager {
                 instance.points = instance.points.map(pt =>
                     pt != null ? [pt[0], pt[1]] : null
                 );
+                // Fill missing nodes near centroid so user can see and place them
+                let cx = 0, cy = 0, count = 0;
+                for (let i = 0; i < instance.points.length; i++) {
+                    if (instance.points[i]) {
+                        cx += instance.points[i][0];
+                        cy += instance.points[i][1];
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    cx /= count;
+                    cy /= count;
+                    for (let i = 0; i < instance.points.length; i++) {
+                        if (!instance.points[i]) {
+                            // Offset each missing node slightly so they don't stack
+                            instance.points[i] = [cx + (i - instance.points.length / 2) * 10, cy];
+                        }
+                    }
+                }
                 instance.type = 'user';
                 converted = true;
             }
