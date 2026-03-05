@@ -7233,6 +7233,8 @@
                         }
                     }
 
+                    var slpFilenameForCam = (camDir.slps.length > 0) ? camDir.slps[0].name : null;
+
                     // Load video (first in directory)
                     if (camDir.videos.length > 0) {
                         var videoFile = camDir.videos[0];
@@ -7252,6 +7254,7 @@
                                 videoHeight: vh,
                                 frameCount: decoder.samples.length,
                                 assignedCamera: camName,
+                                slpFilename: slpFilenameForCam,
                             });
 
                             // Ensure session exists
@@ -7648,6 +7651,7 @@
                             videoWidth: evWidth, videoHeight: evHeight,
                             frameCount: decoder.samples.length,
                             assignedCamera: evCamName,
+                            slpFilename: slpFile.name,
                         });
                     }
 
@@ -7705,6 +7709,7 @@
                                     videoHeight: vdec.videoTrack.video.height,
                                     frameCount: vdec.samples.length,
                                     assignedCamera: assignedCam,
+                                    slpFilename: slpFile.name,
                                 });
                             } catch (videoErr) {
                                 console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);

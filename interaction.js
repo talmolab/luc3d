@@ -273,16 +273,20 @@ class InteractionManager {
                 var mainInst = group.getInstance(viewName);
                 if (mainInst && mainInst.points) {
                     var mainType = mainInst.type || 'user';
-                    var mainVisible = (mainType === 'user' && document.getElementById('visUser').checked) ||
-                        (mainType === 'predicted' && document.getElementById('visPredicted').checked) ||
-                        (mainType === 'reprojected' && document.getElementById('visReprojections').checked);
+                    var visUserEl = document.getElementById('visUser');
+                    var visPredEl = document.getElementById('visPredicted');
+                    var visReprojEl = document.getElementById('visReprojections');
+                    var mainVisible = (mainType === 'user' && (!visUserEl || visUserEl.checked)) ||
+                        (mainType === 'predicted' && (!visPredEl || visPredEl.checked)) ||
+                        (mainType === 'reprojected' && (!visReprojEl || visReprojEl.checked));
                     if (mainVisible && typePassFilters[pass](mainType)) {
                         candidates.push({ inst: mainInst, isReproj: false });
                     }
                 }
                 // Also consider reprojected instance (may coexist with main instance)
+                var visReprojEl2 = document.getElementById('visReprojections');
                 if (typePassFilters[pass]('reprojected') &&
-                    document.getElementById('visReprojections').checked) {
+                    (!visReprojEl2 || visReprojEl2.checked)) {
                     var reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
                     if (reprojInst && reprojInst.points) {
                         candidates.push({ inst: reprojInst, isReproj: true });
@@ -407,8 +411,10 @@ class InteractionManager {
                 if (!points) continue;
 
                 var ulType = ul.instance.type || 'user';
-                if (ulType === 'user' && !document.getElementById('visUser').checked) continue;
-                if (ulType === 'predicted' && !document.getElementById('visPredicted').checked) continue;
+                var visUserChk = document.getElementById('visUser');
+                var visPredChk = document.getElementById('visPredicted');
+                if (ulType === 'user' && visUserChk && !visUserChk.checked) continue;
+                if (ulType === 'predicted' && visPredChk && !visPredChk.checked) continue;
 
                 if (!ulTypePassFilters[pass](ulType)) continue;
 
@@ -505,9 +511,11 @@ class InteractionManager {
                     }
                     return;
                 }
-                // Different instance from same camera — reject
-                if (this.callbacks.onAssignmentError) {
-                    this.callbacks.onAssignmentError('Multiple instances from the same view cannot be assigned to a group.');
+                // Different instance from same camera — replace
+                this.assignmentSelection[i] = unlinked;
+                this._requestRedraw();
+                if (this.callbacks.onAssignmentSelectionChanged) {
+                    this.callbacks.onAssignmentSelectionChanged(this.assignmentSelection.length);
                 }
                 return;
             }
@@ -550,6 +558,11 @@ class InteractionManager {
         this.selectedNodeIdx = nodeIdx;
         this.selectedReprojected = !!reprojected;
 
+        // When clearing linked selection (null), also clear unlinked selection
+        if (!instanceGroup) {
+            this.selectedUnlinked = null;
+        }
+
         if (changed && this.callbacks.onSelectionChanged) {
             this.callbacks.onSelectionChanged(this.selectedInstanceGroup, this.selectedNodeIdx);
         }
@@ -587,6 +600,8 @@ class InteractionManager {
         // Guard: clean up any stale drag state from a missed mouseup
         if (this.isDragging) {
             this._endDrag();
+            // After cleaning up a stale drag, allow the new mousedown to drag
+            this._canDrag = true;
         }
 
         var canDrag = this._canDrag;
