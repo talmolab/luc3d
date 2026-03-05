@@ -89,13 +89,14 @@
         <!-- Toolbar -->
         <div class="toolbar" id="toolbar">
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbAddInstance" title="Add new instance (N)">+ Instance</button>
+                <button class="toolbar-btn" id="tbAddInstance" title="Add new instance (Ctrl+I)">+ Instance</button>
                 <button class="toolbar-btn" id="tbDeleteInstance" title="Delete selected instance (Del)">-
                     Instance</button>
             </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (C)">Group</button>
+                <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
                 <button class="toolbar-btn" id="tbAutoSingle" title="Auto assign + triangulate current frame">Auto Single</button>
                 <button class="toolbar-btn" id="tbAutoMulti" title="Auto assign + triangulate frame range">Auto Multi</button>
             </div>
@@ -581,6 +582,7 @@
             triangulationResults: new Map(), // frameIdx -> [{ group, points3d, reprojections, errors, meanError }]
             lastAutoAssignViews: null,  // Array of view names used for last auto-assignment
             lastAutoAssignFrame: null,  // Frame index where last auto-assignment was run
+            lastUserPoints: new Map(),  // viewName -> {frameIdx, points} — cache of most recent UserInstance per view
         };
 
         let videoController = null;
@@ -1200,6 +1202,66 @@
         }
 
         // ============================================
+        // Smart Instance Creation
+        // ============================================
+
+        /**
+         * Record the most recent UserInstance points for a view.
+         * Called whenever a UserInstance is created or modified so that
+         * addNewInstanceSmart() can do an O(1) lookup instead of scanning frames.
+         */
+        function recordUserPoints(viewName, points) {
+            if (!viewName || !points) return;
+            state.lastUserPoints.set(viewName, points.map(function(p) {
+                return p ? [p[0], p[1]] : null;
+            }));
+        }
+
+        function addNewInstanceSmart() {
+            if (!interactionManager || !state.session) return;
+            var viewName = interactionManager.lastInteractedView || (state.views.length > 0 ? state.views[0].name : null);
+            if (!viewName) return;
+            var frameIdx = state.currentFrame;
+            var points = null;
+
+            // Priority 1: Cached UserInstance points for this view
+            var cached = state.lastUserPoints.get(viewName);
+            if (cached) {
+                points = cached.map(function(p) { return p ? [p[0], p[1]] : null; });
+            }
+
+            // Priority 2: Current frame PredictedInstance in same view
+            if (!points) {
+                // Check grouped predicted instances
+                var curGroups = getInstanceGroupsForFrame(frameIdx);
+                for (var g of curGroups) {
+                    var inst = g.getInstance(viewName);
+                    if (inst && inst.type === 'predicted' && inst.points) {
+                        points = inst.points.map(function(p) { return p ? [p[0], p[1]] : null; });
+                        break;
+                    }
+                }
+                // Check unlinked predicted instances
+                if (!points) {
+                    var fg = state.session.getFrameGroup(frameIdx);
+                    if (fg) {
+                        var unlinked = fg.getUnlinkedInstances(viewName) || [];
+                        for (var ul of unlinked) {
+                            if (ul.instance.type === 'predicted' && ul.instance.points) {
+                                points = ul.instance.points.map(function(p) { return p ? [p[0], p[1]] : null; });
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Priority 3: Topology-based layout (handled in _addNewInstance default)
+            // Note: _addNewInstance fires onUserInstanceCreated callback which calls recordUserPoints
+            interactionManager._addNewInstance(points);
+        }
+
+        // ============================================
         // Overlay Drawing
         // ============================================
 
@@ -1240,6 +1302,11 @@
         function drawAllOverlays(frameIdx) {
             if (!state.session) return;
 
+            // Auto-finish edit group mode on frame change
+            if (editGroupState && frameIdx !== state.currentFrame) {
+                finishEditGroup();
+            }
+
             const frameGroup = state.session.getFrameGroup(frameIdx);
             const instanceGroups = getInstanceGroupsForFrame(frameIdx);
 
@@ -1261,9 +1328,18 @@
             const assignmentSelectedIds = interactionManager ? interactionManager.getAssignmentSelectedIds() : [];
             const selectedUnlinked = interactionManager ? interactionManager.selectedUnlinked : null;
 
-            // Update assignment toolbar state
+            // Update toolbar state
             var tbGroup = document.getElementById('tbGroup');
             if (tbGroup) tbGroup.classList.toggle('active', assignmentMode);
+            var tbEditGroup = document.getElementById('tbEditGroup');
+            if (tbEditGroup) {
+                tbEditGroup.classList.toggle('active', interactionManager ? interactionManager.editGroupMode : false);
+                // Disable when a reprojected instance is selected
+                var isReprojSelected = interactionManager ? interactionManager.selectedReprojected : false;
+                tbEditGroup.disabled = isReprojSelected;
+            }
+
+            var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
             for (const view of state.views) {
                 if (!view.overlayCtx || !view.overlayCanvas) continue;
@@ -1323,6 +1399,7 @@
                     assignmentSelectedIds: assignmentSelectedIds,
                     assignmentMode: assignmentMode,
                     selectedUnlinkedId: selectedUnlinked ? selectedUnlinked.id : null,
+                    editGroupTarget: editGroupTarget,
                 });
             }
 
@@ -1382,6 +1459,7 @@
                     const inst = instanceGroup.getInstance(viewName);
                     if (inst) {
                         inst.modified = true;
+                        recordUserPoints(viewName, inst.points);
                     }
                     instanceGroup.markDirty();
 
@@ -1399,6 +1477,10 @@
                 onInstanceConverted: function (instanceGroup) {
                     const trackName = state.session.tracks[instanceGroup.trackIdx] || 'Track ' + instanceGroup.trackIdx;
                     setStatus('Converted ' + trackName + ' to user instance', 'success');
+                    // Record all view points from the converted group
+                    for (var [vn, inst] of instanceGroup.instances) {
+                        if (inst.type === 'user' && inst.points) recordUserPoints(vn, inst.points);
+                    }
 
                     // Re-run triangulation if this group was previously triangulated
                     if (instanceGroup.points3d) {
@@ -1427,6 +1509,10 @@
                     }
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
+                },
+
+                onUserInstanceCreated: function (viewName, points) {
+                    recordUserPoints(viewName, points);
                 },
 
                 onDoubleClickReprojected: function (group, viewName) {
@@ -1468,6 +1554,7 @@
                         newInst.modified = true;
                         userGroup.addInstance(viewName, newInst);
                         if (fg) fg.addInstance(viewName, newInst);
+                        recordUserPoints(viewName, clonedPoints);
                         group = userGroup; // re-triangulate the user group
                         setStatus('Added UserInstance to ' + viewName + ' for ' + trackName, 'success');
                     } else {
@@ -1483,6 +1570,7 @@
                                     trackIdx, 'user', 1.0
                                 );
                                 userClone.modified = true;
+                                recordUserPoints(camName, userClone.points);
                                 var ul = state.session.addUnlinkedInstance(frameIdx, camName, userClone);
                                 unlinkedList.push(ul);
                             }
@@ -1491,6 +1579,7 @@
                         if (!predGroup.getInstance(viewName)) {
                             var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
                             newInst.modified = true;
+                            recordUserPoints(viewName, clonedPoints);
                             var ul = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
                             unlinkedList.push(ul);
                         }
@@ -1552,6 +1641,7 @@
                         });
                         var userInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
                         userInst.modified = true;
+                        recordUserPoints(camName, clonedPoints);
                         var ul = state.session.addUnlinkedInstance(frameIdx, camName, userInst);
                         unlinkedList.push(ul);
                     }
@@ -1691,6 +1781,68 @@
 
                 onAssignmentRequested: function () {
                     startManualAssignment();
+                },
+
+                // Edit Group mode callbacks
+                onEditGroupRemove: function (group, viewName) {
+                    var frameIdx = state.currentFrame;
+                    var fg = state.session.getFrameGroup(frameIdx);
+                    var inst = group.getInstance(viewName);
+                    if (!inst) return;
+
+                    // Remove from group
+                    group.instances.delete(viewName);
+
+                    // Remove from FrameGroup linked instances
+                    if (fg) {
+                        var camInstances = fg.instances.get(viewName);
+                        if (camInstances) {
+                            var idx = camInstances.indexOf(inst);
+                            if (idx >= 0) camInstances.splice(idx, 1);
+                            if (camInstances.length === 0) fg.instances.delete(viewName);
+                        }
+                        // Add as unlinked
+                        var ul = new UnlinkedInstance(inst, viewName);
+                        fg.addUnlinkedInstance(viewName, ul);
+                    }
+
+                    reTriangulateGroup(group);
+                    updateEditGroupToast();
+                    drawAllOverlays(frameIdx);
+                    updateInfoPanel();
+                },
+
+                onEditGroupAdd: function (group, viewName, unlinkedInstance) {
+                    var frameIdx = state.currentFrame;
+                    var fg = state.session.getFrameGroup(frameIdx);
+                    var inst = unlinkedInstance.instance;
+
+                    // Add to group
+                    group.addInstance(viewName, inst);
+                    inst.trackIdx = group.trackIdx;
+
+                    // Remove from unlinked list in FrameGroup
+                    if (fg) {
+                        fg.removeUnlinkedById(unlinkedInstance.id);
+                        fg.addInstance(viewName, inst);
+                    }
+
+                    reTriangulateGroup(group);
+                    updateEditGroupToast();
+                    drawAllOverlays(frameIdx);
+                    updateInfoPanel();
+                },
+
+                onEditGroupError: function (msg) {
+                    setStatus(msg, 'error');
+                },
+
+                onEditGroupCancelled: function () {
+                    cancelEditGroup();
+                },
+
+                onEditGroupFinished: function () {
+                    finishEditGroup();
                 },
 
                 onDoubleClickEmpty: function (viewName) {
@@ -2255,6 +2407,13 @@
                             handleLoadSessionFolder();
                             break;
                         }
+                        case 'i':
+                        case 'I': {
+                            // Add new instance with smart initialization
+                            e.preventDefault();
+                            addNewInstanceSmart();
+                            break;
+                        }
                     }
                     return;
                 }
@@ -2397,7 +2556,7 @@
 
             // Toolbar buttons
             document.getElementById('tbAddInstance').addEventListener('click', function () {
-                if (interactionManager) interactionManager._addNewInstance();
+                addNewInstanceSmart();
             });
             document.getElementById('tbDeleteInstance').addEventListener('click', function () {
                 if (interactionManager) interactionManager._deleteSelected();
@@ -2413,12 +2572,39 @@
                     interactionManager.setAssignmentMode(true);
                 }
             });
+            // Edit Group button
+            document.getElementById('tbEditGroup').addEventListener('click', function () {
+                if (!interactionManager) return;
+                // If already in edit mode, finish
+                if (interactionManager.editGroupMode) {
+                    finishEditGroup();
+                    return;
+                }
+                // Need a grouped instance selected
+                var selectedGroup = interactionManager.selectedInstanceGroup;
+                if (!selectedGroup) {
+                    setStatus('Error: No Grouped Instance Selected to Edit.', 'error');
+                    return;
+                }
+                // Block editing when a reprojected instance is selected
+                if (interactionManager.selectedReprojected) {
+                    setStatus('Error: Cannot edit a reprojected instance.', 'error');
+                    return;
+                }
+                startEditGroup(selectedGroup);
+            });
             // Auto Single: auto assign + triangulate current frame
             document.getElementById('tbAutoSingle').addEventListener('click', function () {
+                if (interactionManager && interactionManager.assignmentMode) {
+                    interactionManager.setAssignmentMode(false);
+                }
                 runSingleFrameTriangulation();
             });
             // Auto Multi: auto assign + triangulate frame range
             document.getElementById('tbAutoMulti').addEventListener('click', function () {
+                if (interactionManager && interactionManager.assignmentMode) {
+                    interactionManager.setAssignmentMode(false);
+                }
                 showMultiFrameModal();
             });
 
@@ -2586,6 +2772,8 @@
             // Clean up any existing manual or auto assignment
             cleanupManualAssignment();
             cleanupAutoAssignment();
+            // Mutual exclusion: exit edit group mode
+            if (editGroupState) finishEditGroup();
 
             if (!state.session) return;
             var fg = state.session.getFrameGroup(state.currentFrame);
@@ -2629,6 +2817,134 @@
                 }
                 interactionManager._createGroupFromAssignment();
             });
+        }
+
+        // ============================================
+        // Edit Group Mode
+        // ============================================
+
+        var editGroupState = null; // { toast, group, originalInstances: Map }
+
+        function startEditGroup(group) {
+            // Cleanup any existing assignment/edit state
+            cleanupManualAssignment();
+            cleanupEditGroup();
+            if (interactionManager && interactionManager.assignmentMode) {
+                interactionManager.setAssignmentMode(false);
+            }
+
+            // Snapshot group.instances (clone Map with cloned instance refs)
+            var originalInstances = new Map();
+            for (var [camName, inst] of group.instances) {
+                originalInstances.set(camName, inst);
+            }
+
+            interactionManager.setEditGroupMode(true, group);
+
+            // Create toast
+            var toast = document.createElement('div');
+            toast.className = 'auto-assign-toast';
+            toast.innerHTML =
+                '<span id="editGroupToastText">Editing Group: ' + group.instances.size + ' Instances Selected</span>' +
+                '<button id="editGroupCancel">Cancel</button>' +
+                '<button id="editGroupContinue" class="primary">Continue</button>';
+            document.getElementById('menuBar').appendChild(toast);
+
+            editGroupState = { toast: toast, group: group, originalInstances: originalInstances };
+
+            toast.querySelector('#editGroupCancel').addEventListener('click', function () {
+                cancelEditGroup();
+            });
+            toast.querySelector('#editGroupContinue').addEventListener('click', function () {
+                finishEditGroup();
+            });
+        }
+
+        function cancelEditGroup() {
+            if (!editGroupState) return;
+            var group = editGroupState.group;
+            var originalInstances = editGroupState.originalInstances;
+            var frameIdx = state.currentFrame;
+            var fg = state.session.getFrameGroup(frameIdx);
+
+            // Remove any instances that were added (not in original)
+            for (var [camName, inst] of group.instances) {
+                if (!originalInstances.has(camName)) {
+                    // This was added — remove from group and put back as unlinked
+                    group.instances.delete(camName);
+                    if (fg) {
+                        // Remove from FrameGroup linked instances
+                        var camInstances = fg.instances.get(camName);
+                        if (camInstances) {
+                            var idx = camInstances.indexOf(inst);
+                            if (idx >= 0) camInstances.splice(idx, 1);
+                            if (camInstances.length === 0) fg.instances.delete(camName);
+                        }
+                        // Add back as unlinked
+                        var ul = new UnlinkedInstance(inst, camName);
+                        fg.addUnlinkedInstance(camName, ul);
+                    }
+                }
+            }
+
+            // Restore any instances that were removed (in original but not current)
+            for (var [camName, inst] of originalInstances) {
+                if (!group.instances.has(camName)) {
+                    // This was removed — add back to group
+                    group.addInstance(camName, inst);
+                    if (fg) {
+                        fg.addInstance(camName, inst);
+                        // Remove from unlinked if it was put there
+                        var unlinked = fg.getUnlinkedInstances(camName) || [];
+                        for (var ui = unlinked.length - 1; ui >= 0; ui--) {
+                            if (unlinked[ui].instance === inst) {
+                                fg.removeUnlinkedById(unlinked[ui].id);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Re-triangulate to restore original state
+            reTriangulateGroup(group);
+            cleanupEditGroup();
+            drawAllOverlays(state.currentFrame);
+            updateInfoPanel();
+        }
+
+        function finishEditGroup() {
+            if (!editGroupState) return;
+            var group = editGroupState.group;
+            var frameIdx = state.currentFrame;
+
+            // If group has 0 instances, remove it entirely
+            if (group.instances.size === 0) {
+                state.session.removeInstanceGroup(frameIdx, group);
+                if (interactionManager) interactionManager.clearSelection();
+            }
+
+            cleanupEditGroup();
+            if (timeline) timeline.setFrameModified(frameIdx, true);
+            if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(frameIdx));
+            drawAllOverlays(state.currentFrame);
+            updateInfoPanel();
+        }
+
+        function cleanupEditGroup() {
+            if (editGroupState && editGroupState.toast && editGroupState.toast.parentNode) {
+                editGroupState.toast.parentNode.removeChild(editGroupState.toast);
+            }
+            editGroupState = null;
+            if (interactionManager) interactionManager.setEditGroupMode(false);
+        }
+
+        function updateEditGroupToast() {
+            if (!editGroupState) return;
+            var textEl = document.getElementById('editGroupToastText');
+            if (textEl) {
+                textEl.textContent = 'Editing Group: ' + editGroupState.group.instances.size + ' Instances Selected';
+            }
         }
 
         // ============================================
@@ -5304,6 +5620,7 @@
             state.fps = 30;
             state.keypoints3d = null;
             state.triangulationResults = new Map();
+            state.lastUserPoints = new Map();
             state.viewMode = 'grid';
             state.singleViewIndex = 0;
 
@@ -6916,6 +7233,8 @@
                         }
                     }
 
+                    var slpFilenameForCam = (camDir.slps.length > 0) ? camDir.slps[0].name : null;
+
                     // Load video (first in directory)
                     if (camDir.videos.length > 0) {
                         var videoFile = camDir.videos[0];
@@ -6935,6 +7254,7 @@
                                 videoHeight: vh,
                                 frameCount: decoder.samples.length,
                                 assignedCamera: camName,
+                                slpFilename: slpFilenameForCam,
                             });
 
                             // Ensure session exists
@@ -7331,6 +7651,7 @@
                             videoWidth: evWidth, videoHeight: evHeight,
                             frameCount: decoder.samples.length,
                             assignedCamera: evCamName,
+                            slpFilename: slpFile.name,
                         });
                     }
 
@@ -7388,6 +7709,7 @@
                                     videoHeight: vdec.videoTrack.video.height,
                                     frameCount: vdec.samples.length,
                                     assignedCamera: assignedCam,
+                                    slpFilename: slpFile.name,
                                 });
                             } catch (videoErr) {
                                 console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);

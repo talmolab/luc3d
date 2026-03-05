@@ -99,6 +99,13 @@
             requestRedraw: function () { redraws++; },
         });
 
+        // Patch onMouseUp to simulate the canvas event listener that sets _canDrag = true
+        var origOnMouseUp = mgr.onMouseUp.bind(mgr);
+        mgr.onMouseUp = function (e, vn) {
+            origOnMouseUp(e, vn);
+            if (!mgr.isDragging) mgr._canDrag = true;
+        };
+
         var fg = session.getFrameGroup(0);
         var unlinked = fg.getUnlinkedInstances(camName)[0];
 
@@ -136,11 +143,13 @@
      */
     function simulateDrag(mgr, camName, startX, startY, endX, endY, opts) {
         opts = opts || {};
+        mgr._canDrag = true; // Simulate prior mouseup enabling drag
         mgr.onMouseDown(makeMouseEvent('mousedown', startX, startY, opts), camName);
         if (startX !== endX || startY !== endY) {
             mgr._onDragMove(makeMouseEvent('mousemove', endX, endY, opts));
         }
         mgr.onMouseUp(makeMouseEvent('mouseup', endX, endY, opts), camName);
+        mgr._canDrag = true; // Re-enable for next drag (canvas mouseup handler sets this in real browser)
     }
 
     // ============================================
@@ -153,6 +162,7 @@
         beforeEach(function () {
             cleanupCanvases();
             env = buildEnv();
+            env.mgr._canDrag = true; // Simulate prior mouseup enabling drag
         });
 
         it('mousedown on node 0 starts drag with nodeIdx=0', function () {
@@ -217,6 +227,7 @@
         beforeEach(function () {
             cleanupCanvases();
             env = buildEnv();
+            env.mgr._canDrag = true; // Simulate prior mouseup enabling drag
         });
 
         it('can drag same node a second time after release', function () {
@@ -245,6 +256,7 @@
         beforeEach(function () {
             cleanupCanvases();
             env = buildEnv();
+            env.mgr._canDrag = true; // Simulate prior mouseup enabling drag
         });
 
         it('Alt+drag translates all, then normal drag moves single node', function () {
@@ -290,6 +302,7 @@
         beforeEach(function () {
             cleanupCanvases();
             env = buildEnv();
+            env.mgr._canDrag = true; // Simulate prior mouseup enabling drag
         });
 
         it('click empty space clears selection, then click node starts fresh drag', function () {
@@ -297,10 +310,12 @@
             simulateDrag(env.mgr, env.camName, 100, 100, 100, 100);
             assertNotNull(env.mgr.selectedUnlinked, 'Unlinked selected');
 
-            // Click empty space
+            // Click empty space (full click: mousedown + mouseup)
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 500, 450), env.camName);
             assertNull(env.mgr.selectedUnlinked, 'Cleared after empty click');
             assertFalse(env.mgr.isDragging, 'Not dragging');
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 500, 450), env.camName);
+            env.mgr._canDrag = true; // Canvas mouseup handler sets this in real browser
 
             // Now drag node 1
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 200, 200), env.camName);
@@ -324,6 +339,7 @@
         beforeEach(function () {
             cleanupCanvases();
             env = buildEnv();
+            env.mgr._canDrag = true; // Simulate prior mouseup enabling drag
         });
 
         it('mousedown cleans up stale drag if mouseup was missed', function () {
@@ -350,6 +366,7 @@
         beforeEach(function () {
             cleanupCanvases();
             env = buildEnv();
+            env.mgr._canDrag = true; // Simulate prior mouseup enabling drag
         });
 
         it('drag all three nodes in rapid sequence', function () {
@@ -407,26 +424,52 @@
                 videoHeight: vh,
             }];
 
+            var linkedMgr = new InteractionManager({
+                getState: function () {
+                    return { currentFrame: 0, session: session, views: views };
+                },
+                getInstanceGroups: function () { return [group]; },
+                onSelectionChanged: function () {},
+                onNodeMoved: function () {},
+                requestRedraw: function () {},
+            });
+            // Patch onMouseUp to simulate canvas mouseup handler setting _canDrag
+            var origMU = linkedMgr.onMouseUp.bind(linkedMgr);
+            linkedMgr.onMouseUp = function(e, vn) {
+                origMU(e, vn);
+                if (!linkedMgr.isDragging) linkedMgr._canDrag = true;
+            };
             env = {
                 camName: camName,
                 inst: inst,
-                mgr: new InteractionManager({
-                    getState: function () {
-                        return { currentFrame: 0, session: session, views: views };
-                    },
-                    getInstanceGroups: function () { return [group]; },
-                    onSelectionChanged: function () {},
-                    onNodeMoved: function () {},
-                    requestRedraw: function () {},
-                }),
+                mgr: linkedMgr,
             };
         });
 
         it('drag node 0, release, then drag node 1 on linked instance', function () {
-            simulateDrag(env.mgr, env.camName, 100, 100, 130, 140);
+            // Linked instances require select-click first, then drag-click.
+            // First click selects node 0 (no drag yet - not already selected)
+            env.mgr._canDrag = true;
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
+            assertFalse(env.mgr.isDragging, 'First click selects only');
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 100, 100), env.camName);
+            env.mgr._canDrag = true;
+
+            // Second click on same node starts drag (now already selected)
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag 1 started');
+            env.mgr._onDragMove(makeMouseEvent('mousemove', 130, 140));
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 130, 140), env.camName);
             assertEqual(env.inst.points[0][0], 130, 'Node 0 x=130');
             assertFalse(env.mgr.isDragging, 'Clean after drag 1');
+            env.mgr._canDrag = true;
 
+            // Select node 1 first
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 200, 200), env.camName);
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 200, 200), env.camName);
+            env.mgr._canDrag = true;
+
+            // Now drag node 1
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 200, 200), env.camName);
             assertTrue(env.mgr.isDragging, 'Drag 2 started');
             assertEqual(env.mgr.dragInfo.nodeIdx, 1, 'Node 1');
@@ -449,6 +492,7 @@
         beforeEach(function () {
             cleanupCanvases();
             env = buildEnv();
+            env.mgr._canDrag = true; // Simulate prior mouseup enabling drag
         });
 
         it('mouseup without prior drag does not crash', function () {
@@ -473,7 +517,10 @@
         });
 
         it('instance type is set to user after drag', function () {
-            env.unlinked.instance.type = 'predicted';
+            // Dragging a user instance keeps it as 'user' and marks it modified
+            // Note: predicted unlinked instances are blocked from dragging
+            env.unlinked.instance.type = 'user';
+            env.unlinked.instance.modified = false;
             simulateDrag(env.mgr, env.camName, 100, 100, 120, 130);
             assertEqual(env.unlinked.instance.type, 'user', 'Type set to user');
             assertTrue(env.unlinked.instance.modified, 'Marked modified');
@@ -490,6 +537,7 @@
         beforeEach(function () {
             cleanupCanvases();
             env = buildEnv();
+            env.mgr._canDrag = true; // Simulate prior mouseup enabling drag
         });
 
         it('_startDrag installs document listeners, _endDrag removes them', function () {
@@ -539,6 +587,7 @@
         beforeEach(function () {
             cleanupCanvases();
             env = buildEnv();
+            env.mgr._canDrag = true; // Simulate prior mouseup enabling drag
         });
 
         it('canvasToVideo maps correctly with 1:1 fixed canvas', function () {
