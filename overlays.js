@@ -1576,6 +1576,20 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }
     }
 
+    // 5b. Edit Group highlight — white ring around all group member instances
+    var editGroupTarget = options.editGroupTarget || null;
+    if (editGroupTarget) {
+        var egInst = editGroupTarget.getInstance
+            ? editGroupTarget.getInstance(viewName)
+            : null;
+        if (egInst && egInst.points) {
+            drawSelectionHighlight(ctx, egInst.points, skeleton, Object.assign({}, userRender, {
+                color: '#ffffff',
+                selectedNodeIdx: -1,
+            }));
+        }
+    }
+
     // 6. Hover highlight
     if (hoveredNode && hoveredNode.viewName === viewName && instanceGroups) {
         const hGroupIdx = hoveredNode.instanceGroupIdx;

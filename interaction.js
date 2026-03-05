@@ -105,6 +105,16 @@ class InteractionManager {
         this.selectedUnlinked = null;
 
         // ------------------------------------------------------------------
+        // Edit Group mode state
+        // ------------------------------------------------------------------
+
+        /** @type {boolean} Whether edit group mode is active */
+        this.editGroupMode = false;
+
+        /** @type {InstanceGroup|null} The group being edited */
+        this.editGroupTarget = null;
+
+        // ------------------------------------------------------------------
         // Hit-test configuration
         // ------------------------------------------------------------------
 
@@ -467,6 +477,17 @@ class InteractionManager {
     }
 
     /**
+     * Toggle edit group mode on/off.
+     * @param {boolean} enabled
+     * @param {InstanceGroup} [group] - The group to edit (required when enabling)
+     */
+    setEditGroupMode(enabled, group) {
+        this.editGroupMode = !!enabled;
+        this.editGroupTarget = enabled ? group : null;
+        this._requestRedraw();
+    }
+
+    /**
      * Add an unlinked instance to the assignment selection.
      * Only allows one selection per camera view.
      * @param {UnlinkedInstance} unlinked
@@ -614,6 +635,52 @@ class InteractionManager {
         // --- Left click only ---
         if (e.button !== 0) return;
 
+        // --- Edit Group mode: intercept clicks ---
+        if (this.editGroupMode && this.editGroupTarget) {
+            var egLinked = this.findNearestNode(vx, vy, viewName, frameIdx);
+            var egUnlinked = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx);
+
+            if (egLinked) {
+                // Check if clicked instance belongs to the edit target group
+                if (egLinked.instanceGroup === this.editGroupTarget) {
+                    // Remove this instance from the group
+                    if (this.callbacks.onEditGroupRemove) {
+                        this.callbacks.onEditGroupRemove(this.editGroupTarget, viewName);
+                    }
+                } else {
+                    // Instance belongs to another group
+                    if (this.callbacks.onEditGroupError) {
+                        this.callbacks.onEditGroupError('Cannot add: instance belongs to another group');
+                    }
+                }
+            } else if (egUnlinked) {
+                var group = this.editGroupTarget;
+                // Validate: type must match
+                var firstInst = group.instances.values().next().value;
+                var groupType = firstInst ? firstInst.type : 'user';
+                var ulType = egUnlinked.unlinked.instance.type || 'user';
+                if (ulType !== groupType) {
+                    if (this.callbacks.onEditGroupError) {
+                        this.callbacks.onEditGroupError('Cannot add: instance type does not match group (' + groupType + ')');
+                    }
+                } else if (group.getInstance(viewName)) {
+                    if (this.callbacks.onEditGroupError) {
+                        this.callbacks.onEditGroupError('Cannot add: group already has an instance from this view');
+                    }
+                } else {
+                    if (this.callbacks.onEditGroupAdd) {
+                        this.callbacks.onEditGroupAdd(group, viewName, egUnlinked.unlinked);
+                    }
+                }
+            }
+            // Always consume the event in edit group mode
+            e.preventDefault();
+            e.stopPropagation();
+            e._consumedByInteraction = true;
+            this._requestRedraw();
+            return;
+        }
+
         // --- Find the closest node (linked or unlinked) ---
         var linkedHit = this.findNearestNode(vx, vy, viewName, frameIdx);
         var ulHit = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx);
@@ -709,6 +776,9 @@ class InteractionManager {
             var newUl = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
             this.select(null, -1);
             this.selectedUnlinked = newUl;
+            if (this.callbacks.onUserInstanceCreated) {
+                this.callbacks.onUserInstanceCreated(viewName, clonedPoints);
+            }
             e.preventDefault();
             e.stopPropagation();
             e._consumedByInteraction = true;
@@ -735,13 +805,26 @@ class InteractionManager {
             e.stopPropagation();
             e._consumedByInteraction = true;
 
-        // --- Clicked empty space: clear selection and exit assignment mode ---
+        // --- Clicked empty space: clear selection, maybe keep assignment mode ---
         } else {
             if (this.assignmentMode) {
-                this.assignmentSelection = [];
-                this.setAssignmentMode(false);
-                if (this.callbacks.onAssignmentCancelled) {
-                    this.callbacks.onAssignmentCancelled();
+                // Check if the click is in a different view than any selected
+                var clickedInNewView = true;
+                for (var ai = 0; ai < this.assignmentSelection.length; ai++) {
+                    if (this.assignmentSelection[ai].cameraName === viewName) {
+                        clickedInNewView = false;
+                        break;
+                    }
+                }
+                if (clickedInNewView && viewName) {
+                    // Clicking empty space in a new view: keep assignment mode active
+                } else {
+                    // Same view or outside views: exit assignment mode
+                    this.assignmentSelection = [];
+                    this.setAssignmentMode(false);
+                    if (this.callbacks.onAssignmentCancelled) {
+                        this.callbacks.onAssignmentCancelled();
+                    }
                 }
             }
             this.clearSelection();
@@ -930,6 +1013,24 @@ class InteractionManager {
         const state = this._getState();
         if (!state) return;
 
+        // Edit Group mode: Escape cancels, Enter finishes
+        if (this.editGroupMode) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (this.callbacks.onEditGroupCancelled) {
+                    this.callbacks.onEditGroupCancelled();
+                }
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (this.callbacks.onEditGroupFinished) {
+                    this.callbacks.onEditGroupFinished();
+                }
+                return;
+            }
+        }
+
         switch (e.key) {
             case 'Delete':
             case 'Backspace': {
@@ -940,15 +1041,6 @@ class InteractionManager {
                 break;
             }
 
-            case 'n':
-            case 'N': {
-                // Only handle plain 'n', not Ctrl+N (new window) etc.
-                if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-                    e.preventDefault();
-                    this._addNewInstance();
-                }
-                break;
-            }
 
             case 'c':
             case 'C': {
@@ -1530,7 +1622,7 @@ class InteractionManager {
      *
      * @private
      */
-    _addNewInstance() {
+    _addNewInstance(initialPoints) {
         const state = this._getState();
         if (!state || !state.session) return;
 
@@ -1556,19 +1648,86 @@ class InteractionManager {
             }
         }
 
-        // Default positions spread around center
-        const cx = vw / 2, cy = vh / 2;
-        const spacing = Math.min(vw, vh) * 0.04;
-        const points = new Array(numNodes);
-        for (let n = 0; n < numNodes; n++) {
-            const offset = n - (numNodes - 1) / 2;
-            points[n] = [cx + offset * spacing * 0.3, cy + offset * spacing];
+        let points;
+        if (initialPoints && initialPoints.length === numNodes) {
+            points = initialPoints;
+        } else {
+            // Topology-based layout using skeleton edges
+            const cx = vw / 2, cy = vh / 2;
+            const spacing = Math.min(vw, vh) * 0.04;
+            points = new Array(numNodes);
+
+            if (skeleton && skeleton.edges && skeleton.edges.length > 0 && numNodes > 0) {
+                // Build adjacency list
+                const adj = new Array(numNodes);
+                const degree = new Array(numNodes).fill(0);
+                for (let i = 0; i < numNodes; i++) adj[i] = [];
+                for (const edge of skeleton.edges) {
+                    adj[edge[0]].push(edge[1]);
+                    adj[edge[1]].push(edge[0]);
+                    degree[edge[0]]++;
+                    degree[edge[1]]++;
+                }
+
+                // Find root: node with most connections
+                let root = 0;
+                for (let i = 1; i < numNodes; i++) {
+                    if (degree[i] > degree[root]) root = i;
+                }
+
+                // BFS from root, placing children at evenly distributed angles
+                const visited = new Array(numNodes).fill(false);
+                const queue = [root];
+                visited[root] = true;
+                points[root] = [cx, cy];
+                let parentAngle = new Array(numNodes).fill(-Math.PI / 2); // default upward
+
+                while (queue.length > 0) {
+                    const node = queue.shift();
+                    const children = adj[node].filter(c => !visited[c]);
+                    const baseAngle = parentAngle[node];
+                    const spread = Math.PI; // spread children over 180 degrees
+                    for (let i = 0; i < children.length; i++) {
+                        const child = children[i];
+                        visited[child] = true;
+                        let angle;
+                        if (children.length === 1) {
+                            angle = baseAngle;
+                        } else {
+                            angle = baseAngle - spread / 2 + (spread * i) / (children.length - 1);
+                        }
+                        points[child] = [
+                            points[node][0] + Math.cos(angle) * spacing * 2,
+                            points[node][1] + Math.sin(angle) * spacing * 2
+                        ];
+                        parentAngle[child] = angle;
+                        queue.push(child);
+                    }
+                }
+
+                // Handle any disconnected nodes
+                for (let i = 0; i < numNodes; i++) {
+                    if (!visited[i]) {
+                        const offset = i - (numNodes - 1) / 2;
+                        points[i] = [cx + offset * spacing * 0.3, cy + offset * spacing];
+                    }
+                }
+            } else {
+                // Fallback: simple vertical line
+                for (let n = 0; n < numNodes; n++) {
+                    const offset = n - (numNodes - 1) / 2;
+                    points[n] = [cx + offset * spacing * 0.3, cy + offset * spacing];
+                }
+            }
         }
 
         const instance = new Instance(points, 0, 'user', 1.0);
         instance.modified = true;
 
         state.session.addUnlinkedInstance(state.currentFrame, targetCamera, instance);
+        if (this.callbacks.onUserInstanceCreated) {
+            this.callbacks.onUserInstanceCreated(targetCamera, points);
+        }
         this._requestRedraw();
     }
 }
