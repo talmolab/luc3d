@@ -71,9 +71,6 @@ class InteractionManager {
         /** @type {boolean} Whether a drag is in progress */
         this.isDragging = false;
 
-        /** @type {boolean} Whether drag is allowed (set true on mouseup/endDrag, false on mousedown) */
-        this._canDrag = true;
-
         /**
          * Details of the active drag, or null.
          * @type {{
@@ -210,7 +207,7 @@ class InteractionManager {
      *   distance: number,
      * }|null} The nearest hit, or null if nothing is within threshold.
      */
-    findNearestNode(videoX, videoY, viewName, frameIdx) {
+    findNearestNode(videoX, videoY, viewName, frameIdx, options) {
         const groups = this._getInstanceGroups(frameIdx);
         if (!groups || groups.length === 0) return null;
 
@@ -238,9 +235,15 @@ class InteractionManager {
         const edgeWeight = edgeSliderEl ? parseInt(edgeSliderEl.value) || 2 : 2;
         const edgeThreshold = edgeWeight + 4 * displayToVideo;
 
-        // Get skeleton edges for edge hit testing
+        // Get skeleton edges and node names for hit testing
         const skeleton = (state && state.session) ? state.session.skeleton : null;
         const edges = skeleton ? skeleton.edges : null;
+        const nodeNames = skeleton ? skeleton.nodes : null;
+
+        // Label threshold: approximate label area in video pixels
+        const labelSliderEl = document.getElementById('visUserLabelSize');
+        const labelSize = labelSliderEl ? parseInt(labelSliderEl.value) || 11 : 11;
+        const labelThreshold = labelSize * displayToVideo * 1.5;
 
         let best = null;
         let bestDist = Infinity;
@@ -298,6 +301,8 @@ class InteractionManager {
                     }
 
                     // --- Edge hit testing (only if no node was hit for this instance) ---
+                    // When an edge is hit, snap to the nearest endpoint so drags
+                    // always target a real node (nodeIdx -1 was a no-op).
                     if (edges && !best) {
                         for (let ei = 0; ei < edges.length; ei++) {
                             const edge = edges[ei];
@@ -310,12 +315,40 @@ class InteractionManager {
 
                             if (edgeDist < edgeThreshold && edgeDist < bestDist) {
                                 bestDist = edgeDist;
+                                // Pick the closer endpoint as the target node
+                                var dA = Math.hypot(ptA[0] - videoX, ptA[1] - videoY);
+                                var dB = Math.hypot(ptB[0] - videoX, ptB[1] - videoY);
                                 best = {
                                     instanceGroupIdx: g,
                                     instanceGroup: group,
                                     instanceIdx: g,
-                                    nodeIdx: -1, // edge hit, no specific node
+                                    nodeIdx: dA <= dB ? edge[0] : edge[1],
                                     distance: edgeDist,
+                                    isReprojected: instType === 'reprojected',
+                                };
+                            }
+                        }
+                    }
+
+                    // --- Label hit testing (only if no node or edge was hit) ---
+                    // Clicking a node's label text grabs that node for dragging.
+                    if (!best && nodeNames && !(options && options.skipLabels)) {
+                        for (let n = 0; n < instance.points.length; n++) {
+                            const pt = instance.points[n];
+                            if (pt == null) continue;
+                            var name = typeof nodeNames[n] === 'string' ? nodeNames[n] : (nodeNames[n] && nodeNames[n].name ? nodeNames[n].name : null);
+                            if (!name) continue;
+                            // Estimate label bounds: label is drawn offset from node,
+                            // roughly within labelThreshold distance
+                            var ldist = Math.hypot(pt[0] - videoX, pt[1] - videoY);
+                            if (ldist < labelThreshold && ldist < bestDist) {
+                                bestDist = ldist;
+                                best = {
+                                    instanceGroupIdx: g,
+                                    instanceGroup: group,
+                                    instanceIdx: g,
+                                    nodeIdx: n,
+                                    distance: ldist,
                                     isReprojected: instType === 'reprojected',
                                 };
                             }
@@ -339,7 +372,7 @@ class InteractionManager {
      * @param {number} frameIdx
      * @returns {{ unlinked: UnlinkedInstance, nodeIdx: number, distance: number }|null}
      */
-    findNearestUnlinkedNode(videoX, videoY, viewName, frameIdx) {
+    findNearestUnlinkedNode(videoX, videoY, viewName, frameIdx, options) {
         const state = this._getState();
         if (!state || !state.session) return null;
 
@@ -369,9 +402,15 @@ class InteractionManager {
         const edgeWeight = edgeSliderEl ? parseInt(edgeSliderEl.value) || 2 : 2;
         const edgeThreshold = edgeWeight + 4 * displayToVideo;
 
-        // Get skeleton edges for edge hit testing
+        // Get skeleton edges and node names for hit testing
         const skeleton = state.session.skeleton;
         const edges = skeleton ? skeleton.edges : null;
+        const nodeNames = skeleton ? skeleton.nodes : null;
+
+        // Label threshold
+        const labelSliderEl2 = document.getElementById('visUserLabelSize');
+        const labelSize2 = labelSliderEl2 ? parseInt(labelSliderEl2.value) || 11 : 11;
+        const labelThreshold2 = labelSize2 * displayToVideo * 1.5;
 
         let best = null;
         let bestDist = Infinity;
@@ -415,6 +454,7 @@ class InteractionManager {
                 }
 
                 // --- Edge hit testing (only if no node was hit for this instance) ---
+                // Snap to nearest endpoint so drags target a real node.
                 if (edges && !best) {
                     for (let ei = 0; ei < edges.length; ei++) {
                         const edge = edges[ei];
@@ -427,11 +467,26 @@ class InteractionManager {
 
                         if (edgeDist < edgeThreshold && edgeDist < bestDist) {
                             bestDist = edgeDist;
+                            var dA2 = Math.hypot(ptA[0] - videoX, ptA[1] - videoY);
+                            var dB2 = Math.hypot(ptB[0] - videoX, ptB[1] - videoY);
                             best = {
                                 unlinked: ul,
-                                nodeIdx: -1,
+                                nodeIdx: dA2 <= dB2 ? edge[0] : edge[1],
                                 distance: edgeDist,
                             };
+                        }
+                    }
+                }
+
+                // --- Label hit testing (only if no node or edge was hit) ---
+                if (!best && nodeNames && !(options && options.skipLabels)) {
+                    for (let n = 0; n < points.length; n++) {
+                        const pt = points[n];
+                        if (pt == null) continue;
+                        var ldist = Math.hypot(pt[0] - videoX, pt[1] - videoY);
+                        if (ldist < labelThreshold2 && ldist < bestDist) {
+                            bestDist = ldist;
+                            best = { unlinked: ul, nodeIdx: n, distance: ldist };
                         }
                     }
                 }
@@ -562,12 +617,20 @@ class InteractionManager {
             this._endDrag();
         }
 
-        var canDrag = this._canDrag;
-        this._canDrag = false;
-
         var coords = this.canvasToVideo(e.clientX, e.clientY, viewName);
         var vx = coords[0], vy = coords[1];
         var frameIdx = state.currentFrame;
+
+        // Pre-check: if a node/edge is near the click, block zoom immediately
+        // so the zoom handler never starts a box-zoom on node interactions.
+        // Skip label hits here — their large threshold causes false positives.
+        if (e.button === 0) {
+            var preHit = this.findNearestNode(vx, vy, viewName, frameIdx, { skipLabels: true });
+            var preUlHit = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx, { skipLabels: true });
+            if (preHit || preUlHit) {
+                window.__mvguiDragging = true;
+            }
+        }
 
         // --- Right-click / Ctrl+click (macOS trackpad): toggle node null ---
         if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
@@ -647,6 +710,9 @@ class InteractionManager {
                     this.callbacks.onClonePredictedGroup(linkedHit.instanceGroup);
                 }
                 this._requestRedraw();
+                e.preventDefault();
+                e.stopPropagation();
+                e._consumedByInteraction = true;
                 return;
             }
         }
@@ -657,6 +723,9 @@ class InteractionManager {
                 this.callbacks.onConvertReprojection(linkedHit.instanceGroup, viewName);
             }
             this._requestRedraw();
+            e.preventDefault();
+            e.stopPropagation();
+            e._consumedByInteraction = true;
             return;
         }
 
@@ -673,35 +742,30 @@ class InteractionManager {
             }
             var hitInst = linkedHit.instanceGroup.getInstance(viewName);
             var hitReprojInst = linkedHit.isReprojected;
-            // Block drag for predicted and reprojected instances (select only)
+
+            // Predicted/reprojected: select only (double-click to convert)
             if (hitReprojInst || (hitInst && (hitInst.type === 'predicted' || hitInst.type === 'reprojected'))) {
                 this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
                 this._requestRedraw();
                 e.preventDefault();
                 e.stopPropagation();
                 e._consumedByInteraction = true;
-                // Fall through to the end (no drag)
             } else {
-                // Select and start drag (drag threshold prevents accidental movement)
+                // User nodes: select and start drag immediately
                 this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
                 this._startDrag(viewName, linkedHit.instanceGroupIdx, linkedHit.nodeIdx,
-                    vx, vy, null, e.altKey ? linkedHit.instanceGroup.getInstance(viewName) : null);
+                    vx, vy, null, e.altKey ? linkedHit.instanceGroup.getInstance(viewName) : null,
+                    e.clientX, e.clientY);
                 e.preventDefault();
                 e.stopPropagation();
                 e._consumedByInteraction = true;
             }
 
-        // --- Unlinked node: double-click predicted → create user instance ---
+        // --- Unlinked node: double-click predicted → convert all same-track predictions across views ---
         } else if (useUnlinked && e.detail >= 2 && ulHit.unlinked.instance && ulHit.unlinked.instance.type === 'predicted') {
-            var predInst = ulHit.unlinked.instance;
-            var clonedPoints = predInst.points.map(function(pt) {
-                return pt != null ? [pt[0], pt[1]] : null;
-            });
-            var newInst = new Instance(clonedPoints, predInst.trackIdx, 'user', 1.0);
-            newInst.modified = true;
-            var newUl = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
-            this.select(null, -1);
-            this.selectedUnlinked = newUl;
+            if (this.callbacks.onConvertUnlinkedPredictions) {
+                this.callbacks.onConvertUnlinkedPredictions(ulHit.unlinked);
+            }
             e.preventDefault();
             e.stopPropagation();
             e._consumedByInteraction = true;
@@ -719,7 +783,8 @@ class InteractionManager {
             this.addToAssignmentSelection(ulHit.unlinked);
             // Always allow drag for repositioning
             this._startDrag(viewName, -1, ulHit.nodeIdx,
-                vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
+                vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null,
+                e.clientX, e.clientY);
             e.preventDefault();
             e.stopPropagation();
             e._consumedByInteraction = true;
@@ -736,11 +801,6 @@ class InteractionManager {
             this.clearSelection();
         }
 
-        // If no drag was started, re-enable drag for the next mousedown
-        if (!this.isDragging) {
-            this._canDrag = true;
-        }
-
         this._requestRedraw();
     }
 
@@ -753,8 +813,10 @@ class InteractionManager {
      * @param {string} viewName
      */
     onMouseMove(e, viewName) {
-        // During drags, all movement is handled by _onDragMove (document-level)
-        if (this.isDragging) return;
+        // During drags, movement is handled by document-level _onDragMove
+        if (this.isDragging && this.dragInfo) {
+            return;
+        }
 
         var state = this._getState();
         if (!state) return;
@@ -1031,12 +1093,18 @@ class InteractionManager {
                     mousedown: function (e) { self.onMouseDown(e, vn); },
                     mousemove: function (e) { self.onMouseMove(e, vn); },
                     mouseup: function (e) {
-                        if (!self.isDragging) {
-                            self._canDrag = true;
+                        if (self.isDragging && self.dragInfo) {
+                            self.onMouseUp(e, self.dragInfo.viewName);
                         }
+                        window.__mvguiDragging = false;
                     },
                     mouseleave: function () { self.onMouseLeave(vn); },
                     contextmenu: function (e) { e.preventDefault(); },
+                    dblclick: function (e) {
+                        // Prevent double-clicks from bubbling to zoom-reset handler
+                        e.stopPropagation();
+                        e._consumedByInteraction = true;
+                    },
                 };
             })(viewName);
 
@@ -1045,6 +1113,7 @@ class InteractionManager {
             canvas.addEventListener('mouseup', handlers.mouseup);
             canvas.addEventListener('mouseleave', handlers.mouseleave);
             canvas.addEventListener('contextmenu', handlers.contextmenu);
+            canvas.addEventListener('dblclick', handlers.dblclick);
 
             this._boundHandlers.set(viewName, { canvas: canvas, handlers: handlers });
         }
@@ -1052,6 +1121,11 @@ class InteractionManager {
         // Keyboard handler
         this._keyHandler = function (e) { self.onKeyDown(e); };
         document.addEventListener('keydown', this._keyHandler);
+
+        // Safety: always reset the dragging flag on any mouseup so it never
+        // gets stuck (e.g. mouseup fires outside canvas after select-only click)
+        this._globalMouseUpHandler = function () { window.__mvguiDragging = false; };
+        document.addEventListener('mouseup', this._globalMouseUpHandler);
     }
 
     /**
@@ -1066,6 +1140,7 @@ class InteractionManager {
             canvas.removeEventListener('mouseup', h.mouseup);
             canvas.removeEventListener('mouseleave', h.mouseleave);
             canvas.removeEventListener('contextmenu', h.contextmenu);
+            canvas.removeEventListener('dblclick', h.dblclick);
         }
         this._boundHandlers.clear();
 
@@ -1075,6 +1150,11 @@ class InteractionManager {
         if (this._keyHandler) {
             document.removeEventListener('keydown', this._keyHandler);
             this._keyHandler = null;
+        }
+
+        if (this._globalMouseUpHandler) {
+            document.removeEventListener('mouseup', this._globalMouseUpHandler);
+            this._globalMouseUpHandler = null;
         }
     }
 
@@ -1145,7 +1225,7 @@ class InteractionManager {
      * @param {Object|null} altDragSource - If Alt+drag, the instance or unlinked to copy points from
      * @private
      */
-    _startDrag(viewName, instanceGroupIdx, nodeIdx, vx, vy, unlinked, altDragSource) {
+    _startDrag(viewName, instanceGroupIdx, nodeIdx, vx, vy, unlinked, altDragSource, clientX, clientY) {
         // Clean up any previous drag listeners
         this._removeDragListeners();
 
@@ -1168,17 +1248,31 @@ class InteractionManager {
             nodeIdx: nodeIdx,
             startPos: [vx, vy],
             currentPos: [vx, vy],
+            startClientX: clientX || 0,
+            startClientY: clientY || 0,
             unlinked: unlinked,
             originalPoints: originalPoints,
             thresholdMet: false,
         };
 
-        // Install document-level listeners for the drag duration
+        // Capture pointer on the overlay canvas so it gets all events during drag
+        var state = this._getState();
+        if (state) {
+            var view = this._findView(state, viewName);
+            if (view && view.overlayCanvas && view.overlayCanvas.setPointerCapture) {
+                try {
+                    // Find the pointer ID from the most recent event
+                    this._capturedCanvas = view.overlayCanvas;
+                } catch (ignored) {}
+            }
+        }
+
+        // Install document-level listeners as backup for drag duration
         var self = this;
         this._dragMoveHandler = function (e) { self._onDragMove(e); };
         this._dragUpHandler = function (e) { self._onDragUp(e); };
-        document.addEventListener('mousemove', this._dragMoveHandler, true); // capture phase
-        document.addEventListener('mouseup', this._dragUpHandler, true); // capture phase
+        document.addEventListener('mousemove', this._dragMoveHandler, true);
+        document.addEventListener('mouseup', this._dragUpHandler, true);
     }
 
     /**
@@ -1190,17 +1284,22 @@ class InteractionManager {
     _onDragMove(e) {
         if (!this.isDragging || !this.dragInfo) return;
 
+        // Always block zoom handlers during drag
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        window.__mvguiDragging = true;
+
         var info = this.dragInfo;
         var coords = this.canvasToVideo(e.clientX, e.clientY, info.viewName);
         var vx = coords[0], vy = coords[1];
         info.currentPos = [vx, vy];
 
-        // Require minimum movement before committing to a drag
+        // Mark threshold as met on any movement (annotation tools need instant response)
         if (!info.thresholdMet) {
-            var tdx = vx - info.startPos[0];
-            var tdy = vy - info.startPos[1];
-            if (Math.sqrt(tdx * tdx + tdy * tdy) < 3) {
-                return; // Don't update position yet
+            var tdx = e.clientX - info.startClientX;
+            var tdy = e.clientY - info.startClientY;
+            if (tdx === 0 && tdy === 0) {
+                return;
             }
             info.thresholdMet = true;
         }
@@ -1237,8 +1336,6 @@ class InteractionManager {
             }
         }
 
-        e.preventDefault();
-        e.stopPropagation();
         this._requestRedraw();
     }
 
@@ -1249,6 +1346,10 @@ class InteractionManager {
      * @private
      */
     _onDragUp(e) {
+        // Block zoom handlers from seeing this mouseup
+        e.stopImmediatePropagation();
+        e.preventDefault();
+
         if (!this.isDragging || !this.dragInfo) {
             this._endDrag();
             return;
@@ -1267,7 +1368,6 @@ class InteractionManager {
         this.isDragging = false;
         this.dragInfo = null;
         window.__mvguiDragging = false;
-        this._canDrag = true;
         this._removeDragListeners();
     }
 

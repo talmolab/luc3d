@@ -562,113 +562,27 @@ function drawReprojectionErrors(ctx, observedPoints, reprojectedPoints, options)
  * @param {number}  [options.canvasHeight]
  */
 function drawSelectionHighlight(ctx, points, skeleton, options) {
+    // Minimal selection indicator — thin white outline on each node.
+    // No glow, no rings, no bounding box — just enough to show which group is active.
     options = options || {};
-    if (!points || points.length === 0) return;
-
-    const color = options.color || '#667eea';
-    const selectedNodeIdx = options.selectedNodeIdx != null ? options.selectedNodeIdx : -1;
-    const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
-    const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
-
-    const vw = options.videoWidth;
-    const vh = options.videoHeight;
-    const cw = options.canvasWidth != null ? options.canvasWidth : ctx.canvas.width;
-    const ch = options.canvasHeight != null ? options.canvasHeight : ctx.canvas.height;
-
-    const needsTransform = vw != null && vh != null;
-    const toCanvas = needsTransform
-        ? makeVideoToCanvasTransform(vw, vh, cw, ch)
-        : null;
-    const scale = toCanvas ? toCanvas.scale : 1;
-
-    const nodeSize = baseNodeSize;
-    const lineWidth = baseLineWidth;
-
-    // Pre-compute canvas positions
-    const canvasPoints = new Array(points.length);
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (let i = 0; i < points.length; i++) {
-        const pt = points[i];
-        if (pt == null) { canvasPoints[i] = null; continue; }
-        if (toCanvas) {
-            canvasPoints[i] = toCanvas(pt[0], pt[1]);
-        } else {
-            canvasPoints[i] = { x: pt[0], y: pt[1] };
-        }
-        const cp = canvasPoints[i];
-        if (cp.x < minX) minX = cp.x;
-        if (cp.y < minY) minY = cp.y;
-        if (cp.x > maxX) maxX = cp.x;
-        if (cp.y > maxY) maxY = cp.y;
-    }
+    var nodeSize = options.nodeSize || 4;
+    var vw = options.videoWidth;
+    var vh = options.videoHeight;
+    var cw = options.canvasWidth != null ? options.canvasWidth : ctx.canvas.width;
+    var ch = options.canvasHeight != null ? options.canvasHeight : ctx.canvas.height;
+    var toCanvas = (vw != null && vh != null) ? makeVideoToCanvasTransform(vw, vh, cw, ch) : null;
 
     ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
 
-    // --- 1. Glow circles behind nodes ---
-    const rgb = hexToRgb(color);
-    const glowRadius = nodeSize * 2.5;
-    ctx.fillStyle = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.25)';
-    for (let i = 0; i < canvasPoints.length; i++) {
-        const cp = canvasPoints[i];
-        if (!cp) continue;
+    for (var i = 0; i < points.length; i++) {
+        var pt = points[i];
+        if (!pt) continue;
+        var cp = toCanvas ? toCanvas(pt[0], pt[1]) : { x: pt[0], y: pt[1] };
         ctx.beginPath();
-        ctx.arc(cp.x, cp.y, glowRadius, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    // --- 2. Thicker, brighter edges ---
-    if (skeleton.edges) {
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = lineWidth * 2;
-        ctx.lineCap = 'round';
-        ctx.globalAlpha = 0.8;
-        ctx.beginPath();
-        for (let i = 0; i < skeleton.edges.length; i++) {
-            const edge = skeleton.edges[i];
-            const src = canvasPoints[edge[0]];
-            const dst = canvasPoints[edge[1]];
-            if (src && dst) {
-                ctx.moveTo(src.x, src.y);
-                ctx.lineTo(dst.x, dst.y);
-            }
-        }
-        ctx.stroke();
-        ctx.globalAlpha = 1.0;
-    }
-
-    // --- 3. Brighter nodes ---
-    ctx.fillStyle = '#ffffff';
-    for (let i = 0; i < canvasPoints.length; i++) {
-        const cp = canvasPoints[i];
-        if (!cp) continue;
-        ctx.beginPath();
-        ctx.arc(cp.x, cp.y, nodeSize * 1.3, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    // --- 4. Dashed bounding box ---
-    if (minX < Infinity) {
-        const pad = nodeSize * 3;
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.lineWidth = 1 * scale;
-        ctx.setLineDash([4 * scale, 4 * scale]);
-        ctx.strokeRect(minX - pad, minY - pad, (maxX - minX) + 2 * pad, (maxY - minY) + 2 * pad);
-        ctx.setLineDash([]);
-    }
-
-    // --- 5. Bright ring on specifically selected node ---
-    if (selectedNodeIdx >= 0 && selectedNodeIdx < canvasPoints.length && canvasPoints[selectedNodeIdx]) {
-        const cp = canvasPoints[selectedNodeIdx];
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2 * scale;
-        ctx.beginPath();
-        ctx.arc(cp.x, cp.y, nodeSize * 2, 0, Math.PI * 2);
-        ctx.stroke();
-        // Inner colored ring
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5 * scale;
-        ctx.beginPath();
-        ctx.arc(cp.x, cp.y, nodeSize * 2.5, 0, Math.PI * 2);
+        ctx.arc(cp.x, cp.y, nodeSize + 2, 0, Math.PI * 2);
         ctx.stroke();
     }
 
@@ -691,51 +605,7 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
  * @returns {string} Suggested CSS cursor type ('grab')
  */
 function drawHoverHighlight(ctx, point, nodeIdx, options) {
-    options = options || {};
     if (!point) return 'default';
-
-    const color = options.color || '#667eea';
-    const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
-
-    const vw = options.videoWidth;
-    const vh = options.videoHeight;
-    const cw = options.canvasWidth != null ? options.canvasWidth : ctx.canvas.width;
-    const ch = options.canvasHeight != null ? options.canvasHeight : ctx.canvas.height;
-
-    const needsTransform = vw != null && vh != null;
-    const toCanvas = needsTransform
-        ? makeVideoToCanvasTransform(vw, vh, cw, ch)
-        : null;
-    const scale = toCanvas ? toCanvas.scale : 1;
-
-    const nodeSize = baseNodeSize * scale;
-
-    let cp;
-    if (toCanvas) {
-        cp = toCanvas(point[0], point[1]);
-    } else {
-        cp = { x: point[0], y: point[1] };
-    }
-
-    ctx.save();
-
-    // Semi-transparent glow circle (radius increased by 50%, alpha 0.3)
-    const rgb = hexToRgb(color);
-    const hoverRadius = nodeSize * 1.5;
-    ctx.fillStyle = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.3)';
-    ctx.beginPath();
-    ctx.arc(cp.x, cp.y, hoverRadius, 0, Math.PI * 2);
-    ctx.fill();
-
-    // White outline ring
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.lineWidth = 1.5 * scale;
-    ctx.beginPath();
-    ctx.arc(cp.x, cp.y, hoverRadius, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.restore();
-
     return 'grab';
 }
 
@@ -1559,7 +1429,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                 ? hGroup.getInstance(viewName)
                 : (hGroup.instances ? hGroup.instances[viewName] : null);
             if (hInst && hInst.points && hNodeIdx >= 0 && hNodeIdx < hInst.points.length && hInst.points[hNodeIdx]) {
-                drawHoverHighlight(ctx, hInst.points[hNodeIdx], hNodeIdx, Object.assign({}, renderOpts, {
+                drawHoverHighlight(ctx, hInst.points[hNodeIdx], hNodeIdx, Object.assign({}, userRender, {
                     color: '#4ade80',  // lighter green for hover
                 }));
             }
@@ -1573,7 +1443,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
         if (dragInst && dragInst.points) {
             drawDragPreview(ctx, dragInst.points, dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
-                Object.assign({}, renderOpts, { color: '#ffffff' }));
+                Object.assign({}, userRender, { color: '#ffffff' }));
         }
     }
 

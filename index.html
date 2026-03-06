@@ -283,8 +283,8 @@
                     <div class="vis-section-header">Reprojections</div>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
-                        <input type="range" id="visReprojNodeSize" min="1" max="20" value="1" step="1">
-                        <span class="vis-val" id="visReprojNodeSizeVal">1</span>
+                        <input type="range" id="visReprojNodeSize" min="1" max="20" value="20" step="1">
+                        <span class="vis-val" id="visReprojNodeSizeVal">20</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Weight</span>
@@ -549,8 +549,8 @@
     <script src="pose-data.js?v=5"></script>
     <script src="triangulation.js?v=5"></script>
     <script src="demo-data.js"></script>
-    <script src="overlays.js?v=8"></script>
-    <script src="interaction.js?v=6"></script>
+    <script src="overlays.js?v=11"></script>
+    <script src="interaction.js?v=10"></script>
     <script src="viewport3d.js"></script>
     <script src="timeline.js"></script>
     <script src="file-io.js?v=6"></script>
@@ -791,8 +791,13 @@
          */
         function storeReprojectedInstances(group, triangulationResult, allCameras) {
             if (!triangulationResult || !triangulationResult.points3d) return;
+            // Clear old reprojections so stale ones don't persist
+            group.reprojectedInstances.clear();
             for (var ci = 0; ci < allCameras.length; ci++) {
                 var cam = allCameras[ci];
+                // Only create reprojections for cameras that have an instance in this group
+                var inst = group.getInstance(cam.name);
+                if (!inst) continue;
                 // Use existing reprojection if available, otherwise compute it
                 var reprojPts = triangulationResult.reprojections[cam.name];
                 if (!reprojPts && cam.projectionMatrix) {
@@ -1336,6 +1341,47 @@
         // Interaction Manager Setup
         // ============================================
 
+        /**
+         * Fill missing (null) nodes in a points array by spreading them in a
+         * circle around the centroid of existing points. This makes them easy
+         * to individually select and drag into place.
+         */
+        function spreadMissingNodes(points) {
+            var cx = 0, cy = 0, cnt = 0;
+            for (var i = 0; i < points.length; i++) {
+                if (points[i]) { cx += points[i][0]; cy += points[i][1]; cnt++; }
+            }
+            if (cnt === 0) return;
+            cx /= cnt; cy /= cnt;
+
+            // Count how many are missing
+            var missing = [];
+            for (var j = 0; j < points.length; j++) {
+                if (!points[j]) missing.push(j);
+            }
+            if (missing.length === 0) return;
+
+            // Spread in a circle with radius proportional to the bounding box
+            var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (var k = 0; k < points.length; k++) {
+                if (!points[k]) continue;
+                if (points[k][0] < minX) minX = points[k][0];
+                if (points[k][0] > maxX) maxX = points[k][0];
+                if (points[k][1] < minY) minY = points[k][1];
+                if (points[k][1] > maxY) maxY = points[k][1];
+            }
+            var span = Math.max(maxX - minX, maxY - minY, 40);
+            var radius = span * 0.4;
+
+            for (var m = 0; m < missing.length; m++) {
+                var angle = (2 * Math.PI * m) / missing.length - Math.PI / 2;
+                points[missing[m]] = [
+                    cx + radius * Math.cos(angle),
+                    cy + radius * Math.sin(angle),
+                ];
+            }
+        }
+
         function setupInteraction() {
             interactionManager = new InteractionManager({
                 getState: function () { return state; },
@@ -1426,24 +1472,23 @@
                 onClonePredictedGroup: function (predGroup) {
                     // Clone the predicted group's instances as user instances in a new group
                     var frameIdx = state.currentFrame;
+
+                    // Remove the old predicted group so we don't end up with duplicates
+                    var trackMap = state.session.instanceGroups.get(frameIdx);
+                    if (trackMap) {
+                        var trackGroups = trackMap.get(predGroup.trackIdx);
+                        if (trackGroups) {
+                            var pgIdx = trackGroups.indexOf(predGroup);
+                            if (pgIdx >= 0) trackGroups.splice(pgIdx, 1);
+                        }
+                    }
+
                     var unlinkedList = [];
                     for (var [camName, inst] of predGroup.instances) {
                         var clonedPoints = inst.points.map(function(pt) {
                             return pt != null ? [pt[0], pt[1]] : null;
                         });
-                        // Fill missing nodes near centroid so user can place them
-                        var cx2 = 0, cy2 = 0, cnt2 = 0;
-                        for (var pi2 = 0; pi2 < clonedPoints.length; pi2++) {
-                            if (clonedPoints[pi2]) { cx2 += clonedPoints[pi2][0]; cy2 += clonedPoints[pi2][1]; cnt2++; }
-                        }
-                        if (cnt2 > 0) {
-                            cx2 /= cnt2; cy2 /= cnt2;
-                            for (var pi3 = 0; pi3 < clonedPoints.length; pi3++) {
-                                if (!clonedPoints[pi3]) {
-                                    clonedPoints[pi3] = [cx2 + (pi3 - clonedPoints.length / 2) * 10, cy2];
-                                }
-                            }
-                        }
+                        spreadMissingNodes(clonedPoints);
                         var userInst = new Instance(clonedPoints, predGroup.trackIdx, 'user', 1.0);
                         userInst.modified = true;
                         var ul = state.session.addUnlinkedInstance(frameIdx, camName, userInst);
@@ -1455,9 +1500,76 @@
                             ni.trackIdx = newGroup.trackIdx;
                         }
                         if (interactionManager) interactionManager.select(newGroup, -1);
-                        var trackName = state.session.tracks[newGroup.trackIdx] || 'Track ' + newGroup.trackIdx;
-                        setStatus('Created user group ' + trackName + ' from predicted', 'success');
+
+                        // Auto-triangulate if we have >= 2 cameras
+                        var cameras = state.session.cameras;
+                        var groupCamNames = newGroup.cameraNames;
+                        var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
+                        if (groupCameras.length >= 2) {
+                            var result = triangulateAndReproject(newGroup, groupCameras);
+                            newGroup.reprojections = result.reprojections;
+                            newGroup.points3d = result.points3d;
+                            storeReprojectedInstances(newGroup, result, cameras);
+                            newGroup.observedPoints = {};
+                            for (var tci = 0; tci < groupCameras.length; tci++) {
+                                var tcam = groupCameras[tci];
+                                var tinst = newGroup.getInstance(tcam.name);
+                                if (tinst) newGroup.observedPoints[tcam.name] = tinst.points;
+                            }
+                            newGroup.markClean();
+                            var frameResults = state.triangulationResults.get(frameIdx) || [];
+                            frameResults.push({
+                                group: newGroup, points3d: result.points3d,
+                                reprojections: result.reprojections,
+                                errors: result.errors, meanError: result.meanError,
+                            });
+                            state.triangulationResults.set(frameIdx, frameResults);
+                            setReprojErrorVisible(true);
+                            var trackName = state.session.tracks[newGroup.trackIdx] || 'Track ' + newGroup.trackIdx;
+                            setStatus('Converted & triangulated: ' + trackName + ' (error: ' + (result.meanError != null ? result.meanError.toFixed(2) + 'px' : 'N/A') + ')', 'success');
+                        } else {
+                            var trackName = state.session.tracks[newGroup.trackIdx] || 'Track ' + newGroup.trackIdx;
+                            setStatus('Created user group ' + trackName + ' from predicted', 'success');
+                        }
                     }
+                    if (timeline) timeline.setFrameModified(frameIdx, true);
+                    if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(frameIdx));
+                    drawAllOverlays(frameIdx);
+                    update3DViewport(frameIdx);
+                    updateInfoPanel();
+                },
+
+                onConvertUnlinkedPredictions: function (clickedUnlinked) {
+                    // Convert the single clicked predicted instance into a user instance (stays unlinked).
+                    var frameIdx = state.currentFrame;
+                    var fg = state.session.frameGroups.get(frameIdx);
+                    if (!fg) return;
+
+                    var pred = clickedUnlinked.instance;
+                    var camName = clickedUnlinked.cameraName;
+                    var targetTrack = pred.trackIdx;
+
+                    // Clone as user instance
+                    var clonedPoints = pred.points.map(function(pt) {
+                        return pt != null ? [pt[0], pt[1]] : null;
+                    });
+                    spreadMissingNodes(clonedPoints);
+                    var userInst = new Instance(clonedPoints, targetTrack, 'user', 1.0);
+                    userInst.modified = true;
+                    var newUl = state.session.addUnlinkedInstance(frameIdx, camName, userInst);
+
+                    // Remove the original predicted instance
+                    fg.removeUnlinkedById(clickedUnlinked.id);
+
+                    // Select the new user instance
+                    if (interactionManager) {
+                        interactionManager.selectedUnlinked = newUl;
+                        interactionManager.selectedGroup = null;
+                    }
+
+                    var trackName = state.session.tracks[targetTrack] || 'Track ' + targetTrack;
+                    setStatus('Converted prediction to user instance: ' + trackName + ' (' + camName + ')', 'success');
+
                     if (timeline) timeline.setFrameModified(frameIdx, true);
                     drawAllOverlays(frameIdx);
                     updateInfoPanel();
@@ -3815,7 +3927,7 @@
                 // Cycle to next camera
                 state.singleViewIndex = (state.singleViewIndex + 1) % state.views.length;
             }
-            updateVideoGridDisplay();
+            showSingleView(state.singleViewIndex);
         }
 
         function cycleSingleView(direction) {
@@ -3826,23 +3938,34 @@
             } else {
                 state.singleViewIndex = (state.singleViewIndex + direction + state.views.length) % state.views.length;
             }
-            updateVideoGridDisplay();
+            showSingleView(state.singleViewIndex);
         }
 
         function setGridMode() {
             state.viewMode = 'grid';
-            updateVideoGridDisplay();
+            paneManager.clearAll();
+            paneManager.addAllViewsAsGrid();
+            rebuildVideoController();
+            requestAnimationFrame(function () {
+                fitCanvasesToCells();
+                if (videoController) videoController.seekToFrame(state.currentFrame);
+                drawAllOverlays(state.currentFrame);
+            });
         }
 
-        function updateVideoGridDisplay() {
-            // With dockview, view mode switching is handled by showing/hiding panels.
-            // For now, just trigger canvas resize.
-            setTimeout(function () {
+        function showSingleView(idx) {
+            if (idx < 0 || idx >= state.views.length) return;
+            state.viewMode = 'single';
+            state.singleViewIndex = idx;
+            var viewName = state.views[idx].name;
+            paneManager.clearAll();
+            paneManager.addVideoPanel(viewName);
+            rebuildVideoController();
+            requestAnimationFrame(function () {
                 fitCanvasesToCells();
-                for (var i = 0; i < state.views.length; i++) {
-                    if (videoController && state.views[i].canvas) videoController.initZoom(state.views[i]);
-                }
-            }, 100);
+                if (videoController) videoController.seekToFrame(state.currentFrame);
+                drawAllOverlays(state.currentFrame);
+            });
         }
 
         function showViewIndicator() {
@@ -6318,6 +6441,10 @@
                 },
             });
 
+            // Reset zoom setup flags so new controller can attach its own handlers
+            for (const view of state.views) {
+                view._zoomSetup = false;
+            }
             // Set up zoom handlers for views that have been docked (have canvases)
             for (const view of state.views) {
                 if (!view._zoomSetup && view.canvas) {
@@ -7616,16 +7743,10 @@
                         createViewForVideoFile(mVideoEntry);
                     }
 
-                    populateViewStrip();
                     updateTotalFrames();
+                    populateViewStrip();
+                    paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
-                    // Add newly created views to dock grid
-                    for (var edpi = 0; edpi < cameras.length; edpi++) {
-                        var edpName = cameras[edpi].name;
-                        if (state.views.some(function (v) { return v.name === edpName; })) {
-                            paneManager.addVideoPanel(edpName);
-                        }
-                    }
                     requestAnimationFrame(function () { fitCanvasesToCells(); });
 
                     if (videoController) {
@@ -7714,27 +7835,36 @@
                                     frameCount: amvDec.samples.length,
                                     assignedCamera: amvCam,
                                 };
-                                console.log('[add-slp] Video entry:', amvStem, '→ assignedCamera:', amvCam);
                                 state.videoFiles.push(amvEntry);
-                                if (amvCam) createViewForVideoFile(amvEntry);
                             } catch (amvErr) {
                                 console.error('[add-slp] Failed to load ' + amvFile.name + ':', amvErr);
                             }
                         }
-                        populateViewStrip();
-                        updateTotalFrames();
-                        rebuildVideoController();
-                        // Add newly created views to dock grid
-                        console.log('[add-slp] Adding panels for cameras:', cameras.map(function(c){return c.name;}), 'views:', state.views.map(function(v){return v.name;}));
-                        for (var adpi = 0; adpi < cameras.length; adpi++) {
-                            var adpName = cameras[adpi].name;
-                            if (state.views.some(function (v) { return v.name === adpName; })) {
-                                console.log('[add-slp] Adding panel for:', adpName);
-                                paneManager.addVideoPanel(adpName);
-                            } else {
-                                console.warn('[add-slp] No view found for camera:', adpName);
+                        // Use the same assignment logic as handleLoadVideos
+                        autoAssignVideosToCameras();
+                        // Fallback: assign unassigned videos to cameras by index
+                        for (var uvi = 0; uvi < state.videoFiles.length; uvi++) {
+                            var uvf = state.videoFiles[uvi];
+                            if (!uvf.assignedCamera) {
+                                var uvCamName = uvf.name;
+                                var uvCamExists = state.session.cameras.some(function (c) { return c.name === uvCamName; });
+                                if (uvCamExists) {
+                                    uvf.assignedCamera = uvCamName;
+                                }
                             }
                         }
+                        // Create views for all assigned videos that don't have one yet
+                        for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
+                            var nvf = state.videoFiles[nvi];
+                            if (nvf.assignedCamera) {
+                                var nvHasView = state.views.some(function (v) { return v.name === nvf.assignedCamera; });
+                                if (!nvHasView) createViewForVideoFile(nvf);
+                            }
+                        }
+                        updateTotalFrames();
+                        populateViewStrip();
+                        paneManager.addAllViewsAsGrid();
+                        rebuildVideoController();
                         requestAnimationFrame(function () { fitCanvasesToCells(); });
                         if (videoController) {
                             await videoController.seekToFrame(state.currentFrame);
@@ -8205,6 +8335,9 @@
              * Top row gets ceil(n/rows) items, remaining rows fill the rest.
              */
             addAllViewsAsGrid() {
+                // Clear existing panels first to prevent duplicates
+                this.clearAll();
+
                 var views = state.views;
                 var n = views.length;
                 if (n === 0) return;
