@@ -1340,10 +1340,18 @@ class VideoController {
         var newScale = Math.max(minScale, Math.min(10, oldScale * factor));
 
         if (cssX !== undefined && cssY !== undefined) {
-            var contentX = (cssX - z.offsetX) / oldScale;
-            var contentY = (cssY - z.offsetY) / oldScale;
-            z.offsetX = cssX - contentX * newScale;
-            z.offsetY = cssY - contentY * newScale;
+            // Account for flex centering offset
+            var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
+            var container = view.canvas ? view.canvas.closest('.video-cell') : null;
+            var flexOffX = 0, flexOffY = 0;
+            if (wrapper && container) {
+                flexOffX = (container.clientWidth - wrapper.offsetWidth) / 2;
+                flexOffY = (container.clientHeight - wrapper.offsetHeight) / 2;
+            }
+            var contentX = (cssX - flexOffX - z.offsetX) / oldScale;
+            var contentY = (cssY - flexOffY - z.offsetY) / oldScale;
+            z.offsetX = cssX - flexOffX - contentX * newScale;
+            z.offsetY = cssY - flexOffY - contentY * newScale;
         }
 
         z.scale = newScale;
@@ -1378,10 +1386,18 @@ class VideoController {
         var containerW = container.clientWidth;
         var containerH = container.clientHeight;
 
-        var contentX1 = (Math.min(x1, x2) - z.offsetX) / z.scale;
-        var contentY1 = (Math.min(y1, y2) - z.offsetY) / z.scale;
-        var contentX2 = (Math.max(x1, x2) - z.offsetX) / z.scale;
-        var contentY2 = (Math.max(y1, y2) - z.offsetY) / z.scale;
+        // Account for flex centering offset of the wrapper inside the container
+        var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
+        var wW = wrapper ? wrapper.offsetWidth : containerW;
+        var wH = wrapper ? wrapper.offsetHeight : containerH;
+        var flexOffX = (containerW - wW) / 2;
+        var flexOffY = (containerH - wH) / 2;
+
+        // Convert container-relative CSS coords to content (wrapper) coords
+        var contentX1 = (Math.min(x1, x2) - flexOffX - z.offsetX) / z.scale;
+        var contentY1 = (Math.min(y1, y2) - flexOffY - z.offsetY) / z.scale;
+        var contentX2 = (Math.max(x1, x2) - flexOffX - z.offsetX) / z.scale;
+        var contentY2 = (Math.max(y1, y2) - flexOffY - z.offsetY) / z.scale;
         var contentW = contentX2 - contentX1;
         var contentH = contentY2 - contentY1;
 

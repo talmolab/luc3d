@@ -1447,14 +1447,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }
     }
 
-    // 8. Legend
-    if (showLegend) {
-        drawLegend(ctx, {
-            showDetected: showUser || showPredicted,
-            showReprojected: showReprojected,
-            showErrors: showErrors,
-        });
-    }
+    // 8. Legend — now rendered as HTML in the panel header, not on canvas
 }
 
 /**

@@ -32,7 +32,8 @@
                 File
                 <div class="menu-dropdown" id="menuFile">
                     <div class="menu-dropdown-item" id="menuNewProject">New Project</div>
-                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project</div>
+                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project<span class="shortcut">Ctrl+S</span></div>
+                    <div class="menu-dropdown-item" id="menuSaveProjectAs">Save Project As...<span class="shortcut">Ctrl+⇧+S</span></div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
@@ -795,17 +796,20 @@
             group.reprojectedInstances.clear();
             for (var ci = 0; ci < allCameras.length; ci++) {
                 var cam = allCameras[ci];
-                // Only create reprojections for cameras that have an instance in this group
-                var inst = group.getInstance(cam.name);
-                if (!inst) continue;
-                // Use existing reprojection if available, otherwise compute it
-                var reprojPts = triangulationResult.reprojections[cam.name];
+                // Create reprojections for ALL cameras (not just ones in the group)
+                // so users can see where 3D points project into unlabeled views
+                var reprojPts = triangulationResult.reprojections
+                    ? triangulationResult.reprojections[cam.name]
+                    : null;
                 if (!reprojPts && cam.projectionMatrix) {
                     reprojPts = reprojectPoints(triangulationResult.points3d, cam.projectionMatrix);
                 }
                 if (reprojPts) {
                     var reprojInstance = new Instance(reprojPts, group.trackIdx, 'reprojected', 1.0);
                     group.addReprojectedInstance(cam.name, reprojInstance);
+                    // Also store in group.reprojections so it gets saved
+                    if (!group.reprojections) group.reprojections = {};
+                    group.reprojections[cam.name] = reprojPts;
                 }
             }
         }
@@ -1473,15 +1477,8 @@
                     // Clone the predicted group's instances as user instances in a new group
                     var frameIdx = state.currentFrame;
 
-                    // Remove the old predicted group so we don't end up with duplicates
-                    var trackMap = state.session.instanceGroups.get(frameIdx);
-                    if (trackMap) {
-                        var trackGroups = trackMap.get(predGroup.trackIdx);
-                        if (trackGroups) {
-                            var pgIdx = trackGroups.indexOf(predGroup);
-                            if (pgIdx >= 0) trackGroups.splice(pgIdx, 1);
-                        }
-                    }
+                    // Remove the old predicted group from both instanceGroups AND FrameGroup
+                    state.session.removeInstanceGroup(frameIdx, predGroup);
 
                     var unlinkedList = [];
                     for (var [camName, inst] of predGroup.instances) {
@@ -1963,6 +1960,11 @@
                 saveProject();
             });
 
+            document.getElementById('menuSaveProjectAs').addEventListener('click', function () {
+                closeMenus();
+                saveProjectAs();
+            });
+
             document.getElementById('menuLoadProject').addEventListener('click', function () {
                 closeMenus();
                 handleLoadProject();
@@ -2252,9 +2254,28 @@
 
             // --- New keyboard shortcuts (Prompt 36) ---
             document.addEventListener('keydown', function (e) {
+                // --- Cmd/Ctrl+Shift shortcuts ---
+                if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
+                    switch (e.key) {
+                        case 's':
+                        case 'S': {
+                            e.preventDefault();
+                            saveProjectAs();
+                            break;
+                        }
+                    }
+                    return;
+                }
+
                 // --- Cmd/Ctrl shortcuts (work even in inputs) ---
                 if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
                     switch (e.key) {
+                        case 's':
+                        case 'S': {
+                            e.preventDefault();
+                            saveProject();
+                            break;
+                        }
                         case 'j':
                         case 'J': {
                             // Focus frame index input
@@ -2308,6 +2329,9 @@
                         break;
                     }
                     case 'u': {
+                        // U = unlink group when a group is selected (handled by interaction.js)
+                        // U = toggle user visibility when nothing is selected
+                        if (interactionManager && interactionManager.selectedInstanceGroup) break;
                         e.preventDefault();
                         var visUser = document.getElementById('visUser');
                         if (visUser) { visUser.checked = !visUser.checked; visUser.dispatchEvent(new Event('change', { bubbles: true })); }
@@ -5336,14 +5360,11 @@
             setStatus('New project started', 'success');
         }
 
-        function saveProject() {
-            if (!state.session) {
-                setStatus('No session to save', 'error');
-                return;
-            }
-
-            try {
-
+        /**
+         * Build a Blob containing the serialized project JSON.
+         * Shared by saveProject and saveProjectAs.
+         */
+        async function _buildProjectBlob() {
             const projectData = {
                 version: 2,
                 skeleton: {
@@ -5368,16 +5389,22 @@
                     unlinkedInstances: [],
                 };
 
-                // Serialize instance groups
                 const trackMap = state.session.instanceGroups.get(frameIdx);
                 if (trackMap) {
                     for (const [trackIdx, groups] of trackMap) {
                         for (const group of groups) {
+                            // Find triangulation results for this group to save errors
+                            var _triResults = state.triangulationResults.get(frameIdx);
+                            var _triEntry = _triResults ? _triResults.find(function(r){ return r.group === group; }) : null;
                             const groupData = {
                                 id: group.id,
                                 trackIdx: group.trackIdx,
                                 instances: {},
                                 points3d: group.points3d || null,
+                                reprojections: group.reprojections || null,
+                                observedPoints: group.observedPoints || null,
+                                errors: _triEntry ? _triEntry.errors : null,
+                                meanError: _triEntry ? _triEntry.meanError : null,
                             };
                             for (const [camName, inst] of group.instances) {
                                 groupData.instances[camName] = {
@@ -5394,7 +5421,6 @@
                     }
                 }
 
-                // Serialize unlinked instances
                 for (const [camName, unlinkedList] of fg.unlinkedInstances) {
                     for (const unlinked of unlinkedList) {
                         frameData.unlinkedInstances.push({
@@ -5411,11 +5437,22 @@
                 projectData.frames[frameIdx] = frameData;
             }
 
+            // Summary logging (no per-frame spam)
+            var _saveGroupCount = 0, _saveInstCount = 0;
+            for (var _sfk in projectData.frames) {
+                var _sfd = projectData.frames[_sfk];
+                _saveGroupCount += _sfd.instanceGroups.length;
+                for (var _sgi = 0; _sgi < _sfd.instanceGroups.length; _sgi++) {
+                    _saveInstCount += Object.keys(_sfd.instanceGroups[_sgi].instances).length;
+                }
+            }
+            console.log('[save] Total: ' + Object.keys(projectData.frames).length + ' frames, ' +
+                _saveGroupCount + ' groups, ' + _saveInstCount + ' instances');
+
             // Build blob in chunks to avoid "invalid string length" on large sessions
             var header = Object.assign({}, projectData);
             delete header.frames;
             var headerJson = JSON.stringify(header);
-            // Strip closing "}" so we can append frames
             headerJson = headerJson.slice(0, -1) + ',"frames":{';
 
             var blobParts = [headerJson];
@@ -5424,25 +5461,168 @@
                 var fk = frameKeys[bfi];
                 var prefix = bfi > 0 ? ',' : '';
                 blobParts.push(prefix + JSON.stringify(fk) + ':' + JSON.stringify(projectData.frames[fk]));
+                // Yield every 100 frames so the UI stays responsive
+                if (bfi % 100 === 99) {
+                    document.getElementById('loadingStatus').textContent =
+                        'Saving... (' + (bfi + 1) + '/' + frameKeys.length + ' frames)';
+                    await _yieldToUI();
+                }
             }
             blobParts.push('}}');
 
-            const blob = new Blob(blobParts, { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
+            return new Blob(blobParts, { type: 'application/json' });
+        }
+
+        // Stored file handle for "Save Project" (re-save to same file)
+        var _projectFileHandle = null;
+
+        /**
+         * Save Project — if we have a file handle from a previous save/load,
+         * write directly to it. Otherwise behave like Save As.
+         */
+        /** Yield to the browser so pending UI updates paint. */
+        function _yieldToUI() {
+            return new Promise(function (resolve) { setTimeout(resolve, 50); });
+        }
+
+        async function saveProject() {
+            if (!state.session) {
+                setStatus('No session to save', 'error');
+                return;
+            }
+            try {
+                showLoading('Saving project...');
+                await _yieldToUI();
+
+                var blob = await _buildProjectBlob();
+                var sizeMB = (blob.size / 1024 / 1024).toFixed(1);
+
+                // If we have a stored handle, write directly to it
+                if (_projectFileHandle) {
+                    try {
+                        showLoading('Writing ' + sizeMB + ' MB...');
+                        await _yieldToUI();
+                        var writable = await _projectFileHandle.createWritable();
+                        await writable.write(blob);
+                        await writable.close();
+                        hideLoading();
+                        setStatus('Project saved to ' + _projectFileHandle.name + ' (' + sizeMB + ' MB)', 'success');
+                        return;
+                    } catch (handleErr) {
+                        console.warn('[save] File handle write failed, falling back to Save As:', handleErr);
+                        _projectFileHandle = null;
+                    }
+                }
+
+                hideLoading();
+
+                // No handle — use File System Access API if available
+                if (window.showSaveFilePicker) {
+                    try {
+                        var handle = await window.showSaveFilePicker({
+                            suggestedName: 'project.mvgui.json',
+                            types: [{
+                                description: 'LUCID Project',
+                                accept: { 'application/json': ['.mvgui.json', '.json'] },
+                            }],
+                        });
+                        showLoading('Writing ' + sizeMB + ' MB...');
+                        await _yieldToUI();
+                        var writable = await handle.createWritable();
+                        await writable.write(blob);
+                        await writable.close();
+                        _projectFileHandle = handle;
+                        hideLoading();
+                        setStatus('Project saved to ' + handle.name + ' (' + sizeMB + ' MB)', 'success');
+                        return;
+                    } catch (pickerErr) {
+                        hideLoading();
+                        if (pickerErr.name === 'AbortError') {
+                            setStatus('Save cancelled', 'warning');
+                            return;
+                        }
+                        console.warn('[save] showSaveFilePicker failed, falling back to download:', pickerErr);
+                    }
+                }
+
+                // Fallback: download via <a> tag
+                _downloadBlob(blob, 'project.mvgui.json');
+                hideLoading();
+                setStatus('Project saved (' + sizeMB + ' MB)', 'success');
+
+            } catch (err) {
+                hideLoading();
+                console.error('Save project failed:', err);
+                setStatus('Save failed: ' + err.message, 'error');
+            }
+        }
+
+        /**
+         * Save Project As — always prompt for a new file location.
+         */
+        async function saveProjectAs() {
+            if (!state.session) {
+                setStatus('No session to save', 'error');
+                return;
+            }
+            try {
+                showLoading('Preparing project data...');
+                await _yieldToUI();
+
+                var blob = await _buildProjectBlob();
+                var sizeMB = (blob.size / 1024 / 1024).toFixed(1);
+
+                hideLoading();
+
+                if (window.showSaveFilePicker) {
+                    try {
+                        var handle = await window.showSaveFilePicker({
+                            suggestedName: 'project.mvgui.json',
+                            types: [{
+                                description: 'LUCID Project',
+                                accept: { 'application/json': ['.mvgui.json', '.json'] },
+                            }],
+                        });
+                        showLoading('Writing ' + sizeMB + ' MB...');
+                        await _yieldToUI();
+                        var writable = await handle.createWritable();
+                        await writable.write(blob);
+                        await writable.close();
+                        _projectFileHandle = handle;
+                        hideLoading();
+                        setStatus('Project saved to ' + handle.name + ' (' + sizeMB + ' MB)', 'success');
+                        return;
+                    } catch (pickerErr) {
+                        hideLoading();
+                        if (pickerErr.name === 'AbortError') {
+                            setStatus('Save cancelled', 'warning');
+                            return;
+                        }
+                        console.warn('[save-as] showSaveFilePicker failed, falling back to download:', pickerErr);
+                    }
+                }
+
+                // Fallback: download via <a> tag
+                _downloadBlob(blob, 'project.mvgui.json');
+                hideLoading();
+                setStatus('Project saved (' + sizeMB + ' MB)', 'success');
+
+            } catch (err) {
+                hideLoading();
+                console.error('Save project failed:', err);
+                setStatus('Save failed: ' + err.message, 'error');
+            }
+        }
+
+        function _downloadBlob(blob, filename) {
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
             a.href = url;
-            a.download = 'project.mvgui.json';
+            a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-
-            setStatus('Project saved (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
-
-            } catch (err) {
-                console.error('Save project failed:', err);
-                setStatus('Save failed: ' + err.message, 'error');
-            }
         }
 
         async function handleLoadProject() {
@@ -5454,18 +5634,48 @@
                     return;
                 }
 
-                showLoading('Loading project...');
+                showLoading('Reading project file...');
+                await _yieldToUI();
 
                 const text = await files[0].text();
+                var fileSizeMB = (text.length / 1024 / 1024).toFixed(1);
+                showLoading('Parsing project (' + fileSizeMB + ' MB)...');
+                await _yieldToUI();
+
                 const data = JSON.parse(text);
 
+                // Diagnostic: log what's in the saved file
+                if (data.frames) {
+                    var _lfCount = Object.keys(data.frames).length;
+                    var _lgCount = 0, _liCount = 0;
+                    for (var _lfk in data.frames) {
+                        var _lfd = data.frames[_lfk];
+                        if (_lfd.instanceGroups) {
+                            _lgCount += _lfd.instanceGroups.length;
+                            for (var _lgi = 0; _lgi < _lfd.instanceGroups.length; _lgi++) {
+                                _liCount += Object.keys(_lfd.instanceGroups[_lgi].instances).length;
+                            }
+                        }
+                    }
+                    console.log('[load-file] Parsed JSON: ' + _lfCount + ' frames, ' + _lgCount + ' groups, ' + _liCount + ' instances');
+                } else {
+                    console.warn('[load-file] No frames in saved data!');
+                }
+
                 // 1. Restore session data (cameras, skeleton, instances, groups)
+                showLoading('Restoring session (' + (data.frames ? Object.keys(data.frames).length : 0) + ' frames)...');
+                await _yieldToUI();
+
                 var cameras;
                 if (data.version === 2) {
-                    cameras = _restoreProjectV2(data);
+                    cameras = await _restoreProjectV2(data);
                 } else {
                     cameras = _restoreLegacySession(data);
                 }
+
+                console.log('[load] Session restored: ' + state.session.frameGroups.size + ' frameGroups, ' +
+                    state.session.instanceGroups.size + ' instanceGroup frames, ' +
+                    cameras.length + ' cameras (' + cameras.map(function(c){return c.name;}).join(',') + ')');
 
                 // 2. Load videos — check if already loaded, only prompt for missing ones
                 hideLoading();
@@ -5606,6 +5816,12 @@
                     }
                 }
 
+                // Diagnostic: log video-camera assignments
+                console.log('[load] Video assignments:');
+                for (var _vai = 0; _vai < state.videoFiles.length; _vai++) {
+                    console.log('[load]   ' + state.videoFiles[_vai].name + ' -> camera: ' + (state.videoFiles[_vai].assignedCamera || 'UNASSIGNED'));
+                }
+
                 updateTotalFrames();
                 if (state.views.length > 0) {
                     hideWelcomeOverlay();
@@ -5637,10 +5853,92 @@
                     setup3DViewport();
                 }
 
-                // 4. Draw overlays and update UI
+                // 4. Restore reprojections — only re-triangulate groups from old saves
+                //    that have points3d but no saved reprojections (backward compat)
+                if (cameras.length >= 2) {
+                    var _rtNeedRetri = 0;
+                    for (var [_rtFrameIdx, _rtTrackMap] of state.session.instanceGroups) {
+                        for (var [_rtTrackIdx, _rtGroups] of _rtTrackMap) {
+                            for (var _rtGroup of _rtGroups) {
+                                if (_rtGroup.points3d && !_rtGroup.reprojections) _rtNeedRetri++;
+                            }
+                        }
+                    }
+
+                    if (_rtNeedRetri > 0) {
+                        showLoading('Re-triangulating ' + _rtNeedRetri + ' groups (legacy save)...');
+                        await _yieldToUI();
+                        var _rtDone = 0;
+                        for (var [_rtFrameIdx2, _rtTrackMap2] of state.session.instanceGroups) {
+                            for (var [_rtTrackIdx2, _rtGroups2] of _rtTrackMap2) {
+                                for (var _rtGroup2 of _rtGroups2) {
+                                    if (!_rtGroup2.points3d || _rtGroup2.reprojections) continue;
+                                    var _rtCamNames = _rtGroup2.cameraNames;
+                                    var _rtCams = cameras.filter(function (c) { return _rtCamNames.indexOf(c.name) >= 0; });
+                                    if (_rtCams.length < 2) continue;
+                                    var _rtResult = triangulateAndReproject(_rtGroup2, _rtCams);
+                                    _rtGroup2.points3d = _rtResult.points3d;
+                                    _rtGroup2.reprojections = _rtResult.reprojections;
+                                    storeReprojectedInstances(_rtGroup2, _rtResult, cameras);
+                                    _rtGroup2.observedPoints = {};
+                                    for (var _rtci = 0; _rtci < _rtCams.length; _rtci++) {
+                                        var _rtInst = _rtGroup2.getInstance(_rtCams[_rtci].name);
+                                        if (_rtInst) _rtGroup2.observedPoints[_rtCams[_rtci].name] = _rtInst.points;
+                                    }
+                                    _rtGroup2.markClean();
+                                    var _rtFrameResults = state.triangulationResults.get(_rtFrameIdx2) || [];
+                                    _rtFrameResults.push({
+                                        group: _rtGroup2, points3d: _rtResult.points3d,
+                                        reprojections: _rtResult.reprojections,
+                                        errors: _rtResult.errors, meanError: _rtResult.meanError,
+                                    });
+                                    state.triangulationResults.set(_rtFrameIdx2, _rtFrameResults);
+                                    _rtDone++;
+                                    if (_rtDone % 50 === 0) {
+                                        showLoading('Re-triangulating... (' + _rtDone + '/' + _rtNeedRetri + ')');
+                                        await _yieldToUI();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Rebuild reprojected instances for rendering (lightweight, no triangulation)
+                    for (var [_mcFrameIdx, _mcTrackMap] of state.session.instanceGroups) {
+                        for (var [_mcTrackIdx, _mcGroups] of _mcTrackMap) {
+                            for (var _mcGroup of _mcGroups) {
+                                if (_mcGroup.points3d) {
+                                    _mcGroup.markClean();
+                                    if (_mcGroup.reprojections) {
+                                        storeReprojectedInstances(_mcGroup, {
+                                            points3d: _mcGroup.points3d,
+                                            reprojections: _mcGroup.reprojections
+                                        }, cameras);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                console.log('[load] Restored: ' + state.triangulationResults.size + ' frames with triangulation, ' +
+                    state.views.length + ' views, frame=' + state.currentFrame);
+
+                // 5. Draw overlays and update UI
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
                 if (timeline) timeline.setData(state.session);
+
+                // Safety: re-draw after next animation frame in case dockview panels
+                // weren't fully mounted when the first draw happened
+                requestAnimationFrame(function () {
+                    fitCanvasesToCells();
+                    if (videoController) {
+                        videoController.seekToFrame(state.currentFrame);
+                    } else {
+                        drawAllOverlays(state.currentFrame);
+                    }
+                });
 
                 hideLoading();
 
@@ -5660,7 +5958,7 @@
          * Restore session data from a v2 project JSON. Sets state.session.
          * @returns {Camera[]} parsed cameras
          */
-        function _restoreProjectV2(data) {
+        async function _restoreProjectV2(data) {
             var cameras = [];
             if (data.cameras) {
                 cameras = parseCalibrationJSON(JSON.stringify({ cameras: data.cameras }));
@@ -5680,8 +5978,12 @@
             var tracks = data.tracks || ['track_0'];
             var session = new Session(cameras, skeleton, tracks);
 
+            var _triResultsMap = new Map();
             if (data.frames) {
-                for (var frameIdxStr in data.frames) {
+                var _rfKeys = Object.keys(data.frames);
+                var _rfTotal = _rfKeys.length;
+                for (var _rfi = 0; _rfi < _rfTotal; _rfi++) {
+                    var frameIdxStr = _rfKeys[_rfi];
                     var frameIdx = parseInt(frameIdxStr);
                     var frameData = data.frames[frameIdxStr];
                     var fg = new FrameGroup(frameIdx);
@@ -5697,6 +5999,12 @@
                             var group = new InstanceGroup(groupData.id || Date.now(), groupData.trackIdx);
                             if (groupData.points3d) {
                                 group.points3d = groupData.points3d;
+                            }
+                            if (groupData.reprojections) {
+                                group.reprojections = groupData.reprojections;
+                            }
+                            if (groupData.observedPoints) {
+                                group.observedPoints = groupData.observedPoints;
                             }
 
                             for (var camName in groupData.instances) {
@@ -5717,6 +6025,18 @@
                                 trackMap.set(group.trackIdx, []);
                             }
                             trackMap.get(group.trackIdx).push(group);
+
+                            // Build triangulationResults entry if this group had points3d
+                            if (groupData.points3d) {
+                                if (!_triResultsMap.has(frameIdx)) _triResultsMap.set(frameIdx, []);
+                                _triResultsMap.get(frameIdx).push({
+                                    group: group,
+                                    points3d: groupData.points3d,
+                                    reprojections: groupData.reprojections || {},
+                                    errors: groupData.errors || null,
+                                    meanError: groupData.meanError != null ? groupData.meanError : null,
+                                });
+                            }
                         }
                     }
 
@@ -5736,11 +6056,16 @@
                     }
 
                     session.addFrameGroup(fg);
+
+                    if (_rfi % 100 === 99) {
+                        showLoading('Restoring frames... (' + (_rfi + 1) + '/' + _rfTotal + ')');
+                        await _yieldToUI();
+                    }
                 }
             }
 
             state.session = session;
-            state.triangulationResults = new Map();
+            state.triangulationResults = _triResultsMap;
 
             // Fix camera name mismatches: instance keys may differ from camera names
             // (e.g., instances keyed by video name "CamA" but camera named "A")
@@ -6214,7 +6539,7 @@
 
                 var title = document.createElement('div');
                 title.style.cssText = 'color:#fff;font-size:20px;font-weight:600;margin-bottom:8px;';
-                title.textContent = 'SLP loaded — now select the video file(s)';
+                title.textContent = 'Project loaded — now select the video file(s)';
                 overlay.appendChild(title);
 
                 if (refInfo) {
@@ -8131,7 +8456,26 @@
 
                 panelRenderers.set(this.panelId, this);
                 cellResizeObserver.observe(this.element);
-                requestAnimationFrame(function () { refreshPaneInteractions(); });
+
+                // Inject legend into the dockview tab header row
+                requestAnimationFrame(function () {
+                    var cellEl = self.element;
+                    // Walk up to the dockview group container, find the void area in the header
+                    var groupEl = cellEl.closest('.dv-groupview');
+                    if (groupEl) {
+                        var voidEl = groupEl.querySelector('.void-container');
+                        if (voidEl && !voidEl.querySelector('.panel-legend-bar')) {
+                            var legend = document.createElement('div');
+                            legend.className = 'panel-legend-bar';
+                            legend.innerHTML =
+                                '<span class="legend-item"><span class="legend-dot" style="background:#22c55e;"></span>Detected</span>' +
+                                '<span class="legend-item"><span class="legend-x">✕</span>Reprojected</span>' +
+                                '<span class="legend-item"><span class="legend-line"></span>Error</span>';
+                            voidEl.appendChild(legend);
+                        }
+                    }
+                    refreshPaneInteractions();
+                });
             }
 
             update(event) {

@@ -414,6 +414,12 @@ body {
   --dv-separator-border: #3a3a3a;
 }
 
+.dockview-theme-abyss .void-container {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
 .dv-dockview .video-cell {
   position: absolute;
   inset: 0;
@@ -430,6 +436,42 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Legend bar in dockview tab header */
+.panel-legend-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+  margin-left: auto;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.legend-x {
+  color: #ef4444;
+  font-size: 13px;
+  font-weight: bold;
+  line-height: 1;
+}
+.legend-line {
+  display: inline-block;
+  width: 16px;
+  height: 2px;
+  background: linear-gradient(to right, #4ade80, #fbbf24, #ef4444);
+  border-radius: 1px;
 }
 
 .video-cell .canvas-wrapper {
