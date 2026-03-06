@@ -604,7 +604,6 @@ class InteractionManager {
             this._canDrag = true;
         }
 
-        var canDrag = this._canDrag;
         this._canDrag = false;
 
         var coords = this.canvasToVideo(e.clientX, e.clientY, viewName);
@@ -629,18 +628,30 @@ class InteractionManager {
                 // Block null toggle for predicted instances
                 var hitInstance = hit.instanceGroup.getInstance(viewName);
                 if (hitInstance && hitInstance.type === 'predicted') return;
-                // Select and toggle null in one action
-                this.select(hit.instanceGroup, hit.nodeIdx);
-                this._toggleNodeNull(viewName, hit.instanceGroup, hit.nodeIdx);
+                // Resolve edge hits to nearest node
+                var nullNodeIdx = hit.nodeIdx;
+                if (nullNodeIdx === -1) {
+                    nullNodeIdx = this._resolveNearestNode(hitInstance, vx, vy);
+                }
+                if (nullNodeIdx < 0) return; // no valid node found
+                // Select group and toggle null — no node-level selection
+                this.select(hit.instanceGroup, -1);
+                this._toggleNodeNull(viewName, hit.instanceGroup, nullNodeIdx);
             } else if (ulHit) {
                 var ulInst = ulHit.unlinked.instance;
                 if (ulInst && ulInst.type === 'predicted') return;
+                // Resolve edge hits to nearest node
+                var ulNullNodeIdx = ulHit.nodeIdx;
+                if (ulNullNodeIdx === -1) {
+                    ulNullNodeIdx = this._resolveNearestNode(ulInst, vx, vy);
+                }
+                if (ulNullNodeIdx < 0) return;
                 // Toggle null directly on the unlinked instance
                 if (!ulInst.nulledNodes) ulInst.nulledNodes = new Set();
-                if (ulInst.nulledNodes.has(ulHit.nodeIdx)) {
-                    ulInst.nulledNodes.delete(ulHit.nodeIdx);
+                if (ulInst.nulledNodes.has(ulNullNodeIdx)) {
+                    ulInst.nulledNodes.delete(ulNullNodeIdx);
                 } else {
-                    ulInst.nulledNodes.add(ulHit.nodeIdx);
+                    ulInst.nulledNodes.add(ulNullNodeIdx);
                 }
                 this._requestRedraw();
             }
@@ -722,6 +733,9 @@ class InteractionManager {
             if (this.callbacks.onDoubleClickReprojected) {
                 this.callbacks.onDoubleClickReprojected(linkedHit.instanceGroup, viewName);
             }
+            e.preventDefault();
+            e.stopPropagation();
+            e._consumedByInteraction = true;
             this._requestRedraw();
             return;
         }
@@ -734,6 +748,9 @@ class InteractionManager {
                 if (this.callbacks.onClonePredictedGroup) {
                     this.callbacks.onClonePredictedGroup(linkedHit.instanceGroup);
                 }
+                e.preventDefault();
+                e.stopPropagation();
+                e._consumedByInteraction = true;
                 this._requestRedraw();
                 return;
             }
@@ -768,11 +785,19 @@ class InteractionManager {
                 e._consumedByInteraction = true;
                 // Fall through to the end (no drag)
             } else {
-                // Only allow dragging if the instance is already selected
-                var alreadySelected = this.selectedInstanceGroup === linkedHit.instanceGroup;
-                this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
-                if (alreadySelected && canDrag) {
-                    this._startDrag(viewName, linkedHit.instanceGroupIdx, linkedHit.nodeIdx,
+                // Resolve edge hits (nodeIdx=-1) to the nearest node
+                var dragNodeIdx = linkedHit.nodeIdx;
+                if (dragNodeIdx === -1) {
+                    dragNodeIdx = this._resolveNearestNode(hitInst, vx, vy);
+                }
+                // Select group only (no node-level selection) — matches
+                // ungrouped behavior where dragging doesn't require
+                // pre-selecting a specific node.
+                this.select(linkedHit.instanceGroup, -1);
+                // Always start drag — thresholdMet in _startDrag prevents
+                // accidental movement on click-without-drag.
+                if (dragNodeIdx >= 0) {
+                    this._startDrag(viewName, linkedHit.instanceGroupIdx, dragNodeIdx,
                         vx, vy, null, e.altKey ? linkedHit.instanceGroup.getInstance(viewName) : null);
                 }
                 e.preventDefault();
@@ -812,9 +837,16 @@ class InteractionManager {
             // Still allow drag for repositioning
             // Block drag for predicted unlinked instances (select only)
             var ulInstType = ulHit.unlinked.instance ? ulHit.unlinked.instance.type : 'user';
-            if (canDrag && ulInstType !== 'predicted') {
-                this._startDrag(viewName, -1, ulHit.nodeIdx,
-                    vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
+            if (ulInstType !== 'predicted') {
+                // Resolve edge hits to nearest node
+                var ulDragNodeIdx = ulHit.nodeIdx;
+                if (ulDragNodeIdx === -1) {
+                    ulDragNodeIdx = this._resolveNearestNode(ulHit.unlinked.instance, vx, vy);
+                }
+                if (ulDragNodeIdx >= 0) {
+                    this._startDrag(viewName, -1, ulDragNodeIdx,
+                        vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
+                }
             }
             e.preventDefault();
             e.stopPropagation();
@@ -963,7 +995,7 @@ class InteractionManager {
                         }
                     }
                     instance.type = 'user';
-                } else if (instance.points.length > info.nodeIdx) {
+                } else if (info.nodeIdx >= 0 && instance.points.length > info.nodeIdx) {
                     // Single-node drag: finalize the single point
                     instance.points[info.nodeIdx] = [info.currentPos[0], info.currentPos[1]];
                     instance.type = 'user';
@@ -1154,6 +1186,36 @@ class InteractionManager {
     // ======================================================================
 
     /**
+     * Resolve an edge hit (nodeIdx === -1) to the nearest node.
+     * When a click lands on a skeleton edge rather than directly on a node,
+     * findNearestNode returns nodeIdx=-1. This method finds the closest
+     * node to the click point so that drag and null-toggle work correctly.
+     *
+     * @param {Instance} instance - The instance whose points to search
+     * @param {number} vx - Click X in video coordinates
+     * @param {number} vy - Click Y in video coordinates
+     * @returns {number} Resolved node index, or -1 if no valid node found
+     * @private
+     */
+    _resolveNearestNode(instance, vx, vy) {
+        if (!instance || !instance.points) return -1;
+        var bestIdx = -1;
+        var bestDist = Infinity;
+        for (var ni = 0; ni < instance.points.length; ni++) {
+            var pt = instance.points[ni];
+            if (pt == null) continue;
+            var dx = pt[0] - vx;
+            var dy = pt[1] - vy;
+            var d = Math.sqrt(dx * dx + dy * dy);
+            if (d < bestDist) {
+                bestDist = d;
+                bestIdx = ni;
+            }
+        }
+        return bestIdx;
+    }
+
+    /**
      * Safely call getState from callbacks.
      * @returns {Object|null}
      * @private
@@ -1318,7 +1380,7 @@ class InteractionManager {
                         ];
                     }
                 }
-            } else if (instance.points.length > info.nodeIdx) {
+            } else if (info.nodeIdx >= 0 && instance.points.length > info.nodeIdx) {
                 instance.points[info.nodeIdx] = [vx, vy];
             }
         }
