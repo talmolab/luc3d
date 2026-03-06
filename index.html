@@ -876,6 +876,23 @@
             }
             instanceGroup.markClean();
 
+            // Update triangulation results for error display
+            var frameIdx = state.currentFrame;
+            var frameResults = state.triangulationResults.get(frameIdx) || [];
+            var newEntry = { group: instanceGroup, points3d: result.points3d,
+                reprojections: result.reprojections, errors: result.errors,
+                meanError: result.meanError };
+            var replaced = false;
+            for (var ri = 0; ri < frameResults.length; ri++) {
+                if (frameResults[ri].group === instanceGroup) {
+                    frameResults[ri] = newEntry;
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) frameResults.push(newEntry);
+            state.triangulationResults.set(frameIdx, frameResults);
+
             // Update 3D viewport
             if (viewport3d) {
                 var groups = getInstanceGroupsForFrame(state.currentFrame);

@@ -447,29 +447,17 @@
         });
 
         it('drag node 0, release, then drag node 1 on linked instance', function () {
-            // Linked instances require select-click first, then drag-click.
-            // First click selects node 0 (no drag yet - not already selected)
+            // Single click on a linked user instance selects AND starts drag
             env.mgr._canDrag = true;
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
-            assertFalse(env.mgr.isDragging, 'First click selects only');
-            env.mgr.onMouseUp(makeMouseEvent('mouseup', 100, 100), env.camName);
-            env.mgr._canDrag = true;
-
-            // Second click on same node starts drag (now already selected)
-            env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
-            assertTrue(env.mgr.isDragging, 'Drag 1 started');
+            assertTrue(env.mgr.isDragging, 'First click selects and starts drag');
             env.mgr._onDragMove(makeMouseEvent('mousemove', 130, 140));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 130, 140), env.camName);
             assertEqual(env.inst.points[0][0], 130, 'Node 0 x=130');
             assertFalse(env.mgr.isDragging, 'Clean after drag 1');
             env.mgr._canDrag = true;
 
-            // Select node 1 first
-            env.mgr.onMouseDown(makeMouseEvent('mousedown', 200, 200), env.camName);
-            env.mgr.onMouseUp(makeMouseEvent('mouseup', 200, 200), env.camName);
-            env.mgr._canDrag = true;
-
-            // Now drag node 1
+            // Click on node 1 — also immediately starts drag
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 200, 200), env.camName);
             assertTrue(env.mgr.isDragging, 'Drag 2 started');
             assertEqual(env.mgr.dragInfo.nodeIdx, 1, 'Node 1');
@@ -479,6 +467,204 @@
 
             assertEqual(env.inst.points[1][0], 240, 'Node 1 x=240');
             assertEqual(env.inst.points[2][0], 300, 'Node 2 unchanged');
+        });
+
+        it('edge hit resolves to nearest node and starts drag', function () {
+            // Click between node 0 (100,100) and node 1 (200,200) — closer to node 0
+            // Edge hit would give nodeIdx=-1; resolver should pick node 0
+            env.mgr._canDrag = false;
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 130, 130), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag started from edge hit');
+            assertEqual(env.mgr.dragInfo.nodeIdx, 0, 'Resolved to nearest node 0');
+
+            env.mgr._onDragMove(makeMouseEvent('mousemove', 160, 170));
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 160, 170), env.camName);
+            assertEqual(env.inst.points[0][0], 160, 'Node 0 moved to x=160');
+            assertEqual(env.inst.points[1][0], 200, 'Node 1 unchanged');
+        });
+
+        it('edge hit closer to node 1 resolves to node 1', function () {
+            // Click between node 0 (100,100) and node 1 (200,200) — closer to node 1
+            env.mgr._canDrag = false;
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 170, 170), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag started from edge hit');
+            assertEqual(env.mgr.dragInfo.nodeIdx, 1, 'Resolved to nearest node 1');
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 170, 170), env.camName);
+        });
+
+        it('drag immediately after group pre-selected with nodeIdx=-1 (post-double-click)', function () {
+            // Simulates: double-click created a UserInstance and called
+            // select(group, -1). _canDrag may be false if mouseup hasn't
+            // fired yet on this canvas. The next click should still start drag.
+            env.mgr._canDrag = false;
+            env.mgr.select(group, -1);  // pre-select group, no node
+            assertEqual(env.mgr.selectedInstanceGroup, group, 'Group pre-selected');
+            assertEqual(env.mgr.selectedNodeIdx, -1, 'No node selected');
+
+            // Click on node 0 — should immediately start drag
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag started on first click after pre-select');
+            assertEqual(env.mgr.dragInfo.nodeIdx, 0, 'Dragging node 0');
+
+            env.mgr._onDragMove(makeMouseEvent('mousemove', 130, 140));
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 130, 140), env.camName);
+            assertEqual(env.inst.points[0][0], 130, 'Node 0 moved to x=130');
+        });
+    });
+
+    // ============================================
+    // One-click-drag: grouped and ungrouped UserInstances
+    // ============================================
+
+    describe('One-click-drag - grouped UserInstance', function () {
+        var env, group, inst;
+
+        beforeEach(function () {
+            cleanupCanvases();
+
+            var vw = 640, vh = 480, camName = 'cam1';
+            var skeleton = new Skeleton('mouse', ['nose', 'ear', 'tail'], [[0, 1], [1, 2]]);
+            var cameras = [
+                new Camera(camName,
+                    [[600, 0, vw / 2], [0, 600, vh / 2], [0, 0, 1]],
+                    [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [vw, vh])
+            ];
+            var session = new Session(cameras, skeleton, ['track_0']);
+
+            group = new InstanceGroup(1, 0);
+            inst = new Instance([[100, 100], [200, 200], [300, 300]], 0, 'user', 1.0);
+            group.addInstance(camName, inst);
+            session.instanceGroups.set(0, new Map([[0, [group]]]));
+
+            var fg = new FrameGroup(0);
+            fg.addInstance(camName, inst);
+            session.addFrameGroup(fg);
+
+            var overlayCanvas = createMockCanvas(vw, vh);
+            var views = [{
+                name: camName,
+                overlayCanvas: overlayCanvas,
+                videoWidth: vw,
+                videoHeight: vh,
+            }];
+
+            var mgr = new InteractionManager({
+                getState: function () {
+                    return { currentFrame: 0, session: session, views: views };
+                },
+                getInstanceGroups: function () { return [group]; },
+                onSelectionChanged: function () {},
+                onNodeMoved: function () {},
+                requestRedraw: function () {},
+            });
+            var origMU = mgr.onMouseUp.bind(mgr);
+            mgr.onMouseUp = function(e, vn) {
+                origMU(e, vn);
+                if (!mgr.isDragging) mgr._canDrag = true;
+            };
+            env = { camName: camName, inst: inst, mgr: mgr };
+        });
+
+        it('single mousedown+drag moves node without prior selection', function () {
+            // Fresh state: nothing selected, _canDrag false (no prior mouseup)
+            env.mgr._canDrag = false;
+            assertNull(env.mgr.selectedInstanceGroup, 'No group selected initially');
+
+            // One mousedown on node → drag starts immediately
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag started on first click');
+            assertEqual(env.mgr.dragInfo.nodeIdx, 0, 'Dragging node 0');
+            assertEqual(env.mgr.selectedInstanceGroup, group, 'Group selected');
+
+            // Drag moves the node
+            env.mgr._onDragMove(makeMouseEvent('mousemove', 150, 160));
+            assertEqual(env.inst.points[0][0], 150, 'Node 0 moved to x=150');
+            assertEqual(env.inst.points[0][1], 160, 'Node 0 moved to y=160');
+
+            // Release finalizes
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 150, 160), env.camName);
+            assertFalse(env.mgr.isDragging, 'Drag ended');
+            assertDeepEqual(env.inst.points[0], [150, 160], 'Final position correct');
+            assertDeepEqual(env.inst.points[1], [200, 200], 'Other nodes unchanged');
+        });
+
+        it('single mousedown+drag works on each node without prior selection', function () {
+            // Drag node 2 from cold start
+            env.mgr._canDrag = false;
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 300, 300), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag started on node 2');
+            assertEqual(env.mgr.dragInfo.nodeIdx, 2, 'Dragging node 2');
+
+            env.mgr._onDragMove(makeMouseEvent('mousemove', 350, 370));
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 350, 370), env.camName);
+            assertDeepEqual(env.inst.points[2], [350, 370], 'Node 2 moved');
+
+            // Drag node 0 — no extra click needed
+            env.mgr._canDrag = false;
+            env.mgr.clearSelection();
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag started on node 0');
+            assertEqual(env.mgr.dragInfo.nodeIdx, 0, 'Dragging node 0');
+
+            env.mgr._onDragMove(makeMouseEvent('mousemove', 120, 130));
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 120, 130), env.camName);
+            assertDeepEqual(env.inst.points[0], [120, 130], 'Node 0 moved');
+        });
+    });
+
+    describe('One-click-drag - ungrouped UserInstance', function () {
+        var env;
+
+        beforeEach(function () {
+            cleanupCanvases();
+            env = buildEnv();
+        });
+
+        it('single mousedown+drag moves unlinked node without prior selection', function () {
+            // Fresh state: nothing selected, _canDrag false
+            env.mgr._canDrag = false;
+            assertNull(env.mgr.selectedUnlinked, 'No unlinked selected initially');
+
+            // One mousedown on node → drag starts immediately
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag started on first click');
+            assertEqual(env.mgr.dragInfo.nodeIdx, 0, 'Dragging node 0');
+            assertNotNull(env.mgr.selectedUnlinked, 'Unlinked instance selected');
+
+            // Drag moves the node
+            env.mgr._onDragMove(makeMouseEvent('mousemove', 140, 155));
+            assertEqual(env.instance.points[0][0], 140, 'Node 0 moved to x=140');
+            assertEqual(env.instance.points[0][1], 155, 'Node 0 moved to y=155');
+
+            // Release finalizes
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 140, 155), env.camName);
+            assertFalse(env.mgr.isDragging, 'Drag ended');
+            assertDeepEqual(env.instance.points[0], [140, 155], 'Final position correct');
+            assertDeepEqual(env.instance.points[1], [200, 200], 'Other nodes unchanged');
+        });
+
+        it('single mousedown+drag works on each unlinked node without prior selection', function () {
+            // Drag node 1 from cold start
+            env.mgr._canDrag = false;
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 200, 200), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag started on node 1');
+            assertEqual(env.mgr.dragInfo.nodeIdx, 1, 'Dragging node 1');
+
+            env.mgr._onDragMove(makeMouseEvent('mousemove', 230, 240));
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 230, 240), env.camName);
+            assertDeepEqual(env.instance.points[1], [230, 240], 'Node 1 moved');
+
+            // Drag node 2 — clear selection first to simulate fresh click
+            env.mgr._canDrag = false;
+            env.mgr.clearSelection();
+            env.mgr.selectedUnlinked = null;
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', 300, 300), env.camName);
+            assertTrue(env.mgr.isDragging, 'Drag started on node 2');
+            assertEqual(env.mgr.dragInfo.nodeIdx, 2, 'Dragging node 2');
+
+            env.mgr._onDragMove(makeMouseEvent('mousemove', 310, 320));
+            env.mgr.onMouseUp(makeMouseEvent('mouseup', 310, 320), env.camName);
+            assertDeepEqual(env.instance.points[2], [310, 320], 'Node 2 moved');
         });
     });
 

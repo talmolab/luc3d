@@ -1590,25 +1590,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }
     }
 
-    // 6. Hover highlight
-    if (hoveredNode && hoveredNode.viewName === viewName && instanceGroups) {
-        const hGroupIdx = hoveredNode.instanceGroupIdx;
-        const hNodeIdx = hoveredNode.nodeIdx;
-        if (hGroupIdx >= 0 && hGroupIdx < instanceGroups.length) {
-            const hGroup = instanceGroups[hGroupIdx];
-            const hInst = hGroup.getInstance
-                ? hGroup.getInstance(viewName)
-                : (hGroup.instances ? hGroup.instances[viewName] : null);
-            if (hInst && hInst.points && hNodeIdx >= 0 && hNodeIdx < hInst.points.length && hInst.points[hNodeIdx]) {
-                const hTrackColor = getTrackColor(
-                    hGroup.trackIdx != null ? hGroup.trackIdx : 0
-                );
-                drawHoverHighlight(ctx, hInst.points[hNodeIdx], hNodeIdx, Object.assign({}, renderOpts, {
-                    color: hTrackColor,
-                }));
-            }
-        }
-    }
+    // 6. Hover highlight — disabled (cursor change handled by interaction manager)
 
     // 7. Drag preview
     if (dragInfo && dragInfo.viewName === viewName && selectedInstanceGroup) {
@@ -1617,7 +1599,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
         if (dragInst && dragInst.points) {
             drawDragPreview(ctx, dragInst.points, dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
-                Object.assign({}, renderOpts, { color: '#ffffff' }));
+                Object.assign({}, userRender, { color: '#ffffff' }));
         }
     }
 
