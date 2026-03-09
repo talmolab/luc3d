@@ -265,6 +265,8 @@ var testFiles = [
     'test-project-triangulation.js',
     'test-slp-merge.js',
     'test-tempdata-triangulation.js',
+    'test-prompt61.js',
+    'test-bottom-bar.js',
 ];
 
 for (var i = 0; i < testFiles.length; i++) {

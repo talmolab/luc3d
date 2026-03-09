@@ -625,6 +625,8 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
 
     ctx.save();
 
+    const nulledNodes = options.nulledNodes || null;
+
     // --- 1. Glow circles behind nodes ---
     const rgb = hexToRgb(color);
     const glowRadius = nodeSize * 2.5;
@@ -632,6 +634,7 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
+        if (nulledNodes && nulledNodes.has(i)) continue;
         ctx.beginPath();
         ctx.arc(cp.x, cp.y, glowRadius, 0, Math.PI * 2);
         ctx.fill();
@@ -639,32 +642,67 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
 
     // --- 2. Thicker, brighter edges ---
     if (skeleton.edges) {
-        ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = lineWidth * 2;
         ctx.lineCap = 'round';
-        ctx.globalAlpha = 0.8;
-        ctx.beginPath();
-        for (let i = 0; i < skeleton.edges.length; i++) {
-            const edge = skeleton.edges[i];
-            const src = canvasPoints[edge[0]];
-            const dst = canvasPoints[edge[1]];
-            if (src && dst) {
-                ctx.moveTo(src.x, src.y);
-                ctx.lineTo(dst.x, dst.y);
+        // Two-pass: normal edges, then grayed (nulled) edges
+        for (var ePass = 0; ePass < 2; ePass++) {
+            ctx.beginPath();
+            var hasEdgeStrokes = false;
+            for (let i = 0; i < skeleton.edges.length; i++) {
+                const edge = skeleton.edges[i];
+                const src = canvasPoints[edge[0]];
+                const dst = canvasPoints[edge[1]];
+                if (!src || !dst) continue;
+                var srcNulled = nulledNodes && nulledNodes.has(edge[0]);
+                var dstNulled = nulledNodes && nulledNodes.has(edge[1]);
+                var edgeGray = srcNulled || dstNulled;
+                if (ePass === 0 && !edgeGray) {
+                    ctx.moveTo(src.x, src.y);
+                    ctx.lineTo(dst.x, dst.y);
+                    hasEdgeStrokes = true;
+                } else if (ePass === 1 && edgeGray) {
+                    ctx.moveTo(src.x, src.y);
+                    ctx.lineTo(dst.x, dst.y);
+                    hasEdgeStrokes = true;
+                }
+            }
+            if (hasEdgeStrokes) {
+                if (ePass === 0) {
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.globalAlpha = 0.8;
+                } else {
+                    ctx.strokeStyle = '#888888';
+                    ctx.globalAlpha = 0.8 * 0.4;
+                }
+                ctx.stroke();
             }
         }
-        ctx.stroke();
         ctx.globalAlpha = 1.0;
     }
 
     // --- 3. Brighter nodes ---
+    // Normal (non-nulled) nodes
     ctx.fillStyle = '#ffffff';
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
+        if (nulledNodes && nulledNodes.has(i)) continue;
         ctx.beginPath();
         ctx.arc(cp.x, cp.y, nodeSize * 1.3, 0, Math.PI * 2);
         ctx.fill();
+    }
+    // Grayed-out (nulled) nodes
+    if (nulledNodes && nulledNodes.size > 0) {
+        ctx.fillStyle = '#888888';
+        ctx.globalAlpha = 0.4;
+        for (const ni of nulledNodes) {
+            const cp = canvasPoints[ni];
+            if (!cp) continue;
+            ctx.beginPath();
+            ctx.arc(cp.x, cp.y, nodeSize * 1.3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
     }
 
     // --- 4. Dashed bounding box ---
@@ -1177,9 +1215,8 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         const instLineWidth = isPredicted && predictedRender ? (predictedRender.lineWidth || lineWidth) : lineWidth;
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
-        const isEditSelected = selectedUnlinkedId != null && ul.id === selectedUnlinkedId;
-        const isSelected = isAssignSelected || isEditSelected;
-        const color = isAssignSelected ? assignmentColor : isEditSelected ? '#ffffff' : getTrackColor(instance.trackIdx != null ? instance.trackIdx : u);
+        const isSelected = isAssignSelected;
+        const color = isAssignSelected ? assignmentColor : getTrackColor(instance.trackIdx != null ? instance.trackIdx : u);
         const alpha = isSelected ? 0.95 : (isPredicted && predictedRender ? (predictedRender.alpha || 0.5) : 0.5);
 
         // Pre-compute canvas positions
@@ -1321,10 +1358,10 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
             }
         }
 
-        // Selection ring (assignment = yellow, edit = blue)
+        // Selection ring (assignment mode only)
         if (isSelected) {
             ctx.globalAlpha = 0.8;
-            ctx.strokeStyle = isAssignSelected ? assignmentColor : '#ffffff';
+            ctx.strokeStyle = assignmentColor;
             ctx.lineWidth = 2;
             for (let i = 0; i < canvasPoints.length; i++) {
                 const cp = canvasPoints[i];
@@ -1572,6 +1609,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, userRender, {
                 color: '#ffffff',
                 selectedNodeIdx: selectedNodeIdx,
+                nulledNodes: selInst.nulledNodes || null,
             }));
         }
     }
@@ -1586,6 +1624,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             drawSelectionHighlight(ctx, egInst.points, skeleton, Object.assign({}, userRender, {
                 color: '#ffffff',
                 selectedNodeIdx: -1,
+                nulledNodes: egInst.nulledNodes || null,
             }));
         }
     }

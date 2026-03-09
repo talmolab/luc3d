@@ -1424,6 +1424,12 @@ class VideoController {
         if (view._zoomDocUpHandler) {
             document.removeEventListener("mouseup", view._zoomDocUpHandler);
         }
+        if (view._zoomKeyHandler) {
+            document.removeEventListener("keydown", view._zoomKeyHandler);
+        }
+        if (view._zoomContextHandler && view._zoomContainer) {
+            view._zoomContainer.removeEventListener("contextmenu", view._zoomContextHandler);
+        }
 
         // ---- Mouse wheel zoom (cursor-centered) ----
         container.addEventListener("wheel", function (e) {
@@ -1553,7 +1559,7 @@ class VideoController {
                 isPanning = false;
             }
 
-            if (isBoxZooming) {
+            if (e.button === 0 && isBoxZooming) {
                 isBoxZooming = false;
                 var rect = container.getBoundingClientRect();
                 var endX = e.clientX - rect.left;
@@ -1568,7 +1574,33 @@ class VideoController {
             }
         };
 
+        // Escape key cancels an in-progress box zoom
+        view._zoomKeyHandler = function (e) {
+            if (e.key === 'Escape' && isBoxZooming) {
+                isBoxZooming = false;
+                if (boxOverlay && boxOverlay.parentNode) {
+                    boxOverlay.parentNode.removeChild(boxOverlay);
+                }
+                boxOverlay = null;
+            }
+        };
+
+        // Right-click cancels an in-progress box zoom
+        view._zoomContextHandler = function (e) {
+            if (isBoxZooming) {
+                e.preventDefault();
+                isBoxZooming = false;
+                if (boxOverlay && boxOverlay.parentNode) {
+                    boxOverlay.parentNode.removeChild(boxOverlay);
+                }
+                boxOverlay = null;
+            }
+        };
+
         document.addEventListener("mousemove", view._zoomDocMoveHandler);
         document.addEventListener("mouseup", view._zoomDocUpHandler);
+        document.addEventListener("keydown", view._zoomKeyHandler);
+        view._zoomContainer = container;
+        container.addEventListener("contextmenu", view._zoomContextHandler);
     }
 }
