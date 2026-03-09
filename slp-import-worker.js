@@ -249,6 +249,26 @@ async function parseSlp(file) {
             ', Points: ' + (pointsData ? pointsData.x.length : 0) +
             ', PredPoints: ' + (predPointsData ? predPointsData.x.length : 0));
 
+        // Diagnostic: show instances dataset structure and instance_type values
+        if (instancesData) {
+            progress('instances fields: ' + Object.keys(instancesData).join(', '));
+            var numInst = instancesData.instance_type ? instancesData.instance_type.length : 0;
+            progress('Total instances: ' + numInst);
+            // Show first few instance_type values to verify type detection
+            var typePreview = [];
+            for (var _ti2 = 0; _ti2 < Math.min(10, numInst); _ti2++) {
+                typePreview.push(instancesData.instance_type[_ti2]);
+            }
+            progress('instance_type values (first 10): [' + typePreview.join(', ') + ']');
+            // Count types
+            var typeCountMap = {};
+            for (var _ti3 = 0; _ti3 < numInst; _ti3++) {
+                var tv = instancesData.instance_type[_ti3];
+                typeCountMap[tv] = (typeCountMap[tv] || 0) + 1;
+            }
+            progress('instance_type distribution: ' + JSON.stringify(typeCountMap));
+        }
+
         // Diagnostic: show actual field names and first 3 frames
         if (framesData) {
             progress('frames fields: ' + Object.keys(framesData).join(', '));
@@ -285,7 +305,7 @@ async function parseSlp(file) {
                     var ptStart = Number(instancesData.point_id_start[ji]);
                     var ptEnd = Number(instancesData.point_id_end[ji]);
 
-                    var pts = instType === 1 ? predPointsData : pointsData;
+                    var pts = instType === 1 ? (predPointsData || pointsData) : pointsData;
                     if (!pts) continue;
 
                     var points = [];
@@ -338,6 +358,16 @@ async function parseSlp(file) {
 
         f.close();
         try { FS.unmount('/work'); } catch (e) { /* ignore */ }
+
+        // Count instances by type
+        var userCount = 0, predCount = 0;
+        for (var _ci = 0; _ci < frames.length; _ci++) {
+            for (var _cj = 0; _cj < frames[_ci].instances.length; _cj++) {
+                if (frames[_ci].instances[_cj].type === 'predicted') predCount++;
+                else userCount++;
+            }
+        }
+        progress('Instance types: ' + userCount + ' user, ' + predCount + ' predicted');
 
         progress('Done! Sending results...');
 

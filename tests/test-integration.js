@@ -320,7 +320,7 @@
             assertEqual(data.metadata.nodes[0].name, 'nose');
             assertEqual(data.metadata.nodes[3].name, 'body');
             assertEqual(data.metadata.skeletons[0].links.length, 3);
-            assertEqual(data.metadata.skeletons[0].name, 'mouse');
+            assertEqual(data.metadata.skeletons[0].graph.name, 'mouse');
 
             // Verify points are present
             var totalPoints = data.points.length + data.pred_points.length;
