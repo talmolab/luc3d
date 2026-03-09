@@ -1,5 +1,5 @@
 /**
- * test-prompt61.js - Tests for changes introduced 2026-03-09:
+ * test-null-node.js - Tests for changes introduced 2026-03-09:
  *   - Null node graying in selection highlight
  *   - Ungroup button (unlinkGroup via _unlinkSelectedGroup)
  *   - ReprojectedInstance right-click nulls reprojected node
