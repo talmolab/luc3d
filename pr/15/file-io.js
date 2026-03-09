@@ -488,7 +488,7 @@ function serializeSkeleton(skeleton) {
  * @param {Object[]} views - View objects with name, videoWidth, videoHeight
  * @returns {Object} The full export data object
  */
-function buildSlpExportData(session, views) {
+function buildSlpExportData(session, views, videoFiles) {
     const skelData = serializeSkeleton(session.skeleton);
 
     // Metadata
@@ -499,14 +499,39 @@ function buildSlpExportData(session, views) {
         provenance: { source: 'mv-gui', exported_at: new Date().toISOString() },
     };
 
-    // Videos
+    // Videos — use videoPath from videoFiles if available
     const videos = views.map(function (v, i) {
+        var videoPath = v.name + '.mp4';
+        if (videoFiles) {
+            for (var vi = 0; vi < videoFiles.length; vi++) {
+                var vf = videoFiles[vi];
+                if ((vf.name === v.name || vf.assignedCamera === v.name) && vf.videoPath) {
+                    videoPath = vf.videoPath;
+                    break;
+                }
+            }
+        }
+        var shape = [v.frameCount || 0, v.videoHeight || 0, v.videoWidth || 0, 1];
         return {
-            filename: v.name + '.mp4',
+            filename: videoPath,
             backend: {
                 type: 'MediaVideo',
-                shape: [0, v.videoHeight || 0, v.videoWidth || 0, 1],
-                filename: v.name + '.mp4',
+                shape: shape,
+                filename: videoPath,
+                grayscale: false,
+                bgr: false,
+                dataset: '',
+                input_format: '',
+            },
+            source_video: {
+                filename: videoPath,
+                backend: {
+                    type: 'MediaVideo',
+                    shape: shape,
+                    filename: videoPath,
+                    grayscale: false,
+                    bgr: false,
+                },
             },
         };
     });
@@ -536,8 +561,19 @@ function buildSlpExportData(session, views) {
         const frameIdx = sortedFrameIndices[fi];
         const fg = session.frameGroups.get(frameIdx);
 
+        // Build combined per-camera instance list (grouped + ungrouped)
+        const combinedInstances = new Map();
+        for (const [camName, camInsts] of fg.instances) {
+            combinedInstances.set(camName, camInsts.slice());
+        }
+        for (const [camName, ulList] of fg.unlinkedInstances) {
+            if (!combinedInstances.has(camName)) combinedInstances.set(camName, []);
+            const arr = combinedInstances.get(camName);
+            for (let u = 0; u < ulList.length; u++) arr.push(ulList[u].instance);
+        }
+
         // For each camera that has instances in this frame
-        for (const [camName, camInstances] of fg.instances) {
+        for (const [camName, camInstances] of combinedInstances) {
             const videoIdx = camToVideoIdx[camName] !== undefined ? camToVideoIdx[camName] : 0;
 
             const instIdStart = instanceId;
@@ -823,13 +859,28 @@ function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo)
     // Single video entry for this camera
     var vw = videoFileInfo.videoWidth || 0;
     var vh = videoFileInfo.videoHeight || 0;
-    var videoFilename = videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4');
+    var videoFilename = videoFileInfo.videoPath
+        || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
     var videos = [{
         filename: videoFilename,
         backend: {
             type: 'MediaVideo',
             shape: [videoFileInfo.frameCount || 0, vh, vw, 1],
             filename: videoFilename,
+            grayscale: false,
+            bgr: false,
+            dataset: '',
+            input_format: '',
+        },
+        source_video: {
+            filename: videoFilename,
+            backend: {
+                type: 'MediaVideo',
+                shape: [videoFileInfo.frameCount || 0, vh, vw, 1],
+                filename: videoFilename,
+                grayscale: false,
+                bgr: false,
+            },
         },
     }];
 
@@ -851,7 +902,13 @@ function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo)
     for (var fi = 0; fi < allFrameIndices.length; fi++) {
         var frameIdx = allFrameIndices[fi];
         var fg = session.frameGroups.get(frameIdx);
-        var camInstances = fg.instances.get(cameraName) || [];
+        var camInstances = (fg.instances.get(cameraName) || []).slice();
+
+        // Also include ungrouped (unlinked) UserInstances — export identically to grouped
+        var ulInstances = fg.getUnlinkedInstances(cameraName);
+        for (var ui = 0; ui < ulInstances.length; ui++) {
+            camInstances.push(ulInstances[ui].instance);
+        }
 
         // Also collect reprojected instances for this frame+camera
         var reprojInstances = [];

@@ -67,6 +67,9 @@ class InteractionManager {
          */
         this.hoveredNode = null;
 
+        /** Last known cursor position in video coordinates for the last interacted view */
+        this.lastCursorPos = null; // [vx, vy] or null
+
         // ------------------------------------------------------------------
         // Drag state
         // ------------------------------------------------------------------
@@ -103,6 +106,11 @@ class InteractionManager {
 
         /** @type {UnlinkedInstance|null} Currently selected unlinked instance (for editing/deletion) */
         this.selectedUnlinked = null;
+
+        /** @private Whether the clicked unlinked instance was already in assignment selection */
+        this._unlinkedWasSelected = false;
+        /** @private The unlinked instance clicked on mousedown (for deselect-on-click logic) */
+        this._unlinkedClickTarget = null;
 
         // ------------------------------------------------------------------
         // Edit Group mode state
@@ -625,8 +633,15 @@ class InteractionManager {
             }
 
             if (hit) {
+                // Determine which instance was hit (reprojected or main)
+                var hitInstance;
+                if (hit.hitReprojected) {
+                    hitInstance = hit.instanceGroup.reprojectedInstances
+                        ? hit.instanceGroup.reprojectedInstances.get(viewName) : null;
+                } else {
+                    hitInstance = hit.instanceGroup.getInstance(viewName);
+                }
                 // Block null toggle for predicted instances
-                var hitInstance = hit.instanceGroup.getInstance(viewName);
                 if (hitInstance && hitInstance.type === 'predicted') return;
                 // Resolve edge hits to nearest node
                 var nullNodeIdx = hit.nodeIdx;
@@ -634,9 +649,23 @@ class InteractionManager {
                     nullNodeIdx = this._resolveNearestNode(hitInstance, vx, vy);
                 }
                 if (nullNodeIdx < 0) return; // no valid node found
-                // Select group and toggle null — no node-level selection
-                this.select(hit.instanceGroup, -1);
-                this._toggleNodeNull(viewName, hit.instanceGroup, nullNodeIdx);
+                // Select group and toggle null
+                this.select(hit.instanceGroup, -1, hit.hitReprojected);
+                if (hit.hitReprojected) {
+                    // Toggle null directly on the reprojected instance
+                    if (!hitInstance.nulledNodes) hitInstance.nulledNodes = new Set();
+                    if (hitInstance.nulledNodes.has(nullNodeIdx)) {
+                        hitInstance.nulledNodes.delete(nullNodeIdx);
+                    } else {
+                        hitInstance.nulledNodes.add(nullNodeIdx);
+                    }
+                    this._requestRedraw();
+                    if (this.callbacks.onNodeSetNull) {
+                        this.callbacks.onNodeSetNull(viewName, hit.instanceGroup, nullNodeIdx);
+                    }
+                } else {
+                    this._toggleNodeNull(viewName, hit.instanceGroup, nullNodeIdx);
+                }
             } else if (ulHit) {
                 var ulInst = ulHit.unlinked.instance;
                 if (ulInst && ulInst.type === 'predicted') return;
@@ -699,11 +728,14 @@ class InteractionManager {
                     }
                 }
             }
-            // Always consume the event in edit group mode
-            e.preventDefault();
-            e.stopPropagation();
-            e._consumedByInteraction = true;
-            this._requestRedraw();
+            // Consume event only if a node/instance was clicked;
+            // let empty-space clicks pass through for pan/zoom.
+            if (egLinked || egUnlinked) {
+                e.preventDefault();
+                e.stopPropagation();
+                e._consumedByInteraction = true;
+                this._requestRedraw();
+            }
             return;
         }
 
@@ -828,16 +860,30 @@ class InteractionManager {
         } else if (useUnlinked) {
             this.select(null, -1);
             this.selectedUnlinked = ulHit.unlinked;
-            // Auto-enter assignment mode and add to selection
+            // Auto-enter assignment mode
             if (!this.assignmentMode) {
                 this.assignmentMode = true;
                 this.assignmentSelection = [];
             }
-            this.addToAssignmentSelection(ulHit.unlinked);
+            // Check if already selected (for deselect-on-click-only logic)
+            var wasAlreadySelected = false;
+            for (var asi = 0; asi < this.assignmentSelection.length; asi++) {
+                if (this.assignmentSelection[asi].id === ulHit.unlinked.id) {
+                    wasAlreadySelected = true;
+                    break;
+                }
+            }
+            // Always ensure selected on mousedown (don't toggle yet)
+            if (!wasAlreadySelected) {
+                this.addToAssignmentSelection(ulHit.unlinked);
+            }
             // Still allow drag for repositioning
             // Block drag for predicted unlinked instances (select only)
             var ulInstType = ulHit.unlinked.instance ? ulHit.unlinked.instance.type : 'user';
             if (ulInstType !== 'predicted') {
+                // Store flag for mouseup to decide whether to deselect
+                this._unlinkedWasSelected = wasAlreadySelected;
+                this._unlinkedClickTarget = ulHit.unlinked;
                 // Resolve edge hits to nearest node
                 var ulDragNodeIdx = ulHit.nodeIdx;
                 if (ulDragNodeIdx === -1) {
@@ -846,6 +892,11 @@ class InteractionManager {
                 if (ulDragNodeIdx >= 0) {
                     this._startDrag(viewName, -1, ulDragNodeIdx,
                         vx, vy, ulHit.unlinked, e.altKey ? ulHit.unlinked : null);
+                }
+            } else {
+                // Predicted: no drag, toggle immediately on click
+                if (wasAlreadySelected) {
+                    this.addToAssignmentSelection(ulHit.unlinked); // toggles off
                 }
             }
             e.preventDefault();
@@ -901,6 +952,10 @@ class InteractionManager {
 
         var coords = this.canvasToVideo(e.clientX, e.clientY, viewName);
         var vx = coords[0], vy = coords[1];
+
+        // Track cursor position for new instance placement
+        this.lastCursorPos = [vx, vy];
+        this.lastInteractedView = viewName;
 
         // Update hover state
         var frameIdx = state.currentFrame;
@@ -1003,7 +1058,7 @@ class InteractionManager {
 
                 instance.modified = true;
 
-                // Notify the application (only for linked instances)
+                // Notify the application
                 if (group && this.callbacks.onNodeMoved) {
                     this.callbacks.onNodeMoved(
                         info.viewName,
@@ -1011,9 +1066,21 @@ class InteractionManager {
                         info.nodeIdx,
                         [info.currentPos[0], info.currentPos[1]]
                     );
+                } else if (info.unlinked && this.callbacks.onUnlinkedNodeMoved) {
+                    this.callbacks.onUnlinkedNodeMoved(
+                        info.viewName,
+                        instance
+                    );
                 }
             }
         }
+
+        // Deselect unlinked instance only on plain click (no drag) of already-selected instance
+        if (!didMove && this._unlinkedWasSelected && this._unlinkedClickTarget) {
+            this.addToAssignmentSelection(this._unlinkedClickTarget); // toggles off
+        }
+        this._unlinkedWasSelected = false;
+        this._unlinkedClickTarget = null;
 
         this._endDrag();
         this._requestRedraw();
@@ -1025,6 +1092,9 @@ class InteractionManager {
      * @param {string} viewName
      */
     onMouseLeave(viewName) {
+        if (this.lastInteractedView === viewName) {
+            this.lastCursorPos = null;
+        }
         if (this.hoveredNode && this.hoveredNode.viewName === viewName) {
             this.hoveredNode = null;
 
@@ -1574,6 +1644,7 @@ class InteractionManager {
         // Handle unlinked instance deletion
         if (this.selectedUnlinked) {
             const ul = this.selectedUnlinked;
+            const deletedViews = viewName ? [viewName] : [];
             this.clearSelection();
 
             const fg = state.session.getFrameGroup(frameIdx);
@@ -1582,7 +1653,7 @@ class InteractionManager {
             }
 
             if (this.callbacks.onInstanceDeleted) {
-                this.callbacks.onInstanceDeleted(frameIdx, null);
+                this.callbacks.onInstanceDeleted(frameIdx, null, deletedViews);
             }
 
             this._requestRedraw();
@@ -1593,6 +1664,14 @@ class InteractionManager {
         if (!this.selectedInstanceGroup) return;
 
         const group = this.selectedInstanceGroup;
+
+        // Capture affected view names before deletion
+        var deletedViews;
+        if (deleteAll || !viewName) {
+            deletedViews = Array.from(group.instances.keys());
+        } else {
+            deletedViews = [viewName];
+        }
 
         // Clear selection before modifying data
         this.clearSelection();
@@ -1626,7 +1705,7 @@ class InteractionManager {
 
         // Notify the application (e.g. to update 3D viewport, info panel, timeline)
         if (this.callbacks.onInstanceDeleted) {
-            this.callbacks.onInstanceDeleted(frameIdx, group);
+            this.callbacks.onInstanceDeleted(frameIdx, group, deletedViews);
         }
 
         this._requestRedraw();
@@ -1682,9 +1761,9 @@ class InteractionManager {
         // Unlink the group (instances go back to unlinked pool)
         state.session.unlinkGroup(frameIdx, group);
 
-        // Notify the application
+        // Notify the application (no views deleted — instances moved to unlinked pool)
         if (this.callbacks.onInstanceDeleted) {
-            this.callbacks.onInstanceDeleted(frameIdx, group);
+            this.callbacks.onInstanceDeleted(frameIdx, group, []);
         }
 
         this._requestRedraw();
@@ -1699,7 +1778,7 @@ class InteractionManager {
      *
      * @private
      */
-    _addNewInstance(initialPoints) {
+    _addNewInstance(initialPoints, cursorPos) {
         const state = this._getState();
         if (!state || !state.session) return;
 
@@ -1730,7 +1809,12 @@ class InteractionManager {
             points = initialPoints;
         } else {
             // Topology-based layout using skeleton edges
-            const cx = vw / 2, cy = vh / 2;
+            // Center at cursor position if available and within view bounds, else view center
+            let cx = vw / 2, cy = vh / 2;
+            if (cursorPos && cursorPos[0] >= 0 && cursorPos[0] <= vw && cursorPos[1] >= 0 && cursorPos[1] <= vh) {
+                cx = cursorPos[0];
+                cy = cursorPos[1];
+            }
             const spacing = Math.min(vw, vh) * 0.04;
             points = new Array(numNodes);
 

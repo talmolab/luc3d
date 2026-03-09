@@ -140,6 +140,7 @@
             <div class="viewport3d-container" id="viewport3dContainer">
                 <div id="viewport3dCanvas" style="width:100%;height:100%;"></div>
                 <button class="viewport3d-show-cam-btn" id="btnShowCameraView" title="Show selected camera's perspective">Show Camera View</button>
+                <button class="viewport3d-show-cam-btn" id="btnShowInitialView" title="Reset to initial view" style="display:none; top:36px;">Show Initial View</button>
             </div>
 
             <!-- Split handle: 3D viewport | info panel -->
@@ -529,9 +530,10 @@
                 </span>
             </div>
             <div class="status-right">
-                <span class="status-item" id="statusLabeledFrames">Labeled: 0</span>
-                <span class="status-item" id="statusTriangulatedFrames">Triangulated: 0</span>
+                <span class="status-item" id="statusCamera">Camera: -</span>
+                <span class="status-item" id="statusLabeledFrames">Labeled Frames: 0</span>
                 <span class="status-item" id="statusInstances">Instances: -</span>
+                <span class="status-item" id="statusTriangulatedFrames">Triangulated: 0</span>
                 <span class="status-item" id="statusError">Error: -</span>
                 <span class="status-item" id="statusSelection">Selection: none</span>
             </div>
@@ -719,6 +721,7 @@
                         videoHeight: vh,
                         frameCount: decoder.samples.length,
                         assignedCamera: name,
+                        videoPath: name + '.mp4',
                     });
 
                     if (i === 0) {
@@ -1239,43 +1242,97 @@
             var viewName = interactionManager.lastInteractedView || (state.views.length > 0 ? state.views[0].name : null);
             if (!viewName) return;
             var frameIdx = state.currentFrame;
+            var cursorPos = interactionManager.lastCursorPos; // [vx, vy] or null
             var points = null;
 
             // Priority 1: Cached UserInstance points for this view
             var cached = state.lastUserPoints.get(viewName);
-            if (cached) {
-                points = cached.map(function(p) { return p ? [p[0], p[1]] : null; });
-            }
-
-            // Priority 2: Current frame PredictedInstance in same view
-            if (!points) {
-                // Check grouped predicted instances
-                var curGroups = getInstanceGroupsForFrame(frameIdx);
-                for (var g of curGroups) {
-                    var inst = g.getInstance(viewName);
-                    if (inst && inst.type === 'predicted' && inst.points) {
-                        points = inst.points.map(function(p) { return p ? [p[0], p[1]] : null; });
-                        break;
+            if (!cached) {
+                // Cache miss — scan current frame for an existing UserInstance in this view
+                var scanGroups = getInstanceGroupsForFrame(frameIdx);
+                for (var sg = 0; sg < scanGroups.length && !cached; sg++) {
+                    var si = scanGroups[sg].getInstance(viewName);
+                    if (si && si.type === 'user' && si.points) {
+                        recordUserPoints(viewName, si.points);
+                        cached = state.lastUserPoints.get(viewName);
                     }
                 }
-                // Check unlinked predicted instances
-                if (!points) {
-                    var fg = state.session.getFrameGroup(frameIdx);
-                    if (fg) {
-                        var unlinked = fg.getUnlinkedInstances(viewName) || [];
-                        for (var ul of unlinked) {
-                            if (ul.instance.type === 'predicted' && ul.instance.points) {
-                                points = ul.instance.points.map(function(p) { return p ? [p[0], p[1]] : null; });
-                                break;
+                if (!cached) {
+                    var scanFg = state.session.getFrameGroup(frameIdx);
+                    if (scanFg) {
+                        var scanUl = scanFg.getUnlinkedInstances(viewName) || [];
+                        for (var su = 0; su < scanUl.length && !cached; su++) {
+                            if (scanUl[su].instance.type === 'user' && scanUl[su].instance.points) {
+                                recordUserPoints(viewName, scanUl[su].instance.points);
+                                cached = state.lastUserPoints.get(viewName);
                             }
                         }
                     }
                 }
             }
+            if (cached) {
+                points = cached.map(function(p) { return p ? [p[0], p[1]] : null; });
+            }
 
-            // Priority 3: Topology-based layout (handled in _addNewInstance default)
-            // Note: _addNewInstance fires onUserInstanceCreated callback which calls recordUserPoints
-            interactionManager._addNewInstance(points);
+            // Priority 2: Nearest PredictedInstance to cursor (by centroid distance)
+            if (!points) {
+                var allPredicted = [];
+                // Collect grouped predicted instances
+                var curGroups = getInstanceGroupsForFrame(frameIdx);
+                for (var g of curGroups) {
+                    var inst = g.getInstance(viewName);
+                    if (inst && inst.type === 'predicted' && inst.points) {
+                        allPredicted.push(inst);
+                    }
+                }
+                // Collect unlinked predicted instances
+                var fg = state.session.getFrameGroup(frameIdx);
+                if (fg) {
+                    var unlinked = fg.getUnlinkedInstances(viewName) || [];
+                    for (var ul of unlinked) {
+                        if (ul.instance.type === 'predicted' && ul.instance.points) {
+                            allPredicted.push(ul.instance);
+                        }
+                    }
+                }
+                if (allPredicted.length > 0) {
+                    // Find the predicted instance whose centroid is closest to cursor
+                    var bestPred = null;
+                    var bestDist = Infinity;
+                    for (var pi = 0; pi < allPredicted.length; pi++) {
+                        var pred = allPredicted[pi];
+                        // Compute centroid
+                        var sx = 0, sy = 0, count = 0;
+                        for (var ni = 0; ni < pred.points.length; ni++) {
+                            if (pred.points[ni]) {
+                                sx += pred.points[ni][0];
+                                sy += pred.points[ni][1];
+                                count++;
+                            }
+                        }
+                        if (count === 0) continue;
+                        var cx = sx / count, cy = sy / count;
+                        if (cursorPos) {
+                            var dx = cx - cursorPos[0], dy = cy - cursorPos[1];
+                            var dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist < bestDist) {
+                                bestDist = dist;
+                                bestPred = pred;
+                            }
+                        } else {
+                            // No cursor — use first available
+                            if (!bestPred) bestPred = pred;
+                        }
+                    }
+                    if (bestPred) {
+                        points = bestPred.points.map(function(p) { return p ? [p[0], p[1]] : null; });
+                    }
+                }
+            }
+
+            // Priority 3: Topology-based layout centered at cursor
+            // _addNewInstance handles this when points is null, using cursorPos
+            interactionManager._addNewInstance(points, cursorPos);
         }
 
         // ============================================
@@ -1347,10 +1404,20 @@
 
             // Update toolbar state
             var tbGroup = document.getElementById('tbGroup');
-            if (tbGroup) tbGroup.classList.toggle('active', assignmentMode);
+            var hasGroupedSelection = interactionManager && interactionManager.selectedInstanceGroup && !interactionManager.selectedReprojected;
+            if (tbGroup) {
+                if (hasGroupedSelection && !assignmentMode) {
+                    tbGroup.textContent = 'Ungroup';
+                    tbGroup.classList.add('active');
+                } else {
+                    tbGroup.textContent = 'Group';
+                    tbGroup.classList.toggle('active', assignmentMode);
+                }
+            }
             var tbEditGroup = document.getElementById('tbEditGroup');
             if (tbEditGroup) {
-                tbEditGroup.classList.toggle('active', interactionManager ? interactionManager.editGroupMode : false);
+                var editGroupActive = interactionManager ? interactionManager.editGroupMode : false;
+                tbEditGroup.classList.toggle('active', editGroupActive || hasGroupedSelection);
                 // Disable when a reprojected instance is selected
                 var isReprojSelected = interactionManager ? interactionManager.selectedReprojected : false;
                 tbEditGroup.disabled = isReprojSelected;
@@ -1488,6 +1555,16 @@
                         timeline.setFrameModified(state.currentFrame, true);
                     }
 
+                    setStatus('Node moved in ' + viewName, 'success');
+                },
+
+                onUnlinkedNodeMoved: function (viewName, instance) {
+                    if (instance && instance.points) {
+                        recordUserPoints(viewName, instance.points);
+                    }
+                    if (timeline) {
+                        timeline.setFrameModified(state.currentFrame, true);
+                    }
                     setStatus('Node moved in ' + viewName, 'success');
                 },
 
@@ -1704,9 +1781,16 @@
                     }
                 },
 
-                onInstanceDeleted: function (frameIdx, group) {
+                onInstanceDeleted: function (frameIdx, group, deletedViews) {
                     var trackName = group ? (state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx) : 'unlinked instance';
                     setStatus('Deleted ' + trackName, 'success');
+
+                    // Clear per-view cache only for the views whose instance was deleted
+                    if (deletedViews) {
+                        for (var dvi = 0; dvi < deletedViews.length; dvi++) {
+                            state.lastUserPoints.delete(deletedViews[dvi]);
+                        }
+                    }
 
                     // Update timeline modification state
                     if (timeline) {
@@ -1728,6 +1812,7 @@
                 },
 
                 onAssignmentSelectionChanged: function (count) {
+                    updateInfoPanel();
                     if (!manualAssignState) return;
                     var textEl = document.getElementById('manualAssignToastText');
                     if (textEl) {
@@ -1909,6 +1994,17 @@
                     e.stopPropagation();
                     if (viewport3d) viewport3d.showSelectedCameraView();
                 });
+
+                // Wire up "Show Initial View" button
+                document.getElementById('btnShowInitialView').addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    if (viewport3d) viewport3d.showInitialView();
+                });
+
+                // Toggle "Show Initial View" button visibility
+                viewport3d.onCameraViewChanged = function (viewing) {
+                    document.getElementById('btnShowInitialView').style.display = viewing ? '' : 'none';
+                };
 
                 // Show initial frame's 3D points
                 update3DViewport(state.currentFrame);
@@ -2153,7 +2249,7 @@
             document.getElementById('menuExportSlp').addEventListener('click', async function () {
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
-                const data = buildSlpExportData(state.session, state.views);
+                const data = buildSlpExportData(state.session, state.views, state.videoFiles);
 
                 // Try server-side conversion first
                 try {
@@ -2555,6 +2651,23 @@
                 var el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', function() {
+                        // Deselect if selected instance type is now hidden
+                        if (interactionManager && interactionManager.selectedInstanceGroup) {
+                            var showUser = document.getElementById('visUser').checked;
+                            var showPredicted = document.getElementById('visPredicted').checked;
+                            var showReproj = document.getElementById('visReprojections').checked;
+                            if (interactionManager.selectedReprojected && !showReproj) {
+                                interactionManager.clearSelection();
+                            } else if (!interactionManager.selectedReprojected) {
+                                var firstInst = interactionManager.selectedInstanceGroup.instances.values().next().value;
+                                if (firstInst) {
+                                    var t = firstInst.type || 'user';
+                                    if ((t === 'user' && !showUser) || (t === 'predicted' && !showPredicted)) {
+                                        interactionManager.clearSelection();
+                                    }
+                                }
+                            }
+                        }
                         drawAllOverlays(state.currentFrame);
                     });
                 }
@@ -2578,9 +2691,14 @@
             document.getElementById('tbDeleteInstance').addEventListener('click', function () {
                 if (interactionManager) interactionManager._deleteSelected();
             });
-            // Group button: toggle assignment mode or create group
+            // Group button: toggle assignment mode, create group, or ungroup
             document.getElementById('tbGroup').addEventListener('click', function () {
                 if (!interactionManager) return;
+                // Ungroup mode: grouped instance selected and not in assignment mode
+                if (interactionManager.selectedInstanceGroup && !interactionManager.selectedReprojected && !interactionManager.assignmentMode) {
+                    unlinkGroup(interactionManager.selectedInstanceGroup);
+                    return;
+                }
                 if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 1) {
                     interactionManager._createGroupFromAssignment();
                 } else if (interactionManager.assignmentMode) {
@@ -3796,19 +3914,29 @@
             var modal = document.createElement('div');
             modal.className = 'multi-frame-modal slp-export-modal';
 
-            // Build table rows from state.videoFiles that have SLP sources
+            // Build table rows from state.videoFiles (SLP sources or video files)
             var slpEntries = [];
             for (var i = 0; i < state.videoFiles.length; i++) {
                 var vf = state.videoFiles[i];
-                if (!vf.slpFilename) continue;
+                if (!vf.assignedCamera) continue;
                 var camName = vf.name;
-                var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
+                var sourceLabel;
+                var outputName;
 
-                // Compute default output filename with version
-                var versionMatch = stem.match(/_3D_v(\d+)$/);
-                var nextVersion = versionMatch ? parseInt(versionMatch[1]) + 1 : 1;
-                var baseStem = versionMatch ? stem.replace(/_3D_v\d+$/, '') : stem;
-                var outputName = baseStem + '_3D_v' + nextVersion + '.slp';
+                if (vf.slpFilename) {
+                    sourceLabel = vf.slpFilename;
+                    var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
+                    var versionMatch = stem.match(/_3D_v(\d+)$/);
+                    var nextVersion = versionMatch ? parseInt(versionMatch[1]) + 1 : 1;
+                    var baseStem = versionMatch ? stem.replace(/_3D_v\d+$/, '') : stem;
+                    outputName = baseStem + '_3D_v' + nextVersion + '.slp';
+                } else {
+                    // Video-only entry: derive from video/camera name
+                    var videoName = (vf.file && vf.file.name) ? vf.file.name : (vf.name || 'video');
+                    sourceLabel = videoName;
+                    var videoStem = videoName.replace(/\.[^.]+$/, '');
+                    outputName = videoStem + '_v1.slp';
+                }
 
                 // Check if this camera has edits (UserInstances or ReprojectedInstances)
                 var hasEdits = false;
@@ -3837,7 +3965,7 @@
 
                 slpEntries.push({
                     camName: camName,
-                    slpFilename: vf.slpFilename,
+                    sourceLabel: sourceLabel,
                     outputName: outputName,
                     hasEdits: hasEdits,
                     videoFile: vf,
@@ -3845,7 +3973,7 @@
             }
 
             if (slpEntries.length === 0) {
-                setStatus('No SLP files loaded — load a session folder with SLP files first', 'warning');
+                setStatus('No video files loaded', 'warning');
                 return;
             }
 
@@ -3856,7 +3984,7 @@
                 var rowClass = entry.hasEdits ? 'slp-export-row slp-has-edits' : 'slp-export-row';
                 tableRows +=
                     '<tr class="' + rowClass + '" data-idx="' + ei + '">' +
-                    '<td>' + entry.slpFilename + '</td>' +
+                    '<td>' + entry.sourceLabel + '</td>' +
                     '<td>' + entry.outputName + '</td>' +
                     '</tr>';
             }
@@ -3865,7 +3993,7 @@
                 '<h3>Export SLP File</h3>' +
                 '<div class="slp-export-table-container">' +
                 '<table class="data-table slp-export-table">' +
-                '<thead><tr><th>Source SLP</th><th>Output Filename</th></tr></thead>' +
+                '<thead><tr><th>Source</th><th>Output Filename</th></tr></thead>' +
                 '<tbody>' + tableRows + '</tbody>' +
                 '</table>' +
                 '</div>' +
@@ -3874,7 +4002,7 @@
                 '</div>' +
                 '<div class="slp-export-filename-row">' +
                 '<label>Output Filename</label>' +
-                '<input type="text" id="slpExportFilename" value="" placeholder="Select an SLP file above">' +
+                '<input type="text" id="slpExportFilename" value="" placeholder="Select a source above">' +
                 '</div>' +
                 '<div class="slp-export-note">' +
                 'Requires server: <code>python server.py</code> (with h5py, numpy installed). Falls back to JSON if server unavailable.' +
@@ -4960,18 +5088,44 @@
         function updateFrameCounters() {
             if (!state.session) return;
 
+            // Determine active camera
+            var activeCam = interactionManager ? interactionManager.lastInteractedView : null;
+            if (!activeCam && state.views.length > 0) activeCam = state.views[0].name;
+
+            var cameraEl = document.getElementById('statusCamera');
+            if (cameraEl) cameraEl.textContent = 'Camera: ' + (activeCam || '-');
+
             var labeledCount = 0;
+            var instanceCount = 0;
             var triangulatedCount = 0;
 
             state.session.frameGroups.forEach(function(fg, frameIdx) {
-                // Labeled: frame has at least one UserInstance
-                var hasUser = false;
-                fg.instances.forEach(function(instList) {
-                    for (var i = 0; i < instList.length; i++) {
-                        if (instList[i].type === 'user') { hasUser = true; break; }
+                // Per-camera: labeled if frame has a grouped/ungrouped UserInstance
+                // or grouped PredictedInstance in this view
+                var hasLabeled = false;
+                if (activeCam) {
+                    // Check grouped instances for this camera
+                    var camInstances = fg.instances.get(activeCam) || [];
+                    for (var i = 0; i < camInstances.length; i++) {
+                        var t = camInstances[i].type || 'user';
+                        if (t === 'user') {
+                            hasLabeled = true;
+                            instanceCount++;
+                        } else if (t === 'predicted') {
+                            hasLabeled = true;
+                        }
                     }
-                });
-                if (hasUser) labeledCount++;
+                    // Check ungrouped UserInstances for this camera
+                    var ulInstances = fg.getUnlinkedInstances(activeCam);
+                    for (var u = 0; u < ulInstances.length; u++) {
+                        var ulType = ulInstances[u].instance.type || 'user';
+                        if (ulType === 'user') {
+                            hasLabeled = true;
+                            instanceCount++;
+                        }
+                    }
+                }
+                if (hasLabeled) labeledCount++;
 
                 // Triangulated: frame has at least one InstanceGroup with points3d
                 var trackMap = state.session.instanceGroups.get(frameIdx);
@@ -4987,7 +5141,9 @@
 
             var labeledEl = document.getElementById('statusLabeledFrames');
             var triangulatedEl = document.getElementById('statusTriangulatedFrames');
-            if (labeledEl) labeledEl.textContent = 'Labeled: ' + labeledCount;
+            var instancesEl = document.getElementById('statusInstances');
+            if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + labeledCount;
+            if (instancesEl) instancesEl.textContent = 'Instances: ' + instanceCount;
             if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + triangulatedCount;
         }
 
@@ -5333,11 +5489,15 @@
                     tr.appendChild(tdUnlink);
                     tdUnlink.appendChild(unlinkBtn);
 
-                    // Click to select this group
+                    // Click to toggle selection of this group
                     (function (g) {
                         tr.addEventListener('click', function () {
                             if (interactionManager) {
-                                interactionManager.select(g, -1);
+                                if (interactionManager.selectedInstanceGroup === g && !interactionManager.selectedReprojected) {
+                                    interactionManager.clearSelection();
+                                } else {
+                                    interactionManager.select(g, -1);
+                                }
                             }
                             drawAllOverlays(state.currentFrame);
                             updateFrameInfo(state.currentFrame, getInstanceGroupsForFrame(state.currentFrame));
@@ -5478,7 +5638,7 @@
                         const ul = filtered[u];
                         const tr = document.createElement('tr');
 
-                        // Highlight if in assignment selection or selected in viewport
+                        // Highlight if in assignment selection
                         if (interactionManager && interactionManager.assignmentSelection) {
                             for (let s = 0; s < interactionManager.assignmentSelection.length; s++) {
                                 if (interactionManager.assignmentSelection[s].id === ul.id) {
@@ -5486,9 +5646,6 @@
                                     break;
                                 }
                             }
-                        }
-                        if (interactionManager && interactionManager.selectedUnlinked && interactionManager.selectedUnlinked.id === ul.id) {
-                            tr.classList.add('selected');
                         }
 
                         const tdType = document.createElement('td');
@@ -5511,13 +5668,19 @@
                         tr.appendChild(tdPoints);
                         tr.appendChild(tdScore);
 
-                        // Click to select this unlinked instance
+                        // Click to toggle assignment selection for this unlinked instance
                         (function (unlinked) {
                             tr.addEventListener('click', function () {
                                 if (interactionManager) {
                                     interactionManager.select(null, -1);
                                     interactionManager.selectedUnlinked = unlinked;
+                                    if (!interactionManager.assignmentMode) {
+                                        interactionManager.assignmentMode = true;
+                                        interactionManager.assignmentSelection = [];
+                                    }
+                                    interactionManager.addToAssignmentSelection(unlinked);
                                     drawAllOverlays(state.currentFrame);
+                                    updateInfoPanel();
                                 }
                             });
                         })(ul);
@@ -5536,8 +5699,6 @@
             }
 
             // Status bar
-            const numInstances = instanceGroups ? instanceGroups.reduce(function (sum, g) { return sum + g.cameraNames.length; }, 0) : 0;
-            document.getElementById('statusInstances').textContent = 'Instances: ' + numInstances;
             document.getElementById('statusError').textContent = 'Error: ' +
                 (meanError != null ? meanError.toFixed(2) + ' px' : '-');
 
@@ -5938,6 +6099,7 @@
                                     videoHeight: vh,
                                     frameCount: decoder.samples.length,
                                     assignedCamera: null,
+                                    videoPath: file.webkitRelativePath || file.name,
                                 });
                             } catch (videoErr) {
                                 console.error('Failed to load ' + file.name + ':', videoErr);
@@ -6476,6 +6638,7 @@
                             videoHeight: vh,
                             frameCount: frameCount,
                             assignedCamera: null,
+                            videoPath: file.webkitRelativePath || file.name,
                         });
                     } catch (videoErr) {
                         console.error('Failed to load ' + file.name + ':', videoErr);
@@ -6726,6 +6889,7 @@
                         videoHeight: decoder.videoTrack.video.height,
                         frameCount: decoder.samples.length,
                         assignedCamera: cameraName,
+                        videoPath: vf.webkitRelativePath || vf.name,
                     };
                     state.videoFiles.push(videoFileEntry);
 
@@ -7272,6 +7436,7 @@
                                 frameCount: decoder.samples.length,
                                 assignedCamera: camName,
                                 slpFilename: slpFilenameForCam,
+                                videoPath: videoFile.webkitRelativePath || videoFile.name,
                             });
 
                             // Ensure session exists
@@ -7663,12 +7828,19 @@
                             decoder.videoTrack.video.height = evHeight;
                         }
 
+                        var evSlpVideo = slpData.videos[evInfo.idx];
+                        var evVideoPath = evSlpVideo
+                            ? (evSlpVideo.sourceFilename || evSlpVideo.filename || null)
+                            : null;
+                        if (evVideoPath === '.') evVideoPath = null;
+
                         state.videoFiles.push({
                             file: null, name: evCamName, decoder: decoder,
                             videoWidth: evWidth, videoHeight: evHeight,
                             frameCount: decoder.samples.length,
                             assignedCamera: evCamName,
                             slpFilename: slpFile.name,
+                            videoPath: evVideoPath || (evCamName + '.mp4'),
                         });
                     }
 
@@ -7704,6 +7876,7 @@
 
                                 // Match to SLP video reference by filename
                                 var assignedCam = null;
+                                var matchedSlpVideoPath = null;
                                 var vStem = stem.toLowerCase();
                                 for (var rvi = 0; rvi < slpVideoRefs.length; rvi++) {
                                     var refName = slpVideoRefs[rvi];
@@ -7716,6 +7889,11 @@
                                         if (videoIdxToCameraName[rvi]) {
                                             assignedCam = videoIdxToCameraName[rvi];
                                         }
+                                        var matchedMeta = slpData.videos[rvi];
+                                        if (matchedMeta) {
+                                            var origPath = matchedMeta.sourceFilename || matchedMeta.filename || null;
+                                            if (origPath && origPath !== '.') matchedSlpVideoPath = origPath;
+                                        }
                                         break;
                                     }
                                 }
@@ -7727,6 +7905,7 @@
                                     frameCount: vdec.samples.length,
                                     assignedCamera: assignedCam,
                                     slpFilename: slpFile.name,
+                                    videoPath: matchedSlpVideoPath || vFile.webkitRelativePath || vFile.name,
                                 });
                             } catch (videoErr) {
                                 console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);
@@ -8034,11 +8213,18 @@
                             mDecoder.videoTrack.video.height = mevHeight;
                         }
 
+                        var mevSlpVideo = slpData.videos[mevInfo.idx];
+                        var mevVideoPath = mevSlpVideo
+                            ? (mevSlpVideo.sourceFilename || mevSlpVideo.filename || null)
+                            : null;
+                        if (mevVideoPath === '.') mevVideoPath = null;
+
                         var mVideoEntry = {
                             file: null, name: mevCamName, decoder: mDecoder,
                             videoWidth: mevWidth, videoHeight: mevHeight,
                             frameCount: mDecoder.samples.length,
                             assignedCamera: mevCamName,
+                            videoPath: mevVideoPath || (mevCamName + '.mp4'),
                         };
                         state.videoFiles.push(mVideoEntry);
                         createViewForVideoFile(mVideoEntry);
@@ -8079,6 +8265,7 @@
 
                                 // Match to SLP video reference by filename
                                 var amvCam = null;
+                                var amvMatchedVideoPath = null;
                                 var amvStemLower = amvStem.toLowerCase();
                                 for (var arvi = 0; arvi < addSlpVideoRefs.length; arvi++) {
                                     var aRefName = addSlpVideoRefs[arvi];
@@ -8090,6 +8277,11 @@
                                         aRefStem.indexOf(amvStemLower) >= 0) {
                                         if (videoIdxToCameraName[arvi]) {
                                             amvCam = videoIdxToCameraName[arvi];
+                                        }
+                                        var amvMeta = slpData.videos[arvi];
+                                        if (amvMeta) {
+                                            var amvOrigPath = amvMeta.sourceFilename || amvMeta.filename || null;
+                                            if (amvOrigPath && amvOrigPath !== '.') amvMatchedVideoPath = amvOrigPath;
                                         }
                                         break;
                                     }
@@ -8134,6 +8326,7 @@
                                     videoHeight: amvDec.videoTrack.video.height,
                                     frameCount: amvDec.samples.length,
                                     assignedCamera: amvCam,
+                                    videoPath: amvMatchedVideoPath || amvFile.webkitRelativePath || amvFile.name,
                                 };
                                 state.videoFiles.push(amvEntry);
                                 if (amvCam) createViewForVideoFile(amvEntry);
