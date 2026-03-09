@@ -272,7 +272,7 @@ class Instance {
     /**
      * @param {(number[]|null)[]} points - Array of [u, v] 2D keypoints (null if not visible)
      * @param {number} trackIdx - Track index
-     * @param {'user'|'predicted'} type
+     * @param {'user'|'predicted'|'reprojected'} type
      * @param {number} score - Confidence 0-1
      */
     constructor(points, trackIdx, type, score) {
@@ -451,6 +451,8 @@ class InstanceGroup {
         this.dirty = false;
         /** @type {Set<string>|null} Camera names used for last triangulation */
         this.usedCameras = null;
+        /** @type {Map<string, Instance>} camera name -> reprojected instance */
+        this.reprojectedInstances = new Map();
     }
 
     /**
@@ -491,6 +493,24 @@ class InstanceGroup {
      */
     markClean() {
         this.dirty = false;
+    }
+
+    /**
+     * Add (or replace) the reprojected instance for a given camera view.
+     * @param {string} cameraName
+     * @param {Instance} instance
+     */
+    addReprojectedInstance(cameraName, instance) {
+        this.reprojectedInstances.set(cameraName, instance);
+    }
+
+    /**
+     * Get the reprojected instance for a given camera view.
+     * @param {string} cameraName
+     * @returns {Instance|undefined}
+     */
+    getReprojectedInstance(cameraName) {
+        return this.reprojectedInstances.get(cameraName);
     }
 }
 

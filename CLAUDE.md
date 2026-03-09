@@ -17,7 +17,9 @@ Multi-view pose annotation GUI. No build system — pure vanilla JS served as st
 
 ## Local Development
 ```bash
-python3 -m http.server 8080 --bind 0.0.0.0
+python3 server.py
+# Requires: pip install h5py numpy (for SLP export)
+# Fallback: python3 -m http.server 8080 (JSON export only)
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
