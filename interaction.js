@@ -427,6 +427,8 @@ class InteractionManager {
                 if (!ulTypePassFilters[pass](ulType)) continue;
 
                 // --- Node hit testing ---
+                // Use <= so later (newer) instances in the array win ties,
+                // matching the render order where newer instances draw on top.
                 for (let n = 0; n < points.length; n++) {
                     const pt = points[n];
                     if (pt == null) continue;
@@ -435,7 +437,7 @@ class InteractionManager {
                     const dy = pt[1] - videoY;
                     const dist = Math.sqrt(dx * dx + dy * dy);
 
-                    if (dist < nodeThreshold && dist < bestDist) {
+                    if (dist < nodeThreshold && dist <= bestDist) {
                         bestDist = dist;
                         best = {
                             unlinked: ul,
@@ -456,7 +458,7 @@ class InteractionManager {
                         const edgeDist = this._pointToSegmentDist(
                             videoX, videoY, ptA[0], ptA[1], ptB[0], ptB[1]);
 
-                        if (edgeDist < edgeThreshold && edgeDist < bestDist) {
+                        if (edgeDist < edgeThreshold && edgeDist <= bestDist) {
                             bestDist = edgeDist;
                             best = {
                                 unlinked: ul,
@@ -626,9 +628,9 @@ class InteractionManager {
             var hit = this.findNearestNode(vx, vy, viewName, frameIdx);
             var ulHit = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx);
 
-            // Prefer whichever is closer
+            // Prefer unlinked (ungrouped) when equal distance — they render on top
             if (hit && ulHit) {
-                if (ulHit.distance < hit.distance) hit = null;
+                if (ulHit.distance <= hit.distance) hit = null;
                 else ulHit = null;
             }
 
@@ -748,10 +750,13 @@ class InteractionManager {
         if (linkedHit && ulHit) {
             // In assignment mode, prefer unlinked targets so clicks always
             // add to the assignment selection instead of exiting the mode.
+            // Otherwise prefer unlinked (ungrouped) instances since they render
+            // on top of grouped instances — use strict less-than so that equal
+            // distances resolve to the visually-frontmost (unlinked) layer.
             if (this.assignmentMode) {
                 useUnlinked = true;
             } else {
-                useLinked = linkedHit.distance <= ulHit.distance;
+                useLinked = linkedHit.distance < ulHit.distance;
                 useUnlinked = !useLinked;
             }
         } else if (linkedHit) {
