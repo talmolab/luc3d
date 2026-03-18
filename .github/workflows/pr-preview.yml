@@ -36,7 +36,7 @@ jobs:
 
             | | |
             |---|---|
-            | **Preview URL** | https://talmolab.github.io/LUCID/pr/${{ github.event.number }}/ |
+            | **Preview URL** | https://talmolab.github.io/luc3d/pr/${{ github.event.number }}/ |
             | **Commit** | ${{ github.sha }} |
 
             _This preview will be removed when the PR is closed._
