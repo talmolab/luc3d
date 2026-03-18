@@ -15,6 +15,15 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
     <!-- h5wasm for in-browser HDF5 read/write (pinned to 0.8.8, matching slp-viewer) -->
     <script src="https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/dist/iife/h5wasm.js"></script>
+    <!-- Import map for sleap-io.js ESM dependencies -->
+    <script type="importmap">
+    {
+        "imports": {
+            "h5wasm": "./lib/h5wasm/hdf5_hl.js",
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js"
+        }
+    }
+    </script>
 </head>
 
 <body>
@@ -503,7 +512,7 @@
                 <button id="btnFirst" title="First frame (Home)">|&#9664;</button>
                 <button id="btnPrev" title="Previous frame (Left)">&#9664;</button>
                 <button id="btnPlay" title="Play/Pause (Space)">&#9654;</button>
-                <button id="btnNext" title="Next frame (Right)">&#9654;|</button>
+                <button id="btnNext" title="Next frame (Right)">&#9654;</button>
                 <button id="btnLast" title="Last frame (End)">&#9654;|</button>
             </div>
 
@@ -557,6 +566,19 @@
     <script src="timeline.js"></script>
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
+
+    <!-- sleap-io.js bridge: expose saveSlpToBytes and data model to window -->
+    <script type="module">
+        import {
+            Labels, LabeledFrame, Instance, PredictedInstance,
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes
+        } from './lib/sleap-io/index.browser.js';
+        window.SleapIO = {
+            Labels, LabeledFrame, Instance, PredictedInstance,
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes
+        };
+        window.dispatchEvent(new Event('sleapio-ready'));
+    </script>
 
     <script type="module">
         import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core/+esm';
@@ -1064,6 +1086,9 @@
                 setStatus('No groups could be triangulated on frame ' + frameIdx +
                     ' - check that instance groups have labels in 2+ camera views', 'warning');
             }
+
+            // Update timeline: mark frame only if it has grouped UserInstances
+            updateTimelineForFrame(frameIdx);
         }
 
         /**
@@ -1203,6 +1228,14 @@
                 : 'N/A';
             setStatus('Triangulated ' + totalTriangulated + ' frames (' + totalGroups + ' groups, avg error: ' + avgError + 'px)', 'success');
             console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
+
+            // Update timeline: mark frames with grouped UserInstances, refresh track bars
+            if (timeline) {
+                for (var [fIdx] of state.triangulationResults) {
+                    timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
+                }
+                timeline.refreshTracks(state.session);
+            }
         }
 
         // ============================================
@@ -1219,6 +1252,30 @@
                 }
             }
             return result;
+        }
+
+        /**
+         * Check whether a frame has any grouped UserInstances.
+         */
+        function frameHasGroupedUserInstances(frameIdx) {
+            var groups = getInstanceGroupsForFrame(frameIdx);
+            for (var i = 0; i < groups.length; i++) {
+                for (var [, inst] of groups[i].instances) {
+                    if (inst.type === 'user') return true;
+                }
+            }
+            return false;
+        }
+
+        /**
+         * Update timeline markers and track bars for a frame after group changes.
+         * Sets the white modified tick only if grouped UserInstances remain,
+         * and rebuilds track bars so removed groups disappear.
+         */
+        function updateTimelineForFrame(frameIdx) {
+            if (!timeline) return;
+            timeline.setFrameModified(frameIdx, frameHasGroupedUserInstances(frameIdx));
+            timeline.refreshTracks(state.session);
         }
 
         // ============================================
@@ -1792,10 +1849,8 @@
                         }
                     }
 
-                    // Update timeline modification state
-                    if (timeline) {
-                        timeline.setFrameModified(frameIdx, true);
-                    }
+                    // Update timeline: clear tick if no grouped users remain, update track bars
+                    updateTimelineForFrame(frameIdx);
 
                     // Update 3D viewport
                     if (viewport3d) {
@@ -1870,7 +1925,7 @@
                     }
 
                     setStatus('Created group: ' + trackName, 'success');
-                    if (timeline) timeline.setFrameModified(state.currentFrame, true);
+                    updateTimelineForFrame(state.currentFrame);
                     if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
@@ -2249,28 +2304,18 @@
             document.getElementById('menuExportSlp').addEventListener('click', async function () {
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
-                const data = buildSlpExportData(state.session, state.views, state.videoFiles);
-
-                // Try server-side conversion first
                 try {
-                    const resp = await fetch('/convert-slp', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(data),
-                    });
-                    if (resp.ok) {
-                        const slpBlob = await resp.blob();
-                        downloadBlob(slpBlob, 'labels_export.slp');
-                        setStatus('SLP exported: labels_export.slp', 'success');
-                        return;
-                    }
-                } catch (e) {
-                    // Server unavailable — fall back to JSON
+                    var SIO = window.SleapIO;
+                    if (!SIO) { setStatus('sleap-io.js not loaded yet — please wait', 'error'); return; }
+                    var labels = buildSlpLabelsAllViews(state.session, state.views, state.videoFiles);
+                    var bytes = await SIO.saveSlpToBytes(labels);
+                    var blob = new Blob([bytes], { type: 'application/x-hdf5' });
+                    downloadBlob(blob, 'labels_export.slp');
+                    setStatus('SLP exported: labels_export.slp', 'success');
+                } catch (err) {
+                    console.error('[slp-export-all]', err);
+                    setStatus('Export failed: ' + err.message, 'error');
                 }
-
-                // Fallback: download as JSON
-                downloadJSON(data, 'labels_export.slp.json');
-                setStatus('SLP JSON exported \u2014 convert with: python scripts/json_to_slp.py labels_export.slp.json output.slp', 'success');
             });
 
             document.getElementById('menuExportSlpPerCam').addEventListener('click', function () {
@@ -2344,9 +2389,7 @@
             setStatus('Unlinked ' + trackName, 'success');
 
             // Refresh everything
-            if (timeline) {
-                timeline.setFrameModified(frameIdx, true);
-            }
+            updateTimelineForFrame(frameIdx);
             if (viewport3d) {
                 var groups = getInstanceGroupsForFrame(frameIdx);
                 viewport3d.setFrame(groups);
@@ -2686,6 +2729,14 @@
 
             // Toolbar buttons
             document.getElementById('tbAddInstance').addEventListener('click', function () {
+                // Sync selected view from active panel before creating instance
+                if (interactionManager && paneManager && paneManager.api) {
+                    var ap = paneManager.api.activePanel;
+                    if (ap) {
+                        var r = panelRenderers.get(ap.id);
+                        if (r) interactionManager.lastInteractedView = r.getViewName();
+                    }
+                }
                 addNewInstanceSmart();
             });
             document.getElementById('tbDeleteInstance').addEventListener('click', function () {
@@ -2761,7 +2812,7 @@
                     }
                     state.session.removeInstanceGroup(state.currentFrame, group);
                     setStatus('Deleted group', 'success');
-                    if (timeline) timeline.setFrameModified(state.currentFrame, true);
+                    updateTimelineForFrame(state.currentFrame);
                     if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
@@ -3060,7 +3111,7 @@
             }
 
             cleanupEditGroup();
-            if (timeline) timeline.setFrameModified(frameIdx, true);
+            updateTimelineForFrame(frameIdx);
             if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(frameIdx));
             drawAllOverlays(state.currentFrame);
             updateInfoPanel();
@@ -3280,6 +3331,7 @@
                     update3DViewport(state.currentFrame);
                 }
                 setStatus('Auto-assigned ' + groupsCreated + ' identity group(s) across ' + viewNames.length + ' views', 'success');
+                updateTimelineForFrame(state.currentFrame);
             } else {
                 setStatus('No matching identities found across selected views', 'warning');
             }
@@ -3901,6 +3953,14 @@
             }
 
             setStatus('Multi-frame assignment complete: ' + assigned + '/' + totalFrames + ' frames assigned', 'success');
+
+            // Update timeline: mark frames with grouped UserInstances, refresh track bars
+            if (timeline) {
+                for (var [fIdx] of state.triangulationResults) {
+                    timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
+                }
+                timeline.refreshTracks(state.session);
+            }
         }
 
         // ============================================
@@ -3963,12 +4023,46 @@
                     if (hasEdits) break;
                 }
 
+                // Compute per-camera stats (matching bottom status bar logic)
+                var labeledFrames = 0;
+                var instanceCount = 0;
+                var triangulatedFrames = 0;
+                for (var [sfIdx, sfg] of state.session.frameGroups) {
+                    var sfHasLabeled = false;
+                    var sfCamInsts = sfg.instances.get(camName) || [];
+                    for (var sci = 0; sci < sfCamInsts.length; sci++) {
+                        var sft = sfCamInsts[sci].type || 'user';
+                        if (sft === 'user') { sfHasLabeled = true; instanceCount++; }
+                        else if (sft === 'predicted') { sfHasLabeled = true; }
+                    }
+                    var sfUl = sfg.getUnlinkedInstances(camName);
+                    for (var sui = 0; sui < sfUl.length; sui++) {
+                        if ((sfUl[sui].instance.type || 'user') === 'user') {
+                            sfHasLabeled = true; instanceCount++;
+                        }
+                    }
+                    if (sfHasLabeled) labeledFrames++;
+                    var sfTm = state.session.instanceGroups.get(sfIdx);
+                    if (sfTm) {
+                        for (var sfGroups of sfTm.values()) {
+                            var sfFound = false;
+                            for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
+                                if (sfGroups[sfgi].points3d) { triangulatedFrames++; sfFound = true; break; }
+                            }
+                            if (sfFound) break;
+                        }
+                    }
+                }
+
                 slpEntries.push({
                     camName: camName,
                     sourceLabel: sourceLabel,
                     outputName: outputName,
                     hasEdits: hasEdits,
                     videoFile: vf,
+                    labeledFrames: labeledFrames,
+                    instanceCount: instanceCount,
+                    triangulatedFrames: triangulatedFrames,
                 });
             }
 
@@ -3986,6 +4080,9 @@
                     '<tr class="' + rowClass + '" data-idx="' + ei + '">' +
                     '<td>' + entry.sourceLabel + '</td>' +
                     '<td>' + entry.outputName + '</td>' +
+                    '<td>' + entry.labeledFrames + '</td>' +
+                    '<td>' + entry.instanceCount + '</td>' +
+                    '<td>' + entry.triangulatedFrames + '</td>' +
                     '</tr>';
             }
 
@@ -3993,19 +4090,20 @@
                 '<h3>Export SLP File</h3>' +
                 '<div class="slp-export-table-container">' +
                 '<table class="data-table slp-export-table">' +
-                '<thead><tr><th>Source</th><th>Output Filename</th></tr></thead>' +
+                '<thead><tr><th>Source</th><th>Output Filename</th><th>Labeled</th><th>Instances</th><th>Triangulated</th></tr></thead>' +
                 '<tbody>' + tableRows + '</tbody>' +
                 '</table>' +
                 '</div>' +
                 '<div class="slp-export-options">' +
-                '<label><input type="checkbox" id="slpExportReprojAsUser"> Save Reprojections as UserInstance</label>' +
+                '<label><input type="checkbox" id="slpExportReproj"> Save Reprojections</label>' +
+                '<span class="slp-reproj-toggle" id="slpReprojToggle">' +
+                '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
+                '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
+                '</span>' +
                 '</div>' +
                 '<div class="slp-export-filename-row">' +
                 '<label>Output Filename</label>' +
                 '<input type="text" id="slpExportFilename" value="" placeholder="Select a source above">' +
-                '</div>' +
-                '<div class="slp-export-note">' +
-                'Requires server: <code>python server.py</code> (with h5py, numpy installed). Falls back to JSON if server unavailable.' +
                 '</div>' +
                 '<div class="modal-actions">' +
                 '<button id="slpExportCancel">Cancel</button>' +
@@ -4018,6 +4116,30 @@
             // State
             var selectedIdx = -1;
             var filenameInput = document.getElementById('slpExportFilename');
+
+            // Reprojection toggle switch
+            var reprojCheckbox = document.getElementById('slpExportReproj');
+            var reprojToggle = document.getElementById('slpReprojToggle');
+            var toggleOptions = reprojToggle.querySelectorAll('.slp-toggle-option');
+
+            function updateReprojToggleState() {
+                if (reprojCheckbox.checked) {
+                    reprojToggle.classList.remove('slp-toggle-disabled');
+                } else {
+                    reprojToggle.classList.add('slp-toggle-disabled');
+                }
+            }
+            reprojCheckbox.addEventListener('change', updateReprojToggleState);
+            updateReprojToggleState();
+
+            toggleOptions.forEach(function (opt) {
+                opt.addEventListener('click', function () {
+                    if (reprojCheckbox.checked) {
+                        toggleOptions.forEach(function (o) { o.classList.remove('slp-toggle-active'); });
+                        opt.classList.add('slp-toggle-active');
+                    }
+                });
+            });
 
             // Row click selection
             var rows = modal.querySelectorAll('.slp-export-row');
@@ -4041,41 +4163,24 @@
                 if (selectedIdx < 0) return;
                 var entry = slpEntries[selectedIdx];
                 var outputFilename = filenameInput.value.trim() || entry.outputName;
-                var reprojAsUser = document.getElementById('slpExportReprojAsUser').checked;
+                var saveReproj = document.getElementById('slpExportReproj').checked;
+                var reprojToggle = document.querySelector('#slpReprojToggle .slp-toggle-active');
+                // null = don't save reprojections, true = save as UserInstance, false = save as PredictedInstance
+                var reprojAsUser = saveReproj ? (reprojToggle && reprojToggle.getAttribute('data-value') === 'user') : null;
 
                 document.getElementById('slpExportBtn').disabled = true;
                 document.getElementById('slpExportBtn').textContent = 'Exporting...';
 
                 try {
-                    var data = buildPerCameraSlpJson(
-                        state.session, entry.camName, reprojAsUser, entry.videoFile
-                    );
-
-                    // Try server-side conversion first
                     var slpFilename = outputFilename.replace(/\.slp\.json$/, '.slp');
-                    if (!slpFilename.endsWith('.slp')) slpFilename = outputFilename;
-                    try {
-                        var resp = await fetch('/convert-slp', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(data),
-                        });
-                        if (resp.ok) {
-                            var slpBlob = await resp.blob();
-                            downloadBlob(slpBlob, slpFilename);
-                            setStatus('Exported ' + slpFilename, 'success');
-                            overlay.remove();
-                            return;
-                        }
-                    } catch (e) {
-                        // Server unavailable — fall back to JSON
-                    }
+                    if (!slpFilename.endsWith('.slp')) slpFilename += '.slp';
 
-                    // Fallback: download as JSON
-                    var jsonFilename = slpFilename.replace(/\.slp$/, '.slp.json');
-                    var jsonBlob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                    downloadBlob(jsonBlob, jsonFilename);
-                    setStatus('Exported JSON — convert with: python scripts/json_to_slp.py ' + jsonFilename + ' output.slp', 'success');
+                    // Client-side SLP export via sleap-io.js
+                    var slpBlob = await exportSlpClientSide(
+                        state.session, entry.camName, reprojAsUser, entry.videoFile, slpFilename
+                    );
+                    downloadBlob(slpBlob, slpFilename);
+                    setStatus('Exported ' + slpFilename, 'success');
                     overlay.remove();
                 } catch (err) {
                     console.error('[slp-export]', err);
@@ -4395,6 +4500,14 @@
             }
 
             setStatus('Multi-frame triangulation complete: ' + triangulated + '/' + totalFrames + ' frames, avg error: ' + avgError + 'px', 'success');
+
+            // Update timeline: mark frames with grouped UserInstances, refresh track bars
+            if (timeline) {
+                for (var [fIdx] of state.triangulationResults) {
+                    timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
+                }
+                timeline.refreshTracks(state.session);
+            }
         }
 
         // ============================================
@@ -8729,6 +8842,10 @@
                             renderer.element.classList.add('video-selected');
                             activeViewName = renderer.getViewName();
                         }
+                    }
+                    // Update interaction manager so new instances are created on the selected view
+                    if (activeViewName && interactionManager) {
+                        interactionManager.lastInteractedView = activeViewName;
                     }
                     // Highlight corresponding camera in 3D viewer (skip during auto-assignment)
                     if (viewport3d && !autoAssignState) {

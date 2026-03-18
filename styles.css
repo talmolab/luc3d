@@ -833,7 +833,7 @@ body {
 
 /* SLP Export Modal */
 .slp-export-modal {
-  min-width: 500px;
+  min-width: 680px;
 }
 
 .slp-export-table-container {
@@ -846,6 +846,13 @@ body {
   width: 100%;
 }
 
+.slp-export-table th:nth-child(n+3),
+.slp-export-table td:nth-child(n+3) {
+  text-align: right;
+  width: 80px;
+  font-variant-numeric: tabular-nums;
+}
+
 .slp-export-row {
   cursor: pointer;
 }
@@ -855,7 +862,8 @@ body {
 }
 
 .slp-export-row.slp-export-selected {
-  outline: 2px solid var(--accent-color);
+  background: rgba(250, 204, 21, 0.25);
+  outline: 2px solid rgba(250, 204, 21, 0.7);
 }
 
 .slp-export-row.slp-has-edits {
@@ -863,12 +871,48 @@ body {
 }
 
 .slp-export-row.slp-has-edits.slp-export-selected {
-  background: rgba(76, 175, 80, 0.2);
+  background: rgba(250, 204, 21, 0.25);
+  outline: 2px solid rgba(250, 204, 21, 0.7);
 }
 
 .slp-export-options {
   margin: 8px 0;
   font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.slp-reproj-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.slp-toggle-option {
+  padding: 3px 10px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  user-select: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.slp-toggle-option:hover {
+  background: var(--accent-dim);
+}
+
+.slp-toggle-option.slp-toggle-active {
+  background: rgba(234, 179, 8, 0.3);
+  color: #eab308;
+  font-weight: 600;
+}
+
+.slp-reproj-toggle.slp-toggle-disabled .slp-toggle-option {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
 }
 
 .slp-export-filename-row {
