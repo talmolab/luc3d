@@ -1393,6 +1393,120 @@
         }
 
         // ============================================
+        // Smart Instance Creation
+        // ============================================
+
+        /**
+         * Record the most recent UserInstance points for a view.
+         * Called whenever a UserInstance is created or modified so that
+         * addNewInstanceSmart() can do an O(1) lookup instead of scanning frames.
+         */
+        function recordUserPoints(viewName, points) {
+            if (!viewName || !points) return;
+            state.lastUserPoints.set(viewName, points.map(function(p) {
+                return p ? [p[0], p[1]] : null;
+            }));
+        }
+
+        function addNewInstanceSmart() {
+            if (!interactionManager || !state.session) return;
+            var viewName = interactionManager.lastInteractedView || (state.views.length > 0 ? state.views[0].name : null);
+            if (!viewName) return;
+            var frameIdx = state.currentFrame;
+            var cursorPos = interactionManager.lastCursorPos; // [vx, vy] or null
+            var points = null;
+
+            // Priority 1: Cached UserInstance points for this view
+            var cached = state.lastUserPoints.get(viewName);
+            if (!cached) {
+                // Cache miss — scan current frame for an existing UserInstance in this view
+                var scanGroups = getInstanceGroupsForFrame(frameIdx);
+                for (var sg = 0; sg < scanGroups.length && !cached; sg++) {
+                    var si = scanGroups[sg].getInstance(viewName);
+                    if (si && si.type === 'user' && si.points) {
+                        recordUserPoints(viewName, si.points);
+                        cached = state.lastUserPoints.get(viewName);
+                    }
+                }
+                if (!cached) {
+                    var scanFg = state.session.getFrameGroup(frameIdx);
+                    if (scanFg) {
+                        var scanUl = scanFg.getUnlinkedInstances(viewName) || [];
+                        for (var su = 0; su < scanUl.length && !cached; su++) {
+                            if (scanUl[su].instance.type === 'user' && scanUl[su].instance.points) {
+                                recordUserPoints(viewName, scanUl[su].instance.points);
+                                cached = state.lastUserPoints.get(viewName);
+                            }
+                        }
+                    }
+                }
+            }
+            if (cached) {
+                points = cached.map(function(p) { return p ? [p[0], p[1]] : null; });
+            }
+
+            // Priority 2: Nearest PredictedInstance to cursor (by centroid distance)
+            if (!points) {
+                var allPredicted = [];
+                // Collect grouped predicted instances
+                var curGroups = getInstanceGroupsForFrame(frameIdx);
+                for (var g of curGroups) {
+                    var inst = g.getInstance(viewName);
+                    if (inst && inst.type === 'predicted' && inst.points) {
+                        allPredicted.push(inst);
+                    }
+                }
+                // Collect unlinked predicted instances
+                var fg = state.session.getFrameGroup(frameIdx);
+                if (fg) {
+                    var unlinked = fg.getUnlinkedInstances(viewName) || [];
+                    for (var ul of unlinked) {
+                        if (ul.instance.type === 'predicted' && ul.instance.points) {
+                            allPredicted.push(ul.instance);
+                        }
+                    }
+                }
+                if (allPredicted.length > 0) {
+                    // Find the predicted instance whose centroid is closest to cursor
+                    var bestPred = null;
+                    var bestDist = Infinity;
+                    for (var pi = 0; pi < allPredicted.length; pi++) {
+                        var pred = allPredicted[pi];
+                        // Compute centroid
+                        var sx = 0, sy = 0, count = 0;
+                        for (var ni = 0; ni < pred.points.length; ni++) {
+                            if (pred.points[ni]) {
+                                sx += pred.points[ni][0];
+                                sy += pred.points[ni][1];
+                                count++;
+                            }
+                        }
+                        if (count === 0) continue;
+                        var cx = sx / count, cy = sy / count;
+                        if (cursorPos) {
+                            var dx = cx - cursorPos[0], dy = cy - cursorPos[1];
+                            var dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist < bestDist) {
+                                bestDist = dist;
+                                bestPred = pred;
+                            }
+                        } else {
+                            // No cursor — use first available
+                            if (!bestPred) bestPred = pred;
+                        }
+                    }
+                    if (bestPred) {
+                        points = bestPred.points.map(function(p) { return p ? [p[0], p[1]] : null; });
+                    }
+                }
+            }
+
+            // Priority 3: Topology-based layout centered at cursor
+            // _addNewInstance handles this when points is null, using cursorPos
+            interactionManager._addNewInstance(points, cursorPos);
+        }
+
+        // ============================================
         // Overlay Drawing
         // ============================================
 
