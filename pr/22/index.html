@@ -607,6 +607,8 @@
             lastAutoAssignViews: null,  // Array of view names used for last auto-assignment
             lastAutoAssignFrame: null,  // Frame index where last auto-assignment was run
             lastUserPoints: new Map(),  // viewName -> {frameIdx, points} — cache of most recent UserInstance per view
+            exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
+            cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
         };
 
         let videoController = null;
@@ -2301,21 +2303,10 @@
                 exportLabels();
             });
 
-            document.getElementById('menuExportSlp').addEventListener('click', async function () {
+            document.getElementById('menuExportSlp').addEventListener('click', function () {
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
-                try {
-                    var SIO = window.SleapIO;
-                    if (!SIO) { setStatus('sleap-io.js not loaded yet — please wait', 'error'); return; }
-                    var labels = buildSlpLabelsAllViews(state.session, state.views, state.videoFiles);
-                    var bytes = await SIO.saveSlpToBytes(labels);
-                    var blob = new Blob([bytes], { type: 'application/x-hdf5' });
-                    downloadBlob(blob, 'labels_export.slp');
-                    setStatus('SLP exported: labels_export.slp', 'success');
-                } catch (err) {
-                    console.error('[slp-export-all]', err);
-                    setStatus('Export failed: ' + err.message, 'error');
-                }
+                showSlpExportAllModal();
             });
 
             document.getElementById('menuExportSlpPerCam').addEventListener('click', function () {
@@ -4187,6 +4178,231 @@
                     setStatus('Export failed: ' + err.message, 'error');
                     document.getElementById('slpExportBtn').disabled = false;
                     document.getElementById('slpExportBtn').textContent = 'Export';
+                }
+            });
+        }
+
+        // ============================================
+        // Export SLP (All Views) Modal
+        // ============================================
+
+        function showSlpExportAllModal() {
+            var overlay = document.createElement('div');
+            overlay.className = 'multi-frame-modal-overlay';
+
+            var modal = document.createElement('div');
+            modal.className = 'multi-frame-modal slp-export-modal slp-export-all-modal';
+
+            // Build entries from videoFiles
+            var entries = [];
+            for (var i = 0; i < state.videoFiles.length; i++) {
+                var vf = state.videoFiles[i];
+                if (!vf.assignedCamera) continue;
+                var camName = vf.name;
+                var outputName;
+                if (vf.slpFilename) {
+                    var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
+                    var vm = stem.match(/_3D_v(\d+)$/);
+                    var nv = vm ? parseInt(vm[1]) + 1 : 1;
+                    var bs = vm ? stem.replace(/_3D_v\d+$/, '') : stem;
+                    outputName = bs + '_3D_v' + nv + '.slp';
+                } else {
+                    var vn = (vf.file && vf.file.name) ? vf.file.name : (vf.name || 'video');
+                    outputName = vn.replace(/\.[^.]+$/, '') + '_v1.slp';
+                }
+
+                // Per-camera stats
+                var labeledFrames = 0, instanceCount = 0, triangulatedFrames = 0;
+                for (var [sfIdx, sfg] of state.session.frameGroups) {
+                    var sfHasLabeled = false;
+                    var sfCamInsts = sfg.instances.get(camName) || [];
+                    for (var sci = 0; sci < sfCamInsts.length; sci++) {
+                        var sft = sfCamInsts[sci].type || 'user';
+                        if (sft === 'user') { sfHasLabeled = true; instanceCount++; }
+                        else if (sft === 'predicted') { sfHasLabeled = true; }
+                    }
+                    var sfUl = sfg.getUnlinkedInstances(camName);
+                    for (var sui = 0; sui < sfUl.length; sui++) {
+                        if ((sfUl[sui].instance.type || 'user') === 'user') { sfHasLabeled = true; instanceCount++; }
+                    }
+                    if (sfHasLabeled) labeledFrames++;
+                    var sfTm = state.session.instanceGroups.get(sfIdx);
+                    if (sfTm) {
+                        for (var sfGroups of sfTm.values()) {
+                            var sfFound = false;
+                            for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
+                                if (sfGroups[sfgi].points3d) { triangulatedFrames++; sfFound = true; break; }
+                            }
+                            if (sfFound) break;
+                        }
+                    }
+                }
+
+                entries.push({
+                    camName: camName,
+                    outputName: outputName,
+                    videoFile: vf,
+                    labeledFrames: labeledFrames,
+                    instanceCount: instanceCount,
+                    triangulatedFrames: triangulatedFrames,
+                    selected: true,
+                    reprojMode: 'none', // 'none', 'user', 'predicted'
+                });
+            }
+
+            if (entries.length === 0) {
+                setStatus('No video files loaded', 'warning');
+                return;
+            }
+
+            // Build table rows
+            var tableRows = '';
+            for (var ei = 0; ei < entries.length; ei++) {
+                var e = entries[ei];
+                tableRows +=
+                    '<tr class="slp-export-row slp-all-row slp-all-selected" data-idx="' + ei + '">' +
+                    '<td>' + e.camName + '</td>' +
+                    '<td><input type="text" class="slp-all-filename" value="' + e.outputName + '" data-idx="' + ei + '"></td>' +
+                    '<td>' + e.labeledFrames + '</td>' +
+                    '<td>' + e.instanceCount + '</td>' +
+                    '<td>' + e.triangulatedFrames + '</td>' +
+                    '<td class="slp-all-reproj-cell">' +
+                    '<span class="slp-reproj-toggle slp-all-reproj" data-idx="' + ei + '">' +
+                    '<span class="slp-toggle-option slp-toggle-active" data-value="none">None</span>' +
+                    '<span class="slp-toggle-option" data-value="user">User</span>' +
+                    '<span class="slp-toggle-option" data-value="predicted">Predicted</span>' +
+                    '</span>' +
+                    '</td>' +
+                    '</tr>';
+            }
+
+            modal.innerHTML =
+                '<h3>Export SLP (All Views)</h3>' +
+                '<div class="slp-export-table-container">' +
+                '<table class="data-table slp-export-table">' +
+                '<thead><tr><th>Camera</th><th>Output Filename</th><th>Labeled</th><th>Instances</th><th>Triangulated</th><th>Reprojections</th></tr></thead>' +
+                '<tbody>' + tableRows + '</tbody>' +
+                '</table>' +
+                '</div>' +
+                '<div class="modal-actions">' +
+                '<button id="slpAllCancel">Cancel</button>' +
+                '<button class="primary" id="slpAllExport">Export</button>' +
+                '</div>';
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            // Row click toggles selection (click on row itself, not inputs)
+            var rows = modal.querySelectorAll('.slp-all-row');
+            rows.forEach(function (row) {
+                row.addEventListener('click', function (ev) {
+                    if (ev.target.tagName === 'INPUT' || ev.target.closest('.slp-reproj-toggle')) return;
+                    var idx = parseInt(row.getAttribute('data-idx'));
+                    entries[idx].selected = !entries[idx].selected;
+                    row.classList.toggle('slp-all-selected', entries[idx].selected);
+                });
+            });
+
+            // Filename inputs update entries
+            modal.querySelectorAll('.slp-all-filename').forEach(function (input) {
+                input.addEventListener('change', function () {
+                    var idx = parseInt(input.getAttribute('data-idx'));
+                    entries[idx].outputName = input.value.trim() || entries[idx].outputName;
+                });
+                input.addEventListener('click', function (ev) { ev.stopPropagation(); });
+            });
+
+            // Per-row reproj toggle
+            modal.querySelectorAll('.slp-all-reproj').forEach(function (toggle) {
+                var opts = toggle.querySelectorAll('.slp-toggle-option');
+                opts.forEach(function (opt) {
+                    opt.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        var idx = parseInt(toggle.getAttribute('data-idx'));
+                        opts.forEach(function (o) { o.classList.remove('slp-toggle-active'); });
+                        opt.classList.add('slp-toggle-active');
+                        entries[idx].reprojMode = opt.getAttribute('data-value');
+                    });
+                });
+            });
+
+            // Cancel
+            document.getElementById('slpAllCancel').addEventListener('click', function () {
+                overlay.remove();
+            });
+
+            // Export
+            document.getElementById('slpAllExport').addEventListener('click', async function () {
+                var selected = entries.filter(function (e) { return e.selected; });
+                if (selected.length === 0) {
+                    setStatus('No views selected for export', 'warning');
+                    return;
+                }
+
+                var SIO = window.SleapIO;
+                if (!SIO) { setStatus('sleap-io.js not loaded yet', 'error'); return; }
+
+                var exportBtn = document.getElementById('slpAllExport');
+                exportBtn.disabled = true;
+                exportBtn.textContent = 'Exporting...';
+
+                try {
+                    // Get directory handle (reuse cached or prompt)
+                    var dirHandle = state.exportDirHandle;
+                    if (!dirHandle) {
+                        dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                        state.exportDirHandle = dirHandle;
+                    }
+
+                    var exported = 0;
+                    for (var si = 0; si < selected.length; si++) {
+                        var entry = selected[si];
+                        var reprojAsUser = entry.reprojMode === 'none' ? null : (entry.reprojMode === 'user');
+                        var slpFilename = entry.outputName;
+                        if (!slpFilename.endsWith('.slp')) slpFilename += '.slp';
+
+                        var slpBlob = await exportSlpClientSide(
+                            state.session, entry.camName, reprojAsUser, entry.videoFile, slpFilename
+                        );
+
+                        // Resolve subdirectory
+                        var subDirName = state.cameraDirMap[entry.camName] || entry.camName;
+                        var subDir;
+                        try {
+                            subDir = await dirHandle.getDirectoryHandle(subDirName, { create: false });
+                        } catch (e) {
+                            // Subdirectory doesn't exist — try creating it
+                            try {
+                                subDir = await dirHandle.getDirectoryHandle(subDirName, { create: true });
+                            } catch (e2) {
+                                console.warn('[export-all] Could not access/create dir ' + subDirName + ':', e2);
+                                setStatus('Cannot write to ' + subDirName + '/ — skipping ' + entry.camName, 'warning');
+                                continue;
+                            }
+                        }
+
+                        var fileHandle = await subDir.getFileHandle(slpFilename, { create: true });
+                        var writable = await fileHandle.createWritable();
+                        await writable.write(slpBlob);
+                        await writable.close();
+                        exported++;
+
+                        exportBtn.textContent = 'Exporting... (' + (si + 1) + '/' + selected.length + ')';
+                    }
+
+                    setStatus('Exported ' + exported + ' SLP file(s)', 'success');
+                    overlay.remove();
+                } catch (err) {
+                    if (err.name === 'AbortError') {
+                        // User cancelled directory picker
+                        exportBtn.disabled = false;
+                        exportBtn.textContent = 'Export';
+                        return;
+                    }
+                    console.error('[slp-export-all]', err);
+                    setStatus('Export failed: ' + err.message, 'error');
+                    exportBtn.disabled = false;
+                    exportBtn.textContent = 'Export';
                 }
             });
         }
@@ -7454,6 +7670,12 @@
                 }
 
                 console.log('[session-folder] Matched camera dirs:', matchedCameraDirs.length);
+
+                // Cache camera-to-subdirectory mapping for export
+                state.cameraDirMap = {};
+                for (var mci = 0; mci < matchedCameraDirs.length; mci++) {
+                    state.cameraDirMap[matchedCameraDirs[mci].camName] = matchedCameraDirs[mci].dirName;
+                }
 
                 // 3. Load each camera directory
                 // Reset state for new session

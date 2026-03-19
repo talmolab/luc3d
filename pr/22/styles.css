@@ -947,6 +947,44 @@ body {
   color: var(--text-primary);
 }
 
+/* Export All Views modal */
+.slp-export-all-modal {
+  min-width: 780px;
+}
+
+.slp-all-row {
+  opacity: 0.45;
+}
+
+.slp-all-row.slp-all-selected {
+  opacity: 1;
+  background: rgba(250, 204, 21, 0.15);
+}
+
+.slp-all-row.slp-all-selected:hover {
+  background: rgba(250, 204, 21, 0.22);
+}
+
+.slp-all-filename {
+  width: 100%;
+  padding: 2px 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.slp-all-reproj-cell {
+  white-space: nowrap;
+}
+
+.slp-all-reproj .slp-toggle-option {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
 /* Modal layout: range row with views list */
 .modal-range-row {
   display: flex;
