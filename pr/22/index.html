@@ -6789,7 +6789,7 @@
                             var inst = new Instance(
                                 instData.points,
                                 instData.trackIdx || 0,
-                                instData.type || 'predicted',
+                                instData.type || 'user',
                                 instData.score || 1.0
                             );
                             inst.modified = instData.modified || false;
@@ -7454,7 +7454,7 @@
                                 const inst = new Instance(
                                     instData.points,
                                     instData.trackIdx || 0,
-                                    instData.type || 'predicted',
+                                    instData.type || 'user',
                                     instData.score || 1.0
                                 );
                                 inst.modified = instData.modified || false;
@@ -7717,14 +7717,27 @@
 
                 var firstSession = null;
                 var skeletonFromSlp = null;
+                var slpVersionsLoaded = {}; // camName -> version number loaded
 
                 for (var cdi = 0; cdi < matchedCameraDirs.length; cdi++) {
                     var camDir = matchedCameraDirs[cdi];
                     var camName = camDir.camName;
 
-                    // Load SLP if present
+                    // Load SLP if present — pick highest-versioned file
                     if (camDir.slps.length > 0) {
-                        var slpFile = camDir.slps[0];  // first SLP in directory
+                        var slpFile = camDir.slps[0];
+                        var bestVersion = -1;
+                        for (var sli = 0; sli < camDir.slps.length; sli++) {
+                            var slStem = camDir.slps[sli].name.replace(/\.[^.]+$/, '');
+                            var slVer = slStem.match(/_(?:3D_)?v(\d+)$/);
+                            var ver = slVer ? parseInt(slVer[1]) : 0;
+                            if (ver > bestVersion) {
+                                bestVersion = ver;
+                                slpFile = camDir.slps[sli];
+                            }
+                        }
+                        console.log('[session-folder] Loading SLP: ' + slpFile.name + ' (version ' + bestVersion + ')');
+                        slpVersionsLoaded[camName] = bestVersion;
                         showLoading('Loading SLP: ' + slpFile.name + ' (' + (cdi + 1) + '/' + matchedCameraDirs.length + ')...');
 
                         var slpData;
@@ -7848,6 +7861,19 @@
                         } catch (vidErr) {
                             console.error('[session-folder] Failed to load video ' + videoFile.name + ':', vidErr);
                         }
+                    }
+                }
+
+                // Check SLP version consistency across cameras
+                var loadedVersions = Object.values(slpVersionsLoaded);
+                if (loadedVersions.length > 1) {
+                    var allSame = loadedVersions.every(function (v) { return v === loadedVersions[0]; });
+                    if (!allSame) {
+                        var versionDetails = Object.keys(slpVersionsLoaded).map(function (cam) {
+                            return cam + ': v' + slpVersionsLoaded[cam];
+                        }).join(', ');
+                        console.warn('[session-folder] Inconsistent SLP versions across cameras:', versionDetails);
+                        setStatus('Warning: SLP versions differ across cameras (' + versionDetails + ')', 'warning');
                     }
                 }
 
@@ -8081,7 +8107,7 @@
                         var inst = new Instance(
                             instData.points,
                             instData.trackIdx >= 0 ? instData.trackIdx : 0,
-                            instData.type || 'predicted',
+                            instData.type || 'user',
                             instData.score || 0
                         );
                         if (instData.occluded) inst.occluded = instData.occluded;
