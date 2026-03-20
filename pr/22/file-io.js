@@ -1062,8 +1062,10 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo) {
         name: session.skeleton.name || 'skeleton',
     });
 
-    // 2. Build tracks
+    // 2. Build tracks — start with grouped tracks, extend for ungrouped later
     var tracks = session.tracks.map(function (name) { return new SIO.Track(name); });
+
+    var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
 
     // 3. Build video
     var videoFilename = videoFileInfo.videoPath
@@ -1087,43 +1089,45 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo) {
     // 4. Build labeled frames
     var labeledFrames = [];
     var numNodes = session.skeleton.nodes.length;
-    var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
 
     for (var fi = 0; fi < allFrameIndices.length; fi++) {
         var frameIdx = allFrameIndices[fi];
         var fg = session.frameGroups.get(frameIdx);
 
-        // Collect instances for this camera
-        var camInstances = (fg.instances.get(cameraName) || []).slice();
+        // Separate grouped instances from ungrouped for this camera
+        var groupedInstances = (fg.instances.get(cameraName) || []).slice();
+        var ungroupedInstances = [];
         var ulInstances = fg.getUnlinkedInstances(cameraName);
         for (var ui = 0; ui < ulInstances.length; ui++) {
-            camInstances.push(ulInstances[ui].instance);
+            ungroupedInstances.push(ulInstances[ui].instance);
         }
 
-        // Collect reprojected instances
+        // Collect reprojected instances with their group's trackIdx
         var reprojInstances = [];
         var trackMap = session.instanceGroups.get(frameIdx);
         if (trackMap) {
             for (var [trackIdx, groups] of trackMap) {
                 for (var gi = 0; gi < groups.length; gi++) {
                     var reprojInst = groups[gi].getReprojectedInstance(cameraName);
-                    if (reprojInst) reprojInstances.push(reprojInst);
+                    if (reprojInst) {
+                        reprojInst._groupTrackIdx = groups[gi].trackIdx;
+                        reprojInstances.push(reprojInst);
+                    }
                 }
             }
         }
 
-        if (camInstances.length === 0 && reprojInstances.length === 0) continue;
+        if (groupedInstances.length === 0 && ungroupedInstances.length === 0 && reprojInstances.length === 0) continue;
 
         var frameInstances = [];
 
-        // Convert user/predicted instances
-        for (var ii = 0; ii < camInstances.length; ii++) {
-            var inst = camInstances[ii];
-            var isUser = (inst.type === 'user');
+        // 1. Grouped UserInstances first (retain their track)
+        for (var ii = 0; ii < groupedInstances.length; ii++) {
+            var inst = groupedInstances[ii];
             var pts = _buildSioPoints(inst, numNodes);
             var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
 
-            if (isUser) {
+            if (inst.type === 'user') {
                 frameInstances.push(new SIO.Instance({
                     points: pts,
                     skeleton: skeleton,
@@ -1139,12 +1143,34 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo) {
             }
         }
 
-        // Convert reprojected instances (skip if reprojAsUser is null)
+        // 2. Ungrouped UserInstances next (no track assigned)
+        for (var ugi = 0; ugi < ungroupedInstances.length; ugi++) {
+            var ugInst = ungroupedInstances[ugi];
+            var ugPts = _buildSioPoints(ugInst, numNodes);
+
+            if (ugInst.type === 'user') {
+                frameInstances.push(new SIO.Instance({
+                    points: ugPts,
+                    skeleton: skeleton,
+                    track: null,
+                }));
+            } else {
+                frameInstances.push(new SIO.PredictedInstance({
+                    points: ugPts,
+                    skeleton: skeleton,
+                    track: null,
+                    score: ugInst.score || 0,
+                }));
+            }
+        }
+
+        // 3/4. Reprojections — same track as their associated group
         if (reprojAsUser !== null) {
             for (var ri = 0; ri < reprojInstances.length; ri++) {
                 var rInst = reprojInstances[ri];
                 var rPts = _buildSioPoints(rInst, numNodes);
-                var rTrack = (rInst.trackIdx >= 0 && rInst.trackIdx < tracks.length) ? tracks[rInst.trackIdx] : null;
+                var rTrackIdx = rInst._groupTrackIdx;
+                var rTrack = (rTrackIdx >= 0 && rTrackIdx < tracks.length) ? tracks[rTrackIdx] : null;
 
                 if (reprojAsUser) {
                     frameInstances.push(new SIO.Instance({

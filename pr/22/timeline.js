@@ -693,7 +693,7 @@ class Timeline {
         for (let f = first; f <= endFrame && f < this._totalFrames; f += interval) {
             const x = this._frameToX(f);
             if (x < this.LEFT_MARGIN || x > W - this.RIGHT_PADDING) continue;
-            ctx.fillText(String(f), x, top + 2);
+            ctx.fillText(String(f + 1), x, top + 2);
         }
 
         ctx.textAlign = 'left';
@@ -924,7 +924,7 @@ class Timeline {
         if (x >= this.LEFT_MARGIN && x <= this._cssWidth - this.RIGHT_PADDING) {
             const frame = this._clampFrame(this._xToFrame(x));
             const marker = this._frameMarkers.get(frame);
-            let text = 'Frame ' + frame;
+            let text = 'Frame ' + (frame + 1);
             if (marker) {
                 const parts = [];
                 if (marker.hasUser) parts.push('user');

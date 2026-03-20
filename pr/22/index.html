@@ -504,7 +504,7 @@
         <!-- Playback Controls -->
         <div class="controls-bar">
             <div class="frame-display">
-                <span class="current-frame" id="currentFrame">0</span>
+                <span class="current-frame" id="currentFrame">1</span>
                 <span>/ <span id="totalFrames">0</span></span>
             </div>
 
@@ -939,7 +939,7 @@
             const trackMap = state.session.instanceGroups.get(frameIdx);
             if (!trackMap) {
                 console.warn('[triangulate] No instanceGroups for frame', frameIdx);
-                setStatus('No instance groups on frame ' + frameIdx + ' - assign instances to groups first (A key)', 'warning');
+                setStatus('No instance groups on frame ' + (frameIdx + 1) + ' - assign instances to groups first (A key)', 'warning');
                 updateTriangulationBadge('needs-triangulation', 'No groups');
                 return;
             }
@@ -1078,14 +1078,14 @@
             if (frameResults.length > 0 && frameResults[0].meanError != null) {
                 updateTriangulationBadge('triangulated',
                     'Error: ' + frameResults[0].meanError.toFixed(2) + 'px');
-                setStatus('Triangulated frame ' + frameIdx + ' (' + frameResults.length + ' group(s), error: ' +
+                setStatus('Triangulated frame ' + (frameIdx + 1) + ' (' + frameResults.length + ' group(s), error: ' +
                     frameResults[0].meanError.toFixed(2) + 'px)', 'success');
             } else if (frameResults.length > 0) {
                 updateTriangulationBadge('triangulated', 'Triangulated');
-                setStatus('Triangulated frame ' + frameIdx + ' (' + frameResults.length + ' group(s))', 'success');
+                setStatus('Triangulated frame ' + (frameIdx + 1) + ' (' + frameResults.length + ' group(s))', 'success');
             } else {
                 updateTriangulationBadge('needs-triangulation', 'No groups triangulated');
-                setStatus('No groups could be triangulated on frame ' + frameIdx +
+                setStatus('No groups could be triangulated on frame ' + (frameIdx + 1) +
                     ' - check that instance groups have labels in 2+ camera views', 'warning');
             }
 
@@ -1874,7 +1874,7 @@
                     var textEl = document.getElementById('manualAssignToastText');
                     if (textEl) {
                         var totalUnlinked = getTotalUnlinkedCount();
-                        textEl.textContent = 'Frame ' + state.currentFrame +
+                        textEl.textContent = 'Frame ' + (state.currentFrame + 1) +
                             '. Select instances for manual Identity Assignment. Instances Selected: ' +
                             count + '/' + totalUnlinked;
                     }
@@ -2822,7 +2822,7 @@
         function updateSeekbar(frameIdx) {
             if (frameIdx === undefined) frameIdx = state.currentFrame;
             updateSeekbarVisual(frameIdx);
-            document.getElementById('currentFrame').textContent = frameIdx;
+            document.getElementById('currentFrame').textContent = frameIdx + 1;
 
             // Update 3D viewport on frame change
             update3DViewport(frameIdx);
@@ -2832,7 +2832,7 @@
             const pct = state.totalFrames > 1 ? (frameIdx / (state.totalFrames - 1)) * 100 : 0;
             document.getElementById('seekbarProgress').style.width = pct + '%';
             document.getElementById('seekbarThumb').style.left = pct + '%';
-            document.getElementById('currentFrame').textContent = frameIdx;
+            document.getElementById('currentFrame').textContent = frameIdx + 1;
         }
 
         function onPlaybackStateChange(isPlaying) {
@@ -3635,10 +3635,10 @@
                 '<div class="modal-range-row">' +
                 '<div class="frame-inputs-row">' +
                 '  <label>Start</label>' +
-                '  <input type="number" id="mfInputStart" min="0" max="' + maxFrame + '" value="0">' +
+                '  <input type="number" id="mfInputStart" min="1" max="' + (maxFrame + 1) + '" value="1">' +
                 '  <span class="separator">—</span>' +
                 '  <label>End</label>' +
-                '  <input type="number" id="mfInputEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+                '  <input type="number" id="mfInputEnd" min="1" max="' + (maxFrame + 1) + '" value="' + (maxFrame + 1) + '">' +
                 '</div>' +
                 '<div class="modal-views-section" id="mfViewsSection"' +
                     (viewsList ? '' : ' style="display:none"') + '>' +
@@ -3680,8 +3680,8 @@
                     rangeStart.value = e;
                     s = e;
                 }
-                inputStart.value = s;
-                inputEnd.value = e;
+                inputStart.value = s + 1;
+                inputEnd.value = e + 1;
                 updateSliderFill();
             }
 
@@ -3689,21 +3689,19 @@
             rangeEnd.addEventListener('input', syncSliders);
 
             inputStart.addEventListener('change', function () {
-                var v = parseInt(inputStart.value);
+                var v = parseInt(inputStart.value) - 1;
                 if (isNaN(v) || v < 0) v = 0;
                 if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
                 if (v > maxFrame) v = maxFrame;
-                inputStart.value = v;
                 rangeStart.value = v;
                 syncSliders();
             });
 
             inputEnd.addEventListener('change', function () {
-                var v = parseInt(inputEnd.value);
+                var v = parseInt(inputEnd.value) - 1;
                 if (isNaN(v) || v < 0) v = 0;
                 if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
                 if (v > maxFrame) v = maxFrame;
-                inputEnd.value = v;
                 rangeEnd.value = v;
                 syncSliders();
             });
@@ -3771,7 +3769,7 @@
         function startViewSelectionForFrames(startFrame, endFrame, isSingleFrame) {
             var fg = state.session.getFrameGroup(startFrame);
             if (!fg) {
-                setStatus('No instances on frame ' + startFrame, 'warning');
+                setStatus('No instances on frame ' + (startFrame + 1), 'warning');
                 return;
             }
 
@@ -3816,7 +3814,7 @@
                     // Update view count in toast
                     var textEl = document.getElementById('autoAssignToastText');
                     if (textEl) {
-                        textEl.textContent = 'Frame ' + startFrame +
+                        textEl.textContent = 'Frame ' + (startFrame + 1) +
                             '. Select views for automatic Identity Assignment. Views Selected: ' +
                             autoAssignState.selectedViews.size + '/' + totalViews;
                     }
@@ -3977,10 +3975,10 @@
                 if (vf.slpFilename) {
                     sourceLabel = vf.slpFilename;
                     var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
-                    var versionMatch = stem.match(/_3D_v(\d+)$/);
+                    var versionMatch = stem.match(/_(?:3D_)?v(\d+)$/);
                     var nextVersion = versionMatch ? parseInt(versionMatch[1]) + 1 : 1;
-                    var baseStem = versionMatch ? stem.replace(/_3D_v\d+$/, '') : stem;
-                    outputName = baseStem + '_3D_v' + nextVersion + '.slp';
+                    var baseStem = versionMatch ? stem.replace(/_(?:3D_)?v\d+$/, '') : stem;
+                    outputName = baseStem + '_v' + nextVersion + '.slp';
                 } else {
                     // Video-only entry: derive from video/camera name
                     var videoName = (vf.file && vf.file.name) ? vf.file.name : (vf.name || 'video');
@@ -4202,10 +4200,10 @@
                 var outputName;
                 if (vf.slpFilename) {
                     var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
-                    var vm = stem.match(/_3D_v(\d+)$/);
+                    var vm = stem.match(/_(?:3D_)?v(\d+)$/);
                     var nv = vm ? parseInt(vm[1]) + 1 : 1;
-                    var bs = vm ? stem.replace(/_3D_v\d+$/, '') : stem;
-                    outputName = bs + '_3D_v' + nv + '.slp';
+                    var bs = vm ? stem.replace(/_(?:3D_)?v\d+$/, '') : stem;
+                    outputName = bs + '_v' + nv + '.slp';
                 } else {
                     var vn = (vf.file && vf.file.name) ? vf.file.name : (vf.name || 'video');
                     outputName = vn.replace(/\.[^.]+$/, '') + '_v1.slp';
@@ -4470,10 +4468,10 @@
                 '<div class="modal-range-row">' +
                 '<div class="frame-inputs-row">' +
                 '  <label>Start</label>' +
-                '  <input type="number" id="tfInputStart" min="0" max="' + maxFrame + '" value="0">' +
+                '  <input type="number" id="tfInputStart" min="1" max="' + (maxFrame + 1) + '" value="1">' +
                 '  <span class="separator">—</span>' +
                 '  <label>End</label>' +
-                '  <input type="number" id="tfInputEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+                '  <input type="number" id="tfInputEnd" min="1" max="' + (maxFrame + 1) + '" value="' + (maxFrame + 1) + '">' +
                 '</div>' +
                 '<div class="modal-views-section">' +
                 '  <label>Cameras</label>' + viewsList +
@@ -4515,8 +4513,8 @@
                     rangeStart.value = e;
                     s = e;
                 }
-                inputStart.value = s;
-                inputEnd.value = e;
+                inputStart.value = s + 1;
+                inputEnd.value = e + 1;
                 updateSliderFill();
                 // Clear error when range changes
                 document.getElementById('tfError').style.display = 'none';
@@ -4526,21 +4524,19 @@
             rangeEnd.addEventListener('input', syncSliders);
 
             inputStart.addEventListener('change', function () {
-                var v = parseInt(inputStart.value);
+                var v = parseInt(inputStart.value) - 1;
                 if (isNaN(v) || v < 0) v = 0;
                 if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
                 if (v > maxFrame) v = maxFrame;
-                inputStart.value = v;
                 rangeStart.value = v;
                 syncSliders();
             });
 
             inputEnd.addEventListener('change', function () {
-                var v = parseInt(inputEnd.value);
+                var v = parseInt(inputEnd.value) - 1;
                 if (isNaN(v) || v < 0) v = 0;
                 if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
                 if (v > maxFrame) v = maxFrame;
-                inputEnd.value = v;
                 rangeEnd.value = v;
                 syncSliders();
             });
@@ -4570,9 +4566,9 @@
                 if (missingFrames.length > 0) {
                     var errorEl = document.getElementById('tfError');
                     if (missingFrames.length === 1) {
-                        errorEl.textContent = 'Frame ' + missingFrames[0] + ' does not have identity assignment.';
+                        errorEl.textContent = 'Frame ' + (missingFrames[0] + 1) + ' does not have identity assignment.';
                     } else {
-                        errorEl.textContent = 'Frames [' + condenseMissingFrames(missingFrames) + '] do not have identity assignment.';
+                        errorEl.textContent = 'Frames [' + condenseMissingFrames(missingFrames.map(function(f) { return f + 1; })) + '] do not have identity assignment.';
                     }
                     errorEl.style.display = 'block';
                     return;
@@ -4730,9 +4726,15 @@
         // View Mode Switching (grid / single)
         // ============================================
 
+        var savedGridLayout = null; // cached dockview layout JSON from grid mode
+
         function toggleViewMode() {
             if (state.views.length === 0) return;
             if (state.viewMode === 'grid') {
+                // Save grid layout before switching to single view
+                if (paneManager.api) {
+                    savedGridLayout = paneManager.api.toJSON();
+                }
                 state.viewMode = 'single';
                 // Start at the last-interacted view
                 var startIdx = 0;
@@ -4765,7 +4767,31 @@
 
         function setGridMode() {
             state.viewMode = 'grid';
-            updateVideoGridDisplay();
+            if (savedGridLayout && paneManager.api) {
+                // Restore saved grid layout
+                var savedZoom = {};
+                for (var zi = 0; zi < state.views.length; zi++) {
+                    var zv = state.views[zi];
+                    if (zv.zoom) {
+                        savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
+                    }
+                }
+                paneManager.clearAll();
+                paneManager.api.fromJSON(savedGridLayout);
+                refreshPaneInteractions();
+                // Restore zoom state
+                for (var ri = 0; ri < state.views.length; ri++) {
+                    var rv = state.views[ri];
+                    if (savedZoom[rv.name] && rv.zoom) {
+                        rv.zoom.scale = savedZoom[rv.name].scale;
+                        rv.zoom.offsetX = savedZoom[rv.name].offsetX;
+                        rv.zoom.offsetY = savedZoom[rv.name].offsetY;
+                        if (videoController) videoController.applyZoom(rv);
+                    }
+                }
+            } else {
+                updateVideoGridDisplay();
+            }
         }
 
         function updateVideoGridDisplay() {
@@ -7749,7 +7775,23 @@
                         }
                     }
 
-                    var slpFilenameForCam = (camDir.slps.length > 0) ? camDir.slps[0].name : null;
+                    // Scan all SLP files to find the highest version number
+                    var slpFilenameForCam = null;
+                    var highestVersion = 0;
+                    for (var sfi = 0; sfi < camDir.slps.length; sfi++) {
+                        var slpName = camDir.slps[sfi].name;
+                        if (!slpFilenameForCam) slpFilenameForCam = slpName;
+                        var slpStem = slpName.replace(/\.[^.]+$/, '');
+                        // Match both _3D_v<N> and _v<N> patterns
+                        var verMatch = slpStem.match(/_(?:3D_)?v(\d+)$/);
+                        if (verMatch) {
+                            var ver = parseInt(verMatch[1]);
+                            if (ver > highestVersion) {
+                                highestVersion = ver;
+                                slpFilenameForCam = slpName;
+                            }
+                        }
+                    }
 
                     // Load video (first in directory)
                     if (camDir.videos.length > 0) {
@@ -9509,7 +9551,7 @@
             if (!frameEl) return;
             frameEl.addEventListener('dblclick', function (e) {
                 e.stopPropagation();
-                var currentVal = state.currentFrame;
+                var currentVal = state.currentFrame + 1;
                 var input = document.createElement('input');
                 input.type = 'text';
                 input.value = currentVal;
@@ -9525,14 +9567,14 @@
                 function commit() {
                     var raw = input.value.trim();
                     var num = parseInt(raw, 10);
-                    if (!isNaN(num) && num >= 0 && num < state.totalFrames) {
-                        if (videoController) videoController.seekToFrame(num);
+                    if (!isNaN(num) && num >= 1 && num <= state.totalFrames) {
+                        if (videoController) videoController.seekToFrame(num - 1);
                     }
-                    frameEl.textContent = state.currentFrame;
+                    frameEl.textContent = state.currentFrame + 1;
                 }
 
                 function cancel() {
-                    frameEl.textContent = state.currentFrame;
+                    frameEl.textContent = state.currentFrame + 1;
                 }
 
                 input.addEventListener('keydown', function (ev) {

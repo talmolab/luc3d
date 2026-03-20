@@ -949,7 +949,27 @@ body {
 
 /* Export All Views modal */
 .slp-export-all-modal {
-  min-width: 780px;
+  min-width: 700px;
+}
+
+.slp-export-all-modal .slp-export-table {
+  table-layout: auto;
+}
+
+/* Camera column: shrink to fit content, with right padding */
+.slp-export-all-modal .slp-export-table th:first-child,
+.slp-export-all-modal .slp-export-table td:first-child {
+  width: 1%;
+  white-space: nowrap;
+  padding-right: 20px;
+}
+
+/* Reprojections column: explicit min-width so toggle is never clipped */
+.slp-export-all-modal .slp-export-table th:last-child,
+.slp-export-all-modal .slp-export-table td:last-child {
+  min-width: 180px;
+  white-space: nowrap;
+  text-align: center;
 }
 
 .slp-all-row {
@@ -976,14 +996,11 @@ body {
   box-sizing: border-box;
 }
 
-.slp-all-reproj-cell {
-  white-space: nowrap;
-}
-
 .slp-all-reproj .slp-toggle-option {
   padding: 2px 6px;
   font-size: 11px;
 }
+
 
 /* Modal layout: range row with views list */
 .modal-range-row {
