@@ -4778,6 +4778,8 @@
                 }
                 paneManager.clearAll();
                 paneManager.api.fromJSON(savedGridLayout);
+                var emptyMsg = document.getElementById('videoDockEmpty');
+                if (emptyMsg) emptyMsg.classList.add('hidden');
                 refreshPaneInteractions();
                 // Restore zoom state
                 for (var ri = 0; ri < state.views.length; ri++) {

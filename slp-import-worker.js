@@ -242,12 +242,28 @@ async function parseSlp(file) {
             ['instance_id', 'instance_type', 'frame_id', 'skeleton', 'track',
                 'from_predicted', 'score', 'point_id_start', 'point_id_end', 'tracking_score']);
 
+        progress('framesData: ' + (framesData ? 'OK (' + framesData.frame_id.length + ' rows)' : 'NULL'));
+        progress('instancesData: ' + (instancesData ? 'OK (' + (instancesData.instance_type ? instancesData.instance_type.length : '?') + ' rows)' : 'NULL'));
+
         var pointsData = readPoints(f, 'points', ['x', 'y', 'visible', 'complete']);
         var predPointsData = readPoints(f, 'pred_points', ['x', 'y', 'visible', 'complete', 'score']);
+        progress('pointsData: ' + (pointsData ? 'OK (' + pointsData.x.length + ' rows)' : 'NULL'));
+        progress('predPointsData: ' + (predPointsData ? 'OK (' + predPointsData.x.length + ' rows)' : 'NULL'));
 
         progress('Frames: ' + (framesData ? framesData.frame_id.length : 0) +
             ', Points: ' + (pointsData ? pointsData.x.length : 0) +
             ', PredPoints: ' + (predPointsData ? predPointsData.x.length : 0));
+
+        // Diagnostic: check actual value types from compound dataset reads
+        if (pointsData && pointsData.x.length > 0) {
+            var sampleX = pointsData.x[0];
+            progress('points.x[0] type: ' + typeof sampleX + ', value: ' + sampleX +
+                ', isTypedArray: ' + (sampleX && typeof sampleX === 'object' && sampleX.length !== undefined));
+        }
+        if (framesData && framesData.frame_id.length > 0) {
+            var sampleFid = framesData.frame_id[0];
+            progress('frames.frame_id[0] type: ' + typeof sampleFid + ', value: ' + sampleFid);
+        }
 
         // Diagnostic: show instances dataset structure and instance_type values
         if (instancesData) {
@@ -660,9 +676,20 @@ function readColumnar(h5file, name, fields) {
     }
 
     // Compound dataset
+    progress('[readColumnar] ' + name + ': type=' + ds.type + ', dtype=' + (ds.dtype || '?') + ', shape=' + JSON.stringify(ds.shape));
     var raw;
-    try { raw = ds.value; } catch (e) { return null; }
-    if (!raw) return null;
+    try { raw = ds.value; } catch (e) {
+        progress('Warning: failed to read ' + name + '.value: ' + e.message);
+        // Fallback: try json_value which unwraps TypedArrays
+        try { raw = ds.json_value; } catch (e2) {
+            progress('Warning: failed to read ' + name + '.json_value: ' + e2.message);
+            return null;
+        }
+    }
+    if (!raw) { progress('[readColumnar] ' + name + ': raw is null/empty'); return null; }
+    progress('[readColumnar] ' + name + ': raw type=' + typeof raw + ', isArray=' + Array.isArray(raw) +
+        ', length=' + (raw ? raw.length : 0) +
+        (Array.isArray(raw) && raw.length > 0 ? ', first=' + typeof raw[0] + ' isArray=' + Array.isArray(raw[0]) : ''));
 
     // Already columnar object with typed array fields
     if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw[fields[0]] !== undefined) {
@@ -714,7 +741,10 @@ function readPoints(h5file, name, fields) {
             return null;
         }
 
-        var raw = ds.value;
+        var raw;
+        try { raw = ds.value; } catch (e) {
+            try { raw = ds.json_value; } catch (e2) { return null; }
+        }
         if (!raw) return null;
 
         if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.x !== undefined) {
