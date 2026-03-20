@@ -669,11 +669,17 @@ function readColumnar(h5file, name, fields) {
         return raw;
     }
 
-    // Array of tuples
+    // Helper: unwrap single-element TypedArrays from compound dataset reads
+    function unwrap(v) {
+        if (v && typeof v === 'object' && v.length === 1) return v[0];
+        return v;
+    }
+
+    // Array of tuples (compound datasets return TypedArray members)
     if (Array.isArray(raw) && raw.length > 0 && Array.isArray(raw[0])) {
         var data = {};
         for (var j = 0; j < fields.length; j++) {
-            data[fields[j]] = raw.map(function (row) { return row[j]; });
+            data[fields[j]] = raw.map(function (row) { return unwrap(row[j]); });
         }
         return data;
     }
@@ -683,7 +689,7 @@ function readColumnar(h5file, name, fields) {
         var data2 = {};
         for (var k = 0; k < fields.length; k++) {
             var fld = fields[k];
-            data2[fld] = raw.map(function (row) { return row[fld]; });
+            data2[fld] = raw.map(function (row) { return unwrap(row[fld]); });
         }
         return data2;
     }
@@ -715,10 +721,16 @@ function readPoints(h5file, name, fields) {
             return raw;
         }
 
+        // Helper: unwrap single-element TypedArrays from compound dataset reads
+        function unwrap(v) {
+            if (v && typeof v === 'object' && v.length === 1) return v[0];
+            return v;
+        }
+
         if (Array.isArray(raw) && raw.length > 0 && Array.isArray(raw[0])) {
             var data = {};
             for (var j = 0; j < fields.length; j++) {
-                data[fields[j]] = raw.map(function (row) { return row[j]; });
+                data[fields[j]] = raw.map(function (row) { return unwrap(row[j]); });
             }
             return data;
         }
@@ -727,7 +739,7 @@ function readPoints(h5file, name, fields) {
             var data2 = {};
             for (var k = 0; k < fields.length; k++) {
                 var fld = fields[k];
-                data2[fld] = raw.map(function (row) { return row[fld]; });
+                data2[fld] = raw.map(function (row) { return unwrap(row[fld]); });
             }
             return data2;
         }
