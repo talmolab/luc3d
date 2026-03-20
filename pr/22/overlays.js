@@ -1234,7 +1234,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
-        var baseTrackColor = isPredicted ? getTrackColor(instance.trackIdx != null ? instance.trackIdx : u) : UNGROUPED_USER_COLOR;
+        var baseTrackColor = isPredicted ? (getTrackColor(instance.trackIdx != null ? instance.trackIdx : u) || '#888888') : UNGROUPED_USER_COLOR;
         const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.5) : baseTrackColor);
         const ulEdgeColor = isPredicted && !isAssignSelected ? '#888888' : color;
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.5 : 0.5);
