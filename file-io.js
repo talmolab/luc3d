@@ -1244,8 +1244,9 @@ function parseSlpH5(file, onProgress) {
         };
 
         worker.onerror = function (err) {
+            console.error('[slp-import] Worker error event:', err);
             worker.terminate();
-            reject(new Error('SLP worker error: ' + (err.message || 'unknown')));
+            reject(new Error('SLP worker error: ' + (err.message || err.filename + ':' + err.lineno || 'unknown')));
         };
 
         worker.postMessage({ type: 'parse', file: file });

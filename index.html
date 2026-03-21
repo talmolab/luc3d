@@ -501,9 +501,11 @@
 
             <div class="transport-controls">
                 <button id="btnFirst" title="First frame (Home)">|&#9664;</button>
+                <button id="btnPrevLabeled" title="Previous labeled frame (Shift+Left)">&#9664;&#9733;</button>
                 <button id="btnPrev" title="Previous frame (Left)">&#9664;</button>
                 <button id="btnPlay" title="Play/Pause (Space)">&#9654;</button>
-                <button id="btnNext" title="Next frame (Right)">&#9654;|</button>
+                <button id="btnNext" title="Next frame (Right)">&#9654;</button>
+                <button id="btnNextLabeled" title="Next labeled frame (Shift+Right)">&#9733;&#9654;</button>
                 <button id="btnLast" title="Last frame (End)">&#9654;|</button>
             </div>
 
@@ -1191,6 +1193,30 @@
         // ============================================
         // Helper: get instance groups for a frame
         // ============================================
+
+        /**
+         * Seek to the next or previous frame that has at least one labeled instance.
+         * @param {number} direction - 1 for next, -1 for previous
+         */
+        function seekToLabeledFrame(direction) {
+            if (!state.session || !videoController) return;
+            const indices = state.session.frameIndices;
+            if (indices.length === 0) return;
+            const cur = state.currentFrame;
+            var target = null;
+            if (direction > 0) {
+                for (var i = 0; i < indices.length; i++) {
+                    if (indices[i] > cur) { target = indices[i]; break; }
+                }
+            } else {
+                for (var i = indices.length - 1; i >= 0; i--) {
+                    if (indices[i] < cur) { target = indices[i]; break; }
+                }
+            }
+            if (target !== null) {
+                videoController.seekToFrame(target);
+            }
+        }
 
         function getInstanceGroupsForFrame(frameIdx) {
             const trackMap = state.session ? state.session.instanceGroups.get(frameIdx) : null;
@@ -2147,6 +2173,8 @@
             document.getElementById('btnPlay').addEventListener('click', function () { if (videoController) videoController.togglePlayback(); });
             document.getElementById('btnNext').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame + 1); });
             document.getElementById('btnLast').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.totalFrames - 1); });
+            document.getElementById('btnPrevLabeled').addEventListener('click', function () { seekToLabeledFrame(-1); });
+            document.getElementById('btnNextLabeled').addEventListener('click', function () { seekToLabeledFrame(1); });
 
             // Timeline toggle button
             document.getElementById('timelineToggleBtn').addEventListener('click', function () {
@@ -2196,11 +2224,13 @@
                 switch (e.key) {
                     case 'ArrowRight':
                         e.preventDefault();
-                        videoController.seekToFrame(state.currentFrame + (e.shiftKey ? 10 : 1));
+                        if (e.shiftKey) { seekToLabeledFrame(1); }
+                        else { videoController.seekToFrame(state.currentFrame + 1); }
                         break;
                     case 'ArrowLeft':
                         e.preventDefault();
-                        videoController.seekToFrame(state.currentFrame - (e.shiftKey ? 10 : 1));
+                        if (e.shiftKey) { seekToLabeledFrame(-1); }
+                        else { videoController.seekToFrame(state.currentFrame - 1); }
                         break;
                     case ' ':
                         e.preventDefault();
@@ -6217,10 +6247,17 @@
                 if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, new Map());
                 var tMap = session.instanceGroups.get(frameIdx2);
                 for (var [trkIdx, entries] of trackInstances) {
-                    var grp = new InstanceGroup(Date.now() + trkIdx, trkIdx);
-                    for (var ei = 0; ei < entries.length; ei++) grp.addInstance(entries[ei].camName, entries[ei].instance);
-                    if (!tMap.has(trkIdx)) tMap.set(trkIdx, []);
-                    tMap.get(trkIdx).push(grp);
+                    if (entries.length < 2) {
+                        // Single-camera instance stays unlinked
+                        for (var ei = 0; ei < entries.length; ei++) {
+                            fg2.addUnlinkedInstance(entries[ei].camName, new UnlinkedInstance(entries[ei].instance, entries[ei].camName));
+                        }
+                    } else {
+                        var grp = new InstanceGroup(Date.now() + trkIdx, trkIdx);
+                        for (var ei = 0; ei < entries.length; ei++) grp.addInstance(entries[ei].camName, entries[ei].instance);
+                        if (!tMap.has(trkIdx)) tMap.set(trkIdx, []);
+                        tMap.get(trkIdx).push(grp);
+                    }
                 }
             }
 
@@ -6884,10 +6921,16 @@
                     if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, new Map());
                     const trackMap2 = session.instanceGroups.get(frameIdx2);
                     for (const [trackIdx, entries] of trackInstances) {
-                        const group = new InstanceGroup(Date.now() + trackIdx, trackIdx);
-                        for (const e of entries) group.addInstance(e.camName, e.instance);
-                        if (!trackMap2.has(trackIdx)) trackMap2.set(trackIdx, []);
-                        trackMap2.get(trackIdx).push(group);
+                        if (entries.length < 2) {
+                            for (const e of entries) {
+                                fg2.addUnlinkedInstance(e.camName, new UnlinkedInstance(e.instance, e.camName));
+                            }
+                        } else {
+                            const group = new InstanceGroup(Date.now() + trackIdx, trackIdx);
+                            for (const e of entries) group.addInstance(e.camName, e.instance);
+                            if (!trackMap2.has(trackIdx)) trackMap2.set(trackIdx, []);
+                            trackMap2.get(trackIdx).push(group);
+                        }
                     }
                 }
 
@@ -7594,10 +7637,17 @@
                         session.instanceGroups.set(frameIdx2, new Map());
                         var trackMap2 = session.instanceGroups.get(frameIdx2);
                         for (var [trackIdx, entries] of trackInstances) {
-                            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx);
-                            for (var e of entries) group.addInstance(e.camName, e.instance);
-                            if (!trackMap2.has(trackIdx)) trackMap2.set(trackIdx, []);
-                            trackMap2.get(trackIdx).push(group);
+                            if (entries.length < 2) {
+                                // Single-camera instance stays unlinked
+                                for (var e of entries) {
+                                    fg2.addUnlinkedInstance(e.camName, new UnlinkedInstance(e.instance, e.camName));
+                                }
+                            } else {
+                                var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx);
+                                for (var e of entries) group.addInstance(e.camName, e.instance);
+                                if (!trackMap2.has(trackIdx)) trackMap2.set(trackIdx, []);
+                                trackMap2.get(trackIdx).push(group);
+                            }
                         }
                     }
                     fgCount++;

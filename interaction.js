@@ -112,6 +112,9 @@ class InteractionManager {
         /** @type {string|null} Last view where user interacted (for per-camera delete) */
         this.lastInteractedView = null;
 
+        /** @type {number} Last active track index, used when creating new instances */
+        this.lastActiveTrackIdx = 0;
+
         /** @type {Map<string, Object>} viewName -> { handlers } */
         this._boundHandlers = new Map();
 
@@ -577,6 +580,10 @@ class InteractionManager {
 
         this.selectedInstanceGroup = instanceGroup;
         this.selectedNodeIdx = nodeIdx;
+
+        if (instanceGroup && instanceGroup.trackIdx !== undefined) {
+            this.lastActiveTrackIdx = instanceGroup.trackIdx;
+        }
 
         if (changed && this.callbacks.onSelectionChanged) {
             this.callbacks.onSelectionChanged(this.selectedInstanceGroup, this.selectedNodeIdx);
@@ -1685,28 +1692,69 @@ class InteractionManager {
         }
         if (!targetCamera) return;
 
-        // Get video dimensions
-        let vw = 640, vh = 480;
-        if (state.views) {
-            for (const v of state.views) {
-                if (v.name === targetCamera) {
-                    vw = v.videoWidth || vw;
-                    vh = v.videoHeight || vh;
+        // Use last active track index
+        const trackIdx = this.lastActiveTrackIdx;
+
+        // Try to copy positions from the nearest previous frame on the same
+        // camera. Check both linked InstanceGroups (matching track) and
+        // unlinked instances.
+        let points = null;
+        const session = state.session;
+        const currentFrame = state.currentFrame;
+        const sortedFrames = session.frameIndices;
+        for (let i = sortedFrames.length - 1; i >= 0; i--) {
+            const fi = sortedFrames[i];
+            if (fi >= currentFrame) continue;
+            // Check linked groups first (matching track)
+            const groups = session.getInstanceGroupsForFrame(fi);
+            for (const g of groups) {
+                if (g.trackIdx === trackIdx && g.instances.has(targetCamera)) {
+                    const srcInst = g.instances.get(targetCamera);
+                    if (srcInst && srcInst.points) {
+                        points = srcInst.points.map(function (p) { return p ? [p[0], p[1]] : null; });
+                    }
                     break;
                 }
             }
+            // Check unlinked instances on this camera
+            if (!points) {
+                const fg = session.getFrameGroup(fi);
+                if (fg) {
+                    const unlinked = fg.getUnlinkedInstances(targetCamera);
+                    for (let u = unlinked.length - 1; u >= 0; u--) {
+                        const srcInst = unlinked[u].instance;
+                        if (srcInst && srcInst.points) {
+                            points = srcInst.points.map(function (p) { return p ? [p[0], p[1]] : null; });
+                            break;
+                        }
+                    }
+                }
+            }
+            if (points) break;
         }
 
-        // Default positions spread around center
-        const cx = vw / 2, cy = vh / 2;
-        const spacing = Math.min(vw, vh) * 0.04;
-        const points = new Array(numNodes);
-        for (let n = 0; n < numNodes; n++) {
-            const offset = n - (numNodes - 1) / 2;
-            points[n] = [cx + offset * spacing * 0.3, cy + offset * spacing];
+        // Fallback: default positions spread around center
+        if (!points) {
+            let vw = 640, vh = 480;
+            if (state.views) {
+                for (const v of state.views) {
+                    if (v.name === targetCamera) {
+                        vw = v.videoWidth || vw;
+                        vh = v.videoHeight || vh;
+                        break;
+                    }
+                }
+            }
+            const cx = vw / 2, cy = vh / 2;
+            const spacing = Math.min(vw, vh) * 0.04;
+            points = new Array(numNodes);
+            for (let n = 0; n < numNodes; n++) {
+                const offset = n - (numNodes - 1) / 2;
+                points[n] = [cx + offset * spacing * 0.3, cy + offset * spacing];
+            }
         }
 
-        const instance = new Instance(points, 0, 'user', 1.0);
+        const instance = new Instance(points, trackIdx, 'user', 1.0);
         instance.modified = true;
 
         state.session.addUnlinkedInstance(state.currentFrame, targetCamera, instance);
