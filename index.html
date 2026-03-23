@@ -166,6 +166,10 @@
                         <h3>Reprojection Error</h3>
                         <div class="error-display" id="errorDisplay">-</div>
                         <div id="perCameraErrors"></div>
+                        <details id="errorBreakdownDetails" style="margin-top:6px;">
+                            <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);user-select:none;">Per-node breakdown</summary>
+                            <div id="errorBreakdownTable" style="margin-top:4px;overflow-x:auto;"></div>
+                        </details>
                     </div>
 
                     <!-- Selected Instance -->
@@ -4922,6 +4926,101 @@
                         perCamDiv.appendChild(row);
                     }
                 }
+            }
+
+            // ---- Per-node per-camera error breakdown table ----
+            const breakdownDiv = document.getElementById('errorBreakdownTable');
+            breakdownDiv.textContent = '';
+            if (results && results.length > 0 && state.session && state.session.skeleton) {
+                const nodeNames = state.session.skeleton.nodes;
+                const cameras = state.session.cameras;
+                const camNames = cameras.map(function(c) { return c.name; });
+
+                // Accumulate errors: nodeErrors[nodeIdx][camName] = {sum, count}
+                var nodeErrors = [];
+                for (var ni = 0; ni < nodeNames.length; ni++) {
+                    nodeErrors[ni] = {};
+                    for (var ci = 0; ci < camNames.length; ci++) {
+                        nodeErrors[ni][camNames[ci]] = { sum: 0, count: 0 };
+                    }
+                }
+                for (var ri = 0; ri < results.length; ri++) {
+                    var r = results[ri];
+                    if (!r.errors) continue;
+                    for (var ci = 0; ci < camNames.length; ci++) {
+                        var camErrs = r.errors[camNames[ci]];
+                        if (!camErrs) continue;
+                        for (var ni = 0; ni < Math.min(camErrs.length, nodeNames.length); ni++) {
+                            if (camErrs[ni] != null) {
+                                nodeErrors[ni][camNames[ci]].sum += camErrs[ni];
+                                nodeErrors[ni][camNames[ci]].count++;
+                            }
+                        }
+                    }
+                }
+
+                // Build table
+                var tbl = document.createElement('table');
+                tbl.style.cssText = 'font-size:10px;border-collapse:collapse;width:100%;';
+                var thead = document.createElement('thead');
+                var hrow = document.createElement('tr');
+                var th0 = document.createElement('th');
+                th0.textContent = 'Node';
+                th0.style.cssText = 'text-align:left;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
+                hrow.appendChild(th0);
+                for (var ci = 0; ci < camNames.length; ci++) {
+                    var th = document.createElement('th');
+                    th.textContent = camNames[ci];
+                    th.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
+                    hrow.appendChild(th);
+                }
+                var thAvg = document.createElement('th');
+                thAvg.textContent = 'Avg';
+                thAvg.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);font-weight:700;';
+                hrow.appendChild(thAvg);
+                thead.appendChild(hrow);
+                tbl.appendChild(thead);
+
+                var tbody = document.createElement('tbody');
+                for (var ni = 0; ni < nodeNames.length; ni++) {
+                    var row = document.createElement('tr');
+                    var tdName = document.createElement('td');
+                    tdName.textContent = nodeNames[ni];
+                    tdName.style.cssText = 'padding:1px 4px;white-space:nowrap;color:var(--text-secondary);';
+                    row.appendChild(tdName);
+                    var rowSum = 0, rowCount = 0;
+                    for (var ci = 0; ci < camNames.length; ci++) {
+                        var td = document.createElement('td');
+                        td.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;';
+                        var entry = nodeErrors[ni][camNames[ci]];
+                        if (entry.count > 0) {
+                            var avg = entry.sum / entry.count;
+                            td.textContent = avg.toFixed(1);
+                            td.style.color = avg < 2 ? 'var(--success-color)' : avg < 5 ? 'var(--warning-color)' : 'var(--error-color)';
+                            rowSum += entry.sum;
+                            rowCount += entry.count;
+                        } else {
+                            td.textContent = '-';
+                            td.style.color = 'var(--text-muted)';
+                        }
+                        row.appendChild(td);
+                    }
+                    // Row average
+                    var tdAvg = document.createElement('td');
+                    tdAvg.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;font-weight:700;';
+                    if (rowCount > 0) {
+                        var rowAvg = rowSum / rowCount;
+                        tdAvg.textContent = rowAvg.toFixed(1);
+                        tdAvg.style.color = rowAvg < 2 ? 'var(--success-color)' : rowAvg < 5 ? 'var(--warning-color)' : 'var(--error-color)';
+                    } else {
+                        tdAvg.textContent = '-';
+                        tdAvg.style.color = 'var(--text-muted)';
+                    }
+                    row.appendChild(tdAvg);
+                    tbody.appendChild(row);
+                }
+                tbl.appendChild(tbody);
+                breakdownDiv.appendChild(tbl);
             }
 
             // ---- Linked Instance Groups table ----
