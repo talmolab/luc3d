@@ -515,6 +515,26 @@ body {
   user-select: none;
 }
 
+/* File path label (top-left, below view label) */
+.video-cell .view-file-path {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-family: monospace;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 5;
+  user-select: none;
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Box zoom overlay */
 .box-zoom-overlay {
   position: absolute;

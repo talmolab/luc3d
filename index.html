@@ -1517,7 +1517,8 @@
                         var ul = state.session.addUnlinkedInstance(frameIdx, camName, userInst);
                         unlinkedList.push(ul);
                     }
-                    if (unlinkedList.length > 0) {
+                    if (unlinkedList.length > 1) {
+                        // Multiple views — group them together
                         var newGroup = state.session.createGroupFromUnlinked(frameIdx, unlinkedList, predGroup.trackIdx);
                         for (var [cn, ni] of newGroup.instances) {
                             ni.trackIdx = newGroup.trackIdx;
@@ -1554,6 +1555,14 @@
                             var trackName = state.session.tracks[newGroup.trackIdx] || 'Track ' + newGroup.trackIdx;
                             setStatus('Created user group ' + trackName + ' from predicted', 'success');
                         }
+                    } else if (unlinkedList.length === 1) {
+                        // Single view — leave as unlinked, don't create a lonely group
+                        if (interactionManager) {
+                            interactionManager.selectedUnlinked = unlinkedList[0];
+                            interactionManager.selectedGroup = null;
+                        }
+                        var trackName = state.session.tracks[predGroup.trackIdx] || 'Track ' + predGroup.trackIdx;
+                        setStatus('Converted prediction to user instance: ' + trackName, 'success');
                     }
                     if (timeline) timeline.setFrameModified(frameIdx, true);
                     if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(frameIdx));
@@ -8502,6 +8511,16 @@
                     view.overlayCanvas = overlayCanvas;
                     view.overlayCtx = overlayCanvas.getContext('2d');
                     view.wrapper = wrapper;
+
+                    // Show full file path on the video panel
+                    var vf = state.videoFiles.find(function (v) { return v.assignedCamera === self.viewName; });
+                    if (vf && vf.file) {
+                        var filePath = vf.file.webkitRelativePath || vf.file.name;
+                        var pathLabel = document.createElement('div');
+                        pathLabel.className = 'view-file-path';
+                        pathLabel.textContent = filePath;
+                        self.element.appendChild(pathLabel);
+                    }
                 }
 
                 panelRenderers.set(this.panelId, this);
