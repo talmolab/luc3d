@@ -425,6 +425,15 @@ body {
   inset: 0;
 }
 
+/* Allow clicks to pass through to overlay canvas in inactive panels
+   without requiring panel activation first */
+.dv-dockview .dv-content-container {
+  pointer-events: none;
+}
+.dv-dockview .dv-content-container > * {
+  pointer-events: auto;
+}
+
 /* --------------------------------------------------------------------------
    Video Cell
    -------------------------------------------------------------------------- */

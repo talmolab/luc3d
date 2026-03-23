@@ -166,7 +166,7 @@
                         <h3>Reprojection Error</h3>
                         <div class="error-display" id="errorDisplay">-</div>
                         <div id="perCameraErrors"></div>
-                        <details id="errorBreakdownDetails" style="margin-top:6px;">
+                        <details id="errorBreakdownDetails" style="margin-top:6px;" open>
                             <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);user-select:none;">Per-node breakdown</summary>
                             <div id="errorBreakdownTable" style="margin-top:4px;overflow-x:auto;"></div>
                         </details>
@@ -5456,11 +5456,14 @@
             var ulEmpty = document.getElementById('unlinkedEmpty');
             if (ulEmpty) ulEmpty.style.display = '';
 
-            // Clear error display
+            // Clear error display and hide reprojection UI
             var errorDisplay = document.getElementById('errorDisplay');
             if (errorDisplay) { errorDisplay.textContent = '-'; errorDisplay.className = 'error-display'; }
             var perCamErrors = document.getElementById('perCameraErrors');
             if (perCamErrors) perCamErrors.innerHTML = '';
+            var breakdownTable = document.getElementById('errorBreakdownTable');
+            if (breakdownTable) breakdownTable.innerHTML = '';
+            setReprojErrorVisible(false);
 
             // Clear skeleton editing tables and dropdowns
             var skelBody = document.querySelector('#skeletonNodesTable tbody');
@@ -6080,6 +6083,11 @@
 
                 hideLoading();
 
+                // Show reprojection error columns if we have triangulation data
+                if (state.triangulationResults && state.triangulationResults.size > 0) {
+                    setReprojErrorVisible(true);
+                }
+
                 var statusParts = [cameras.length + ' cameras', state.session.numFrames + ' labeled frames'];
                 if (state.views.length > 0) {
                     statusParts.push(state.views.length + ' views');
@@ -6204,6 +6212,23 @@
 
             state.session = session;
             state.triangulationResults = _triResultsMap;
+
+            // Rebuild reprojectedInstances from saved reprojection data
+            for (var [_rfIdx, _rfResults] of _triResultsMap) {
+                for (var _rr = 0; _rr < _rfResults.length; _rr++) {
+                    var _rrEntry = _rfResults[_rr];
+                    var _rrGroup = _rrEntry.group;
+                    if (_rrGroup.reprojections) {
+                        for (var _rrCamName in _rrGroup.reprojections) {
+                            var _rrPts = _rrGroup.reprojections[_rrCamName];
+                            if (_rrPts) {
+                                var _rrInst = new Instance(_rrPts, _rrGroup.trackIdx, 'reprojected', 1.0);
+                                _rrGroup.addReprojectedInstance(_rrCamName, _rrInst);
+                            }
+                        }
+                    }
+                }
+            }
 
             // Fix camera name mismatches: instance keys may differ from camera names
             // (e.g., instances keyed by video name "CamA" but camera named "A")
