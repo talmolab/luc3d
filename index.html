@@ -7026,18 +7026,22 @@
         async function handleLoadCalibration() {
             try {
                 setStatus('Loading calibration...', 'warning');
-                const cameras = await loadCalibrationFile();
-                if (!cameras || cameras.length === 0) {
+                const calibResult = await loadCalibrationFile();
+                if (!calibResult || !calibResult.cameras || calibResult.cameras.length === 0) {
                     setStatus('No calibration loaded', 'warning');
                     return;
                 }
+                const cameras = calibResult.cameras;
 
                 // If we have a session, replace its cameras; otherwise create a new session
                 if (state.session) {
                     state.session.cameras = cameras;
                 } else {
                     const skeleton = new Skeleton('skeleton', [], []);
-                    state.session = new Session(cameras, skeleton, ['track_0']);
+                    var sessionName = calibResult.fileName
+                        ? calibResult.fileName.replace(/\.[^.]+$/, '')
+                        : ('Session ' + (state.sessions.length + 1));
+                    state.session = new Session(cameras, skeleton, ['track_0'], sessionName);
                     if (state.sessions.indexOf(state.session) < 0) {
                         state.sessions.push(state.session);
                         state.activeSessionIdx = state.sessions.length - 1;
@@ -7361,6 +7365,14 @@
             };
 
             state.views.push(view);
+
+            // Register this video's index in the active session
+            if (state.session) {
+                var vfIdx = state.videoFiles.indexOf(videoFile);
+                if (vfIdx >= 0 && state.session.videoFileIndices.indexOf(vfIdx) < 0) {
+                    state.session.videoFileIndices.push(vfIdx);
+                }
+            }
 
             return view;
         }
@@ -7748,6 +7760,16 @@
 
                 showLoading('Scanning folder...');
 
+                // Derive folder name from first file's relative path
+                var folderName = null;
+                if (allFiles.length > 0) {
+                    var firstRelPath = allFiles[0].webkitRelativePath || '';
+                    var firstParts = firstRelPath.split('/');
+                    if (firstParts.length > 1) {
+                        folderName = firstParts[0];
+                    }
+                }
+
                 // Categorize files into per-camera directories
                 var calibFile = null;
                 var skeletonFile = null;
@@ -7937,7 +7959,8 @@
                         if (!state.session) {
                             var skeleton = new Skeleton('skeleton', [], []);
                             var tracks = slpData.tracks || ['track_0'];
-                            state.session = new Session(cameras.length > 0 ? cameras : [], skeleton, tracks);
+                            var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
+                            state.session = new Session(cameras.length > 0 ? cameras : [], skeleton, tracks, sessionName);
                             firstSession = state.session;
                             if (state.sessions.indexOf(state.session) < 0) {
                                 state.sessions.push(state.session);
@@ -8015,7 +8038,8 @@
 
                             // Ensure session exists
                             if (!state.session) {
-                                state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0']);
+                                var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
+                                state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0'], sessionName);
                                 if (state.sessions.indexOf(state.session) < 0) {
                                     state.sessions.push(state.session);
                                     state.activeSessionIdx = state.sessions.length - 1;

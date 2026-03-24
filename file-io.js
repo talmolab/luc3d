@@ -265,13 +265,15 @@ async function loadCalibrationFile() {
     const file = files[0];
     const text = await file.text();
 
+    var cameras;
     if (file.name.endsWith('.toml')) {
-        return parseCalibrationTOML(text);
+        cameras = parseCalibrationTOML(text);
     } else if (file.name.endsWith('.json')) {
-        return parseCalibrationJSON(text);
+        cameras = parseCalibrationJSON(text);
     } else {
         throw new Error('Unsupported calibration format: ' + file.name);
     }
+    return { cameras: cameras, fileName: file.name };
 }
 
 /**
