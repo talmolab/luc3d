@@ -438,6 +438,27 @@
 
                 <!-- ==================== Session Tab ==================== -->
                 <div class="panel-tab-content" id="tabSession">
+                    <!-- Sessions List -->
+                    <div class="info-section">
+                        <h3>Sessions</h3>
+                        <div id="sessionsListPanel">
+                            <table class="info-table" id="sessionsTable" style="display:none">
+                                <thead><tr>
+                                    <th>Name</th>
+                                    <th>Cameras</th>
+                                    <th>Frames</th>
+                                    <th></th>
+                                </tr></thead>
+                                <tbody></tbody>
+                            </table>
+                            <div id="sessionsEmpty" style="font-size:11px;color:var(--text-muted);">No sessions loaded</div>
+                        </div>
+                        <div style="margin-top:6px;display:flex;gap:4px;">
+                            <button class="btn btn-sm" id="btnAddSessionFolder">Load Folder...</button>
+                            <button class="btn btn-sm" id="btnAddSessionCalib">From Calibration...</button>
+                        </div>
+                    </div>
+
                     <div class="info-section">
                         <h3>Session Info</h3>
                         <div class="session-info-row">
@@ -5532,6 +5553,7 @@
             populateVideosTable();
             populateCamerasTable();
             populateSkeletonTable();
+            populateSessionsPanel();
 
             // Wire Videos tab buttons
             document.getElementById('btnAddVideos').onclick = function () { handleLoadVideos(); };
@@ -5592,6 +5614,12 @@
             };
 
             populateSessionAssignTable();
+
+            // Wire Sessions list buttons
+            var btnAddFolder = document.getElementById('btnAddSessionFolder');
+            if (btnAddFolder) btnAddFolder.onclick = function() { handleLoadSessionFolder(); };
+            var btnAddCalib = document.getElementById('btnAddSessionCalib');
+            if (btnAddCalib) btnAddCalib.onclick = function() { handleLoadCalibration(); };
         }
 
         function populateSessionAssignTable() {
@@ -9794,6 +9822,81 @@
                         });
                     }
                 })(state.views[idx]);
+            }
+        }
+
+        // ============================================
+        // Sessions Info Panel
+        // ============================================
+
+        function populateSessionsPanel() {
+            var table = document.getElementById('sessionsTable');
+            if (!table) return;
+            var tbody = table.querySelector('tbody');
+            var empty = document.getElementById('sessionsEmpty');
+            tbody.textContent = '';
+
+            if (state.sessions.length === 0) {
+                table.style.display = 'none';
+                if (empty) empty.style.display = '';
+                return;
+            }
+
+            table.style.display = '';
+            if (empty) empty.style.display = 'none';
+
+            for (var si = 0; si < state.sessions.length; si++) {
+                var session = state.sessions[si];
+                var tr = document.createElement('tr');
+                if (si === state.activeSessionIdx) tr.style.background = 'var(--accent-dim)';
+
+                var tdName = document.createElement('td');
+                tdName.textContent = session.name;
+                tdName.style.cursor = 'pointer';
+                (function(idx) {
+                    tdName.addEventListener('click', function() { switchSession(idx); });
+                    tdName.addEventListener('dblclick', function() {
+                        var newName = prompt('Rename session:', state.sessions[idx].name);
+                        if (newName && newName.trim()) {
+                            state.sessions[idx].name = newName.trim();
+                            populateSessionsPanel();
+                            populateSessionStrip();
+                        }
+                    });
+                })(si);
+
+                var tdCams = document.createElement('td');
+                tdCams.textContent = session.cameras ? session.cameras.length : 0;
+
+                var tdFrames = document.createElement('td');
+                tdFrames.textContent = session.numFrames || 0;
+
+                var tdActions = document.createElement('td');
+                if (state.sessions.length > 1) {
+                    var delBtn = document.createElement('button');
+                    delBtn.textContent = '\u00d7';
+                    delBtn.className = 'btn btn-sm';
+                    delBtn.style.cssText = 'padding:0 4px;font-size:12px;';
+                    (function(idx) {
+                        delBtn.addEventListener('click', function(e) {
+                            e.stopPropagation();
+                            if (!confirm('Delete session "' + state.sessions[idx].name + '"?')) return;
+                            state.sessions.splice(idx, 1);
+                            if (state.activeSessionIdx >= state.sessions.length) {
+                                state.activeSessionIdx = state.sessions.length - 1;
+                            }
+                            switchSession(state.activeSessionIdx);
+                            populateSessionsPanel();
+                        });
+                    })(si);
+                    tdActions.appendChild(delBtn);
+                }
+
+                tr.appendChild(tdName);
+                tr.appendChild(tdCams);
+                tr.appendChild(tdFrames);
+                tr.appendChild(tdActions);
+                tbody.appendChild(tr);
             }
         }
 
