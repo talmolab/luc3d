@@ -185,6 +185,47 @@ body {
   background: transparent;
 }
 
+.menu-has-submenu {
+  position: relative;
+}
+
+.menu-submenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  min-width: 160px;
+  z-index: 101;
+  padding: 4px 0;
+}
+
+.menu-has-submenu:hover > .menu-submenu {
+  display: block;
+}
+
+.menu-submenu-item {
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.menu-submenu-item:hover {
+  background: var(--accent-dim);
+}
+
+.menu-submenu-item.menu-submenu-new {
+  color: var(--accent-color);
+  border-top: 1px solid var(--border-color);
+  margin-top: 2px;
+  padding-top: 6px;
+}
+
 .menu-separator {
   height: 1px;
   background: var(--border-color);

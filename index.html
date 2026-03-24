@@ -92,14 +92,18 @@
                     <div class="menu-dropdown-item" id="menuRenameTrack">Rename Track...</div>
                     <div class="menu-dropdown-item" id="menuDeleteTrack">Delete Track...</div>
                     <div class="menu-separator"></div>
-                    <div class="menu-dropdown-item" id="menuAssignTrack">Assign Track to Selected...</div>
+                    <div class="menu-dropdown-item menu-has-submenu" id="menuAssignTrack">Assign Track ▸
+                        <div class="menu-submenu" id="menuAssignTrackSub"></div>
+                    </div>
                     <div class="menu-dropdown-item" id="menuSwapTracks">Swap Tracks...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuNewIdentity">New Identity...</div>
                     <div class="menu-dropdown-item" id="menuRenameIdentity">Rename Identity...</div>
                     <div class="menu-dropdown-item" id="menuDeleteIdentity">Delete Identity...</div>
                     <div class="menu-separator"></div>
-                    <div class="menu-dropdown-item" id="menuAssignIdentity">Assign Identity to Selected...</div>
+                    <div class="menu-dropdown-item menu-has-submenu" id="menuAssignIdentity">Assign Identity ▸
+                        <div class="menu-submenu" id="menuAssignIdentitySub"></div>
+                    </div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -115,6 +119,7 @@
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
                 </div>
             </div>
+            <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hotkeys (?)</div>
             <div class="menu-item" id="menuLoadDemoBar" style="cursor:pointer;">Load Demo</div>
         </div>
 
@@ -2742,54 +2747,80 @@
                 updateInfoPanel();
             });
 
-            document.getElementById('menuAssignTrack').addEventListener('click', function () {
-                closeMenus();
-                if (!state.session) { setStatus('No session', 'warning'); return; }
+            // Track assign helper (reused by submenu and hotkeys)
+            function assignTrackToSelected(trackIdx) {
+                if (!state.session) return;
                 var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
                 var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
                 if (!sel && !selUl) { setStatus('Select an instance first', 'warning'); return; }
 
-                var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
-                var idx = parseInt(prompt('Assign to which track?\n\n' + trackList + '\n\nEnter number:')) - 1;
-                if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
-
                 if (sel) {
                     var oldTrack = sel.trackIdx;
-                    for (var [cn, inst] of sel.instances) { inst.trackIdx = idx; }
-                    sel.trackIdx = idx;
-                    // Propagate
+                    for (var [cn, inst] of sel.instances) { inst.trackIdx = trackIdx; }
+                    sel.trackIdx = trackIdx;
                     var propagated = 0;
                     for (var [fIdx, fgP] of state.session.frameGroups) {
                         if (fIdx <= state.currentFrame) continue;
                         for (var [cn2, insts] of fgP.instances) {
                             for (var i = 0; i < insts.length; i++) {
-                                if (insts[i].trackIdx === oldTrack) { insts[i].trackIdx = idx; propagated++; }
+                                if (insts[i].trackIdx === oldTrack) { insts[i].trackIdx = trackIdx; propagated++; }
                             }
                         }
                         for (var [cn3, ulL] of fgP.unlinkedInstances) {
                             for (var u = 0; u < ulL.length; u++) {
-                                if (ulL[u].instance.trackIdx === oldTrack) { ulL[u].instance.trackIdx = idx; propagated++; }
+                                if (ulL[u].instance.trackIdx === oldTrack) { ulL[u].instance.trackIdx = trackIdx; propagated++; }
                             }
                         }
                     }
-                    setStatus('Assigned ' + state.session.tracks[idx] + (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
+                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
                 } else if (selUl) {
                     var oldTrack2 = selUl.instance.trackIdx;
-                    selUl.instance.trackIdx = idx;
-                    // Propagate for same camera
+                    selUl.instance.trackIdx = trackIdx;
                     var propagated2 = 0;
                     for (var [fIdx2, fgP2] of state.session.frameGroups) {
                         if (fIdx2 <= state.currentFrame) continue;
                         var ulPropList = fgP2.getUnlinkedInstances(selUl.cameraName);
                         for (var pi = 0; pi < ulPropList.length; pi++) {
-                            if (ulPropList[pi].instance.trackIdx === oldTrack2) { ulPropList[pi].instance.trackIdx = idx; propagated2++; }
+                            if (ulPropList[pi].instance.trackIdx === oldTrack2) { ulPropList[pi].instance.trackIdx = trackIdx; propagated2++; }
                         }
                     }
-                    setStatus('Assigned ' + state.session.tracks[idx] + ' to ' + selUl.cameraName +
-                        (propagated2 > 0 ? ' (propagated ' + propagated2 + ')' : ''), 'success');
+                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (propagated2 > 0 ? ' (propagated ' + propagated2 + ')' : ''), 'success');
                 }
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+            }
+
+            // Populate Assign Track submenu on hover
+            document.getElementById('menuAssignTrack').addEventListener('mouseenter', function () {
+                var sub = document.getElementById('menuAssignTrackSub');
+                sub.innerHTML = '';
+                if (!state.session) return;
+                for (var i = 0; i < state.session.tracks.length; i++) {
+                    var item = document.createElement('div');
+                    item.className = 'menu-submenu-item';
+                    item.textContent = state.session.tracks[i];
+                    item.setAttribute('data-idx', i);
+                    item.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        closeMenus();
+                        assignTrackToSelected(parseInt(this.getAttribute('data-idx')));
+                    });
+                    sub.appendChild(item);
+                }
+                // "New Track..." option at bottom
+                var newItem = document.createElement('div');
+                newItem.className = 'menu-submenu-item menu-submenu-new';
+                newItem.textContent = '+ New Track...';
+                newItem.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    closeMenus();
+                    var name = prompt('New track name:', 'track_' + state.session.tracks.length);
+                    if (!name) return;
+                    if (state.session.tracks.indexOf(name) < 0) state.session.tracks.push(name);
+                    var idx = state.session.tracks.indexOf(name);
+                    assignTrackToSelected(idx);
+                });
+                sub.appendChild(newItem);
             });
 
             document.getElementById('menuSwapTracks').addEventListener('click', function () {
@@ -2865,23 +2896,49 @@
                 updateInfoPanel();
             });
 
-            document.getElementById('menuAssignIdentity').addEventListener('click', function () {
-                closeMenus();
-                if (!state.session) { setStatus('No session', 'warning'); return; }
-                var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
-                if (!sel) { setStatus('Select an instance group first', 'warning'); return; }
-                if (state.session.identities.length === 0) {
-                    var name = prompt('No identities yet. Create one:', 'identity_0');
-                    if (!name) return;
-                    state.session.addIdentity(name);
+            // Populate Assign Identity submenu on hover
+            document.getElementById('menuAssignIdentity').addEventListener('mouseenter', function () {
+                var sub = document.getElementById('menuAssignIdentitySub');
+                sub.innerHTML = '';
+                if (!state.session) return;
+                for (var i = 0; i < state.session.identities.length; i++) {
+                    var item = document.createElement('div');
+                    item.className = 'menu-submenu-item';
+                    item.textContent = state.session.identities[i].name;
+                    item.setAttribute('data-id', state.session.identities[i].id);
+                    item.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        closeMenus();
+                        var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                        if (!sel) { setStatus('Select a group first', 'warning'); return; }
+                        state.session.assignIdentityToGroup(sel, parseInt(this.getAttribute('data-id')));
+                        setStatus('Assigned identity: ' + this.textContent, 'success');
+                        drawAllOverlays(state.currentFrame);
+                        updateInfoPanel();
+                    });
+                    sub.appendChild(item);
                 }
-                var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
-                var idx = parseInt(prompt('Assign to which identity?\n\n' + idList + '\n\nEnter number:')) - 1;
-                if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
-                state.session.assignIdentityToGroup(sel, state.session.identities[idx].id);
-                setStatus('Assigned identity: ' + state.session.identities[idx].name, 'success');
-                drawAllOverlays(state.currentFrame);
-                updateInfoPanel();
+                // "New Identity..." at bottom
+                var newItem = document.createElement('div');
+                newItem.className = 'menu-submenu-item menu-submenu-new';
+                newItem.textContent = '+ New Identity...';
+                newItem.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    closeMenus();
+                    var name = prompt('New identity name:', 'identity_' + state.session.identities.length);
+                    if (!name) return;
+                    var identity = state.session.addIdentity(name);
+                    var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                    if (sel) {
+                        state.session.assignIdentityToGroup(sel, identity.id);
+                        setStatus('Created and assigned: ' + name, 'success');
+                    } else {
+                        setStatus('Created identity: ' + name, 'success');
+                    }
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                });
+                sub.appendChild(newItem);
             });
 
             // Set Env / Clear Env buttons on 3D viewport
@@ -3126,6 +3183,52 @@
             });
 
             // Standalone "Load Demo" menu bar button
+            document.getElementById('menuHotkeys').addEventListener('click', showHotkeysHelp);
+
+            function showHotkeysHelp() {
+                var overlay = document.createElement('div');
+                overlay.className = 'multi-frame-modal-overlay';
+                var modal = document.createElement('div');
+                modal.className = 'multi-frame-modal';
+                modal.style.maxWidth = '550px';
+                modal.innerHTML =
+                    '<h3>Keyboard Shortcuts</h3>' +
+                    '<div style="max-height:60vh;overflow-y:auto;">' +
+                    '<table class="data-table" style="font-size:12px;">' +
+                    '<thead><tr><th>Key</th><th>Action</th></tr></thead>' +
+                    '<tbody>' +
+                    '<tr><td><b>Navigation</b></td><td></td></tr>' +
+                    '<tr><td><code>←</code> / <code>→</code></td><td>Previous / Next frame</td></tr>' +
+                    '<tr><td><code>Shift+←</code> / <code>Shift+→</code></td><td>Skip 10 frames</td></tr>' +
+                    '<tr><td><code>Home</code> / <code>End</code></td><td>First / Last frame</td></tr>' +
+                    '<tr><td><code>Space</code></td><td>Play / Pause</td></tr>' +
+                    '<tr><td colspan="2" style="height:8px;"></td></tr>' +
+                    '<tr><td><b>Editing</b></td><td></td></tr>' +
+                    '<tr><td><code>N</code></td><td>Add new instance</td></tr>' +
+                    '<tr><td><code>Delete</code></td><td>Delete selected instance</td></tr>' +
+                    '<tr><td><code>U</code></td><td>Ungroup selected</td></tr>' +
+                    '<tr><td><code>T</code></td><td>Triangulate current frame</td></tr>' +
+                    '<tr><td><code>Tab</code> / <code>Shift+Tab</code></td><td>Cycle selection</td></tr>' +
+                    '<tr><td><code>Double-click</code></td><td>Convert predicted → user label</td></tr>' +
+                    '<tr><td colspan="2" style="height:8px;"></td></tr>' +
+                    '<tr><td><b>Identity (select group first)</b></td><td></td></tr>' +
+                    '<tr><td><code>1</code> – <code>9</code></td><td>Assign identity 1–9 to selected group</td></tr>' +
+                    '<tr><td colspan="2" style="height:8px;"></td></tr>' +
+                    '<tr><td><b>Tracks (select group first)</b></td><td></td></tr>' +
+                    '<tr><td><code>Shift+1</code> – <code>Shift+9</code></td><td>Assign track 1–9 (propagates forward)</td></tr>' +
+                    '<tr><td colspan="2" style="height:8px;"></td></tr>' +
+                    '<tr><td><b>View</b></td><td></td></tr>' +
+                    '<tr><td><code>3</code></td><td>Toggle 3D viewport</td></tr>' +
+                    '<tr><td><code>I</code></td><td>Toggle info panel</td></tr>' +
+                    '<tr><td><code>?</code></td><td>Show this help</td></tr>' +
+                    '</tbody></table></div>' +
+                    '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
+                overlay.appendChild(modal);
+                document.body.appendChild(overlay);
+                document.getElementById('hotkeysClose').addEventListener('click', function () { overlay.remove(); });
+                overlay.addEventListener('click', function (ev) { if (ev.target === overlay) overlay.remove(); });
+            }
+
             document.getElementById('menuLoadDemoBar').addEventListener('click', function () {
                 closeMenus();
                 loadDemoSession();
@@ -3378,30 +3481,27 @@
             document.addEventListener('keydown', function (e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-                // Identity assignment: Ctrl/Cmd+1 through Ctrl/Cmd+9
-                if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
-                    e.preventDefault();
+                // Identity assignment: 1-9 (no modifier) when a group is selected
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
                     if (!state.session || !interactionManager) return;
                     var selectedGroup = interactionManager.selectedInstanceGroup;
-                    if (!selectedGroup) {
-                        setStatus('Select an instance group first', 'warning');
-                        return;
-                    }
+                    if (!selectedGroup) return; // No group selected — let key fall through
+                    e.preventDefault();
                     var identityNum = parseInt(e.key) - 1;
                     while (state.session.identities.length <= identityNum) {
                         state.session.addIdentity('identity_' + state.session.identities.length);
                     }
                     var identity = state.session.identities[identityNum];
                     state.session.assignIdentityToGroup(selectedGroup, identity.id);
-                    setStatus('Assigned ' + identity.name + ' to group', 'success');
+                    setStatus('Assigned ' + identity.name + ' to group (press ' + e.key + ')', 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                     return;
                 }
 
-                // Track assignment: Alt+1 through Alt+9
+                // Track assignment: Shift+1 through Shift+9
                 // Propagates to all subsequent frames (SLEAP-style)
-                if (e.altKey && !e.ctrlKey && !e.metaKey && e.key >= '1' && e.key <= '9') {
+                if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.code >= 'Digit1' && e.code <= 'Digit9') {
                     e.preventDefault();
                     if (!state.session || !interactionManager) return;
                     var selectedGroup = interactionManager.selectedInstanceGroup;
@@ -3409,7 +3509,7 @@
                         setStatus('Select an instance group first', 'warning');
                         return;
                     }
-                    var newTrackIdx = parseInt(e.key) - 1;
+                    var newTrackIdx = parseInt(e.code.replace('Digit', '')) - 1;
                     var oldTrackIdx = selectedGroup.trackIdx;
                     // Update current group
                     for (var [camName, inst] of selectedGroup.instances) {
@@ -3495,6 +3595,11 @@
                         }
                         break;
                     }
+                    case '?':
+                        showHotkeysHelp();
+                        e.preventDefault();
+                        break;
+
                     case 'Escape': {
                         // Click the visible Cancel button in any active modal/toast
                         var cancelBtn = null;
