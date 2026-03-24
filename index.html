@@ -10028,23 +10028,51 @@
             state.sessions.splice(idx, 1);
 
             if (state.sessions.length === 0) {
-                // Last session removed — reset to fresh state
+                // Last session removed — full reset to fresh state
                 state.session = null;
                 state.activeSessionIdx = 0;
                 state.triangulationResults = new Map();
                 state.views = [];
+                state.videoFiles = [];
+                state.keypoints3d = null;
+                state.lastUserPoints = new Map();
+                state.currentFrame = 0;
+                state.totalFrames = 0;
                 if (videoController) {
                     if (state.isPlaying) videoController.stopPlayback();
                     videoController = null;
                 }
                 paneManager.clearAll();
                 if (interactionManager) interactionManager.detach();
+
+                // Clear all UI
                 populateViewStrip();
                 populateSessionStrip();
                 populateSessionsPanel();
                 updateInfoPanel();
-                if (timeline) timeline.setData(null);
-                if (viewport3d) viewport3d.setFrame([]);
+                setReprojErrorVisible(false);
+
+                // Reset timeline
+                if (timeline) {
+                    timeline.setData(null);
+                    timeline.setTotalFrames(0);
+                }
+
+                // Clear 3D viewport
+                if (viewport3d) {
+                    viewport3d.cameras = [];
+                    viewport3d.skeleton = null;
+                    viewport3d.setFrame([]);
+                }
+
+                // Reset frame counter display
+                document.getElementById('currentFrame').textContent = '0';
+                document.getElementById('totalFrames').textContent = '0';
+
+                // Show dock empty message
+                var emptyMsg = document.getElementById('videoDockEmpty');
+                if (emptyMsg) emptyMsg.classList.remove('hidden');
+
                 setStatus('Session removed — ready for new session', 'success');
                 return;
             }
