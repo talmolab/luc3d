@@ -2120,19 +2120,19 @@
                     var trackName = state.session.tracks[trackIdx] || 'Track ' + trackIdx;
 
                     // Search all groups for an existing UserInstance group with this track
-                    var userGroup = null;
+                    // Find the existing group for this track (user or predicted)
+                    var existingGroup = null;
                     var allGroups = getInstanceGroupsForFrame(frameIdx);
                     for (var gi = 0; gi < allGroups.length; gi++) {
-                        var g = allGroups[gi];
-                        if (g.trackIdx === trackIdx) {
-                            var firstInst = g.instances.values().next().value;
-                            if (firstInst && firstInst.type === 'user') { userGroup = g; break; }
+                        if (allGroups[gi].trackIdx === trackIdx) {
+                            existingGroup = allGroups[gi];
+                            break;
                         }
                     }
 
-                    // Case 1: UserInstance for this track already exists in this view — select it
-                    if (userGroup && userGroup.getInstance(viewName)) {
-                        if (interactionManager) interactionManager.select(userGroup, -1);
+                    // Case 1: Group already has an instance in this view — select it
+                    if (existingGroup && existingGroup.getInstance(viewName)) {
+                        if (interactionManager) interactionManager.select(existingGroup, -1);
                         drawAllOverlays(frameIdx);
                         updateInfoPanel();
                         return;
@@ -2147,14 +2147,15 @@
 
                     var fg = state.session.getFrameGroup(frameIdx);
 
-                    if (userGroup) {
-                        // Case 2: UserInstance group exists but not in this view — add to it
+                    if (existingGroup) {
+                        // Case 2: Group exists but not in this view — add user instance to it
                         var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
                         newInst.modified = true;
-                        userGroup.addInstance(viewName, newInst);
+                        existingGroup.addInstance(viewName, newInst);
                         if (fg) fg.addInstance(viewName, newInst);
                         recordUserPoints(viewName, clonedPoints);
-                        group = userGroup; // re-triangulate the user group
+                        existingGroup.markDirty();
+                        group = existingGroup;
                         setStatus('Added UserInstance to ' + viewName + ' for ' + trackName, 'success');
                     } else {
                         // Case 3: No UserInstance group — create a new UserInstance group
