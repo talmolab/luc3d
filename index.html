@@ -341,6 +341,7 @@
                             <thead>
                                 <tr>
                                     <th>Name</th>
+                                    <th>Path</th>
                                     <th>Frames</th>
                                     <th>Size</th>
                                     <th>Labeled</th>
@@ -4932,6 +4933,12 @@
                 const tdName = document.createElement('td');
                 tdName.textContent = vf.name;
 
+                // Path
+                const tdPath = document.createElement('td');
+                tdPath.textContent = vf.videoPath || '';
+                tdPath.style.cssText = 'font-size:10px;color:var(--text-muted);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+                tdPath.title = vf.videoPath || '';
+
                 // Frames
                 const tdFrames = document.createElement('td');
                 tdFrames.className = 'mono';
@@ -4982,6 +4989,7 @@
                 tdScore.textContent = scoreCount > 0 ? (scoreSum / scoreCount).toFixed(2) : '-';
 
                 tr.appendChild(tdName);
+                tr.appendChild(tdPath);
                 tr.appendChild(tdFrames);
                 tr.appendChild(tdSize);
                 tr.appendChild(tdLabeled);
@@ -8198,9 +8206,10 @@
                             }
 
                             var sessionIdx = state.sessions.indexOf(state.session);
+                            var videoStem = videoFile.name.replace(/\.[^.]+$/, '');
                             state.videoFiles.push({
                                 file: videoFile,
-                                name: camName,
+                                name: videoStem,
                                 decoder: decoder,
                                 videoWidth: vw,
                                 videoHeight: vh,
