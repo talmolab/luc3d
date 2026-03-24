@@ -9969,123 +9969,104 @@
             if (newIdx === state.activeSessionIdx) return;
             if (newIdx < 0 || newIdx >= state.sessions.length) return;
 
-            // Save current session state
+            // Save current session state — keep views alive
             var oldSession = state.sessions[state.activeSessionIdx];
             oldSession.lastFrame = state.currentFrame;
             oldSession.triangulationResults = state.triangulationResults;
+            oldSession._views = state.views;           // preserve live views with decoders+canvases
+            oldSession._videoController = videoController;
 
-            // Rebuild videoFileIndices from current views if not already tracked
-            if (oldSession.videoFileIndices.length === 0) {
-                for (var ovi = 0; ovi < state.views.length; ovi++) {
-                    var viewName = state.views[ovi].name;
-                    for (var ovfi = 0; ovfi < state.videoFiles.length; ovfi++) {
-                        if (state.videoFiles[ovfi].assignedCamera === viewName &&
-                            oldSession.videoFileIndices.indexOf(ovfi) < 0) {
-                            oldSession.videoFileIndices.push(ovfi);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Switch
+            // Switch active session
             state.activeSessionIdx = newIdx;
             var newSession = state.sessions[newIdx];
             state.session = newSession;
             state.triangulationResults = newSession.triangulationResults || new Map();
 
-            console.log('[switchSession] Switching to session', newIdx, newSession.name);
-            console.log('[switchSession] newSession.videoFileIndices:', JSON.stringify(newSession.videoFileIndices));
-            console.log('[switchSession] newSession.cameras:', newSession.cameras.map(function(c){return c.name;}));
-            console.log('[switchSession] all videoFiles:', state.videoFiles.map(function(vf,i){return i+':'+vf.name+'->'+vf.assignedCamera;}));
+            // Stop playback
+            if (videoController && state.isPlaying) {
+                videoController.stopPlayback();
+            }
 
-            // Rebuild views for new session's videos
-            if (videoController) {
-                if (state.isPlaying) videoController.stopPlayback();
+            // Restore saved views or build new ones
+            if (newSession._views && newSession._views.length > 0) {
+                // Session has been visited before — restore its views and controller
+                state.views = newSession._views;
+                videoController = newSession._videoController || null;
+
+                // Re-dock the panels
+                paneManager.clearAll();
+                paneManager.addAllViewsAsGrid();
+
+                // Re-render after dockview creates panels
+                setTimeout(function() {
+                    fitCanvasesToCells();
+                    refreshPaneInteractions();
+                    state.currentFrame = newSession.lastFrame || 0;
+                    if (videoController) {
+                        videoController.seekToFrame(state.currentFrame);
+                    }
+                    drawAllOverlays(state.currentFrame);
+                }, 50);
+            } else {
+                // First visit — build views from videoFileIndices
                 videoController = null;
-            }
-            state.views = [];
-            paneManager.clearAll();
+                state.views = [];
+                paneManager.clearAll();
 
-            // Ensure videoFileIndices is populated
-            if (newSession.videoFileIndices.length === 0 && newSession.cameras.length > 0) {
-                // Use sessionIdx tag if available, otherwise fall back to camera name matching
-                for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
-                    var nvf = state.videoFiles[nvi];
-                    if (nvf.sessionIdx === newIdx) {
-                        newSession.videoFileIndices.push(nvi);
-                    }
-                }
-                // Fallback: match by camera name if no tagged videos found
+                // Ensure videoFileIndices is populated
                 if (newSession.videoFileIndices.length === 0) {
-                    var claimedByOthers = new Set();
-                    for (var osi = 0; osi < state.sessions.length; osi++) {
-                        if (osi === newIdx) continue;
-                        var otherIndices = state.sessions[osi].videoFileIndices || [];
-                        for (var oi = 0; oi < otherIndices.length; oi++) {
-                            claimedByOthers.add(otherIndices[oi]);
-                        }
-                    }
-                    for (var nvi2 = 0; nvi2 < state.videoFiles.length; nvi2++) {
-                        if (claimedByOthers.has(nvi2)) continue;
-                        var nvf2 = state.videoFiles[nvi2];
-                        if (nvf2.assignedCamera && newSession.cameras.some(function(c) { return c.name === nvf2.assignedCamera; })) {
-                            newSession.videoFileIndices.push(nvi2);
+                    for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
+                        if (state.videoFiles[nvi].sessionIdx === newIdx) {
+                            newSession.videoFileIndices.push(nvi);
                         }
                     }
                 }
-            }
 
-            // Create views for this session's assigned videos
-            for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
-                var vfIdx = newSession.videoFileIndices[vi];
-                var vf = state.videoFiles[vfIdx];
-                console.log('[switchSession] creating view for vfIdx', vfIdx, 'vf:', vf ? vf.name + '->' + vf.assignedCamera : 'null');
-                if (vf && vf.assignedCamera) {
-                    createViewForVideoFile(vf);
+                for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
+                    var vfIdx = newSession.videoFileIndices[vi];
+                    var vf = state.videoFiles[vfIdx];
+                    if (vf && vf.assignedCamera) {
+                        createViewForVideoFile(vf);
+                    }
                 }
-            }
-            console.log('[switchSession] views created:', state.views.map(function(v){return v.name;}));
 
-            // Rebuild UI
-            updateTotalFrames();
+                updateTotalFrames();
+                paneManager.addAllViewsAsGrid();
+                rebuildVideoController();
+
+                setTimeout(function() {
+                    fitCanvasesToCells();
+                    refreshPaneInteractions();
+                    state.currentFrame = newSession.lastFrame || 0;
+                    if (videoController && state.views.length > 0) {
+                        videoController.seekToFrame(state.currentFrame);
+                    }
+                    drawAllOverlays(state.currentFrame);
+                }, 50);
+            }
+
+            // Update sidebars and panels (immediate, no delay needed)
             populateViewStrip();
             populateSessionStrip();
-            paneManager.addAllViewsAsGrid();
-            rebuildVideoController();
 
-            // Let dockview render panels and create canvases, then seek + draw
-            setTimeout(function() {
-                fitCanvasesToCells();
-                refreshPaneInteractions();
+            // Update 3D viewport
+            if (viewport3d) {
+                viewport3d.cameras = newSession.cameras;
+                viewport3d.skeleton = newSession.skeleton;
+                viewport3d.addCameraPyramids();
+                viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                viewport3d.fitToScene();
+            } else {
+                setup3DViewport();
+            }
 
-                // Restore frame position
-                state.currentFrame = newSession.lastFrame || 0;
-                if (videoController && state.views.length > 0) {
-                    videoController.seekToFrame(state.currentFrame);
-                }
+            if (state.triangulationResults.size > 0) {
+                setReprojErrorVisible(true);
+            }
+            updateInfoPanel();
+            if (timeline) timeline.setData(newSession);
 
-                // Update 3D viewport
-                if (viewport3d) {
-                    viewport3d.cameras = newSession.cameras;
-                    viewport3d.skeleton = newSession.skeleton;
-                    viewport3d.addCameraPyramids();
-                    viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
-                    viewport3d.fitToScene();
-                } else {
-                    setup3DViewport();
-                }
-
-                // Update panels
-                if (state.triangulationResults.size > 0) {
-                    setReprojErrorVisible(true);
-                }
-                drawAllOverlays(state.currentFrame);
-                updateInfoPanel();
-                if (timeline) timeline.setData(newSession);
-
-                setStatus('Switched to ' + newSession.name, 'info');
-            }, 50);
+            setStatus('Switched to ' + newSession.name, 'info');
         }
 
         function updateViewStripThumbnail(view, thumbCanvas) {
