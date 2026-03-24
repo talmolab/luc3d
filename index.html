@@ -85,6 +85,23 @@
                     </div>
                 </div>
             </div>
+            <div class="menu-item" data-menu="tracks">
+                Tracks
+                <div class="menu-dropdown" id="menuTracks">
+                    <div class="menu-dropdown-item" id="menuNewTrack">New Track...</div>
+                    <div class="menu-dropdown-item" id="menuRenameTrack">Rename Track...</div>
+                    <div class="menu-dropdown-item" id="menuDeleteTrack">Delete Track...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuAssignTrack">Assign Track to Selected...</div>
+                    <div class="menu-dropdown-item" id="menuSwapTracks">Swap Tracks...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuNewIdentity">New Identity...</div>
+                    <div class="menu-dropdown-item" id="menuRenameIdentity">Rename Identity...</div>
+                    <div class="menu-dropdown-item" id="menuDeleteIdentity">Delete Identity...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuAssignIdentity">Assign Identity to Selected...</div>
+                </div>
+            </div>
             <div class="menu-item" data-menu="view">
                 View
                 <div class="menu-dropdown" id="menuView">
@@ -211,6 +228,7 @@
                             <thead>
                                 <tr>
                                     <th>Track</th>
+                                    <th>Identity</th>
                                     <th>Views</th>
                                     <th>Type</th>
                                     <th class="reproj-error-col" style="display:none">Error</th>
@@ -2660,6 +2678,207 @@
                 var check = document.getElementById('menuTrustTracksCheck');
                 check.textContent = state.session.trustTracks ? '☑' : '☐';
                 setStatus('Trust Track Labels: ' + (state.session.trustTracks ? 'ON' : 'OFF'), 'success');
+            });
+
+            // ============================================
+            // Tracks Menu Handlers
+            // ============================================
+
+            document.getElementById('menuNewTrack').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session) { setStatus('No session', 'warning'); return; }
+                var name = prompt('New track name:', 'track_' + state.session.tracks.length);
+                if (!name) return;
+                if (state.session.tracks.indexOf(name) >= 0) {
+                    setStatus('Track "' + name + '" already exists', 'warning');
+                    return;
+                }
+                state.session.tracks.push(name);
+                setStatus('Created track: ' + name, 'success');
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuRenameTrack').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.tracks.length === 0) { setStatus('No tracks', 'warning'); return; }
+                var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
+                var idx = parseInt(prompt('Which track to rename?\n\n' + trackList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
+                var newName = prompt('New name for "' + state.session.tracks[idx] + '":', state.session.tracks[idx]);
+                if (!newName) return;
+                state.session.tracks[idx] = newName;
+                setStatus('Renamed track ' + (idx + 1) + ' to: ' + newName, 'success');
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuDeleteTrack').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.tracks.length === 0) { setStatus('No tracks', 'warning'); return; }
+                var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
+                var idx = parseInt(prompt('Which track to delete?\n\n' + trackList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
+                var name = state.session.tracks[idx];
+                if (!confirm('Delete track "' + name + '"? Instances will become trackless.')) return;
+                state.session.tracks.splice(idx, 1);
+                // Shift trackIdx on all instances
+                for (var [fIdx, fg] of state.session.frameGroups) {
+                    for (var [cn, insts] of fg.instances) {
+                        for (var i = 0; i < insts.length; i++) {
+                            if (insts[i].trackIdx === idx) insts[i].trackIdx = -1;
+                            else if (insts[i].trackIdx > idx) insts[i].trackIdx--;
+                        }
+                    }
+                    for (var [cn2, ulList] of fg.unlinkedInstances) {
+                        for (var u = 0; u < ulList.length; u++) {
+                            if (ulList[u].instance.trackIdx === idx) ulList[u].instance.trackIdx = -1;
+                            else if (ulList[u].instance.trackIdx > idx) ulList[u].instance.trackIdx--;
+                        }
+                    }
+                }
+                setStatus('Deleted track: ' + name, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuAssignTrack').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session) { setStatus('No session', 'warning'); return; }
+                var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
+                if (!sel && !selUl) { setStatus('Select an instance first', 'warning'); return; }
+
+                var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
+                var idx = parseInt(prompt('Assign to which track?\n\n' + trackList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
+
+                if (sel) {
+                    var oldTrack = sel.trackIdx;
+                    for (var [cn, inst] of sel.instances) { inst.trackIdx = idx; }
+                    sel.trackIdx = idx;
+                    // Propagate
+                    var propagated = 0;
+                    for (var [fIdx, fgP] of state.session.frameGroups) {
+                        if (fIdx <= state.currentFrame) continue;
+                        for (var [cn2, insts] of fgP.instances) {
+                            for (var i = 0; i < insts.length; i++) {
+                                if (insts[i].trackIdx === oldTrack) { insts[i].trackIdx = idx; propagated++; }
+                            }
+                        }
+                        for (var [cn3, ulL] of fgP.unlinkedInstances) {
+                            for (var u = 0; u < ulL.length; u++) {
+                                if (ulL[u].instance.trackIdx === oldTrack) { ulL[u].instance.trackIdx = idx; propagated++; }
+                            }
+                        }
+                    }
+                    setStatus('Assigned ' + state.session.tracks[idx] + (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
+                } else if (selUl) {
+                    var oldTrack2 = selUl.instance.trackIdx;
+                    selUl.instance.trackIdx = idx;
+                    // Propagate for same camera
+                    var propagated2 = 0;
+                    for (var [fIdx2, fgP2] of state.session.frameGroups) {
+                        if (fIdx2 <= state.currentFrame) continue;
+                        var ulPropList = fgP2.getUnlinkedInstances(selUl.cameraName);
+                        for (var pi = 0; pi < ulPropList.length; pi++) {
+                            if (ulPropList[pi].instance.trackIdx === oldTrack2) { ulPropList[pi].instance.trackIdx = idx; propagated2++; }
+                        }
+                    }
+                    setStatus('Assigned ' + state.session.tracks[idx] + ' to ' + selUl.cameraName +
+                        (propagated2 > 0 ? ' (propagated ' + propagated2 + ')' : ''), 'success');
+                }
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuSwapTracks').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.tracks.length < 2) { setStatus('Need at least 2 tracks', 'warning'); return; }
+                var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
+                var a = parseInt(prompt('Swap track A?\n\n' + trackList + '\n\nEnter number:')) - 1;
+                if (isNaN(a) || a < 0 || a >= state.session.tracks.length) return;
+                var b = parseInt(prompt('Swap with track B?\n\n' + trackList + '\n\nEnter number:')) - 1;
+                if (isNaN(b) || b < 0 || b >= state.session.tracks.length || b === a) return;
+
+                var frameStart = parseInt(prompt('Start frame (1-indexed):', state.currentFrame + 1)) - 1;
+                var frameEnd = parseInt(prompt('End frame (1-indexed, or 0 for all):', 0)) - 1;
+                if (frameEnd < 0) frameEnd = state.totalFrames;
+
+                var count = swapTracks(a, b, frameStart, frameEnd);
+                setStatus('Swapped ' + state.session.tracks[a] + ' ↔ ' + state.session.tracks[b] +
+                    ' (' + count + ' instances, frames ' + (frameStart + 1) + '–' + (frameEnd + 1) + ')', 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            // ============================================
+            // Identity Menu Handlers
+            // ============================================
+
+            document.getElementById('menuNewIdentity').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session) { setStatus('No session', 'warning'); return; }
+                var name = prompt('New identity name:', 'identity_' + state.session.identities.length);
+                if (!name) return;
+                var existing = state.session.identities.find(function (id) { return id.name === name; });
+                if (existing) { setStatus('Identity "' + name + '" already exists', 'warning'); return; }
+                state.session.addIdentity(name);
+                setStatus('Created identity: ' + name, 'success');
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuRenameIdentity').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.identities.length === 0) { setStatus('No identities', 'warning'); return; }
+                var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
+                var idx = parseInt(prompt('Which identity to rename?\n\n' + idList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
+                var newName = prompt('New name for "' + state.session.identities[idx].name + '":', state.session.identities[idx].name);
+                if (!newName) return;
+                state.session.identities[idx].name = newName;
+                setStatus('Renamed identity to: ' + newName, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuDeleteIdentity').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.identities.length === 0) { setStatus('No identities', 'warning'); return; }
+                var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
+                var idx = parseInt(prompt('Which identity to delete?\n\n' + idList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
+                var identity = state.session.identities[idx];
+                if (!confirm('Delete identity "' + identity.name + '"? Groups will become unassigned.')) return;
+                // Unassign all groups with this identity
+                for (var [fIdx, trackMap] of state.session.instanceGroups) {
+                    for (var [tIdx, groups] of trackMap) {
+                        for (var gi = 0; gi < groups.length; gi++) {
+                            if (groups[gi].identityId === identity.id) groups[gi].identityId = -1;
+                        }
+                    }
+                }
+                state.session.identities.splice(idx, 1);
+                setStatus('Deleted identity: ' + identity.name, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuAssignIdentity').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session) { setStatus('No session', 'warning'); return; }
+                var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                if (!sel) { setStatus('Select an instance group first', 'warning'); return; }
+                if (state.session.identities.length === 0) {
+                    var name = prompt('No identities yet. Create one:', 'identity_0');
+                    if (!name) return;
+                    state.session.addIdentity(name);
+                }
+                var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
+                var idx = parseInt(prompt('Assign to which identity?\n\n' + idList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
+                state.session.assignIdentityToGroup(sel, state.session.identities[idx].id);
+                setStatus('Assigned identity: ' + state.session.identities[idx].name, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
             });
 
             // Set Env / Clear Env buttons on 3D viewport
@@ -6638,13 +6857,45 @@
 
                     // Track column (with color dot)
                     const tdTrack = document.createElement('td');
-                    const dot = document.createElement('span');
-                    dot.className = 'track-indicator';
-                    dot.style.backgroundColor = getTrackColor(group.trackIdx);
-                    dot.style.marginRight = '4px';
-                    tdTrack.appendChild(dot);
-                    const trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
-                    tdTrack.appendChild(document.createTextNode(trackName));
+                    // Track dropdown
+                    var trackSelect = document.createElement('select');
+                    trackSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
+                    for (var tsi = 0; tsi < (state.session.tracks || []).length; tsi++) {
+                        var tOpt = document.createElement('option');
+                        tOpt.value = tsi;
+                        tOpt.textContent = state.session.tracks[tsi];
+                        trackSelect.appendChild(tOpt);
+                    }
+                    trackSelect.value = group.trackIdx != null ? group.trackIdx : 0;
+                    (function (g, sel) {
+                        sel.addEventListener('change', function (ev) {
+                            ev.stopPropagation();
+                            var oldTrack = g.trackIdx;
+                            var newTrack = parseInt(sel.value);
+                            for (var [cn, inst] of g.instances) { inst.trackIdx = newTrack; }
+                            g.trackIdx = newTrack;
+                            // Propagate to subsequent frames
+                            var propagated = 0;
+                            for (var [fIdx, fgP] of state.session.frameGroups) {
+                                if (fIdx <= state.currentFrame) continue;
+                                for (var [cn2, insts] of fgP.instances) {
+                                    for (var i = 0; i < insts.length; i++) {
+                                        if (insts[i].trackIdx === oldTrack) { insts[i].trackIdx = newTrack; propagated++; }
+                                    }
+                                }
+                                for (var [cn3, ulL] of fgP.unlinkedInstances) {
+                                    for (var u = 0; u < ulL.length; u++) {
+                                        if (ulL[u].instance.trackIdx === oldTrack) { ulL[u].instance.trackIdx = newTrack; propagated++; }
+                                    }
+                                }
+                            }
+                            setStatus('Track → ' + state.session.tracks[newTrack] + (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
+                            drawAllOverlays(state.currentFrame);
+                            updateInfoPanel();
+                        });
+                        sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                    })(group, trackSelect);
+                    tdTrack.appendChild(trackSelect);
                     if (group.dirty) {
                         const dirtyDot = document.createElement('span');
                         dirtyDot.style.cssText = 'width:5px;height:5px;border-radius:50%;background:var(--warning-color);display:inline-block;margin-left:4px;';
@@ -6652,12 +6903,13 @@
                         tdTrack.appendChild(dirtyDot);
                     }
 
-                    // Identity dropdown
+                    // Identity column (separate td)
+                    const tdIdentity = document.createElement('td');
                     const idSelect = document.createElement('select');
-                    idSelect.style.cssText = 'font-size:11px; background:var(--bg-tertiary); color:var(--text-primary); border:1px solid var(--border-color); border-radius:3px; padding:1px 4px; margin-left:6px;';
+                    idSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
                     const optNone = document.createElement('option');
                     optNone.value = '-1';
-                    optNone.textContent = '(unassigned)';
+                    optNone.textContent = '(none)';
                     idSelect.appendChild(optNone);
                     if (state.session && state.session.identities) {
                         for (var idIdx = 0; idIdx < state.session.identities.length; idIdx++) {
@@ -6672,14 +6924,13 @@
                     (function (g, sel) {
                         sel.addEventListener('change', function (e) {
                             e.stopPropagation();
-                            var newId = parseInt(sel.value);
-                            state.session.assignIdentityToGroup(g, newId);
+                            state.session.assignIdentityToGroup(g, parseInt(sel.value));
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
                         });
                         sel.addEventListener('click', function (e) { e.stopPropagation(); });
                     })(group, idSelect);
-                    tdTrack.appendChild(idSelect);
+                    tdIdentity.appendChild(idSelect);
 
                     // Views column
                     const tdViews = document.createElement('td');
@@ -6729,6 +6980,7 @@
                     unlinkBtn.style.cssText = 'background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:14px;padding:2px 4px;line-height:1;';
 
                     tr.appendChild(tdTrack);
+                    tr.appendChild(tdIdentity);
                     tr.appendChild(tdViews);
                     tr.appendChild(tdType);
                     tr.appendChild(tdError);
