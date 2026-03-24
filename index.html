@@ -10008,10 +10008,6 @@
         }
 
         function removeSession(idx) {
-            if (state.sessions.length <= 1) {
-                setStatus('Cannot remove the only session', 'warning');
-                return;
-            }
             if (!confirm('Delete session "' + state.sessions[idx].name + '"?')) return;
 
             // Clean up session's video file entries
@@ -10020,17 +10016,38 @@
                 for (var vi = 0; vi < sess.videoFileIndices.length; vi++) {
                     var vfIdx = sess.videoFileIndices[vi];
                     if (state.videoFiles[vfIdx]) {
-                        state.videoFiles[vfIdx].sessionIdx = -1; // mark as orphaned
+                        state.videoFiles[vfIdx].sessionIdx = -1;
                     }
                 }
             }
 
-            // Remove triangulation results for this session
             if (sess.triangulationResults) {
                 sess.triangulationResults.clear();
             }
 
             state.sessions.splice(idx, 1);
+
+            if (state.sessions.length === 0) {
+                // Last session removed — reset to fresh state
+                state.session = null;
+                state.activeSessionIdx = 0;
+                state.triangulationResults = new Map();
+                state.views = [];
+                if (videoController) {
+                    if (state.isPlaying) videoController.stopPlayback();
+                    videoController = null;
+                }
+                paneManager.clearAll();
+                if (interactionManager) interactionManager.detach();
+                populateViewStrip();
+                populateSessionStrip();
+                populateSessionsPanel();
+                updateInfoPanel();
+                if (timeline) timeline.setData(null);
+                if (viewport3d) viewport3d.setFrame([]);
+                setStatus('Session removed — ready for new session', 'success');
+                return;
+            }
 
             // Adjust active index
             if (state.activeSessionIdx >= state.sessions.length) {
@@ -10038,7 +10055,6 @@
             } else if (state.activeSessionIdx > idx) {
                 state.activeSessionIdx--;
             } else if (state.activeSessionIdx === idx) {
-                // Deleted the active session — switch to nearest
                 state.activeSessionIdx = Math.min(idx, state.sessions.length - 1);
             }
 
