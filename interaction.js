@@ -813,20 +813,9 @@ class InteractionManager {
                 e._consumedByInteraction = true;
                 // Fall through to the end (no drag)
             } else if (hitInst && (hitInst.type === 'predicted' || hitInst.type === 'reprojected')) {
-                // Convert predicted/reprojected to user on drag (allow proofreading)
-                hitInst.type = 'user';
-                hitInst.modified = true;
-                linkedHit.instanceGroup.markDirty();
-
-                var dragNodeIdx2 = linkedHit.nodeIdx;
-                if (dragNodeIdx2 === -1) {
-                    dragNodeIdx2 = this._resolveNearestNode(hitInst, vx, vy);
-                }
-                this.select(linkedHit.instanceGroup, -1);
-                if (dragNodeIdx2 >= 0) {
-                    this._startDrag(viewName, linkedHit.instanceGroupIdx, dragNodeIdx2,
-                        vx, vy, null, e.altKey ? hitInst : null);
-                }
+                // Single click: select only. Double click converts to user (handled elsewhere).
+                this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
+                this._requestRedraw();
                 e.preventDefault();
                 e.stopPropagation();
                 e._consumedByInteraction = true;
