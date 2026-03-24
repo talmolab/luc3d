@@ -6358,6 +6358,53 @@
             setStatus('New project started', 'success');
         }
 
+        function serializeSessionFrames(session) {
+            var frames = {};
+            for (var [frameIdx, fg] of session.frameGroups) {
+                var frameData = { instanceGroups: [], unlinkedInstances: [] };
+                var trackMap = session.instanceGroups.get(frameIdx);
+                if (trackMap) {
+                    for (var [trackIdx, groups] of trackMap) {
+                        for (var group of groups) {
+                            var groupData = {
+                                id: group.id,
+                                trackIdx: group.trackIdx,
+                                instances: {},
+                                points3d: group.points3d || null,
+                                reprojections: group.reprojections || null,
+                                observedPoints: group.observedPoints || null,
+                            };
+                            for (var [camName, inst] of group.instances) {
+                                groupData.instances[camName] = {
+                                    points: inst.points,
+                                    trackIdx: inst.trackIdx,
+                                    type: inst.type,
+                                    score: inst.score,
+                                    modified: inst.modified,
+                                    occluded: inst.occluded,
+                                };
+                            }
+                            frameData.instanceGroups.push(groupData);
+                        }
+                    }
+                }
+                for (var [camName2, unlinkedList] of fg.unlinkedInstances) {
+                    for (var unlinked of unlinkedList) {
+                        frameData.unlinkedInstances.push({
+                            cameraName: camName2,
+                            points: unlinked.instance.points,
+                            type: unlinked.instance.type || 'user',
+                            score: unlinked.instance.score || 1.0,
+                            modified: unlinked.instance.modified || false,
+                            occluded: unlinked.instance.occluded,
+                        });
+                    }
+                }
+                frames[frameIdx] = frameData;
+            }
+            return frames;
+        }
+
         function saveProject() {
             if (!state.session) {
                 setStatus('No session to save', 'error');
@@ -6365,6 +6412,49 @@
             }
 
             try {
+
+            if (state.sessions.length > 1) {
+                // V3: multi-session format
+                // First, make sure active session's triangulationResults are saved
+                state.sessions[state.activeSessionIdx].triangulationResults = state.triangulationResults;
+
+                var projectData = {
+                    version: 3,
+                    sessions: state.sessions.map(function(sess, si) {
+                        return {
+                            name: sess.name,
+                            skeleton: {
+                                name: sess.skeleton.name,
+                                nodes: sess.skeleton.nodes,
+                                edges: sess.skeleton.edges,
+                            },
+                            cameras: sess.cameras.map(function(c) {
+                                return { name: c.name, matrix: c.matrix, dist: c.dist, rvec: c.rvec, tvec: c.tvec, size: c.size };
+                            }),
+                            tracks: sess.tracks,
+                            videoManifest: sess.videoFileIndices.map(function(vfIdx) {
+                                var vf = state.videoFiles[vfIdx];
+                                return vf ? { filename: vf.name, assignedCamera: vf.assignedCamera || null } : null;
+                            }).filter(Boolean),
+                            frames: serializeSessionFrames(sess),
+                        };
+                    }),
+                };
+
+                // Build blob (same chunked approach)
+                var blob = new Blob([JSON.stringify(projectData)], { type: 'application/json' });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = 'project.mvgui.json';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+                setStatus('Project saved (v3, ' + state.sessions.length + ' sessions)', 'success');
+                return;
+            }
+            // else: fall through to existing v2 save code below...
 
             const projectData = {
                 version: 2,
@@ -6485,7 +6575,9 @@
 
                 // 1. Restore session data (cameras, skeleton, instances, groups)
                 var cameras;
-                if (data.version === 2) {
+                if (data.version === 3) {
+                    cameras = _restoreProjectV3(data);
+                } else if (data.version === 2) {
                     cameras = _restoreProjectV2(data);
                 } else {
                     cameras = _restoreLegacySession(data);
@@ -6684,6 +6776,34 @@
                 hideLoading();
                 setStatus('Load error: ' + err.message, 'error');
             }
+        }
+
+        function _restoreProjectV3(data) {
+            state.sessions = [];
+            state.triangulationResults = new Map();
+            var allCameras = null;
+
+            for (var si = 0; si < data.sessions.length; si++) {
+                var sd = data.sessions[si];
+                // Reuse _restoreProjectV2 logic per session
+                var sessionData = Object.assign({}, sd, { version: 2 });
+                var cameras = _restoreProjectV2(sessionData);
+                // _restoreProjectV2 sets state.session and pushes to state.sessions
+                state.session.name = sd.name || ('Session ' + (si + 1));
+
+                // Store triangulation results on session object
+                state.session.triangulationResults = state.triangulationResults;
+                state.triangulationResults = new Map();
+
+                if (si === 0) allCameras = cameras;
+            }
+
+            // Activate first session
+            state.activeSessionIdx = 0;
+            state.session = state.sessions[0];
+            state.triangulationResults = state.sessions[0].triangulationResults || new Map();
+
+            return allCameras;
         }
 
         /**
