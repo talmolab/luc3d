@@ -9965,6 +9965,17 @@
             oldSession.lastFrame = state.currentFrame;
             oldSession.triangulationResults = state.triangulationResults;
 
+            // Rebuild videoFileIndices from current views (in case they weren't tracked)
+            oldSession.videoFileIndices = [];
+            for (var ovi = 0; ovi < state.videoFiles.length; ovi++) {
+                var ovf = state.videoFiles[ovi];
+                if (ovf.assignedCamera && oldSession.cameras.some(function(c) { return c.name === ovf.assignedCamera; })) {
+                    oldSession.videoFileIndices.push(ovi);
+                }
+            }
+            // Also save the current views' video assignments for reliable restoration
+            oldSession._savedViews = state.views.map(function(v) { return v.name; });
+
             // Switch
             state.activeSessionIdx = newIdx;
             var newSession = state.sessions[newIdx];
@@ -9978,6 +9989,16 @@
             }
             state.views = [];
             paneManager.clearAll();
+
+            // Ensure videoFileIndices is populated (match by camera names if empty)
+            if (newSession.videoFileIndices.length === 0 && newSession.cameras.length > 0) {
+                for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
+                    var nvf = state.videoFiles[nvi];
+                    if (nvf.assignedCamera && newSession.cameras.some(function(c) { return c.name === nvf.assignedCamera; })) {
+                        newSession.videoFileIndices.push(nvi);
+                    }
+                }
+            }
 
             // Create views for this session's assigned videos
             for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
