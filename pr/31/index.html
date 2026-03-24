@@ -2154,8 +2154,6 @@
                         userGroup.addInstance(viewName, newInst);
                         if (fg) fg.addInstance(viewName, newInst);
                         recordUserPoints(viewName, clonedPoints);
-                        // Remove old reprojected instance for this view (user label replaces it)
-                        if (userGroup.reprojectedInstances) userGroup.reprojectedInstances.delete(viewName);
                         group = userGroup; // re-triangulate the user group
                         setStatus('Added UserInstance to ' + viewName + ' for ' + trackName, 'success');
                     } else {
@@ -2189,13 +2187,11 @@
                             for (var [cn, ni] of group.instances) {
                                 ni.trackIdx = group.trackIdx;
                             }
-                            // Transfer reprojected instances from predicted group to new user group
-                            // (skip the clicked view — it now has a user instance)
+                            // Transfer all reprojected instances from predicted group to new user group
+                            // (kept until next re-triangulation replaces them)
                             if (predGroup.reprojectedInstances && predGroup.reprojectedInstances.size > 0) {
                                 for (var [cn, ri] of predGroup.reprojectedInstances) {
-                                    if (cn !== viewName) {
-                                        group.addReprojectedInstance(cn, ri);
-                                    }
+                                    group.addReprojectedInstance(cn, ri);
                                 }
                                 predGroup.reprojectedInstances.clear();
                             }
