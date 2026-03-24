@@ -2164,6 +2164,11 @@
 
                     var fg = state.session.getFrameGroup(frameIdx);
 
+                    console.log('[dblclick-reproj] existingGroup:', !!existingGroup,
+                        '| group === existingGroup:', group === existingGroup,
+                        '| trackIdx:', trackIdx, '| viewName:', viewName,
+                        '| reprojInstances:', group.reprojectedInstances ? group.reprojectedInstances.size : 0);
+
                     if (existingGroup) {
                         // Case 2: Group exists but not in this view — add user instance to it
                         var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
