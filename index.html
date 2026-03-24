@@ -1815,6 +1815,13 @@
                             predGroup.reprojections = null;
                             predGroup.points3d = null;
                         }
+                        // Remove old predicted group's triangulation results
+                        var oldFrameResults = state.triangulationResults.get(frameIdx);
+                        if (oldFrameResults) {
+                            state.triangulationResults.set(frameIdx,
+                                oldFrameResults.filter(function(r) { return r.group !== predGroup; }));
+                        }
+
                         setStatus('Created UserInstance group for ' + trackName, 'success');
                     }
 
