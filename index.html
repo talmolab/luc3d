@@ -2248,56 +2248,19 @@
                 onClonePredictedGroup: function (predGroup) {
                     var frameIdx = state.currentFrame;
                     var trackIdx = predGroup.trackIdx;
+                    var trackName = state.session.tracks[trackIdx] || 'Track ' + trackIdx;
 
-                    // Check if a UserInstance group for this track already exists
-                    var groups = getInstanceGroupsForFrame(frameIdx);
-                    for (var gi = 0; gi < groups.length; gi++) {
-                        var g = groups[gi];
-                        if (g.trackIdx === trackIdx && g !== predGroup) {
-                            var firstInst = g.instances.values().next().value;
-                            if (firstInst && firstInst.type === 'user') {
-                                // UserInstance group already exists — just select it
-                                if (interactionManager) interactionManager.select(g, -1);
-                                drawAllOverlays(frameIdx);
-                                updateInfoPanel();
-                                return;
-                            }
-                        }
-                    }
-
-                    // Clone the predicted group's instances as user instances in a new group
-                    var unlinkedList = [];
+                    // Convert predicted instances to user IN PLACE — no new group
                     for (var [camName, inst] of predGroup.instances) {
-                        var clonedPoints = inst.points.map(function(pt) {
-                            return pt != null ? [pt[0], pt[1]] : null;
-                        });
-                        var userInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
-                        userInst.modified = true;
-                        recordUserPoints(camName, clonedPoints);
-                        var ul = state.session.addUnlinkedInstance(frameIdx, camName, userInst);
-                        unlinkedList.push(ul);
+                        inst.type = 'user';
+                        inst.modified = true;
+                        recordUserPoints(camName, inst.points);
                     }
-                    if (unlinkedList.length > 0) {
-                        var newGroup = state.session.createGroupFromUnlinked(frameIdx, unlinkedList, trackIdx);
-                        for (var [cn, ni] of newGroup.instances) {
-                            ni.trackIdx = newGroup.trackIdx;
-                        }
-                        // Transfer reprojected instances from predicted group to new user group
-                        if (predGroup.reprojectedInstances && predGroup.reprojectedInstances.size > 0) {
-                            for (var [cn, ri] of predGroup.reprojectedInstances) {
-                                newGroup.addReprojectedInstance(cn, ri);
-                            }
-                            predGroup.reprojectedInstances.clear();
-                        }
-                        newGroup.reprojections = predGroup.reprojections || {};
-                        newGroup.points3d = predGroup.points3d;
-                        newGroup.observedPoints = predGroup.observedPoints;
-                        predGroup.reprojections = null;
-                        predGroup.points3d = null;
-                        if (interactionManager) interactionManager.select(newGroup, -1);
-                        var trackName = state.session.tracks[newGroup.trackIdx] || 'Track ' + newGroup.trackIdx;
-                        setStatus('Created user group ' + trackName + ' from predicted', 'success');
-                    }
+                    // Reprojections stay — they'll update on next triangulate
+                    predGroup.markDirty();
+
+                    if (interactionManager) interactionManager.select(predGroup, -1);
+                    setStatus('Converted ' + trackName + ' to user labels', 'success');
                     if (timeline) timeline.setFrameModified(frameIdx, true);
                     drawAllOverlays(frameIdx);
                     updateInfoPanel();
