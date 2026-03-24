@@ -265,13 +265,15 @@ async function loadCalibrationFile() {
     const file = files[0];
     const text = await file.text();
 
+    var cameras;
     if (file.name.endsWith('.toml')) {
-        return parseCalibrationTOML(text);
+        cameras = parseCalibrationTOML(text);
     } else if (file.name.endsWith('.json')) {
-        return parseCalibrationJSON(text);
+        cameras = parseCalibrationJSON(text);
     } else {
         throw new Error('Unsupported calibration format: ' + file.name);
     }
+    return { cameras: cameras, fileName: file.name };
 }
 
 /**
@@ -1044,7 +1046,7 @@ function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo)
  * @param {Object} videoFileInfo - { videoWidth, videoHeight, frameCount, videoPath, file }
  * @returns {Object} sleap-io.js Labels instance
  */
-function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo) {
+function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -1095,23 +1097,39 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo) {
         var fg = session.frameGroups.get(frameIdx);
 
         // Separate grouped instances from ungrouped for this camera
-        var groupedInstances = (fg.instances.get(cameraName) || []).slice();
+        // Apply instanceFilter if provided: { user: bool, predicted: bool, reprojected: bool }
+        var groupedInstances = [];
+        var rawGrouped = fg.instances.get(cameraName) || [];
+        for (var gi2 = 0; gi2 < rawGrouped.length; gi2++) {
+            var gType = rawGrouped[gi2].type || 'user';
+            if (!instanceFilter || instanceFilter[gType] !== false) {
+                groupedInstances.push(rawGrouped[gi2]);
+            }
+        }
+
         var ungroupedInstances = [];
-        var ulInstances = fg.getUnlinkedInstances(cameraName);
-        for (var ui = 0; ui < ulInstances.length; ui++) {
-            ungroupedInstances.push(ulInstances[ui].instance);
+        if (!instanceFilter || instanceFilter.user !== false || instanceFilter.predicted !== false) {
+            var ulInstances = fg.getUnlinkedInstances(cameraName);
+            for (var ui = 0; ui < ulInstances.length; ui++) {
+                var ulType = ulInstances[ui].instance.type || 'user';
+                if (!instanceFilter || instanceFilter[ulType] !== false) {
+                    ungroupedInstances.push(ulInstances[ui].instance);
+                }
+            }
         }
 
         // Collect reprojected instances with their group's trackIdx
         var reprojInstances = [];
-        var trackMap = session.instanceGroups.get(frameIdx);
-        if (trackMap) {
-            for (var [trackIdx, groups] of trackMap) {
-                for (var gi = 0; gi < groups.length; gi++) {
-                    var reprojInst = groups[gi].getReprojectedInstance(cameraName);
-                    if (reprojInst) {
-                        reprojInst._groupTrackIdx = groups[gi].trackIdx;
-                        reprojInstances.push(reprojInst);
+        if (!instanceFilter || instanceFilter.reprojected !== false) {
+            var trackMap = session.instanceGroups.get(frameIdx);
+            if (trackMap) {
+                for (var [trackIdx, groups] of trackMap) {
+                    for (var gi = 0; gi < groups.length; gi++) {
+                        var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                        if (reprojInst) {
+                            reprojInst._groupTrackIdx = groups[gi].trackIdx;
+                            reprojInstances.push(reprojInst);
+                        }
                     }
                 }
             }
@@ -1238,11 +1256,11 @@ function _buildSioPoints(inst, numNodes) {
  * @param {string} outputFilename
  * @returns {Promise<Blob>} SLP file as a Blob
  */
-async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename) {
+async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
-    var labels = buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo);
+    var labels = buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter);
     var bytes = await SIO.saveSlpToBytes(labels);
     return new Blob([bytes], { type: 'application/x-hdf5' });
 }
