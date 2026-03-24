@@ -7042,6 +7042,7 @@
                         frameData.unlinkedInstances.push({
                             cameraName: camName2,
                             points: unlinked.instance.points,
+                            trackIdx: unlinked.instance.trackIdx,
                             type: unlinked.instance.type || 'user',
                             score: unlinked.instance.score || 1.0,
                             modified: unlinked.instance.modified || false,
@@ -7083,7 +7084,11 @@
                             tracks: sess.tracks,
                             videoManifest: sess.videoFileIndices.map(function(vfIdx) {
                                 var vf = state.videoFiles[vfIdx];
-                                return vf ? { filename: vf.name, assignedCamera: vf.assignedCamera || null } : null;
+                                return vf ? {
+                                    filename: vf.name,
+                                    assignedCamera: vf.assignedCamera || null,
+                                    videoPath: vf.videoPath || null,
+                                } : null;
                             }).filter(Boolean),
                             frames: serializeSessionFrames(sess),
                         };
@@ -7234,7 +7239,20 @@
 
                 // 2. Load videos — check if already loaded, only prompt for missing ones
                 hideLoading();
+
+                // For V3 projects, collect video manifests from all sessions
                 var videoManifest = data.videoManifest || [];
+                if (data.version === 3 && data.sessions) {
+                    videoManifest = [];
+                    for (var vsi = 0; vsi < data.sessions.length; vsi++) {
+                        var sessManifest = data.sessions[vsi].videoManifest || [];
+                        for (var vmi = 0; vmi < sessManifest.length; vmi++) {
+                            sessManifest[vmi]._sessionIdx = vsi;
+                            videoManifest.push(sessManifest[vmi]);
+                        }
+                    }
+                }
+
                 var cameraNames = cameras.map(function (c) { return c.name; });
                 var manifestFilenames = videoManifest.map(function (m) { return m.filename; }).filter(Boolean);
 
@@ -7253,80 +7271,129 @@
 
                 var needsVideoPrompt = missingFilenames.length > 0 || manifestFilenames.length === 0;
 
-                if (needsVideoPrompt) {
+                // Clear stale views
+                if (videoController) {
+                    if (state.isPlaying) videoController.pause();
+                    videoController = null;
+                }
+                state.views = [];
+                paneManager.clearAll();
+
+                if (data.version === 3 && data.sessions && needsVideoPrompt) {
+                    // V3: prompt for each session's folder individually
+                    for (var psi = 0; psi < data.sessions.length; psi++) {
+                        var sessData = data.sessions[psi];
+                        var sessName = sessData.name || ('Session ' + (psi + 1));
+                        var sessCameras = (sessData.videoManifest || []).map(function (m) { return m.assignedCamera; }).filter(Boolean);
+
+                        var folderFiles = await forceVideoSelectionWithFolder(
+                            'Cameras: ' + sessCameras.join(', '),
+                            sessName
+                        );
+
+                        if (folderFiles.length > 0) {
+                            var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
+                            for (var ffi = 0; ffi < folderFiles.length; ffi++) {
+                                var file = folderFiles[ffi];
+                                var fnLower = file.name.toLowerCase();
+                                var ext = fnLower.substring(fnLower.lastIndexOf('.'));
+                                if (videoExtensions.indexOf(ext) < 0) continue;
+
+                                var stem = file.name.replace(/\.[^.]+$/, '');
+                                if (state.videoFiles.find(function (vf) { return vf.name === stem; })) continue;
+
+                                showLoading('Loading ' + file.name + '...');
+                                try {
+                                    var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                                    await decoder.init(file);
+                                    var vw = decoder.videoTrack.video.width;
+                                    var vh = decoder.videoTrack.video.height;
+
+                                    // Figure out camera from subdirectory path
+                                    var relPath = file.webkitRelativePath || file.name;
+                                    var pathParts = relPath.split('/');
+                                    var dirCam = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
+
+                                    // Match to manifest camera
+                                    var assignedCam = null;
+                                    if (dirCam) {
+                                        var dirCamLower = dirCam.toLowerCase();
+                                        for (var sci = 0; sci < sessCameras.length; sci++) {
+                                            if (sessCameras[sci].toLowerCase() === dirCamLower) {
+                                                assignedCam = sessCameras[sci];
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    var vfIdx = state.videoFiles.length;
+                                    state.videoFiles.push({
+                                        file: file,
+                                        name: stem,
+                                        decoder: decoder,
+                                        videoWidth: vw,
+                                        videoHeight: vh,
+                                        frameCount: decoder.samples.length,
+                                        assignedCamera: assignedCam,
+                                        videoPath: relPath,
+                                        sessionIdx: psi,
+                                    });
+
+                                    if (state.sessions[psi] && state.sessions[psi].videoFileIndices.indexOf(vfIdx) < 0) {
+                                        state.sessions[psi].videoFileIndices.push(vfIdx);
+                                    }
+                                } catch (vidErr) {
+                                    console.error('Failed to load ' + file.name + ':', vidErr);
+                                }
+                            }
+                        }
+                    }
+                    hideLoading();
+
+                } else if (needsVideoPrompt) {
+                    // V2 / legacy: single prompt for video files
                     var manifestInfo = missingFilenames.length > 0
                         ? 'Need: ' + missingFilenames.join(', ')
                         : (manifestFilenames.join(', ') || '(unknown)');
                     var videoFiles = await forceVideoSelection(manifestInfo);
 
                     if (videoFiles.length > 0) {
-                        // Clear stale views (but keep already-loaded videoFiles)
-                        if (videoController) {
-                            if (state.isPlaying) videoController.pause();
-                            videoController = null;
-                        }
-                        state.views = [];
-                        var gridEl = document.getElementById('videoGrid');
-                        if (gridEl) gridEl.innerHTML = '';
-
-                        // If we had no prior videos, start fresh
-                        if (alreadyLoaded.length === 0) {
-                            state.videoFiles = [];
-                        }
-
-                        var failedVideos = [];
                         for (var i = 0; i < videoFiles.length; i++) {
-                            var file = videoFiles[i];
-                            var stem = file.name.replace(/\.[^.]+$/, '');
+                            var file2 = videoFiles[i];
+                            var stem2 = file2.name.replace(/\.[^.]+$/, '');
+                            if (state.videoFiles.find(function (vf) { return vf.name === stem2; })) continue;
 
-                            // Skip if already loaded
-                            var alreadyHave = state.videoFiles.find(function (vf) { return vf.name === stem; });
-                            if (alreadyHave) continue;
-
-                            showLoading('Loading ' + file.name + ' (' + (i + 1) + '/' + videoFiles.length + ')...');
+                            showLoading('Loading ' + file2.name + ' (' + (i + 1) + '/' + videoFiles.length + ')...');
                             try {
-                                var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
-                                await decoder.init(file);
-
-                                var vw = decoder.videoTrack.video.width;
-                                var vh = decoder.videoTrack.video.height;
-
+                                var decoder2 = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                                await decoder2.init(file2);
                                 state.videoFiles.push({
-                                    file: file,
-                                    name: stem,
-                                    decoder: decoder,
-                                    videoWidth: vw,
-                                    videoHeight: vh,
-                                    frameCount: decoder.samples.length,
+                                    file: file2,
+                                    name: stem2,
+                                    decoder: decoder2,
+                                    videoWidth: decoder2.videoTrack.video.width,
+                                    videoHeight: decoder2.videoTrack.video.height,
+                                    frameCount: decoder2.samples.length,
                                     assignedCamera: null,
-                                    videoPath: file.webkitRelativePath || file.name,
+                                    videoPath: file2.webkitRelativePath || file2.name,
                                 });
                             } catch (videoErr) {
-                                console.error('Failed to load ' + file.name + ':', videoErr);
-                                failedVideos.push(stem);
+                                console.error('Failed to load ' + file2.name + ':', videoErr);
                             }
                         }
                     }
-                } else {
-                    // All videos already loaded — just clear views to rebuild them
-                    console.log('[load-project] All ' + alreadyLoaded.length + ' videos already loaded, skipping prompt');
-                    if (videoController) {
-                        if (state.isPlaying) videoController.pause();
-                        videoController = null;
-                    }
-                    state.views = [];
-                    paneManager.clearAll();
-                }
+                    hideLoading();
 
-                // Match videos to cameras using manifest
-                for (var mi = 0; mi < videoManifest.length; mi++) {
-                    var entry = videoManifest[mi];
-                    if (!entry.filename || !entry.assignedCamera) continue;
-                    for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
-                        var vf = state.videoFiles[vfi];
-                        if (!vf.assignedCamera && vf.name === entry.filename) {
-                            vf.assignedCamera = entry.assignedCamera;
-                            break;
+                    // Match videos to cameras using manifest (V2 path)
+                    for (var mi = 0; mi < videoManifest.length; mi++) {
+                        var entry = videoManifest[mi];
+                        if (!entry.filename || !entry.assignedCamera) continue;
+                        for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
+                            var vf = state.videoFiles[vfi];
+                            if (!vf.assignedCamera && vf.name === entry.filename) {
+                                vf.assignedCamera = entry.assignedCamera;
+                                break;
+                            }
                         }
                     }
                 }
@@ -7529,7 +7596,8 @@
                         for (var ui = 0; ui < frameData.unlinkedInstances.length; ui++) {
                             var ulData = frameData.unlinkedInstances[ui];
                             var ulInst = new Instance(
-                                ulData.points, 0,
+                                ulData.points,
+                                ulData.trackIdx != null ? ulData.trackIdx : 0,
                                 ulData.type || 'user',
                                 ulData.score || 1.0
                             );
@@ -8109,6 +8177,86 @@
                         resolve(files);
                     }
                     // If cancelled / empty, overlay stays — user must pick files
+                });
+
+                document.body.appendChild(overlay);
+            });
+        }
+
+        /**
+         * Video selection dialog with "Select Session Folder" option.
+         * Scans the folder for videos in camera subdirectories and matches them
+         * to the manifest entries by camera name or filename.
+         */
+        function forceVideoSelectionWithFolder(refInfo, sessionName) {
+            return new Promise(function (resolve) {
+                var overlay = document.createElement('div');
+                overlay.id = 'videoSelectOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+
+                var title = document.createElement('div');
+                title.style.cssText = 'color:#fff;font-size:20px;font-weight:600;margin-bottom:8px;';
+                title.textContent = 'Select folder for: ' + sessionName;
+                overlay.appendChild(title);
+
+                if (refInfo) {
+                    var sub = document.createElement('div');
+                    sub.style.cssText = 'color:#aaa;font-size:14px;margin-bottom:24px;max-width:600px;text-align:center;word-break:break-all;';
+                    sub.textContent = refInfo;
+                    overlay.appendChild(sub);
+                }
+
+                var btnRow = document.createElement('div');
+                btnRow.style.cssText = 'display:flex;gap:16px;';
+
+                var btnFolder = document.createElement('button');
+                btnFolder.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
+                btnFolder.textContent = 'Select Session Folder';
+                btnRow.appendChild(btnFolder);
+
+                var btnFiles = document.createElement('button');
+                btnFiles.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:var(--bg-tertiary,#333);color:#fff;border:1px solid var(--border-color,#555);border-radius:8px;';
+                btnFiles.textContent = 'Select Video Files';
+                btnRow.appendChild(btnFiles);
+
+                overlay.appendChild(btnRow);
+
+                // Folder button — scan for videos in camera subdirs
+                btnFolder.addEventListener('click', async function () {
+                    var allFiles;
+                    try { allFiles = await pickFolder(); } catch (e) { return; }
+                    if (!allFiles || allFiles.length === 0) return;
+
+                    var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
+                    var matchedFiles = [];
+
+                    // Build map: camera subdirs -> video files
+                    for (var fi = 0; fi < allFiles.length; fi++) {
+                        var file = allFiles[fi];
+                        var relPath = file.webkitRelativePath || file.name;
+                        var parts = relPath.split('/');
+                        if (parts.length < 2) continue;
+                        var fnLower = parts[parts.length - 1].toLowerCase();
+                        var ext = fnLower.substring(fnLower.lastIndexOf('.'));
+                        if (videoExtensions.indexOf(ext) >= 0) {
+                            matchedFiles.push(file);
+                        }
+                    }
+
+                    if (matchedFiles.length > 0) {
+                        overlay.remove();
+                        resolve(matchedFiles);
+                    }
+                });
+
+                // Files button — fallback to individual file picker
+                btnFiles.addEventListener('click', async function () {
+                    var files = [];
+                    try { files = await pickVideoFiles(); } catch (e) { /* cancelled */ }
+                    if (files.length > 0) {
+                        overlay.remove();
+                        resolve(files);
+                    }
                 });
 
                 document.body.appendChild(overlay);

@@ -9,30 +9,26 @@
 // SLEAP default "alphabet" palette — 26 visually distinct colors (Green-Armytage)
 // Red entries removed: red is reserved exclusively for ReprojectedInstances.
 const TRACK_COLORS = [
-    '#f0a3ff',  // amethyst
-    '#0075dc',  // blue
-    '#993f00',  // caramel
-    '#4c005c',  // damson
-    '#191919',  // ebony
-    '#005c31',  // forest
+    '#ff6b6b',  // red
+    '#4ecdc4',  // teal
+    '#ffe66d',  // yellow
+    '#a78bfa',  // purple
     '#2bce48',  // green
-    '#ffcc99',  // honeydew
-    '#808080',  // iron
-    '#94ffb5',  // jade
-    '#8f7c00',  // khaki
-    '#9dcc00',  // lime
-    '#c20088',  // mallow
-    '#003380',  // navy
-    '#ffa405',  // orpiment
-    '#ffa8bb',  // pink
-    '#426600',  // quagmire
-    '#5ef1f2',  // sky
-    '#00998f',  // turquoise
-    '#e0ff66',  // uranium
-    '#740aff',  // violet
-    '#ffff80',  // light yellow
-    '#ffff00',  // yellow
-    '#ff5005',  // zinnia
+    '#ff9f43',  // orange
+    '#5ef1f2',  // cyan
+    '#ff6eb4',  // hot pink
+    '#69db7c',  // lime
+    '#ffa405',  // amber
+    '#74b9ff',  // sky blue
+    '#f0a3ff',  // lavender
+    '#ffd93d',  // gold
+    '#6bcb77',  // emerald
+    '#ff8a5c',  // salmon
+    '#a8e6cf',  // mint
+    '#dda0dd',  // plum
+    '#87ceeb',  // light blue
+    '#ffb347',  // tangerine
+    '#98fb98',  // pale green
 ];
 
 // Fixed color for all ReprojectedInstances
@@ -1280,8 +1276,8 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
         var baseTrackColor = isPredicted ? (getTrackColor(instance.trackIdx != null ? instance.trackIdx : u) || '#888888') : UNGROUPED_USER_COLOR;
-        const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.25) : baseTrackColor);
-        const ulEdgeColor = isPredicted && !isAssignSelected ? '#aaaaaa' : color;
+        const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
+        const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
 
         // Pre-compute canvas positions
