@@ -8176,6 +8176,17 @@
                             var vw = decoder.videoTrack.video.width;
                             var vh = decoder.videoTrack.video.height;
 
+                            // Ensure session exists before pushing video
+                            if (!state.session) {
+                                var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
+                                state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0'], sessionName);
+                                if (state.sessions.indexOf(state.session) < 0) {
+                                    state.sessions.push(state.session);
+                                    state.activeSessionIdx = state.sessions.length - 1;
+                                }
+                            }
+
+                            var sessionIdx = state.sessions.indexOf(state.session);
                             state.videoFiles.push({
                                 file: videoFile,
                                 name: camName,
@@ -8186,17 +8197,9 @@
                                 assignedCamera: camName,
                                 slpFilename: slpFilenameForCam,
                                 videoPath: videoFile.webkitRelativePath || videoFile.name,
+                                sessionIdx: sessionIdx,
                             });
 
-                            // Ensure session exists
-                            if (!state.session) {
-                                var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
-                                state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0'], sessionName);
-                                if (state.sessions.indexOf(state.session) < 0) {
-                                    state.sessions.push(state.session);
-                                    state.activeSessionIdx = state.sessions.length - 1;
-                                }
-                            }
                             // Track this video in the session
                             var loadedVfIdx = state.videoFiles.length - 1;
                             if (state.session.videoFileIndices.indexOf(loadedVfIdx) < 0) {
@@ -10004,22 +10007,31 @@
             state.views = [];
             paneManager.clearAll();
 
-            // Ensure videoFileIndices is populated (match by camera names if empty)
-            // Only claim videos not already claimed by other sessions
+            // Ensure videoFileIndices is populated
             if (newSession.videoFileIndices.length === 0 && newSession.cameras.length > 0) {
-                var claimedByOthers = new Set();
-                for (var osi = 0; osi < state.sessions.length; osi++) {
-                    if (osi === newIdx) continue;
-                    var otherIndices = state.sessions[osi].videoFileIndices || [];
-                    for (var oi = 0; oi < otherIndices.length; oi++) {
-                        claimedByOthers.add(otherIndices[oi]);
+                // Use sessionIdx tag if available, otherwise fall back to camera name matching
+                for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
+                    var nvf = state.videoFiles[nvi];
+                    if (nvf.sessionIdx === newIdx) {
+                        newSession.videoFileIndices.push(nvi);
                     }
                 }
-                for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
-                    if (claimedByOthers.has(nvi)) continue;
-                    var nvf = state.videoFiles[nvi];
-                    if (nvf.assignedCamera && newSession.cameras.some(function(c) { return c.name === nvf.assignedCamera; })) {
-                        newSession.videoFileIndices.push(nvi);
+                // Fallback: match by camera name if no tagged videos found
+                if (newSession.videoFileIndices.length === 0) {
+                    var claimedByOthers = new Set();
+                    for (var osi = 0; osi < state.sessions.length; osi++) {
+                        if (osi === newIdx) continue;
+                        var otherIndices = state.sessions[osi].videoFileIndices || [];
+                        for (var oi = 0; oi < otherIndices.length; oi++) {
+                            claimedByOthers.add(otherIndices[oi]);
+                        }
+                    }
+                    for (var nvi2 = 0; nvi2 < state.videoFiles.length; nvi2++) {
+                        if (claimedByOthers.has(nvi2)) continue;
+                        var nvf2 = state.videoFiles[nvi2];
+                        if (nvf2.assignedCamera && newSession.cameras.some(function(c) { return c.name === nvf2.assignedCamera; })) {
+                            newSession.videoFileIndices.push(nvi2);
+                        }
                     }
                 }
             }
