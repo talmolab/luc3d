@@ -316,8 +316,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
 
     const nodeShape = options.nodeShape || 'circle';
-    // X markers stay screen-sized (scale with display resolution so they don't shrink on zoom)
-    const nodeSize = nodeShape === 'x' ? baseNodeSize * displayScale : baseNodeSize;
+    const nodeSize = baseNodeSize;
     const lineWidth = baseLineWidth;
     const nulledNodes = instance.nulledNodes || null;
 
