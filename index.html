@@ -7908,9 +7908,20 @@
 
                 showLoading('Scanning folder...');
 
-                // For multi-session: save previous session and start fresh
+                // For multi-session: save previous session's UI state before loading new one
                 var previousSession = state.session;
+                if (previousSession) {
+                    previousSession.lastFrame = state.currentFrame;
+                    previousSession.triangulationResults = state.triangulationResults;
+                    previousSession._views = state.views;
+                    previousSession._videoController = videoController;
+                }
+                // Start fresh for the new session
                 state.session = null;
+                state.views = [];
+                state.triangulationResults = new Map();
+                if (videoController && state.isPlaying) videoController.stopPlayback();
+                videoController = null;
 
                 // Derive folder name from first file's relative path
                 var folderName = null;
@@ -8335,6 +8346,12 @@
 
                 hideLoading();
 
+                // Save this session's UI state for switching
+                if (state.session) {
+                    state.session._views = state.views;
+                    state.session._videoController = videoController;
+                }
+
                 var statusMsg = 'Loaded ' + matchedCameraDirs.length + ' camera(s)';
                 if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
                 setStatus(statusMsg, 'success');
@@ -8344,6 +8361,11 @@
                 // Restore previous session if new one failed
                 if (!state.session && previousSession) {
                     state.session = previousSession;
+                    if (previousSession._views) {
+                        state.views = previousSession._views;
+                        videoController = previousSession._videoController;
+                    }
+                    state.triangulationResults = previousSession.triangulationResults || new Map();
                 }
                 hideLoading();
                 setStatus('Session folder error: ' + err.message, 'error');
