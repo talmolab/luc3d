@@ -608,6 +608,8 @@
             isPlaying: false,
             playInterval: null,
             session: null,      // Session object from pose-data.js
+            sessions: [],              // Array of Session objects
+            activeSessionIdx: 0,       // Index of currently active session
             keypoints3d: null,  // Raw 3D keypoints from demo-data.js
             triangulationResults: new Map(), // frameIdx -> [{ group, points3d, reprojections, errors, meanError }]
             lastAutoAssignViews: null,  // Array of view names used for last auto-assignment
@@ -621,6 +623,24 @@
         let interactionManager = null;
         let viewport3d = null;
         let timeline = null;
+
+        // ============================================
+        // Session Accessors
+        // ============================================
+
+        function getActiveSession() {
+            if (state.sessions.length === 0) return state.session;
+            return state.sessions[state.activeSessionIdx] || null;
+        }
+
+        function setActiveSession(session) {
+            if (state.sessions.length === 0) {
+                state.session = session;
+                return;
+            }
+            state.sessions[state.activeSessionIdx] = session;
+            state.session = session;
+        }
 
         // View names matching sample_session video files
         const VIEW_NAMES = ['back', 'mid', 'side', 'top'];
@@ -766,6 +786,10 @@
                 const numFrames = Math.min(state.totalFrames, 100);
                 const demoResult = createDemoSession(numFrames);
                 state.session = demoResult.session;
+                if (state.sessions.indexOf(state.session) < 0) {
+                    state.sessions.push(state.session);
+                    state.activeSessionIdx = state.sessions.length - 1;
+                }
                 state.keypoints3d = demoResult.keypoints3d;
 
                 // Triangulation is NOT run automatically — user must trigger it
@@ -5128,6 +5152,10 @@
                         [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
                 });
                 state.session = new Session(cameras, new Skeleton('skeleton', [], []), ['track_0']);
+                if (state.sessions.indexOf(state.session) < 0) {
+                    state.sessions.push(state.session);
+                    state.activeSessionIdx = state.sessions.length - 1;
+                }
             }
         }
 
@@ -6727,6 +6755,10 @@
             }
 
             state.session = session;
+            if (state.sessions.indexOf(state.session) < 0) {
+                state.sessions.push(state.session);
+                state.activeSessionIdx = state.sessions.length - 1;
+            }
             state.triangulationResults = new Map();
 
             // Rebuild triangulationResults from saved reprojection/error data
@@ -6932,6 +6964,10 @@
             }
 
             state.session = session;
+            if (state.sessions.indexOf(state.session) < 0) {
+                state.sessions.push(state.session);
+                state.activeSessionIdx = state.sessions.length - 1;
+            }
             state.triangulationResults = new Map();
 
             // Fix camera name mismatches
@@ -6981,6 +7017,10 @@
                 } else {
                     const skeleton = new Skeleton('skeleton', [], []);
                     state.session = new Session(cameras, skeleton, ['track_0']);
+                    if (state.sessions.indexOf(state.session) < 0) {
+                        state.sessions.push(state.session);
+                        state.activeSessionIdx = state.sessions.length - 1;
+                    }
                 }
 
                 // Re-assign videos to the new calibration cameras
@@ -7126,6 +7166,10 @@
                     });
                     var skeleton = new Skeleton('skeleton', [], []);
                     state.session = new Session(cameras, skeleton, ['track_0']);
+                    if (state.sessions.indexOf(state.session) < 0) {
+                        state.sessions.push(state.session);
+                        state.activeSessionIdx = state.sessions.length - 1;
+                    }
                 }
 
                 // Auto-assign videos to existing calibration cameras first
@@ -7597,6 +7641,10 @@
                 }
 
                 state.session = session;
+                if (state.sessions.indexOf(state.session) < 0) {
+                    state.sessions.push(state.session);
+                    state.activeSessionIdx = state.sessions.length - 1;
+                }
                 updateInfoPanel();
                 setStatus('Session loaded (' + cameras.length + ' cameras, ' + session.numFrames + ' frames)', 'success');
 
@@ -7869,6 +7917,10 @@
                             var tracks = slpData.tracks || ['track_0'];
                             state.session = new Session(cameras.length > 0 ? cameras : [], skeleton, tracks);
                             firstSession = state.session;
+                            if (state.sessions.indexOf(state.session) < 0) {
+                                state.sessions.push(state.session);
+                                state.activeSessionIdx = state.sessions.length - 1;
+                            }
                         }
 
                         // Add frames — all instances go under camName
@@ -7942,6 +7994,10 @@
                             // Ensure session exists
                             if (!state.session) {
                                 state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0']);
+                                if (state.sessions.indexOf(state.session) < 0) {
+                                    state.sessions.push(state.session);
+                                    state.activeSessionIdx = state.sessions.length - 1;
+                                }
                             }
                             // Ensure camera exists in session
                             if (!state.session.cameras.some(function (c) { return c.name === camName; })) {
@@ -8260,6 +8316,10 @@
                 }
 
                 state.session = session;
+                if (state.sessions.indexOf(state.session) < 0) {
+                    state.sessions.push(state.session);
+                    state.activeSessionIdx = state.sessions.length - 1;
+                }
                 console.log('[load-slp] Session:', session.numFrames, 'frames,',
                     cameras.length, 'cameras, tracks:', tracks);
 
