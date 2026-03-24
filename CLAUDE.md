@@ -17,9 +17,8 @@ Multi-view pose annotation GUI. No build system — pure vanilla JS served as st
 
 ## Local Development
 ```bash
-python3 server.py
-# Requires: pip install h5py numpy (for SLP export)
-# Fallback: python3 -m http.server 8080 (JSON export only)
+python3 -m http.server 8080
+# Or simply: python3 server.py
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
@@ -27,7 +26,9 @@ python3 server.py
 ## Dependencies (CDN only)
 - Three.js 0.147
 - mp4box.js
-- All loaded via script tags in index.html
+- h5wasm 0.8.8 (WebAssembly HDF5)
+- sleap-io.js 0.2.1 (local copy in `lib/sleap-io/`, client-side SLP export)
+- All loaded via script tags / import maps in index.html
 
 ## Tests
 Browser-based tests in `tests/test-runner.html`. Open in browser to run.

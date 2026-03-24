@@ -105,7 +105,7 @@ class Timeline {
         this.PLAYHEAD_COLOR = '#ffffff';
         this.MARKER_USER_COLOR = '#3b82f6';          // blue
         this.MARKER_PREDICTED_COLOR = '#93c5fd';      // light blue
-        this.MARKER_MODIFIED_COLOR = '#4ade80';        // green
+        this.MARKER_MODIFIED_COLOR = '#ffffff';        // white
         this.RANGE_COLOR = 'rgba(99,102,241,0.25)';   // indigo translucent
         this.SEPARATOR_COLOR = 'rgba(255,255,255,0.12)';
 
@@ -289,6 +289,9 @@ class Timeline {
         // --- Track bars ---
         this._drawTrackBars(ctx, trackAreaTop, W);
 
+        // --- Modified frame lines (white, span track + marker areas, on top of track bars) ---
+        this._drawModifiedFrameLines(ctx, trackAreaTop, labelAreaTop, W);
+
         // --- Separator ---
         if (numTracks > 0) {
             ctx.strokeStyle = this.SEPARATOR_COLOR;
@@ -349,26 +352,41 @@ class Timeline {
     _buildTrackSegments(session) {
         const numTracks = session.tracks ? session.tracks.length : 0;
         this._trackSegments = [];
+        if (numTracks === 0) return;
 
+        // Build per-track frame sets in a single pass over instanceGroups
+        // instanceGroups: Map<frameIdx, Map<trackIdx, InstanceGroup[]>>
+        const trackFrames = new Array(numTracks);
         for (let t = 0; t < numTracks; t++) {
-            /** @type {Set<number>} */
-            const presentFrames = new Set();
+            trackFrames[t] = new Set();
+        }
 
-            // Scan all frame groups for instances belonging to this track
-            for (const [frameIdx, fg] of session.frameGroups) {
-                // fg.instances is a Map<cameraName, Instance[]>
-                for (const [_camName, instances] of fg.instances) {
-                    for (let i = 0; i < instances.length; i++) {
-                        if (instances[i].trackIdx === t) {
-                            presentFrames.add(frameIdx);
-                            break; // one hit per camera is enough
-                        }
+        if (session.instanceGroups) {
+            for (const [frameIdx, trackMap] of session.instanceGroups) {
+                for (const [trackIdx] of trackMap) {
+                    if (trackIdx >= 0 && trackIdx < numTracks) {
+                        trackFrames[trackIdx].add(frameIdx);
                     }
                 }
             }
+        }
 
-            // Convert the set of frame indices into sorted contiguous segments
-            const sorted = Array.from(presentFrames).sort((a, b) => a - b);
+        // Also scan frameGroups for instances with trackIdx (e.g. predicted instances
+        // loaded from SLP that aren't yet in instanceGroups)
+        for (const [frameIdx, fg] of session.frameGroups) {
+            for (const [_camName, instances] of fg.instances) {
+                for (let i = 0; i < instances.length; i++) {
+                    const t = instances[i].trackIdx;
+                    if (t >= 0 && t < numTracks) {
+                        trackFrames[t].add(frameIdx);
+                    }
+                }
+            }
+        }
+
+        // Convert each track's frame set to sorted contiguous segments
+        for (let t = 0; t < numTracks; t++) {
+            const sorted = Array.from(trackFrames[t]).sort((a, b) => a - b);
             const segments = [];
             let segStart = -1;
             let segEnd = -1;
@@ -495,6 +513,66 @@ class Timeline {
     }
 
     /**
+     * Draw white vertical lines for modified (grouped/triangulated) frames.
+     * These span from the track area through the marker area and render
+     * on top of the colored track bars.
+     * @private
+     */
+    _drawModifiedFrameLines(ctx, top, bottom, W) {
+        const lineH = bottom - top;
+        if (lineH <= 0) return;
+
+        const pxPerFrame = this._pxPerFrame();
+        const startFrame = Math.floor(this._scrollFrame);
+        const endFrame = Math.ceil(this._scrollFrame + this._visibleFrames());
+        const contentLeft = this.LEFT_MARGIN;
+        const contentRight = W - this.RIGHT_PADDING;
+
+        ctx.fillStyle = this.MARKER_MODIFIED_COLOR;
+
+        if (pxPerFrame < 3) {
+            // Dense mode: bin into pixel columns
+            const contentW = contentRight - contentLeft;
+            if (contentW <= 0) return;
+            const numBins = Math.ceil(contentW);
+            const framesPerBin = this._visibleFrames() / numBins;
+
+            for (let b = 0; b < numBins; b++) {
+                const binFrameStart = this._scrollFrame + b * framesPerBin;
+                const binFrameEnd = binFrameStart + framesPerBin;
+                let hasModified = false;
+
+                for (let f = Math.floor(binFrameStart); f < Math.ceil(binFrameEnd); f++) {
+                    const marker = this._frameMarkers.get(f);
+                    if (marker && marker.modified) { hasModified = true; break; }
+                }
+
+                if (!hasModified) continue;
+                const x = contentLeft + b;
+                ctx.globalAlpha = 0.7;
+                ctx.fillRect(x, top, 1, lineH);
+                ctx.globalAlpha = 1.0;
+            }
+        } else {
+            // Sparse mode: individual lines per frame
+            const lineW = Math.max(1, Math.min(2, pxPerFrame * 0.3));
+
+            for (let f = startFrame; f <= endFrame; f++) {
+                if (f < 0 || f >= this._totalFrames) continue;
+                const marker = this._frameMarkers.get(f);
+                if (!marker || !marker.modified) continue;
+
+                const x = this._frameToX(f + 0.5);
+                if (x < contentLeft || x > contentRight) continue;
+
+                ctx.globalAlpha = 0.85;
+                ctx.fillRect(Math.round(x) - lineW / 2, top, lineW, lineH);
+                ctx.globalAlpha = 1.0;
+            }
+        }
+    }
+
+    /**
      * Draw frame markers (dots or density bars).
      * @private
      */
@@ -525,11 +603,7 @@ class Timeline {
             if (x < this.LEFT_MARGIN || x > W - this.RIGHT_PADDING) continue;
 
             if (marker.modified) {
-                // Green filled dot
-                ctx.fillStyle = this.MARKER_MODIFIED_COLOR;
-                ctx.beginPath();
-                ctx.arc(x, cy, dotR, 0, Math.PI * 2);
-                ctx.fill();
+                // Modified frames are drawn as full-height lines by _drawModifiedFrameLines
             } else if (marker.hasUser) {
                 // Blue filled dot
                 ctx.fillStyle = this.MARKER_USER_COLOR;
@@ -576,12 +650,10 @@ class Timeline {
                 if (marker.hasPredicted) hasPredicted = true;
             }
 
-            if (!hasUser && !hasPredicted && !hasModified) continue;
+            if (!hasUser && !hasPredicted) continue;
 
             const x = contentLeft + b;
-            if (hasModified) {
-                ctx.fillStyle = this.MARKER_MODIFIED_COLOR;
-            } else if (hasUser) {
+            if (hasUser) {
                 ctx.fillStyle = this.MARKER_USER_COLOR;
             } else {
                 ctx.fillStyle = this.MARKER_PREDICTED_COLOR;
@@ -621,7 +693,7 @@ class Timeline {
         for (let f = first; f <= endFrame && f < this._totalFrames; f += interval) {
             const x = this._frameToX(f);
             if (x < this.LEFT_MARGIN || x > W - this.RIGHT_PADDING) continue;
-            ctx.fillText(String(f), x, top + 2);
+            ctx.fillText(String(f + 1), x, top + 2);
         }
 
         ctx.textAlign = 'left';
@@ -852,7 +924,7 @@ class Timeline {
         if (x >= this.LEFT_MARGIN && x <= this._cssWidth - this.RIGHT_PADDING) {
             const frame = this._clampFrame(this._xToFrame(x));
             const marker = this._frameMarkers.get(frame);
-            let text = 'Frame ' + frame;
+            let text = 'Frame ' + (frame + 1);
             if (marker) {
                 const parts = [];
                 if (marker.hasUser) parts.push('user');
@@ -1035,6 +1107,18 @@ class Timeline {
                 modified: modified,
             });
         }
+    }
+
+    /**
+     * Rebuild track segments from the session without clearing frame markers.
+     * Call after triangulation or track assignment to update track bars in real time.
+     * @param {Session} session
+     */
+    refreshTracks(session) {
+        if (!session) return;
+        this._trackNames = session.tracks || [];
+        this._buildTrackSegments(session);
+        this.redraw();
     }
 
     /**

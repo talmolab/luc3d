@@ -6,33 +6,40 @@
  * All functions are globals (no imports/exports).
  */
 
-// Track colors — primary colors first, then distinct shades (24-color palette)
+// SLEAP default "alphabet" palette — 26 visually distinct colors (Green-Armytage)
+// Red entries removed: red is reserved exclusively for ReprojectedInstances.
 const TRACK_COLORS = [
-    '#e53e3e',  // red
-    '#3182ce',  // blue
-    '#38a169',  // green
-    '#dd6b20',  // orange
-    '#805ad5',  // purple
-    '#d69e2e',  // gold
-    '#00b5d8',  // cyan
-    '#e53e9f',  // magenta
-    '#c53030',  // dark red
-    '#2b6cb0',  // dark blue
-    '#276749',  // dark green
-    '#c05621',  // burnt orange
-    '#6b46c1',  // dark purple
-    '#b7791f',  // dark gold
-    '#0987a0',  // teal
-    '#b83280',  // dark magenta
-    '#fc8181',  // light red
-    '#63b3ed',  // light blue
-    '#68d391',  // light green
-    '#f6ad55',  // light orange
-    '#b794f4',  // light purple
-    '#faf089',  // light yellow
-    '#76e4f7',  // light cyan
-    '#f687b3',  // pink
+    '#f0a3ff',  // amethyst
+    '#0075dc',  // blue
+    '#993f00',  // caramel
+    '#4c005c',  // damson
+    '#191919',  // ebony
+    '#005c31',  // forest
+    '#2bce48',  // green
+    '#ffcc99',  // honeydew
+    '#808080',  // iron
+    '#94ffb5',  // jade
+    '#8f7c00',  // khaki
+    '#9dcc00',  // lime
+    '#c20088',  // mallow
+    '#003380',  // navy
+    '#ffa405',  // orpiment
+    '#ffa8bb',  // pink
+    '#426600',  // quagmire
+    '#5ef1f2',  // sky
+    '#00998f',  // turquoise
+    '#e0ff66',  // uranium
+    '#740aff',  // violet
+    '#ffff80',  // light yellow
+    '#ffff00',  // yellow
+    '#ff5005',  // zinnia
 ];
+
+// Fixed color for all ReprojectedInstances
+const REPROJECTION_COLOR = '#e53e3e';
+
+// Fixed color for ungrouped UserInstances
+const UNGROUPED_USER_COLOR = '#F8B195';
 
 function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
@@ -130,6 +137,16 @@ function brightenColor(hex, factor) {
     const r = Math.min(255, Math.round(rgb.r + (255 - rgb.r) * factor));
     const g = Math.min(255, Math.round(rgb.g + (255 - rgb.g) * factor));
     const b = Math.min(255, Math.round(rgb.b + (255 - rgb.b) * factor));
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+/** Desaturate a hex color by blending toward mid-gray. amount=0.5 means 50% gray. */
+function desaturateColor(hex, amount) {
+    const rgb = hexToRgb(hex);
+    const gray = 128;
+    const r = Math.round(rgb.r + (gray - rgb.r) * amount);
+    const g = Math.round(rgb.g + (gray - rgb.g) * amount);
+    const b = Math.round(rgb.b + (gray - rgb.b) * amount);
     return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 }
 
@@ -233,6 +250,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     if (!points || points.length === 0) return;
 
     const color = options.color || getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
+    const edgeColor = options.edgeColor || color;
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
     const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
@@ -313,7 +331,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
             }
             if (hasStrokes) {
                 if (pass === 0) {
-                    ctx.strokeStyle = color;
+                    ctx.strokeStyle = edgeColor;
                 } else {
                     ctx.strokeStyle = '#888888';
                     ctx.globalAlpha = alpha * 0.4;
@@ -975,7 +993,7 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
         const trackName = inst.trackIdx != null && trackNames[inst.trackIdx]
             ? trackNames[inst.trackIdx]
             : ('Track ' + (inst.trackIdx != null ? inst.trackIdx : instIdx));
-        const color = getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx);
+        const color = options.color || getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx);
 
         var fontSize = adjustedLabelSize;
         if (fontSize <= 0) continue; // label size 0 = hidden
@@ -1216,8 +1234,10 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
-        const color = isAssignSelected ? assignmentColor : getTrackColor(instance.trackIdx != null ? instance.trackIdx : u);
-        const alpha = isSelected ? 0.95 : (isPredicted && predictedRender ? (predictedRender.alpha || 0.5) : 0.5);
+        var baseTrackColor = isPredicted ? (getTrackColor(instance.trackIdx != null ? instance.trackIdx : u) || '#888888') : UNGROUPED_USER_COLOR;
+        const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.5) : baseTrackColor);
+        const ulEdgeColor = isPredicted && !isAssignSelected ? '#888888' : color;
+        const alpha = isSelected ? 0.95 : (isPredicted ? 0.5 : 0.5);
 
         // Pre-compute canvas positions
         const canvasPoints = new Array(points.length);
@@ -1268,7 +1288,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
                 }
                 if (hasEdgeStrokes) {
                     if (ePass === 0) {
-                        ctx.strokeStyle = color;
+                        ctx.strokeStyle = ulEdgeColor;
                     } else {
                         ctx.strokeStyle = '#888888';
                         ctx.globalAlpha = alpha * 0.4;
@@ -1485,7 +1505,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         selectedUnlinkedId: options.selectedUnlinkedId || null,
     };
 
-    // 2. Linked predicted instances (back layer)
+    // 2. Linked predicted instances (back layer) — muted/desaturated
     if (viewInstances && showPredicted) {
         for (let i = 0; i < viewInstances.length; i++) {
             const inst = viewInstances[i];
@@ -1496,9 +1516,12 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
-            var drawColor = isSelected ? '#ffffff' : baseColor;
+            var drawColor = isSelected ? '#ffffff' : desaturateColor(baseColor, 0.5);
+            var drawAlpha = isSelected ? 1.0 : 0.5;
             drawSkeleton(ctx, inst, skeleton, Object.assign({}, predictedRender, {
                 color: drawColor,
+                edgeColor: isSelected ? '#ffffff' : '#888888',
+                alpha: drawAlpha,
                 lineStyle: predictedOpts.postLineStyle || 'solid',
             }));
         }
@@ -1520,9 +1543,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (showReprojected && group.reprojectedInstances && group.reprojectedInstances.size > 0) {
                 const reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
                 if (reprojInst) {
-                    var baseColor = getTrackColor(group.trackIdx != null ? group.trackIdx : 0);
                     var isSelected = selectedReprojected && selectedInstanceGroup && selectedInstanceGroup === group;
-                    var drawColor = isSelected ? '#ffffff' : baseColor;
+                    var drawColor = isSelected ? '#ffffff' : REPROJECTION_COLOR;
                     drawSkeleton(ctx, reprojInst, skeleton, Object.assign({}, reprojRender, {
                         color: drawColor,
                         lineStyle: reprojOpts.lineStyle || 'dotted',
@@ -1534,6 +1556,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                         const trackNames = session && session.tracks ? session.tracks : [];
                         drawInstanceLabels(ctx, [reprojInst], skeleton, viewName, Object.assign({}, reprojRender, {
                             trackNames: trackNames,
+                            color: REPROJECTION_COLOR,
                         }));
                     }
                 }
@@ -1544,7 +1567,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                 const reprojPts = group.reprojections ? group.reprojections[viewName] : null;
                 if (reprojPts) {
                     drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
-                        color: getTrackColor(group.trackIdx != null ? group.trackIdx : 0),
+                        color: REPROJECTION_COLOR,
                     }));
                 }
             }
@@ -1603,9 +1626,6 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
         if (selInst && selInst.points) {
-            const trackColor = getTrackColor(
-                selectedInstanceGroup.trackIdx != null ? selectedInstanceGroup.trackIdx : 0
-            );
             drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, userRender, {
                 color: '#ffffff',
                 selectedNodeIdx: selectedNodeIdx,
@@ -1718,9 +1738,9 @@ function drawLegend(ctx, options) {
             ctx.arc(ix + iconWidth / 2, iy, 4, 0, Math.PI * 2);
             ctx.fill();
         } else if (item.type === 'reprojected') {
-            // X marker in red
+            // X marker in reprojection red
             const cx = ix + iconWidth / 2;
-            ctx.strokeStyle = '#ff6b6b';
+            ctx.strokeStyle = REPROJECTION_COLOR;
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.moveTo(cx - 4, iy - 4);

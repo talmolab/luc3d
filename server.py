@@ -2,14 +2,12 @@
 """
 LUCID development server.
 
-Serves static files and provides a /convert-slp endpoint that converts
-JSON export data to SLEAP .slp (HDF5) format using h5py.
+Serves static files. SLP export is now handled client-side via sleap-io.js.
+A legacy /convert-slp endpoint is still available if h5py is installed.
 
 Usage:
     python server.py [port]
-
-Requires: h5py, numpy (for SLP conversion)
-    pip install h5py numpy
+    # or simply: python3 -m http.server 8080
 """
 
 import io
@@ -17,7 +15,7 @@ import json
 import sys
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
-# Try to import h5py and the conversion function
+# Try to import h5py for legacy /convert-slp endpoint
 try:
     import h5py
 
@@ -39,7 +37,7 @@ class LucidHandler(SimpleHTTPRequestHandler):
     def _handle_convert_slp(self):
         if not HAS_H5PY:
             self.send_error(
-                503, "h5py not installed. Run: pip install h5py numpy"
+                503, "Legacy endpoint: h5py not installed. Use client-side export instead."
             )
             return
 
@@ -86,10 +84,9 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     server = HTTPServer(("0.0.0.0", port), LucidHandler)
     print(f"LUCID server on http://0.0.0.0:{port}/")
+    print("  SLP export: client-side via sleap-io.js (no server dependency)")
     if HAS_H5PY:
-        print("  /convert-slp endpoint: ready (h5py available)")
-    else:
-        print("  /convert-slp endpoint: unavailable (pip install h5py numpy)")
+        print("  Legacy /convert-slp endpoint: available (h5py found)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
