@@ -268,6 +268,7 @@ var testFiles = [
     'test-prompt61.js',
     'test-bottom-bar.js',
     'test-multi-session-export.js',
+    'test-reprojection-lifecycle.js',
 ];
 
 for (var i = 0; i < testFiles.length; i++) {
