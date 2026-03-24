@@ -435,6 +435,23 @@ class FrameGroup {
 }
 
 
+var _identityIdCounter = 0;
+
+var IDENTITY_COLORS = [
+    '#ff6b6b', '#4ecdc4', '#ffe66d', '#a78bfa', '#2bce48',
+    '#ff9f43', '#5ef1f2', '#ff6eb4', '#69db7c', '#ffa405',
+    '#74b9ff', '#f0a3ff', '#ffd93d', '#6bcb77', '#ff8a5c',
+    '#a8e6cf', '#dda0dd', '#87ceeb', '#ffb347', '#98fb98',
+];
+
+class Identity {
+    constructor(id, name, color) {
+        this.id = id != null ? id : _identityIdCounter++;
+        this.name = name || ('identity_' + this.id);
+        this.color = color || IDENTITY_COLORS[this.id % IDENTITY_COLORS.length];
+    }
+}
+
 class InstanceGroup {
     /**
      * @param {number} id
@@ -443,6 +460,7 @@ class InstanceGroup {
     constructor(id, trackIdx) {
         this.id = id;
         this.trackIdx = trackIdx;
+        this.identityId = -1;
         /** @type {Map<string, Instance>} camera name -> single instance */
         this.instances = new Map();
         /** @type {number[][]|null} N x [x, y, z] triangulated 3D points, or null */
@@ -533,6 +551,35 @@ class Session {
         this.frameGroups = new Map();
         /** @type {Map<number, Map<number, InstanceGroup[]>>} frameIdx -> trackIdx -> InstanceGroup[] */
         this.instanceGroups = new Map();
+        /** @type {Identity[]} */
+        this.identities = [];
+        this.trustTracks = false;
+    }
+
+    addIdentity(name, color) {
+        var maxId = this.identities.reduce(function (m, id) { return Math.max(m, id.id); }, -1);
+        var identity = new Identity(maxId + 1, name, color);
+        this.identities.push(identity);
+        return identity;
+    }
+
+    getIdentity(identityId) {
+        for (var i = 0; i < this.identities.length; i++) {
+            if (this.identities[i].id === identityId) return this.identities[i];
+        }
+        return null;
+    }
+
+    getOrCreateIdentityForTrack(trackIdx) {
+        var trackName = this.tracks[trackIdx] || ('track_' + trackIdx);
+        for (var i = 0; i < this.identities.length; i++) {
+            if (this.identities[i].name === trackName) return this.identities[i];
+        }
+        return this.addIdentity(trackName);
+    }
+
+    assignIdentityToGroup(group, identityId) {
+        group.identityId = identityId;
     }
 
     /**
