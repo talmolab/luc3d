@@ -15,6 +15,15 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
     <!-- h5wasm for in-browser HDF5 read/write (pinned to 0.8.8, matching slp-viewer) -->
     <script src="https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/dist/iife/h5wasm.js"></script>
+    <!-- Import map for sleap-io.js ESM dependencies -->
+    <script type="importmap">
+    {
+        "imports": {
+            "h5wasm": "./lib/h5wasm/hdf5_hl.js",
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js"
+        }
+    }
+    </script>
 </head>
 
 <body>
@@ -495,7 +504,7 @@
         <!-- Playback Controls -->
         <div class="controls-bar">
             <div class="frame-display">
-                <span class="current-frame" id="currentFrame">0</span>
+                <span class="current-frame" id="currentFrame">1</span>
                 <span>/ <span id="totalFrames">0</span></span>
             </div>
 
@@ -503,7 +512,7 @@
                 <button id="btnFirst" title="First frame (Home)">|&#9664;</button>
                 <button id="btnPrev" title="Previous frame (Left)">&#9664;</button>
                 <button id="btnPlay" title="Play/Pause (Space)">&#9654;</button>
-                <button id="btnNext" title="Next frame (Right)">&#9654;|</button>
+                <button id="btnNext" title="Next frame (Right)">&#9654;</button>
                 <button id="btnLast" title="Last frame (End)">&#9654;|</button>
             </div>
 
@@ -558,6 +567,19 @@
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
 
+    <!-- sleap-io.js bridge: expose saveSlpToBytes and data model to window -->
+    <script type="module">
+        import {
+            Labels, LabeledFrame, Instance, PredictedInstance,
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes
+        } from './lib/sleap-io/index.browser.js';
+        window.SleapIO = {
+            Labels, LabeledFrame, Instance, PredictedInstance,
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes
+        };
+        window.dispatchEvent(new Event('sleapio-ready'));
+    </script>
+
     <script type="module">
         import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core/+esm';
 
@@ -585,6 +607,8 @@
             lastAutoAssignViews: null,  // Array of view names used for last auto-assignment
             lastAutoAssignFrame: null,  // Frame index where last auto-assignment was run
             lastUserPoints: new Map(),  // viewName -> {frameIdx, points} — cache of most recent UserInstance per view
+            exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
+            cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
         };
 
         let videoController = null;
@@ -915,7 +939,7 @@
             const trackMap = state.session.instanceGroups.get(frameIdx);
             if (!trackMap) {
                 console.warn('[triangulate] No instanceGroups for frame', frameIdx);
-                setStatus('No instance groups on frame ' + frameIdx + ' - assign instances to groups first (A key)', 'warning');
+                setStatus('No instance groups on frame ' + (frameIdx + 1) + ' - assign instances to groups first (A key)', 'warning');
                 updateTriangulationBadge('needs-triangulation', 'No groups');
                 return;
             }
@@ -1054,16 +1078,19 @@
             if (frameResults.length > 0 && frameResults[0].meanError != null) {
                 updateTriangulationBadge('triangulated',
                     'Error: ' + frameResults[0].meanError.toFixed(2) + 'px');
-                setStatus('Triangulated frame ' + frameIdx + ' (' + frameResults.length + ' group(s), error: ' +
+                setStatus('Triangulated frame ' + (frameIdx + 1) + ' (' + frameResults.length + ' group(s), error: ' +
                     frameResults[0].meanError.toFixed(2) + 'px)', 'success');
             } else if (frameResults.length > 0) {
                 updateTriangulationBadge('triangulated', 'Triangulated');
-                setStatus('Triangulated frame ' + frameIdx + ' (' + frameResults.length + ' group(s))', 'success');
+                setStatus('Triangulated frame ' + (frameIdx + 1) + ' (' + frameResults.length + ' group(s))', 'success');
             } else {
                 updateTriangulationBadge('needs-triangulation', 'No groups triangulated');
-                setStatus('No groups could be triangulated on frame ' + frameIdx +
+                setStatus('No groups could be triangulated on frame ' + (frameIdx + 1) +
                     ' - check that instance groups have labels in 2+ camera views', 'warning');
             }
+
+            // Update timeline: mark frame only if it has grouped UserInstances
+            updateTimelineForFrame(frameIdx);
         }
 
         /**
@@ -1203,6 +1230,14 @@
                 : 'N/A';
             setStatus('Triangulated ' + totalTriangulated + ' frames (' + totalGroups + ' groups, avg error: ' + avgError + 'px)', 'success');
             console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
+
+            // Update timeline: mark frames with grouped UserInstances, refresh track bars
+            if (timeline) {
+                for (var [fIdx] of state.triangulationResults) {
+                    timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
+                }
+                timeline.refreshTracks(state.session);
+            }
         }
 
         // ============================================
@@ -1219,6 +1254,30 @@
                 }
             }
             return result;
+        }
+
+        /**
+         * Check whether a frame has any grouped UserInstances.
+         */
+        function frameHasGroupedUserInstances(frameIdx) {
+            var groups = getInstanceGroupsForFrame(frameIdx);
+            for (var i = 0; i < groups.length; i++) {
+                for (var [, inst] of groups[i].instances) {
+                    if (inst.type === 'user') return true;
+                }
+            }
+            return false;
+        }
+
+        /**
+         * Update timeline markers and track bars for a frame after group changes.
+         * Sets the white modified tick only if grouped UserInstances remain,
+         * and rebuilds track bars so removed groups disappear.
+         */
+        function updateTimelineForFrame(frameIdx) {
+            if (!timeline) return;
+            timeline.setFrameModified(frameIdx, frameHasGroupedUserInstances(frameIdx));
+            timeline.refreshTracks(state.session);
         }
 
         // ============================================
@@ -1792,10 +1851,8 @@
                         }
                     }
 
-                    // Update timeline modification state
-                    if (timeline) {
-                        timeline.setFrameModified(frameIdx, true);
-                    }
+                    // Update timeline: clear tick if no grouped users remain, update track bars
+                    updateTimelineForFrame(frameIdx);
 
                     // Update 3D viewport
                     if (viewport3d) {
@@ -1817,7 +1874,7 @@
                     var textEl = document.getElementById('manualAssignToastText');
                     if (textEl) {
                         var totalUnlinked = getTotalUnlinkedCount();
-                        textEl.textContent = 'Frame ' + state.currentFrame +
+                        textEl.textContent = 'Frame ' + (state.currentFrame + 1) +
                             '. Select instances for manual Identity Assignment. Instances Selected: ' +
                             count + '/' + totalUnlinked;
                     }
@@ -1870,7 +1927,7 @@
                     }
 
                     setStatus('Created group: ' + trackName, 'success');
-                    if (timeline) timeline.setFrameModified(state.currentFrame, true);
+                    updateTimelineForFrame(state.currentFrame);
                     if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
@@ -2246,31 +2303,10 @@
                 exportLabels();
             });
 
-            document.getElementById('menuExportSlp').addEventListener('click', async function () {
+            document.getElementById('menuExportSlp').addEventListener('click', function () {
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
-                const data = buildSlpExportData(state.session, state.views, state.videoFiles);
-
-                // Try server-side conversion first
-                try {
-                    const resp = await fetch('/convert-slp', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(data),
-                    });
-                    if (resp.ok) {
-                        const slpBlob = await resp.blob();
-                        downloadBlob(slpBlob, 'labels_export.slp');
-                        setStatus('SLP exported: labels_export.slp', 'success');
-                        return;
-                    }
-                } catch (e) {
-                    // Server unavailable — fall back to JSON
-                }
-
-                // Fallback: download as JSON
-                downloadJSON(data, 'labels_export.slp.json');
-                setStatus('SLP JSON exported \u2014 convert with: python scripts/json_to_slp.py labels_export.slp.json output.slp', 'success');
+                showSlpExportAllModal();
             });
 
             document.getElementById('menuExportSlpPerCam').addEventListener('click', function () {
@@ -2344,9 +2380,7 @@
             setStatus('Unlinked ' + trackName, 'success');
 
             // Refresh everything
-            if (timeline) {
-                timeline.setFrameModified(frameIdx, true);
-            }
+            updateTimelineForFrame(frameIdx);
             if (viewport3d) {
                 var groups = getInstanceGroupsForFrame(frameIdx);
                 viewport3d.setFrame(groups);
@@ -2686,6 +2720,14 @@
 
             // Toolbar buttons
             document.getElementById('tbAddInstance').addEventListener('click', function () {
+                // Sync selected view from active panel before creating instance
+                if (interactionManager && paneManager && paneManager.api) {
+                    var ap = paneManager.api.activePanel;
+                    if (ap) {
+                        var r = panelRenderers.get(ap.id);
+                        if (r) interactionManager.lastInteractedView = r.getViewName();
+                    }
+                }
                 addNewInstanceSmart();
             });
             document.getElementById('tbDeleteInstance').addEventListener('click', function () {
@@ -2761,7 +2803,7 @@
                     }
                     state.session.removeInstanceGroup(state.currentFrame, group);
                     setStatus('Deleted group', 'success');
-                    if (timeline) timeline.setFrameModified(state.currentFrame, true);
+                    updateTimelineForFrame(state.currentFrame);
                     if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
@@ -2780,7 +2822,7 @@
         function updateSeekbar(frameIdx) {
             if (frameIdx === undefined) frameIdx = state.currentFrame;
             updateSeekbarVisual(frameIdx);
-            document.getElementById('currentFrame').textContent = frameIdx;
+            document.getElementById('currentFrame').textContent = frameIdx + 1;
 
             // Update 3D viewport on frame change
             update3DViewport(frameIdx);
@@ -2790,7 +2832,7 @@
             const pct = state.totalFrames > 1 ? (frameIdx / (state.totalFrames - 1)) * 100 : 0;
             document.getElementById('seekbarProgress').style.width = pct + '%';
             document.getElementById('seekbarThumb').style.left = pct + '%';
-            document.getElementById('currentFrame').textContent = frameIdx;
+            document.getElementById('currentFrame').textContent = frameIdx + 1;
         }
 
         function onPlaybackStateChange(isPlaying) {
@@ -3060,7 +3102,7 @@
             }
 
             cleanupEditGroup();
-            if (timeline) timeline.setFrameModified(frameIdx, true);
+            updateTimelineForFrame(frameIdx);
             if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(frameIdx));
             drawAllOverlays(state.currentFrame);
             updateInfoPanel();
@@ -3280,6 +3322,7 @@
                     update3DViewport(state.currentFrame);
                 }
                 setStatus('Auto-assigned ' + groupsCreated + ' identity group(s) across ' + viewNames.length + ' views', 'success');
+                updateTimelineForFrame(state.currentFrame);
             } else {
                 setStatus('No matching identities found across selected views', 'warning');
             }
@@ -3592,10 +3635,10 @@
                 '<div class="modal-range-row">' +
                 '<div class="frame-inputs-row">' +
                 '  <label>Start</label>' +
-                '  <input type="number" id="mfInputStart" min="0" max="' + maxFrame + '" value="0">' +
+                '  <input type="number" id="mfInputStart" min="1" max="' + (maxFrame + 1) + '" value="1">' +
                 '  <span class="separator">—</span>' +
                 '  <label>End</label>' +
-                '  <input type="number" id="mfInputEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+                '  <input type="number" id="mfInputEnd" min="1" max="' + (maxFrame + 1) + '" value="' + (maxFrame + 1) + '">' +
                 '</div>' +
                 '<div class="modal-views-section" id="mfViewsSection"' +
                     (viewsList ? '' : ' style="display:none"') + '>' +
@@ -3637,8 +3680,8 @@
                     rangeStart.value = e;
                     s = e;
                 }
-                inputStart.value = s;
-                inputEnd.value = e;
+                inputStart.value = s + 1;
+                inputEnd.value = e + 1;
                 updateSliderFill();
             }
 
@@ -3646,21 +3689,19 @@
             rangeEnd.addEventListener('input', syncSliders);
 
             inputStart.addEventListener('change', function () {
-                var v = parseInt(inputStart.value);
+                var v = parseInt(inputStart.value) - 1;
                 if (isNaN(v) || v < 0) v = 0;
                 if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
                 if (v > maxFrame) v = maxFrame;
-                inputStart.value = v;
                 rangeStart.value = v;
                 syncSliders();
             });
 
             inputEnd.addEventListener('change', function () {
-                var v = parseInt(inputEnd.value);
+                var v = parseInt(inputEnd.value) - 1;
                 if (isNaN(v) || v < 0) v = 0;
                 if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
                 if (v > maxFrame) v = maxFrame;
-                inputEnd.value = v;
                 rangeEnd.value = v;
                 syncSliders();
             });
@@ -3728,7 +3769,7 @@
         function startViewSelectionForFrames(startFrame, endFrame, isSingleFrame) {
             var fg = state.session.getFrameGroup(startFrame);
             if (!fg) {
-                setStatus('No instances on frame ' + startFrame, 'warning');
+                setStatus('No instances on frame ' + (startFrame + 1), 'warning');
                 return;
             }
 
@@ -3773,7 +3814,7 @@
                     // Update view count in toast
                     var textEl = document.getElementById('autoAssignToastText');
                     if (textEl) {
-                        textEl.textContent = 'Frame ' + startFrame +
+                        textEl.textContent = 'Frame ' + (startFrame + 1) +
                             '. Select views for automatic Identity Assignment. Views Selected: ' +
                             autoAssignState.selectedViews.size + '/' + totalViews;
                     }
@@ -3901,6 +3942,14 @@
             }
 
             setStatus('Multi-frame assignment complete: ' + assigned + '/' + totalFrames + ' frames assigned', 'success');
+
+            // Update timeline: mark frames with grouped UserInstances, refresh track bars
+            if (timeline) {
+                for (var [fIdx] of state.triangulationResults) {
+                    timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
+                }
+                timeline.refreshTracks(state.session);
+            }
         }
 
         // ============================================
@@ -3926,10 +3975,10 @@
                 if (vf.slpFilename) {
                     sourceLabel = vf.slpFilename;
                     var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
-                    var versionMatch = stem.match(/_3D_v(\d+)$/);
+                    var versionMatch = stem.match(/_(?:3D_)?v(\d+)$/);
                     var nextVersion = versionMatch ? parseInt(versionMatch[1]) + 1 : 1;
-                    var baseStem = versionMatch ? stem.replace(/_3D_v\d+$/, '') : stem;
-                    outputName = baseStem + '_3D_v' + nextVersion + '.slp';
+                    var baseStem = versionMatch ? stem.replace(/_(?:3D_)?v\d+$/, '') : stem;
+                    outputName = baseStem + '_v' + nextVersion + '.slp';
                 } else {
                     // Video-only entry: derive from video/camera name
                     var videoName = (vf.file && vf.file.name) ? vf.file.name : (vf.name || 'video');
@@ -3963,12 +4012,46 @@
                     if (hasEdits) break;
                 }
 
+                // Compute per-camera stats (matching bottom status bar logic)
+                var labeledFrames = 0;
+                var instanceCount = 0;
+                var triangulatedFrames = 0;
+                for (var [sfIdx, sfg] of state.session.frameGroups) {
+                    var sfHasLabeled = false;
+                    var sfCamInsts = sfg.instances.get(camName) || [];
+                    for (var sci = 0; sci < sfCamInsts.length; sci++) {
+                        var sft = sfCamInsts[sci].type || 'user';
+                        if (sft === 'user') { sfHasLabeled = true; instanceCount++; }
+                        else if (sft === 'predicted') { sfHasLabeled = true; }
+                    }
+                    var sfUl = sfg.getUnlinkedInstances(camName);
+                    for (var sui = 0; sui < sfUl.length; sui++) {
+                        if ((sfUl[sui].instance.type || 'user') === 'user') {
+                            sfHasLabeled = true; instanceCount++;
+                        }
+                    }
+                    if (sfHasLabeled) labeledFrames++;
+                    var sfTm = state.session.instanceGroups.get(sfIdx);
+                    if (sfTm) {
+                        for (var sfGroups of sfTm.values()) {
+                            var sfFound = false;
+                            for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
+                                if (sfGroups[sfgi].points3d) { triangulatedFrames++; sfFound = true; break; }
+                            }
+                            if (sfFound) break;
+                        }
+                    }
+                }
+
                 slpEntries.push({
                     camName: camName,
                     sourceLabel: sourceLabel,
                     outputName: outputName,
                     hasEdits: hasEdits,
                     videoFile: vf,
+                    labeledFrames: labeledFrames,
+                    instanceCount: instanceCount,
+                    triangulatedFrames: triangulatedFrames,
                 });
             }
 
@@ -3986,6 +4069,9 @@
                     '<tr class="' + rowClass + '" data-idx="' + ei + '">' +
                     '<td>' + entry.sourceLabel + '</td>' +
                     '<td>' + entry.outputName + '</td>' +
+                    '<td>' + entry.labeledFrames + '</td>' +
+                    '<td>' + entry.instanceCount + '</td>' +
+                    '<td>' + entry.triangulatedFrames + '</td>' +
                     '</tr>';
             }
 
@@ -3993,19 +4079,20 @@
                 '<h3>Export SLP File</h3>' +
                 '<div class="slp-export-table-container">' +
                 '<table class="data-table slp-export-table">' +
-                '<thead><tr><th>Source</th><th>Output Filename</th></tr></thead>' +
+                '<thead><tr><th>Source</th><th>Output Filename</th><th>Labeled</th><th>Instances</th><th>Triangulated</th></tr></thead>' +
                 '<tbody>' + tableRows + '</tbody>' +
                 '</table>' +
                 '</div>' +
                 '<div class="slp-export-options">' +
-                '<label><input type="checkbox" id="slpExportReprojAsUser"> Save Reprojections as UserInstance</label>' +
+                '<label><input type="checkbox" id="slpExportReproj"> Save Reprojections</label>' +
+                '<span class="slp-reproj-toggle" id="slpReprojToggle">' +
+                '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
+                '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
+                '</span>' +
                 '</div>' +
                 '<div class="slp-export-filename-row">' +
                 '<label>Output Filename</label>' +
                 '<input type="text" id="slpExportFilename" value="" placeholder="Select a source above">' +
-                '</div>' +
-                '<div class="slp-export-note">' +
-                'Requires server: <code>python server.py</code> (with h5py, numpy installed). Falls back to JSON if server unavailable.' +
                 '</div>' +
                 '<div class="modal-actions">' +
                 '<button id="slpExportCancel">Cancel</button>' +
@@ -4018,6 +4105,30 @@
             // State
             var selectedIdx = -1;
             var filenameInput = document.getElementById('slpExportFilename');
+
+            // Reprojection toggle switch
+            var reprojCheckbox = document.getElementById('slpExportReproj');
+            var reprojToggle = document.getElementById('slpReprojToggle');
+            var toggleOptions = reprojToggle.querySelectorAll('.slp-toggle-option');
+
+            function updateReprojToggleState() {
+                if (reprojCheckbox.checked) {
+                    reprojToggle.classList.remove('slp-toggle-disabled');
+                } else {
+                    reprojToggle.classList.add('slp-toggle-disabled');
+                }
+            }
+            reprojCheckbox.addEventListener('change', updateReprojToggleState);
+            updateReprojToggleState();
+
+            toggleOptions.forEach(function (opt) {
+                opt.addEventListener('click', function () {
+                    if (reprojCheckbox.checked) {
+                        toggleOptions.forEach(function (o) { o.classList.remove('slp-toggle-active'); });
+                        opt.classList.add('slp-toggle-active');
+                    }
+                });
+            });
 
             // Row click selection
             var rows = modal.querySelectorAll('.slp-export-row');
@@ -4041,47 +4152,255 @@
                 if (selectedIdx < 0) return;
                 var entry = slpEntries[selectedIdx];
                 var outputFilename = filenameInput.value.trim() || entry.outputName;
-                var reprojAsUser = document.getElementById('slpExportReprojAsUser').checked;
+                var saveReproj = document.getElementById('slpExportReproj').checked;
+                var reprojToggle = document.querySelector('#slpReprojToggle .slp-toggle-active');
+                // null = don't save reprojections, true = save as UserInstance, false = save as PredictedInstance
+                var reprojAsUser = saveReproj ? (reprojToggle && reprojToggle.getAttribute('data-value') === 'user') : null;
 
                 document.getElementById('slpExportBtn').disabled = true;
                 document.getElementById('slpExportBtn').textContent = 'Exporting...';
 
                 try {
-                    var data = buildPerCameraSlpJson(
-                        state.session, entry.camName, reprojAsUser, entry.videoFile
-                    );
-
-                    // Try server-side conversion first
                     var slpFilename = outputFilename.replace(/\.slp\.json$/, '.slp');
-                    if (!slpFilename.endsWith('.slp')) slpFilename = outputFilename;
-                    try {
-                        var resp = await fetch('/convert-slp', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(data),
-                        });
-                        if (resp.ok) {
-                            var slpBlob = await resp.blob();
-                            downloadBlob(slpBlob, slpFilename);
-                            setStatus('Exported ' + slpFilename, 'success');
-                            overlay.remove();
-                            return;
-                        }
-                    } catch (e) {
-                        // Server unavailable — fall back to JSON
-                    }
+                    if (!slpFilename.endsWith('.slp')) slpFilename += '.slp';
 
-                    // Fallback: download as JSON
-                    var jsonFilename = slpFilename.replace(/\.slp$/, '.slp.json');
-                    var jsonBlob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                    downloadBlob(jsonBlob, jsonFilename);
-                    setStatus('Exported JSON — convert with: python scripts/json_to_slp.py ' + jsonFilename + ' output.slp', 'success');
+                    // Client-side SLP export via sleap-io.js
+                    var slpBlob = await exportSlpClientSide(
+                        state.session, entry.camName, reprojAsUser, entry.videoFile, slpFilename
+                    );
+                    downloadBlob(slpBlob, slpFilename);
+                    setStatus('Exported ' + slpFilename, 'success');
                     overlay.remove();
                 } catch (err) {
                     console.error('[slp-export]', err);
                     setStatus('Export failed: ' + err.message, 'error');
                     document.getElementById('slpExportBtn').disabled = false;
                     document.getElementById('slpExportBtn').textContent = 'Export';
+                }
+            });
+        }
+
+        // ============================================
+        // Export SLP (All Views) Modal
+        // ============================================
+
+        function showSlpExportAllModal() {
+            var overlay = document.createElement('div');
+            overlay.className = 'multi-frame-modal-overlay';
+
+            var modal = document.createElement('div');
+            modal.className = 'multi-frame-modal slp-export-modal slp-export-all-modal';
+
+            // Build entries from videoFiles
+            var entries = [];
+            for (var i = 0; i < state.videoFiles.length; i++) {
+                var vf = state.videoFiles[i];
+                if (!vf.assignedCamera) continue;
+                var camName = vf.name;
+                var outputName;
+                if (vf.slpFilename) {
+                    var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
+                    var vm = stem.match(/_(?:3D_)?v(\d+)$/);
+                    var nv = vm ? parseInt(vm[1]) + 1 : 1;
+                    var bs = vm ? stem.replace(/_(?:3D_)?v\d+$/, '') : stem;
+                    outputName = bs + '_v' + nv + '.slp';
+                } else {
+                    var vn = (vf.file && vf.file.name) ? vf.file.name : (vf.name || 'video');
+                    outputName = vn.replace(/\.[^.]+$/, '') + '_v1.slp';
+                }
+
+                // Per-camera stats
+                var labeledFrames = 0, instanceCount = 0, triangulatedFrames = 0;
+                for (var [sfIdx, sfg] of state.session.frameGroups) {
+                    var sfHasLabeled = false;
+                    var sfCamInsts = sfg.instances.get(camName) || [];
+                    for (var sci = 0; sci < sfCamInsts.length; sci++) {
+                        var sft = sfCamInsts[sci].type || 'user';
+                        if (sft === 'user') { sfHasLabeled = true; instanceCount++; }
+                        else if (sft === 'predicted') { sfHasLabeled = true; }
+                    }
+                    var sfUl = sfg.getUnlinkedInstances(camName);
+                    for (var sui = 0; sui < sfUl.length; sui++) {
+                        if ((sfUl[sui].instance.type || 'user') === 'user') { sfHasLabeled = true; instanceCount++; }
+                    }
+                    if (sfHasLabeled) labeledFrames++;
+                    var sfTm = state.session.instanceGroups.get(sfIdx);
+                    if (sfTm) {
+                        for (var sfGroups of sfTm.values()) {
+                            var sfFound = false;
+                            for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
+                                if (sfGroups[sfgi].points3d) { triangulatedFrames++; sfFound = true; break; }
+                            }
+                            if (sfFound) break;
+                        }
+                    }
+                }
+
+                entries.push({
+                    camName: camName,
+                    outputName: outputName,
+                    videoFile: vf,
+                    labeledFrames: labeledFrames,
+                    instanceCount: instanceCount,
+                    triangulatedFrames: triangulatedFrames,
+                    selected: true,
+                    reprojMode: 'none', // 'none', 'user', 'predicted'
+                });
+            }
+
+            if (entries.length === 0) {
+                setStatus('No video files loaded', 'warning');
+                return;
+            }
+
+            // Build table rows
+            var tableRows = '';
+            for (var ei = 0; ei < entries.length; ei++) {
+                var e = entries[ei];
+                tableRows +=
+                    '<tr class="slp-export-row slp-all-row slp-all-selected" data-idx="' + ei + '">' +
+                    '<td>' + e.camName + '</td>' +
+                    '<td><input type="text" class="slp-all-filename" value="' + e.outputName + '" data-idx="' + ei + '"></td>' +
+                    '<td>' + e.labeledFrames + '</td>' +
+                    '<td>' + e.instanceCount + '</td>' +
+                    '<td>' + e.triangulatedFrames + '</td>' +
+                    '<td class="slp-all-reproj-cell">' +
+                    '<span class="slp-reproj-toggle slp-all-reproj" data-idx="' + ei + '">' +
+                    '<span class="slp-toggle-option slp-toggle-active" data-value="none">None</span>' +
+                    '<span class="slp-toggle-option" data-value="user">User</span>' +
+                    '<span class="slp-toggle-option" data-value="predicted">Predicted</span>' +
+                    '</span>' +
+                    '</td>' +
+                    '</tr>';
+            }
+
+            modal.innerHTML =
+                '<h3>Export SLP (All Views)</h3>' +
+                '<div class="slp-export-table-container">' +
+                '<table class="data-table slp-export-table">' +
+                '<thead><tr><th>Camera</th><th>Output Filename</th><th>Labeled</th><th>Instances</th><th>Triangulated</th><th>Reprojections</th></tr></thead>' +
+                '<tbody>' + tableRows + '</tbody>' +
+                '</table>' +
+                '</div>' +
+                '<div class="modal-actions">' +
+                '<button id="slpAllCancel">Cancel</button>' +
+                '<button class="primary" id="slpAllExport">Export</button>' +
+                '</div>';
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            // Row click toggles selection (click on row itself, not inputs)
+            var rows = modal.querySelectorAll('.slp-all-row');
+            rows.forEach(function (row) {
+                row.addEventListener('click', function (ev) {
+                    if (ev.target.tagName === 'INPUT' || ev.target.closest('.slp-reproj-toggle')) return;
+                    var idx = parseInt(row.getAttribute('data-idx'));
+                    entries[idx].selected = !entries[idx].selected;
+                    row.classList.toggle('slp-all-selected', entries[idx].selected);
+                });
+            });
+
+            // Filename inputs update entries
+            modal.querySelectorAll('.slp-all-filename').forEach(function (input) {
+                input.addEventListener('change', function () {
+                    var idx = parseInt(input.getAttribute('data-idx'));
+                    entries[idx].outputName = input.value.trim() || entries[idx].outputName;
+                });
+                input.addEventListener('click', function (ev) { ev.stopPropagation(); });
+            });
+
+            // Per-row reproj toggle
+            modal.querySelectorAll('.slp-all-reproj').forEach(function (toggle) {
+                var opts = toggle.querySelectorAll('.slp-toggle-option');
+                opts.forEach(function (opt) {
+                    opt.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        var idx = parseInt(toggle.getAttribute('data-idx'));
+                        opts.forEach(function (o) { o.classList.remove('slp-toggle-active'); });
+                        opt.classList.add('slp-toggle-active');
+                        entries[idx].reprojMode = opt.getAttribute('data-value');
+                    });
+                });
+            });
+
+            // Cancel
+            document.getElementById('slpAllCancel').addEventListener('click', function () {
+                overlay.remove();
+            });
+
+            // Export
+            document.getElementById('slpAllExport').addEventListener('click', async function () {
+                var selected = entries.filter(function (e) { return e.selected; });
+                if (selected.length === 0) {
+                    setStatus('No views selected for export', 'warning');
+                    return;
+                }
+
+                var SIO = window.SleapIO;
+                if (!SIO) { setStatus('sleap-io.js not loaded yet', 'error'); return; }
+
+                var exportBtn = document.getElementById('slpAllExport');
+                exportBtn.disabled = true;
+                exportBtn.textContent = 'Exporting...';
+
+                try {
+                    // Get directory handle (reuse cached or prompt)
+                    var dirHandle = state.exportDirHandle;
+                    if (!dirHandle) {
+                        dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                        state.exportDirHandle = dirHandle;
+                    }
+
+                    var exported = 0;
+                    for (var si = 0; si < selected.length; si++) {
+                        var entry = selected[si];
+                        var reprojAsUser = entry.reprojMode === 'none' ? null : (entry.reprojMode === 'user');
+                        var slpFilename = entry.outputName;
+                        if (!slpFilename.endsWith('.slp')) slpFilename += '.slp';
+
+                        var slpBlob = await exportSlpClientSide(
+                            state.session, entry.camName, reprojAsUser, entry.videoFile, slpFilename
+                        );
+
+                        // Resolve subdirectory
+                        var subDirName = state.cameraDirMap[entry.camName] || entry.camName;
+                        var subDir;
+                        try {
+                            subDir = await dirHandle.getDirectoryHandle(subDirName, { create: false });
+                        } catch (e) {
+                            // Subdirectory doesn't exist — try creating it
+                            try {
+                                subDir = await dirHandle.getDirectoryHandle(subDirName, { create: true });
+                            } catch (e2) {
+                                console.warn('[export-all] Could not access/create dir ' + subDirName + ':', e2);
+                                setStatus('Cannot write to ' + subDirName + '/ — skipping ' + entry.camName, 'warning');
+                                continue;
+                            }
+                        }
+
+                        var fileHandle = await subDir.getFileHandle(slpFilename, { create: true });
+                        var writable = await fileHandle.createWritable();
+                        await writable.write(slpBlob);
+                        await writable.close();
+                        exported++;
+
+                        exportBtn.textContent = 'Exporting... (' + (si + 1) + '/' + selected.length + ')';
+                    }
+
+                    setStatus('Exported ' + exported + ' SLP file(s)', 'success');
+                    overlay.remove();
+                } catch (err) {
+                    if (err.name === 'AbortError') {
+                        // User cancelled directory picker
+                        exportBtn.disabled = false;
+                        exportBtn.textContent = 'Export';
+                        return;
+                    }
+                    console.error('[slp-export-all]', err);
+                    setStatus('Export failed: ' + err.message, 'error');
+                    exportBtn.disabled = false;
+                    exportBtn.textContent = 'Export';
                 }
             });
         }
@@ -4149,10 +4468,10 @@
                 '<div class="modal-range-row">' +
                 '<div class="frame-inputs-row">' +
                 '  <label>Start</label>' +
-                '  <input type="number" id="tfInputStart" min="0" max="' + maxFrame + '" value="0">' +
+                '  <input type="number" id="tfInputStart" min="1" max="' + (maxFrame + 1) + '" value="1">' +
                 '  <span class="separator">—</span>' +
                 '  <label>End</label>' +
-                '  <input type="number" id="tfInputEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+                '  <input type="number" id="tfInputEnd" min="1" max="' + (maxFrame + 1) + '" value="' + (maxFrame + 1) + '">' +
                 '</div>' +
                 '<div class="modal-views-section">' +
                 '  <label>Cameras</label>' + viewsList +
@@ -4194,8 +4513,8 @@
                     rangeStart.value = e;
                     s = e;
                 }
-                inputStart.value = s;
-                inputEnd.value = e;
+                inputStart.value = s + 1;
+                inputEnd.value = e + 1;
                 updateSliderFill();
                 // Clear error when range changes
                 document.getElementById('tfError').style.display = 'none';
@@ -4205,21 +4524,19 @@
             rangeEnd.addEventListener('input', syncSliders);
 
             inputStart.addEventListener('change', function () {
-                var v = parseInt(inputStart.value);
+                var v = parseInt(inputStart.value) - 1;
                 if (isNaN(v) || v < 0) v = 0;
                 if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
                 if (v > maxFrame) v = maxFrame;
-                inputStart.value = v;
                 rangeStart.value = v;
                 syncSliders();
             });
 
             inputEnd.addEventListener('change', function () {
-                var v = parseInt(inputEnd.value);
+                var v = parseInt(inputEnd.value) - 1;
                 if (isNaN(v) || v < 0) v = 0;
                 if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
                 if (v > maxFrame) v = maxFrame;
-                inputEnd.value = v;
                 rangeEnd.value = v;
                 syncSliders();
             });
@@ -4249,9 +4566,9 @@
                 if (missingFrames.length > 0) {
                     var errorEl = document.getElementById('tfError');
                     if (missingFrames.length === 1) {
-                        errorEl.textContent = 'Frame ' + missingFrames[0] + ' does not have identity assignment.';
+                        errorEl.textContent = 'Frame ' + (missingFrames[0] + 1) + ' does not have identity assignment.';
                     } else {
-                        errorEl.textContent = 'Frames [' + condenseMissingFrames(missingFrames) + '] do not have identity assignment.';
+                        errorEl.textContent = 'Frames [' + condenseMissingFrames(missingFrames.map(function(f) { return f + 1; })) + '] do not have identity assignment.';
                     }
                     errorEl.style.display = 'block';
                     return;
@@ -4395,15 +4712,29 @@
             }
 
             setStatus('Multi-frame triangulation complete: ' + triangulated + '/' + totalFrames + ' frames, avg error: ' + avgError + 'px', 'success');
+
+            // Update timeline: mark frames with grouped UserInstances, refresh track bars
+            if (timeline) {
+                for (var [fIdx] of state.triangulationResults) {
+                    timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
+                }
+                timeline.refreshTracks(state.session);
+            }
         }
 
         // ============================================
         // View Mode Switching (grid / single)
         // ============================================
 
+        var savedGridLayout = null; // cached dockview layout JSON from grid mode
+
         function toggleViewMode() {
             if (state.views.length === 0) return;
             if (state.viewMode === 'grid') {
+                // Save grid layout before switching to single view
+                if (paneManager.api) {
+                    savedGridLayout = paneManager.api.toJSON();
+                }
                 state.viewMode = 'single';
                 // Start at the last-interacted view
                 var startIdx = 0;
@@ -4436,7 +4767,33 @@
 
         function setGridMode() {
             state.viewMode = 'grid';
-            updateVideoGridDisplay();
+            if (savedGridLayout && paneManager.api) {
+                // Restore saved grid layout
+                var savedZoom = {};
+                for (var zi = 0; zi < state.views.length; zi++) {
+                    var zv = state.views[zi];
+                    if (zv.zoom) {
+                        savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
+                    }
+                }
+                paneManager.clearAll();
+                paneManager.api.fromJSON(savedGridLayout);
+                var emptyMsg = document.getElementById('videoDockEmpty');
+                if (emptyMsg) emptyMsg.classList.add('hidden');
+                refreshPaneInteractions();
+                // Restore zoom state
+                for (var ri = 0; ri < state.views.length; ri++) {
+                    var rv = state.views[ri];
+                    if (savedZoom[rv.name] && rv.zoom) {
+                        rv.zoom.scale = savedZoom[rv.name].scale;
+                        rv.zoom.offsetX = savedZoom[rv.name].offsetX;
+                        rv.zoom.offsetY = savedZoom[rv.name].offsetY;
+                        if (videoController) videoController.applyZoom(rv);
+                    }
+                }
+            } else {
+                updateVideoGridDisplay();
+            }
         }
 
         function updateVideoGridDisplay() {
@@ -5529,7 +5886,7 @@
                         const rtdTrack = document.createElement('td');
                         const rdot = document.createElement('span');
                         rdot.className = 'track-indicator';
-                        rdot.style.backgroundColor = getTrackColor(group.trackIdx);
+                        rdot.style.backgroundColor = REPROJECTION_COLOR;
                         rdot.style.marginRight = '4px';
                         rtdTrack.appendChild(rdot);
                         rtdTrack.appendChild(document.createTextNode(trackName));
@@ -6434,7 +6791,7 @@
                             var inst = new Instance(
                                 instData.points,
                                 instData.trackIdx || 0,
-                                instData.type || 'predicted',
+                                instData.type || 'user',
                                 instData.score || 1.0
                             );
                             inst.modified = instData.modified || false;
@@ -7099,7 +7456,7 @@
                                 const inst = new Instance(
                                     instData.points,
                                     instData.trackIdx || 0,
-                                    instData.type || 'predicted',
+                                    instData.type || 'user',
                                     instData.score || 1.0
                                 );
                                 inst.modified = instData.modified || false;
@@ -7342,6 +7699,12 @@
 
                 console.log('[session-folder] Matched camera dirs:', matchedCameraDirs.length);
 
+                // Cache camera-to-subdirectory mapping for export
+                state.cameraDirMap = {};
+                for (var mci = 0; mci < matchedCameraDirs.length; mci++) {
+                    state.cameraDirMap[matchedCameraDirs[mci].camName] = matchedCameraDirs[mci].dirName;
+                }
+
                 // 3. Load each camera directory
                 // Reset state for new session
                 if (state.session || state.views.length > 0) {
@@ -7356,14 +7719,27 @@
 
                 var firstSession = null;
                 var skeletonFromSlp = null;
+                var slpVersionsLoaded = {}; // camName -> version number loaded
 
                 for (var cdi = 0; cdi < matchedCameraDirs.length; cdi++) {
                     var camDir = matchedCameraDirs[cdi];
                     var camName = camDir.camName;
 
-                    // Load SLP if present
+                    // Load SLP if present — pick highest-versioned file
                     if (camDir.slps.length > 0) {
-                        var slpFile = camDir.slps[0];  // first SLP in directory
+                        var slpFile = camDir.slps[0];
+                        var bestVersion = -1;
+                        for (var sli = 0; sli < camDir.slps.length; sli++) {
+                            var slStem = camDir.slps[sli].name.replace(/\.[^.]+$/, '');
+                            var slVer = slStem.match(/_(?:3D_)?v(\d+)$/);
+                            var ver = slVer ? parseInt(slVer[1]) : 0;
+                            if (ver > bestVersion) {
+                                bestVersion = ver;
+                                slpFile = camDir.slps[sli];
+                            }
+                        }
+                        console.log('[session-folder] Loading SLP: ' + slpFile.name + ' (version ' + bestVersion + ')');
+                        slpVersionsLoaded[camName] = bestVersion;
                         showLoading('Loading SLP: ' + slpFile.name + ' (' + (cdi + 1) + '/' + matchedCameraDirs.length + ')...');
 
                         var slpData;
@@ -7414,7 +7790,23 @@
                         }
                     }
 
-                    var slpFilenameForCam = (camDir.slps.length > 0) ? camDir.slps[0].name : null;
+                    // Scan all SLP files to find the highest version number
+                    var slpFilenameForCam = null;
+                    var highestVersion = 0;
+                    for (var sfi = 0; sfi < camDir.slps.length; sfi++) {
+                        var slpName = camDir.slps[sfi].name;
+                        if (!slpFilenameForCam) slpFilenameForCam = slpName;
+                        var slpStem = slpName.replace(/\.[^.]+$/, '');
+                        // Match both _3D_v<N> and _v<N> patterns
+                        var verMatch = slpStem.match(/_(?:3D_)?v(\d+)$/);
+                        if (verMatch) {
+                            var ver = parseInt(verMatch[1]);
+                            if (ver > highestVersion) {
+                                highestVersion = ver;
+                                slpFilenameForCam = slpName;
+                            }
+                        }
+                    }
 
                     // Load video (first in directory)
                     if (camDir.videos.length > 0) {
@@ -7471,6 +7863,19 @@
                         } catch (vidErr) {
                             console.error('[session-folder] Failed to load video ' + videoFile.name + ':', vidErr);
                         }
+                    }
+                }
+
+                // Check SLP version consistency across cameras
+                var loadedVersions = Object.values(slpVersionsLoaded);
+                if (loadedVersions.length > 1) {
+                    var allSame = loadedVersions.every(function (v) { return v === loadedVersions[0]; });
+                    if (!allSame) {
+                        var versionDetails = Object.keys(slpVersionsLoaded).map(function (cam) {
+                            return cam + ': v' + slpVersionsLoaded[cam];
+                        }).join(', ');
+                        console.warn('[session-folder] Inconsistent SLP versions across cameras:', versionDetails);
+                        setStatus('Warning: SLP versions differ across cameras (' + versionDetails + ')', 'warning');
                     }
                 }
 
@@ -7704,7 +8109,7 @@
                         var inst = new Instance(
                             instData.points,
                             instData.trackIdx >= 0 ? instData.trackIdx : 0,
-                            instData.type || 'predicted',
+                            instData.type || 'user',
                             instData.score || 0
                         );
                         if (instData.occluded) inst.occluded = instData.occluded;
@@ -8730,6 +9135,10 @@
                             activeViewName = renderer.getViewName();
                         }
                     }
+                    // Update interaction manager so new instances are created on the selected view
+                    if (activeViewName && interactionManager) {
+                        interactionManager.lastInteractedView = activeViewName;
+                    }
                     // Highlight corresponding camera in 3D viewer (skip during auto-assignment)
                     if (viewport3d && !autoAssignState) {
                         viewport3d.highlightCamera(activeViewName);
@@ -9170,7 +9579,7 @@
             if (!frameEl) return;
             frameEl.addEventListener('dblclick', function (e) {
                 e.stopPropagation();
-                var currentVal = state.currentFrame;
+                var currentVal = state.currentFrame + 1;
                 var input = document.createElement('input');
                 input.type = 'text';
                 input.value = currentVal;
@@ -9186,14 +9595,14 @@
                 function commit() {
                     var raw = input.value.trim();
                     var num = parseInt(raw, 10);
-                    if (!isNaN(num) && num >= 0 && num < state.totalFrames) {
-                        if (videoController) videoController.seekToFrame(num);
+                    if (!isNaN(num) && num >= 1 && num <= state.totalFrames) {
+                        if (videoController) videoController.seekToFrame(num - 1);
                     }
-                    frameEl.textContent = state.currentFrame;
+                    frameEl.textContent = state.currentFrame + 1;
                 }
 
                 function cancel() {
-                    frameEl.textContent = state.currentFrame;
+                    frameEl.textContent = state.currentFrame + 1;
                 }
 
                 input.addEventListener('keydown', function (ev) {

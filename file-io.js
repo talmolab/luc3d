@@ -1032,6 +1032,359 @@ function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo)
 }
 
 // ============================================
+// Client-side SLP export via sleap-io.js
+// ============================================
+
+/**
+ * Build a sleap-io.js Labels object for a single camera, ready for saveSlpToBytes().
+ *
+ * @param {Session} session
+ * @param {string} cameraName
+ * @param {boolean} reprojAsUser - Export ReprojectedInstances as user instances
+ * @param {Object} videoFileInfo - { videoWidth, videoHeight, frameCount, videoPath, file }
+ * @returns {Object} sleap-io.js Labels instance
+ */
+function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo) {
+    var SIO = window.SleapIO;
+    if (!SIO) throw new Error('sleap-io.js not loaded');
+
+    // 1. Build skeleton
+    var nodeNames = session.skeleton.nodes.map(function (n) {
+        return typeof n === 'string' ? n : (n.name || '');
+    });
+    var sioNodes = nodeNames.map(function (name) { return new SIO.Node(name); });
+    var sioEdges = (session.skeleton.edges || []).map(function (e) {
+        return new SIO.Edge(sioNodes[e[0]], sioNodes[e[1]]);
+    });
+    var skeleton = new SIO.Skeleton({
+        nodes: sioNodes,
+        edges: sioEdges,
+        name: session.skeleton.name || 'skeleton',
+    });
+
+    // 2. Build tracks — start with grouped tracks, extend for ungrouped later
+    var tracks = session.tracks.map(function (name) { return new SIO.Track(name); });
+
+    var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
+
+    // 3. Build video
+    var videoFilename = videoFileInfo.videoPath
+        || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
+    var vw = videoFileInfo.videoWidth || 0;
+    var vh = videoFileInfo.videoHeight || 0;
+    var fc = videoFileInfo.frameCount || 0;
+    var video = new SIO.Video({
+        filename: videoFilename,
+        backendMetadata: {
+            type: 'MediaVideo',
+            shape: [fc, vh, vw, 1],
+            filename: videoFilename,
+            grayscale: false,
+            bgr: false,
+        },
+        openBackend: false,
+    });
+    video.shape = [fc, vh, vw, 1];
+
+    // 4. Build labeled frames
+    var labeledFrames = [];
+    var numNodes = session.skeleton.nodes.length;
+
+    for (var fi = 0; fi < allFrameIndices.length; fi++) {
+        var frameIdx = allFrameIndices[fi];
+        var fg = session.frameGroups.get(frameIdx);
+
+        // Separate grouped instances from ungrouped for this camera
+        var groupedInstances = (fg.instances.get(cameraName) || []).slice();
+        var ungroupedInstances = [];
+        var ulInstances = fg.getUnlinkedInstances(cameraName);
+        for (var ui = 0; ui < ulInstances.length; ui++) {
+            ungroupedInstances.push(ulInstances[ui].instance);
+        }
+
+        // Collect reprojected instances with their group's trackIdx
+        var reprojInstances = [];
+        var trackMap = session.instanceGroups.get(frameIdx);
+        if (trackMap) {
+            for (var [trackIdx, groups] of trackMap) {
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                    if (reprojInst) {
+                        reprojInst._groupTrackIdx = groups[gi].trackIdx;
+                        reprojInstances.push(reprojInst);
+                    }
+                }
+            }
+        }
+
+        if (groupedInstances.length === 0 && ungroupedInstances.length === 0 && reprojInstances.length === 0) continue;
+
+        var frameInstances = [];
+
+        // 1. Grouped UserInstances first (retain their track)
+        for (var ii = 0; ii < groupedInstances.length; ii++) {
+            var inst = groupedInstances[ii];
+            var pts = _buildSioPoints(inst, numNodes);
+            var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+
+            if (inst.type === 'user') {
+                frameInstances.push(new SIO.Instance({
+                    points: pts,
+                    skeleton: skeleton,
+                    track: track,
+                }));
+            } else {
+                frameInstances.push(new SIO.PredictedInstance({
+                    points: pts,
+                    skeleton: skeleton,
+                    track: track,
+                    score: inst.score || 0,
+                }));
+            }
+        }
+
+        // 2. Ungrouped UserInstances next (no track assigned)
+        for (var ugi = 0; ugi < ungroupedInstances.length; ugi++) {
+            var ugInst = ungroupedInstances[ugi];
+            var ugPts = _buildSioPoints(ugInst, numNodes);
+
+            if (ugInst.type === 'user') {
+                frameInstances.push(new SIO.Instance({
+                    points: ugPts,
+                    skeleton: skeleton,
+                    track: null,
+                }));
+            } else {
+                frameInstances.push(new SIO.PredictedInstance({
+                    points: ugPts,
+                    skeleton: skeleton,
+                    track: null,
+                    score: ugInst.score || 0,
+                }));
+            }
+        }
+
+        // 3/4. Reprojections — same track as their associated group
+        if (reprojAsUser !== null) {
+            for (var ri = 0; ri < reprojInstances.length; ri++) {
+                var rInst = reprojInstances[ri];
+                var rPts = _buildSioPoints(rInst, numNodes);
+                var rTrackIdx = rInst._groupTrackIdx;
+                var rTrack = (rTrackIdx >= 0 && rTrackIdx < tracks.length) ? tracks[rTrackIdx] : null;
+
+                if (reprojAsUser) {
+                    frameInstances.push(new SIO.Instance({
+                        points: rPts,
+                        skeleton: skeleton,
+                        track: rTrack,
+                    }));
+                } else {
+                    frameInstances.push(new SIO.PredictedInstance({
+                        points: rPts,
+                        skeleton: skeleton,
+                        track: rTrack,
+                        score: rInst.score || 1.0,
+                    }));
+                }
+            }
+        }
+
+        labeledFrames.push(new SIO.LabeledFrame({
+            video: video,
+            frameIdx: frameIdx,
+            instances: frameInstances,
+        }));
+    }
+
+    // 5. Create Labels
+    return new SIO.Labels({
+        labeledFrames: labeledFrames,
+        videos: [video],
+        skeletons: [skeleton],
+        tracks: tracks,
+        provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+    });
+}
+
+/**
+ * Convert a LUCID instance's points to sleap-io.js Point array.
+ * @param {Instance} inst
+ * @param {number} numNodes
+ * @returns {Array} Point array
+ */
+function _buildSioPoints(inst, numNodes) {
+    var pts = [];
+    var nulledNodes = inst.nulledNodes || null;
+    for (var n = 0; n < numNodes; n++) {
+        var pt = inst.points[n];
+        var isNulled = nulledNodes && nulledNodes.has(n);
+        if (pt == null || isNulled) {
+            pts.push({ xy: [NaN, NaN], visible: false, complete: false });
+        } else {
+            var occ = inst.occluded && inst.occluded[n];
+            pts.push({ xy: [pt[0], pt[1]], visible: !occ, complete: true });
+        }
+    }
+    return pts;
+}
+
+/**
+ * Export SLP for a single camera using sleap-io.js (fully client-side).
+ *
+ * @param {Session} session
+ * @param {string} cameraName
+ * @param {boolean} reprojAsUser
+ * @param {Object} videoFileInfo
+ * @param {string} outputFilename
+ * @returns {Promise<Blob>} SLP file as a Blob
+ */
+async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename) {
+    var SIO = window.SleapIO;
+    if (!SIO) throw new Error('sleap-io.js not loaded');
+
+    var labels = buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo);
+    var bytes = await SIO.saveSlpToBytes(labels);
+    return new Blob([bytes], { type: 'application/x-hdf5' });
+}
+
+/**
+ * Build a sleap-io.js Labels object for all camera views.
+ *
+ * @param {Session} session
+ * @param {Array} views - Array of view objects with .name, .videoWidth, .videoHeight, .frameCount
+ * @param {Array} videoFiles - Array of videoFile objects
+ * @returns {Object} sleap-io.js Labels instance
+ */
+function buildSlpLabelsAllViews(session, views, videoFiles) {
+    var SIO = window.SleapIO;
+    if (!SIO) throw new Error('sleap-io.js not loaded');
+
+    // 1. Build skeleton
+    var nodeNames = session.skeleton.nodes.map(function (n) {
+        return typeof n === 'string' ? n : (n.name || '');
+    });
+    var sioNodes = nodeNames.map(function (name) { return new SIO.Node(name); });
+    var sioEdges = (session.skeleton.edges || []).map(function (e) {
+        return new SIO.Edge(sioNodes[e[0]], sioNodes[e[1]]);
+    });
+    var skeleton = new SIO.Skeleton({
+        nodes: sioNodes,
+        edges: sioEdges,
+        name: session.skeleton.name || 'skeleton',
+    });
+
+    // 2. Build tracks
+    var tracks = session.tracks.map(function (name) { return new SIO.Track(name); });
+
+    // 3. Build videos — one per camera
+    var camToVideoIdx = {};
+    var sioVideos = [];
+    session.cameras.forEach(function (cam, i) {
+        camToVideoIdx[cam.name] = i;
+        var videoPath = cam.name + '.mp4';
+        var vw = 0, vh = 0, fc = 0;
+        // Find matching view and videoFile info
+        for (var vi = 0; vi < (views || []).length; vi++) {
+            var v = views[vi];
+            if (v.name === cam.name) {
+                vw = v.videoWidth || 0;
+                vh = v.videoHeight || 0;
+                fc = v.frameCount || 0;
+                break;
+            }
+        }
+        if (videoFiles) {
+            for (var vfi = 0; vfi < videoFiles.length; vfi++) {
+                var vf = videoFiles[vfi];
+                if ((vf.name === cam.name || vf.assignedCamera === cam.name) && vf.videoPath) {
+                    videoPath = vf.videoPath;
+                    break;
+                }
+            }
+        }
+        var video = new SIO.Video({
+            filename: videoPath,
+            backendMetadata: {
+                type: 'MediaVideo',
+                shape: [fc, vh, vw, 1],
+                filename: videoPath,
+                grayscale: false,
+                bgr: false,
+            },
+            openBackend: false,
+        });
+        video.shape = [fc, vh, vw, 1];
+        sioVideos.push(video);
+    });
+
+    // 4. Build labeled frames — one per camera per frame group
+    var labeledFrames = [];
+    var numNodes = session.skeleton.nodes.length;
+    var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
+
+    for (var fi = 0; fi < allFrameIndices.length; fi++) {
+        var frameIdx = allFrameIndices[fi];
+        var fg = session.frameGroups.get(frameIdx);
+
+        // Build combined per-camera instance list (grouped + ungrouped)
+        var combinedInstances = new Map();
+        for (var [camName, camInsts] of fg.instances) {
+            combinedInstances.set(camName, camInsts.slice());
+        }
+        for (var [camName2, ulList] of fg.unlinkedInstances) {
+            if (!combinedInstances.has(camName2)) combinedInstances.set(camName2, []);
+            var arr = combinedInstances.get(camName2);
+            for (var u = 0; u < ulList.length; u++) arr.push(ulList[u].instance);
+        }
+
+        for (var [camName3, camInstances] of combinedInstances) {
+            var videoIdx = camToVideoIdx[camName3] !== undefined ? camToVideoIdx[camName3] : 0;
+            var video = sioVideos[videoIdx];
+            if (!video) continue;
+
+            var frameInstances = [];
+            for (var ii = 0; ii < camInstances.length; ii++) {
+                var inst = camInstances[ii];
+                var isUser = (inst.type === 'user');
+                var pts = _buildSioPoints(inst, numNodes);
+                var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+
+                if (isUser) {
+                    frameInstances.push(new SIO.Instance({
+                        points: pts,
+                        skeleton: skeleton,
+                        track: track,
+                    }));
+                } else {
+                    frameInstances.push(new SIO.PredictedInstance({
+                        points: pts,
+                        skeleton: skeleton,
+                        track: track,
+                        score: inst.score || 0,
+                    }));
+                }
+            }
+
+            if (frameInstances.length > 0) {
+                labeledFrames.push(new SIO.LabeledFrame({
+                    video: video,
+                    frameIdx: frameIdx,
+                    instances: frameInstances,
+                }));
+            }
+        }
+    }
+
+    return new SIO.Labels({
+        labeledFrames: labeledFrames,
+        videos: sioVideos,
+        skeletons: [skeleton],
+        tracks: tracks,
+        provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+    });
+}
+
+// ============================================
 // Points3d HDF5 export (in-browser)
 // ============================================
 
