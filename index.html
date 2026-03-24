@@ -1818,6 +1818,10 @@
                         setStatus('Created UserInstance group for ' + trackName, 'success');
                     }
 
+                    // Re-triangulate with the new view included
+                    reTriangulateGroup(group);
+                    setReprojErrorVisible(true);
+
                     if (interactionManager) interactionManager.select(group, -1);
                     if (timeline) timeline.setFrameModified(frameIdx, true);
                     drawAllOverlays(frameIdx);
