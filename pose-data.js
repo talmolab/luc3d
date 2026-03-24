@@ -520,11 +520,15 @@ class Session {
      * @param {Camera[]} cameras
      * @param {Skeleton} skeleton
      * @param {string[]} tracks - Track names
+     * @param {string} name - Session name (optional, defaults to 'Session 1')
      */
-    constructor(cameras, skeleton, tracks) {
+    constructor(cameras, skeleton, tracks, name) {
         this.cameras = cameras;
         this.skeleton = skeleton;
         this.tracks = tracks;
+        this.name = name || 'Session 1';
+        this.videoFileIndices = [];
+        this.lastFrame = 0;
         /** @type {Map<number, FrameGroup>} frameIdx -> FrameGroup */
         this.frameGroups = new Map();
         /** @type {Map<number, Map<number, InstanceGroup[]>>} frameIdx -> trackIdx -> InstanceGroup[] */

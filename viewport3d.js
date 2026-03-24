@@ -180,6 +180,10 @@ class Viewport3D {
         this._skeletonGroup.name = 'skeletons';
         this.scene.add(this._skeletonGroup);
 
+        this._envGroup = new THREE.Group();
+        this._envGroup.name = 'environment';
+        this.scene.add(this._envGroup);
+
         // --- Draw camera pyramids ---
         this.addCameraPyramids();
 
@@ -855,6 +859,88 @@ class Viewport3D {
         }
 
         console.log('[3D] updateSkeleton complete:', this._skeletonGroup.children.length, 'instance groups in scene');
+    }
+
+    /**
+     * Set a persistent environment overlay from triangulated 3D points.
+     * This is rendered as a semi-transparent skeleton that persists across frame changes.
+     *
+     * @param {Array<InstanceGroup>} instanceGroups - Groups whose points3d to freeze as environment
+     */
+    setEnvironment(instanceGroups) {
+        this._clearGroup(this._envGroup);
+
+        if (!instanceGroups || instanceGroups.length === 0) {
+            console.log('[3D] clearEnvironment');
+            return;
+        }
+
+        const ss = this._sceneScale || 1;
+        const nodeRadius = 1.5 * ss;
+        const edgeRadius = 0.6 * ss;
+        const sphereSegments = 10;
+        const cylinderSegments = 6;
+        const sphereGeo = new THREE.SphereGeometry(nodeRadius, sphereSegments, sphereSegments);
+        const edges = this.skeleton.edges || [];
+        const nodes = this.skeleton.nodes || [];
+
+        var envColor = new THREE.Color(0xdddddd);
+
+        var nodeMaterial = new THREE.MeshPhongMaterial({
+            color: envColor,
+            opacity: 1.0,
+            shininess: 60,
+        });
+
+        var edgeMaterial = new THREE.MeshPhongMaterial({
+            color: envColor,
+            transparent: true,
+            opacity: 0.8,
+            shininess: 40,
+        });
+
+        for (var g = 0; g < instanceGroups.length; g++) {
+            var group = instanceGroups[g];
+            var pts = group.points3d;
+            if (!pts || pts.length === 0) continue;
+
+            var envGroup3D = new THREE.Group();
+            envGroup3D.name = 'env_' + g;
+
+            for (var n = 0; n < pts.length; n++) {
+                var pt = pts[n];
+                if (pt == null) continue;
+                var mesh = new THREE.Mesh(sphereGeo, nodeMaterial);
+                mesh.position.set(pt[0], pt[1], pt[2]);
+                mesh.name = 'env_node_' + (nodes[n] || n);
+                envGroup3D.add(mesh);
+            }
+
+            for (var e = 0; e < edges.length; e++) {
+                var srcIdx = edges[e][0];
+                var dstIdx = edges[e][1];
+                if (srcIdx >= pts.length || dstIdx >= pts.length) continue;
+                var srcPt = pts[srcIdx];
+                var dstPt = pts[dstIdx];
+                if (srcPt == null || dstPt == null) continue;
+
+                var cylinder = this._createCylinder(srcPt, dstPt, edgeRadius, edgeMaterial, cylinderSegments);
+                cylinder.name = 'env_edge_' + srcIdx + '_' + dstIdx;
+                envGroup3D.add(cylinder);
+            }
+
+            this._envGroup.add(envGroup3D);
+        }
+
+        console.log('[3D] setEnvironment:', instanceGroups.length, 'groups,', this._envGroup.children.length, 'in scene');
+    }
+
+    /**
+     * Clear the persistent environment overlay.
+     */
+    clearEnvironment() {
+        this._clearGroup(this._envGroup);
+        console.log('[3D] environment cleared');
     }
 
     /**
