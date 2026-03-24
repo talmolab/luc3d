@@ -805,6 +805,7 @@
 
                 // Populate view strip and auto-arrange in grid
                 populateViewStrip();
+                populateSessionStrip();
                 paneManager.addAllViewsAsGrid();
 
                 rebuildVideoController();
@@ -2799,6 +2800,16 @@
                     if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
+                }
+            });
+
+            // Add session button
+            document.getElementById('btnAddSession').addEventListener('click', function() {
+                var choice = prompt('Add session:\n1 = Load Session Folder\n2 = Create from Calibration\n\nEnter 1 or 2:');
+                if (choice === '1') {
+                    handleLoadSessionFolder();
+                } else if (choice === '2') {
+                    handleLoadCalibration();
                 }
             });
 
@@ -5570,6 +5581,7 @@
                 }
                 if (created > 0) {
                     populateViewStrip();
+                    populateSessionStrip();
                     rebuildVideoController();
                     fitCanvasesToCells();
                     populateSessionAssignTable();
@@ -6624,6 +6636,7 @@
                 if (state.views.length > 0) {
                     hideWelcomeOverlay();
                     populateViewStrip();
+                    populateSessionStrip();
                     paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
                     fitCanvasesToCells();
@@ -7219,6 +7232,7 @@
 
                 if (newViewsCreated) {
                     populateViewStrip();
+                    populateSessionStrip();
                     paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
                     fitCanvasesToCells();
@@ -8101,6 +8115,7 @@
                 // 6. Finalize
                 if (state.views.length > 0) {
                     populateViewStrip();
+                    populateSessionStrip();
                     paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
                     updateTotalFrames();
@@ -8527,6 +8542,7 @@
                 updateTotalFrames();
                 if (state.views.length > 0) {
                     populateViewStrip();
+                    populateSessionStrip();
                     paneManager.addAllViewsAsGrid();
                     rebuildVideoController();
                     fitCanvasesToCells();
@@ -8812,6 +8828,7 @@
                     }
 
                     populateViewStrip();
+                    populateSessionStrip();
                     updateTotalFrames();
                     rebuildVideoController();
                     requestAnimationFrame(function () { fitCanvasesToCells(); });
@@ -8916,6 +8933,7 @@
                             }
                         }
                         populateViewStrip();
+                        populateSessionStrip();
                         updateTotalFrames();
                         rebuildVideoController();
                         requestAnimationFrame(function () { fitCanvasesToCells(); });
@@ -9633,6 +9651,122 @@
                     }
                 })(state.views[idx]);
             }
+        }
+
+        // ============================================
+        // Session Strip
+        // ============================================
+
+        function populateSessionStrip() {
+            var list = document.getElementById('sessionStripList');
+            list.textContent = '';
+
+            for (var si = 0; si < state.sessions.length; si++) {
+                var session = state.sessions[si];
+                var item = document.createElement('div');
+                item.className = 'session-strip-item' + (si === state.activeSessionIdx ? ' active' : '');
+                item.title = session.name;
+                item.dataset.sessionIdx = si;
+
+                var icon = document.createElement('div');
+                icon.className = 'session-strip-icon';
+                var numCams = session.cameras ? session.cameras.length : 0;
+                for (var ci = 0; ci < numCams; ci++) {
+                    var dot = document.createElement('div');
+                    dot.className = 'cam-dot';
+                    icon.appendChild(dot);
+                }
+                item.appendChild(icon);
+
+                var label = document.createElement('div');
+                label.className = 'session-strip-label';
+                label.textContent = session.name;
+                item.appendChild(label);
+
+                (function(idx) {
+                    item.addEventListener('click', function() {
+                        switchSession(idx);
+                    });
+                    item.addEventListener('dblclick', function(e) {
+                        e.stopPropagation();
+                        var newName = prompt('Rename session:', state.sessions[idx].name);
+                        if (newName && newName.trim()) {
+                            state.sessions[idx].name = newName.trim();
+                            populateSessionStrip();
+                        }
+                    });
+                })(si);
+
+                list.appendChild(item);
+            }
+        }
+
+        function switchSession(newIdx) {
+            if (newIdx === state.activeSessionIdx) return;
+            if (newIdx < 0 || newIdx >= state.sessions.length) return;
+
+            // Save current session state
+            var oldSession = state.sessions[state.activeSessionIdx];
+            oldSession.lastFrame = state.currentFrame;
+            oldSession.triangulationResults = state.triangulationResults;
+
+            // Switch
+            state.activeSessionIdx = newIdx;
+            var newSession = state.sessions[newIdx];
+            state.session = newSession;
+            state.triangulationResults = newSession.triangulationResults || new Map();
+
+            // Rebuild views for new session's videos
+            if (videoController) {
+                if (state.isPlaying) videoController.stopPlayback();
+                videoController = null;
+            }
+            state.views = [];
+            paneManager.clearAll();
+
+            // Create views for this session's assigned videos
+            for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
+                var vfIdx = newSession.videoFileIndices[vi];
+                var vf = state.videoFiles[vfIdx];
+                if (vf && vf.assignedCamera) {
+                    createViewForVideoFile(vf);
+                }
+            }
+
+            // Rebuild UI
+            updateTotalFrames();
+            populateViewStrip();
+            populateSessionStrip();
+            paneManager.addAllViewsAsGrid();
+            rebuildVideoController();
+            fitCanvasesToCells();
+
+            // Restore frame position
+            if (videoController && state.views.length > 0) {
+                state.currentFrame = newSession.lastFrame || 0;
+                videoController.seekToFrame(state.currentFrame);
+            }
+
+            // Update 3D viewport
+            if (viewport3d) {
+                viewport3d.cameras = newSession.cameras;
+                viewport3d.skeleton = newSession.skeleton;
+                viewport3d.addCameraPyramids();
+                viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                viewport3d.fitToScene();
+            } else {
+                setup3DViewport();
+            }
+
+            // Update panels
+            if (state.triangulationResults.size > 0) {
+                setReprojErrorVisible(true);
+            }
+            drawAllOverlays(state.currentFrame);
+            updateInfoPanel();
+            if (timeline) timeline.setData(newSession);
+
+            setStatus('Switched to ' + newSession.name, 'info');
         }
 
         function updateViewStripThumbnail(view, thumbCanvas) {
