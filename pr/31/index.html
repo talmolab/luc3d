@@ -886,6 +886,12 @@
             if (!triangulationResult || !triangulationResult.points3d) return;
             for (var ci = 0; ci < allCameras.length; ci++) {
                 var cam = allCameras[ci];
+
+                // Skip cameras that have a user instance in the group — don't overlay
+                // a reprojection on top of a user-edited label
+                var groupInst = group.getInstance ? group.getInstance(cam.name) : null;
+                if (groupInst && groupInst.type === 'user') continue;
+
                 var reprojPts = triangulationResult.reprojections[cam.name];
                 if (!reprojPts && cam.projectionMatrix) {
                     reprojPts = reprojectPoints(triangulationResult.points3d, cam.projectionMatrix);
