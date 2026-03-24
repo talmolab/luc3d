@@ -79,6 +79,10 @@
                     <div class="menu-dropdown-item" id="menuTriangulateMulti">Triangulate Multiple Frames</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuGroupByTrack">Group by Track &amp; Triangulate All</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuTrustTracks">
+                        <span id="menuTrustTracksCheck">☐</span> Trust Track Labels
+                    </div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -2616,6 +2620,15 @@
                 showGroupByTrackModal();
             });
 
+            document.getElementById('menuTrustTracks').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session) return;
+                state.session.trustTracks = !state.session.trustTracks;
+                var check = document.getElementById('menuTrustTracksCheck');
+                check.textContent = state.session.trustTracks ? '☑' : '☐';
+                setStatus('Trust Track Labels: ' + (state.session.trustTracks ? 'ON' : 'OFF'), 'success');
+            });
+
             // Set Env / Clear Env buttons on 3D viewport
             document.getElementById('btnSetEnv').addEventListener('click', async function (e) {
                 e.stopPropagation();
@@ -3103,6 +3116,52 @@
                             e.preventDefault();
                         }
                         break;
+                }
+            });
+
+            // --- Identity & Track hotkeys ---
+            document.addEventListener('keydown', function (e) {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+                // Identity assignment: Ctrl/Cmd+1 through Ctrl/Cmd+9
+                if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
+                    e.preventDefault();
+                    if (!state.session || !interactionManager) return;
+                    var selectedGroup = interactionManager.selectedInstanceGroup;
+                    if (!selectedGroup) {
+                        setStatus('Select an instance group first', 'warning');
+                        return;
+                    }
+                    var identityNum = parseInt(e.key) - 1;
+                    while (state.session.identities.length <= identityNum) {
+                        state.session.addIdentity('identity_' + state.session.identities.length);
+                    }
+                    var identity = state.session.identities[identityNum];
+                    state.session.assignIdentityToGroup(selectedGroup, identity.id);
+                    setStatus('Assigned ' + identity.name + ' to group', 'success');
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                    return;
+                }
+
+                // Track assignment: Alt+1 through Alt+9
+                if (e.altKey && !e.ctrlKey && !e.metaKey && e.key >= '1' && e.key <= '9') {
+                    e.preventDefault();
+                    if (!state.session || !interactionManager) return;
+                    var selectedGroup = interactionManager.selectedInstanceGroup;
+                    if (!selectedGroup) {
+                        setStatus('Select an instance group first', 'warning');
+                        return;
+                    }
+                    var newTrackIdx = parseInt(e.key) - 1;
+                    for (var [camName, inst] of selectedGroup.instances) {
+                        inst.trackIdx = newTrackIdx;
+                    }
+                    selectedGroup.trackIdx = newTrackIdx;
+                    setStatus('Set track to ' + (state.session.tracks[newTrackIdx] || 'track_' + newTrackIdx), 'success');
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                    return;
                 }
             });
 
