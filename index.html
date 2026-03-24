@@ -228,6 +228,7 @@
                         <table class="data-table" id="unlinkedTable">
                             <thead>
                                 <tr>
+                                    <th>Track</th>
                                     <th>Type</th>
                                     <th>Points</th>
                                     <th>Score</th>
@@ -2093,13 +2094,15 @@
                     // Update status bar
                     if (selectedGroup) {
                         const trackName = state.session.tracks[selectedGroup.trackIdx] || 'Track ' + selectedGroup.trackIdx;
+                        const identity = selectedGroup.identityId >= 0 ? state.session.getIdentity(selectedGroup.identityId) : null;
+                        const identityLabel = identity ? ' [' + identity.name + ']' : '';
                         const nodeName = selectedNodeIdx >= 0 && state.session.skeleton.nodes[selectedNodeIdx]
                             ? state.session.skeleton.nodes[selectedNodeIdx]
                             : '';
                         document.getElementById('statusSelection').textContent =
-                            'Selection: ' + trackName + (nodeName ? ' / ' + nodeName : '');
+                            'Selection: ' + trackName + identityLabel + (nodeName ? ' / ' + nodeName : '');
                         document.getElementById('selectedInfo').textContent =
-                            trackName + ' (' + selectedGroup.cameraNames.length + ' views)' +
+                            trackName + identityLabel + ' (' + selectedGroup.cameraNames.length + ' views)' +
                             (nodeName ? ' - node: ' + nodeName : '');
 
                         // Update 3D viewport selection
@@ -3175,6 +3178,7 @@
                 }
 
                 // Track assignment: Alt+1 through Alt+9
+                // Propagates to all subsequent frames (SLEAP-style)
                 if (e.altKey && !e.ctrlKey && !e.metaKey && e.key >= '1' && e.key <= '9') {
                     e.preventDefault();
                     if (!state.session || !interactionManager) return;
@@ -3184,11 +3188,35 @@
                         return;
                     }
                     var newTrackIdx = parseInt(e.key) - 1;
+                    var oldTrackIdx = selectedGroup.trackIdx;
+                    // Update current group
                     for (var [camName, inst] of selectedGroup.instances) {
                         inst.trackIdx = newTrackIdx;
                     }
                     selectedGroup.trackIdx = newTrackIdx;
-                    setStatus('Set track to ' + (state.session.tracks[newTrackIdx] || 'track_' + newTrackIdx), 'success');
+                    // Propagate to subsequent frames
+                    var propagated = 0;
+                    for (var [fIdx, fgProp] of state.session.frameGroups) {
+                        if (fIdx <= state.currentFrame) continue;
+                        for (var [cn, insts] of fgProp.instances) {
+                            for (var pi = 0; pi < insts.length; pi++) {
+                                if (insts[pi].trackIdx === oldTrackIdx) {
+                                    insts[pi].trackIdx = newTrackIdx;
+                                    propagated++;
+                                }
+                            }
+                        }
+                        for (var [cn2, ulList] of fgProp.unlinkedInstances) {
+                            for (var ui = 0; ui < ulList.length; ui++) {
+                                if (ulList[ui].instance.trackIdx === oldTrackIdx) {
+                                    ulList[ui].instance.trackIdx = newTrackIdx;
+                                    propagated++;
+                                }
+                            }
+                        }
+                    }
+                    var trackName = state.session.tracks[newTrackIdx] || 'track_' + newTrackIdx;
+                    setStatus('Set track to ' + trackName + (propagated > 0 ? ' (propagated ' + propagated + ' instances)' : ''), 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                     return;
@@ -6866,6 +6894,55 @@
                             }
                         }
 
+                        // Track column with dropdown
+                        const tdTrackUl = document.createElement('td');
+                        var trackSelect = document.createElement('select');
+                        trackSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:80px;';
+                        for (var ti = 0; ti < (state.session.tracks || []).length; ti++) {
+                            var tOpt = document.createElement('option');
+                            tOpt.value = ti;
+                            tOpt.textContent = state.session.tracks[ti];
+                            trackSelect.appendChild(tOpt);
+                        }
+                        trackSelect.value = ul.instance.trackIdx != null ? ul.instance.trackIdx : 0;
+                        (function (ulObj, inst, sel, camNameForUl) {
+                            sel.addEventListener('change', function (ev) {
+                                ev.stopPropagation();
+                                var oldTrack = inst.trackIdx;
+                                var newTrack = parseInt(sel.value);
+                                inst.trackIdx = newTrack;
+
+                                // Propagate: reassign all subsequent frames with same old track in same camera
+                                var propagated = 0;
+                                for (var [fIdx, fgProp] of state.session.frameGroups) {
+                                    if (fIdx <= state.currentFrame) continue;
+                                    // Unlinked instances
+                                    var ulPropList = fgProp.getUnlinkedInstances(camNameForUl);
+                                    for (var pi = 0; pi < ulPropList.length; pi++) {
+                                        if (ulPropList[pi].instance.trackIdx === oldTrack) {
+                                            ulPropList[pi].instance.trackIdx = newTrack;
+                                            propagated++;
+                                        }
+                                    }
+                                    // Grouped instances
+                                    var grpInsts = fgProp.getInstances(camNameForUl);
+                                    for (var gi = 0; gi < grpInsts.length; gi++) {
+                                        if (grpInsts[gi].trackIdx === oldTrack) {
+                                            grpInsts[gi].trackIdx = newTrack;
+                                            propagated++;
+                                        }
+                                    }
+                                }
+
+                                setStatus('Track ' + oldTrack + ' → ' + newTrack + ' on ' + camNameForUl +
+                                    (propagated > 0 ? ' (propagated to ' + propagated + ' subsequent instances)' : ''), 'success');
+                                drawAllOverlays(state.currentFrame);
+                                updateInfoPanel();
+                            });
+                            sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                        })(ul, ul.instance, trackSelect, cam.name);
+                        tdTrackUl.appendChild(trackSelect);
+
                         const tdType = document.createElement('td');
                         var instType = ul.instance.type || 'user';
                         var typeBadge = document.createElement('span');
@@ -6882,6 +6959,7 @@
                         tdScore.className = 'mono';
                         tdScore.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
 
+                        tr.appendChild(tdTrackUl);
                         tr.appendChild(tdType);
                         tr.appendChild(tdPoints);
                         tr.appendChild(tdScore);
