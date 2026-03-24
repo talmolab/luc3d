@@ -7908,6 +7908,10 @@
 
                 showLoading('Scanning folder...');
 
+                // For multi-session: save previous session and start fresh
+                var previousSession = state.session;
+                state.session = null;
+
                 // Derive folder name from first file's relative path
                 var folderName = null;
                 if (allFiles.length > 0) {
@@ -8328,6 +8332,10 @@
 
             } catch (err) {
                 console.error('[session-folder] Error:', err);
+                // Restore previous session if new one failed
+                if (!state.session && previousSession) {
+                    state.session = previousSession;
+                }
                 hideLoading();
                 setStatus('Session folder error: ' + err.message, 'error');
             }
