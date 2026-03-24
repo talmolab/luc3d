@@ -1554,10 +1554,12 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             var trackBaseColor = getTrackColor(group.trackIdx != null ? group.trackIdx : g);
             var reprojTrackColor = complementaryColor(trackBaseColor);
 
-            // Skip reprojection if this view already has a grouped instance (user or predicted)
-            var hasGroupedInst = group.getInstance ? group.getInstance(viewName) : null;
+            // Skip reprojection only if this view has a USER instance (user edited it)
+            // Predicted instances still show reprojections for comparison
+            var groupedInst = group.getInstance ? group.getInstance(viewName) : null;
+            var hideReproj = groupedInst && groupedInst.type === 'user';
 
-            if (showReprojected && !hasGroupedInst && group.reprojectedInstances && group.reprojectedInstances.size > 0) {
+            if (showReprojected && !hideReproj && group.reprojectedInstances && group.reprojectedInstances.size > 0) {
                 const reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
                 if (reprojInst) {
                     var isSelected = selectedReprojected && selectedInstanceGroup && selectedInstanceGroup === group;
@@ -1579,7 +1581,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             }
 
             // Fall back to raw reprojection data if no Instance objects exist
-            if (showReprojected && !hasGroupedInst && (!group.reprojectedInstances || group.reprojectedInstances.size === 0)) {
+            if (showReprojected && !hideReproj && (!group.reprojectedInstances || group.reprojectedInstances.size === 0)) {
                 const reprojPts = group.reprojections ? group.reprojections[viewName] : null;
                 if (reprojPts) {
                     drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
