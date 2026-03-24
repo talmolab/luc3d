@@ -9991,6 +9991,11 @@
             state.session = newSession;
             state.triangulationResults = newSession.triangulationResults || new Map();
 
+            console.log('[switchSession] Switching to session', newIdx, newSession.name);
+            console.log('[switchSession] newSession.videoFileIndices:', JSON.stringify(newSession.videoFileIndices));
+            console.log('[switchSession] newSession.cameras:', newSession.cameras.map(function(c){return c.name;}));
+            console.log('[switchSession] all videoFiles:', state.videoFiles.map(function(vf,i){return i+':'+vf.name+'->'+vf.assignedCamera;}));
+
             // Rebuild views for new session's videos
             if (videoController) {
                 if (state.isPlaying) videoController.stopPlayback();
@@ -10023,10 +10028,12 @@
             for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
                 var vfIdx = newSession.videoFileIndices[vi];
                 var vf = state.videoFiles[vfIdx];
+                console.log('[switchSession] creating view for vfIdx', vfIdx, 'vf:', vf ? vf.name + '->' + vf.assignedCamera : 'null');
                 if (vf && vf.assignedCamera) {
                     createViewForVideoFile(vf);
                 }
             }
+            console.log('[switchSession] views created:', state.views.map(function(v){return v.name;}));
 
             // Rebuild UI
             updateTotalFrames();
