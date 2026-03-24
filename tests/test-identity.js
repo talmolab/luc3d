@@ -87,6 +87,49 @@
         });
     });
 
+    describe('Identity serialization', function () {
+        it('round-trips through plain object', function () {
+            var original = new Identity(3, 'fly_B', '#4ecdc4');
+            var data = { id: original.id, name: original.name, color: original.color };
+            var restored = new Identity(data.id, data.name, data.color);
+            assertEqual(restored.id, 3);
+            assertEqual(restored.name, 'fly_B');
+            assertEqual(restored.color, '#4ecdc4');
+        });
+
+        it('identityId persists on InstanceGroup serialization', function () {
+            var group = new InstanceGroup(1, 0);
+            group.identityId = 5;
+            var data = { identityId: group.identityId };
+            var restored = new InstanceGroup(1, 0);
+            if (data.identityId != null) restored.identityId = data.identityId;
+            assertEqual(restored.identityId, 5);
+        });
+    });
+
+    describe('Track swap logic', function () {
+        it('swaps trackIdx between two tracks', function () {
+            var fg = new FrameGroup(0);
+            var instA = new Instance([[10, 20]], 0, 'predicted');
+            var instB = new Instance([[30, 40]], 1, 'predicted');
+            fg.addInstance('CamA', instA);
+            fg.addInstance('CamA', instB);
+
+            // Swap track 0 <-> track 1
+            var instances = fg.getInstances('CamA');
+            for (var i = 0; i < instances.length; i++) {
+                if (instances[i].trackIdx === 0) instances[i].trackIdx = -99;
+                else if (instances[i].trackIdx === 1) instances[i].trackIdx = 0;
+            }
+            for (var i = 0; i < instances.length; i++) {
+                if (instances[i].trackIdx === -99) instances[i].trackIdx = 1;
+            }
+
+            assertEqual(instA.trackIdx, 1);
+            assertEqual(instB.trackIdx, 0);
+        });
+    });
+
     describe('Identity color resolution', function () {
         it('getGroupColor uses identity color when assigned', function () {
             var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);

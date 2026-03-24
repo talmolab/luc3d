@@ -1376,6 +1376,10 @@
 
             var session = state.session;
 
+            if (!session.trustTracks) {
+                console.log('[group-by-track] Running with trustTracks OFF — tracks used for grouping but not marked as trusted');
+            }
+
             // Scan all frames to gather per-track stats
             var trackStats = {};  // trackIdx -> { frames: Set, cameras: Set, nodeCount }
             var numNodes = session.skeleton.nodes.length;
@@ -1525,6 +1529,28 @@
 
                 overlay.remove();
             });
+        }
+
+        function swapTracks(trackA, trackB, frameStart, frameEnd) {
+            if (!state.session) return 0;
+            var swapped = 0;
+            for (var [frameIdx, fg] of state.session.frameGroups) {
+                if (frameIdx < frameStart || frameIdx > frameEnd) continue;
+                for (var [camName, instances] of fg.instances) {
+                    for (var i = 0; i < instances.length; i++) {
+                        if (instances[i].trackIdx === trackA) { instances[i].trackIdx = trackB; swapped++; }
+                        else if (instances[i].trackIdx === trackB) { instances[i].trackIdx = trackA; swapped++; }
+                    }
+                }
+                for (var [camName2, ulList] of fg.unlinkedInstances) {
+                    for (var u = 0; u < ulList.length; u++) {
+                        var inst = ulList[u].instance;
+                        if (inst.trackIdx === trackA) { inst.trackIdx = trackB; swapped++; }
+                        else if (inst.trackIdx === trackB) { inst.trackIdx = trackA; swapped++; }
+                    }
+                }
+            }
+            return swapped;
         }
 
         async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCameraNames) {
@@ -7104,6 +7130,7 @@
                             var groupData = {
                                 id: group.id,
                                 trackIdx: group.trackIdx,
+                                identityId: group.identityId != null ? group.identityId : -1,
                                 instances: {},
                                 points3d: group.points3d || null,
                                 reprojections: group.reprojections || null,
@@ -7168,6 +7195,10 @@
                                 return { name: c.name, matrix: c.matrix, dist: c.dist, rvec: c.rvec, tvec: c.tvec, size: c.size };
                             }),
                             tracks: sess.tracks,
+                            identities: sess.identities.map(function (id) {
+                                return { id: id.id, name: id.name, color: id.color };
+                            }),
+                            trustTracks: sess.trustTracks || false,
                             videoManifest: sess.videoFileIndices.map(function(vfIdx) {
                                 var vf = state.videoFiles[vfIdx];
                                 return vf ? {
@@ -7207,6 +7238,10 @@
                     return { name: c.name, matrix: c.matrix, dist: c.dist, rvec: c.rvec, tvec: c.tvec, size: c.size };
                 }),
                 tracks: state.session.tracks,
+                identities: state.session.identities.map(function (id) {
+                    return { id: id.id, name: id.name, color: id.color };
+                }),
+                trustTracks: state.session.trustTracks || false,
                 videoManifest: (state.videoFiles || []).map(function (vf) {
                     return { filename: vf.name, assignedCamera: vf.assignedCamera || null };
                 }),
@@ -7228,6 +7263,7 @@
                             const groupData = {
                                 id: group.id,
                                 trackIdx: group.trackIdx,
+                                identityId: group.identityId != null ? group.identityId : -1,
                                 instances: {},
                                 points3d: group.points3d || null,
                                 reprojections: group.reprojections || null,
@@ -7632,6 +7668,14 @@
             var tracks = data.tracks || ['track_0'];
             var session = new Session(cameras, skeleton, tracks);
 
+            if (data.identities) {
+                for (var idi = 0; idi < data.identities.length; idi++) {
+                    var idData = data.identities[idi];
+                    session.identities.push(new Identity(idData.id, idData.name, idData.color));
+                }
+            }
+            if (data.trustTracks != null) session.trustTracks = data.trustTracks;
+
             if (data.frames) {
                 for (var frameIdxStr in data.frames) {
                     var frameIdx = parseInt(frameIdxStr);
@@ -7647,6 +7691,7 @@
                         for (var gi = 0; gi < frameData.instanceGroups.length; gi++) {
                             var groupData = frameData.instanceGroups[gi];
                             var group = new InstanceGroup(groupData.id || Date.now(), groupData.trackIdx);
+                            if (groupData.identityId != null) group.identityId = groupData.identityId;
                             if (groupData.points3d) {
                                 group.points3d = groupData.points3d;
                             }
@@ -10992,6 +11037,10 @@
             var newSession = state.sessions[newIdx];
             state.session = newSession;
             state.triangulationResults = newSession.triangulationResults || new Map();
+
+            // Sync trust track labels toggle
+            var trustCheck = document.getElementById('menuTrustTracksCheck');
+            if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
 
             // Stop playback
             if (videoController && state.isPlaying) {
