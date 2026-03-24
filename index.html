@@ -131,6 +131,7 @@
                         <!-- Populated dynamically -->
                     </div>
                     <button class="session-strip-add" id="btnAddSession" title="Add session">+</button>
+                    <button class="session-strip-add" id="btnRemoveSession" title="Remove active session" style="margin-top:0;">&minus;</button>
                 </div>
                 <!-- View strip sidebar (scrollable list of video thumbnails) -->
                 <div class="view-strip" id="viewStrip">
@@ -2844,6 +2845,10 @@
                 } else if (choice === '2') {
                     handleLoadCalibration();
                 }
+            });
+            // Remove session button
+            document.getElementById('btnRemoveSession').addEventListener('click', function() {
+                removeSession(state.activeSessionIdx);
             });
 
             // Frame counter and FPS
@@ -9940,13 +9945,7 @@
                     (function(idx) {
                         delBtn.addEventListener('click', function(e) {
                             e.stopPropagation();
-                            if (!confirm('Delete session "' + state.sessions[idx].name + '"?')) return;
-                            state.sessions.splice(idx, 1);
-                            if (state.activeSessionIdx >= state.sessions.length) {
-                                state.activeSessionIdx = state.sessions.length - 1;
-                            }
-                            switchSession(state.activeSessionIdx);
-                            populateSessionsPanel();
+                            removeSession(idx);
                         });
                     })(si);
                     tdActions.appendChild(delBtn);
@@ -10006,6 +10005,60 @@
 
                 list.appendChild(item);
             }
+        }
+
+        function removeSession(idx) {
+            if (state.sessions.length <= 1) {
+                setStatus('Cannot remove the only session', 'warning');
+                return;
+            }
+            if (!confirm('Delete session "' + state.sessions[idx].name + '"?')) return;
+
+            // Clean up session's video file entries
+            var sess = state.sessions[idx];
+            if (sess.videoFileIndices) {
+                for (var vi = 0; vi < sess.videoFileIndices.length; vi++) {
+                    var vfIdx = sess.videoFileIndices[vi];
+                    if (state.videoFiles[vfIdx]) {
+                        state.videoFiles[vfIdx].sessionIdx = -1; // mark as orphaned
+                    }
+                }
+            }
+
+            // Remove triangulation results for this session
+            if (sess.triangulationResults) {
+                sess.triangulationResults.clear();
+            }
+
+            state.sessions.splice(idx, 1);
+
+            // Adjust active index
+            if (state.activeSessionIdx >= state.sessions.length) {
+                state.activeSessionIdx = state.sessions.length - 1;
+            } else if (state.activeSessionIdx > idx) {
+                state.activeSessionIdx--;
+            } else if (state.activeSessionIdx === idx) {
+                // Deleted the active session — switch to nearest
+                state.activeSessionIdx = Math.min(idx, state.sessions.length - 1);
+            }
+
+            // Update sessionIdx tags on remaining sessions' videos
+            for (var si = 0; si < state.sessions.length; si++) {
+                var s = state.sessions[si];
+                if (s.videoFileIndices) {
+                    for (var svi = 0; svi < s.videoFileIndices.length; svi++) {
+                        var svfIdx = s.videoFileIndices[svi];
+                        if (state.videoFiles[svfIdx]) {
+                            state.videoFiles[svfIdx].sessionIdx = si;
+                        }
+                    }
+                }
+            }
+
+            switchSession(state.activeSessionIdx);
+            populateSessionStrip();
+            populateSessionsPanel();
+            setStatus('Session removed', 'success');
         }
 
         function switchSession(newIdx) {
