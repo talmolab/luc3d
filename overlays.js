@@ -1554,12 +1554,12 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             var trackBaseColor = getTrackColor(group.trackIdx != null ? group.trackIdx : g);
             var reprojTrackColor = complementaryColor(trackBaseColor);
 
-            // Hide reprojection X only if this view has a user-edited instance (no doubles)
-            var viewGroupInst = group.getInstance ? group.getInstance(viewName) : null;
-            var skipReproj = viewGroupInst && viewGroupInst.type === 'user';
+            // Always draw reprojections — one per group per view
+            if (showReprojected) {
+                var reprojInst = (group.reprojectedInstances && group.reprojectedInstances.size > 0)
+                    ? (group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null)
+                    : null;
 
-            if (showReprojected && !skipReproj && group.reprojectedInstances && group.reprojectedInstances.size > 0) {
-                const reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
                 if (reprojInst) {
                     var isSelected = selectedReprojected && selectedInstanceGroup && selectedInstanceGroup === group;
                     var drawColor = isSelected ? '#ffffff' : reprojTrackColor;
@@ -1576,16 +1576,14 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                             color: reprojTrackColor,
                         }));
                     }
-                }
-            }
-
-            // Fall back to raw reprojection data if no Instance objects exist
-            if (showReprojected && !skipReproj && (!group.reprojectedInstances || group.reprojectedInstances.size === 0)) {
-                const reprojPts = group.reprojections ? group.reprojections[viewName] : null;
-                if (reprojPts) {
-                    drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
-                        color: reprojTrackColor,
-                    }));
+                } else {
+                    // Fall back to raw reprojection data
+                    var reprojPts = group.reprojections ? group.reprojections[viewName] : null;
+                    if (reprojPts) {
+                        drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
+                            color: reprojTrackColor,
+                        }));
+                    }
                 }
             }
 
