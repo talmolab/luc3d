@@ -8197,6 +8197,12 @@
                                     state.activeSessionIdx = state.sessions.length - 1;
                                 }
                             }
+                            // Track this video in the session
+                            var loadedVfIdx = state.videoFiles.length - 1;
+                            if (state.session.videoFileIndices.indexOf(loadedVfIdx) < 0) {
+                                state.session.videoFileIndices.push(loadedVfIdx);
+                            }
+
                             // Ensure camera exists in session
                             if (!state.session.cameras.some(function (c) { return c.name === camName; })) {
                                 state.session.cameras.push(
@@ -9965,16 +9971,19 @@
             oldSession.lastFrame = state.currentFrame;
             oldSession.triangulationResults = state.triangulationResults;
 
-            // Rebuild videoFileIndices from current views (in case they weren't tracked)
-            oldSession.videoFileIndices = [];
-            for (var ovi = 0; ovi < state.videoFiles.length; ovi++) {
-                var ovf = state.videoFiles[ovi];
-                if (ovf.assignedCamera && oldSession.cameras.some(function(c) { return c.name === ovf.assignedCamera; })) {
-                    oldSession.videoFileIndices.push(ovi);
+            // Rebuild videoFileIndices from current views if not already tracked
+            if (oldSession.videoFileIndices.length === 0) {
+                for (var ovi = 0; ovi < state.views.length; ovi++) {
+                    var viewName = state.views[ovi].name;
+                    for (var ovfi = 0; ovfi < state.videoFiles.length; ovfi++) {
+                        if (state.videoFiles[ovfi].assignedCamera === viewName &&
+                            oldSession.videoFileIndices.indexOf(ovfi) < 0) {
+                            oldSession.videoFileIndices.push(ovfi);
+                            break;
+                        }
+                    }
                 }
             }
-            // Also save the current views' video assignments for reliable restoration
-            oldSession._savedViews = state.views.map(function(v) { return v.name; });
 
             // Switch
             state.activeSessionIdx = newIdx;
@@ -9991,8 +10000,18 @@
             paneManager.clearAll();
 
             // Ensure videoFileIndices is populated (match by camera names if empty)
+            // Only claim videos not already claimed by other sessions
             if (newSession.videoFileIndices.length === 0 && newSession.cameras.length > 0) {
+                var claimedByOthers = new Set();
+                for (var osi = 0; osi < state.sessions.length; osi++) {
+                    if (osi === newIdx) continue;
+                    var otherIndices = state.sessions[osi].videoFileIndices || [];
+                    for (var oi = 0; oi < otherIndices.length; oi++) {
+                        claimedByOthers.add(otherIndices[oi]);
+                    }
+                }
                 for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
+                    if (claimedByOthers.has(nvi)) continue;
                     var nvf = state.videoFiles[nvi];
                     if (nvf.assignedCamera && newSession.cameras.some(function(c) { return c.name === nvf.assignedCamera; })) {
                         newSession.videoFileIndices.push(nvi);
