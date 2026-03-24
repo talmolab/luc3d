@@ -955,10 +955,27 @@
             var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
             if (groupCameras.length < 2) return;
 
+            // Save old reprojections in case re-triangulation fails
+            var oldReprojInstances = instanceGroup.reprojectedInstances
+                ? new Map(instanceGroup.reprojectedInstances) : null;
+            var oldReprojections = instanceGroup.reprojections;
+            var oldPoints3d = instanceGroup.points3d;
+
             var result = triangulateAndReproject(instanceGroup, groupCameras);
-            instanceGroup.points3d = result.points3d;
-            instanceGroup.reprojections = result.reprojections;
-            storeReprojectedInstances(instanceGroup, result, cameras);
+
+            // Only update if we got valid results
+            var validPts = result.points3d && result.points3d.some(function (p) { return p != null; });
+            if (validPts) {
+                instanceGroup.points3d = result.points3d;
+                instanceGroup.reprojections = result.reprojections;
+                storeReprojectedInstances(instanceGroup, result, cameras);
+            } else {
+                // Restore old data
+                console.warn('[reTriangulate] Failed — keeping old reprojections');
+                instanceGroup.points3d = oldPoints3d;
+                instanceGroup.reprojections = oldReprojections;
+                if (oldReprojInstances) instanceGroup.reprojectedInstances = oldReprojInstances;
+            }
             instanceGroup.observedPoints = {};
             for (var ci = 0; ci < groupCameras.length; ci++) {
                 var cam = groupCameras[ci];
@@ -2212,8 +2229,9 @@
                         setStatus('Created UserInstance group for ' + trackName, 'success');
                     }
 
-                    // Re-triangulate with the new view included
-                    reTriangulateGroup(group);
+                    // Don't re-triangulate automatically — keep old reprojections visible.
+                    // User presses Triangulate (T) when ready to update.
+                    group.markDirty();
                     setReprojErrorVisible(true);
 
                     if (interactionManager) interactionManager.select(group, -1);
