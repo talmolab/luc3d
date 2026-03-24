@@ -10015,34 +10015,39 @@
             populateSessionStrip();
             paneManager.addAllViewsAsGrid();
             rebuildVideoController();
-            fitCanvasesToCells();
 
-            // Restore frame position
-            if (videoController && state.views.length > 0) {
+            // Let dockview render panels and create canvases, then seek + draw
+            setTimeout(function() {
+                fitCanvasesToCells();
+                refreshPaneInteractions();
+
+                // Restore frame position
                 state.currentFrame = newSession.lastFrame || 0;
-                videoController.seekToFrame(state.currentFrame);
-            }
+                if (videoController && state.views.length > 0) {
+                    videoController.seekToFrame(state.currentFrame);
+                }
 
-            // Update 3D viewport
-            if (viewport3d) {
-                viewport3d.cameras = newSession.cameras;
-                viewport3d.skeleton = newSession.skeleton;
-                viewport3d.addCameraPyramids();
-                viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
-                viewport3d.fitToScene();
-            } else {
-                setup3DViewport();
-            }
+                // Update 3D viewport
+                if (viewport3d) {
+                    viewport3d.cameras = newSession.cameras;
+                    viewport3d.skeleton = newSession.skeleton;
+                    viewport3d.addCameraPyramids();
+                    viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+                    viewport3d.fitToScene();
+                } else {
+                    setup3DViewport();
+                }
 
-            // Update panels
-            if (state.triangulationResults.size > 0) {
-                setReprojErrorVisible(true);
-            }
-            drawAllOverlays(state.currentFrame);
-            updateInfoPanel();
-            if (timeline) timeline.setData(newSession);
+                // Update panels
+                if (state.triangulationResults.size > 0) {
+                    setReprojErrorVisible(true);
+                }
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                if (timeline) timeline.setData(newSession);
 
-            setStatus('Switched to ' + newSession.name, 'info');
+                setStatus('Switched to ' + newSession.name, 'info');
+            }, 50);
         }
 
         function updateViewStripThumbnail(view, thumbCanvas) {
