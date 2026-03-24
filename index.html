@@ -2695,6 +2695,7 @@
                 }
                 state.session.tracks.push(name);
                 setStatus('Created track: ' + name, 'success');
+                drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
             });
 
@@ -2708,6 +2709,7 @@
                 if (!newName) return;
                 state.session.tracks[idx] = newName;
                 setStatus('Renamed track ' + (idx + 1) + ' to: ' + newName, 'success');
+                drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
             });
 
@@ -2823,6 +2825,7 @@
                 if (existing) { setStatus('Identity "' + name + '" already exists', 'warning'); return; }
                 state.session.addIdentity(name);
                 setStatus('Created identity: ' + name, 'success');
+                drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
             });
 
