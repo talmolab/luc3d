@@ -697,6 +697,11 @@ class InteractionManager {
             var egLinked = this.findNearestNode(vx, vy, viewName, frameIdx);
             var egUnlinked = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx);
 
+            // Skip reprojected hits — only interact with real instances in edit group mode
+            if (egLinked && egLinked.hitReprojected) {
+                egLinked = null;
+            }
+
             if (egLinked) {
                 // Check if clicked instance belongs to the edit target group
                 if (egLinked.instanceGroup === this.editGroupTarget) {
@@ -712,15 +717,8 @@ class InteractionManager {
                 }
             } else if (egUnlinked) {
                 var group = this.editGroupTarget;
-                // Validate: type must match
-                var firstInst = group.instances.values().next().value;
-                var groupType = firstInst ? firstInst.type : 'user';
-                var ulType = egUnlinked.unlinked.instance.type || 'user';
-                if (ulType !== groupType) {
-                    if (this.callbacks.onEditGroupError) {
-                        this.callbacks.onEditGroupError('Cannot add: instance type does not match group (' + groupType + ')');
-                    }
-                } else if (group.getInstance(viewName)) {
+                // Validate: can't add if group already has this view
+                if (group.getInstance(viewName)) {
                     if (this.callbacks.onEditGroupError) {
                         this.callbacks.onEditGroupError('Cannot add: group already has an instance from this view');
                     }
