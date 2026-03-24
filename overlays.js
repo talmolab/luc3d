@@ -647,7 +647,7 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
 
     // --- 1. Glow circles behind nodes ---
     const rgb = hexToRgb(color);
-    const glowRadius = nodeSize * 1.4;
+    const glowRadius = nodeSize * 2.5;
     ctx.fillStyle = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.25)';
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
@@ -706,7 +706,7 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
         if (!cp) continue;
         if (nulledNodes && nulledNodes.has(i)) continue;
         ctx.beginPath();
-        ctx.arc(cp.x, cp.y, nodeSize * 1.1, 0, Math.PI * 2);
+        ctx.arc(cp.x, cp.y, nodeSize * 1.3, 0, Math.PI * 2);
         ctx.fill();
     }
     // Grayed-out (nulled) nodes
@@ -717,7 +717,7 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
             const cp = canvasPoints[ni];
             if (!cp) continue;
             ctx.beginPath();
-            ctx.arc(cp.x, cp.y, nodeSize * 1.1, 0, Math.PI * 2);
+            ctx.arc(cp.x, cp.y, nodeSize * 1.3, 0, Math.PI * 2);
             ctx.fill();
         }
         ctx.globalAlpha = 1.0;

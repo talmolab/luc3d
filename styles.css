@@ -419,14 +419,6 @@ body {
   inset: 0;
 }
 
-/* Bypass dockview panel activation — allow direct interaction in any panel */
-.dv-dockview .dv-content-container {
-  pointer-events: none;
-}
-.dv-dockview .dv-content-container > * {
-  pointer-events: auto;
-}
-
 /* --------------------------------------------------------------------------
    Video Cell
    -------------------------------------------------------------------------- */

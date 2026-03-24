@@ -106,8 +106,8 @@
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
-                <button class="toolbar-btn" id="tbTriangulate" title="Triangulate current frame (T)">Triangulate</button>
-                <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All</button>
+                <button class="toolbar-btn" id="tbAutoSingle" title="Auto assign + triangulate current frame">Auto Single</button>
+                <button class="toolbar-btn" id="tbAutoMulti" title="Auto assign + triangulate frame range">Auto Multi</button>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
@@ -175,10 +175,6 @@
                         <h3>Reprojection Error</h3>
                         <div class="error-display" id="errorDisplay">-</div>
                         <div id="perCameraErrors"></div>
-                        <details id="errorBreakdownDetails" style="margin-top:6px;" open>
-                            <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);user-select:none;">Per-node breakdown</summary>
-                            <div id="errorBreakdownTable" style="margin-top:4px;overflow-x:auto;"></div>
-                        </details>
                     </div>
 
                     <!-- Selected Instance -->
@@ -514,11 +510,9 @@
 
             <div class="transport-controls">
                 <button id="btnFirst" title="First frame (Home)">|&#9664;</button>
-                <button id="btnPrevLabeled" title="Previous labeled frame (Shift+Left)">&#9664;&#9733;</button>
                 <button id="btnPrev" title="Previous frame (Left)">&#9664;</button>
                 <button id="btnPlay" title="Play/Pause (Space)">&#9654;</button>
                 <button id="btnNext" title="Next frame (Right)">&#9654;</button>
-                <button id="btnNextLabeled" title="Next labeled frame (Shift+Right)">&#9733;&#9654;</button>
                 <button id="btnLast" title="Last frame (End)">&#9654;|</button>
             </div>
 
@@ -887,7 +881,7 @@
          * Called automatically when a node is moved or nulled to keep reprojections in sync.
          */
         function reTriangulateGroup(instanceGroup) {
-            if (!instanceGroup) return;
+            if (!instanceGroup || !instanceGroup.reprojections) return;
             if (!state.session || state.session.cameras.length < 2) return;
 
             var cameras = state.session.cameras;
@@ -930,31 +924,6 @@
             if (viewport3d) {
                 var groups = getInstanceGroupsForFrame(state.currentFrame);
                 viewport3d.setFrame(groups);
-            }
-        }
-
-        /**
-         * Navigate to the next or previous frame that has labeled data.
-         * direction > 0: next labeled frame; direction < 0: previous labeled frame.
-         */
-        function seekToLabeledFrame(direction) {
-            if (!state.session) return;
-            var indices = state.session.frameIndices;
-            if (!indices || indices.length === 0) return;
-            var cur = state.currentFrame;
-            var target = null;
-            if (direction > 0) {
-                for (var i = 0; i < indices.length; i++) {
-                    if (indices[i] > cur) { target = indices[i]; break; }
-                }
-            } else {
-                for (var i = indices.length - 1; i >= 0; i--) {
-                    if (indices[i] < cur) { target = indices[i]; break; }
-                }
-            }
-            if (target != null && videoController) {
-                videoController.seekToFrame(target);
-                setStatus('Frame ' + (target + 1), 'info');
             }
         }
 
@@ -1637,6 +1606,9 @@
                     }
                     instanceGroup.markDirty();
 
+                    // Auto-recalculate reprojection if group was previously triangulated
+                    reTriangulateGroup(instanceGroup);
+
                     // Mark frame as modified in timeline
                     if (timeline) {
                         timeline.setFrameModified(state.currentFrame, true);
@@ -1661,6 +1633,28 @@
                     // Record all view points from the converted group
                     for (var [vn, inst] of instanceGroup.instances) {
                         if (inst.type === 'user' && inst.points) recordUserPoints(vn, inst.points);
+                    }
+
+                    // Re-run triangulation if this group was previously triangulated
+                    if (instanceGroup.points3d) {
+                        var cameras = state.session.cameras;
+                        var groupCamNames = instanceGroup.cameraNames;
+                        var groupCameras = cameras.filter(function(c) {
+                            return groupCamNames.indexOf(c.name) >= 0;
+                        });
+                        if (groupCameras.length >= 2) {
+                            var result = triangulateAndReproject(instanceGroup, groupCameras);
+                            instanceGroup.points3d = result.points3d;
+                            instanceGroup.reprojections = result.reprojections;
+                            storeReprojectedInstances(instanceGroup, result, cameras);
+                            instanceGroup.observedPoints = {};
+                            for (var ci = 0; ci < groupCameras.length; ci++) {
+                                var cam = groupCameras[ci];
+                                var inst = instanceGroup.getInstance(cam.name);
+                                if (inst) instanceGroup.observedPoints[cam.name] = inst.points;
+                            }
+                            instanceGroup.markClean();
+                        }
                     }
 
                     if (timeline) {
@@ -1763,6 +1757,9 @@
                         setStatus('Created UserInstance group for ' + trackName, 'success');
                     }
 
+                    // Re-triangulate and reproject with new observations
+                    reTriangulateGroup(group);
+
                     if (interactionManager) interactionManager.select(group, -1);
                     if (timeline) timeline.setFrameModified(frameIdx, true);
                     drawAllOverlays(frameIdx);
@@ -1818,6 +1815,7 @@
                         newGroup.observedPoints = predGroup.observedPoints;
                         predGroup.reprojections = null;
                         predGroup.points3d = null;
+                        reTriangulateGroup(newGroup);
                         if (interactionManager) interactionManager.select(newGroup, -1);
                         var trackName = state.session.tracks[newGroup.trackIdx] || 'Track ' + newGroup.trackIdx;
                         setStatus('Created user group ' + trackName + ' from predicted', 'success');
@@ -1833,6 +1831,9 @@
                     const nodeName = state.session.skeleton.nodes[nodeIdx] || 'node ' + nodeIdx;
                     setStatus((isNulled ? 'Nulled ' : 'Restored ') + nodeName + ' in ' + viewName);
                     instanceGroup.markDirty();
+
+                    // Auto-recalculate reprojection if group was previously triangulated
+                    reTriangulateGroup(instanceGroup);
 
                     if (timeline) {
                         timeline.setFrameModified(state.currentFrame, true);
@@ -1888,8 +1889,42 @@
                     var trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
 
                     // Auto-triangulate the new group
-                    reTriangulateGroup(group);
-                    setReprojErrorVisible(true);
+                    var frameIdx = state.currentFrame;
+                    var cameras = state.session.cameras;
+                    var groupCamNames = group.cameraNames;
+                    var groupCameras = cameras.filter(function (c) {
+                        return groupCamNames.indexOf(c.name) >= 0;
+                    });
+                    if (groupCameras.length >= 2) {
+                        var result = triangulateAndReproject(group, groupCameras);
+                        group.reprojections = result.reprojections;
+                        group.points3d = result.points3d;
+                        storeReprojectedInstances(group, result, cameras);
+                        group.observedPoints = {};
+                        for (var ci = 0; ci < groupCameras.length; ci++) {
+                            var cam = groupCameras[ci];
+                            var inst = group.getInstance(cam.name);
+                            if (inst) group.observedPoints[cam.name] = inst.points;
+                        }
+                        group.markClean();
+
+                        // Replace existing entry for this group, or add new
+                        var frameResults = state.triangulationResults.get(frameIdx) || [];
+                        var newEntry = { group: group, points3d: result.points3d,
+                            reprojections: result.reprojections, errors: result.errors,
+                            meanError: result.meanError };
+                        var replaced = false;
+                        for (var ri = 0; ri < frameResults.length; ri++) {
+                            if (frameResults[ri].group === group) {
+                                frameResults[ri] = newEntry;
+                                replaced = true;
+                                break;
+                            }
+                        }
+                        if (!replaced) frameResults.push(newEntry);
+                        state.triangulationResults.set(frameIdx, frameResults);
+                        setReprojErrorVisible(true);
+                    }
 
                     setStatus('Created group: ' + trackName, 'success');
                     updateTimelineForFrame(state.currentFrame);
@@ -1930,6 +1965,7 @@
                         fg.addUnlinkedInstance(viewName, ul);
                     }
 
+                    reTriangulateGroup(group);
                     updateEditGroupToast();
                     drawAllOverlays(frameIdx);
                     updateInfoPanel();
@@ -1950,6 +1986,7 @@
                         fg.addInstance(viewName, inst);
                     }
 
+                    reTriangulateGroup(group);
                     updateEditGroupToast();
                     drawAllOverlays(frameIdx);
                     updateInfoPanel();
@@ -2441,13 +2478,11 @@
                 switch (e.key) {
                     case 'ArrowRight':
                         e.preventDefault();
-                        if (e.shiftKey) { seekToLabeledFrame(1); }
-                        else { videoController.seekToFrame(state.currentFrame + 1); }
+                        videoController.seekToFrame(state.currentFrame + (e.shiftKey ? 10 : 1));
                         break;
                     case 'ArrowLeft':
                         e.preventDefault();
-                        if (e.shiftKey) { seekToLabeledFrame(-1); }
-                        else { videoController.seekToFrame(state.currentFrame - 1); }
+                        videoController.seekToFrame(state.currentFrame - (e.shiftKey ? 10 : 1));
                         break;
                     case ' ':
                         e.preventDefault();
@@ -2698,8 +2733,6 @@
             document.getElementById('tbDeleteInstance').addEventListener('click', function () {
                 if (interactionManager) interactionManager._deleteSelected();
             });
-            document.getElementById('btnPrevLabeled').addEventListener('click', function() { seekToLabeledFrame(-1); });
-            document.getElementById('btnNextLabeled').addEventListener('click', function() { seekToLabeledFrame(1); });
             // Group button: toggle assignment mode, create group, or ungroup
             document.getElementById('tbGroup').addEventListener('click', function () {
                 if (!interactionManager) return;
@@ -2737,14 +2770,21 @@
                 }
                 startEditGroup(selectedGroup);
             });
-            // Triangulate current frame
-            document.getElementById('tbTriangulate').addEventListener('click', function () {
-                triangulateCurrentFrame();
+            // Auto Single: auto assign + triangulate current frame
+            document.getElementById('tbAutoSingle').addEventListener('click', function () {
+                if (interactionManager && interactionManager.assignmentMode) {
+                    interactionManager.setAssignmentMode(false);
+                }
+                runSingleFrameTriangulation();
             });
-            // Triangulate all frames with instance groups
-            document.getElementById('tbTriangulateAll').addEventListener('click', function () {
-                triangulateAllFrames();
+            // Auto Multi: auto assign + triangulate frame range
+            document.getElementById('tbAutoMulti').addEventListener('click', function () {
+                if (interactionManager && interactionManager.assignmentMode) {
+                    interactionManager.setAssignmentMode(false);
+                }
+                showMultiFrameModal();
             });
+
 
             // Context menu for instance groups
             document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
@@ -3043,6 +3083,8 @@
                 }
             }
 
+            // Re-triangulate to restore original state
+            reTriangulateGroup(group);
             cleanupEditGroup();
             drawAllOverlays(state.currentFrame);
             updateInfoPanel();
@@ -5707,100 +5749,6 @@
                 }
             }
 
-            // ---- Per-node per-camera error breakdown table ----
-            var breakdownDiv = document.getElementById('errorBreakdownTable');
-            breakdownDiv.textContent = '';
-            if (results && results.length > 0 && state.session && state.session.skeleton) {
-                var nodeNames = state.session.skeleton.nodes;
-                var cameras = state.session.cameras;
-                var camNames = cameras.map(function(c) { return c.name; });
-
-                // Accumulate errors: nodeErrors[nodeIdx][camName] = {sum, count}
-                var nodeErrors = [];
-                for (var ni = 0; ni < nodeNames.length; ni++) {
-                    nodeErrors[ni] = {};
-                    for (var ci = 0; ci < camNames.length; ci++) {
-                        nodeErrors[ni][camNames[ci]] = { sum: 0, count: 0 };
-                    }
-                }
-                for (var ri = 0; ri < results.length; ri++) {
-                    var r = results[ri];
-                    if (!r.errors) continue;
-                    for (var ci = 0; ci < camNames.length; ci++) {
-                        var camErrs = r.errors[camNames[ci]];
-                        if (!camErrs) continue;
-                        for (var ni = 0; ni < Math.min(camErrs.length, nodeNames.length); ni++) {
-                            if (camErrs[ni] != null) {
-                                nodeErrors[ni][camNames[ci]].sum += camErrs[ni];
-                                nodeErrors[ni][camNames[ci]].count++;
-                            }
-                        }
-                    }
-                }
-
-                // Build table
-                var tbl = document.createElement('table');
-                tbl.style.cssText = 'font-size:10px;border-collapse:collapse;width:100%;';
-                var thead = document.createElement('thead');
-                var hrow = document.createElement('tr');
-                var th0 = document.createElement('th');
-                th0.textContent = 'Node';
-                th0.style.cssText = 'text-align:left;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
-                hrow.appendChild(th0);
-                for (var ci = 0; ci < camNames.length; ci++) {
-                    var th = document.createElement('th');
-                    th.textContent = camNames[ci];
-                    th.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
-                    hrow.appendChild(th);
-                }
-                var thAvg = document.createElement('th');
-                thAvg.textContent = 'Avg';
-                thAvg.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);font-weight:700;';
-                hrow.appendChild(thAvg);
-                thead.appendChild(hrow);
-                tbl.appendChild(thead);
-
-                var tbody = document.createElement('tbody');
-                for (var ni = 0; ni < nodeNames.length; ni++) {
-                    var row = document.createElement('tr');
-                    var tdName = document.createElement('td');
-                    tdName.textContent = nodeNames[ni];
-                    tdName.style.cssText = 'padding:1px 4px;white-space:nowrap;color:var(--text-secondary);';
-                    row.appendChild(tdName);
-                    var rowSum = 0, rowCount = 0;
-                    for (var ci = 0; ci < camNames.length; ci++) {
-                        var td = document.createElement('td');
-                        td.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;';
-                        var entry = nodeErrors[ni][camNames[ci]];
-                        if (entry.count > 0) {
-                            var avg = entry.sum / entry.count;
-                            td.textContent = avg.toFixed(1);
-                            td.style.color = avg < 2 ? 'var(--success-color)' : avg < 5 ? 'var(--warning-color)' : 'var(--error-color)';
-                            rowSum += entry.sum;
-                            rowCount += entry.count;
-                        } else {
-                            td.textContent = '-';
-                            td.style.color = 'var(--text-muted)';
-                        }
-                        row.appendChild(td);
-                    }
-                    var tdAvg = document.createElement('td');
-                    tdAvg.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;font-weight:700;';
-                    if (rowCount > 0) {
-                        var rowAvg = rowSum / rowCount;
-                        tdAvg.textContent = rowAvg.toFixed(1);
-                        tdAvg.style.color = rowAvg < 2 ? 'var(--success-color)' : rowAvg < 5 ? 'var(--warning-color)' : 'var(--error-color)';
-                    } else {
-                        tdAvg.textContent = '-';
-                        tdAvg.style.color = 'var(--text-muted)';
-                    }
-                    row.appendChild(tdAvg);
-                    tbody.appendChild(row);
-                }
-                tbl.appendChild(tbody);
-                breakdownDiv.appendChild(tbl);
-            }
-
             // ---- Linked Instance Groups table ----
             const groupsTbody = document.querySelector('#instanceGroupsTable tbody');
             const groupsEmpty = document.getElementById('instanceGroupsEmpty');
@@ -6352,8 +6300,6 @@
                                 trackIdx: group.trackIdx,
                                 instances: {},
                                 points3d: group.points3d || null,
-                                reprojections: group.reprojections || null,
-                                observedPoints: group.observedPoints || null,
                             };
                             for (const [camName, inst] of group.instances) {
                                 groupData.instances[camName] = {
@@ -6616,9 +6562,6 @@
                 }
 
                 // 4. Draw overlays and update UI
-                if (state.triangulationResults.size > 0) {
-                    setReprojErrorVisible(true);
-                }
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
                 if (timeline) timeline.setData(state.session);
@@ -6679,12 +6622,6 @@
                             if (groupData.points3d) {
                                 group.points3d = groupData.points3d;
                             }
-                            if (groupData.reprojections) {
-                                group.reprojections = groupData.reprojections;
-                            }
-                            if (groupData.observedPoints) {
-                                group.observedPoints = groupData.observedPoints;
-                            }
 
                             for (var camName in groupData.instances) {
                                 var instData = groupData.instances[camName];
@@ -6728,51 +6665,6 @@
 
             state.session = session;
             state.triangulationResults = new Map();
-
-            // Rebuild triangulationResults from saved reprojection/error data
-            for (var [trFrameIdx, trTrackMap] of session.instanceGroups) {
-                var trFrameResults = [];
-                for (var [trTrackIdx, trGroups] of trTrackMap) {
-                    for (var trgi = 0; trgi < trGroups.length; trgi++) {
-                        var trGroup = trGroups[trgi];
-                        if (trGroup.points3d && trGroup.reprojections) {
-                            // Recompute errors from saved observed + reprojected points
-                            var trErrors = {};
-                            var trTotalErr = 0, trTotalCount = 0;
-                            for (var trCamName in trGroup.reprojections) {
-                                var trObs = trGroup.observedPoints ? trGroup.observedPoints[trCamName] : null;
-                                var trRep = trGroup.reprojections[trCamName];
-                                if (!trObs || !trRep) continue;
-                                trErrors[trCamName] = [];
-                                for (var trni = 0; trni < trRep.length; trni++) {
-                                    if (trObs[trni] && trRep[trni]) {
-                                        var dx = trRep[trni][0] - trObs[trni][0];
-                                        var dy = trRep[trni][1] - trObs[trni][1];
-                                        var err = Math.sqrt(dx * dx + dy * dy);
-                                        trErrors[trCamName].push(err);
-                                        trTotalErr += err;
-                                        trTotalCount++;
-                                    } else {
-                                        trErrors[trCamName].push(null);
-                                    }
-                                }
-                            }
-                            trFrameResults.push({
-                                group: trGroup,
-                                points3d: trGroup.points3d,
-                                reprojections: trGroup.reprojections,
-                                errors: trErrors,
-                                meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null
-                            });
-                            // Also store reprojected instances for overlay rendering
-                            storeReprojectedInstances(trGroup, { reprojections: trGroup.reprojections, points3d: trGroup.points3d }, cameras);
-                        }
-                    }
-                }
-                if (trFrameResults.length > 0) {
-                    state.triangulationResults.set(trFrameIdx, trFrameResults);
-                }
-            }
 
             // Fix camera name mismatches: instance keys may differ from camera names
             // (e.g., instances keyed by video name "CamA" but camera named "A")
