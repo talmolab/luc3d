@@ -1643,7 +1643,8 @@
 
                     group.reprojections = result.reprojections;
                     group.points3d = result.points3d;
-                    storeReprojectedInstances(group, result, cameras);
+                    // Reproject to ALL cameras (including excluded ones) so they show reprojections
+                    storeReprojectedInstances(group, result, allCameras);
                     group.observedPoints = {};
                     group.usedCameras = new Set();
                     for (var ck = 0; ck < groupCameras.length; ck++) {
