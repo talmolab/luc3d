@@ -1632,6 +1632,10 @@
                         group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
                     }
 
+                    // Auto-assign identity from track
+                    var identity = session.getOrCreateIdentityForTrack(trackIdx);
+                    session.assignIdentityToGroup(group, identity.id);
+
                     // Store in session.instanceGroups
                     if (!session.instanceGroups.has(frameIdx)) {
                         session.instanceGroups.set(frameIdx, new Map());
@@ -6594,11 +6598,45 @@
                         tdTrack.appendChild(dirtyDot);
                     }
 
+                    // Identity dropdown
+                    const idSelect = document.createElement('select');
+                    idSelect.style.cssText = 'font-size:11px; background:var(--bg-tertiary); color:var(--text-primary); border:1px solid var(--border-color); border-radius:3px; padding:1px 4px; margin-left:6px;';
+                    const optNone = document.createElement('option');
+                    optNone.value = '-1';
+                    optNone.textContent = '(unassigned)';
+                    idSelect.appendChild(optNone);
+                    if (state.session && state.session.identities) {
+                        for (var idIdx = 0; idIdx < state.session.identities.length; idIdx++) {
+                            var ident = state.session.identities[idIdx];
+                            var opt = document.createElement('option');
+                            opt.value = String(ident.id);
+                            opt.textContent = ident.name;
+                            idSelect.appendChild(opt);
+                        }
+                    }
+                    idSelect.value = String(group.identityId != null ? group.identityId : -1);
+                    (function (g, sel) {
+                        sel.addEventListener('change', function (e) {
+                            e.stopPropagation();
+                            var newId = parseInt(sel.value);
+                            state.session.assignIdentityToGroup(g, newId);
+                            drawAllOverlays(state.currentFrame);
+                            updateInfoPanel();
+                        });
+                        sel.addEventListener('click', function (e) { e.stopPropagation(); });
+                    })(group, idSelect);
+                    tdTrack.appendChild(idSelect);
+
                     // Views column
                     const tdViews = document.createElement('td');
                     tdViews.className = 'mono';
                     tdViews.textContent = group.cameraNames.length + '/' + state.session.cameras.length;
-                    tdViews.title = group.cameraNames.join(', ');
+                    var viewDetails = group.cameraNames.map(function (cn) {
+                        var inst = group.getInstance(cn);
+                        var tIdx = inst && inst.trackIdx != null ? inst.trackIdx : '?';
+                        return cn + ' (track ' + tIdx + ')';
+                    });
+                    tdViews.title = viewDetails.join(', ');
 
                     // Type column
                     const tdType = document.createElement('td');

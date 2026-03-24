@@ -41,6 +41,14 @@ function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
 
+function getGroupColor(group, session) {
+    if (group.identityId >= 0 && session) {
+        var identity = session.getIdentity(group.identityId);
+        if (identity && identity.color) return identity.color;
+    }
+    return getTrackColor(group.trackIdx != null ? group.trackIdx : 0);
+}
+
 function getLineDashPattern(style) {
     if (style === 'dotted') return [2, 3];
     if (style === 'dashed') return [6, 4];
@@ -1550,8 +1558,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         for (let g = 0; g < instanceGroups.length; g++) {
             const group = instanceGroups[g];
 
-            // Draw reprojected instances — color-matched to track
-            var trackBaseColor = getTrackColor(group.trackIdx != null ? group.trackIdx : g);
+            // Draw reprojected instances — color-matched to identity or track
+            var trackBaseColor = getGroupColor(group, session);
             var reprojTrackColor = complementaryColor(trackBaseColor);
 
             // Always draw reprojections — one per group per view
@@ -1598,6 +1606,16 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         }
     }
 
+    // Build map of instance -> group for identity coloring
+    var instToGroup = new Map();
+    if (instanceGroups) {
+        for (var _ig = 0; _ig < instanceGroups.length; _ig++) {
+            var _g = instanceGroups[_ig];
+            var _inst = _g.getInstance ? _g.getInstance(viewName) : null;
+            if (_inst) instToGroup.set(_inst, _g);
+        }
+    }
+
     // 3. Linked predicted instances — drawn OVER reprojections so they're visible
     if (viewInstances && showPredicted) {
         for (let i = 0; i < viewInstances.length; i++) {
@@ -1605,7 +1623,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             const instType = inst.type || 'user';
             if (instType !== 'predicted') continue;
 
-            var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
+            var parentGroup = instToGroup.get(inst);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session) : getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
             var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
@@ -1635,7 +1654,8 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             const instType = inst.type || 'user';
             if (instType === 'predicted') continue;
 
-            var baseColor = getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
+            var parentGroup = instToGroup.get(inst);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session) : getTrackColor(inst.trackIdx != null ? inst.trackIdx : i);
             var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
