@@ -3572,43 +3572,65 @@
             document.addEventListener('keydown', function (e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-                // Identity assignment: 1-9 (no modifier) when a group is selected
+                // Identity assignment: 1-9 (no modifier) — works on groups AND unlinked
                 if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
                     if (!state.session || !interactionManager) return;
                     var selectedGroup = interactionManager.selectedInstanceGroup;
-                    if (!selectedGroup) return; // No group selected — let key fall through
+                    var selectedUl = interactionManager.selectedUnlinked;
+                    if (!selectedGroup && !selectedUl) return; // Nothing selected
                     e.preventDefault();
                     var identityNum = parseInt(e.key) - 1;
                     while (state.session.identities.length <= identityNum) {
                         state.session.addIdentity('id_' + state.session.identities.length);
                     }
                     var identity = state.session.identities[identityNum];
-                    state.session.assignIdentityToGroup(selectedGroup, identity.id);
-                    setStatus('Assigned ' + identity.name + ' to group (press ' + e.key + ')', 'success');
+                    if (selectedGroup) {
+                        state.session.assignIdentityToGroup(selectedGroup, identity.id);
+                        setStatus('Assigned ' + identity.name + ' to group', 'success');
+                    } else if (selectedUl) {
+                        state.session.assignTrackToIdentity(selectedUl.instance.trackIdx, identity.id, selectedUl.cameraName);
+                        setStatus('Assigned ' + identity.name + ' to ' + selectedUl.cameraName + ' track ' + selectedUl.instance.trackIdx, 'success');
+                    }
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                     return;
                 }
 
-                // Track assignment: Shift+1 through Shift+9
-                // Propagates to all subsequent frames (SLEAP-style)
+                // Track assignment: Shift+1 through Shift+9 — works on groups AND unlinked
                 if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.code >= 'Digit1' && e.code <= 'Digit9') {
                     e.preventDefault();
                     if (!state.session || !interactionManager) return;
                     var selectedGroup = interactionManager.selectedInstanceGroup;
-                    if (!selectedGroup) {
-                        setStatus('Select an instance group first', 'warning');
+                    var selectedUl = interactionManager.selectedUnlinked;
+                    if (!selectedGroup && !selectedUl) {
+                        setStatus('Select an instance first', 'warning');
                         return;
                     }
                     var newTrackIdx = parseInt(e.code.replace('Digit', '')) - 1;
-                    // Swap-assign per camera with propagation
-                    var totalProp = 0;
-                    for (var [camName, inst] of selectedGroup.instances) {
-                        totalProp += swapAssignTrack(state.currentFrame, camName, inst, newTrackIdx, state.session);
-                    }
-                    selectedGroup.trackIdx = newTrackIdx;
                     var trackName = state.session.tracks[newTrackIdx] || 'track_' + newTrackIdx;
-                    setStatus('Set track to ' + trackName + (totalProp > 0 ? ' (swapped & propagated ' + totalProp + ')' : ''), 'success');
+                    if (selectedGroup) {
+                        // Swap-assign per camera with propagation
+                        var totalProp = 0;
+                        for (var [camName, inst] of selectedGroup.instances) {
+                            totalProp += swapAssignTrack(state.currentFrame, camName, inst, newTrackIdx, state.session);
+                        }
+                        selectedGroup.trackIdx = newTrackIdx;
+                        setStatus('Set track to ' + trackName + (totalProp > 0 ? ' (swapped ' + totalProp + ')' : ''), 'success');
+                    } else if (selectedUl) {
+                        // Inline swap for unlinked instance
+                        var oldT = selectedUl.instance.trackIdx;
+                        var fg = state.session.getFrameGroup(state.currentFrame);
+                        if (fg && oldT !== newTrackIdx) {
+                            var camUl = fg.getUnlinkedInstances(selectedUl.cameraName);
+                            for (var su = 0; su < camUl.length; su++) {
+                                if (camUl[su].instance !== selectedUl.instance && camUl[su].instance.trackIdx === newTrackIdx) {
+                                    camUl[su].instance.trackIdx = oldT;
+                                }
+                            }
+                        }
+                        selectedUl.instance.trackIdx = newTrackIdx;
+                        setStatus('Set track to ' + trackName + ' on ' + selectedUl.cameraName, 'success');
+                    }
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                     return;
