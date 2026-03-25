@@ -259,6 +259,7 @@
                             <thead>
                                 <tr>
                                     <th>Track</th>
+                                    <th>ID</th>
                                     <th>Type</th>
                                     <th>Points</th>
                                     <th>Score</th>
@@ -2695,22 +2696,9 @@
 
                 // When trusting tracks, propagate track numbers to identities
                 if (state.session.trustTracks) {
-                    var trackSet = new Set();
-                    for (var [fIdx, fg] of state.session.frameGroups) {
-                        for (var [cn, insts] of fg.instances) {
-                            for (var i = 0; i < insts.length; i++) {
-                                if (insts[i].trackIdx != null && insts[i].trackIdx >= 0) trackSet.add(insts[i].trackIdx);
-                            }
-                        }
-                        for (var [cn2, ulList] of fg.unlinkedInstances) {
-                            for (var u = 0; u < ulList.length; u++) {
-                                if (ulList[u].instance.trackIdx != null && ulList[u].instance.trackIdx >= 0) trackSet.add(ulList[u].instance.trackIdx);
-                            }
-                        }
-                    }
-                    // Create identities for each track
-                    for (var tid of trackSet) {
-                        state.session.getOrCreateIdentityForTrack(tid);
+                    // Create identity for each track name (fast — just uses tracks array)
+                    for (var ti = 0; ti < state.session.tracks.length; ti++) {
+                        state.session.getOrCreateIdentityForTrack(ti);
                     }
                     // Assign identities to existing groups by track
                     for (var [fIdx2, trackMap] of state.session.instanceGroups) {
@@ -2721,7 +2709,10 @@
                             }
                         }
                     }
-                    setStatus('Trust Track Labels: ON — ' + trackSet.size + ' identities created from tracks', 'success');
+                    // Auto-switch to Color by Identity
+                    state.colorByIdentity = true;
+                    updateColorByChecks();
+                    setStatus('Trust Track Labels: ON — ' + state.session.tracks.length + ' identities from tracks', 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                 } else {
@@ -7369,6 +7360,39 @@
                         })(ul, ul.instance, trackSelect, cam.name);
                         tdTrackUl.appendChild(trackSelect);
 
+                        // Identity column for unlinked instances
+                        const tdIdUl = document.createElement('td');
+                        var idSelectUl = document.createElement('select');
+                        idSelectUl.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:70px;';
+                        var optNoneUl = document.createElement('option');
+                        optNoneUl.value = '-1';
+                        optNoneUl.textContent = '—';
+                        idSelectUl.appendChild(optNoneUl);
+                        for (var idi = 0; idi < (state.session.identities || []).length; idi++) {
+                            var idOpt = document.createElement('option');
+                            idOpt.value = state.session.identities[idi].id;
+                            idOpt.textContent = state.session.identities[idi].name;
+                            idSelectUl.appendChild(idOpt);
+                        }
+                        // Pre-select based on trackIdentityMap
+                        var currentIdForTrack = state.session.trackIdentityMap.get(ul.instance.trackIdx);
+                        idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
+                        (function (inst, sel) {
+                            sel.addEventListener('change', function (ev) {
+                                ev.stopPropagation();
+                                var newIdVal = parseInt(sel.value);
+                                if (newIdVal >= 0) {
+                                    state.session.assignTrackToIdentity(inst.trackIdx, newIdVal);
+                                } else {
+                                    state.session.trackIdentityMap.delete(inst.trackIdx);
+                                }
+                                drawAllOverlays(state.currentFrame);
+                                updateInfoPanel();
+                            });
+                            sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                        })(ul.instance, idSelectUl);
+                        tdIdUl.appendChild(idSelectUl);
+
                         const tdType = document.createElement('td');
                         var instType = ul.instance.type || 'user';
                         var typeBadge = document.createElement('span');
@@ -7386,6 +7410,7 @@
                         tdScore.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
 
                         tr.appendChild(tdTrackUl);
+                        tr.appendChild(tdIdUl);
                         tr.appendChild(tdType);
                         tr.appendChild(tdPoints);
                         tr.appendChild(tdScore);
