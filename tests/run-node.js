@@ -269,6 +269,8 @@ var testFiles = [
     'test-bottom-bar.js',
     'test-multi-session-export.js',
     'test-reprojection-lifecycle.js',
+    'test-identity.js',
+    'test-session-switching.js',
 ];
 
 for (var i = 0; i < testFiles.length; i++) {

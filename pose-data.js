@@ -122,9 +122,12 @@ class Camera {
      * @returns {number[][]} 3x3 rotation matrix
      */
     get rotationMatrix() {
+        if (this._cachedR) return this._cachedR;
+
         // If rvec is already a 3x3 rotation matrix, return it directly.
         // This handles anipose TOML format which stores rotation as a matrix.
         if (Array.isArray(this.rvec) && Array.isArray(this.rvec[0])) {
+            this._cachedR = this.rvec;
             return this.rvec;
         }
 
@@ -173,6 +176,7 @@ class Camera {
                 R[i][j] = (i === j ? 1 : 0) + sinT * K[i][j] + oneMinusCosT * KK[i][j];
             }
         }
+        this._cachedR = R;
         return R;
     }
 
@@ -181,13 +185,15 @@ class Camera {
      * @returns {number[][]} 3x4 matrix
      */
     get extrinsicMatrix() {
+        if (this._cachedRt) return this._cachedRt;
         const R = this.rotationMatrix;
         const t = this.tvec;
-        return [
+        this._cachedRt = [
             [R[0][0], R[0][1], R[0][2], t[0]],
             [R[1][0], R[1][1], R[1][2], t[1]],
             [R[2][0], R[2][1], R[2][2], t[2]]
         ];
+        return this._cachedRt;
     }
 
     /**
@@ -195,9 +201,12 @@ class Camera {
      * @returns {number[][]} 3x4 projection matrix
      */
     get projectionMatrix() {
-        const K = this.matrix;
-        const Rt = this.extrinsicMatrix;
-        return mat3x3Multiply3x4(K, Rt);
+        if (!this._cachedP) {
+            const K = this.matrix;
+            const Rt = this.extrinsicMatrix;
+            this._cachedP = mat3x3Multiply3x4(K, Rt);
+        }
+        return this._cachedP;
     }
 
     /**
@@ -435,6 +444,23 @@ class FrameGroup {
 }
 
 
+var _identityIdCounter = 0;
+
+var IDENTITY_COLORS = [
+    '#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff8800',
+    '#0088ff', '#ff0088', '#88ff00', '#8800ff', '#00ff88',
+    '#ff0000', '#0000ff', '#00ff44', '#ff4400', '#4400ff',
+    '#44ff00', '#ff0044', '#0044ff', '#ffaa00', '#aa00ff',
+];
+
+class Identity {
+    constructor(id, name, color) {
+        this.id = id != null ? id : _identityIdCounter++;
+        this.name = name || ('id_' + this.id);
+        this.color = color || IDENTITY_COLORS[this.id % IDENTITY_COLORS.length];
+    }
+}
+
 class InstanceGroup {
     /**
      * @param {number} id
@@ -443,6 +469,7 @@ class InstanceGroup {
     constructor(id, trackIdx) {
         this.id = id;
         this.trackIdx = trackIdx;
+        this.identityId = -1;
         /** @type {Map<string, Instance>} camera name -> single instance */
         this.instances = new Map();
         /** @type {number[][]|null} N x [x, y, z] triangulated 3D points, or null */
@@ -533,6 +560,77 @@ class Session {
         this.frameGroups = new Map();
         /** @type {Map<number, Map<number, InstanceGroup[]>>} frameIdx -> trackIdx -> InstanceGroup[] */
         this.instanceGroups = new Map();
+        /** @type {Identity[]} */
+        this.identities = [];
+        this.trustTracks = false;
+        /** @type {Map<string, number>} "camName:trackIdx" → identityId (per-camera tracklet-to-identity) */
+        this.trackIdentityMap = new Map();
+    }
+
+    addIdentity(name, color) {
+        var maxId = this.identities.reduce(function (m, id) { return Math.max(m, id.id); }, -1);
+        var identity = new Identity(maxId + 1, name, color);
+        this.identities.push(identity);
+        return identity;
+    }
+
+    getIdentity(identityId) {
+        for (var i = 0; i < this.identities.length; i++) {
+            if (this.identities[i].id === identityId) return this.identities[i];
+        }
+        return null;
+    }
+
+    getOrCreateIdentityForTrack(trackIdx) {
+        // Check if any camera has this track mapped already
+        var idName = 'id_' + trackIdx;
+        for (var i = 0; i < this.identities.length; i++) {
+            if (this.identities[i].name === idName) return this.identities[i];
+        }
+        // Create new identity and map it for all cameras
+        var identity = this.addIdentity(idName);
+        for (var ci = 0; ci < this.cameras.length; ci++) {
+            this.trackIdentityMap.set(this.cameras[ci].name + ':' + trackIdx, identity.id);
+        }
+        return identity;
+    }
+
+    assignIdentityToGroup(group, identityId) {
+        group.identityId = identityId;
+    }
+
+    /**
+     * Assign a tracklet (trackIdx) in a specific camera to an Identity.
+     * @param {number} trackIdx
+     * @param {number} identityId
+     * @param {string} [cameraName] - If omitted, assigns for ALL cameras
+     */
+    assignTrackToIdentity(trackIdx, identityId, cameraName) {
+        if (cameraName) {
+            this.trackIdentityMap.set(cameraName + ':' + trackIdx, identityId);
+        } else {
+            for (var ci = 0; ci < this.cameras.length; ci++) {
+                this.trackIdentityMap.set(this.cameras[ci].name + ':' + trackIdx, identityId);
+            }
+        }
+    }
+
+    /**
+     * Get the Identity for a tracklet (trackIdx) in a specific camera.
+     * @param {number} trackIdx
+     * @param {string} [cameraName] - If omitted, checks first matching camera
+     * @returns {Identity|null}
+     */
+    getIdentityForTrack(trackIdx, cameraName) {
+        if (cameraName) {
+            var identityId = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
+            if (identityId != null) return this.getIdentity(identityId);
+        }
+        // Fallback: check any camera
+        for (var [key, idVal] of this.trackIdentityMap) {
+            if (key.endsWith(':' + trackIdx)) return this.getIdentity(idVal);
+        }
+        return null;
     }
 
     /**
