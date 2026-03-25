@@ -2257,6 +2257,7 @@
                 let overlayFrameGroup = null;
                 if (frameGroup) {
                     overlayFrameGroup = {
+                        frameIdx: frameGroup.frameIdx,
                         instances: {}
                     };
                     for (const [camName, instances] of frameGroup.instances) {
