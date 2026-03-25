@@ -144,13 +144,14 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
 
     var groups;
 
-    // Always do pairwise cross-view matching (geometry within current frame)
-    groups = matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignments);
-
-    // If we have previous 3D targets, re-order groups to match prev identities
-    // by scoring each group against each prev target via reprojection
-    if (prevTargets3d && prevTargets3d.length > 0 && groups.length > 0) {
-        groups = reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments);
+    if (prevTargets3d && prevTargets3d.length > 0) {
+        // TEMPORAL MODE: assign each camera's instances directly to the
+        // closest previous 3D target via reprojection. No pairwise re-matching.
+        // This is much more stable than re-matching + reordering.
+        groups = assignInstancesToPrevTargets(prevTargets3d, camInstances, camMap, activeCams, prevAssignments);
+    } else {
+        // BOOTSTRAP: first frame — use pairwise cross-view scoring
+        groups = matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignments);
     }
 
     // Triangulate each group for 3D targets (used for next frame's reprojection matching)
@@ -241,6 +242,82 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
  *
  * Combined into single cost for Hungarian assignment.
  */
+/**
+ * Assign instances to previous 3D targets directly (temporal mode).
+ *
+ * For each camera independently:
+ *   1. Reproject each prev 3D target into this camera
+ *   2. Build cost matrix: distance from reprojection to each instance
+ *   3. Add strong bonus for track identity continuity
+ *   4. Hungarian assign — each target gets at most one instance per camera
+ *
+ * Result: N groups (one per prev target), each with the best-matching
+ * instance from each camera.
+ */
+function assignInstancesToPrevTargets(prevTargets3d, camInstances, camMap, activeCams, prevAssignments) {
+    var nTargets = prevTargets3d.length;
+    var groups = [];
+    for (var t = 0; t < nTargets; t++) groups.push(new Map());
+
+    for (var ci = 0; ci < activeCams.length; ci++) {
+        var camName = activeCams[ci];
+        var cam = camMap[camName];
+        var insts = camInstances[camName];
+        if (!insts || insts.length === 0) continue;
+
+        // Build cost matrix: nTargets × nInstances
+        var n = Math.max(nTargets, insts.length);
+        var cost = [];
+        for (var ti = 0; ti < n; ti++) {
+            cost[ti] = [];
+            for (var ii = 0; ii < n; ii++) {
+                if (ti >= nTargets || ii >= insts.length) {
+                    cost[ti][ii] = 10000;  // padding
+                    continue;
+                }
+
+                var pts3d = prevTargets3d[ti].points3d;
+                var dist = 10000;
+
+                // Reprojection distance
+                if (pts3d) {
+                    var hasAny = false;
+                    for (var pk = 0; pk < pts3d.length; pk++) {
+                        if (pts3d[pk] != null) { hasAny = true; break; }
+                    }
+                    if (hasAny) {
+                        var reproj = reprojectPoints(pts3d, cam.projectionMatrix);
+                        var d = computeInstanceDistance(reproj, insts[ii].points);
+                        if (d < Infinity) dist = d;
+                    }
+                }
+
+                // Identity continuity bonus (reduce cost by a lot if same identity)
+                var bonus = 0;
+                if (prevAssignments && prevTargets3d[ti].identityId != null) {
+                    var prevId = prevAssignments.get(camName + ':' + insts[ii].trackIdx);
+                    if (prevId != null && prevId === prevTargets3d[ti].identityId) {
+                        bonus = -50;  // very strong pull toward same identity
+                    }
+                }
+
+                cost[ti][ii] = dist + bonus;
+            }
+        }
+
+        var assignment = hungarianAlgorithm(cost);
+        for (var ti2 = 0; ti2 < nTargets; ti2++) {
+            var ii2 = assignment[ti2];
+            if (ii2 >= 0 && ii2 < insts.length && cost[ti2][ii2] < 5000) {
+                groups[ti2].set(camName, insts[ii2]);
+            }
+        }
+    }
+
+    return groups;
+}
+
+
 function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments) {
     var nTargets = prevTargets3d.length;
     var nGroups = groups.length;
