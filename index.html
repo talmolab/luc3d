@@ -88,6 +88,7 @@
                     <div class="menu-dropdown-item" id="menuTriangulateMulti">Triangulate Multiple Frames</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuGroupByTrack">Group by Track &amp; Triangulate All</div>
+                    <div class="menu-dropdown-item" id="menuGroupByIdentity">Group by Identity &amp; Triangulate All</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuTrustTracks">
                         <span id="menuTrustTracksCheck">☐</span> Trust Track Labels
@@ -1607,6 +1608,146 @@
             });
         }
 
+        // ============================================
+        // Group by Identity & Triangulate All
+        // ============================================
+
+        /**
+         * Group instances by their assigned Identity (from tracker), then triangulate.
+         * Uses session.trackIdentityMap to find which camera:trackIdx -> identityId.
+         * For each frame, groups instances that share the same identity into InstanceGroups,
+         * then triangulates each group.
+         */
+        async function groupByIdentityAndTriangulateAll() {
+            var session = getActiveSession();
+            if (!session) {
+                setStatus('No session loaded', 'warning');
+                return;
+            }
+            if (session.cameras.length < 2) {
+                setStatus('Need at least 2 cameras', 'warning');
+                return;
+            }
+            if (session.identities.length === 0) {
+                setStatus('No identities assigned yet — run Track Frame or Track All first', 'warning');
+                return;
+            }
+
+            var cameras = session.cameras;
+            var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
+            if (allFrameIndices.length === 0) {
+                setStatus('No frames', 'warning');
+                return;
+            }
+
+            showLoading('Grouping by identity & triangulating 0/' + allFrameIndices.length + ' frames...');
+
+            var totalGrouped = 0;
+            var totalTriangulated = 0;
+            var YIELD_EVERY = 100;
+
+            for (var fi = 0; fi < allFrameIndices.length; fi++) {
+                var frameIdx = allFrameIndices[fi];
+                var fg = session.frameGroups.get(frameIdx);
+                if (!fg) continue;
+
+                // 1. Collect all instances, bucket by identityId
+                //    identityId -> { camName -> Instance }
+                var idBuckets = {};
+
+                // From grouped instances
+                for (var [camName, instances] of fg.instances) {
+                    for (var ii = 0; ii < instances.length; ii++) {
+                        var inst = instances[ii];
+                        var key = camName + ':' + inst.trackIdx;
+                        var identityId = session.trackIdentityMap.get(key);
+                        if (identityId == null) continue;
+                        if (!idBuckets[identityId]) idBuckets[identityId] = {};
+                        if (!idBuckets[identityId][camName]) idBuckets[identityId][camName] = inst;
+                    }
+                }
+
+                // From unlinked instances
+                for (var [camName2, ulList] of fg.unlinkedInstances) {
+                    for (var ui = 0; ui < ulList.length; ui++) {
+                        var ulInst = ulList[ui].instance;
+                        var key2 = camName2 + ':' + ulInst.trackIdx;
+                        var identityId2 = session.trackIdentityMap.get(key2);
+                        if (identityId2 == null) continue;
+                        if (!idBuckets[identityId2]) idBuckets[identityId2] = {};
+                        if (!idBuckets[identityId2][camName2]) idBuckets[identityId2][camName2] = ulInst;
+                    }
+                }
+
+                // 2. Clear existing groups for this frame
+                session.instanceGroups.delete(frameIdx);
+                for (var [cn] of fg.instances) fg.instances.set(cn, []);
+                for (var [cn2] of fg.unlinkedInstances) fg.unlinkedInstances.set(cn2, []);
+
+                // 3. Create InstanceGroups from identity buckets
+                for (var idStr in idBuckets) {
+                    var identityId3 = parseInt(idStr);
+                    var bucket = idBuckets[idStr];
+                    var camNames = Object.keys(bucket);
+
+                    // Add instances back to fg.instances
+                    for (var ci = 0; ci < camNames.length; ci++) {
+                        fg.addInstance(camNames[ci], bucket[camNames[ci]]);
+                    }
+
+                    if (camNames.length < 2) continue;
+
+                    // Create InstanceGroup
+                    var groupId = session.instanceGroups.size + totalGrouped;
+                    var trackIdx = bucket[camNames[0]].trackIdx;
+                    var group = new InstanceGroup(groupId, trackIdx);
+                    group.identityId = identityId3;
+
+                    for (var ci2 = 0; ci2 < camNames.length; ci2++) {
+                        group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
+                    }
+
+                    // Add to session
+                    if (!session.instanceGroups.has(frameIdx)) {
+                        session.instanceGroups.set(frameIdx, new Map());
+                    }
+                    var frameMap = session.instanceGroups.get(frameIdx);
+                    if (!frameMap.has(trackIdx)) frameMap.set(trackIdx, []);
+                    frameMap.get(trackIdx).push(group);
+
+                    // Triangulate
+                    var triResult = triangulateAndReproject(group, cameras);
+                    group.points3d = triResult.points3d;
+                    group.markClean();
+
+                    // Store reprojections
+                    for (var ci3 = 0; ci3 < cameras.length; ci3++) {
+                        var reprojPts = triResult.reprojections[cameras[ci3].name];
+                        if (reprojPts) {
+                            var reprojInst = new Instance(reprojPts, trackIdx, 'reprojected', 0);
+                            group.addReprojectedInstance(cameras[ci3].name, reprojInst);
+                        }
+                    }
+
+                    totalGrouped++;
+                    totalTriangulated++;
+                }
+
+                // Yield to UI
+                if (fi % YIELD_EVERY === 0) {
+                    document.getElementById('loadingStatus').textContent =
+                        'Grouping by identity & triangulating ' + (fi + 1) + '/' + allFrameIndices.length + ' frames...';
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+            }
+
+            hideLoading();
+            drawAllOverlays(state.currentFrame);
+            updateInfoPanel();
+            setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
+                totalTriangulated + ' across ' + allFrameIndices.length + ' frames', 'success');
+        }
+
         function swapTracks(trackA, trackB, frameStart, frameEnd) {
             if (!state.session) return 0;
             var swapped = 0;
@@ -2725,6 +2866,10 @@
                 closeMenus();
                 showGroupByTrackModal();
             });
+            document.getElementById('menuGroupByIdentity').addEventListener('click', function () {
+                closeMenus();
+                groupByIdentityAndTriangulateAll();
+            });
 
             document.getElementById('menuTrustTracks').addEventListener('click', function () {
                 closeMenus();
@@ -2917,6 +3062,97 @@
                 }
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
+            }
+
+            /**
+             * Propagate an identity assignment forward from the current frame.
+             * For every frame after currentFrame, finds instances with the same
+             * camera:trackIdx and assigns them the same identity.
+             *
+             * @param {number} trackIdx - The track index being assigned
+             * @param {number} identityId - The identity to assign
+             * @param {string} [cameraName] - If set, only propagate for this camera. Otherwise all cameras.
+             * @returns {number} Number of propagated assignments
+             */
+            function propagateIdentityForward(trackIdx, identityId, cameraName) {
+                var session = state.session;
+                if (!session) return 0;
+                var propagated = 0;
+
+                for (var [frameIdx, fg] of session.frameGroups) {
+                    if (frameIdx <= state.currentFrame) continue;
+
+                    // Check linked instances
+                    for (var [cn, instances] of fg.instances) {
+                        if (cameraName && cn !== cameraName) continue;
+                        for (var i = 0; i < instances.length; i++) {
+                            if (instances[i].trackIdx === trackIdx) {
+                                session.trackIdentityMap.set(cn + ':' + trackIdx, identityId);
+                                propagated++;
+                            }
+                        }
+                    }
+                    // Check unlinked instances
+                    for (var [cn2, ulList] of fg.unlinkedInstances) {
+                        if (cameraName && cn2 !== cameraName) continue;
+                        for (var u = 0; u < ulList.length; u++) {
+                            if (ulList[u].instance.trackIdx === trackIdx) {
+                                session.trackIdentityMap.set(cn2 + ':' + trackIdx, identityId);
+                                propagated++;
+                            }
+                        }
+                    }
+
+                    // Also update InstanceGroups
+                    var groupsAtFrame = session.instanceGroups.get(frameIdx);
+                    if (groupsAtFrame) {
+                        for (var [tIdx, groups] of groupsAtFrame) {
+                            for (var gi = 0; gi < groups.length; gi++) {
+                                if (groups[gi].trackIdx === trackIdx) {
+                                    groups[gi].identityId = identityId;
+                                }
+                            }
+                        }
+                    }
+                }
+                return propagated;
+            }
+
+            /**
+             * Assign identity to selected instance/group and propagate forward.
+             * Used by both the menu and keyboard shortcuts.
+             */
+            function assignIdentityToSelected(identityId, identityName) {
+                var session = state.session;
+                if (!session) return;
+                var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
+                if (!sel && !selUl) {
+                    setStatus('Select an instance first', 'warning');
+                    return;
+                }
+
+                var propagated = 0;
+                if (sel) {
+                    session.assignIdentityToGroup(sel, identityId);
+                    // Propagate for all cameras in the group
+                    for (var [cn, inst] of sel.instances) {
+                        session.trackIdentityMap.set(cn + ':' + inst.trackIdx, identityId);
+                        propagated += propagateIdentityForward(inst.trackIdx, identityId, cn);
+                    }
+                } else if (selUl) {
+                    session.assignTrackToIdentity(selUl.instance.trackIdx, identityId, selUl.cameraName);
+                    propagated = propagateIdentityForward(selUl.instance.trackIdx, identityId, selUl.cameraName);
+                }
+
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
+
+                var msg = 'Assigned ' + identityName;
+                if (propagated > 0) msg += ' (propagated to ' + propagated + ' future instances)';
+                setStatus(msg, 'success');
             }
 
             // Populate Assign Track submenu on hover
@@ -3040,20 +3276,7 @@
                         closeMenus();
                         var newId = parseInt(this.getAttribute('data-id'));
                         var idName = this.textContent;
-                        var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
-                        var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
-                        if (sel) {
-                            state.session.assignIdentityToGroup(sel, newId);
-                            setStatus('Assigned ' + idName + ' to group', 'success');
-                        } else if (selUl) {
-                            state.session.assignTrackToIdentity(selUl.instance.trackIdx, newId, selUl.cameraName);
-                            setStatus('Assigned ' + idName + ' to ' + selUl.cameraName, 'success');
-                        } else {
-                            setStatus('Select an instance first', 'warning');
-                            return;
-                        }
-                        drawAllOverlays(state.currentFrame);
-                        updateInfoPanel();
+                        assignIdentityToSelected(newId, idName);
                     });
                     sub.appendChild(item);
                 }
@@ -3067,19 +3290,7 @@
                     var name = prompt('New identity name:', 'identity_' + state.session.identities.length);
                     if (!name) return;
                     var identity = state.session.addIdentity(name);
-                    var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
-                    var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
-                    if (sel) {
-                        state.session.assignIdentityToGroup(sel, identity.id);
-                        setStatus('Created and assigned: ' + name, 'success');
-                    } else if (selUl) {
-                        state.session.assignTrackToIdentity(selUl.instance.trackIdx, identity.id, selUl.cameraName);
-                        setStatus('Created and assigned: ' + name + ' to ' + selUl.cameraName, 'success');
-                    } else {
-                        setStatus('Created identity: ' + name, 'success');
-                    }
-                    drawAllOverlays(state.currentFrame);
-                    updateInfoPanel();
+                    assignIdentityToSelected(identity.id, name);
                 });
                 sub.appendChild(newItem);
             });
@@ -3636,15 +3847,7 @@
                         state.session.addIdentity('id_' + state.session.identities.length);
                     }
                     var identity = state.session.identities[identityNum];
-                    if (selectedGroup) {
-                        state.session.assignIdentityToGroup(selectedGroup, identity.id);
-                        setStatus('Assigned ' + identity.name + ' to group', 'success');
-                    } else if (selectedUl) {
-                        state.session.assignTrackToIdentity(selectedUl.instance.trackIdx, identity.id, selectedUl.cameraName);
-                        setStatus('Assigned ' + identity.name + ' to ' + selectedUl.cameraName + ' track ' + selectedUl.instance.trackIdx, 'success');
-                    }
-                    drawAllOverlays(state.currentFrame);
-                    updateInfoPanel();
+                    assignIdentityToSelected(identity.id, identity.name);
                     return;
                 }
 
@@ -7200,8 +7403,14 @@
                             e.stopPropagation();
                             var newIdentityId = parseInt(sel.value);
                             state.session.assignIdentityToGroup(g, newIdentityId);
+                            // Propagate forward for all cameras in the group
+                            for (var [cn, inst] of g.instances) {
+                                state.session.trackIdentityMap.set(cn + ':' + inst.trackIdx, newIdentityId);
+                                propagateIdentityForward(inst.trackIdx, newIdentityId, cn);
+                            }
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
+                            if (timeline) timeline.refreshTracks(state.session);
                         });
                         sel.addEventListener('click', function (e) { e.stopPropagation(); });
                     })(group, idSelect);
@@ -7486,11 +7695,13 @@
                                 var newIdVal = parseInt(sel.value);
                                 if (newIdVal >= 0) {
                                     state.session.assignTrackToIdentity(inst.trackIdx, newIdVal, camNameForId);
+                                    propagateIdentityForward(inst.trackIdx, newIdVal, camNameForId);
                                 } else {
                                     state.session.trackIdentityMap.delete(camNameForId + ':' + inst.trackIdx);
                                 }
                                 drawAllOverlays(state.currentFrame);
                                 updateInfoPanel();
+                                if (timeline) timeline.refreshTracks(state.session);
                             });
                             sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                         })(ul.instance, idSelectUl, cam.name);
@@ -12082,18 +12293,25 @@
                 setStatus('No session with cameras loaded', 'error');
                 return;
             }
-            if (!globalTracker) {
-                globalTracker = new CrossViewTracker(getTrackerHyperparams());
-            }
             var fg = session.getFrameGroup(state.currentFrame);
             if (!fg) {
                 setStatus('No frame data at frame ' + state.currentFrame, 'error');
                 return;
             }
-            var result = globalTracker.trackFrame(fg, session.cameras, session);
-            globalTracker.applyResults(session);
-            drawAllOverlays(state.currentFrame);
-            setStatus('Tracked frame ' + state.currentFrame + ': ' + result.targets.length + ' targets', 'success');
+            try {
+                var result = matchFrameInstances(fg, session.cameras, session);
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
+                if (result.numIdentities > 0) {
+                    setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities assigned', 'success');
+                } else {
+                    setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
+                }
+            } catch (e) {
+                console.error('[Tracker] error:', e);
+                setStatus('Tracker error: ' + e.message, 'error');
+            }
         }
 
         function findMatchForSelected() {
@@ -12146,101 +12364,59 @@
             // TODO: Visual highlight of matched instances (phase 2)
         }
 
-        function trackAll() {
+        async function trackAll() {
             var session = getActiveSession();
             if (!session || !session.cameras || session.cameras.length === 0) {
                 setStatus('No session with cameras loaded', 'error');
                 return;
             }
 
-            // Serialize frame data for worker
-            var frames = [];
-            var frameIndices = session.frameIndices;
-            for (var i = 0; i < frameIndices.length; i++) {
-                var fi = frameIndices[i];
-                var fg = session.getFrameGroup(fi);
-                if (!fg) continue;
-                var detections = {};
-                for (var c = 0; c < session.cameras.length; c++) {
-                    var cam = session.cameras[c];
-                    var instances = fg.getInstances(cam.name);
-                    if (!instances || instances.length === 0) continue;
-                    detections[cam.name] = instances.map(function (inst) {
-                        var pts = inst.points.map(function (p) {
-                            return p ? (cam.undistortPoint ? cam.undistortPoint(p) : p.slice()) : null;
-                        });
-                        return { points: pts, trackIdx: inst.trackIdx };
-                    });
-                }
-                frames.push({ frameIdx: fi, detections: detections });
+            var cameras = session.cameras;
+            if (cameras.length < 2) {
+                setStatus('Need at least 2 cameras', 'warning');
+                return;
             }
 
-            if (frames.length === 0) {
+            var frameIndices = session.frameIndices;
+            if (frameIndices.length === 0) {
                 setStatus('No frames to track', 'error');
                 return;
             }
 
-            var cameras = session.cameras.map(function (cam) {
-                return { name: cam.name, projectionMatrix: cam.projectionMatrix };
-            });
+            // Clear old identities for fresh run
+            session.identities = [];
+            session.trackIdentityMap = new Map();
 
-            // Launch worker
-            trackerWorker = new Worker('tracker-worker.js');
-            var progressEl = document.getElementById('trackerProgress');
-            var progressBar = document.getElementById('trackerProgressBar');
-            var progressText = document.getElementById('trackerProgressText');
-            progressEl.style.display = 'flex';
+            showLoading('Assigning identities: 0/' + frameIndices.length + ' frames...');
 
-            trackerWorker.onmessage = function (e) {
-                var msg = e.data;
-                if (msg.type === 'progress') {
-                    var pct = (msg.frame / msg.total * 100).toFixed(1);
-                    progressBar.style.width = pct + '%';
-                    progressText.textContent = 'Tracking frame ' + msg.frame + ' / ' + msg.total;
-                } else if (msg.type === 'complete') {
-                    progressEl.style.display = 'none';
-                    applyWorkerResults(msg.results, session);
-                    trackerWorker.terminate();
-                    trackerWorker = null;
-                    setStatus('Tracking complete: ' + msg.results.numTargets + ' identities found', 'success');
-                } else if (msg.type === 'error') {
-                    progressEl.style.display = 'none';
-                    setStatus('Tracker error: ' + msg.message, 'error');
-                    trackerWorker.terminate();
-                    trackerWorker = null;
-                } else if (msg.type === 'cancelled') {
-                    progressEl.style.display = 'none';
-                    setStatus('Tracking cancelled at frame ' + msg.frame, 'warning');
-                    trackerWorker.terminate();
-                    trackerWorker = null;
+            var YIELD_EVERY = 50;
+
+            try {
+                for (var f = 0; f < frameIndices.length; f++) {
+                    var fi = frameIndices[f];
+                    var fg = session.getFrameGroup(fi);
+                    if (fg) {
+                        matchFrameInstances(fg, cameras, session);
+                    }
+
+                    if (f % YIELD_EVERY === 0) {
+                        document.getElementById('loadingStatus').textContent =
+                            'Assigning identities: ' + (f + 1) + '/' + frameIndices.length + ' frames...';
+                        await new Promise(function (r) { setTimeout(r, 0); });
+                    }
                 }
-            };
 
-            trackerWorker.postMessage({
-                type: 'start',
-                data: {
-                    frames: frames,
-                    cameras: cameras,
-                    hyperparameters: getTrackerHyperparams()
-                }
-            });
-            setStatus('Tracking ' + frames.length + ' frames...', 'info');
-        }
-
-        function applyWorkerResults(results, session) {
-            var trackToIdentity = {};
-            for (var i = 0; i < results.identityAssignments.length; i++) {
-                var a = results.identityAssignments[i];
-                if (!(a.trackId in trackToIdentity)) {
-                    var identity = session.addIdentity('track_' + a.trackId);
-                    trackToIdentity[a.trackId] = identity.id;
-                }
-                session.trackIdentityMap.set(
-                    a.cameraName + ':' + a.trackIdx,
-                    trackToIdentity[a.trackId]
-                );
+                hideLoading();
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
+                setStatus('Tracked ' + frameIndices.length + ' frames, ' +
+                    session.identities.length + ' identities', 'success');
+            } catch (e) {
+                hideLoading();
+                console.error('[TrackAll] error:', e);
+                setStatus('Track All error: ' + e.message, 'error');
             }
-            drawAllOverlays(state.currentFrame);
         }
 
         // Wire up tracker buttons
