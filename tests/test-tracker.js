@@ -160,3 +160,88 @@
         });
     });
 })();
+
+(function () {
+    const { describe, it, assertEqual, assertApprox, assertNotNull, assertTrue,
+        assertGreaterThan } = TestFramework;
+
+    function makeTestCamera(name, rvec, tvec) {
+        return new Camera(
+            name,
+            [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+            [0, 0, 0, 0, 0],
+            rvec, tvec, [640, 480]
+        );
+    }
+
+    describe('CrossViewTracker - adjacency scoring', function () {
+        it('2D score is higher for closer projected match', function () {
+            if (typeof CrossViewTracker === 'undefined') return;
+            var tracker = new CrossViewTracker();
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var p3d = [10, 5, 50];
+            var det1 = Detection2D.fromInstance(new Instance([cam1.project(p3d)], 0, 'predicted', 1), cam1, 0);
+            var det2 = Detection2D.fromInstance(new Instance([cam2.project(p3d)], 0, 'predicted', 1), cam2, 0);
+            var target = Target3D.fromDetections([det1, det2], 0);
+            var goodDet = Detection2D.fromInstance(new Instance([cam1.project(p3d)], 1, 'predicted', 1), cam1, 1);
+            var badDet = Detection2D.fromInstance(new Instance([[0, 0]], 1, 'predicted', 1), cam1, 1);
+            var projected = reprojectPoints(target.points, cam1.projectionMatrix);
+            var goodScore = tracker.calculateAdjacencyValue2d(projected, goodDet, 1);
+            var badScore = tracker.calculateAdjacencyValue2d(projected, badDet, 1);
+            assertGreaterThan(goodScore, badScore, 'good match > bad match');
+        });
+    });
+
+    describe('CrossViewTracker - trackFrame', function () {
+        it('creates targets from first frame detections', function () {
+            if (typeof CrossViewTracker === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var animal1 = [10, 5, 50];
+            var session = new Session([cam1, cam2], Skeleton.defaultMouse(), ['t0']);
+            var fg = new FrameGroup(0);
+            fg.addInstance('c1', new Instance([cam1.project(animal1)], 0, 'predicted', 1));
+            fg.addInstance('c2', new Instance([cam2.project(animal1)], 0, 'predicted', 1));
+            session.addFrameGroup(fg);
+            var tracker = new CrossViewTracker();
+            var result = tracker.trackFrame(fg, [cam1, cam2], session);
+            assertTrue(result.targets.length >= 1, 'at least 1 target created');
+        });
+
+        it('maintains targets across 2 frames', function () {
+            if (typeof CrossViewTracker === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var animal = [[10, 5, 50], [11, 5, 50]];
+            var session = new Session([cam1, cam2], Skeleton.defaultMouse(), ['t0']);
+            var tracker = new CrossViewTracker();
+            for (var f = 0; f < 2; f++) {
+                var fg = new FrameGroup(f);
+                fg.addInstance('c1', new Instance([cam1.project(animal[f])], 0, 'predicted', 1));
+                fg.addInstance('c2', new Instance([cam2.project(animal[f])], 0, 'predicted', 1));
+                session.addFrameGroup(fg);
+                tracker.trackFrame(fg, [cam1, cam2], session);
+            }
+            assertEqual(tracker.prevTargets.length, 1, 'still 1 target after 2 frames');
+        });
+    });
+
+    describe('CrossViewTracker - applyResults', function () {
+        it('creates identities and maps track indices', function () {
+            if (typeof CrossViewTracker === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var session = new Session([cam1, cam2], Skeleton.defaultMouse(), ['t0']);
+            var fg = new FrameGroup(0);
+            fg.addInstance('c1', new Instance([cam1.project([10, 5, 50])], 0, 'predicted', 1));
+            fg.addInstance('c2', new Instance([cam2.project([10, 5, 50])], 0, 'predicted', 1));
+            session.addFrameGroup(fg);
+            var tracker = new CrossViewTracker();
+            tracker.trackFrame(fg, [cam1, cam2], session);
+            tracker.applyResults(session);
+            assertTrue(session.identities.length >= 1, 'identity created');
+            assertTrue(session.trackIdentityMap.size >= 1, 'track mapped');
+        });
+    });
+})();
