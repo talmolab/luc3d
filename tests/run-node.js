@@ -270,6 +270,7 @@ var testFiles = [
     'test-multi-session-export.js',
     'test-reprojection-lifecycle.js',
     'test-identity.js',
+    'test-session-switching.js',
 ];
 
 for (var i = 0; i < testFiles.length; i++) {

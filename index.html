@@ -11686,22 +11686,18 @@
             // Restore saved views or build new ones
             if (newSession._views && newSession._views.length > 0) {
                 state.views = newSession._views;
-                videoController = newSession._videoController || null;
 
                 paneManager.clearAll();
                 paneManager.addAllViewsAsGrid();
 
-                // Re-seek all decoders to warm up video buffers
+                // Rebuild video controller with current state.views
+                rebuildVideoController();
+
                 var targetFrame = newSession.lastFrame || 0;
                 setTimeout(function() {
                     fitCanvasesToCells();
                     refreshPaneInteractions();
                     state.currentFrame = targetFrame;
-                    // Seek each decoder individually to warm cache
-                    for (var rvi = 0; rvi < state.views.length; rvi++) {
-                        var d = state.views[rvi].decoder;
-                        if (d && d.seekNative) d.seekNative(targetFrame);
-                    }
                     if (videoController) {
                         videoController.seekToFrame(targetFrame);
                     }
