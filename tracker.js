@@ -144,12 +144,13 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
 
     var groups;
 
-    // If we have previous 3D targets, match instances to them directly via reprojection
-    if (prevTargets3d && prevTargets3d.length > 0) {
-        groups = matchViaReprojection(prevTargets3d, camInstances, camMap, activeCams, prevAssignments);
-    } else {
-        // Bootstrap: build groups from pairwise cross-view scoring
-        groups = matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignments);
+    // Always do pairwise cross-view matching (geometry within current frame)
+    groups = matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignments);
+
+    // If we have previous 3D targets, re-order groups to match prev identities
+    // by scoring each group against each prev target via reprojection
+    if (prevTargets3d && prevTargets3d.length > 0 && groups.length > 0) {
+        groups = reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments);
     }
 
     // Triangulate each group for 3D targets (used for next frame's reprojection matching)
@@ -211,6 +212,78 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
     }
 
     return { groups: groups, numIdentities: groups.length, assignments: assignments, targets3d: targets3d };
+}
+
+
+/**
+ * Re-order groups from the current frame's pairwise matching to be consistent
+ * with previous frame's identity ordering.
+ *
+ * For each (prevTarget, currentGroup) pair, compute mean reprojection distance
+ * across all cameras. Use Hungarian to find optimal assignment. Re-order groups
+ * so group[i] corresponds to prevTarget[i].
+ */
+function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments) {
+    var nTargets = prevTargets3d.length;
+    var nGroups = groups.length;
+    var n = Math.max(nTargets, nGroups);
+
+    // Build cost matrix: prevTarget[i] → group[j]
+    var cost = [];
+    for (var ti = 0; ti < n; ti++) {
+        cost[ti] = [];
+        for (var gi = 0; gi < n; gi++) {
+            if (ti >= nTargets || gi >= nGroups) {
+                cost[ti][gi] = 1000;  // dummy high cost for padding
+                continue;
+            }
+            var pts3d = prevTargets3d[ti].points3d;
+            if (!pts3d) { cost[ti][gi] = 1000; continue; }
+
+            // Compute mean reprojection distance across cameras in this group
+            var totalDist = 0, distCount = 0;
+            groups[gi].forEach(function(inst, camName) {
+                var cam = camMap[camName];
+                if (!cam) return;
+                var reproj = reprojectPoints(pts3d, cam.projectionMatrix);
+                var d = computeInstanceDistance(reproj, inst.points);
+                if (d < Infinity) { totalDist += d; distCount++; }
+            });
+
+            // Also add temporal bonus from prev assignments
+            var bonus = 0;
+            if (prevAssignments && prevTargets3d[ti].identityId != null) {
+                groups[gi].forEach(function(inst, camName) {
+                    var prevId = prevAssignments.get(camName + ':' + inst.trackIdx);
+                    if (prevId != null && prevId === prevTargets3d[ti].identityId) {
+                        bonus -= 20;  // strong bonus (lower cost)
+                    }
+                });
+            }
+
+            cost[ti][gi] = (distCount > 0 ? totalDist / distCount : 500) + bonus;
+        }
+    }
+
+    var assignment = hungarianAlgorithm(cost);
+
+    // Reorder groups: newGroups[ti] = groups[assignment[ti]]
+    var reordered = [];
+    for (var ti2 = 0; ti2 < nTargets; ti2++) {
+        var gi2 = assignment[ti2];
+        if (gi2 >= 0 && gi2 < nGroups) {
+            reordered.push(groups[gi2]);
+        } else {
+            reordered.push(new Map());  // empty group for missing target
+        }
+    }
+    // Add any unmatched groups at the end
+    var usedGroups = new Set(assignment.filter(function(g) { return g >= 0 && g < nGroups; }));
+    for (var gi3 = 0; gi3 < nGroups; gi3++) {
+        if (!usedGroups.has(gi3)) reordered.push(groups[gi3]);
+    }
+
+    return reordered;
 }
 
 
