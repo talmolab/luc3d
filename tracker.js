@@ -355,45 +355,62 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
         }
     }
 
-    // --- Step 3: Assign identities (reuse existing by name) ---
+    // --- Step 3: Assign identities using stable mapping ---
+    // If prevAssignments exists, use it to carry identity forward.
+    // Each group votes: which identity did its members have last frame?
     var fi = frameGroup.frameIdx;
+    var assignments = new Map();
+    var usedIdentityIds = new Set();
+
     for (var g2 = 0; g2 < groups.length; g2++) {
-        var idName = 'id_' + g2;
-        // Look for existing identity with this name
         var identity = null;
-        for (var ei = 0; ei < session.identities.length; ei++) {
-            if (session.identities[ei].name === idName) {
-                identity = session.identities[ei];
-                break;
+
+        // Vote: what identity did this group's members have on the previous frame?
+        if (prevAssignments) {
+            var votes = {};  // identityId -> count
+            groups[g2].forEach(function(inst, cn) {
+                var prevId = prevAssignments.get(cn + ':' + inst.trackIdx);
+                if (prevId != null) {
+                    votes[prevId] = (votes[prevId] || 0) + 1;
+                }
+            });
+            // Pick identity with most votes (that hasn't been used by another group this frame)
+            var bestVote = -1, bestVoteId = null;
+            for (var vid in votes) {
+                var vidNum = parseInt(vid);
+                if (votes[vid] > bestVote && !usedIdentityIds.has(vidNum)) {
+                    bestVote = votes[vid];
+                    bestVoteId = vidNum;
+                }
+            }
+            if (bestVoteId != null) {
+                identity = session.getIdentity(bestVoteId);
             }
         }
-        // Only create if it doesn't exist
+
+        // Fallback: find or create by index
         if (!identity) {
-            identity = session.addIdentity(idName);
+            var idName = 'id_' + g2;
+            for (var ei = 0; ei < session.identities.length; ei++) {
+                if (session.identities[ei].name === idName && !usedIdentityIds.has(session.identities[ei].id)) {
+                    identity = session.identities[ei];
+                    break;
+                }
+            }
         }
+        if (!identity) {
+            identity = session.addIdentity('id_' + session.identities.length);
+        }
+
+        usedIdentityIds.add(identity.id);
+
         groups[g2].forEach(function(inst, cn) {
-            // Always set global (for non-frame-aware code paths like info panel)
             session.trackIdentityMap.set(cn + ':' + inst.trackIdx, identity.id);
-            // Also set per-frame override if requested
             if (opts.perFrame && session.setFrameIdentity) {
                 session.setFrameIdentity(fi, cn, inst.trackIdx, identity.id);
             }
+            assignments.set(cn + ':' + inst.trackIdx, identity.id);
         });
-    }
-
-    // Build assignments map for temporal continuity
-    var assignments = new Map();
-    for (var g3 = 0; g3 < groups.length; g3++) {
-        var idName3 = 'id_' + g3;
-        var idObj = null;
-        for (var eid = 0; eid < session.identities.length; eid++) {
-            if (session.identities[eid].name === idName3) { idObj = session.identities[eid]; break; }
-        }
-        if (idObj) {
-            groups[g3].forEach(function(inst, cn) {
-                assignments.set(cn + ':' + inst.trackIdx, idObj.id);
-            });
-        }
     }
 
     return { groups: groups, numIdentities: groups.length, assignments: assignments };
