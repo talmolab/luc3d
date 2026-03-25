@@ -7049,13 +7049,26 @@
                         sel.addEventListener('change', function (ev) {
                             ev.stopPropagation();
                             var newTrack = parseInt(sel.value);
-                            // Swap-assign per camera, propagate each
-                            var totalProp = 0;
-                            for (var [cn, inst] of g.instances) {
-                                totalProp += swapAssignTrack(state.currentFrame, cn, inst, newTrack, state.session);
+                            var oldTrack = g.trackIdx;
+                            // Swap on current frame per camera
+                            if (oldTrack !== newTrack) {
+                                var fg = state.session.getFrameGroup(state.currentFrame);
+                                if (fg) {
+                                    for (var [cn, ginst] of g.instances) {
+                                        var camInsts = fg.getInstances(cn);
+                                        for (var si = 0; si < camInsts.length; si++) {
+                                            if (camInsts[si] !== ginst && camInsts[si].trackIdx === newTrack) camInsts[si].trackIdx = oldTrack;
+                                        }
+                                        var camUl = fg.getUnlinkedInstances(cn);
+                                        for (var su = 0; su < camUl.length; su++) {
+                                            if (camUl[su].instance !== ginst && camUl[su].instance.trackIdx === newTrack) camUl[su].instance.trackIdx = oldTrack;
+                                        }
+                                        ginst.trackIdx = newTrack;
+                                    }
+                                }
                             }
                             g.trackIdx = newTrack;
-                            setStatus('Track → ' + state.session.tracks[newTrack] + (totalProp > 0 ? ' (swapped & propagated ' + totalProp + ')' : ''), 'success');
+                            setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack), 'success');
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
                         });
@@ -7329,14 +7342,26 @@
                                 ev.stopPropagation();
                                 var newTrack = parseInt(sel.value);
                                 var oldTrack = inst.trackIdx;
-                                var propagated = swapAssignTrack(state.currentFrame, camNameForUl, inst, newTrack, state.session);
-                                console.log('[track-dropdown] ' + camNameForUl + ': track ' + oldTrack + ' → ' + newTrack +
-                                    ' | inst.trackIdx now=' + inst.trackIdx +
-                                    ' | colorByIdentity=' + state.colorByIdentity +
-                                    ' | trackColor=' + getTrackColor(inst.trackIdx));
-                                setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl +
-                                    (propagated > 0 ? ' (swapped ' + propagated + ')' : ''), 'success');
-                                drawAllOverlays(state.currentFrame);
+                                // Inline swap on current frame
+                                var fg = state.session.getFrameGroup(state.currentFrame);
+                                if (fg && oldTrack !== newTrack) {
+                                    var camInsts = fg.getInstances(camNameForUl);
+                                    for (var si = 0; si < camInsts.length; si++) {
+                                        if (camInsts[si] !== inst && camInsts[si].trackIdx === newTrack) camInsts[si].trackIdx = oldTrack;
+                                    }
+                                    var camUl = fg.getUnlinkedInstances(camNameForUl);
+                                    for (var su = 0; su < camUl.length; su++) {
+                                        if (camUl[su].instance !== inst && camUl[su].instance.trackIdx === newTrack) camUl[su].instance.trackIdx = oldTrack;
+                                    }
+                                }
+                                inst.trackIdx = newTrack;
+                                console.log('[TRACK CHANGE] ' + camNameForUl + ': ' + oldTrack + ' → ' + newTrack + ' | color should be: ' + getTrackColor(newTrack));
+                                setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl, 'success');
+                                try {
+                                    drawAllOverlays(state.currentFrame);
+                                } catch (err) {
+                                    console.error('[TRACK CHANGE] drawAllOverlays error:', err);
+                                }
                                 updateInfoPanel();
                             });
                             sel.addEventListener('click', function (ev) { ev.stopPropagation(); });

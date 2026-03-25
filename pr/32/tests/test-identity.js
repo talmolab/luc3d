@@ -500,17 +500,18 @@
 
     describe('Identity color resolution', function () {
         it('getGroupColor uses identity color when useIdentity is true', function () {
-            var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
+            var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0']);
             var id = s.addIdentity('mouse_A', '#ff0000');
             var group = new InstanceGroup(1, 0);
             s.assignIdentityToGroup(group, id.id);
-            // Pass useIdentity=true as third param
             var color = getGroupColor(group, s, true);
             assertEqual(color, '#ff0000');
         });
 
         it('getGroupColor uses track color when useIdentity is false', function () {
-            var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
+            var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0']);
             var id = s.addIdentity('mouse_A', '#ff0000');
             var group = new InstanceGroup(1, 0);
             s.assignIdentityToGroup(group, id.id);
