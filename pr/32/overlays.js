@@ -47,7 +47,10 @@ function getGroupColor(group, session, useIdentity) {
         // Try group's direct identity first
         if (group.identityId >= 0) {
             var identity = session.getIdentity(group.identityId);
-            if (identity && identity.color) return identity.color;
+            if (identity && identity.color) {
+                console.log('[getGroupColor] ID mode: group.identityId=' + group.identityId + ' → ' + identity.name + ' color=' + identity.color);
+                return identity.color;
+            }
         }
         // Fall back to track→identity map
         var trackId = group.trackIdx != null ? group.trackIdx : 0;
@@ -65,7 +68,11 @@ function getGroupColor(group, session, useIdentity) {
 function getInstanceColor(instance, session, cameraName, useIdentity) {
     if (useIdentity && session && instance.trackIdx != null) {
         var identity = session.getIdentityForTrack(instance.trackIdx, cameraName);
-        if (identity && identity.color) return identity.color;
+        if (identity && identity.color) {
+            console.log('[getInstanceColor] ID mode: track=' + instance.trackIdx + ' cam=' + cameraName + ' → ' + identity.name + ' color=' + identity.color);
+            return identity.color;
+        }
+        console.log('[getInstanceColor] ID mode but NO identity for track=' + instance.trackIdx + ' cam=' + cameraName + ' mapSize=' + session.trackIdentityMap.size);
     }
     return getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
 }
@@ -1512,6 +1519,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     const showErrors      = options.showErrors !== false;
     const showLegend      = options.showLegend !== false;
     const colorByIdentity = !!options.colorByIdentity;
+    if (colorByIdentity) console.log('[drawFrameOverlays] colorByIdentity=true for view ' + viewName);
 
     // Per-type rendering options (fall back to flat options for backward compat)
     const defaultOpts = {
