@@ -47,10 +47,7 @@ function getGroupColor(group, session, useIdentity) {
         // Try group's direct identity first
         if (group.identityId >= 0) {
             var identity = session.getIdentity(group.identityId);
-            if (identity && identity.color) {
-                console.log('[getGroupColor] ID mode: group.identityId=' + group.identityId + ' → ' + identity.name + ' color=' + identity.color);
-                return identity.color;
-            }
+            if (identity && identity.color) return identity.color;
         }
         // Fall back to track→identity map
         var trackId = group.trackIdx != null ? group.trackIdx : 0;
@@ -68,11 +65,7 @@ function getGroupColor(group, session, useIdentity) {
 function getInstanceColor(instance, session, cameraName, useIdentity) {
     if (useIdentity && session && instance.trackIdx != null) {
         var identity = session.getIdentityForTrack(instance.trackIdx, cameraName);
-        if (identity && identity.color) {
-            console.log('[getInstanceColor] ID mode: track=' + instance.trackIdx + ' cam=' + cameraName + ' → ' + identity.name + ' color=' + identity.color);
-            return identity.color;
-        }
-        console.log('[getInstanceColor] ID mode but NO identity for track=' + instance.trackIdx + ' cam=' + cameraName + ' mapSize=' + session.trackIdentityMap.size);
+        if (identity && identity.color) return identity.color;
     }
     return getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
 }
@@ -1271,6 +1264,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     const assignmentSelectedIds = options.assignmentSelectedIds || [];
     const assignmentColor = options.assignmentColor || '#fbbf24';
     const ulColorByIdentity = !!options.colorByIdentity;
+    const ulSession = options.session || null;
     const selectedUnlinkedId = options.selectedUnlinkedId || null;
     const predictedRender = options.predictedRender || null;
 
@@ -1311,7 +1305,6 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
-        var ulSession = typeof state !== 'undefined' ? state.session : null;
         var baseTrackColor = isPredicted ? (getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity) || '#888888') : UNGROUPED_USER_COLOR;
         const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
         const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
@@ -1519,7 +1512,6 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     const showErrors      = options.showErrors !== false;
     const showLegend      = options.showLegend !== false;
     const colorByIdentity = !!options.colorByIdentity;
-    if (colorByIdentity) console.log('[drawFrameOverlays] colorByIdentity=true for view ' + viewName);
 
     // Per-type rendering options (fall back to flat options for backward compat)
     const defaultOpts = {
@@ -1676,6 +1668,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, unlinkedOpts, {
             typeFilter: 'predicted',
             colorByIdentity: colorByIdentity,
+            session: session,
         }));
     }
 
@@ -1715,6 +1708,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, unlinkedOpts, {
             typeFilter: 'user',
             colorByIdentity: colorByIdentity,
+            session: session,
         }));
     }
 
