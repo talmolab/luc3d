@@ -41,7 +41,8 @@ function getUndistortedPoints(inst, cam) {
 }
 
 function clearFrameCache() {
-    _fMatrixCache = {};
+    // Keep F matrix cache — same cameras every frame
+    // _fMatrixCache = {};
 }
 
 // ============================================

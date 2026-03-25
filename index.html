@@ -12417,6 +12417,7 @@
                 if (!promptNumAnimals()) return;
             }
             console.log('[TrackAll] numAnimals:', trackerNumAnimals, 'frames:', frameIndices.length);
+            console.time('[TrackAll] total');
 
             // Clear old identities for fresh run
             session.identities = [];
@@ -12462,6 +12463,7 @@
 
                 hideLoading();
                 drawAllOverlays(state.currentFrame);
+                console.timeEnd('[TrackAll] total');
                 updateInfoPanel();
                 if (timeline) timeline.refreshTracks(state.session);
                 setStatus('Tracked ' + frameIndices.length + ' frames, ' +
