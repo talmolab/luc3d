@@ -1214,15 +1214,13 @@ body {
 
 .timeline-container {
   height: var(--timeline-height);
-  min-height: 60px;
-  max-height: 400px;
+  min-height: 40px;
   background: var(--bg-tertiary);
   border-top: 1px solid var(--border-color);
   position: relative;
   overflow-y: auto;
   overflow-x: hidden;
   flex-shrink: 0;
-  resize: vertical;
 }
 
 .timeline-canvas {
