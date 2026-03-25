@@ -12287,6 +12287,26 @@
             };
         }
 
+        // Tracker state: number of animals (null = unconstrained)
+        var trackerNumAnimals = null;
+
+        function promptNumAnimals() {
+            var input = prompt('Number of animals (leave empty for auto-detect):', trackerNumAnimals || '');
+            if (input === null) return false;  // cancelled
+            input = input.trim();
+            if (input === '') {
+                trackerNumAnimals = null;
+            } else {
+                var n = parseInt(input);
+                if (isNaN(n) || n < 1) {
+                    setStatus('Invalid number', 'error');
+                    return false;
+                }
+                trackerNumAnimals = n;
+            }
+            return true;
+        }
+
         function trackCurrentFrame() {
             var session = getActiveSession();
             if (!session || !session.cameras || session.cameras.length === 0) {
@@ -12298,13 +12318,22 @@
                 setStatus('No frame data at frame ' + state.currentFrame, 'error');
                 return;
             }
+
+            // Prompt for number of animals on first use
+            if (trackerNumAnimals == null) {
+                if (!promptNumAnimals()) return;
+            }
+
             try {
-                var result = matchFrameInstances(fg, session.cameras, session);
+                var result = matchFrameInstances(fg, session.cameras, session, {
+                    numAnimals: trackerNumAnimals
+                });
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
                 if (timeline) timeline.refreshTracks(state.session);
                 if (result.numIdentities > 0) {
-                    setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities assigned', 'success');
+                    setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
+                        (trackerNumAnimals ? ' (constrained to ' + trackerNumAnimals + ')' : ''), 'success');
                 } else {
                     setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
                 }
@@ -12383,6 +12412,11 @@
                 return;
             }
 
+            // Prompt for number of animals
+            if (trackerNumAnimals == null) {
+                if (!promptNumAnimals()) return;
+            }
+
             // Clear old identities for fresh run
             session.identities = [];
             session.trackIdentityMap = new Map();
@@ -12393,17 +12427,23 @@
             var YIELD_EVERY = 50;
 
             var prevAssignments = null;
+            var prevTargets3d = null;
             try {
                 for (var f = 0; f < frameIndices.length; f++) {
                     var fi = frameIndices[f];
                     var fg = session.getFrameGroup(fi);
                     if (fg) {
                         var result = matchFrameInstances(fg, cameras, session, {
+                            numAnimals: trackerNumAnimals,
                             perFrame: true,
-                            prevAssignments: prevAssignments
+                            prevAssignments: prevAssignments,
+                            prevTargets3d: prevTargets3d
                         });
                         if (result.assignments && result.assignments.size > 0) {
                             prevAssignments = result.assignments;
+                        }
+                        if (result.targets3d && result.targets3d.length > 0) {
+                            prevTargets3d = result.targets3d;
                         }
                     }
 
