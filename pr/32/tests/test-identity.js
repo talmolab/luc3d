@@ -367,6 +367,75 @@
         });
     });
 
+    // ---- getInstanceColor with session passed explicitly ----
+
+    describe('getInstanceColor with explicit session', function () {
+        it('returns identity color when useIdentity=true and map is populated', function () {
+            var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
+            var id = s.addIdentity('id_0', '#00ff00');
+            s.assignTrackToIdentity(0, id.id, 'CamA');
+
+            var inst = new Instance([[10, 20]], 0, 'predicted');
+            var color = getInstanceColor(inst, s, 'CamA', true);
+            assertEqual(color, '#00ff00', 'should return identity color');
+        });
+
+        it('returns track color when useIdentity=false', function () {
+            var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
+            var id = s.addIdentity('id_0', '#00ff00');
+            s.assignTrackToIdentity(0, id.id, 'CamA');
+
+            var inst = new Instance([[10, 20]], 0, 'predicted');
+            var color = getInstanceColor(inst, s, 'CamA', false);
+            assertEqual(color, getTrackColor(0), 'should return track color');
+        });
+
+        it('returns track color when session is null', function () {
+            var inst = new Instance([[10, 20]], 0, 'predicted');
+            var color = getInstanceColor(inst, null, 'CamA', true);
+            assertEqual(color, getTrackColor(0), 'should fall back to track color');
+        });
+
+        it('changing identity changes color immediately', function () {
+            var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
+            var id0 = s.addIdentity('id_0', '#00ff00');
+            var id1 = s.addIdentity('id_1', '#ff00ff');
+            s.assignTrackToIdentity(0, id0.id, 'CamA');
+
+            var inst = new Instance([[10, 20]], 0, 'predicted');
+
+            // Initially green
+            var color1 = getInstanceColor(inst, s, 'CamA', true);
+            assertEqual(color1, '#00ff00', 'should be green initially');
+
+            // Change to id_1 (magenta)
+            s.assignTrackToIdentity(0, id1.id, 'CamA');
+            var color2 = getInstanceColor(inst, s, 'CamA', true);
+            assertEqual(color2, '#ff00ff', 'should be magenta after reassign');
+        });
+
+        it('different cameras can have different identity colors', function () {
+            var cams = [
+                new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
+                new Camera('CamB', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
+            ];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
+            var id0 = s.addIdentity('id_0', '#00ff00');
+            var id1 = s.addIdentity('id_1', '#ff00ff');
+            s.assignTrackToIdentity(0, id0.id, 'CamA');
+            s.assignTrackToIdentity(0, id1.id, 'CamB');
+
+            var inst = new Instance([[10, 20]], 0, 'predicted');
+            var colorA = getInstanceColor(inst, s, 'CamA', true);
+            var colorB = getInstanceColor(inst, s, 'CamB', true);
+            assertEqual(colorA, '#00ff00', 'CamA should be green');
+            assertEqual(colorB, '#ff00ff', 'CamB should be magenta');
+        });
+    });
+
     // ---- trackIdentityMap serialization ----
 
     describe('trackIdentityMap serialization', function () {
