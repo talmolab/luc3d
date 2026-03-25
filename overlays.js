@@ -1062,7 +1062,10 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
         const trackName = inst.trackIdx != null && trackNames[inst.trackIdx]
             ? trackNames[inst.trackIdx]
             : ('Track ' + (inst.trackIdx != null ? inst.trackIdx : instIdx));
-        const color = options.color || getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx);
+        var trackColors = options.trackColors || null;
+        const color = (trackColors && trackColors[inst.trackIdx])
+            ? trackColors[inst.trackIdx]
+            : (options.color || getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx));
 
         var fontSize = adjustedLabelSize;
         if (fontSize <= 0) continue; // label size 0 = hidden
@@ -1699,9 +1702,23 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
 
         // 4a. Draw track name labels (user instances only)
         if (userOpts.showLabels && userInstances.length > 0) {
-            const trackNames = session && session.tracks ? session.tracks : [];
+            var labelNames = session && session.tracks ? session.tracks.slice() : [];
+            var labelColors = null;
+            // When coloring by identity, show identity names and colors on labels
+            if (colorByIdentity && session) {
+                labelColors = {};
+                for (var li = 0; li < userInstances.length; li++) {
+                    var lInst = userInstances[li];
+                    var lIdentity = session.getIdentityForTrack(lInst.trackIdx, viewName, _frameIdx);
+                    if (lIdentity) {
+                        labelNames[lInst.trackIdx] = lIdentity.name;
+                        labelColors[lInst.trackIdx] = lIdentity.color;
+                    }
+                }
+            }
             drawInstanceLabels(ctx, userInstances, skeleton, viewName, Object.assign({}, userRender, {
-                trackNames: trackNames,
+                trackNames: labelNames,
+                trackColors: labelColors,
             }));
         }
     }
