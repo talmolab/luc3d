@@ -274,6 +274,230 @@
         });
     });
 
+    // ---- Swap proofreading sequences ----
+
+    describe('Swap proofreading: fix artificial swap across frames', function () {
+        function makeSwapSession() {
+            var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0', 'track_1']);
+            // 5 frames: swap happens at frame 3
+            for (var f = 0; f < 5; f++) {
+                var fg = new FrameGroup(f);
+                if (f < 3) {
+                    // Correct: instA=track_0, instB=track_1
+                    fg.addInstance('CamA', new Instance([[f * 10, f * 10 + 1]], 0, 'predicted'));
+                    fg.addInstance('CamA', new Instance([[f * 10 + 5, f * 10 + 6]], 1, 'predicted'));
+                } else {
+                    // Swapped: instA=track_1, instB=track_0
+                    fg.addInstance('CamA', new Instance([[f * 10, f * 10 + 1]], 1, 'predicted'));
+                    fg.addInstance('CamA', new Instance([[f * 10 + 5, f * 10 + 6]], 0, 'predicted'));
+                }
+                s.addFrameGroup(fg);
+            }
+            return s;
+        }
+
+        it('detects swap: frame 3+ has inverted tracks', function () {
+            var s = makeSwapSession();
+            var f2 = s.getFrameGroup(2).getInstances('CamA');
+            var f3 = s.getFrameGroup(3).getInstances('CamA');
+            // Frame 2: first=track_0, second=track_1
+            assertEqual(f2[0].trackIdx, 0);
+            assertEqual(f2[1].trackIdx, 1);
+            // Frame 3: first=track_1, second=track_0 (swapped)
+            assertEqual(f3[0].trackIdx, 1);
+            assertEqual(f3[1].trackIdx, 0);
+        });
+
+        it('swapTracks at frame 3 fixes all subsequent frames', function () {
+            var s = makeSwapSession();
+            // Swap track_0 and track_1 from frame 3 onwards
+            for (var [fIdx, fg] of s.frameGroups) {
+                if (fIdx < 3) continue;
+                var insts = fg.getInstances('CamA');
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === 0) insts[i].trackIdx = -99;
+                }
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === 1) insts[i].trackIdx = 0;
+                }
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === -99) insts[i].trackIdx = 1;
+                }
+            }
+
+            // Verify ALL frames are now correct
+            for (var f = 0; f < 5; f++) {
+                var insts = s.getFrameGroup(f).getInstances('CamA');
+                assertEqual(insts[0].trackIdx, 0, 'frame ' + f + ' inst 0 should be track_0');
+                assertEqual(insts[1].trackIdx, 1, 'frame ' + f + ' inst 1 should be track_1');
+            }
+        });
+
+        it('fixing swap does not affect frames before the swap point', function () {
+            var s = makeSwapSession();
+            // Save frame 0-2 tracks before fix
+            var before = [];
+            for (var f = 0; f < 3; f++) {
+                var insts = s.getFrameGroup(f).getInstances('CamA');
+                before.push([insts[0].trackIdx, insts[1].trackIdx]);
+            }
+
+            // Fix swap at frame 3
+            for (var [fIdx, fg] of s.frameGroups) {
+                if (fIdx < 3) continue;
+                var insts = fg.getInstances('CamA');
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === 0) insts[i].trackIdx = -99;
+                }
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === 1) insts[i].trackIdx = 0;
+                }
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === -99) insts[i].trackIdx = 1;
+                }
+            }
+
+            // Verify frames 0-2 unchanged
+            for (var f = 0; f < 3; f++) {
+                var insts = s.getFrameGroup(f).getInstances('CamA');
+                assertEqual(insts[0].trackIdx, before[f][0], 'frame ' + f + ' inst 0 unchanged');
+                assertEqual(insts[1].trackIdx, before[f][1], 'frame ' + f + ' inst 1 unchanged');
+            }
+        });
+    });
+
+    describe('Swap proofreading: multiple swaps', function () {
+        it('handles two swaps at different frames', function () {
+            var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0', 'track_1']);
+
+            // Frame 0-1: correct (0,1)
+            // Frame 2-3: swapped (1,0)
+            // Frame 4-5: swapped back (0,1) — double swap
+            for (var f = 0; f < 6; f++) {
+                var fg = new FrameGroup(f);
+                var swapped = (f >= 2 && f <= 3);
+                fg.addInstance('CamA', new Instance([[f, 0]], swapped ? 1 : 0, 'predicted'));
+                fg.addInstance('CamA', new Instance([[f, 5]], swapped ? 0 : 1, 'predicted'));
+                s.addFrameGroup(fg);
+            }
+
+            // Fix first swap at frame 2 (swap 0↔1 from frame 2 onwards)
+            for (var [fIdx, fg] of s.frameGroups) {
+                if (fIdx < 2) continue;
+                var insts = fg.getInstances('CamA');
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === 0) insts[i].trackIdx = -99;
+                }
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === 1) insts[i].trackIdx = 0;
+                }
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === -99) insts[i].trackIdx = 1;
+                }
+            }
+
+            // After first fix: frames 0-3 should be correct, but frames 4-5 are now swapped
+            // (because the second swap got un-swapped by our fix)
+            for (var f = 0; f < 4; f++) {
+                var insts = s.getFrameGroup(f).getInstances('CamA');
+                assertEqual(insts[0].trackIdx, 0, 'after fix 1: frame ' + f + ' inst 0 = track_0');
+                assertEqual(insts[1].trackIdx, 1, 'after fix 1: frame ' + f + ' inst 1 = track_1');
+            }
+            // Frames 4-5 are now inverted (because they were already correct, our swap broke them)
+            var f4 = s.getFrameGroup(4).getInstances('CamA');
+            assertEqual(f4[0].trackIdx, 1, 'frame 4 now swapped by our fix');
+            assertEqual(f4[1].trackIdx, 0, 'frame 4 now swapped by our fix');
+
+            // Fix second swap at frame 4
+            for (var [fIdx2, fg2] of s.frameGroups) {
+                if (fIdx2 < 4) continue;
+                var insts2 = fg2.getInstances('CamA');
+                for (var i = 0; i < insts2.length; i++) {
+                    if (insts2[i].trackIdx === 0) insts2[i].trackIdx = -99;
+                }
+                for (var i = 0; i < insts2.length; i++) {
+                    if (insts2[i].trackIdx === 1) insts2[i].trackIdx = 0;
+                }
+                for (var i = 0; i < insts2.length; i++) {
+                    if (insts2[i].trackIdx === -99) insts2[i].trackIdx = 1;
+                }
+            }
+
+            // Now ALL frames should be correct
+            for (var f = 0; f < 6; f++) {
+                var insts = s.getFrameGroup(f).getInstances('CamA');
+                assertEqual(insts[0].trackIdx, 0, 'final: frame ' + f + ' inst 0 = track_0');
+                assertEqual(insts[1].trackIdx, 1, 'final: frame ' + f + ' inst 1 = track_1');
+            }
+        });
+    });
+
+    describe('Swap proofreading: sequential dropdown changes', function () {
+        it('changing instance A then B does not corrupt tracks', function () {
+            var fg = new FrameGroup(0);
+            var instA = new Instance([[10, 20]], 0, 'predicted');
+            var instB = new Instance([[30, 40]], 1, 'predicted');
+            fg.addInstance('CamA', instA);
+            fg.addInstance('CamA', instB);
+
+            // User changes instA from track_0 to track_1 (swap)
+            var camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) {
+                if (camInsts[i] !== instA && camInsts[i].trackIdx === 1) camInsts[i].trackIdx = 0;
+            }
+            instA.trackIdx = 1;
+            assertEqual(instA.trackIdx, 1, 'step 1: A = track_1');
+            assertEqual(instB.trackIdx, 0, 'step 1: B = track_0 (swapped)');
+
+            // User then changes instB from track_0 to track_1 (swap again)
+            camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) {
+                if (camInsts[i] !== instB && camInsts[i].trackIdx === 1) camInsts[i].trackIdx = 0;
+            }
+            instB.trackIdx = 1;
+            assertEqual(instA.trackIdx, 0, 'step 2: A = track_0 (swapped back)');
+            assertEqual(instB.trackIdx, 1, 'step 2: B = track_1');
+
+            // Verify no duplicates
+            var tracks = {};
+            camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) {
+                var t = camInsts[i].trackIdx;
+                assertTrue(!tracks[t], 'no duplicate track ' + t);
+                tracks[t] = true;
+            }
+        });
+
+        it('three instances: assigning occupied track swaps correctly', function () {
+            var fg = new FrameGroup(0);
+            var instA = new Instance([[10, 20]], 0, 'predicted');
+            var instB = new Instance([[30, 40]], 1, 'predicted');
+            var instC = new Instance([[50, 60]], 2, 'predicted');
+            fg.addInstance('CamA', instA);
+            fg.addInstance('CamA', instB);
+            fg.addInstance('CamA', instC);
+
+            // Change instA from track_0 to track_2 — instC should swap to track_0
+            var camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) {
+                if (camInsts[i] !== instA && camInsts[i].trackIdx === 2) camInsts[i].trackIdx = 0;
+            }
+            instA.trackIdx = 2;
+
+            assertEqual(instA.trackIdx, 2, 'A = track_2');
+            assertEqual(instB.trackIdx, 1, 'B unchanged = track_1');
+            assertEqual(instC.trackIdx, 0, 'C swapped to track_0');
+
+            // Verify all unique
+            var seen = new Set();
+            camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) seen.add(camInsts[i].trackIdx);
+            assertEqual(seen.size, 3, 'all 3 tracks unique');
+        });
+    });
+
     describe('Identity color resolution', function () {
         it('getGroupColor uses identity color when useIdentity is true', function () {
             var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
