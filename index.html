@@ -2198,22 +2198,10 @@
                     var trackIdx = group.trackIdx;
                     var trackName = state.session.tracks[trackIdx] || 'Track ' + trackIdx;
 
-                    // Search all groups for an existing UserInstance group with this track
-                    // Find the existing group for this track (user or predicted)
-                    var existingGroup = null;
-                    var allGroups = getInstanceGroupsForFrame(frameIdx);
-                    for (var gi = 0; gi < allGroups.length; gi++) {
-                        if (allGroups[gi].trackIdx === trackIdx) {
-                            existingGroup = allGroups[gi];
-                            break;
-                        }
-                    }
-
-                    // Case 1: Group already has an instance in this view — select it
-                    if (existingGroup && existingGroup.getInstance(viewName)) {
-                        if (interactionManager) interactionManager.select(existingGroup, -1);
+                    // Already has an instance in this view — just select it
+                    if (group.getInstance(viewName)) {
+                        if (interactionManager) interactionManager.select(group, -1);
                         drawAllOverlays(frameIdx);
-                        updateInfoPanel();
                         return;
                     }
 
@@ -2224,82 +2212,18 @@
                         return pt != null ? [pt[0], pt[1]] : null;
                     });
 
+                    // Add user instance directly to the SAME group
+                    var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
+                    newInst.modified = true;
+                    group.addInstance(viewName, newInst);
                     var fg = state.session.getFrameGroup(frameIdx);
+                    if (fg) fg.addInstance(viewName, newInst);
+                    recordUserPoints(viewName, clonedPoints);
 
-                    console.log('[dblclick-reproj] existingGroup:', !!existingGroup,
-                        '| group === existingGroup:', group === existingGroup,
-                        '| trackIdx:', trackIdx, '| viewName:', viewName,
-                        '| reprojInstances:', group.reprojectedInstances ? group.reprojectedInstances.size : 0);
-
-                    if (existingGroup) {
-                        // Case 2: Group exists but not in this view — add user instance to it
-                        var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
-                        newInst.modified = true;
-                        existingGroup.addInstance(viewName, newInst);
-                        if (fg) fg.addInstance(viewName, newInst);
-                        recordUserPoints(viewName, clonedPoints);
-                        existingGroup.markDirty();
-                        group = existingGroup;
-                        setStatus('Added UserInstance to ' + viewName + ' for ' + trackName, 'success');
-                    } else {
-                        // Case 3: No UserInstance group — create a new UserInstance group
-                        // from all PredictedInstance views + clicked view.
-                        // The original PredictedInstance group is left intact.
-                        var predGroup = group;
-                        var unlinkedList = [];
-                        for (var [camName, inst] of predGroup.instances) {
-                            if (inst.type === 'predicted') {
-                                var userClone = new Instance(
-                                    inst.points.map(function(pt) { return pt != null ? [pt[0], pt[1]] : null; }),
-                                    trackIdx, 'user', 1.0
-                                );
-                                userClone.modified = true;
-                                recordUserPoints(camName, userClone.points);
-                                var ul = state.session.addUnlinkedInstance(frameIdx, camName, userClone);
-                                unlinkedList.push(ul);
-                            }
-                        }
-                        // Add clicked view if not already a PredictedInstance view
-                        if (!predGroup.getInstance(viewName)) {
-                            var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
-                            newInst.modified = true;
-                            recordUserPoints(viewName, clonedPoints);
-                            var ul = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
-                            unlinkedList.push(ul);
-                        }
-                        if (unlinkedList.length > 0) {
-                            group = state.session.createGroupFromUnlinked(frameIdx, unlinkedList, trackIdx);
-                            for (var [cn, ni] of group.instances) {
-                                ni.trackIdx = group.trackIdx;
-                            }
-                            // Transfer all reprojected instances from predicted group to new user group
-                            // (kept until next re-triangulation replaces them)
-                            if (predGroup.reprojectedInstances && predGroup.reprojectedInstances.size > 0) {
-                                for (var [cn, ri] of predGroup.reprojectedInstances) {
-                                    group.addReprojectedInstance(cn, ri);
-                                }
-                                predGroup.reprojectedInstances.clear();
-                            }
-                            group.reprojections = predGroup.reprojections || {};
-                            group.points3d = predGroup.points3d;
-                            group.observedPoints = predGroup.observedPoints;
-                            predGroup.reprojections = null;
-                            predGroup.points3d = null;
-                        }
-                        // Remove old predicted group's triangulation results
-                        var oldFrameResults = state.triangulationResults.get(frameIdx);
-                        if (oldFrameResults) {
-                            state.triangulationResults.set(frameIdx,
-                                oldFrameResults.filter(function(r) { return r.group !== predGroup; }));
-                        }
-
-                        setStatus('Created UserInstance group for ' + trackName, 'success');
-                    }
-
-                    // Don't re-triangulate automatically — keep old reprojections visible.
-                    // User presses Triangulate (T) when ready to update.
+                    // Reprojections stay — markDirty so user knows to re-triangulate
                     group.markDirty();
                     setReprojErrorVisible(true);
+                    setStatus('Added user label to ' + viewName + ' for ' + trackName + ' — press T to re-triangulate', 'success');
 
                     if (interactionManager) interactionManager.select(group, -1);
                     if (timeline) timeline.setFrameModified(frameIdx, true);
