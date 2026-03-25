@@ -1660,12 +1660,19 @@
                 //    identityId -> { camName -> Instance }
                 var idBuckets = {};
 
+                // Collect ALL instances (with or without identity)
+                var allInstancesByCam = {};  // camName -> Instance[]
+
                 // From grouped instances
                 for (var [camName, instances] of fg.instances) {
                     for (var ii = 0; ii < instances.length; ii++) {
                         var inst = instances[ii];
-                        var key = camName + ':' + inst.trackIdx;
-                        var identityId = session.trackIdentityMap.get(key);
+                        if (!allInstancesByCam[camName]) allInstancesByCam[camName] = [];
+                        allInstancesByCam[camName].push(inst);
+
+                        var identityId = session.getIdentityIdForTrack
+                            ? session.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx)
+                            : session.trackIdentityMap.get(camName + ':' + inst.trackIdx);
                         if (identityId == null) continue;
                         if (!idBuckets[identityId]) idBuckets[identityId] = {};
                         if (!idBuckets[identityId][camName]) idBuckets[identityId][camName] = inst;
@@ -1676,29 +1683,35 @@
                 for (var [camName2, ulList] of fg.unlinkedInstances) {
                     for (var ui = 0; ui < ulList.length; ui++) {
                         var ulInst = ulList[ui].instance;
-                        var key2 = camName2 + ':' + ulInst.trackIdx;
-                        var identityId2 = session.trackIdentityMap.get(key2);
+                        if (!allInstancesByCam[camName2]) allInstancesByCam[camName2] = [];
+                        allInstancesByCam[camName2].push(ulInst);
+
+                        var identityId2 = session.getIdentityIdForTrack
+                            ? session.getIdentityIdForTrack(camName2, ulInst.trackIdx, frameIdx)
+                            : session.trackIdentityMap.get(camName2 + ':' + ulInst.trackIdx);
                         if (identityId2 == null) continue;
                         if (!idBuckets[identityId2]) idBuckets[identityId2] = {};
                         if (!idBuckets[identityId2][camName2]) idBuckets[identityId2][camName2] = ulInst;
                     }
                 }
 
-                // 2. Clear existing groups for this frame
+                // 2. Clear existing groups and instances for this frame
                 session.instanceGroups.delete(frameIdx);
                 for (var [cn] of fg.instances) fg.instances.set(cn, []);
                 for (var [cn2] of fg.unlinkedInstances) fg.unlinkedInstances.set(cn2, []);
+
+                // Add ALL instances back to fg.instances (they're now grouped/linked)
+                for (var cn3 in allInstancesByCam) {
+                    for (var ai = 0; ai < allInstancesByCam[cn3].length; ai++) {
+                        fg.addInstance(cn3, allInstancesByCam[cn3][ai]);
+                    }
+                }
 
                 // 3. Create InstanceGroups from identity buckets
                 for (var idStr in idBuckets) {
                     var identityId3 = parseInt(idStr);
                     var bucket = idBuckets[idStr];
                     var camNames = Object.keys(bucket);
-
-                    // Add instances back to fg.instances
-                    for (var ci = 0; ci < camNames.length; ci++) {
-                        fg.addInstance(camNames[ci], bucket[camNames[ci]]);
-                    }
 
                     if (camNames.length < 2) continue;
 

@@ -1265,6 +1265,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     const assignmentColor = options.assignmentColor || '#fbbf24';
     const ulColorByIdentity = !!options.colorByIdentity;
     const ulSession = options.session || null;
+    const ulFrameIdx = options.frameIdx != null ? options.frameIdx : null;
     const selectedUnlinkedId = options.selectedUnlinkedId || null;
     const predictedRender = options.predictedRender || null;
 
@@ -1305,7 +1306,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
-        var baseTrackColor = isPredicted ? (getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity) || '#888888') : UNGROUPED_USER_COLOR;
+        var baseTrackColor = isPredicted ? (getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity, ulFrameIdx) || '#888888') : UNGROUPED_USER_COLOR;
         const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
         const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
@@ -1670,6 +1671,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             typeFilter: 'predicted',
             colorByIdentity: colorByIdentity,
             session: session,
+            frameIdx: _frameIdx,
         }));
     }
 
@@ -1710,6 +1712,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             typeFilter: 'user',
             colorByIdentity: colorByIdentity,
             session: session,
+            frameIdx: _frameIdx,
         }));
     }
 
