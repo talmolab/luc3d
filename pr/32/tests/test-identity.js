@@ -830,4 +830,168 @@
             assertEqual(s2.trackIdentityMap.get('CamA:1'), id1.id);
         });
     });
+    // ---- Timeline tracklet stress test ----
+
+    describe('Timeline tracklet generation', function () {
+        function makeCamera(name) {
+            return new Camera(name, [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]);
+        }
+
+        it('builds per-camera tracklets for 2 tracks × 3 cameras', function () {
+            var cams = [makeCamera('CamA'), makeCamera('CamB'), makeCamera('CamC')];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0', 'track_1']);
+
+            // 10 frames, both tracks in all cameras
+            for (var f = 0; f < 10; f++) {
+                var fg = new FrameGroup(f);
+                for (var ci = 0; ci < cams.length; ci++) {
+                    fg.addUnlinkedInstance(cams[ci].name, new UnlinkedInstance(
+                        new Instance([[f, 0]], 0, 'predicted'), cams[ci].name));
+                    fg.addUnlinkedInstance(cams[ci].name, new UnlinkedInstance(
+                        new Instance([[f, 5]], 1, 'predicted'), cams[ci].name));
+                }
+                s.addFrameGroup(fg);
+            }
+
+            // Build segments like the timeline does
+            var segments = [];
+            var trackNames = [];
+            var numTracks = s.tracks.length;
+            var trackCamFrames = {};
+            for (var [frameIdx, fg2] of s.frameGroups) {
+                for (var [camName, ulList] of fg2.unlinkedInstances) {
+                    for (var u = 0; u < ulList.length; u++) {
+                        var t = ulList[u].instance.trackIdx;
+                        var key = t + ':' + camName;
+                        if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
+                        trackCamFrames[key].add(frameIdx);
+                    }
+                }
+            }
+
+            for (var t2 = 0; t2 < numTracks; t2++) {
+                for (var ci2 = 0; ci2 < cams.length; ci2++) {
+                    var key2 = t2 + ':' + cams[ci2].name;
+                    if (trackCamFrames[key2]) {
+                        segments.push({ trackIdx: t2, cam: cams[ci2].name, count: trackCamFrames[key2].size });
+                        trackNames.push(s.tracks[t2] + ' / ' + cams[ci2].name);
+                    }
+                }
+            }
+
+            // 2 tracks × 3 cameras = 6 rows
+            assertEqual(segments.length, 6, 'should have 6 tracklet rows');
+            assertEqual(trackNames[0], 'track_0 / CamA');
+            assertEqual(trackNames[5], 'track_1 / CamC');
+            // Each has 10 frames
+            for (var si = 0; si < segments.length; si++) {
+                assertEqual(segments[si].count, 10, 'row ' + si + ' should have 10 frames');
+            }
+        });
+
+        it('handles 10 tracks × 8 cameras = 80 rows without error', function () {
+            var cams = [];
+            for (var ci = 0; ci < 8; ci++) cams.push(makeCamera('cam_' + ci));
+            var trackNames = [];
+            for (var ti = 0; ti < 10; ti++) trackNames.push('track_' + ti);
+            var s = new Session(cams, new Skeleton('s', ['a'], []), trackNames);
+
+            // 100 frames, each track appears in each camera
+            for (var f = 0; f < 100; f++) {
+                var fg = new FrameGroup(f);
+                for (var ci2 = 0; ci2 < cams.length; ci2++) {
+                    for (var ti2 = 0; ti2 < 10; ti2++) {
+                        fg.addUnlinkedInstance(cams[ci2].name, new UnlinkedInstance(
+                            new Instance([[f, ti2]], ti2, 'predicted'), cams[ci2].name));
+                    }
+                }
+                s.addFrameGroup(fg);
+            }
+
+            // Count tracklet rows
+            var trackCamFrames = {};
+            for (var [frameIdx, fg2] of s.frameGroups) {
+                for (var [camName, ulList] of fg2.unlinkedInstances) {
+                    for (var u = 0; u < ulList.length; u++) {
+                        var t = ulList[u].instance.trackIdx;
+                        var key = t + ':' + camName;
+                        if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
+                        trackCamFrames[key].add(frameIdx);
+                    }
+                }
+            }
+
+            var rowCount = Object.keys(trackCamFrames).length;
+            assertEqual(rowCount, 80, 'should have 80 tracklet rows (10 tracks × 8 cameras)');
+
+            // Each row should have 100 frames
+            for (var key in trackCamFrames) {
+                assertEqual(trackCamFrames[key].size, 100, key + ' should have 100 frames');
+            }
+        });
+
+        it('detects gaps in tracklets', function () {
+            var cams = [makeCamera('CamA')];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
+
+            // Frames 0-4, then gap, then 8-9
+            for (var f = 0; f < 10; f++) {
+                if (f >= 5 && f <= 7) continue; // gap
+                var fg = new FrameGroup(f);
+                fg.addUnlinkedInstance('CamA', new UnlinkedInstance(
+                    new Instance([[f, 0]], 0, 'predicted'), 'CamA'));
+                s.addFrameGroup(fg);
+            }
+
+            var frames = new Set();
+            for (var [frameIdx, fg2] of s.frameGroups) {
+                var ulList = fg2.getUnlinkedInstances('CamA');
+                for (var u = 0; u < ulList.length; u++) {
+                    if (ulList[u].instance.trackIdx === 0) frames.add(frameIdx);
+                }
+            }
+
+            // Build segments
+            var sorted = Array.from(frames).sort(function (a, b) { return a - b; });
+            var segments = [];
+            var segStart = -1, segEnd = -1;
+            for (var i = 0; i < sorted.length; i++) {
+                if (segStart < 0) { segStart = sorted[i]; segEnd = sorted[i]; }
+                else if (sorted[i] === segEnd + 1) { segEnd = sorted[i]; }
+                else { segments.push({ start: segStart, end: segEnd }); segStart = sorted[i]; segEnd = sorted[i]; }
+            }
+            if (segStart >= 0) segments.push({ start: segStart, end: segEnd });
+
+            assertEqual(segments.length, 2, 'should have 2 segments (gap at 5-7)');
+            assertEqual(segments[0].start, 0);
+            assertEqual(segments[0].end, 4);
+            assertEqual(segments[1].start, 8);
+            assertEqual(segments[1].end, 9);
+        });
+
+        it('camera with no instances for a track produces no row', function () {
+            var cams = [makeCamera('CamA'), makeCamera('CamB')];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
+
+            // Only CamA has instances
+            var fg = new FrameGroup(0);
+            fg.addUnlinkedInstance('CamA', new UnlinkedInstance(
+                new Instance([[0, 0]], 0, 'predicted'), 'CamA'));
+            s.addFrameGroup(fg);
+
+            var trackCamFrames = {};
+            for (var [frameIdx, fg2] of s.frameGroups) {
+                for (var [camName, ulList] of fg2.unlinkedInstances) {
+                    for (var u = 0; u < ulList.length; u++) {
+                        var key = ulList[u].instance.trackIdx + ':' + camName;
+                        if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
+                        trackCamFrames[key].add(frameIdx);
+                    }
+                }
+            }
+
+            assertTrue(!!trackCamFrames['0:CamA'], 'CamA should have track_0');
+            assertTrue(!trackCamFrames['0:CamB'], 'CamB should NOT have track_0');
+        });
+    });
 })();
