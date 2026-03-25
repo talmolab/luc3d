@@ -90,6 +90,9 @@ class Timeline {
         /** @const {number} Vertical gap between track rows (px) */
         this.TRACK_ROW_GAP = 1;
 
+        /** @const {number} Extra gap between camera/view groups (px) */
+        this.VIEW_GROUP_GAP = 8;
+
         /** @const {number} Height of the frame-marker area (px) */
         this.MARKER_AREA_HEIGHT = 20;
 
@@ -257,9 +260,16 @@ class Timeline {
         var dpr = window.devicePixelRatio || 1;
         var rect = this._container.getBoundingClientRect();
         var w = Math.round(rect.width);
-        // Compute needed height based on track rows
+        // Compute needed height based on track rows + extra gaps between camera groups
         var numRows = this._trackSegments.length;
-        var neededH = this.TOP_PADDING + (numRows > 0 ? numRows * (this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP) : 0) + 8 + this.MARKER_AREA_HEIGHT + this.LABEL_AREA_HEIGHT;
+        var numViewGaps = 0;
+        var _prevCamResize = null;
+        for (var _ri = 0; _ri < numRows; _ri++) {
+            var _thisCam = this._trackSegments[_ri].cameraName;
+            if (_prevCamResize != null && _thisCam !== _prevCamResize) numViewGaps++;
+            _prevCamResize = _thisCam;
+        }
+        var neededH = this.TOP_PADDING + (numRows > 0 ? numRows * (this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP) + numViewGaps * this.VIEW_GROUP_GAP : 0) + 8 + this.MARKER_AREA_HEIGHT + this.LABEL_AREA_HEIGHT;
         var h = Math.max(Math.round(rect.height), neededH);
         this._canvas.width = w * dpr;
         this._canvas.height = h * dpr;
@@ -660,9 +670,23 @@ class Timeline {
         const trackW = W - this.LEFT_MARGIN - this.RIGHT_PADDING;
         if (trackW <= 0) return;
 
+        // Precompute row Y positions with extra gap between camera groups
+        var rowYPositions = [];
+        var cumY = 0;
+        var prevCam = null;
+        for (var ry = 0; ry < this._trackSegments.length; ry++) {
+            var thisCam = this._trackSegments[ry].cameraName;
+            if (prevCam != null && thisCam !== prevCam) {
+                cumY += this.VIEW_GROUP_GAP;
+            }
+            rowYPositions.push(cumY);
+            cumY += this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP;
+            prevCam = thisCam;
+        }
+
         for (let t = 0; t < this._trackSegments.length; t++) {
             const track = this._trackSegments[t];
-            const rowY = top + t * (this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP);
+            const rowY = top + rowYPositions[t];
 
             // Track label
             ctx.fillStyle = this.LABEL_COLOR;
