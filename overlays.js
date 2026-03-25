@@ -41,8 +41,8 @@ function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
 
-function getGroupColor(group, session) {
-    var useIdentity = (typeof state !== 'undefined' && state.colorByIdentity);
+function getGroupColor(group, session, forceIdentity) {
+    var useIdentity = forceIdentity || (typeof state !== 'undefined' && state.colorByIdentity);
 
     if (useIdentity && session) {
         // Try group's direct identity first

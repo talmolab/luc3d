@@ -133,19 +133,12 @@
 
     describe('Identity color resolution', function () {
         it('getGroupColor uses identity color when colorByIdentity is on', function () {
-            // Set global state for color mode
-            var origState = typeof state !== 'undefined' ? state.colorByIdentity : undefined;
-            if (typeof state !== 'undefined') state.colorByIdentity = true;
-
             var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
             var id = s.addIdentity('mouse_A', '#ff0000');
             var group = new InstanceGroup(1, 0);
             s.assignIdentityToGroup(group, id.id);
-            var color = getGroupColor(group, s);
+            var color = getGroupColor(group, s, true);
             assertEqual(color, '#ff0000');
-
-            // Restore
-            if (typeof state !== 'undefined') state.colorByIdentity = origState;
         });
 
         it('getGroupColor falls back to track color when unassigned', function () {
