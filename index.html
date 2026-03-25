@@ -572,6 +572,8 @@
             </div><!-- end info-panel-wrapper -->
         </div>
 
+        <!-- Timeline resize handle -->
+        <div class="split-handle horizontal" id="timelineResizeHandle"></div>
         <!-- Timeline -->
         <div class="timeline-container" id="timelineContainer">
         </div>
@@ -11835,6 +11837,32 @@
                 panelEl.style.width = newWidth + 'px';
                 panelEl.style.minWidth = newWidth + 'px';
             });
+
+            // Timeline resize handle (vertical drag)
+            var timelineHandle = document.getElementById('timelineResizeHandle');
+            var timelineEl = document.getElementById('timelineContainer');
+            if (timelineHandle && timelineEl) {
+                timelineHandle.addEventListener('mousedown', function (e) {
+                    e.preventDefault();
+                    var startY = e.clientY;
+                    var startH = timelineEl.offsetHeight;
+                    timelineHandle.classList.add('dragging');
+
+                    function onMove(ev) {
+                        var delta = startY - ev.clientY;
+                        var newH = Math.max(40, Math.min(600, startH + delta));
+                        timelineEl.style.height = newH + 'px';
+                        if (timeline) timeline.resize();
+                    }
+                    function onUp() {
+                        timelineHandle.classList.remove('dragging');
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                    }
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                });
+            }
 
             var infoPanelWrapper = document.getElementById('infoPanelWrapper');
 
