@@ -11569,13 +11569,15 @@
                 return;
             }
 
-            // Adjust active index
-            if (state.activeSessionIdx >= state.sessions.length) {
-                state.activeSessionIdx = state.sessions.length - 1;
+            // Compute new active index BEFORE switching
+            var newActiveIdx;
+            if (state.activeSessionIdx === idx) {
+                // Deleted the active session — pick nearest
+                newActiveIdx = Math.min(idx, state.sessions.length - 1);
             } else if (state.activeSessionIdx > idx) {
-                state.activeSessionIdx--;
-            } else if (state.activeSessionIdx === idx) {
-                state.activeSessionIdx = Math.min(idx, state.sessions.length - 1);
+                newActiveIdx = state.activeSessionIdx - 1;
+            } else {
+                newActiveIdx = state.activeSessionIdx;
             }
 
             // Update sessionIdx tags on remaining sessions' videos
@@ -11591,7 +11593,44 @@
                 }
             }
 
-            switchSession(state.activeSessionIdx);
+            // Set active directly (bypass switchSession's save-old-state which would act on wrong session)
+            state.activeSessionIdx = newActiveIdx;
+            state.session = state.sessions[newActiveIdx];
+            state.triangulationResults = state.session.triangulationResults || new Map();
+
+            // Restore views for the new active session
+            if (state.session._views && state.session._views.length > 0) {
+                state.views = state.session._views;
+                videoController = state.session._videoController || null;
+                paneManager.clearAll();
+                paneManager.addAllViewsAsGrid();
+                setTimeout(function () {
+                    fitCanvasesToCells();
+                    refreshPaneInteractions();
+                    state.currentFrame = state.session.lastFrame || 0;
+                    if (videoController) videoController.seekToFrame(state.currentFrame);
+                    drawAllOverlays(state.currentFrame);
+                }, 50);
+            } else {
+                // First visit — build views
+                videoController = null;
+                state.views = [];
+                paneManager.clearAll();
+                for (var nvi = 0; nvi < state.session.videoFileIndices.length; nvi++) {
+                    var vf = state.videoFiles[state.session.videoFileIndices[nvi]];
+                    if (vf && vf.assignedCamera) createViewForVideoFile(vf);
+                }
+                updateTotalFrames();
+                paneManager.addAllViewsAsGrid();
+                rebuildVideoController();
+                setTimeout(function () {
+                    fitCanvasesToCells();
+                    refreshPaneInteractions();
+                    drawAllOverlays(state.currentFrame);
+                }, 50);
+            }
+
+            populateViewStrip();
             populateSessionStrip();
             populateSessionsPanel();
             setStatus('Session removed', 'success');
