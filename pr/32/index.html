@@ -7328,9 +7328,14 @@
                             sel.addEventListener('change', function (ev) {
                                 ev.stopPropagation();
                                 var newTrack = parseInt(sel.value);
+                                var oldTrack = inst.trackIdx;
                                 var propagated = swapAssignTrack(state.currentFrame, camNameForUl, inst, newTrack, state.session);
+                                console.log('[track-dropdown] ' + camNameForUl + ': track ' + oldTrack + ' → ' + newTrack +
+                                    ' | inst.trackIdx now=' + inst.trackIdx +
+                                    ' | colorByIdentity=' + state.colorByIdentity +
+                                    ' | trackColor=' + getTrackColor(inst.trackIdx));
                                 setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl +
-                                    (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
+                                    (propagated > 0 ? ' (swapped ' + propagated + ')' : ''), 'success');
                                 drawAllOverlays(state.currentFrame);
                                 updateInfoPanel();
                             });
