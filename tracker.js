@@ -1,61 +1,59 @@
 /**
  * tracker.js — Cross-view instance matching and identity assignment.
  *
- * Two modes:
- *   - Constrained (numAnimals specified): exactly N identities, uses
- *     reprojection + epipolar scoring with Hungarian assignment.
- *   - Unconstrained: auto-discovers groups, may create variable identity count.
- *
- * Scoring uses:
- *   1. Reprojection consistency (OKS-style): triangulate pair, reproject,
- *      measure match quality.
- *   2. Epipolar constraint: how well points satisfy epipolar geometry.
+ * Optimized: caches fundamental matrices, pre-undistorts points,
+ * uses epipolar-only for initial scoring (fast), reprojection for
+ * top candidates only.
  *
  * Depends on: pose-data.js, triangulation.js
  */
 
 // ============================================
-// Pairwise scoring
+// Caches (cleared per-frame)
+// ============================================
+
+var _fMatrixCache = {};   // "cam1:cam2" → F matrix
+var _undistortCache = new WeakMap();  // Instance → undistorted points
+
+function getCachedF(camA, camB) {
+    var key = camA.name + ':' + camB.name;
+    if (_fMatrixCache[key]) return _fMatrixCache[key];
+    var F = computeFundamentalMatrix(camA, camB);
+    _fMatrixCache[key] = F;
+    return F;
+}
+
+function getUndistortedPoints(inst, cam) {
+    var cached = _undistortCache.get(inst);
+    if (cached) return cached;
+    var pts = [];
+    for (var k = 0; k < inst.points.length; k++) {
+        if (inst.points[k] == null) {
+            pts.push(null);
+        } else if (cam.undistortPoint) {
+            pts.push(cam.undistortPoint(inst.points[k]));
+        } else {
+            pts.push(inst.points[k]);
+        }
+    }
+    _undistortCache.set(inst, pts);
+    return pts;
+}
+
+function clearFrameCache() {
+    _fMatrixCache = {};
+}
+
+// ============================================
+// Scoring functions
 // ============================================
 
 /**
- * OKS-style reprojection consistency score for a pair of instances.
- * Triangulates, reprojects, measures agreement.
- * @returns {number} Score in [0, 1], 1 = perfect
- */
-function reprojectionConsistencyScore(instA, camA, instB, camB) {
-    var ptsA = instA.points;
-    var ptsB = instB.points;
-    var numKp = Math.min(ptsA.length, ptsB.length);
-    if (numKp === 0) return 0;
-
-    var PA = camA.projectionMatrix;
-    var PB = camB.projectionMatrix;
-    var totalOks = 0, validCount = 0;
-
-    for (var k = 0; k < numKp; k++) {
-        if (ptsA[k] == null || ptsB[k] == null) continue;
-        var uA = camA.undistortPoint ? camA.undistortPoint(ptsA[k]) : ptsA[k];
-        var uB = camB.undistortPoint ? camB.undistortPoint(ptsB[k]) : ptsB[k];
-        var pt3d = triangulatePointDLT([uA, uB], [PA, PB]);
-        if (pt3d == null) continue;
-        var repA = reprojectPoint(pt3d, PA);
-        var repB = reprojectPoint(pt3d, PB);
-        var errA = Math.sqrt(Math.pow(ptsA[k][0] - repA[0], 2) + Math.pow(ptsA[k][1] - repA[1], 2));
-        var errB = Math.sqrt(Math.pow(ptsB[k][0] - repB[0], 2) + Math.pow(ptsB[k][1] - repB[1], 2));
-        var sigma = 20.0;
-        totalOks += (Math.exp(-errA * errA / (2 * sigma * sigma)) + Math.exp(-errB * errB / (2 * sigma * sigma))) / 2;
-        validCount++;
-    }
-    return validCount > 0 ? totalOks / validCount : 0;
-}
-
-/**
- * Epipolar constraint score. Lower error = higher score.
+ * Fast epipolar-only score (no triangulation needed).
  * @returns {number} Score in [0, 1]
  */
-function epipolarConstraintScore(instA, camA, instB, camB) {
-    var F = computeFundamentalMatrix(camA, camB);
+function epipolarScore(instA, camA, instB, camB) {
+    var F = getCachedF(camA, camB);
     var ptsA = instA.points, ptsB = instB.points;
     var numKp = Math.min(ptsA.length, ptsB.length);
     var totalErr = 0, validCount = 0;
@@ -76,11 +74,38 @@ function epipolarConstraintScore(instA, camA, instB, camB) {
 }
 
 /**
- * Combined cross-view score.
+ * OKS reprojection consistency score (expensive — only use for refinement).
+ * @returns {number} Score in [0, 1]
+ */
+function reprojectionScore(instA, camA, instB, camB) {
+    var uA = getUndistortedPoints(instA, camA);
+    var uB = getUndistortedPoints(instB, camB);
+    var PA = camA.projectionMatrix, PB = camB.projectionMatrix;
+    var numKp = Math.min(uA.length, uB.length);
+    var totalOks = 0, validCount = 0;
+    var sigma2x2 = 2 * 20.0 * 20.0;
+
+    for (var k = 0; k < numKp; k++) {
+        if (uA[k] == null || uB[k] == null) continue;
+        var pt3d = triangulatePointDLT([uA[k], uB[k]], [PA, PB]);
+        if (pt3d == null) continue;
+        var repA = reprojectPoint(pt3d, PA);
+        var repB = reprojectPoint(pt3d, PB);
+        var dxA = instA.points[k][0] - repA[0], dyA = instA.points[k][1] - repA[1];
+        var dxB = instB.points[k][0] - repB[0], dyB = instB.points[k][1] - repB[1];
+        totalOks += (Math.exp(-(dxA*dxA + dyA*dyA) / sigma2x2) +
+                     Math.exp(-(dxB*dxB + dyB*dyB) / sigma2x2)) / 2;
+        validCount++;
+    }
+    return validCount > 0 ? totalOks / validCount : 0;
+}
+
+/**
+ * Combined score: fast epipolar + reprojection OKS.
  */
 function crossViewScore(instA, camA, instB, camB) {
-    return 0.6 * reprojectionConsistencyScore(instA, camA, instB, camB) +
-           0.4 * epipolarConstraintScore(instA, camA, instB, camB);
+    return 0.4 * epipolarScore(instA, camA, instB, camB) +
+           0.6 * reprojectionScore(instA, camA, instB, camB);
 }
 
 
@@ -111,27 +136,19 @@ function collectInstances(frameGroup, cameras) {
 
 
 // ============================================
-// Single-frame matching (constrained or unconstrained)
+// Single-frame matching
 // ============================================
 
 /**
  * Match instances across views for one frame.
- *
- * @param {FrameGroup} frameGroup
- * @param {Camera[]} cameras
- * @param {Session} session
- * @param {Object} [opts]
- * @param {number} [opts.numAnimals] - If set, constrain to exactly N identities
- * @param {boolean} [opts.perFrame] - Use per-frame identity storage
- * @param {Map<string, number>} [opts.prevAssignments] - Previous frame's cam:track → identityId
- * @param {Array<{points3d: number[][]|null, identityId: number}>} [opts.prevTargets3d] - Previous frame's 3D targets for reprojection matching
- * @returns {{groups: Array<Map<string, Instance>>, numIdentities: number, assignments: Map<string, number>, targets3d: Array}}
  */
 function matchFrameInstances(frameGroup, cameras, session, opts) {
     opts = opts || {};
     var numAnimals = opts.numAnimals || null;
     var prevAssignments = opts.prevAssignments || null;
     var prevTargets3d = opts.prevTargets3d || null;
+
+    clearFrameCache();
 
     var collected = collectInstances(frameGroup, cameras);
     var camInstances = collected.camInstances;
@@ -142,29 +159,26 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
         return { groups: [], numIdentities: 0, assignments: new Map(), targets3d: [] };
     }
 
-    var groups;
-
     // Always do pairwise cross-view matching (geometry within current frame)
-    groups = matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignments);
+    var groups = matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignments);
 
     // If we have previous 3D targets, re-order groups to match prev identities
-    // by scoring each group against each prev target via reprojection
     if (prevTargets3d && prevTargets3d.length > 0 && groups.length > 0) {
         groups = reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments);
     }
 
-    // Triangulate each group for 3D targets (used for next frame's reprojection matching)
+    // Triangulate each group
     var targets3d = [];
     for (var gi = 0; gi < groups.length; gi++) {
         var pts3d = triangulateGroup(groups[gi], camMap);
         targets3d.push({
             points3d: pts3d,
             groupIdx: gi,
-            prevInstances: groups[gi]  // store for cross-view consistency check next frame
+            prevInstances: groups[gi]
         });
     }
 
-    // Ensure we have exactly numAnimals identities (create upfront if needed)
+    // Assign identities
     var fi = frameGroup.frameIdx;
     if (numAnimals) {
         while (session.identities.length < numAnimals) {
@@ -205,13 +219,9 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
                 }
             }
         }
-
-        // Last resort (only if unconstrained): create new
         if (!identity && !numAnimals) {
             identity = session.addIdentity('id_' + session.identities.length);
         }
-
-        // If constrained and still no identity (shouldn't happen), skip
         if (!identity) continue;
 
         usedIds.add(identity.id);
@@ -230,44 +240,35 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
 }
 
 
+// ============================================
+// Temporal reordering
+// ============================================
+
 /**
- * Re-order groups from the current frame's pairwise matching to be consistent
- * with previous frame's identity ordering.
- *
- * Scores each (prevTarget, currentGroup) pair using three signals:
- *   1. Reprojection distance: prev 3D → reproject into group's cameras → distance
- *   2. Cross-view OKS: triangulate group → reproject to prev target's cameras → OKS
- *   3. Track identity continuity: did group members have same identity last frame
- *
- * Combined into single cost for Hungarian assignment.
+ * Re-order groups to match previous identity ordering using multi-signal scoring.
  */
 function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments) {
     var nTargets = prevTargets3d.length;
     var nGroups = groups.length;
     var n = Math.max(nTargets, nGroups);
 
-    // Pre-triangulate each current group's 3D
+    // Pre-triangulate current groups
     var groupPts3d = [];
     for (var gi0 = 0; gi0 < nGroups; gi0++) {
         groupPts3d.push(triangulateGroup(groups[gi0], camMap));
     }
 
-    // Build cost matrix: prevTarget[i] → group[j]
     var cost = [];
     for (var ti = 0; ti < n; ti++) {
         cost[ti] = [];
         for (var gi = 0; gi < n; gi++) {
-            if (ti >= nTargets || gi >= nGroups) {
-                cost[ti][gi] = 1000;
-                continue;
-            }
+            if (ti >= nTargets || gi >= nGroups) { cost[ti][gi] = 1000; continue; }
 
             var prevPts3d = prevTargets3d[ti].points3d;
             var currPts3d = groupPts3d[gi];
-            var score = 0;
-            var scoreCount = 0;
+            var score = 0, scoreCount = 0;
 
-            // --- Signal 1: Reprojection distance (prev 3D → current instances) ---
+            // Signal 1: Reprojection distance (prev 3D → current instances)
             if (prevPts3d) {
                 var reprojTotal = 0, reprojCount = 0;
                 groups[gi].forEach(function(inst, camName) {
@@ -278,14 +279,12 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     if (d < Infinity) { reprojTotal += d; reprojCount++; }
                 });
                 if (reprojCount > 0) {
-                    // Convert distance to score [0,1]: lower distance = higher score
-                    var meanDist = reprojTotal / reprojCount;
-                    score += Math.exp(-meanDist / 50.0);
+                    score += Math.exp(-(reprojTotal / reprojCount) / 50.0);
                     scoreCount++;
                 }
             }
 
-            // --- Signal 2: 3D distance (prev 3D ↔ current 3D) ---
+            // Signal 2: 3D distance
             if (prevPts3d && currPts3d) {
                 var totalDist3d = 0, count3d = 0;
                 var numKp = Math.min(prevPts3d.length, currPts3d.length);
@@ -299,13 +298,12 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     }
                 }
                 if (count3d > 0) {
-                    var mean3d = totalDist3d / count3d;
-                    score += Math.exp(-mean3d / 30.0);
+                    score += Math.exp(-(totalDist3d / count3d) / 30.0);
                     scoreCount++;
                 }
             }
 
-            // --- Signal 3: Cross-view consistency (reproject current 3D → prev cameras) ---
+            // Signal 3: Cross-view consistency
             if (currPts3d && prevTargets3d[ti].prevInstances) {
                 var prevInsts = prevTargets3d[ti].prevInstances;
                 var oksTotal = 0, oksCount = 0;
@@ -314,208 +312,122 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     if (!cam || !prevInst) return;
                     var reproj = reprojectPoints(currPts3d, cam.projectionMatrix);
                     var d = computeInstanceDistance(reproj, prevInst.points);
-                    if (d < Infinity) {
-                        oksTotal += Math.exp(-d / 50.0);
-                        oksCount++;
-                    }
+                    if (d < Infinity) { oksTotal += Math.exp(-d / 50.0); oksCount++; }
                 });
-                if (oksCount > 0) {
-                    score += oksTotal / oksCount;
-                    scoreCount++;
-                }
+                if (oksCount > 0) { score += oksTotal / oksCount; scoreCount++; }
             }
 
-            // --- Signal 4: Track identity continuity ---
+            // Signal 4: Track identity continuity (2x weight)
             if (prevAssignments && prevTargets3d[ti].identityId != null) {
                 var matchingTracks = 0, totalTracks = 0;
                 groups[gi].forEach(function(inst, camName) {
                     totalTracks++;
                     var prevId = prevAssignments.get(camName + ':' + inst.trackIdx);
-                    if (prevId != null && prevId === prevTargets3d[ti].identityId) {
-                        matchingTracks++;
-                    }
+                    if (prevId != null && prevId === prevTargets3d[ti].identityId) matchingTracks++;
                 });
                 if (totalTracks > 0) {
-                    // Strong signal: fraction of tracks that match * weight
                     score += 2.0 * (matchingTracks / totalTracks);
                     scoreCount++;
                 }
             }
 
-            // Convert to cost (lower = better match)
-            var finalScore = scoreCount > 0 ? score / scoreCount : 0;
-            cost[ti][gi] = -finalScore;  // negate: Hungarian minimizes
+            cost[ti][gi] = -(scoreCount > 0 ? score / scoreCount : 0);
         }
     }
 
     var assignment = hungarianAlgorithm(cost);
 
-    // Reorder groups: newGroups[ti] = groups[assignment[ti]]
     var reordered = [];
     for (var ti2 = 0; ti2 < nTargets; ti2++) {
         var gi2 = assignment[ti2];
-        if (gi2 >= 0 && gi2 < nGroups) {
-            reordered.push(groups[gi2]);
-        } else {
-            reordered.push(new Map());
-        }
+        reordered.push(gi2 >= 0 && gi2 < nGroups ? groups[gi2] : new Map());
     }
-    // Append unmatched groups
     var usedGroups = new Set(assignment.filter(function(g) { return g >= 0 && g < nGroups; }));
     for (var gi3 = 0; gi3 < nGroups; gi3++) {
         if (!usedGroups.has(gi3)) reordered.push(groups[gi3]);
     }
-
     return reordered;
 }
 
 
-/**
- * Match instances to previous frame's 3D targets via reprojection distance.
- * Each camera's instances are assigned to the closest reprojected target.
- */
-function matchViaReprojection(prevTargets3d, camInstances, camMap, activeCams, prevAssignments) {
-    var nTargets = prevTargets3d.length;
-    var groups = [];
-    for (var t = 0; t < nTargets; t++) groups.push(new Map());
-
-    for (var ci = 0; ci < activeCams.length; ci++) {
-        var camName = activeCams[ci];
-        var cam = camMap[camName];
-        var insts = camInstances[camName];
-        if (!insts || insts.length === 0) continue;
-
-        // Build cost matrix: targets x instances
-        var cost = [];
-        var hasValidCost = false;
-        for (var ti = 0; ti < nTargets; ti++) {
-            cost[ti] = [];
-            var pts3d = prevTargets3d[ti] ? prevTargets3d[ti].points3d : null;
-
-            // Check if pts3d has any non-null points
-            var hasPoints = false;
-            if (pts3d) {
-                for (var pk = 0; pk < pts3d.length; pk++) {
-                    if (pts3d[pk] != null) { hasPoints = true; break; }
-                }
-            }
-
-            var reproj = hasPoints ? reprojectPoints(pts3d, cam.projectionMatrix) : null;
-
-            for (var ii = 0; ii < insts.length; ii++) {
-                if (reproj) {
-                    var dist = computeInstanceDistance(reproj, insts[ii].points);
-                    var score = dist < Infinity ? Math.exp(-dist / 30.0) : 0;
-                    // Temporal bonus
-                    if (prevAssignments && prevTargets3d[ti] && prevTargets3d[ti].identityId != null) {
-                        var prevId = prevAssignments.get(camName + ':' + insts[ii].trackIdx);
-                        if (prevId != null && prevId === prevTargets3d[ti].identityId) {
-                            score += 0.3;
-                        }
-                    }
-                    cost[ti][ii] = -score;
-                    if (score > 0) hasValidCost = true;
-                } else {
-                    cost[ti][ii] = 0;
-                }
-            }
-        }
-
-        if (hasValidCost && cost.length > 0 && insts.length > 0) {
-            var assignment = hungarianAlgorithm(cost);
-            for (var ti2 = 0; ti2 < assignment.length; ti2++) {
-                var ii2 = assignment[ti2];
-                if (ii2 >= 0 && ii2 < insts.length && -cost[ti2][ii2] > 0.05) {
-                    groups[ti2].set(camName, insts[ii2]);
-                }
-            }
-        }
-    }
-
-    return groups;
-}
-
+// ============================================
+// Pairwise bootstrap
+// ============================================
 
 /**
- * Bootstrap: pairwise cross-view matching for the first frame.
+ * Bootstrap: pairwise cross-view matching using epipolar-first scoring.
  */
 function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignments) {
-    // Pick the two cameras with the most instances (best chance of seeing all animals)
+    // Pick two cameras with most instances
     var camsByCount = activeCams.slice().sort(function(a, b) {
         return camInstances[b].length - camInstances[a].length;
     });
-    var bestCam1 = camsByCount[0];
-    var bestCam2 = camsByCount[1];
-
-    // Among cameras with enough instances, pick the pair with best baseline
-    // (different position = better triangulation). For now just use top 2 by count.
-    var cam1 = camMap[bestCam1];
-    var cam2 = camMap[bestCam2];
-    var insts1 = camInstances[bestCam1];
-    var insts2 = camInstances[bestCam2];
-
-    // Reorder activeCams so the chosen pair is first (for the remaining-cameras loop)
+    var bestCam1 = camsByCount[0], bestCam2 = camsByCount[1];
+    var cam1 = camMap[bestCam1], cam2 = camMap[bestCam2];
+    var insts1 = camInstances[bestCam1], insts2 = camInstances[bestCam2];
     var remainingCams = activeCams.filter(function(c) { return c !== bestCam1 && c !== bestCam2; });
     activeCams = [bestCam1, bestCam2].concat(remainingCams);
 
-    console.log('[matchPairwise] bootstrap pair:', bestCam1, '(' + insts1.length + ')', 'vs', bestCam2, '(' + insts2.length + ')');
-
-    // Score matrix
+    // Fast epipolar-only score matrix first
     var scoreMatrix = [];
     for (var a = 0; a < insts1.length; a++) {
         scoreMatrix[a] = [];
         for (var b = 0; b < insts2.length; b++) {
-            var geoScore = crossViewScore(insts1[a], cam1, insts2[b], cam2);
+            var score = epipolarScore(insts1[a], cam1, insts2[b], cam2);
             if (prevAssignments) {
-                var pidA = prevAssignments.get(activeCams[0] + ':' + insts1[a].trackIdx);
-                var pidB = prevAssignments.get(activeCams[1] + ':' + insts2[b].trackIdx);
-                if (pidA != null && pidB != null && pidA === pidB) geoScore += 0.3;
+                var pidA = prevAssignments.get(bestCam1 + ':' + insts1[a].trackIdx);
+                var pidB = prevAssignments.get(bestCam2 + ':' + insts2[b].trackIdx);
+                if (pidA != null && pidB != null && pidA === pidB) score += 0.3;
             }
-            scoreMatrix[a][b] = geoScore;
+            scoreMatrix[a][b] = score;
         }
     }
 
     var costMatrix = scoreMatrix.map(function(row) { return row.map(function(v) { return -v; }); });
     var assignment = hungarianAlgorithm(costMatrix);
 
-    // Collect all matches with scores
+    // Collect matches with scores
     var matches = [];
     for (var a2 = 0; a2 < assignment.length; a2++) {
         var b2 = assignment[a2];
         if (b2 < 0 || b2 >= insts2.length) continue;
         matches.push({ a: a2, b: b2, score: scoreMatrix[a2][b2] });
     }
-
-    // Sort by score descending
     matches.sort(function(x, y) { return y.score - x.score; });
 
-    // If numAnimals is set, keep top N matches (but may have fewer if not enough instances)
+    // Refine top candidates with full reprojection score
+    var topN = numAnimals ? Math.min(numAnimals * 2, matches.length) : matches.length;
+    for (var mi = 0; mi < topN; mi++) {
+        var m = matches[mi];
+        var fullScore = crossViewScore(insts1[m.a], cam1, insts2[m.b], cam2);
+        if (prevAssignments) {
+            var pA = prevAssignments.get(bestCam1 + ':' + insts1[m.a].trackIdx);
+            var pB = prevAssignments.get(bestCam2 + ':' + insts2[m.b].trackIdx);
+            if (pA != null && pB != null && pA === pB) fullScore += 0.3;
+        }
+        matches[mi].score = fullScore;
+    }
+    matches.sort(function(x, y) { return y.score - x.score; });
+
     if (numAnimals) {
         matches = matches.slice(0, numAnimals);
     } else {
         matches = matches.filter(function(m) { return m.score > 0.05; });
     }
 
-    console.log('[matchPairwise] matches:', matches.length, 'needed:', numAnimals || 'auto',
-        'scores:', matches.map(function(m) { return m.score.toFixed(3); }));
-
     var groups = [];
-    var matched1 = new Set();
-    var matched2 = new Set();
-    for (var mi = 0; mi < matches.length; mi++) {
+    var matched1 = new Set(), matched2 = new Set();
+    for (var mi2 = 0; mi2 < matches.length; mi2++) {
         var group = new Map();
-        group.set(activeCams[0], insts1[matches[mi].a]);
-        group.set(activeCams[1], insts2[matches[mi].b]);
+        group.set(activeCams[0], insts1[matches[mi2].a]);
+        group.set(activeCams[1], insts2[matches[mi2].b]);
         groups.push(group);
-        matched1.add(matches[mi].a);
-        matched2.add(matches[mi].b);
+        matched1.add(matches[mi2].a);
+        matched2.add(matches[mi2].b);
     }
 
-    // If constrained and we don't have enough groups, create groups from
-    // unmatched instances (single-camera groups that will get filled by
-    // the remaining-cameras step)
+    // Pad to numAnimals if needed
     if (numAnimals && groups.length < numAnimals) {
-        // First try unmatched from cam1
         for (var a3 = 0; a3 < insts1.length && groups.length < numAnimals; a3++) {
             if (!matched1.has(a3)) {
                 var sg = new Map();
@@ -523,7 +435,6 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
                 groups.push(sg);
             }
         }
-        // Then try unmatched from cam2
         for (var b3 = 0; b3 < insts2.length && groups.length < numAnimals; b3++) {
             if (!matched2.has(b3)) {
                 var sg2 = new Map();
@@ -531,32 +442,28 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
                 groups.push(sg2);
             }
         }
-        console.log('[matchPairwise] padded to', groups.length, 'groups');
     }
 
-    // Solo groups for unmatched (only if unconstrained)
+    // Solo groups for unmatched (unconstrained only)
     if (!numAnimals) {
         for (var a4 = 0; a4 < insts1.length; a4++) {
             if (!matched1.has(a4)) {
-                var sg3 = new Map();
-                sg3.set(activeCams[0], insts1[a4]);
-                groups.push(sg3);
+                var sg3 = new Map(); sg3.set(activeCams[0], insts1[a4]); groups.push(sg3);
             }
         }
         for (var b4 = 0; b4 < insts2.length; b4++) {
             if (!matched2.has(b4)) {
-                var sg4 = new Map();
-                sg4.set(activeCams[1], insts2[b4]);
-                groups.push(sg4);
+                var sg4 = new Map(); sg4.set(activeCams[1], insts2[b4]); groups.push(sg4);
             }
         }
     }
 
-    // Add remaining cameras via reprojection
+    // Add remaining cameras via reprojection (fast — no pairwise scoring)
     for (var ci = 2; ci < activeCams.length; ci++) {
         var camName = activeCams[ci];
         var cam3 = camMap[camName];
         var insts3 = camInstances[camName];
+        if (!insts3 || insts3.length === 0) continue;
 
         var cost3 = [];
         for (var gi = 0; gi < groups.length; gi++) {
@@ -564,12 +471,7 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
             var pts3d = triangulateGroup(groups[gi], camMap);
             var reproj3 = pts3d ? reprojectPoints(pts3d, cam3.projectionMatrix) : null;
             for (var ii = 0; ii < insts3.length; ii++) {
-                if (reproj3) {
-                    var dist = computeInstanceDistance(reproj3, insts3[ii].points);
-                    cost3[gi][ii] = dist;
-                } else {
-                    cost3[gi][ii] = Infinity;
-                }
+                cost3[gi][ii] = reproj3 ? computeInstanceDistance(reproj3, insts3[ii].points) : Infinity;
             }
         }
         if (cost3.length > 0 && insts3.length > 0) {
@@ -582,13 +484,10 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
                     matched3.add(ii2);
                 }
             }
-            // Only create solo groups for unmatched if unconstrained
             if (!numAnimals) {
                 for (var ii3 = 0; ii3 < insts3.length; ii3++) {
                     if (!matched3.has(ii3)) {
-                        var sg3 = new Map();
-                        sg3.set(camName, insts3[ii3]);
-                        groups.push(sg3);
+                        var sg5 = new Map(); sg5.set(camName, insts3[ii3]); groups.push(sg5);
                     }
                 }
             }
@@ -599,9 +498,10 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
 }
 
 
-/**
- * Triangulate a group's instances into 3D points.
- */
+// ============================================
+// Triangulation helper
+// ============================================
+
 function triangulateGroup(group, camMap) {
     var cams = [], entries = [];
     group.forEach(function(inst, cn) { cams.push(camMap[cn]); entries.push(inst); });
