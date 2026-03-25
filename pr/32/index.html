@@ -117,7 +117,7 @@
                 View
                 <div class="menu-dropdown" id="menuView">
                     <div class="menu-dropdown-item" id="menuToggle3D">Toggle 3D Viewport <span
-                            class="shortcut-hint">3</span></div>
+                            class="shortcut-hint">\</span></div>
                     <div class="menu-dropdown-item" id="menuToggleTimeline">Toggle Timeline</div>
                     <div class="menu-dropdown-item" id="menuToggleInfo">Toggle Info Panel <span
                             class="shortcut-hint">I</span></div>
@@ -3303,13 +3303,13 @@
                     '<tr><td><code>Double-click</code></td><td>Convert predicted → user label</td></tr>' +
                     '<tr><td colspan="2" style="height:8px;"></td></tr>' +
                     '<tr><td><b>Identity (select group first)</b></td><td></td></tr>' +
-                    '<tr><td><code>1</code> – <code>9</code></td><td>Assign identity 1–9 to selected group</td></tr>' +
+                    '<tr><td><code>1</code> – <code>9</code></td><td>Assign identity 1–9 to selected instance</td></tr>' +
                     '<tr><td colspan="2" style="height:8px;"></td></tr>' +
                     '<tr><td><b>Tracks (select group first)</b></td><td></td></tr>' +
                     '<tr><td><code>Shift+1</code> – <code>Shift+9</code></td><td>Assign track 1–9 (propagates forward)</td></tr>' +
                     '<tr><td colspan="2" style="height:8px;"></td></tr>' +
                     '<tr><td><b>View</b></td><td></td></tr>' +
-                    '<tr><td><code>3</code></td><td>Toggle 3D viewport</td></tr>' +
+                    '<tr><td><code>\\</code></td><td>Toggle 3D viewport</td></tr>' +
                     '<tr><td><code>I</code></td><td>Toggle info panel</td></tr>' +
                     '<tr><td><code>?</code></td><td>Show this help</td></tr>' +
                     '</tbody></table></div>' +
@@ -3559,7 +3559,7 @@
                             e.preventDefault();
                         }
                         break;
-                    case '3':
+                    case '\\':
                         if (!e.ctrlKey && !e.metaKey) {
                             toggle3DViewport();
                             e.preventDefault();
