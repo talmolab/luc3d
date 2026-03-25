@@ -602,6 +602,11 @@
         <div class="split-handle horizontal" id="timelineResizeHandle"></div>
         <!-- Timeline -->
         <div class="timeline-container" id="timelineContainer">
+            <div class="timeline-mode-toggle" id="timelineModeToggle">
+                <button class="timeline-mode-btn active" data-mode="tracks" title="Show tracks">Tracks</button>
+                <button class="timeline-mode-btn" data-mode="identities" title="Show identities">IDs</button>
+                <button class="timeline-mode-btn" data-mode="both" title="Show both">Both</button>
+            </div>
         </div>
 
         <!-- Playback Controls -->
@@ -2787,6 +2792,18 @@
             // Populate with session data
             if (state.session) {
                 timeline.setData(state.session);
+            }
+
+            // Timeline display mode toggles
+            var modeToggle = document.getElementById('timelineModeToggle');
+            if (modeToggle) {
+                modeToggle.querySelectorAll('.timeline-mode-btn').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        modeToggle.querySelectorAll('.timeline-mode-btn').forEach(function (b) { b.classList.remove('active'); });
+                        btn.classList.add('active');
+                        if (timeline) timeline.setDisplayMode(btn.getAttribute('data-mode'));
+                    });
+                });
             }
         }
 

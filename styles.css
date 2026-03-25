@@ -2419,3 +2419,32 @@ kbd {
     color: #888;
     font-size: 11px;
 }
+
+/* --- Timeline mode toggle --- */
+.timeline-mode-toggle {
+    position: absolute;
+    top: 2px;
+    right: 6px;
+    z-index: 10;
+    display: flex;
+    gap: 2px;
+}
+.timeline-mode-btn {
+    font-size: 10px;
+    padding: 1px 6px;
+    border: 1px solid #444;
+    background: #1a1a2e;
+    color: #888;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1.4;
+}
+.timeline-mode-btn:hover {
+    background: #2a2d5e;
+    color: #ccc;
+}
+.timeline-mode-btn.active {
+    background: #667eea;
+    color: #fff;
+    border-color: #667eea;
+}

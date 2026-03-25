@@ -66,6 +66,15 @@ class Timeline {
         /** Track names (string[]) */
         this._trackNames = [];
 
+        /**
+         * Display mode: 'tracks', 'identities', or 'both'
+         * Controls what the timeline bars represent.
+         */
+        this._displayMode = 'tracks';
+
+        /** Cached session reference for rebuilding segments on mode change */
+        this._session = null;
+
         /** Range selection state */
         this._rangeStart = null;
         this._rangeEnd = null;
@@ -196,6 +205,7 @@ class Timeline {
      * @param {Session} session - The session (has .tracks, .frameGroups)
      */
     setData(session) {
+        this._session = session;
         if (!session) {
             this._trackSegments = [];
             this._frameMarkers.clear();
@@ -204,7 +214,7 @@ class Timeline {
             return;
         }
 
-        this._buildTrackSegments(session);
+        this._rebuildSegments(session);
         this._buildFrameMarkers(session);
         this.redraw();
     }
@@ -434,6 +444,123 @@ class Timeline {
                 });
                 this._trackNames.push(trackName + ' / ' + cameraNames[ci]);
             }
+        }
+    }
+
+    /**
+     * Rebuild segments based on current display mode.
+     * @param {Session} session
+     * @private
+     */
+    _rebuildSegments(session) {
+        if (this._displayMode === 'identities') {
+            this._buildIdentitySegments(session);
+        } else if (this._displayMode === 'both') {
+            this._buildTrackSegments(session);
+            // Append identity segments after track segments
+            var trackCount = this._trackSegments.length;
+            var trackNames = this._trackNames.slice();
+            this._buildIdentitySegments(session);
+            // Merge: track segments first, then identity segments
+            var idSegments = this._trackSegments;
+            var idNames = this._trackNames;
+            this._trackSegments = [];
+            this._trackNames = [];
+            // Re-build track segments
+            this._buildTrackSegments(session);
+            // Append identity segments
+            for (var i = 0; i < idSegments.length; i++) {
+                this._trackSegments.push(idSegments[i]);
+                this._trackNames.push(idNames[i]);
+            }
+        } else {
+            this._buildTrackSegments(session);
+        }
+    }
+
+    /**
+     * Build segments grouped by identity instead of track.
+     * Uses session.trackIdentityMap to find identity per camera:trackIdx,
+     * then colors by identity color.
+     *
+     * @param {Session} session
+     * @private
+     */
+    _buildIdentitySegments(session) {
+        this._trackSegments = [];
+        this._trackNames = [];
+
+        if (!session.identities || session.identities.length === 0) return;
+
+        var cameraNames = session.cameras ? session.cameras.map(function (c) { return c.name; }) : [];
+
+        // Build identity -> camName -> Set<frameIdx>
+        var idCamFrames = {};  // "identityId:camName" -> Set<frameIdx>
+
+        for (var [frameIdx, fg] of session.frameGroups) {
+            // Grouped instances
+            for (var [camName, instances] of fg.instances) {
+                for (var i = 0; i < instances.length; i++) {
+                    var key = camName + ':' + instances[i].trackIdx;
+                    var idId = session.trackIdentityMap.get(key);
+                    if (idId == null) continue;
+                    var segKey = idId + ':' + camName;
+                    if (!idCamFrames[segKey]) idCamFrames[segKey] = new Set();
+                    idCamFrames[segKey].add(frameIdx);
+                }
+            }
+            // Unlinked instances
+            for (var [camName2, ulList] of fg.unlinkedInstances) {
+                for (var u = 0; u < ulList.length; u++) {
+                    var key2 = camName2 + ':' + ulList[u].instance.trackIdx;
+                    var idId2 = session.trackIdentityMap.get(key2);
+                    if (idId2 == null) continue;
+                    var segKey2 = idId2 + ':' + camName2;
+                    if (!idCamFrames[segKey2]) idCamFrames[segKey2] = new Set();
+                    idCamFrames[segKey2].add(frameIdx);
+                }
+            }
+        }
+
+        // Build segments per identity per camera
+        for (var idIdx = 0; idIdx < session.identities.length; idIdx++) {
+            var ident = session.identities[idIdx];
+            for (var ci = 0; ci < cameraNames.length; ci++) {
+                var sKey = ident.id + ':' + cameraNames[ci];
+                var frameSet = idCamFrames[sKey];
+                if (!frameSet || frameSet.size === 0) continue;
+
+                var sorted = Array.from(frameSet).sort(function (a, b) { return a - b; });
+                var segments = [];
+                var segStart = -1, segEnd = -1;
+                for (var si = 0; si < sorted.length; si++) {
+                    var f = sorted[si];
+                    if (segStart < 0) { segStart = f; segEnd = f; }
+                    else if (f === segEnd + 1) { segEnd = f; }
+                    else { segments.push({ start: segStart, end: segEnd }); segStart = f; segEnd = f; }
+                }
+                if (segStart >= 0) segments.push({ start: segStart, end: segEnd });
+
+                this._trackSegments.push({
+                    trackIdx: ident.id,
+                    cameraName: cameraNames[ci],
+                    color: ident.color || '#667eea',
+                    segments: segments,
+                });
+                this._trackNames.push(ident.name + ' / ' + cameraNames[ci]);
+            }
+        }
+    }
+
+    /**
+     * Set the timeline display mode and refresh.
+     * @param {'tracks'|'identities'|'both'} mode
+     */
+    setDisplayMode(mode) {
+        this._displayMode = mode;
+        if (this._session) {
+            this._rebuildSegments(this._session);
+            this.redraw();
         }
     }
 
@@ -1141,7 +1268,8 @@ class Timeline {
      */
     refreshTracks(session) {
         if (!session) return;
-        this._buildTrackSegments(session);
+        this._session = session;
+        this._rebuildSegments(session);
         this.redraw();
     }
 
