@@ -2355,3 +2355,67 @@ kbd {
     background: var(--accent-dim);
     color: var(--text-primary);
 }
+
+/* --- Tracker UI --- */
+.tracker-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
+    background: #1a1a2e;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    z-index: 9999;
+    border-bottom: 1px solid #333;
+    gap: 8px;
+}
+.tracker-progress-inner {
+    flex: 1;
+    height: 4px;
+    background: #333;
+    border-radius: 2px;
+    overflow: hidden;
+}
+.tracker-progress-bar {
+    height: 100%;
+    background: #667eea;
+    border-radius: 2px;
+    transition: width 0.2s;
+}
+#trackerProgressText {
+    font-size: 12px;
+    color: #ccc;
+    white-space: nowrap;
+}
+.tracker-settings {
+    background: #16213e;
+    border: 1px solid #2a2d5e;
+    border-radius: 4px;
+    margin: 4px 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+.tracker-settings summary {
+    cursor: pointer;
+    color: #667eea;
+    font-weight: 600;
+}
+.tracker-settings-body label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+    color: #ccc;
+}
+.tracker-settings-body input[type="range"] {
+    flex: 1;
+    max-width: 120px;
+}
+.tracker-settings-body span {
+    min-width: 28px;
+    text-align: right;
+    color: #888;
+    font-size: 11px;
+}

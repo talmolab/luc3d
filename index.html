@@ -35,6 +35,15 @@
             <button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;margin-top:12px;">Dismiss</button>
         </div>
 
+        <!-- Tracker progress overlay -->
+        <div class="tracker-progress" id="trackerProgress" style="display:none;">
+            <div class="tracker-progress-inner">
+                <div class="tracker-progress-bar" id="trackerProgressBar" style="width:0%"></div>
+            </div>
+            <span id="trackerProgressText">Tracking...</span>
+            <button class="toolbar-btn" id="trackerCancel" style="margin-left:8px;">Cancel</button>
+        </div>
+
         <!-- Menu Bar -->
         <div class="menu-bar" id="menuBar">
             <div class="menu-item" data-menu="file">
@@ -145,6 +154,11 @@
                 <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All</button>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
+            <div class="toolbar-separator"></div>
+            <div class="toolbar-group">
+                <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame</button>
+                <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
+            </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group toolbar-checkboxes">
                 <label><input type="checkbox" id="visUser" checked> User</label>
@@ -566,6 +580,17 @@
                     </div>
                 </div>
 
+                <details class="tracker-settings" id="trackerSettingsPanel" style="display:none;">
+                    <summary>Tracker Settings</summary>
+                    <div class="tracker-settings-body">
+                        <label>2D Weight <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerWeight2d"><span id="trackerWeight2dVal">1.0</span></label>
+                        <label>3D Weight <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerWeight3d"><span id="trackerWeight3dVal">1.0</span></label>
+                        <label>Velocity <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerVelocity"><span id="trackerVelocityVal">1.0</span></label>
+                        <label>Distance <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerDistance"><span id="trackerDistanceVal">1.0</span></label>
+                        <label>Time Penalty <input type="range" min="0" max="5" step="0.1" value="1.0" id="trackerTimePenalty"><span id="trackerTimePenaltyVal">1.0</span></label>
+                    </div>
+                </details>
+
                 <!-- Hidden legacy element for backward compat -->
                 <div class="instance-list" id="instanceList" style="display:none;"></div>
             </div>
@@ -638,6 +663,7 @@
     <script src="video.js?v=4"></script>
     <script src="pose-data.js?v=5"></script>
     <script src="triangulation.js?v=5"></script>
+    <script src="tracker.js"></script>
     <script src="demo-data.js"></script>
     <script src="overlays.js?v=8"></script>
     <script src="interaction.js?v=6"></script>
@@ -3665,6 +3691,19 @@
 
             // --- New keyboard shortcuts (Prompt 36) ---
             document.addEventListener('keydown', function (e) {
+                // --- Ctrl+Shift+T = Track All ---
+                if (e.key === 'T' && e.shiftKey && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    trackAll();
+                    return;
+                }
+                // --- Shift+T = Track Frame ---
+                if (e.key === 'T' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                    e.preventDefault();
+                    trackCurrentFrame();
+                    return;
+                }
                 // --- Cmd/Ctrl shortcuts (work even in inputs) ---
                 if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
                     switch (e.key) {
@@ -12008,6 +12047,167 @@
                     if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
                 });
                 input.addEventListener('blur', commit);
+            });
+        })();
+
+        // ============================================
+        // Cross-View Tracker Integration
+        // ============================================
+
+        var globalTracker = null;
+        var trackerWorker = null;
+
+        function getTrackerHyperparams() {
+            var el2d = document.getElementById('trackerWeight2d');
+            return {
+                correspondenceWeight2d: el2d ? parseFloat(el2d.value) : 1.0,
+                correspondenceWeight3d: document.getElementById('trackerWeight3d') ? parseFloat(document.getElementById('trackerWeight3d').value) : 1.0,
+                velocityThreshold: document.getElementById('trackerVelocity') ? parseFloat(document.getElementById('trackerVelocity').value) : 1.0,
+                distanceThreshold: document.getElementById('trackerDistance') ? parseFloat(document.getElementById('trackerDistance').value) : 1.0,
+                timePenalty: document.getElementById('trackerTimePenalty') ? parseFloat(document.getElementById('trackerTimePenalty').value) : 1.0
+            };
+        }
+
+        function trackCurrentFrame() {
+            var session = getActiveSession();
+            if (!session || !session.cameras || session.cameras.length === 0) {
+                setStatus('No session with cameras loaded', 'error');
+                return;
+            }
+            if (!globalTracker) {
+                globalTracker = new CrossViewTracker(getTrackerHyperparams());
+            }
+            var fg = session.getFrameGroup(state.currentFrame);
+            if (!fg) {
+                setStatus('No frame data at frame ' + state.currentFrame, 'error');
+                return;
+            }
+            var result = globalTracker.trackFrame(fg, session.cameras, session);
+            globalTracker.applyResults(session);
+            drawAllOverlays(state.currentFrame);
+            setStatus('Tracked frame ' + state.currentFrame + ': ' + result.targets.length + ' targets', 'success');
+        }
+
+        function trackAll() {
+            var session = getActiveSession();
+            if (!session || !session.cameras || session.cameras.length === 0) {
+                setStatus('No session with cameras loaded', 'error');
+                return;
+            }
+
+            // Serialize frame data for worker
+            var frames = [];
+            var frameIndices = session.frameIndices;
+            for (var i = 0; i < frameIndices.length; i++) {
+                var fi = frameIndices[i];
+                var fg = session.getFrameGroup(fi);
+                if (!fg) continue;
+                var detections = {};
+                for (var c = 0; c < session.cameras.length; c++) {
+                    var cam = session.cameras[c];
+                    var instances = fg.getInstances(cam.name);
+                    if (!instances || instances.length === 0) continue;
+                    detections[cam.name] = instances.map(function (inst) {
+                        var pts = inst.points.map(function (p) {
+                            return p ? (cam.undistortPoint ? cam.undistortPoint(p) : p.slice()) : null;
+                        });
+                        return { points: pts, trackIdx: inst.trackIdx };
+                    });
+                }
+                frames.push({ frameIdx: fi, detections: detections });
+            }
+
+            if (frames.length === 0) {
+                setStatus('No frames to track', 'error');
+                return;
+            }
+
+            var cameras = session.cameras.map(function (cam) {
+                return { name: cam.name, projectionMatrix: cam.projectionMatrix };
+            });
+
+            // Launch worker
+            trackerWorker = new Worker('tracker-worker.js');
+            var progressEl = document.getElementById('trackerProgress');
+            var progressBar = document.getElementById('trackerProgressBar');
+            var progressText = document.getElementById('trackerProgressText');
+            progressEl.style.display = 'flex';
+
+            trackerWorker.onmessage = function (e) {
+                var msg = e.data;
+                if (msg.type === 'progress') {
+                    var pct = (msg.frame / msg.total * 100).toFixed(1);
+                    progressBar.style.width = pct + '%';
+                    progressText.textContent = 'Tracking frame ' + msg.frame + ' / ' + msg.total;
+                } else if (msg.type === 'complete') {
+                    progressEl.style.display = 'none';
+                    applyWorkerResults(msg.results, session);
+                    trackerWorker.terminate();
+                    trackerWorker = null;
+                    setStatus('Tracking complete: ' + msg.results.numTargets + ' identities found', 'success');
+                } else if (msg.type === 'error') {
+                    progressEl.style.display = 'none';
+                    setStatus('Tracker error: ' + msg.message, 'error');
+                    trackerWorker.terminate();
+                    trackerWorker = null;
+                } else if (msg.type === 'cancelled') {
+                    progressEl.style.display = 'none';
+                    setStatus('Tracking cancelled at frame ' + msg.frame, 'warning');
+                    trackerWorker.terminate();
+                    trackerWorker = null;
+                }
+            };
+
+            trackerWorker.postMessage({
+                type: 'start',
+                data: {
+                    frames: frames,
+                    cameras: cameras,
+                    hyperparameters: getTrackerHyperparams()
+                }
+            });
+            setStatus('Tracking ' + frames.length + ' frames...', 'info');
+        }
+
+        function applyWorkerResults(results, session) {
+            var trackToIdentity = {};
+            for (var i = 0; i < results.identityAssignments.length; i++) {
+                var a = results.identityAssignments[i];
+                if (!(a.trackId in trackToIdentity)) {
+                    var identity = session.addIdentity('track_' + a.trackId);
+                    trackToIdentity[a.trackId] = identity.id;
+                }
+                session.trackIdentityMap.set(
+                    a.cameraName + ':' + a.trackIdx,
+                    trackToIdentity[a.trackId]
+                );
+            }
+            drawAllOverlays(state.currentFrame);
+        }
+
+        // Wire up tracker buttons
+        (function () {
+            var btnTrackFrame = document.getElementById('tbTrackFrame');
+            var btnTrackAll = document.getElementById('tbTrackAll');
+            var btnCancel = document.getElementById('trackerCancel');
+
+            if (btnTrackFrame) btnTrackFrame.addEventListener('click', trackCurrentFrame);
+            if (btnTrackAll) btnTrackAll.addEventListener('click', trackAll);
+            if (btnCancel) btnCancel.addEventListener('click', function () {
+                if (trackerWorker) trackerWorker.postMessage({ type: 'cancel' });
+            });
+
+            // Slider value display
+            ['trackerWeight2d', 'trackerWeight3d', 'trackerVelocity', 'trackerDistance', 'trackerTimePenalty'].forEach(function (id) {
+                var slider = document.getElementById(id);
+                var valSpan = document.getElementById(id + 'Val');
+                if (slider && valSpan) {
+                    slider.addEventListener('input', function () {
+                        valSpan.textContent = slider.value;
+                        // Reset tracker so new hyperparams take effect
+                        globalTracker = null;
+                    });
+                }
             });
         })();
 
