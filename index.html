@@ -104,6 +104,13 @@
                     <div class="menu-dropdown-item menu-has-submenu" id="menuAssignIdentity">Assign Identity ▸
                         <div class="menu-submenu" id="menuAssignIdentitySub"></div>
                     </div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuColorByTrack">
+                        <span id="menuColorByTrackCheck">☑</span> Color by Track
+                    </div>
+                    <div class="menu-dropdown-item" id="menuColorById">
+                        <span id="menuColorByIdCheck">☐</span> Color by Identity
+                    </div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -680,6 +687,7 @@
             lastUserPoints: new Map(),  // viewName -> {frameIdx, points} — cache of most recent UserInstance per view
             exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
             cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
+            colorByIdentity: false,     // false = color by track, true = color by identity
         };
 
         let videoController = null;
@@ -2684,7 +2692,63 @@
                 state.session.trustTracks = !state.session.trustTracks;
                 var check = document.getElementById('menuTrustTracksCheck');
                 check.textContent = state.session.trustTracks ? '☑' : '☐';
-                setStatus('Trust Track Labels: ' + (state.session.trustTracks ? 'ON' : 'OFF'), 'success');
+
+                // When trusting tracks, propagate track numbers to identities
+                if (state.session.trustTracks) {
+                    var trackSet = new Set();
+                    for (var [fIdx, fg] of state.session.frameGroups) {
+                        for (var [cn, insts] of fg.instances) {
+                            for (var i = 0; i < insts.length; i++) {
+                                if (insts[i].trackIdx != null && insts[i].trackIdx >= 0) trackSet.add(insts[i].trackIdx);
+                            }
+                        }
+                        for (var [cn2, ulList] of fg.unlinkedInstances) {
+                            for (var u = 0; u < ulList.length; u++) {
+                                if (ulList[u].instance.trackIdx != null && ulList[u].instance.trackIdx >= 0) trackSet.add(ulList[u].instance.trackIdx);
+                            }
+                        }
+                    }
+                    // Create identities for each track
+                    for (var tid of trackSet) {
+                        state.session.getOrCreateIdentityForTrack(tid);
+                    }
+                    // Assign identities to existing groups by track
+                    for (var [fIdx2, trackMap] of state.session.instanceGroups) {
+                        for (var [tIdx, groups] of trackMap) {
+                            for (var gi = 0; gi < groups.length; gi++) {
+                                var identity = state.session.getOrCreateIdentityForTrack(groups[gi].trackIdx);
+                                state.session.assignIdentityToGroup(groups[gi], identity.id);
+                            }
+                        }
+                    }
+                    setStatus('Trust Track Labels: ON — ' + trackSet.size + ' identities created from tracks', 'success');
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                } else {
+                    setStatus('Trust Track Labels: OFF — tracks and identities are independent', 'success');
+                }
+            });
+
+            // Color by Track / Color by Identity toggles
+            function updateColorByChecks() {
+                document.getElementById('menuColorByTrackCheck').textContent = state.colorByIdentity ? '☐' : '☑';
+                document.getElementById('menuColorByIdCheck').textContent = state.colorByIdentity ? '☑' : '☐';
+            }
+
+            document.getElementById('menuColorByTrack').addEventListener('click', function () {
+                closeMenus();
+                state.colorByIdentity = false;
+                updateColorByChecks();
+                drawAllOverlays(state.currentFrame);
+                setStatus('Coloring by Track', 'success');
+            });
+
+            document.getElementById('menuColorById').addEventListener('click', function () {
+                closeMenus();
+                state.colorByIdentity = true;
+                updateColorByChecks();
+                drawAllOverlays(state.currentFrame);
+                setStatus('Coloring by Identity', 'success');
             });
 
             // ============================================

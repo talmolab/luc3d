@@ -42,7 +42,10 @@ function getTrackColor(trackIdx) {
 }
 
 function getGroupColor(group, session) {
-    if (group.identityId >= 0 && session) {
+    // Check global state for color mode (set in index.html)
+    var useIdentity = (typeof state !== 'undefined' && state.colorByIdentity);
+
+    if (useIdentity && group.identityId >= 0 && session) {
         var identity = session.getIdentity(group.identityId);
         if (identity && identity.color) return identity.color;
     }
