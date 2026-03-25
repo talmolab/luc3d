@@ -50,11 +50,12 @@ function getGroupColor(group, session) {
             var identity = session.getIdentity(group.identityId);
             if (identity && identity.color) return identity.color;
         }
-        // Fall back to track→identity map (for ungrouped predictions)
+        // Fall back to track→identity map
         var trackId = group.trackIdx != null ? group.trackIdx : 0;
         var trackIdentity = session.getIdentityForTrack(trackId);
         if (trackIdentity && trackIdentity.color) return trackIdentity.color;
     }
+    // Color by track (default)
     return getTrackColor(group.trackIdx != null ? group.trackIdx : 0);
 }
 
