@@ -1763,19 +1763,12 @@
                 }
             }
 
-            // Post-triangulation updates
-            showLoading('Updating displays...');
-            await new Promise(function (r) { setTimeout(r, 0); });
-
+            // Post-triangulation updates — hide loading first so user sees results
+            hideLoading();
             setReprojErrorVisible(true);
             drawAllOverlays(state.currentFrame);
-
-            showLoading('Updating 3D viewport...');
-            await new Promise(function (r) { setTimeout(r, 0); });
             update3DViewport(state.currentFrame);
             if (viewport3d) viewport3d.fitToScene();
-
-            hideLoading();
             var avgError = totalErrors.length > 0
                 ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
                 : 'N/A';
