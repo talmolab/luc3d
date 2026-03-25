@@ -2806,6 +2806,60 @@
             });
 
             // Track assign helper (reused by submenu and hotkeys)
+            /**
+             * Swap-assign a track: if another instance on the same frame/camera
+             * already has the target track, swap their tracks instead of creating
+             * a duplicate. Then propagate the swap forward.
+             */
+            function swapAssignTrack(frameIdx, camName, instance, newTrack, session) {
+                var oldTrack = instance.trackIdx;
+                if (oldTrack === newTrack) return 0;
+
+                // Find conflicting instance on this frame with the target track
+                var fg = session.getFrameGroup(frameIdx);
+                if (!fg) return 0;
+
+                var camInsts = fg.getInstances(camName);
+                var ulInsts = fg.getUnlinkedInstances(camName);
+
+                // Swap on current frame
+                for (var i = 0; i < camInsts.length; i++) {
+                    if (camInsts[i] !== instance && camInsts[i].trackIdx === newTrack) {
+                        camInsts[i].trackIdx = oldTrack;
+                    }
+                }
+                for (var u = 0; u < ulInsts.length; u++) {
+                    if (ulInsts[u].instance !== instance && ulInsts[u].instance.trackIdx === newTrack) {
+                        ulInsts[u].instance.trackIdx = oldTrack;
+                    }
+                }
+                instance.trackIdx = newTrack;
+
+                // Propagate swap to subsequent frames (swap, not just reassign)
+                var propagated = 0;
+                for (var [fIdx, fgP] of session.frameGroups) {
+                    if (fIdx <= frameIdx) continue;
+                    // Use temp value to avoid overwriting
+                    var allInsts = [];
+                    for (var [cn, insts] of fgP.instances) {
+                        if (cn === camName) for (var j = 0; j < insts.length; j++) allInsts.push(insts[j]);
+                    }
+                    for (var [cn2, ulL] of fgP.unlinkedInstances) {
+                        if (cn2 === camName) for (var k = 0; k < ulL.length; k++) allInsts.push(ulL[k].instance);
+                    }
+                    for (var m = 0; m < allInsts.length; m++) {
+                        if (allInsts[m].trackIdx === oldTrack) { allInsts[m].trackIdx = -99; propagated++; }
+                    }
+                    for (var m = 0; m < allInsts.length; m++) {
+                        if (allInsts[m].trackIdx === newTrack) { allInsts[m].trackIdx = oldTrack; propagated++; }
+                    }
+                    for (var m = 0; m < allInsts.length; m++) {
+                        if (allInsts[m].trackIdx === -99) { allInsts[m].trackIdx = newTrack; }
+                    }
+                }
+                return propagated;
+            }
+
             function assignTrackToSelected(trackIdx) {
                 if (!state.session) return;
                 var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
@@ -2813,38 +2867,15 @@
                 if (!sel && !selUl) { setStatus('Select an instance first', 'warning'); return; }
 
                 if (sel) {
-                    var oldTrack = sel.trackIdx;
-                    for (var [cn, inst] of sel.instances) { inst.trackIdx = trackIdx; }
+                    var totalProp = 0;
+                    for (var [cn, inst] of sel.instances) {
+                        totalProp += swapAssignTrack(state.currentFrame, cn, inst, trackIdx, state.session);
+                    }
                     sel.trackIdx = trackIdx;
-                    // Propagate track only (not identity) to subsequent frames
-                    var propagated = 0;
-                    for (var [fIdx, fgP] of state.session.frameGroups) {
-                        if (fIdx <= state.currentFrame) continue;
-                        for (var [cn2, insts] of fgP.instances) {
-                            for (var i = 0; i < insts.length; i++) {
-                                if (insts[i].trackIdx === oldTrack) { insts[i].trackIdx = trackIdx; propagated++; }
-                            }
-                        }
-                        for (var [cn3, ulL] of fgP.unlinkedInstances) {
-                            for (var u = 0; u < ulL.length; u++) {
-                                if (ulL[u].instance.trackIdx === oldTrack) { ulL[u].instance.trackIdx = trackIdx; propagated++; }
-                            }
-                        }
-                    }
-                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
+                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (totalProp > 0 ? ' (swapped & propagated ' + totalProp + ')' : ''), 'success');
                 } else if (selUl) {
-                    var oldTrack2 = selUl.instance.trackIdx;
-                    selUl.instance.trackIdx = trackIdx;
-                    // Propagate in same camera only
-                    var propagated2 = 0;
-                    for (var [fIdx2, fgP2] of state.session.frameGroups) {
-                        if (fIdx2 <= state.currentFrame) continue;
-                        var ulPropList = fgP2.getUnlinkedInstances(selUl.cameraName);
-                        for (var pi = 0; pi < ulPropList.length; pi++) {
-                            if (ulPropList[pi].instance.trackIdx === oldTrack2) { ulPropList[pi].instance.trackIdx = trackIdx; propagated2++; }
-                        }
-                    }
-                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (propagated2 > 0 ? ' (propagated ' + propagated2 + ')' : ''), 'success');
+                    var propagated = swapAssignTrack(state.currentFrame, selUl.cameraName, selUl.instance, trackIdx, state.session);
+                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (propagated > 0 ? ' (swapped & propagated ' + propagated + ')' : ''), 'success');
                 }
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
@@ -3570,28 +3601,14 @@
                         return;
                     }
                     var newTrackIdx = parseInt(e.code.replace('Digit', '')) - 1;
-                    var oldTrackIdx = selectedGroup.trackIdx;
+                    // Swap-assign per camera with propagation
+                    var totalProp = 0;
                     for (var [camName, inst] of selectedGroup.instances) {
-                        inst.trackIdx = newTrackIdx;
+                        totalProp += swapAssignTrack(state.currentFrame, camName, inst, newTrackIdx, state.session);
                     }
                     selectedGroup.trackIdx = newTrackIdx;
-                    // Propagate track to subsequent frames
-                    var propagated = 0;
-                    for (var [fIdx, fgProp] of state.session.frameGroups) {
-                        if (fIdx <= state.currentFrame) continue;
-                        for (var [cn, insts] of fgProp.instances) {
-                            for (var pi = 0; pi < insts.length; pi++) {
-                                if (insts[pi].trackIdx === oldTrackIdx) { insts[pi].trackIdx = newTrackIdx; propagated++; }
-                            }
-                        }
-                        for (var [cn2, ulList] of fgProp.unlinkedInstances) {
-                            for (var ui = 0; ui < ulList.length; ui++) {
-                                if (ulList[ui].instance.trackIdx === oldTrackIdx) { ulList[ui].instance.trackIdx = newTrackIdx; propagated++; }
-                            }
-                        }
-                    }
                     var trackName = state.session.tracks[newTrackIdx] || 'track_' + newTrackIdx;
-                    setStatus('Set track to ' + trackName + (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
+                    setStatus('Set track to ' + trackName + (totalProp > 0 ? ' (swapped & propagated ' + totalProp + ')' : ''), 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                     return;
@@ -7031,26 +7048,14 @@
                     (function (g, sel) {
                         sel.addEventListener('change', function (ev) {
                             ev.stopPropagation();
-                            var oldTrack = g.trackIdx;
                             var newTrack = parseInt(sel.value);
-                            for (var [cn, inst] of g.instances) { inst.trackIdx = newTrack; }
-                            g.trackIdx = newTrack;
-                            // Propagate track (not identity) to subsequent frames
-                            var propagated = 0;
-                            for (var [fIdx, fgP] of state.session.frameGroups) {
-                                if (fIdx <= state.currentFrame) continue;
-                                for (var [cn2, insts] of fgP.instances) {
-                                    for (var i = 0; i < insts.length; i++) {
-                                        if (insts[i].trackIdx === oldTrack) { insts[i].trackIdx = newTrack; propagated++; }
-                                    }
-                                }
-                                for (var [cn3, ulL] of fgP.unlinkedInstances) {
-                                    for (var u = 0; u < ulL.length; u++) {
-                                        if (ulL[u].instance.trackIdx === oldTrack) { ulL[u].instance.trackIdx = newTrack; propagated++; }
-                                    }
-                                }
+                            // Swap-assign per camera, propagate each
+                            var totalProp = 0;
+                            for (var [cn, inst] of g.instances) {
+                                totalProp += swapAssignTrack(state.currentFrame, cn, inst, newTrack, state.session);
                             }
-                            setStatus('Track → ' + state.session.tracks[newTrack] + (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
+                            g.trackIdx = newTrack;
+                            setStatus('Track → ' + state.session.tracks[newTrack] + (totalProp > 0 ? ' (swapped & propagated ' + totalProp + ')' : ''), 'success');
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
                         });
@@ -7322,28 +7327,8 @@
                         (function (ulObj, inst, sel, camNameForUl) {
                             sel.addEventListener('change', function (ev) {
                                 ev.stopPropagation();
-                                var oldTrack = inst.trackIdx;
                                 var newTrack = parseInt(sel.value);
-                                inst.trackIdx = newTrack;
-                                // Propagate track in same camera to subsequent frames
-                                var propagated = 0;
-                                for (var [fIdx, fgProp] of state.session.frameGroups) {
-                                    if (fIdx <= state.currentFrame) continue;
-                                    var ulPropList = fgProp.getUnlinkedInstances(camNameForUl);
-                                    for (var pi = 0; pi < ulPropList.length; pi++) {
-                                        if (ulPropList[pi].instance.trackIdx === oldTrack) {
-                                            ulPropList[pi].instance.trackIdx = newTrack;
-                                            propagated++;
-                                        }
-                                    }
-                                    var grpInsts = fgProp.getInstances(camNameForUl);
-                                    for (var gi = 0; gi < grpInsts.length; gi++) {
-                                        if (grpInsts[gi].trackIdx === oldTrack) {
-                                            grpInsts[gi].trackIdx = newTrack;
-                                            propagated++;
-                                        }
-                                    }
-                                }
+                                var propagated = swapAssignTrack(state.currentFrame, camNameForUl, inst, newTrack, state.session);
                                 setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl +
                                     (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
                                 drawAllOverlays(state.currentFrame);
