@@ -163,9 +163,12 @@ function crossViewScore(instA, camA, instB, camB, wReproj, wEpipolar) {
  * @param {FrameGroup} frameGroup
  * @param {Camera[]} cameras
  * @param {Session} session
+ * @param {Object} [opts]
+ * @param {boolean} [opts.perFrame=false] - If true, use per-frame identity overrides instead of global
  * @returns {{groups: Array<Map<string, Instance>>, numIdentities: number}}
  */
-function matchFrameInstances(frameGroup, cameras, session) {
+function matchFrameInstances(frameGroup, cameras, session, opts) {
+    opts = opts || {};
     // Collect instances per camera
     var camInstances = {};
     var camMap = {};
@@ -324,6 +327,7 @@ function matchFrameInstances(frameGroup, cameras, session) {
     }
 
     // --- Step 3: Assign identities (reuse existing by name) ---
+    var fi = frameGroup.frameIdx;
     for (var g2 = 0; g2 < groups.length; g2++) {
         var idName = 'id_' + g2;
         // Look for existing identity with this name
@@ -339,7 +343,11 @@ function matchFrameInstances(frameGroup, cameras, session) {
             identity = session.addIdentity(idName);
         }
         groups[g2].forEach(function(inst, cn) {
-            session.trackIdentityMap.set(cn + ':' + inst.trackIdx, identity.id);
+            if (opts.perFrame && session.setFrameIdentity) {
+                session.setFrameIdentity(fi, cn, inst.trackIdx, identity.id);
+            } else {
+                session.trackIdentityMap.set(cn + ':' + inst.trackIdx, identity.id);
+            }
         });
     }
 

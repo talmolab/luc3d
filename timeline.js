@@ -501,8 +501,9 @@ class Timeline {
             // Grouped instances
             for (var [camName, instances] of fg.instances) {
                 for (var i = 0; i < instances.length; i++) {
-                    var key = camName + ':' + instances[i].trackIdx;
-                    var idId = session.trackIdentityMap.get(key);
+                    var idId = session.getIdentityIdForTrack
+                        ? session.getIdentityIdForTrack(camName, instances[i].trackIdx, frameIdx)
+                        : session.trackIdentityMap.get(camName + ':' + instances[i].trackIdx);
                     if (idId == null) continue;
                     var segKey = idId + ':' + camName;
                     if (!idCamFrames[segKey]) idCamFrames[segKey] = new Set();
@@ -512,8 +513,9 @@ class Timeline {
             // Unlinked instances
             for (var [camName2, ulList] of fg.unlinkedInstances) {
                 for (var u = 0; u < ulList.length; u++) {
-                    var key2 = camName2 + ':' + ulList[u].instance.trackIdx;
-                    var idId2 = session.trackIdentityMap.get(key2);
+                    var idId2 = session.getIdentityIdForTrack
+                        ? session.getIdentityIdForTrack(camName2, ulList[u].instance.trackIdx, frameIdx)
+                        : session.trackIdentityMap.get(camName2 + ':' + ulList[u].instance.trackIdx);
                     if (idId2 == null) continue;
                     var segKey2 = idId2 + ':' + camName2;
                     if (!idCamFrames[segKey2]) idCamFrames[segKey2] = new Set();
@@ -560,7 +562,7 @@ class Timeline {
         this._displayMode = mode;
         if (this._session) {
             this._rebuildSegments(this._session);
-            this.redraw();
+            this.resize();  // resize recalculates canvas height for new row count + redraws
         }
     }
 
@@ -1270,7 +1272,7 @@ class Timeline {
         if (!session) return;
         this._session = session;
         this._rebuildSegments(session);
-        this.redraw();
+        this.resize();
     }
 
     /**

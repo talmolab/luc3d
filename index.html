@@ -3092,48 +3092,15 @@
              * @param {string} [cameraName] - If set, only propagate for this camera. Otherwise all cameras.
              * @returns {number} Number of propagated assignments
              */
+            /**
+             * Propagate identity forward from current frame using per-frame overrides.
+             * Also sets on current frame itself.
+             */
             function propagateIdentityForward(trackIdx, identityId, cameraName) {
                 var session = state.session;
                 if (!session) return 0;
-                var propagated = 0;
-
-                for (var [frameIdx, fg] of session.frameGroups) {
-                    if (frameIdx <= state.currentFrame) continue;
-
-                    // Check linked instances
-                    for (var [cn, instances] of fg.instances) {
-                        if (cameraName && cn !== cameraName) continue;
-                        for (var i = 0; i < instances.length; i++) {
-                            if (instances[i].trackIdx === trackIdx) {
-                                session.trackIdentityMap.set(cn + ':' + trackIdx, identityId);
-                                propagated++;
-                            }
-                        }
-                    }
-                    // Check unlinked instances
-                    for (var [cn2, ulList] of fg.unlinkedInstances) {
-                        if (cameraName && cn2 !== cameraName) continue;
-                        for (var u = 0; u < ulList.length; u++) {
-                            if (ulList[u].instance.trackIdx === trackIdx) {
-                                session.trackIdentityMap.set(cn2 + ':' + trackIdx, identityId);
-                                propagated++;
-                            }
-                        }
-                    }
-
-                    // Also update InstanceGroups
-                    var groupsAtFrame = session.instanceGroups.get(frameIdx);
-                    if (groupsAtFrame) {
-                        for (var [tIdx, groups] of groupsAtFrame) {
-                            for (var gi = 0; gi < groups.length; gi++) {
-                                if (groups[gi].trackIdx === trackIdx) {
-                                    groups[gi].identityId = identityId;
-                                }
-                            }
-                        }
-                    }
-                }
-                return propagated;
+                // Set per-frame override from current frame forward
+                return session.propagateIdentity(state.currentFrame, cameraName, trackIdx, identityId);
             }
 
             /**
@@ -12413,7 +12380,7 @@
                     var fi = frameIndices[f];
                     var fg = session.getFrameGroup(fi);
                     if (fg) {
-                        matchFrameInstances(fg, cameras, session);
+                        matchFrameInstances(fg, cameras, session, { perFrame: true });
                     }
 
                     if (f % YIELD_EVERY === 0) {
