@@ -2974,6 +2974,7 @@
                 setStatus('Created track: ' + name, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             document.getElementById('menuRenameTrack').addEventListener('click', function () {
@@ -2988,6 +2989,7 @@
                 setStatus('Renamed track ' + (idx + 1) + ' to: ' + newName, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             document.getElementById('menuDeleteTrack').addEventListener('click', function () {
@@ -3017,6 +3019,7 @@
                 setStatus('Deleted track: ' + name, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             // Track assign helper (reused by submenu and hotkeys)
@@ -3221,6 +3224,7 @@
                 setStatus('Created identity: ' + name, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             document.getElementById('menuRenameIdentity').addEventListener('click', function () {
@@ -3235,6 +3239,7 @@
                 setStatus('Renamed identity to: ' + newName, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             document.getElementById('menuDeleteIdentity').addEventListener('click', function () {
@@ -3257,6 +3262,7 @@
                 setStatus('Deleted identity: ' + identity.name, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             // Populate Assign Identity submenu on hover
@@ -3870,22 +3876,13 @@
                         selectedGroup.trackIdx = newTrackIdx;
                         setStatus('Set track to ' + trackName + (totalProp > 0 ? ' (swapped ' + totalProp + ')' : ''), 'success');
                     } else if (selectedUl) {
-                        // Inline swap for unlinked instance
-                        var oldT = selectedUl.instance.trackIdx;
-                        var fg = state.session.getFrameGroup(state.currentFrame);
-                        if (fg && oldT !== newTrackIdx) {
-                            var camUl = fg.getUnlinkedInstances(selectedUl.cameraName);
-                            for (var su = 0; su < camUl.length; su++) {
-                                if (camUl[su].instance !== selectedUl.instance && camUl[su].instance.trackIdx === newTrackIdx) {
-                                    camUl[su].instance.trackIdx = oldT;
-                                }
-                            }
-                        }
-                        selectedUl.instance.trackIdx = newTrackIdx;
-                        setStatus('Set track to ' + trackName + ' on ' + selectedUl.cameraName, 'success');
+                        // Swap-assign with propagation (same as assignTrackToSelected)
+                        var propagated = swapAssignTrack(state.currentFrame, selectedUl.cameraName, selectedUl.instance, newTrackIdx, state.session);
+                        setStatus('Set track to ' + trackName + (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
                     }
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
+                    if (timeline) timeline.refreshTracks(state.session);
                     return;
                 }
             });

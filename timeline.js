@@ -444,9 +444,9 @@ class Timeline {
             }
         }
 
-        // Build segments per track per camera, ordered by track then camera
-        for (var t3 = 0; t3 < numTracks; t3++) {
-            for (var ci = 0; ci < cameraNames.length; ci++) {
+        // Build segments ordered by camera then track (view-first layout)
+        for (var ci = 0; ci < cameraNames.length; ci++) {
+            for (var t3 = 0; t3 < numTracks; t3++) {
                 var camKey = t3 + ':' + cameraNames[ci];
                 var frameSet = trackCamFrames[camKey];
                 if (!frameSet || frameSet.size === 0) continue;
@@ -471,7 +471,7 @@ class Timeline {
                     color: color,
                     segments: segments,
                 });
-                this._trackNames.push(trackName + ' / ' + cameraNames[ci]);
+                this._trackNames.push(cameraNames[ci] + ' / ' + trackName);
             }
         }
     }
@@ -553,10 +553,10 @@ class Timeline {
             }
         }
 
-        // Build segments per identity per camera
-        for (var idIdx = 0; idIdx < session.identities.length; idIdx++) {
-            var ident = session.identities[idIdx];
-            for (var ci = 0; ci < cameraNames.length; ci++) {
+        // Build segments per camera per identity (view-first layout)
+        for (var ci = 0; ci < cameraNames.length; ci++) {
+            for (var idIdx = 0; idIdx < session.identities.length; idIdx++) {
+                var ident = session.identities[idIdx];
                 var sKey = ident.id + ':' + cameraNames[ci];
                 var frameSet = idCamFrames[sKey];
                 if (!frameSet || frameSet.size === 0) continue;
@@ -578,7 +578,7 @@ class Timeline {
                     color: ident.color || '#667eea',
                     segments: segments,
                 });
-                this._trackNames.push(ident.name + ' / ' + cameraNames[ci]);
+                this._trackNames.push(cameraNames[ci] + ' / ' + ident.name);
             }
         }
     }
