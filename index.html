@@ -2696,22 +2696,9 @@
 
                 // When trusting tracks, propagate track numbers to identities
                 if (state.session.trustTracks) {
-                    var trackSet = new Set();
-                    for (var [fIdx, fg] of state.session.frameGroups) {
-                        for (var [cn, insts] of fg.instances) {
-                            for (var i = 0; i < insts.length; i++) {
-                                if (insts[i].trackIdx != null && insts[i].trackIdx >= 0) trackSet.add(insts[i].trackIdx);
-                            }
-                        }
-                        for (var [cn2, ulList] of fg.unlinkedInstances) {
-                            for (var u = 0; u < ulList.length; u++) {
-                                if (ulList[u].instance.trackIdx != null && ulList[u].instance.trackIdx >= 0) trackSet.add(ulList[u].instance.trackIdx);
-                            }
-                        }
-                    }
-                    // Create identities for each track
-                    for (var tid of trackSet) {
-                        state.session.getOrCreateIdentityForTrack(tid);
+                    // Create identity for each track name (fast — just uses tracks array)
+                    for (var ti = 0; ti < state.session.tracks.length; ti++) {
+                        state.session.getOrCreateIdentityForTrack(ti);
                     }
                     // Assign identities to existing groups by track
                     for (var [fIdx2, trackMap] of state.session.instanceGroups) {
@@ -2722,7 +2709,10 @@
                             }
                         }
                     }
-                    setStatus('Trust Track Labels: ON — ' + trackSet.size + ' identities created from tracks', 'success');
+                    // Auto-switch to Color by Identity
+                    state.colorByIdentity = true;
+                    updateColorByChecks();
+                    setStatus('Trust Track Labels: ON — ' + state.session.tracks.length + ' identities from tracks', 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                 } else {
