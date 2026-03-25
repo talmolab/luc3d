@@ -7671,7 +7671,9 @@
                             idSelectUl.appendChild(idOpt);
                         }
                         // Pre-select based on trackIdentityMap (per-camera)
-                        var currentIdForTrack = state.session.trackIdentityMap.get(cam.name + ':' + ul.instance.trackIdx);
+                        var currentIdForTrack = state.session.getIdentityIdForTrack
+                            ? state.session.getIdentityIdForTrack(cam.name, ul.instance.trackIdx, state.currentFrame)
+                            : state.session.trackIdentityMap.get(cam.name + ':' + ul.instance.trackIdx);
                         idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
                         (function (inst, sel, camNameForId) {
                             sel.addEventListener('change', function (ev) {
@@ -12370,6 +12372,7 @@
             // Clear old identities for fresh run
             session.identities = [];
             session.trackIdentityMap = new Map();
+            session.frameIdentityMap = new Map();
 
             showLoading('Assigning identities: 0/' + frameIndices.length + ' frames...');
 

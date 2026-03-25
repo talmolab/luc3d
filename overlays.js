@@ -41,7 +41,7 @@ function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
 
-function getGroupColor(group, session, useIdentity) {
+function getGroupColor(group, session, useIdentity, frameIdx) {
 
     if (useIdentity && session) {
         // Try group's direct identity first
@@ -49,9 +49,9 @@ function getGroupColor(group, session, useIdentity) {
             var identity = session.getIdentity(group.identityId);
             if (identity && identity.color) return identity.color;
         }
-        // Fall back to track→identity map
+        // Fall back to track→identity map (with per-frame support)
         var trackId = group.trackIdx != null ? group.trackIdx : 0;
-        var trackIdentity = session.getIdentityForTrack(trackId);
+        var trackIdentity = session.getIdentityForTrack(trackId, null, frameIdx);
         if (trackIdentity && trackIdentity.color) return trackIdentity.color;
     }
     // Color by track (default)
@@ -62,9 +62,9 @@ function getGroupColor(group, session, useIdentity) {
  * Get color for an instance using the track→identity map.
  * Used for unlinked/ungrouped predictions.
  */
-function getInstanceColor(instance, session, cameraName, useIdentity) {
+function getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) {
     if (useIdentity && session && instance.trackIdx != null) {
-        var identity = session.getIdentityForTrack(instance.trackIdx, cameraName);
+        var identity = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
         if (identity && identity.color) return identity.color;
     }
     return getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
@@ -1504,6 +1504,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
  */
 function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, options) {
     options = options || {};
+    var _frameIdx = frameGroup ? frameGroup.frameIdx : null;
 
     // Per-type visibility flags
     const showUser        = options.showUser !== undefined ? options.showUser : (options.showDetected !== false);
@@ -1583,7 +1584,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             const group = instanceGroups[g];
 
             // Draw reprojected instances — color-matched to identity or track
-            var trackBaseColor = getGroupColor(group, session, colorByIdentity);
+            var trackBaseColor = getGroupColor(group, session, colorByIdentity, _frameIdx);
             var reprojTrackColor = complementaryColor(trackBaseColor);
 
             // Always draw reprojections — one per group per view
@@ -1648,7 +1649,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (instType !== 'predicted') continue;
 
             var parentGroup = instToGroup.get(inst);
-            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity) : getInstanceColor(inst, session, viewName, colorByIdentity);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity, _frameIdx) : getInstanceColor(inst, session, viewName, colorByIdentity, _frameIdx);
             var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
@@ -1681,7 +1682,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (instType === 'predicted') continue;
 
             var parentGroup = instToGroup.get(inst);
-            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity) : getInstanceColor(inst, session, viewName, colorByIdentity);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity, _frameIdx) : getInstanceColor(inst, session, viewName, colorByIdentity, _frameIdx);
             var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
