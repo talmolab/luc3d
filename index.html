@@ -1606,7 +1606,7 @@
                 return;
             }
 
-            showLoading('Grouping by track & triangulating ' + allFrameIndices.length + ' frames...');
+            showLoading('Grouping & triangulating 0/' + allFrameIndices.length + ' frames...');
 
             var totalGrouped = 0;
             var totalTriangulated = 0;
@@ -1757,17 +1757,21 @@
                 }
 
                 // Yield to UI periodically
-                if (fi > 0 && fi % YIELD_EVERY === 0) {
-                    showLoading('Grouping & triangulating... ' + fi + '/' + allFrameIndices.length + ' frames');
+                if (fi % YIELD_EVERY === 0) {
+                    showLoading('Triangulating... ' + (fi + 1) + '/' + allFrameIndices.length + ' frames');
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
             }
 
-            // Show reproj/error UI elements
-            setReprojErrorVisible(true);
+            // Post-triangulation updates
+            showLoading('Updating displays...');
+            await new Promise(function (r) { setTimeout(r, 0); });
 
-            // Update display
+            setReprojErrorVisible(true);
             drawAllOverlays(state.currentFrame);
+
+            showLoading('Updating 3D viewport...');
+            await new Promise(function (r) { setTimeout(r, 0); });
             update3DViewport(state.currentFrame);
             if (viewport3d) viewport3d.fitToScene();
 
