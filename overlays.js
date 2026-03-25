@@ -41,8 +41,7 @@ function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
 
-function getGroupColor(group, session, forceIdentity) {
-    var useIdentity = forceIdentity || (typeof state !== 'undefined' && state.colorByIdentity);
+function getGroupColor(group, session, useIdentity) {
 
     if (useIdentity && session) {
         // Try group's direct identity first
@@ -63,8 +62,7 @@ function getGroupColor(group, session, forceIdentity) {
  * Get color for an instance using the track→identity map.
  * Used for unlinked/ungrouped predictions.
  */
-function getInstanceColor(instance, session, cameraName) {
-    var useIdentity = (typeof state !== 'undefined' && state.colorByIdentity);
+function getInstanceColor(instance, session, cameraName, useIdentity) {
     if (useIdentity && session && instance.trackIdx != null) {
         var identity = session.getIdentityForTrack(instance.trackIdx, cameraName);
         if (identity && identity.color) return identity.color;
@@ -1265,6 +1263,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     const showLabels = options.showLabels !== false; // default true for unlinked
     const assignmentSelectedIds = options.assignmentSelectedIds || [];
     const assignmentColor = options.assignmentColor || '#fbbf24';
+    const ulColorByIdentity = !!options.colorByIdentity;
     const selectedUnlinkedId = options.selectedUnlinkedId || null;
     const predictedRender = options.predictedRender || null;
 
@@ -1305,7 +1304,8 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
-        var baseTrackColor = isPredicted ? (getInstanceColor(instance, typeof state !== 'undefined' ? state.session : null, ul.cameraName) || '#888888') : UNGROUPED_USER_COLOR;
+        var ulSession = typeof state !== 'undefined' ? state.session : null;
+        var baseTrackColor = isPredicted ? (getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity) || '#888888') : UNGROUPED_USER_COLOR;
         const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
         const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
@@ -1511,6 +1511,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     const showReprojected = options.showReprojected !== false;
     const showErrors      = options.showErrors !== false;
     const showLegend      = options.showLegend !== false;
+    const colorByIdentity = !!options.colorByIdentity;
 
     // Per-type rendering options (fall back to flat options for backward compat)
     const defaultOpts = {
@@ -1582,7 +1583,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             const group = instanceGroups[g];
 
             // Draw reprojected instances — color-matched to identity or track
-            var trackBaseColor = getGroupColor(group, session);
+            var trackBaseColor = getGroupColor(group, session, colorByIdentity);
             var reprojTrackColor = complementaryColor(trackBaseColor);
 
             // Always draw reprojections — one per group per view
@@ -1647,7 +1648,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (instType !== 'predicted') continue;
 
             var parentGroup = instToGroup.get(inst);
-            var baseColor = parentGroup ? getGroupColor(parentGroup, session) : getInstanceColor(inst, session, viewName);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity) : getInstanceColor(inst, session, viewName, colorByIdentity);
             var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
@@ -1666,6 +1667,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     if (unlinkedInstances.length > 0) {
         drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, unlinkedOpts, {
             typeFilter: 'predicted',
+            colorByIdentity: colorByIdentity,
         }));
     }
 
@@ -1678,7 +1680,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (instType === 'predicted') continue;
 
             var parentGroup = instToGroup.get(inst);
-            var baseColor = parentGroup ? getGroupColor(parentGroup, session) : getInstanceColor(inst, session, viewName);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity) : getInstanceColor(inst, session, viewName, colorByIdentity);
             var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
@@ -1704,6 +1706,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     if (unlinkedInstances.length > 0) {
         drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, unlinkedOpts, {
             typeFilter: 'user',
+            colorByIdentity: colorByIdentity,
         }));
     }
 
