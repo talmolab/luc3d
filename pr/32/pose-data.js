@@ -122,9 +122,12 @@ class Camera {
      * @returns {number[][]} 3x3 rotation matrix
      */
     get rotationMatrix() {
+        if (this._cachedR) return this._cachedR;
+
         // If rvec is already a 3x3 rotation matrix, return it directly.
         // This handles anipose TOML format which stores rotation as a matrix.
         if (Array.isArray(this.rvec) && Array.isArray(this.rvec[0])) {
+            this._cachedR = this.rvec;
             return this.rvec;
         }
 
@@ -173,6 +176,7 @@ class Camera {
                 R[i][j] = (i === j ? 1 : 0) + sinT * K[i][j] + oneMinusCosT * KK[i][j];
             }
         }
+        this._cachedR = R;
         return R;
     }
 
@@ -181,13 +185,15 @@ class Camera {
      * @returns {number[][]} 3x4 matrix
      */
     get extrinsicMatrix() {
+        if (this._cachedRt) return this._cachedRt;
         const R = this.rotationMatrix;
         const t = this.tvec;
-        return [
+        this._cachedRt = [
             [R[0][0], R[0][1], R[0][2], t[0]],
             [R[1][0], R[1][1], R[1][2], t[1]],
             [R[2][0], R[2][1], R[2][2], t[2]]
         ];
+        return this._cachedRt;
     }
 
     /**
@@ -195,9 +201,12 @@ class Camera {
      * @returns {number[][]} 3x4 projection matrix
      */
     get projectionMatrix() {
-        const K = this.matrix;
-        const Rt = this.extrinsicMatrix;
-        return mat3x3Multiply3x4(K, Rt);
+        if (!this._cachedP) {
+            const K = this.matrix;
+            const Rt = this.extrinsicMatrix;
+            this._cachedP = mat3x3Multiply3x4(K, Rt);
+        }
+        return this._cachedP;
     }
 
     /**
