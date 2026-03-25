@@ -157,7 +157,11 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
     var targets3d = [];
     for (var gi = 0; gi < groups.length; gi++) {
         var pts3d = triangulateGroup(groups[gi], camMap);
-        targets3d.push({ points3d: pts3d, groupIdx: gi });
+        targets3d.push({
+            points3d: pts3d,
+            groupIdx: gi,
+            prevInstances: groups[gi]  // store for cross-view consistency check next frame
+        });
     }
 
     // Assign identities with stable mapping from prev frame
@@ -219,14 +223,23 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
  * Re-order groups from the current frame's pairwise matching to be consistent
  * with previous frame's identity ordering.
  *
- * For each (prevTarget, currentGroup) pair, compute mean reprojection distance
- * across all cameras. Use Hungarian to find optimal assignment. Re-order groups
- * so group[i] corresponds to prevTarget[i].
+ * Scores each (prevTarget, currentGroup) pair using three signals:
+ *   1. Reprojection distance: prev 3D → reproject into group's cameras → distance
+ *   2. Cross-view OKS: triangulate group → reproject to prev target's cameras → OKS
+ *   3. Track identity continuity: did group members have same identity last frame
+ *
+ * Combined into single cost for Hungarian assignment.
  */
 function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments) {
     var nTargets = prevTargets3d.length;
     var nGroups = groups.length;
     var n = Math.max(nTargets, nGroups);
+
+    // Pre-triangulate each current group's 3D
+    var groupPts3d = [];
+    for (var gi0 = 0; gi0 < nGroups; gi0++) {
+        groupPts3d.push(triangulateGroup(groups[gi0], camMap));
+    }
 
     // Build cost matrix: prevTarget[i] → group[j]
     var cost = [];
@@ -234,34 +247,93 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
         cost[ti] = [];
         for (var gi = 0; gi < n; gi++) {
             if (ti >= nTargets || gi >= nGroups) {
-                cost[ti][gi] = 1000;  // dummy high cost for padding
+                cost[ti][gi] = 1000;
                 continue;
             }
-            var pts3d = prevTargets3d[ti].points3d;
-            if (!pts3d) { cost[ti][gi] = 1000; continue; }
 
-            // Compute mean reprojection distance across cameras in this group
-            var totalDist = 0, distCount = 0;
-            groups[gi].forEach(function(inst, camName) {
-                var cam = camMap[camName];
-                if (!cam) return;
-                var reproj = reprojectPoints(pts3d, cam.projectionMatrix);
-                var d = computeInstanceDistance(reproj, inst.points);
-                if (d < Infinity) { totalDist += d; distCount++; }
-            });
+            var prevPts3d = prevTargets3d[ti].points3d;
+            var currPts3d = groupPts3d[gi];
+            var score = 0;
+            var scoreCount = 0;
 
-            // Also add temporal bonus from prev assignments
-            var bonus = 0;
-            if (prevAssignments && prevTargets3d[ti].identityId != null) {
+            // --- Signal 1: Reprojection distance (prev 3D → current instances) ---
+            if (prevPts3d) {
+                var reprojTotal = 0, reprojCount = 0;
                 groups[gi].forEach(function(inst, camName) {
-                    var prevId = prevAssignments.get(camName + ':' + inst.trackIdx);
-                    if (prevId != null && prevId === prevTargets3d[ti].identityId) {
-                        bonus -= 20;  // strong bonus (lower cost)
-                    }
+                    var cam = camMap[camName];
+                    if (!cam) return;
+                    var reproj = reprojectPoints(prevPts3d, cam.projectionMatrix);
+                    var d = computeInstanceDistance(reproj, inst.points);
+                    if (d < Infinity) { reprojTotal += d; reprojCount++; }
                 });
+                if (reprojCount > 0) {
+                    // Convert distance to score [0,1]: lower distance = higher score
+                    var meanDist = reprojTotal / reprojCount;
+                    score += Math.exp(-meanDist / 50.0);
+                    scoreCount++;
+                }
             }
 
-            cost[ti][gi] = (distCount > 0 ? totalDist / distCount : 500) + bonus;
+            // --- Signal 2: 3D distance (prev 3D ↔ current 3D) ---
+            if (prevPts3d && currPts3d) {
+                var totalDist3d = 0, count3d = 0;
+                var numKp = Math.min(prevPts3d.length, currPts3d.length);
+                for (var k = 0; k < numKp; k++) {
+                    if (prevPts3d[k] && currPts3d[k]) {
+                        var dx = prevPts3d[k][0] - currPts3d[k][0];
+                        var dy = prevPts3d[k][1] - currPts3d[k][1];
+                        var dz = prevPts3d[k][2] - currPts3d[k][2];
+                        totalDist3d += Math.sqrt(dx*dx + dy*dy + dz*dz);
+                        count3d++;
+                    }
+                }
+                if (count3d > 0) {
+                    var mean3d = totalDist3d / count3d;
+                    score += Math.exp(-mean3d / 30.0);
+                    scoreCount++;
+                }
+            }
+
+            // --- Signal 3: Cross-view consistency (reproject current 3D → prev cameras) ---
+            if (currPts3d && prevTargets3d[ti].prevInstances) {
+                var prevInsts = prevTargets3d[ti].prevInstances;
+                var oksTotal = 0, oksCount = 0;
+                prevInsts.forEach(function(prevInst, camName) {
+                    var cam = camMap[camName];
+                    if (!cam || !prevInst) return;
+                    var reproj = reprojectPoints(currPts3d, cam.projectionMatrix);
+                    var d = computeInstanceDistance(reproj, prevInst.points);
+                    if (d < Infinity) {
+                        oksTotal += Math.exp(-d / 50.0);
+                        oksCount++;
+                    }
+                });
+                if (oksCount > 0) {
+                    score += oksTotal / oksCount;
+                    scoreCount++;
+                }
+            }
+
+            // --- Signal 4: Track identity continuity ---
+            if (prevAssignments && prevTargets3d[ti].identityId != null) {
+                var matchingTracks = 0, totalTracks = 0;
+                groups[gi].forEach(function(inst, camName) {
+                    totalTracks++;
+                    var prevId = prevAssignments.get(camName + ':' + inst.trackIdx);
+                    if (prevId != null && prevId === prevTargets3d[ti].identityId) {
+                        matchingTracks++;
+                    }
+                });
+                if (totalTracks > 0) {
+                    // Strong signal: fraction of tracks that match * weight
+                    score += 2.0 * (matchingTracks / totalTracks);
+                    scoreCount++;
+                }
+            }
+
+            // Convert to cost (lower = better match)
+            var finalScore = scoreCount > 0 ? score / scoreCount : 0;
+            cost[ti][gi] = -finalScore;  // negate: Hungarian minimizes
         }
     }
 
@@ -274,10 +346,10 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
         if (gi2 >= 0 && gi2 < nGroups) {
             reordered.push(groups[gi2]);
         } else {
-            reordered.push(new Map());  // empty group for missing target
+            reordered.push(new Map());
         }
     }
-    // Add any unmatched groups at the end
+    // Append unmatched groups
     var usedGroups = new Set(assignment.filter(function(g) { return g >= 0 && g < nGroups; }));
     for (var gi3 = 0; gi3 < nGroups; gi3++) {
         if (!usedGroups.has(gi3)) reordered.push(groups[gi3]);
