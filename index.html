@@ -3012,10 +3012,20 @@
                     item.addEventListener('click', function (ev) {
                         ev.stopPropagation();
                         closeMenus();
+                        var newId = parseInt(this.getAttribute('data-id'));
+                        var idName = this.textContent;
                         var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
-                        if (!sel) { setStatus('Select a group first', 'warning'); return; }
-                        state.session.assignIdentityToGroup(sel, parseInt(this.getAttribute('data-id')));
-                        setStatus('Assigned identity: ' + this.textContent, 'success');
+                        var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
+                        if (sel) {
+                            state.session.assignIdentityToGroup(sel, newId);
+                            setStatus('Assigned ' + idName + ' to group', 'success');
+                        } else if (selUl) {
+                            state.session.assignTrackToIdentity(selUl.instance.trackIdx, newId, selUl.cameraName);
+                            setStatus('Assigned ' + idName + ' to ' + selUl.cameraName, 'success');
+                        } else {
+                            setStatus('Select an instance first', 'warning');
+                            return;
+                        }
                         drawAllOverlays(state.currentFrame);
                         updateInfoPanel();
                     });
@@ -3032,9 +3042,13 @@
                     if (!name) return;
                     var identity = state.session.addIdentity(name);
                     var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                    var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
                     if (sel) {
                         state.session.assignIdentityToGroup(sel, identity.id);
                         setStatus('Created and assigned: ' + name, 'success');
+                    } else if (selUl) {
+                        state.session.assignTrackToIdentity(selUl.instance.trackIdx, identity.id, selUl.cameraName);
+                        setStatus('Created and assigned: ' + name + ' to ' + selUl.cameraName, 'success');
                     } else {
                         setStatus('Created identity: ' + name, 'success');
                     }
