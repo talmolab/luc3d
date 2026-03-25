@@ -7367,6 +7367,7 @@
                             setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack), 'success');
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
+                            if (timeline) timeline.refreshTracks(state.session);
                         });
                         sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                     })(group, trackSelect);
