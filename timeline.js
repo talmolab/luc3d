@@ -76,10 +76,10 @@ class Timeline {
         // --- Layout constants ------------------------------------------------
 
         /** @const {number} Height of each track bar row (px) */
-        this.TRACK_ROW_HEIGHT = 16;
+        this.TRACK_ROW_HEIGHT = 10;
 
         /** @const {number} Vertical gap between track rows (px) */
-        this.TRACK_ROW_GAP = 2;
+        this.TRACK_ROW_GAP = 1;
 
         /** @const {number} Height of the frame-marker area (px) */
         this.MARKER_AREA_HEIGHT = 20;
@@ -88,7 +88,7 @@ class Timeline {
         this.LABEL_AREA_HEIGHT = 16;
 
         /** @const {number} Left margin for track labels */
-        this.LEFT_MARGIN = 60;
+        this.LEFT_MARGIN = 100;
 
         /** @const {number} Right padding */
         this.RIGHT_PADDING = 8;
@@ -204,7 +204,6 @@ class Timeline {
             return;
         }
 
-        this._trackNames = session.tracks || [];
         this._buildTrackSegments(session);
         this._buildFrameMarkers(session);
         this.redraw();
@@ -245,10 +244,13 @@ class Timeline {
      * Re-measure the container and resize the canvas (call after layout changes).
      */
     resize() {
-        const dpr = window.devicePixelRatio || 1;
-        const rect = this._container.getBoundingClientRect();
-        const w = Math.round(rect.width);
-        const h = Math.round(rect.height);
+        var dpr = window.devicePixelRatio || 1;
+        var rect = this._container.getBoundingClientRect();
+        var w = Math.round(rect.width);
+        // Compute needed height based on track rows
+        var numRows = this._trackSegments.length;
+        var neededH = this.TOP_PADDING + (numRows > 0 ? numRows * (this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP) : 0) + 8 + this.MARKER_AREA_HEIGHT + this.LABEL_AREA_HEIGHT;
+        var h = Math.max(Math.round(rect.height), neededH);
         this._canvas.width = w * dpr;
         this._canvas.height = h * dpr;
         this._canvas.style.width = w + 'px';
@@ -350,69 +352,88 @@ class Timeline {
      * @private
      */
     _buildTrackSegments(session) {
-        const numTracks = session.tracks ? session.tracks.length : 0;
+        var numTracks = session.tracks ? session.tracks.length : 0;
         this._trackSegments = [];
+        this._trackNames = [];
         if (numTracks === 0) return;
 
-        // Build per-track frame sets in a single pass over instanceGroups
-        // instanceGroups: Map<frameIdx, Map<trackIdx, InstanceGroup[]>>
-        const trackFrames = new Array(numTracks);
-        for (let t = 0; t < numTracks; t++) {
-            trackFrames[t] = new Set();
-        }
+        // Collect camera names
+        var cameraNames = session.cameras ? session.cameras.map(function (c) { return c.name; }) : [];
 
+        // Build per-track-per-camera frame sets
+        // key: "trackIdx:camName" → Set<frameIdx>
+        var trackCamFrames = {};
+
+        // Scan grouped instances (instanceGroups)
         if (session.instanceGroups) {
-            for (const [frameIdx, trackMap] of session.instanceGroups) {
-                for (const [trackIdx] of trackMap) {
-                    if (trackIdx >= 0 && trackIdx < numTracks) {
-                        trackFrames[trackIdx].add(frameIdx);
+            for (var [frameIdx, trackMap] of session.instanceGroups) {
+                for (var [trackIdx, groups] of trackMap) {
+                    for (var gi = 0; gi < groups.length; gi++) {
+                        for (var [camName] of groups[gi].instances) {
+                            var key = trackIdx + ':' + camName;
+                            if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
+                            trackCamFrames[key].add(frameIdx);
+                        }
                     }
                 }
             }
         }
 
-        // Also scan frameGroups for instances with trackIdx (e.g. predicted instances
-        // loaded from SLP that aren't yet in instanceGroups)
-        for (const [frameIdx, fg] of session.frameGroups) {
-            for (const [_camName, instances] of fg.instances) {
-                for (let i = 0; i < instances.length; i++) {
-                    const t = instances[i].trackIdx;
+        // Scan unlinked instances in frameGroups
+        for (var [frameIdx2, fg] of session.frameGroups) {
+            // Grouped instances
+            for (var [camName2, instances] of fg.instances) {
+                for (var i = 0; i < instances.length; i++) {
+                    var t = instances[i].trackIdx;
                     if (t >= 0 && t < numTracks) {
-                        trackFrames[t].add(frameIdx);
+                        var key2 = t + ':' + camName2;
+                        if (!trackCamFrames[key2]) trackCamFrames[key2] = new Set();
+                        trackCamFrames[key2].add(frameIdx2);
+                    }
+                }
+            }
+            // Unlinked instances
+            for (var [camName3, ulList] of fg.unlinkedInstances) {
+                for (var u = 0; u < ulList.length; u++) {
+                    var t2 = ulList[u].instance.trackIdx;
+                    if (t2 >= 0 && t2 < numTracks) {
+                        var key3 = t2 + ':' + camName3;
+                        if (!trackCamFrames[key3]) trackCamFrames[key3] = new Set();
+                        trackCamFrames[key3].add(frameIdx2);
                     }
                 }
             }
         }
 
-        // Convert each track's frame set to sorted contiguous segments
-        for (let t = 0; t < numTracks; t++) {
-            const sorted = Array.from(trackFrames[t]).sort((a, b) => a - b);
-            const segments = [];
-            let segStart = -1;
-            let segEnd = -1;
+        // Build segments per track per camera, ordered by track then camera
+        for (var t3 = 0; t3 < numTracks; t3++) {
+            for (var ci = 0; ci < cameraNames.length; ci++) {
+                var camKey = t3 + ':' + cameraNames[ci];
+                var frameSet = trackCamFrames[camKey];
+                if (!frameSet || frameSet.size === 0) continue;
 
-            for (let i = 0; i < sorted.length; i++) {
-                const f = sorted[i];
-                if (segStart < 0) {
-                    segStart = f;
-                    segEnd = f;
-                } else if (f === segEnd + 1) {
-                    segEnd = f;
-                } else {
-                    segments.push({ start: segStart, end: segEnd });
-                    segStart = f;
-                    segEnd = f;
+                var sorted = Array.from(frameSet).sort(function (a, b) { return a - b; });
+                var segments = [];
+                var segStart = -1, segEnd = -1;
+                for (var si = 0; si < sorted.length; si++) {
+                    var f = sorted[si];
+                    if (segStart < 0) { segStart = f; segEnd = f; }
+                    else if (f === segEnd + 1) { segEnd = f; }
+                    else { segments.push({ start: segStart, end: segEnd }); segStart = f; segEnd = f; }
                 }
-            }
-            if (segStart >= 0) {
-                segments.push({ start: segStart, end: segEnd });
-            }
+                if (segStart >= 0) segments.push({ start: segStart, end: segEnd });
 
-            this._trackSegments.push({
-                trackIdx: t,
-                color: typeof getTrackColor === 'function' ? getTrackColor(t) : '#667eea',
-                segments: segments,
-            });
+                var trackName = session.tracks[t3] || ('track_' + t3);
+                var color = typeof getTrackColor === 'function' ? getTrackColor(t3) : '#667eea';
+
+                this._trackSegments.push({
+                    trackIdx: t3,
+                    cameraName: cameraNames[ci],
+                    color: color,
+                    segments: segments,
+                });
+                this._trackNames.push(trackName + ' / ' + cameraNames[ci]);
+            }
         }
     }
 
@@ -845,9 +866,8 @@ class Timeline {
      * @private
      */
     _handleMouseDown(e) {
-        const rect = this._canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        var x = e.offsetX;
+        var y = e.offsetY;
 
         // Middle button -> pan
         if (e.button === 1) {
@@ -887,9 +907,8 @@ class Timeline {
      * @private
      */
     _handleMouseMove(e) {
-        const rect = this._canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        var x = e.offsetX;
+        var y = e.offsetY;
 
         // Panning
         if (this._isPanning) {
@@ -968,10 +987,16 @@ class Timeline {
      * @private
      */
     _handleWheel(e) {
-        e.preventDefault();
+        var mouseX = e.offsetX;
+        var contentRight = this._cssWidth - this.RIGHT_PADDING;
 
-        const rect = this._canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
+        // Left label area or right edge: let container scroll vertically
+        if (mouseX < this.LEFT_MARGIN || mouseX > contentRight) {
+            // Don't preventDefault — let the container handle vertical scroll
+            return;
+        }
+
+        e.preventDefault();
 
         // Frame under cursor before zoom
         const frameUnderCursor = this._xToFrame(mouseX);
@@ -1116,7 +1141,6 @@ class Timeline {
      */
     refreshTracks(session) {
         if (!session) return;
-        this._trackNames = session.tracks || [];
         this._buildTrackSegments(session);
         this.redraw();
     }

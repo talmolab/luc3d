@@ -79,13 +79,45 @@
                     <div class="menu-dropdown-item" id="menuTriangulateMulti">Triangulate Multiple Frames</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuGroupByTrack">Group by Track &amp; Triangulate All</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuTrustTracks">
+                        <span id="menuTrustTracksCheck">☐</span> Trust Track Labels
+                    </div>
+                </div>
+            </div>
+            <div class="menu-item" data-menu="tracks">
+                Tracks
+                <div class="menu-dropdown" id="menuTracks">
+                    <div class="menu-dropdown-item" id="menuNewTrack">New Track...</div>
+                    <div class="menu-dropdown-item" id="menuRenameTrack">Rename Track...</div>
+                    <div class="menu-dropdown-item" id="menuDeleteTrack">Delete Track...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item menu-has-submenu" id="menuAssignTrack">Assign Track ▸
+                        <div class="menu-submenu" id="menuAssignTrackSub"></div>
+                    </div>
+                    <div class="menu-dropdown-item" id="menuSwapTracks">Swap Tracks...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuNewIdentity">New Identity...</div>
+                    <div class="menu-dropdown-item" id="menuRenameIdentity">Rename Identity...</div>
+                    <div class="menu-dropdown-item" id="menuDeleteIdentity">Delete Identity...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item menu-has-submenu" id="menuAssignIdentity">Assign Identity ▸
+                        <div class="menu-submenu" id="menuAssignIdentitySub"></div>
+                    </div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuColorByTrack">
+                        <span id="menuColorByTrackCheck">☑</span> Color by Track
+                    </div>
+                    <div class="menu-dropdown-item" id="menuColorById">
+                        <span id="menuColorByIdCheck">☐</span> Color by Identity
+                    </div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
                 View
                 <div class="menu-dropdown" id="menuView">
                     <div class="menu-dropdown-item" id="menuToggle3D">Toggle 3D Viewport <span
-                            class="shortcut-hint">3</span></div>
+                            class="shortcut-hint">\</span></div>
                     <div class="menu-dropdown-item" id="menuToggleTimeline">Toggle Timeline</div>
                     <div class="menu-dropdown-item" id="menuToggleInfo">Toggle Info Panel <span
                             class="shortcut-hint">I</span></div>
@@ -94,6 +126,7 @@
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
                 </div>
             </div>
+            <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hot Keys</div>
             <div class="menu-item" id="menuLoadDemoBar" style="cursor:pointer;">Load Demo</div>
         </div>
 
@@ -207,6 +240,7 @@
                             <thead>
                                 <tr>
                                     <th>Track</th>
+                                    <th>Identity</th>
                                     <th>Views</th>
                                     <th>Type</th>
                                     <th class="reproj-error-col" style="display:none">Error</th>
@@ -224,6 +258,8 @@
                         <table class="data-table" id="unlinkedTable">
                             <thead>
                                 <tr>
+                                    <th>Track</th>
+                                    <th>ID</th>
                                     <th>Type</th>
                                     <th>Points</th>
                                     <th>Score</th>
@@ -310,8 +346,8 @@
                     <div class="vis-section-header">Reprojections</div>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
-                        <input type="range" id="visReprojNodeSize" min="1" max="50" value="6" step="1">
-                        <span class="vis-val" id="visReprojNodeSizeVal">6</span>
+                        <input type="range" id="visReprojNodeSize" min="1" max="50" value="16" step="1">
+                        <span class="vis-val" id="visReprojNodeSizeVal">16</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Weight</span>
@@ -536,6 +572,8 @@
             </div><!-- end info-panel-wrapper -->
         </div>
 
+        <!-- Timeline resize handle -->
+        <div class="split-handle horizontal" id="timelineResizeHandle"></div>
         <!-- Timeline -->
         <div class="timeline-container" id="timelineContainer">
         </div>
@@ -652,6 +690,7 @@
             lastUserPoints: new Map(),  // viewName -> {frameIdx, points} — cache of most recent UserInstance per view
             exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
             cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
+            colorByIdentity: false,     // false = color by track, true = color by identity
         };
 
         let videoController = null;
@@ -772,6 +811,16 @@
         async function loadDemoSession() {
             showLoading('Loading demo videos...');
             try {
+                // Clear existing state
+                if (videoController && state.isPlaying) videoController.stopPlayback();
+                videoController = null;
+                state.views = [];
+                state.videoFiles = [];
+                state.session = null;
+                state.sessions = [];
+                state.triangulationResults = new Map();
+                paneManager.clearAll();
+
                 // Load videos and create view objects (no grid cells needed - dockview creates them)
                 const basePath = 'sample_session/';
                 for (let i = 0; i < VIEW_NAMES.length; i++) {
@@ -1372,6 +1421,10 @@
 
             var session = state.session;
 
+            if (!session.trustTracks) {
+                console.log('[group-by-track] Running with trustTracks OFF — tracks used for grouping but not marked as trusted');
+            }
+
             // Scan all frames to gather per-track stats
             var trackStats = {};  // trackIdx -> { frames: Set, cameras: Set, nodeCount }
             var numNodes = session.skeleton.nodes.length;
@@ -1517,10 +1570,37 @@
                 document.getElementById('gbtGo').textContent = 'Working...';
                 modal.querySelector('.gbt-progress').style.display = '';
 
-                await groupByTrackAndTriangulateAll(selTracks, selCams);
+                try {
+                    await groupByTrackAndTriangulateAll(selTracks, selCams);
+                } catch (err) {
+                    console.error('[group-by-track] Error:', err);
+                    setStatus('Triangulation error: ' + err.message, 'error');
+                }
 
                 overlay.remove();
             });
+        }
+
+        function swapTracks(trackA, trackB, frameStart, frameEnd) {
+            if (!state.session) return 0;
+            var swapped = 0;
+            for (var [frameIdx, fg] of state.session.frameGroups) {
+                if (frameIdx < frameStart || frameIdx > frameEnd) continue;
+                for (var [camName, instances] of fg.instances) {
+                    for (var i = 0; i < instances.length; i++) {
+                        if (instances[i].trackIdx === trackA) { instances[i].trackIdx = trackB; swapped++; }
+                        else if (instances[i].trackIdx === trackB) { instances[i].trackIdx = trackA; swapped++; }
+                    }
+                }
+                for (var [camName2, ulList] of fg.unlinkedInstances) {
+                    for (var u = 0; u < ulList.length; u++) {
+                        var inst = ulList[u].instance;
+                        if (inst.trackIdx === trackA) { inst.trackIdx = trackB; swapped++; }
+                        else if (inst.trackIdx === trackB) { inst.trackIdx = trackA; swapped++; }
+                    }
+                }
+            }
+            return swapped;
         }
 
         async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCameraNames) {
@@ -1547,7 +1627,7 @@
                 return;
             }
 
-            showLoading('Grouping by track & triangulating ' + allFrameIndices.length + ' frames...');
+            showLoading('Grouping & triangulating 0/' + allFrameIndices.length + ' frames...');
 
             var totalGrouped = 0;
             var totalTriangulated = 0;
@@ -1628,6 +1708,10 @@
                         group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
                     }
 
+                    // Auto-assign identity from track
+                    var identity = session.getOrCreateIdentityForTrack(trackIdx);
+                    session.assignIdentityToGroup(group, identity.id);
+
                     // Store in session.instanceGroups
                     if (!session.instanceGroups.has(frameIdx)) {
                         session.instanceGroups.set(frameIdx, new Map());
@@ -1694,21 +1778,18 @@
                 }
 
                 // Yield to UI periodically
-                if (fi > 0 && fi % YIELD_EVERY === 0) {
-                    showLoading('Grouping & triangulating... ' + fi + '/' + allFrameIndices.length + ' frames');
+                if (fi % YIELD_EVERY === 0) {
+                    showLoading('Triangulating... ' + (fi + 1) + '/' + allFrameIndices.length + ' frames');
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
             }
 
-            // Show reproj/error UI elements
+            // Post-triangulation updates — hide loading first so user sees results
+            hideLoading();
             setReprojErrorVisible(true);
-
-            // Update display
             drawAllOverlays(state.currentFrame);
             update3DViewport(state.currentFrame);
             if (viewport3d) viewport3d.fitToScene();
-
-            hideLoading();
             var avgError = totalErrors.length > 0
                 ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
                 : 'N/A';
@@ -2010,6 +2091,7 @@
                 }
 
                 drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
+                    colorByIdentity: state.colorByIdentity,
                     showUser: vis.showUser,
                     showPredicted: vis.showPredicted,
                     showReprojected: vis.showReprojected,
@@ -2059,13 +2141,15 @@
                     // Update status bar
                     if (selectedGroup) {
                         const trackName = state.session.tracks[selectedGroup.trackIdx] || 'Track ' + selectedGroup.trackIdx;
+                        const identity = selectedGroup.identityId >= 0 ? state.session.getIdentity(selectedGroup.identityId) : null;
+                        const identityLabel = identity ? ' [' + identity.name + ']' : '';
                         const nodeName = selectedNodeIdx >= 0 && state.session.skeleton.nodes[selectedNodeIdx]
                             ? state.session.skeleton.nodes[selectedNodeIdx]
                             : '';
                         document.getElementById('statusSelection').textContent =
-                            'Selection: ' + trackName + (nodeName ? ' / ' + nodeName : '');
+                            'Selection: ' + trackName + identityLabel + (nodeName ? ' / ' + nodeName : '');
                         document.getElementById('selectedInfo').textContent =
-                            trackName + ' (' + selectedGroup.cameraNames.length + ' views)' +
+                            trackName + identityLabel + ' (' + selectedGroup.cameraNames.length + ' views)' +
                             (nodeName ? ' - node: ' + nodeName : '');
 
                         // Update 3D viewport selection
@@ -2616,6 +2700,364 @@
                 showGroupByTrackModal();
             });
 
+            document.getElementById('menuTrustTracks').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session) return;
+                state.session.trustTracks = !state.session.trustTracks;
+                var check = document.getElementById('menuTrustTracksCheck');
+                check.textContent = state.session.trustTracks ? '☑' : '☐';
+
+                // When trusting tracks, propagate track numbers to identities
+                if (state.session.trustTracks) {
+                    // Create identity for each track name (fast — just uses tracks array)
+                    for (var ti = 0; ti < state.session.tracks.length; ti++) {
+                        state.session.getOrCreateIdentityForTrack(ti);
+                    }
+                    // Assign identities to existing groups by track
+                    for (var [fIdx2, trackMap] of state.session.instanceGroups) {
+                        for (var [tIdx, groups] of trackMap) {
+                            for (var gi = 0; gi < groups.length; gi++) {
+                                var identity = state.session.getOrCreateIdentityForTrack(groups[gi].trackIdx);
+                                state.session.assignIdentityToGroup(groups[gi], identity.id);
+                            }
+                        }
+                    }
+                    // Auto-switch to Color by Identity
+                    state.colorByIdentity = true;
+                    updateColorByChecks();
+                    setStatus('Trust Track Labels: ON — ' + state.session.tracks.length + ' identities from tracks', 'success');
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                } else {
+                    setStatus('Trust Track Labels: OFF — tracks and identities are independent', 'success');
+                }
+            });
+
+            // Color by Track / Color by Identity toggles
+            function updateColorByChecks() {
+                document.getElementById('menuColorByTrackCheck').textContent = state.colorByIdentity ? '☐' : '☑';
+                document.getElementById('menuColorByIdCheck').textContent = state.colorByIdentity ? '☑' : '☐';
+            }
+
+            document.getElementById('menuColorByTrack').addEventListener('click', function () {
+                closeMenus();
+                state.colorByIdentity = false;
+                updateColorByChecks();
+                drawAllOverlays(state.currentFrame);
+                setStatus('Coloring by Track', 'success');
+            });
+
+            document.getElementById('menuColorById').addEventListener('click', function () {
+                closeMenus();
+                state.colorByIdentity = true;
+                updateColorByChecks();
+                drawAllOverlays(state.currentFrame);
+                setStatus('Coloring by Identity', 'success');
+            });
+
+            // ============================================
+            // Tracks Menu Handlers
+            // ============================================
+
+            document.getElementById('menuNewTrack').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session) { setStatus('No session', 'warning'); return; }
+                var name = prompt('New track name:', 'track_' + state.session.tracks.length);
+                if (!name) return;
+                if (state.session.tracks.indexOf(name) >= 0) {
+                    setStatus('Track "' + name + '" already exists', 'warning');
+                    return;
+                }
+                state.session.tracks.push(name);
+                setStatus('Created track: ' + name, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuRenameTrack').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.tracks.length === 0) { setStatus('No tracks', 'warning'); return; }
+                var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
+                var idx = parseInt(prompt('Which track to rename?\n\n' + trackList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
+                var newName = prompt('New name for "' + state.session.tracks[idx] + '":', state.session.tracks[idx]);
+                if (!newName) return;
+                state.session.tracks[idx] = newName;
+                setStatus('Renamed track ' + (idx + 1) + ' to: ' + newName, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuDeleteTrack').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.tracks.length === 0) { setStatus('No tracks', 'warning'); return; }
+                var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
+                var idx = parseInt(prompt('Which track to delete?\n\n' + trackList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
+                var name = state.session.tracks[idx];
+                if (!confirm('Delete track "' + name + '"? Instances will become trackless.')) return;
+                state.session.tracks.splice(idx, 1);
+                // Shift trackIdx on all instances
+                for (var [fIdx, fg] of state.session.frameGroups) {
+                    for (var [cn, insts] of fg.instances) {
+                        for (var i = 0; i < insts.length; i++) {
+                            if (insts[i].trackIdx === idx) insts[i].trackIdx = -1;
+                            else if (insts[i].trackIdx > idx) insts[i].trackIdx--;
+                        }
+                    }
+                    for (var [cn2, ulList] of fg.unlinkedInstances) {
+                        for (var u = 0; u < ulList.length; u++) {
+                            if (ulList[u].instance.trackIdx === idx) ulList[u].instance.trackIdx = -1;
+                            else if (ulList[u].instance.trackIdx > idx) ulList[u].instance.trackIdx--;
+                        }
+                    }
+                }
+                setStatus('Deleted track: ' + name, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            // Track assign helper (reused by submenu and hotkeys)
+            /**
+             * Swap-assign a track: if another instance on the same frame/camera
+             * already has the target track, swap their tracks instead of creating
+             * a duplicate. Then propagate the swap forward.
+             */
+            function swapAssignTrack(frameIdx, camName, instance, newTrack, session) {
+                var oldTrack = instance.trackIdx;
+                if (oldTrack === newTrack) return 0;
+
+                // Find conflicting instance on this frame with the target track
+                var fg = session.getFrameGroup(frameIdx);
+                if (!fg) return 0;
+
+                var camInsts = fg.getInstances(camName);
+                var ulInsts = fg.getUnlinkedInstances(camName);
+
+                // Swap on current frame
+                for (var i = 0; i < camInsts.length; i++) {
+                    if (camInsts[i] !== instance && camInsts[i].trackIdx === newTrack) {
+                        camInsts[i].trackIdx = oldTrack;
+                    }
+                }
+                for (var u = 0; u < ulInsts.length; u++) {
+                    if (ulInsts[u].instance !== instance && ulInsts[u].instance.trackIdx === newTrack) {
+                        ulInsts[u].instance.trackIdx = oldTrack;
+                    }
+                }
+                instance.trackIdx = newTrack;
+
+                // Propagate swap to subsequent frames (swap, not just reassign)
+                var propagated = 0;
+                for (var [fIdx, fgP] of session.frameGroups) {
+                    if (fIdx <= frameIdx) continue;
+                    // Use temp value to avoid overwriting
+                    var allInsts = [];
+                    for (var [cn, insts] of fgP.instances) {
+                        if (cn === camName) for (var j = 0; j < insts.length; j++) allInsts.push(insts[j]);
+                    }
+                    for (var [cn2, ulL] of fgP.unlinkedInstances) {
+                        if (cn2 === camName) for (var k = 0; k < ulL.length; k++) allInsts.push(ulL[k].instance);
+                    }
+                    for (var m = 0; m < allInsts.length; m++) {
+                        if (allInsts[m].trackIdx === oldTrack) { allInsts[m].trackIdx = -99; propagated++; }
+                    }
+                    for (var m = 0; m < allInsts.length; m++) {
+                        if (allInsts[m].trackIdx === newTrack) { allInsts[m].trackIdx = oldTrack; propagated++; }
+                    }
+                    for (var m = 0; m < allInsts.length; m++) {
+                        if (allInsts[m].trackIdx === -99) { allInsts[m].trackIdx = newTrack; }
+                    }
+                }
+                return propagated;
+            }
+
+            function assignTrackToSelected(trackIdx) {
+                if (!state.session) return;
+                var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
+                if (!sel && !selUl) { setStatus('Select an instance first', 'warning'); return; }
+
+                if (sel) {
+                    var totalProp = 0;
+                    for (var [cn, inst] of sel.instances) {
+                        totalProp += swapAssignTrack(state.currentFrame, cn, inst, trackIdx, state.session);
+                    }
+                    sel.trackIdx = trackIdx;
+                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (totalProp > 0 ? ' (swapped & propagated ' + totalProp + ')' : ''), 'success');
+                } else if (selUl) {
+                    var propagated = swapAssignTrack(state.currentFrame, selUl.cameraName, selUl.instance, trackIdx, state.session);
+                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (propagated > 0 ? ' (swapped & propagated ' + propagated + ')' : ''), 'success');
+                }
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            }
+
+            // Populate Assign Track submenu on hover
+            document.getElementById('menuAssignTrack').addEventListener('mouseenter', function () {
+                var sub = document.getElementById('menuAssignTrackSub');
+                sub.innerHTML = '';
+                if (!state.session) return;
+                for (var i = 0; i < state.session.tracks.length; i++) {
+                    var item = document.createElement('div');
+                    item.className = 'menu-submenu-item';
+                    item.textContent = state.session.tracks[i];
+                    item.setAttribute('data-idx', i);
+                    item.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        closeMenus();
+                        assignTrackToSelected(parseInt(this.getAttribute('data-idx')));
+                    });
+                    sub.appendChild(item);
+                }
+                // "New Track..." option at bottom
+                var newItem = document.createElement('div');
+                newItem.className = 'menu-submenu-item menu-submenu-new';
+                newItem.textContent = '+ New Track...';
+                newItem.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    closeMenus();
+                    var name = prompt('New track name:', 'track_' + state.session.tracks.length);
+                    if (!name) return;
+                    if (state.session.tracks.indexOf(name) < 0) state.session.tracks.push(name);
+                    var idx = state.session.tracks.indexOf(name);
+                    assignTrackToSelected(idx);
+                });
+                sub.appendChild(newItem);
+            });
+
+            document.getElementById('menuSwapTracks').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.tracks.length < 2) { setStatus('Need at least 2 tracks', 'warning'); return; }
+                var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
+                var a = parseInt(prompt('Swap track A?\n\n' + trackList + '\n\nEnter number:')) - 1;
+                if (isNaN(a) || a < 0 || a >= state.session.tracks.length) return;
+                var b = parseInt(prompt('Swap with track B?\n\n' + trackList + '\n\nEnter number:')) - 1;
+                if (isNaN(b) || b < 0 || b >= state.session.tracks.length || b === a) return;
+
+                var frameStart = parseInt(prompt('Start frame (1-indexed):', state.currentFrame + 1)) - 1;
+                var frameEnd = parseInt(prompt('End frame (1-indexed, or 0 for all):', 0)) - 1;
+                if (frameEnd < 0) frameEnd = state.totalFrames;
+
+                var count = swapTracks(a, b, frameStart, frameEnd);
+                setStatus('Swapped ' + state.session.tracks[a] + ' ↔ ' + state.session.tracks[b] +
+                    ' (' + count + ' instances, frames ' + (frameStart + 1) + '–' + (frameEnd + 1) + ')', 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            // ============================================
+            // Identity Menu Handlers
+            // ============================================
+
+            document.getElementById('menuNewIdentity').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session) { setStatus('No session', 'warning'); return; }
+                var name = prompt('New identity name:', 'identity_' + state.session.identities.length);
+                if (!name) return;
+                var existing = state.session.identities.find(function (id) { return id.name === name; });
+                if (existing) { setStatus('Identity "' + name + '" already exists', 'warning'); return; }
+                state.session.addIdentity(name);
+                setStatus('Created identity: ' + name, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuRenameIdentity').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.identities.length === 0) { setStatus('No identities', 'warning'); return; }
+                var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
+                var idx = parseInt(prompt('Which identity to rename?\n\n' + idList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
+                var newName = prompt('New name for "' + state.session.identities[idx].name + '":', state.session.identities[idx].name);
+                if (!newName) return;
+                state.session.identities[idx].name = newName;
+                setStatus('Renamed identity to: ' + newName, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            document.getElementById('menuDeleteIdentity').addEventListener('click', function () {
+                closeMenus();
+                if (!state.session || state.session.identities.length === 0) { setStatus('No identities', 'warning'); return; }
+                var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
+                var idx = parseInt(prompt('Which identity to delete?\n\n' + idList + '\n\nEnter number:')) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
+                var identity = state.session.identities[idx];
+                if (!confirm('Delete identity "' + identity.name + '"? Groups will become unassigned.')) return;
+                // Unassign all groups with this identity
+                for (var [fIdx, trackMap] of state.session.instanceGroups) {
+                    for (var [tIdx, groups] of trackMap) {
+                        for (var gi = 0; gi < groups.length; gi++) {
+                            if (groups[gi].identityId === identity.id) groups[gi].identityId = -1;
+                        }
+                    }
+                }
+                state.session.identities.splice(idx, 1);
+                setStatus('Deleted identity: ' + identity.name, 'success');
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+            });
+
+            // Populate Assign Identity submenu on hover
+            document.getElementById('menuAssignIdentity').addEventListener('mouseenter', function () {
+                var sub = document.getElementById('menuAssignIdentitySub');
+                sub.innerHTML = '';
+                if (!state.session) return;
+                for (var i = 0; i < state.session.identities.length; i++) {
+                    var item = document.createElement('div');
+                    item.className = 'menu-submenu-item';
+                    item.textContent = state.session.identities[i].name;
+                    item.setAttribute('data-id', state.session.identities[i].id);
+                    item.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        closeMenus();
+                        var newId = parseInt(this.getAttribute('data-id'));
+                        var idName = this.textContent;
+                        var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                        var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
+                        if (sel) {
+                            state.session.assignIdentityToGroup(sel, newId);
+                            setStatus('Assigned ' + idName + ' to group', 'success');
+                        } else if (selUl) {
+                            state.session.assignTrackToIdentity(selUl.instance.trackIdx, newId, selUl.cameraName);
+                            setStatus('Assigned ' + idName + ' to ' + selUl.cameraName, 'success');
+                        } else {
+                            setStatus('Select an instance first', 'warning');
+                            return;
+                        }
+                        drawAllOverlays(state.currentFrame);
+                        updateInfoPanel();
+                    });
+                    sub.appendChild(item);
+                }
+                // "New Identity..." at bottom
+                var newItem = document.createElement('div');
+                newItem.className = 'menu-submenu-item menu-submenu-new';
+                newItem.textContent = '+ New Identity...';
+                newItem.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    closeMenus();
+                    var name = prompt('New identity name:', 'identity_' + state.session.identities.length);
+                    if (!name) return;
+                    var identity = state.session.addIdentity(name);
+                    var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                    var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
+                    if (sel) {
+                        state.session.assignIdentityToGroup(sel, identity.id);
+                        setStatus('Created and assigned: ' + name, 'success');
+                    } else if (selUl) {
+                        state.session.assignTrackToIdentity(selUl.instance.trackIdx, identity.id, selUl.cameraName);
+                        setStatus('Created and assigned: ' + name + ' to ' + selUl.cameraName, 'success');
+                    } else {
+                        setStatus('Created identity: ' + name, 'success');
+                    }
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                });
+                sub.appendChild(newItem);
+            });
+
             // Set Env / Clear Env buttons on 3D viewport
             document.getElementById('btnSetEnv').addEventListener('click', async function (e) {
                 e.stopPropagation();
@@ -2858,6 +3300,52 @@
             });
 
             // Standalone "Load Demo" menu bar button
+            document.getElementById('menuHotkeys').addEventListener('click', showHotkeysHelp);
+
+            function showHotkeysHelp() {
+                var overlay = document.createElement('div');
+                overlay.className = 'multi-frame-modal-overlay';
+                var modal = document.createElement('div');
+                modal.className = 'multi-frame-modal';
+                modal.style.maxWidth = '550px';
+                modal.innerHTML =
+                    '<h3>Keyboard Shortcuts</h3>' +
+                    '<div style="max-height:60vh;overflow-y:auto;">' +
+                    '<table class="data-table" style="font-size:12px;">' +
+                    '<thead><tr><th>Key</th><th>Action</th></tr></thead>' +
+                    '<tbody>' +
+                    '<tr><td><b>Navigation</b></td><td></td></tr>' +
+                    '<tr><td><code>←</code> / <code>→</code></td><td>Previous / Next frame</td></tr>' +
+                    '<tr><td><code>Shift+←</code> / <code>Shift+→</code></td><td>Skip 10 frames</td></tr>' +
+                    '<tr><td><code>Home</code> / <code>End</code></td><td>First / Last frame</td></tr>' +
+                    '<tr><td><code>Space</code></td><td>Play / Pause</td></tr>' +
+                    '<tr><td colspan="2" style="height:8px;"></td></tr>' +
+                    '<tr><td><b>Editing</b></td><td></td></tr>' +
+                    '<tr><td><code>N</code></td><td>Add new instance</td></tr>' +
+                    '<tr><td><code>Delete</code></td><td>Delete selected instance</td></tr>' +
+                    '<tr><td><code>U</code></td><td>Ungroup selected</td></tr>' +
+                    '<tr><td><code>T</code></td><td>Triangulate current frame</td></tr>' +
+                    '<tr><td><code>Tab</code> / <code>Shift+Tab</code></td><td>Cycle selection</td></tr>' +
+                    '<tr><td><code>Double-click</code></td><td>Convert predicted → user label</td></tr>' +
+                    '<tr><td colspan="2" style="height:8px;"></td></tr>' +
+                    '<tr><td><b>Identity (select group first)</b></td><td></td></tr>' +
+                    '<tr><td><code>1</code> – <code>9</code></td><td>Assign identity 1–9 to selected instance</td></tr>' +
+                    '<tr><td colspan="2" style="height:8px;"></td></tr>' +
+                    '<tr><td><b>Tracks (select group first)</b></td><td></td></tr>' +
+                    '<tr><td><code>Shift+1</code> – <code>Shift+9</code></td><td>Assign track 1–9 (propagates forward)</td></tr>' +
+                    '<tr><td colspan="2" style="height:8px;"></td></tr>' +
+                    '<tr><td><b>View</b></td><td></td></tr>' +
+                    '<tr><td><code>\\</code></td><td>Toggle 3D viewport</td></tr>' +
+                    '<tr><td><code>I</code></td><td>Toggle info panel</td></tr>' +
+                    '<tr><td><code>?</code></td><td>Show this help</td></tr>' +
+                    '</tbody></table></div>' +
+                    '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
+                overlay.appendChild(modal);
+                document.body.appendChild(overlay);
+                document.getElementById('hotkeysClose').addEventListener('click', function () { overlay.remove(); });
+                overlay.addEventListener('click', function (ev) { if (ev.target === overlay) overlay.remove(); });
+            }
+
             document.getElementById('menuLoadDemoBar').addEventListener('click', function () {
                 closeMenus();
                 loadDemoSession();
@@ -3097,12 +3585,81 @@
                             e.preventDefault();
                         }
                         break;
-                    case '3':
+                    case '\\':
                         if (!e.ctrlKey && !e.metaKey) {
                             toggle3DViewport();
                             e.preventDefault();
                         }
                         break;
+                }
+            });
+
+            // --- Identity & Track hotkeys ---
+            document.addEventListener('keydown', function (e) {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+                // Identity assignment: 1-9 (no modifier) — works on groups AND unlinked
+                if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
+                    if (!state.session || !interactionManager) return;
+                    var selectedGroup = interactionManager.selectedInstanceGroup;
+                    var selectedUl = interactionManager.selectedUnlinked;
+                    if (!selectedGroup && !selectedUl) return; // Nothing selected
+                    e.preventDefault();
+                    var identityNum = parseInt(e.key) - 1;
+                    while (state.session.identities.length <= identityNum) {
+                        state.session.addIdentity('id_' + state.session.identities.length);
+                    }
+                    var identity = state.session.identities[identityNum];
+                    if (selectedGroup) {
+                        state.session.assignIdentityToGroup(selectedGroup, identity.id);
+                        setStatus('Assigned ' + identity.name + ' to group', 'success');
+                    } else if (selectedUl) {
+                        state.session.assignTrackToIdentity(selectedUl.instance.trackIdx, identity.id, selectedUl.cameraName);
+                        setStatus('Assigned ' + identity.name + ' to ' + selectedUl.cameraName + ' track ' + selectedUl.instance.trackIdx, 'success');
+                    }
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                    return;
+                }
+
+                // Track assignment: Shift+1 through Shift+9 — works on groups AND unlinked
+                if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.code >= 'Digit1' && e.code <= 'Digit9') {
+                    e.preventDefault();
+                    if (!state.session || !interactionManager) return;
+                    var selectedGroup = interactionManager.selectedInstanceGroup;
+                    var selectedUl = interactionManager.selectedUnlinked;
+                    if (!selectedGroup && !selectedUl) {
+                        setStatus('Select an instance first', 'warning');
+                        return;
+                    }
+                    var newTrackIdx = parseInt(e.code.replace('Digit', '')) - 1;
+                    var trackName = state.session.tracks[newTrackIdx] || 'track_' + newTrackIdx;
+                    if (selectedGroup) {
+                        // Swap-assign per camera with propagation
+                        var totalProp = 0;
+                        for (var [camName, inst] of selectedGroup.instances) {
+                            totalProp += swapAssignTrack(state.currentFrame, camName, inst, newTrackIdx, state.session);
+                        }
+                        selectedGroup.trackIdx = newTrackIdx;
+                        setStatus('Set track to ' + trackName + (totalProp > 0 ? ' (swapped ' + totalProp + ')' : ''), 'success');
+                    } else if (selectedUl) {
+                        // Inline swap for unlinked instance
+                        var oldT = selectedUl.instance.trackIdx;
+                        var fg = state.session.getFrameGroup(state.currentFrame);
+                        if (fg && oldT !== newTrackIdx) {
+                            var camUl = fg.getUnlinkedInstances(selectedUl.cameraName);
+                            for (var su = 0; su < camUl.length; su++) {
+                                if (camUl[su].instance !== selectedUl.instance && camUl[su].instance.trackIdx === newTrackIdx) {
+                                    camUl[su].instance.trackIdx = oldT;
+                                }
+                            }
+                        }
+                        selectedUl.instance.trackIdx = newTrackIdx;
+                        setStatus('Set track to ' + trackName + ' on ' + selectedUl.cameraName, 'success');
+                    }
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                    return;
                 }
             });
 
@@ -3156,6 +3713,11 @@
                         }
                         break;
                     }
+                    case '?':
+                        showHotkeysHelp();
+                        e.preventDefault();
+                        break;
+
                     case 'Escape': {
                         // Click the visible Cancel button in any active modal/toast
                         var cancelBtn = null;
@@ -6521,13 +7083,46 @@
 
                     // Track column (with color dot)
                     const tdTrack = document.createElement('td');
-                    const dot = document.createElement('span');
-                    dot.className = 'track-indicator';
-                    dot.style.backgroundColor = getTrackColor(group.trackIdx);
-                    dot.style.marginRight = '4px';
-                    tdTrack.appendChild(dot);
-                    const trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
-                    tdTrack.appendChild(document.createTextNode(trackName));
+                    // Track dropdown
+                    var trackSelect = document.createElement('select');
+                    trackSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
+                    for (var tsi = 0; tsi < (state.session.tracks || []).length; tsi++) {
+                        var tOpt = document.createElement('option');
+                        tOpt.value = tsi;
+                        tOpt.textContent = state.session.tracks[tsi];
+                        trackSelect.appendChild(tOpt);
+                    }
+                    trackSelect.value = group.trackIdx != null ? group.trackIdx : 0;
+                    (function (g, sel) {
+                        sel.addEventListener('change', function (ev) {
+                            ev.stopPropagation();
+                            var newTrack = parseInt(sel.value);
+                            var oldTrack = g.trackIdx;
+                            // Swap on current frame per camera
+                            if (oldTrack !== newTrack) {
+                                var fg = state.session.getFrameGroup(state.currentFrame);
+                                if (fg) {
+                                    for (var [cn, ginst] of g.instances) {
+                                        var camInsts = fg.getInstances(cn);
+                                        for (var si = 0; si < camInsts.length; si++) {
+                                            if (camInsts[si] !== ginst && camInsts[si].trackIdx === newTrack) camInsts[si].trackIdx = oldTrack;
+                                        }
+                                        var camUl = fg.getUnlinkedInstances(cn);
+                                        for (var su = 0; su < camUl.length; su++) {
+                                            if (camUl[su].instance !== ginst && camUl[su].instance.trackIdx === newTrack) camUl[su].instance.trackIdx = oldTrack;
+                                        }
+                                        ginst.trackIdx = newTrack;
+                                    }
+                                }
+                            }
+                            g.trackIdx = newTrack;
+                            setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack), 'success');
+                            drawAllOverlays(state.currentFrame);
+                            updateInfoPanel();
+                        });
+                        sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                    })(group, trackSelect);
+                    tdTrack.appendChild(trackSelect);
                     if (group.dirty) {
                         const dirtyDot = document.createElement('span');
                         dirtyDot.style.cssText = 'width:5px;height:5px;border-radius:50%;background:var(--warning-color);display:inline-block;margin-left:4px;';
@@ -6535,11 +7130,46 @@
                         tdTrack.appendChild(dirtyDot);
                     }
 
+                    // Identity column (separate td)
+                    const tdIdentity = document.createElement('td');
+                    const idSelect = document.createElement('select');
+                    idSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
+                    const optNone = document.createElement('option');
+                    optNone.value = '-1';
+                    optNone.textContent = '(none)';
+                    idSelect.appendChild(optNone);
+                    if (state.session && state.session.identities) {
+                        for (var idIdx = 0; idIdx < state.session.identities.length; idIdx++) {
+                            var ident = state.session.identities[idIdx];
+                            var opt = document.createElement('option');
+                            opt.value = String(ident.id);
+                            opt.textContent = ident.name;
+                            idSelect.appendChild(opt);
+                        }
+                    }
+                    idSelect.value = String(group.identityId != null ? group.identityId : -1);
+                    (function (g, sel) {
+                        sel.addEventListener('change', function (e) {
+                            e.stopPropagation();
+                            var newIdentityId = parseInt(sel.value);
+                            state.session.assignIdentityToGroup(g, newIdentityId);
+                            drawAllOverlays(state.currentFrame);
+                            updateInfoPanel();
+                        });
+                        sel.addEventListener('click', function (e) { e.stopPropagation(); });
+                    })(group, idSelect);
+                    tdIdentity.appendChild(idSelect);
+
                     // Views column
                     const tdViews = document.createElement('td');
                     tdViews.className = 'mono';
                     tdViews.textContent = group.cameraNames.length + '/' + state.session.cameras.length;
-                    tdViews.title = group.cameraNames.join(', ');
+                    var viewDetails = group.cameraNames.map(function (cn) {
+                        var inst = group.getInstance(cn);
+                        var tIdx = inst && inst.trackIdx != null ? inst.trackIdx : '?';
+                        return cn + ' (track ' + tIdx + ')';
+                    });
+                    tdViews.title = viewDetails.join(', ');
 
                     // Type column
                     const tdType = document.createElement('td');
@@ -6578,6 +7208,7 @@
                     unlinkBtn.style.cssText = 'background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:14px;padding:2px 4px;line-height:1;';
 
                     tr.appendChild(tdTrack);
+                    tr.appendChild(tdIdentity);
                     tr.appendChild(tdViews);
                     tr.appendChild(tdType);
                     tr.appendChild(tdError);
@@ -6743,6 +7374,81 @@
                             }
                         }
 
+                        // Track column with dropdown
+                        const tdTrackUl = document.createElement('td');
+                        var trackSelect = document.createElement('select');
+                        trackSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:80px;';
+                        for (var ti = 0; ti < (state.session.tracks || []).length; ti++) {
+                            var tOpt = document.createElement('option');
+                            tOpt.value = ti;
+                            tOpt.textContent = state.session.tracks[ti];
+                            trackSelect.appendChild(tOpt);
+                        }
+                        trackSelect.value = ul.instance.trackIdx != null ? ul.instance.trackIdx : 0;
+                        (function (ulObj, inst, sel, camNameForUl) {
+                            sel.addEventListener('change', function (ev) {
+                                ev.stopPropagation();
+                                var newTrack = parseInt(sel.value);
+                                var oldTrack = inst.trackIdx;
+                                // Inline swap on current frame
+                                var fg = state.session.getFrameGroup(state.currentFrame);
+                                if (fg && oldTrack !== newTrack) {
+                                    var camInsts = fg.getInstances(camNameForUl);
+                                    for (var si = 0; si < camInsts.length; si++) {
+                                        if (camInsts[si] !== inst && camInsts[si].trackIdx === newTrack) camInsts[si].trackIdx = oldTrack;
+                                    }
+                                    var camUl = fg.getUnlinkedInstances(camNameForUl);
+                                    for (var su = 0; su < camUl.length; su++) {
+                                        if (camUl[su].instance !== inst && camUl[su].instance.trackIdx === newTrack) camUl[su].instance.trackIdx = oldTrack;
+                                    }
+                                }
+                                inst.trackIdx = newTrack;
+                                console.log('[TRACK CHANGE] ' + camNameForUl + ': ' + oldTrack + ' → ' + newTrack + ' | color should be: ' + getTrackColor(newTrack));
+                                setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl, 'success');
+                                try {
+                                    drawAllOverlays(state.currentFrame);
+                                } catch (err) {
+                                    console.error('[TRACK CHANGE] drawAllOverlays error:', err);
+                                }
+                                updateInfoPanel();
+                            });
+                            sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                        })(ul, ul.instance, trackSelect, cam.name);
+                        tdTrackUl.appendChild(trackSelect);
+
+                        // Identity column for unlinked instances
+                        const tdIdUl = document.createElement('td');
+                        var idSelectUl = document.createElement('select');
+                        idSelectUl.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:70px;';
+                        var optNoneUl = document.createElement('option');
+                        optNoneUl.value = '-1';
+                        optNoneUl.textContent = '—';
+                        idSelectUl.appendChild(optNoneUl);
+                        for (var idi = 0; idi < (state.session.identities || []).length; idi++) {
+                            var idOpt = document.createElement('option');
+                            idOpt.value = state.session.identities[idi].id;
+                            idOpt.textContent = state.session.identities[idi].name;
+                            idSelectUl.appendChild(idOpt);
+                        }
+                        // Pre-select based on trackIdentityMap (per-camera)
+                        var currentIdForTrack = state.session.trackIdentityMap.get(cam.name + ':' + ul.instance.trackIdx);
+                        idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
+                        (function (inst, sel, camNameForId) {
+                            sel.addEventListener('change', function (ev) {
+                                ev.stopPropagation();
+                                var newIdVal = parseInt(sel.value);
+                                if (newIdVal >= 0) {
+                                    state.session.assignTrackToIdentity(inst.trackIdx, newIdVal, camNameForId);
+                                } else {
+                                    state.session.trackIdentityMap.delete(camNameForId + ':' + inst.trackIdx);
+                                }
+                                drawAllOverlays(state.currentFrame);
+                                updateInfoPanel();
+                            });
+                            sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                        })(ul.instance, idSelectUl, cam.name);
+                        tdIdUl.appendChild(idSelectUl);
+
                         const tdType = document.createElement('td');
                         var instType = ul.instance.type || 'user';
                         var typeBadge = document.createElement('span');
@@ -6759,6 +7465,8 @@
                         tdScore.className = 'mono';
                         tdScore.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
 
+                        tr.appendChild(tdTrackUl);
+                        tr.appendChild(tdIdUl);
                         tr.appendChild(tdType);
                         tr.appendChild(tdPoints);
                         tr.appendChild(tdScore);
@@ -7007,6 +7715,7 @@
                             var groupData = {
                                 id: group.id,
                                 trackIdx: group.trackIdx,
+                                identityId: group.identityId != null ? group.identityId : -1,
                                 instances: {},
                                 points3d: group.points3d || null,
                                 reprojections: group.reprojections || null,
@@ -7028,17 +7737,23 @@
                 }
                 for (var [camName2, unlinkedList] of fg.unlinkedInstances) {
                     for (var unlinked of unlinkedList) {
-                        frameData.unlinkedInstances.push({
-                            cameraName: camName2,
-                            points: unlinked.instance.points,
-                            trackIdx: unlinked.instance.trackIdx,
-                            type: unlinked.instance.type || 'user',
-                            score: unlinked.instance.score || 1.0,
-                            modified: unlinked.instance.modified || false,
-                            occluded: unlinked.instance.occluded,
-                        });
+                        // Only save user-created or modified instances — predictions reload from H5
+                        var ulType = unlinked.instance.type || 'user';
+                        if (ulType === 'user' || unlinked.instance.modified) {
+                            frameData.unlinkedInstances.push({
+                                cameraName: camName2,
+                                points: unlinked.instance.points,
+                                trackIdx: unlinked.instance.trackIdx,
+                                type: ulType,
+                                score: unlinked.instance.score || 1.0,
+                                modified: unlinked.instance.modified || false,
+                                occluded: unlinked.instance.occluded,
+                            });
+                        }
                     }
                 }
+                // Skip empty frames
+                if (frameData.instanceGroups.length === 0 && frameData.unlinkedInstances.length === 0) continue;
                 frames[frameIdx] = frameData;
             }
             return frames;
@@ -7071,6 +7786,11 @@
                                 return { name: c.name, matrix: c.matrix, dist: c.dist, rvec: c.rvec, tvec: c.tvec, size: c.size };
                             }),
                             tracks: sess.tracks,
+                            identities: sess.identities.map(function (id) {
+                                return { id: id.id, name: id.name, color: id.color };
+                            }),
+                            trustTracks: sess.trustTracks || false,
+                            trackIdentityMap: Array.from(sess.trackIdentityMap.entries()),
                             videoManifest: sess.videoFileIndices.map(function(vfIdx) {
                                 var vf = state.videoFiles[vfIdx];
                                 return vf ? {
@@ -7110,6 +7830,11 @@
                     return { name: c.name, matrix: c.matrix, dist: c.dist, rvec: c.rvec, tvec: c.tvec, size: c.size };
                 }),
                 tracks: state.session.tracks,
+                identities: state.session.identities.map(function (id) {
+                    return { id: id.id, name: id.name, color: id.color };
+                }),
+                trustTracks: state.session.trustTracks || false,
+                trackIdentityMap: Array.from(state.session.trackIdentityMap.entries()),
                 videoManifest: (state.videoFiles || []).map(function (vf) {
                     return { filename: vf.name, assignedCamera: vf.assignedCamera || null };
                 }),
@@ -7131,6 +7856,7 @@
                             const groupData = {
                                 id: group.id,
                                 trackIdx: group.trackIdx,
+                                identityId: group.identityId != null ? group.identityId : -1,
                                 instances: {},
                                 points3d: group.points3d || null,
                                 reprojections: group.reprojections || null,
@@ -7211,9 +7937,17 @@
                     return;
                 }
 
-                showLoading('Loading project...');
+                var fileSize = files[0].size;
+                if (fileSize > 50 * 1024 * 1024) {
+                    if (!confirm('Project file is ' + (fileSize / 1024 / 1024).toFixed(0) + 'MB — this may be slow. Continue?')) {
+                        setStatus('Load cancelled', 'warning');
+                        return;
+                    }
+                }
+                showLoading('Loading project (' + (fileSize / 1024 / 1024).toFixed(1) + ' MB)...');
 
                 const text = await files[0].text();
+                showLoading('Parsing project...');
                 const data = JSON.parse(text);
 
                 // 1. Restore session data (cameras, skeleton, instances, groups)
@@ -7535,6 +8269,19 @@
             var tracks = data.tracks || ['track_0'];
             var session = new Session(cameras, skeleton, tracks);
 
+            if (data.identities) {
+                for (var idi = 0; idi < data.identities.length; idi++) {
+                    var idData = data.identities[idi];
+                    session.identities.push(new Identity(idData.id, idData.name, idData.color));
+                }
+            }
+            if (data.trustTracks != null) session.trustTracks = data.trustTracks;
+            if (data.trackIdentityMap) {
+                for (var tmi = 0; tmi < data.trackIdentityMap.length; tmi++) {
+                    session.trackIdentityMap.set(data.trackIdentityMap[tmi][0], data.trackIdentityMap[tmi][1]);
+                }
+            }
+
             if (data.frames) {
                 for (var frameIdxStr in data.frames) {
                     var frameIdx = parseInt(frameIdxStr);
@@ -7550,6 +8297,7 @@
                         for (var gi = 0; gi < frameData.instanceGroups.length; gi++) {
                             var groupData = frameData.instanceGroups[gi];
                             var group = new InstanceGroup(groupData.id || Date.now(), groupData.trackIdx);
+                            if (groupData.identityId != null) group.identityId = groupData.identityId;
                             if (groupData.points3d) {
                                 group.points3d = groupData.points3d;
                             }
@@ -10851,13 +11599,15 @@
                 return;
             }
 
-            // Adjust active index
-            if (state.activeSessionIdx >= state.sessions.length) {
-                state.activeSessionIdx = state.sessions.length - 1;
+            // Compute new active index BEFORE switching
+            var newActiveIdx;
+            if (state.activeSessionIdx === idx) {
+                // Deleted the active session — pick nearest
+                newActiveIdx = Math.min(idx, state.sessions.length - 1);
             } else if (state.activeSessionIdx > idx) {
-                state.activeSessionIdx--;
-            } else if (state.activeSessionIdx === idx) {
-                state.activeSessionIdx = Math.min(idx, state.sessions.length - 1);
+                newActiveIdx = state.activeSessionIdx - 1;
+            } else {
+                newActiveIdx = state.activeSessionIdx;
             }
 
             // Update sessionIdx tags on remaining sessions' videos
@@ -10873,7 +11623,44 @@
                 }
             }
 
-            switchSession(state.activeSessionIdx);
+            // Set active directly (bypass switchSession's save-old-state which would act on wrong session)
+            state.activeSessionIdx = newActiveIdx;
+            state.session = state.sessions[newActiveIdx];
+            state.triangulationResults = state.session.triangulationResults || new Map();
+
+            // Restore views for the new active session
+            if (state.session._views && state.session._views.length > 0) {
+                state.views = state.session._views;
+                videoController = state.session._videoController || null;
+                paneManager.clearAll();
+                paneManager.addAllViewsAsGrid();
+                setTimeout(function () {
+                    fitCanvasesToCells();
+                    refreshPaneInteractions();
+                    state.currentFrame = state.session.lastFrame || 0;
+                    if (videoController) videoController.seekToFrame(state.currentFrame);
+                    drawAllOverlays(state.currentFrame);
+                }, 50);
+            } else {
+                // First visit — build views
+                videoController = null;
+                state.views = [];
+                paneManager.clearAll();
+                for (var nvi = 0; nvi < state.session.videoFileIndices.length; nvi++) {
+                    var vf = state.videoFiles[state.session.videoFileIndices[nvi]];
+                    if (vf && vf.assignedCamera) createViewForVideoFile(vf);
+                }
+                updateTotalFrames();
+                paneManager.addAllViewsAsGrid();
+                rebuildVideoController();
+                setTimeout(function () {
+                    fitCanvasesToCells();
+                    refreshPaneInteractions();
+                    drawAllOverlays(state.currentFrame);
+                }, 50);
+            }
+
+            populateViewStrip();
             populateSessionStrip();
             populateSessionsPanel();
             setStatus('Session removed', 'success');
@@ -10890,36 +11677,45 @@
             oldSession._views = state.views;           // preserve live views with decoders+canvases
             oldSession._videoController = videoController;
 
+            // Pause old session's video elements to free resources
+            if (videoController && state.isPlaying) {
+                videoController.stopPlayback();
+            }
+            for (var ovi = 0; ovi < state.views.length; ovi++) {
+                if (state.views[ovi].decoder && state.views[ovi].decoder.pauseNative) {
+                    state.views[ovi].decoder.pauseNative();
+                }
+            }
+
             // Switch active session
             state.activeSessionIdx = newIdx;
             var newSession = state.sessions[newIdx];
             state.session = newSession;
             state.triangulationResults = newSession.triangulationResults || new Map();
 
-            // Stop playback
-            if (videoController && state.isPlaying) {
-                videoController.stopPlayback();
-            }
+            // Sync trust track labels toggle
+            var trustCheck = document.getElementById('menuTrustTracksCheck');
+            if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
 
             // Restore saved views or build new ones
             if (newSession._views && newSession._views.length > 0) {
-                // Session has been visited before — restore its views and controller
                 state.views = newSession._views;
-                videoController = newSession._videoController || null;
 
-                // Re-dock the panels
                 paneManager.clearAll();
                 paneManager.addAllViewsAsGrid();
 
-                // Re-render after dockview creates panels
+                // Rebuild video controller with current state.views
+                rebuildVideoController();
+
+                var targetFrame = newSession.lastFrame || 0;
                 setTimeout(function() {
                     fitCanvasesToCells();
                     refreshPaneInteractions();
-                    state.currentFrame = newSession.lastFrame || 0;
+                    state.currentFrame = targetFrame;
                     if (videoController) {
-                        videoController.seekToFrame(state.currentFrame);
+                        videoController.seekToFrame(targetFrame);
                     }
-                    drawAllOverlays(state.currentFrame);
+                    drawAllOverlays(targetFrame);
                 }, 50);
             } else {
                 // First visit — build views from videoFileIndices
@@ -11074,6 +11870,32 @@
                 panelEl.style.width = newWidth + 'px';
                 panelEl.style.minWidth = newWidth + 'px';
             });
+
+            // Timeline resize handle (vertical drag)
+            var timelineHandle = document.getElementById('timelineResizeHandle');
+            var timelineEl = document.getElementById('timelineContainer');
+            if (timelineHandle && timelineEl) {
+                timelineHandle.addEventListener('mousedown', function (e) {
+                    e.preventDefault();
+                    var startY = e.clientY;
+                    var startH = timelineEl.offsetHeight;
+                    timelineHandle.classList.add('dragging');
+
+                    function onMove(ev) {
+                        var delta = startY - ev.clientY;
+                        var newH = Math.max(40, Math.min(600, startH + delta));
+                        timelineEl.style.height = newH + 'px';
+                        if (timeline) timeline.resize();
+                    }
+                    function onUp() {
+                        timelineHandle.classList.remove('dragging');
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                    }
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                });
+            }
 
             var infoPanelWrapper = document.getElementById('infoPanelWrapper');
 
