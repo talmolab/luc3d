@@ -164,8 +164,14 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
         });
     }
 
-    // Assign identities with stable mapping from prev frame
+    // Ensure we have exactly numAnimals identities (create upfront if needed)
     var fi = frameGroup.frameIdx;
+    if (numAnimals) {
+        while (session.identities.length < numAnimals) {
+            session.addIdentity('id_' + session.identities.length);
+        }
+    }
+
     var assignments = new Map();
     var usedIds = new Set();
 
@@ -189,19 +195,24 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
             if (bestId != null) identity = session.getIdentity(bestId);
         }
 
-        // Fallback: create/reuse
+        // Fallback: pick any unused identity from the first N
         if (!identity) {
-            var idName = 'id_' + g;
-            for (var ei = 0; ei < session.identities.length; ei++) {
-                if (session.identities[ei].name === idName && !usedIds.has(session.identities[ei].id)) {
+            var maxId = numAnimals || session.identities.length;
+            for (var ei = 0; ei < Math.min(maxId, session.identities.length); ei++) {
+                if (!usedIds.has(session.identities[ei].id)) {
                     identity = session.identities[ei];
                     break;
                 }
             }
         }
-        if (!identity) {
+
+        // Last resort (only if unconstrained): create new
+        if (!identity && !numAnimals) {
             identity = session.addIdentity('id_' + session.identities.length);
         }
+
+        // If constrained and still no identity (shouldn't happen), skip
+        if (!identity) continue;
 
         usedIds.add(identity.id);
         targets3d[g].identityId = identity.id;
