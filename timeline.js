@@ -866,9 +866,8 @@ class Timeline {
      * @private
      */
     _handleMouseDown(e) {
-        const rect = this._canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        var x = e.offsetX;
+        var y = e.offsetY;
 
         // Middle button -> pan
         if (e.button === 1) {
@@ -908,9 +907,8 @@ class Timeline {
      * @private
      */
     _handleMouseMove(e) {
-        const rect = this._canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        var x = e.offsetX;
+        var y = e.offsetY;
 
         // Panning
         if (this._isPanning) {
@@ -991,8 +989,7 @@ class Timeline {
     _handleWheel(e) {
         e.preventDefault();
 
-        const rect = this._canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
+        var mouseX = e.offsetX;
 
         // Frame under cursor before zoom
         const frameUnderCursor = this._xToFrame(mouseX);
