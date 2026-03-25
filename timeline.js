@@ -362,9 +362,35 @@ class Timeline {
      * @private
      */
     _buildTrackSegments(session) {
-        var numTracks = session.tracks ? session.tracks.length : 0;
         this._trackSegments = [];
         this._trackNames = [];
+
+        // Find max track index across all data (not just session.tracks.length,
+        // which may be stale if tracks were added dynamically)
+        var maxTrackIdx = session.tracks ? session.tracks.length - 1 : -1;
+        if (session.instanceGroups) {
+            for (var [_fi, trackMap] of session.instanceGroups) {
+                for (var [_mk, grps] of trackMap) {
+                    for (var _gi = 0; _gi < grps.length; _gi++) {
+                        if (grps[_gi].trackIdx > maxTrackIdx) maxTrackIdx = grps[_gi].trackIdx;
+                    }
+                }
+            }
+        }
+        for (var [_fi2, fg] of session.frameGroups) {
+            for (var [_cn, insts] of fg.instances) {
+                for (var _ii = 0; _ii < insts.length; _ii++) {
+                    if (insts[_ii].trackIdx > maxTrackIdx) maxTrackIdx = insts[_ii].trackIdx;
+                }
+            }
+            for (var [_cn2, ulList] of fg.unlinkedInstances) {
+                for (var _ui = 0; _ui < ulList.length; _ui++) {
+                    if (ulList[_ui].instance.trackIdx > maxTrackIdx) maxTrackIdx = ulList[_ui].instance.trackIdx;
+                }
+            }
+        }
+
+        var numTracks = maxTrackIdx + 1;
         if (numTracks === 0) return;
 
         // Collect camera names
@@ -377,10 +403,13 @@ class Timeline {
         // Scan grouped instances (instanceGroups)
         if (session.instanceGroups) {
             for (var [frameIdx, trackMap] of session.instanceGroups) {
-                for (var [trackIdx, groups] of trackMap) {
+                for (var [_mapKey, groups] of trackMap) {
                     for (var gi = 0; gi < groups.length; gi++) {
+                        // Use the group's actual trackIdx, not the map key
+                        // (map key may be stale after track reassignment)
+                        var grpTrack = groups[gi].trackIdx;
                         for (var [camName] of groups[gi].instances) {
-                            var key = trackIdx + ':' + camName;
+                            var key = grpTrack + ':' + camName;
                             if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
                             trackCamFrames[key].add(frameIdx);
                         }
@@ -395,7 +424,7 @@ class Timeline {
             for (var [camName2, instances] of fg.instances) {
                 for (var i = 0; i < instances.length; i++) {
                     var t = instances[i].trackIdx;
-                    if (t >= 0 && t < numTracks) {
+                    if (t >= 0) {
                         var key2 = t + ':' + camName2;
                         if (!trackCamFrames[key2]) trackCamFrames[key2] = new Set();
                         trackCamFrames[key2].add(frameIdx2);
