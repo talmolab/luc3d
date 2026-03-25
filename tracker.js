@@ -234,33 +234,45 @@ function matchViaReprojection(prevTargets3d, camInstances, camMap, activeCams, p
         var camName = activeCams[ci];
         var cam = camMap[camName];
         var insts = camInstances[camName];
+        if (!insts || insts.length === 0) continue;
 
         // Build cost matrix: targets x instances
         var cost = [];
+        var hasValidCost = false;
         for (var ti = 0; ti < nTargets; ti++) {
             cost[ti] = [];
-            var pts3d = prevTargets3d[ti].points3d;
-            var reproj = pts3d ? reprojectPoints(pts3d, cam.projectionMatrix) : null;
+            var pts3d = prevTargets3d[ti] ? prevTargets3d[ti].points3d : null;
+
+            // Check if pts3d has any non-null points
+            var hasPoints = false;
+            if (pts3d) {
+                for (var pk = 0; pk < pts3d.length; pk++) {
+                    if (pts3d[pk] != null) { hasPoints = true; break; }
+                }
+            }
+
+            var reproj = hasPoints ? reprojectPoints(pts3d, cam.projectionMatrix) : null;
 
             for (var ii = 0; ii < insts.length; ii++) {
                 if (reproj) {
                     var dist = computeInstanceDistance(reproj, insts[ii].points);
-                    var score = Math.exp(-dist / 30.0);
+                    var score = dist < Infinity ? Math.exp(-dist / 30.0) : 0;
                     // Temporal bonus
-                    if (prevAssignments && prevTargets3d[ti].identityId != null) {
+                    if (prevAssignments && prevTargets3d[ti] && prevTargets3d[ti].identityId != null) {
                         var prevId = prevAssignments.get(camName + ':' + insts[ii].trackIdx);
                         if (prevId != null && prevId === prevTargets3d[ti].identityId) {
                             score += 0.3;
                         }
                     }
                     cost[ti][ii] = -score;
+                    if (score > 0) hasValidCost = true;
                 } else {
                     cost[ti][ii] = 0;
                 }
             }
         }
 
-        if (cost.length > 0 && insts.length > 0) {
+        if (hasValidCost && cost.length > 0 && insts.length > 0) {
             var assignment = hungarianAlgorithm(cost);
             for (var ti2 = 0; ti2 < assignment.length; ti2++) {
                 var ii2 = assignment[ti2];
