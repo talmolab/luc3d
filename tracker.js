@@ -152,13 +152,6 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
         groups = matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignments);
     }
 
-    // Constrain to numAnimals: keep top N groups by size, merge rest
-    if (numAnimals && groups.length > numAnimals) {
-        // Sort by number of cameras (larger groups = more confident)
-        groups.sort(function(a, b) { return b.size - a.size; });
-        groups = groups.slice(0, numAnimals);
-    }
-
     // Triangulate each group for 3D targets (used for next frame's reprojection matching)
     var targets3d = [];
     for (var gi = 0; gi < groups.length; gi++) {
@@ -314,36 +307,52 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
     var costMatrix = scoreMatrix.map(function(row) { return row.map(function(v) { return -v; }); });
     var assignment = hungarianAlgorithm(costMatrix);
 
-    var groups = [];
-    var matched2 = new Set();
+    // Collect all matches with scores
+    var matches = [];
     for (var a2 = 0; a2 < assignment.length; a2++) {
         var b2 = assignment[a2];
         if (b2 < 0 || b2 >= insts2.length) continue;
-        if (scoreMatrix[a2][b2] < 0.05) continue;
-        var group = new Map();
-        group.set(activeCams[0], insts1[a2]);
-        group.set(activeCams[1], insts2[b2]);
-        groups.push(group);
-        matched2.add(b2);
+        matches.push({ a: a2, b: b2, score: scoreMatrix[a2][b2] });
     }
 
-    // Solo groups for unmatched
-    for (var a3 = 0; a3 < insts1.length; a3++) {
-        var wasMatched = false;
-        for (var g = 0; g < groups.length; g++) {
-            if (groups[g].get(activeCams[0]) === insts1[a3]) { wasMatched = true; break; }
-        }
-        if (!wasMatched) {
-            var sg = new Map();
-            sg.set(activeCams[0], insts1[a3]);
-            groups.push(sg);
-        }
+    // Sort by score descending
+    matches.sort(function(x, y) { return y.score - x.score; });
+
+    // If numAnimals is set, keep exactly top N matches
+    if (numAnimals) {
+        matches = matches.slice(0, numAnimals);
+    } else {
+        // Filter out low-scoring matches
+        matches = matches.filter(function(m) { return m.score > 0.05; });
     }
-    for (var b3 = 0; b3 < insts2.length; b3++) {
-        if (!matched2.has(b3)) {
-            var sg2 = new Map();
-            sg2.set(activeCams[1], insts2[b3]);
-            groups.push(sg2);
+
+    var groups = [];
+    var matched1 = new Set();
+    var matched2 = new Set();
+    for (var mi = 0; mi < matches.length; mi++) {
+        var group = new Map();
+        group.set(activeCams[0], insts1[matches[mi].a]);
+        group.set(activeCams[1], insts2[matches[mi].b]);
+        groups.push(group);
+        matched1.add(matches[mi].a);
+        matched2.add(matches[mi].b);
+    }
+
+    // Solo groups for unmatched (only if unconstrained)
+    if (!numAnimals) {
+        for (var a3 = 0; a3 < insts1.length; a3++) {
+            if (!matched1.has(a3)) {
+                var sg = new Map();
+                sg.set(activeCams[0], insts1[a3]);
+                groups.push(sg);
+            }
+        }
+        for (var b3 = 0; b3 < insts2.length; b3++) {
+            if (!matched2.has(b3)) {
+                var sg2 = new Map();
+                sg2.set(activeCams[1], insts2[b3]);
+                groups.push(sg2);
+            }
         }
     }
 
@@ -377,11 +386,14 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
                     matched3.add(ii2);
                 }
             }
-            for (var ii3 = 0; ii3 < insts3.length; ii3++) {
-                if (!matched3.has(ii3)) {
-                    var sg3 = new Map();
-                    sg3.set(camName, insts3[ii3]);
-                    groups.push(sg3);
+            // Only create solo groups for unmatched if unconstrained
+            if (!numAnimals) {
+                for (var ii3 = 0; ii3 < insts3.length; ii3++) {
+                    if (!matched3.has(ii3)) {
+                        var sg3 = new Map();
+                        sg3.set(camName, insts3[ii3]);
+                        groups.push(sg3);
+                    }
                 }
             }
         }
