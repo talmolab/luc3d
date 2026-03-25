@@ -669,4 +669,55 @@ class CrossViewTracker {
             });
         }
     }
+
+    /**
+     * Find the best matching instance in other views for a selected instance.
+     * Uses epipolar geometry to score matches.
+     *
+     * @param {Instance} selectedInstance - The instance selected by the user
+     * @param {string} selectedCameraName - Camera name of the selected instance
+     * @param {FrameGroup} frameGroup - Current frame's FrameGroup
+     * @param {Camera[]} cameras - All cameras
+     * @returns {Map<string, {instance: Instance, score: number}>} cameraName -> best match
+     */
+    findMatchesForInstance(selectedInstance, selectedCameraName, frameGroup, cameras) {
+        var selectedCam = null;
+        for (var c = 0; c < cameras.length; c++) {
+            if (cameras[c].name === selectedCameraName) { selectedCam = cameras[c]; break; }
+        }
+        if (!selectedCam) return new Map();
+
+        var selectedDet = Detection2D.fromInstance(selectedInstance, selectedCam, frameGroup.frameIdx);
+        var matches = new Map();
+
+        for (var c2 = 0; c2 < cameras.length; c2++) {
+            var cam = cameras[c2];
+            if (cam.name === selectedCameraName) continue;
+
+            var instances = frameGroup.getInstances(cam.name);
+            if (!instances || instances.length === 0) continue;
+
+            // Compute fundamental matrix between the two views
+            var F = this.computeFundamentalFromProjections(
+                selectedCam.projectionMatrix, cam.projectionMatrix
+            );
+
+            var bestScore = Infinity;
+            var bestInst = null;
+            for (var i = 0; i < instances.length; i++) {
+                var candidateDet = Detection2D.fromInstance(instances[i], cam, frameGroup.frameIdx);
+                var error = epipolarError(selectedDet.points, candidateDet.points, F);
+                if (error < bestScore) {
+                    bestScore = error;
+                    bestInst = instances[i];
+                }
+            }
+
+            if (bestInst) {
+                matches.set(cam.name, { instance: bestInst, score: bestScore });
+            }
+        }
+
+        return matches;
+    }
 }

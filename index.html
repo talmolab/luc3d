@@ -3704,6 +3704,14 @@
                     trackCurrentFrame();
                     return;
                 }
+                // F = Find Match for selected instance
+                if (e.key === 'f' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                    if (interactionManager && (interactionManager.selectedUnlinked || interactionManager.selectedInstanceGroup)) {
+                        e.preventDefault();
+                        findMatchForSelected();
+                    }
+                }
                 // --- Cmd/Ctrl shortcuts (work even in inputs) ---
                 if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
                     switch (e.key) {
@@ -12086,6 +12094,56 @@
             globalTracker.applyResults(session);
             drawAllOverlays(state.currentFrame);
             setStatus('Tracked frame ' + state.currentFrame + ': ' + result.targets.length + ' targets', 'success');
+        }
+
+        function findMatchForSelected() {
+            var session = getActiveSession();
+            if (!session || !session.cameras || session.cameras.length === 0) return;
+            if (!interactionManager) return;
+
+            // Determine the selected instance and its camera
+            var selectedInst = null;
+            var selectedCam = null;
+
+            if (interactionManager.selectedUnlinked) {
+                // Unlinked instance: single-view, has .instance and .cameraName
+                selectedInst = interactionManager.selectedUnlinked.instance;
+                selectedCam = interactionManager.selectedUnlinked.cameraName;
+            } else if (interactionManager.selectedInstanceGroup) {
+                // Grouped instance: pick the first camera's instance
+                var group = interactionManager.selectedInstanceGroup;
+                var iter = group.instances.entries();
+                var first = iter.next();
+                if (!first.done) {
+                    selectedCam = first.value[0];
+                    selectedInst = first.value[1];
+                }
+            }
+
+            if (!selectedInst || !selectedCam) {
+                setStatus('Select an instance first', 'warning');
+                return;
+            }
+            if (!globalTracker) {
+                globalTracker = new CrossViewTracker(getTrackerHyperparams());
+            }
+            var fg = session.getFrameGroup(state.currentFrame);
+            if (!fg) return;
+
+            var matches = globalTracker.findMatchesForInstance(selectedInst, selectedCam, fg, session.cameras);
+            if (matches.size === 0) {
+                setStatus('No matches found in other views', 'warning');
+                return;
+            }
+
+            // Report matches
+            var parts = [];
+            matches.forEach(function (match, camName) {
+                parts.push(camName + ' (err=' + match.score.toFixed(1) + ')');
+            });
+            setStatus('Matches: ' + parts.join(', '), 'success');
+
+            // TODO: Visual highlight of matched instances (phase 2)
         }
 
         function trackAll() {
