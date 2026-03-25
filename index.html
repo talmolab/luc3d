@@ -1549,7 +1549,12 @@
                 document.getElementById('gbtGo').textContent = 'Working...';
                 modal.querySelector('.gbt-progress').style.display = '';
 
-                await groupByTrackAndTriangulateAll(selTracks, selCams);
+                try {
+                    await groupByTrackAndTriangulateAll(selTracks, selCams);
+                } catch (err) {
+                    console.error('[group-by-track] Error:', err);
+                    setStatus('Triangulation error: ' + err.message, 'error');
+                }
 
                 overlay.remove();
             });
