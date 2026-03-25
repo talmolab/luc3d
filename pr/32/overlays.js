@@ -42,11 +42,33 @@ function getTrackColor(trackIdx) {
 }
 
 function getGroupColor(group, session) {
-    if (group.identityId >= 0 && session) {
-        var identity = session.getIdentity(group.identityId);
-        if (identity && identity.color) return identity.color;
+    var useIdentity = (typeof state !== 'undefined' && state.colorByIdentity);
+
+    if (useIdentity && session) {
+        // Try group's direct identity first
+        if (group.identityId >= 0) {
+            var identity = session.getIdentity(group.identityId);
+            if (identity && identity.color) return identity.color;
+        }
+        // Fall back to track→identity map (for ungrouped predictions)
+        var trackId = group.trackIdx != null ? group.trackIdx : 0;
+        var trackIdentity = session.getIdentityForTrack(trackId);
+        if (trackIdentity && trackIdentity.color) return trackIdentity.color;
     }
     return getTrackColor(group.trackIdx != null ? group.trackIdx : 0);
+}
+
+/**
+ * Get color for an instance using the track→identity map.
+ * Used for unlinked/ungrouped predictions.
+ */
+function getInstanceColor(instance, session) {
+    var useIdentity = (typeof state !== 'undefined' && state.colorByIdentity);
+    if (useIdentity && session && instance.trackIdx != null) {
+        var identity = session.getIdentityForTrack(instance.trackIdx);
+        if (identity && identity.color) return identity.color;
+    }
+    return getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
 }
 
 function getLineDashPattern(style) {
@@ -1282,7 +1304,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
-        var baseTrackColor = isPredicted ? (getTrackColor(instance.trackIdx != null ? instance.trackIdx : u) || '#888888') : UNGROUPED_USER_COLOR;
+        var baseTrackColor = isPredicted ? (getInstanceColor(instance, typeof state !== 'undefined' ? state.session : null) || '#888888') : UNGROUPED_USER_COLOR;
         const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
         const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
