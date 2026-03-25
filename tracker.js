@@ -284,10 +284,25 @@ function matchViaReprojection(prevTargets3d, camInstances, camMap, activeCams, p
  * Bootstrap: pairwise cross-view matching for the first frame.
  */
 function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignments) {
-    var cam1 = camMap[activeCams[0]];
-    var cam2 = camMap[activeCams[1]];
-    var insts1 = camInstances[activeCams[0]];
-    var insts2 = camInstances[activeCams[1]];
+    // Pick the two cameras with the most instances (best chance of seeing all animals)
+    var camsByCount = activeCams.slice().sort(function(a, b) {
+        return camInstances[b].length - camInstances[a].length;
+    });
+    var bestCam1 = camsByCount[0];
+    var bestCam2 = camsByCount[1];
+
+    // Among cameras with enough instances, pick the pair with best baseline
+    // (different position = better triangulation). For now just use top 2 by count.
+    var cam1 = camMap[bestCam1];
+    var cam2 = camMap[bestCam2];
+    var insts1 = camInstances[bestCam1];
+    var insts2 = camInstances[bestCam2];
+
+    // Reorder activeCams so the chosen pair is first (for the remaining-cameras loop)
+    var remainingCams = activeCams.filter(function(c) { return c !== bestCam1 && c !== bestCam2; });
+    activeCams = [bestCam1, bestCam2].concat(remainingCams);
+
+    console.log('[matchPairwise] bootstrap pair:', bestCam1, '(' + insts1.length + ')', 'vs', bestCam2, '(' + insts2.length + ')');
 
     // Score matrix
     var scoreMatrix = [];
@@ -318,13 +333,15 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
     // Sort by score descending
     matches.sort(function(x, y) { return y.score - x.score; });
 
-    // If numAnimals is set, keep exactly top N matches
+    // If numAnimals is set, keep top N matches (but may have fewer if not enough instances)
     if (numAnimals) {
         matches = matches.slice(0, numAnimals);
     } else {
-        // Filter out low-scoring matches
         matches = matches.filter(function(m) { return m.score > 0.05; });
     }
+
+    console.log('[matchPairwise] matches:', matches.length, 'needed:', numAnimals || 'auto',
+        'scores:', matches.map(function(m) { return m.score.toFixed(3); }));
 
     var groups = [];
     var matched1 = new Set();
@@ -338,20 +355,43 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
         matched2.add(matches[mi].b);
     }
 
-    // Solo groups for unmatched (only if unconstrained)
-    if (!numAnimals) {
-        for (var a3 = 0; a3 < insts1.length; a3++) {
+    // If constrained and we don't have enough groups, create groups from
+    // unmatched instances (single-camera groups that will get filled by
+    // the remaining-cameras step)
+    if (numAnimals && groups.length < numAnimals) {
+        // First try unmatched from cam1
+        for (var a3 = 0; a3 < insts1.length && groups.length < numAnimals; a3++) {
             if (!matched1.has(a3)) {
                 var sg = new Map();
                 sg.set(activeCams[0], insts1[a3]);
                 groups.push(sg);
             }
         }
-        for (var b3 = 0; b3 < insts2.length; b3++) {
+        // Then try unmatched from cam2
+        for (var b3 = 0; b3 < insts2.length && groups.length < numAnimals; b3++) {
             if (!matched2.has(b3)) {
                 var sg2 = new Map();
                 sg2.set(activeCams[1], insts2[b3]);
                 groups.push(sg2);
+            }
+        }
+        console.log('[matchPairwise] padded to', groups.length, 'groups');
+    }
+
+    // Solo groups for unmatched (only if unconstrained)
+    if (!numAnimals) {
+        for (var a4 = 0; a4 < insts1.length; a4++) {
+            if (!matched1.has(a4)) {
+                var sg3 = new Map();
+                sg3.set(activeCams[0], insts1[a4]);
+                groups.push(sg3);
+            }
+        }
+        for (var b4 = 0; b4 < insts2.length; b4++) {
+            if (!matched2.has(b4)) {
+                var sg4 = new Map();
+                sg4.set(activeCams[1], insts2[b4]);
+                groups.push(sg4);
             }
         }
     }
