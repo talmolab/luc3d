@@ -632,12 +632,20 @@ class Session {
             var frameIdVal = this.frameIdentityMap.get(frameKey);
             if (frameIdVal != null) return this.getIdentity(frameIdVal);
         }
+        // Per-frame without cameraName: check any camera at this frame
+        if (frameIdx != null && !cameraName) {
+            for (var [fKey, fIdVal] of this.frameIdentityMap) {
+                if (fKey.startsWith(frameIdx + ':') && fKey.endsWith(':' + trackIdx)) {
+                    return this.getIdentity(fIdVal);
+                }
+            }
+        }
         // Fall back to global
         if (cameraName) {
             var identityId = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
             if (identityId != null) return this.getIdentity(identityId);
         }
-        // Fallback: check any camera
+        // Fallback: check any camera in global
         for (var [key, idVal] of this.trackIdentityMap) {
             if (key.endsWith(':' + trackIdx)) return this.getIdentity(idVal);
         }

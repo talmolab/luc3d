@@ -66,8 +66,9 @@
             var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
             var p1 = [10, 5, 50];
             var p2 = [-5, 8, 40];
-            var det1 = [cam1.project(p1), cam1.project(p2)];
-            var det2 = [cam2.project(p1), cam2.project(p2)];
+            // Each detection is an array of keypoints (1 keypoint each here)
+            var det1 = [[cam1.project(p1)], [cam1.project(p2)]];
+            var det2 = [[cam2.project(p1)], [cam2.project(p2)]];
             var F = computeFundamentalMatrix(cam1, cam2);
             var costMatrix = epipolarErrorMatrix(det1, det2, F);
             assertLessThan(costMatrix[0][0], costMatrix[0][1], 'correct < wrong for det1[0]');

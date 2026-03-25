@@ -343,10 +343,11 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
             identity = session.addIdentity(idName);
         }
         groups[g2].forEach(function(inst, cn) {
+            // Always set global (for non-frame-aware code paths like info panel)
+            session.trackIdentityMap.set(cn + ':' + inst.trackIdx, identity.id);
+            // Also set per-frame override if requested
             if (opts.perFrame && session.setFrameIdentity) {
                 session.setFrameIdentity(fi, cn, inst.trackIdx, identity.id);
-            } else {
-                session.trackIdentityMap.set(cn + ':' + inst.trackIdx, identity.id);
             }
         });
     }
