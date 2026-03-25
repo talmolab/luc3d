@@ -131,6 +131,149 @@
         });
     });
 
+    // ---- Track reassignment with auto-swap ----
+
+    describe('Track reassignment auto-swap', function () {
+        it('assigning track_1 to instance A swaps instance B to track_0', function () {
+            // Frame 0: instA=track_0, instB=track_1 in CamA
+            var fg = new FrameGroup(0);
+            var instA = new Instance([[10, 20]], 0, 'predicted');
+            var instB = new Instance([[30, 40]], 1, 'predicted');
+            fg.addInstance('CamA', instA);
+            fg.addInstance('CamA', instB);
+
+            // Assign instA to track_1 — instB should auto-swap to track_0
+            var oldTrack = instA.trackIdx;  // 0
+            var newTrack = 1;
+            // Find conflicting instance on same camera with newTrack
+            var camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) {
+                if (camInsts[i] !== instA && camInsts[i].trackIdx === newTrack) {
+                    camInsts[i].trackIdx = oldTrack;  // swap
+                }
+            }
+            instA.trackIdx = newTrack;
+
+            assertEqual(instA.trackIdx, 1, 'instA should be track_1');
+            assertEqual(instB.trackIdx, 0, 'instB should auto-swap to track_0');
+        });
+
+        it('no swap needed when target track is unoccupied', function () {
+            var fg = new FrameGroup(0);
+            var instA = new Instance([[10, 20]], 0, 'predicted');
+            var instB = new Instance([[30, 40]], 1, 'predicted');
+            fg.addInstance('CamA', instA);
+            fg.addInstance('CamA', instB);
+
+            // Assign instA to track_2 (unoccupied) — no swap
+            var oldTrack = instA.trackIdx;
+            var newTrack = 2;
+            var camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) {
+                if (camInsts[i] !== instA && camInsts[i].trackIdx === newTrack) {
+                    camInsts[i].trackIdx = oldTrack;
+                }
+            }
+            instA.trackIdx = newTrack;
+
+            assertEqual(instA.trackIdx, 2, 'instA should be track_2');
+            assertEqual(instB.trackIdx, 1, 'instB unchanged');
+        });
+
+        it('swap propagates to subsequent frames', function () {
+            // Setup: 3 frames, each with 2 instances
+            var session = new Session(
+                [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])],
+                new Skeleton('s', ['a'], []),
+                ['track_0', 'track_1']
+            );
+
+            // Frame 0: A=track_0, B=track_1 (correct)
+            var fg0 = new FrameGroup(0);
+            var f0a = new Instance([[10, 20]], 0, 'predicted');
+            var f0b = new Instance([[30, 40]], 1, 'predicted');
+            fg0.addInstance('CamA', f0a);
+            fg0.addInstance('CamA', f0b);
+            session.addFrameGroup(fg0);
+
+            // Frame 1: A=track_0, B=track_1 (correct)
+            var fg1 = new FrameGroup(1);
+            var f1a = new Instance([[11, 21]], 0, 'predicted');
+            var f1b = new Instance([[31, 41]], 1, 'predicted');
+            fg1.addInstance('CamA', f1a);
+            fg1.addInstance('CamA', f1b);
+            session.addFrameGroup(fg1);
+
+            // Frame 2: SWAPPED — A=track_1, B=track_0
+            var fg2 = new FrameGroup(2);
+            var f2a = new Instance([[12, 22]], 1, 'predicted'); // swapped!
+            var f2b = new Instance([[32, 42]], 0, 'predicted'); // swapped!
+            fg2.addInstance('CamA', f2a);
+            fg2.addInstance('CamA', f2b);
+            session.addFrameGroup(fg2);
+
+            // Fix frame 2: swap track_0 and track_1 from frame 2 onwards
+            for (var [fIdx, fg] of session.frameGroups) {
+                if (fIdx < 2) continue;
+                var insts = fg.getInstances('CamA');
+                // Mark track_0 as temp -99
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === 0) insts[i].trackIdx = -99;
+                }
+                // track_1 → track_0
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === 1) insts[i].trackIdx = 0;
+                }
+                // temp → track_1
+                for (var i = 0; i < insts.length; i++) {
+                    if (insts[i].trackIdx === -99) insts[i].trackIdx = 1;
+                }
+            }
+
+            // Verify all frames are now correct
+            assertEqual(f0a.trackIdx, 0, 'frame 0 A unchanged');
+            assertEqual(f0b.trackIdx, 1, 'frame 0 B unchanged');
+            assertEqual(f1a.trackIdx, 0, 'frame 1 A unchanged');
+            assertEqual(f1b.trackIdx, 1, 'frame 1 B unchanged');
+            assertEqual(f2a.trackIdx, 0, 'frame 2 A fixed to track_0');
+            assertEqual(f2b.trackIdx, 1, 'frame 2 B fixed to track_1');
+        });
+
+        it('sequential reassignment does not create duplicate tracks', function () {
+            var fg = new FrameGroup(0);
+            var instA = new Instance([[10, 20]], 0, 'predicted');
+            var instB = new Instance([[30, 40]], 1, 'predicted');
+            fg.addInstance('CamA', instA);
+            fg.addInstance('CamA', instB);
+
+            // Step 1: change instA from track_0 to track_1 (auto-swap instB to track_0)
+            var camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) {
+                if (camInsts[i] !== instA && camInsts[i].trackIdx === 1) camInsts[i].trackIdx = 0;
+            }
+            instA.trackIdx = 1;
+
+            assertEqual(instA.trackIdx, 1);
+            assertEqual(instB.trackIdx, 0);
+
+            // Step 2: change instA back to track_0 (auto-swap instB back to track_1)
+            camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) {
+                if (camInsts[i] !== instA && camInsts[i].trackIdx === 0) camInsts[i].trackIdx = 1;
+            }
+            instA.trackIdx = 0;
+
+            assertEqual(instA.trackIdx, 0, 'instA back to track_0');
+            assertEqual(instB.trackIdx, 1, 'instB back to track_1');
+
+            // Verify no duplicates
+            var tracks = new Set();
+            camInsts = fg.getInstances('CamA');
+            for (var i = 0; i < camInsts.length; i++) tracks.add(camInsts[i].trackIdx);
+            assertEqual(tracks.size, 2, 'should have 2 distinct tracks');
+        });
+    });
+
     describe('Identity color resolution', function () {
         it('getGroupColor uses identity color when useIdentity is true', function () {
             var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
