@@ -456,7 +456,7 @@ var IDENTITY_COLORS = [
 class Identity {
     constructor(id, name, color) {
         this.id = id != null ? id : _identityIdCounter++;
-        this.name = name || ('identity_' + this.id);
+        this.name = name || ('id_' + this.id);
         this.color = color || IDENTITY_COLORS[this.id % IDENTITY_COLORS.length];
     }
 }
@@ -580,11 +580,11 @@ class Session {
     }
 
     getOrCreateIdentityForTrack(trackIdx) {
-        var trackName = this.tracks[trackIdx] || ('track_' + trackIdx);
+        var idName = 'id_' + trackIdx;
         for (var i = 0; i < this.identities.length; i++) {
-            if (this.identities[i].name === trackName) return this.identities[i];
+            if (this.identities[i].name === idName) return this.identities[i];
         }
-        return this.addIdentity(trackName);
+        return this.addIdentity(idName);
     }
 
     assignIdentityToGroup(group, identityId) {

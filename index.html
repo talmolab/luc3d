@@ -3491,7 +3491,7 @@
                     e.preventDefault();
                     var identityNum = parseInt(e.key) - 1;
                     while (state.session.identities.length <= identityNum) {
-                        state.session.addIdentity('identity_' + state.session.identities.length);
+                        state.session.addIdentity('id_' + state.session.identities.length);
                     }
                     var identity = state.session.identities[identityNum];
                     state.session.assignIdentityToGroup(selectedGroup, identity.id);
