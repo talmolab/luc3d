@@ -447,10 +447,10 @@ class FrameGroup {
 var _identityIdCounter = 0;
 
 var IDENTITY_COLORS = [
-    '#ff6b6b', '#4ecdc4', '#ffe66d', '#a78bfa', '#2bce48',
-    '#ff9f43', '#5ef1f2', '#ff6eb4', '#69db7c', '#ffa405',
-    '#74b9ff', '#f0a3ff', '#ffd93d', '#6bcb77', '#ff8a5c',
-    '#a8e6cf', '#dda0dd', '#87ceeb', '#ffb347', '#98fb98',
+    '#00b4d8', '#e63946', '#2a9d8f', '#f77f00', '#7209b7',
+    '#06d6a0', '#ef476f', '#118ab2', '#ffd166', '#073b4c',
+    '#8338ec', '#ff006e', '#3a86ff', '#fb5607', '#80ed99',
+    '#c77dff', '#ffbe0b', '#06aed5', '#d62828', '#55a630',
 ];
 
 class Identity {
