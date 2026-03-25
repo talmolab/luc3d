@@ -12392,12 +12392,19 @@
 
             var YIELD_EVERY = 50;
 
+            var prevAssignments = null;
             try {
                 for (var f = 0; f < frameIndices.length; f++) {
                     var fi = frameIndices[f];
                     var fg = session.getFrameGroup(fi);
                     if (fg) {
-                        matchFrameInstances(fg, cameras, session, { perFrame: true });
+                        var result = matchFrameInstances(fg, cameras, session, {
+                            perFrame: true,
+                            prevAssignments: prevAssignments
+                        });
+                        if (result.assignments && result.assignments.size > 0) {
+                            prevAssignments = result.assignments;
+                        }
                     }
 
                     if (f % YIELD_EVERY === 0) {

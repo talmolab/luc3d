@@ -165,7 +165,8 @@ function crossViewScore(instA, camA, instB, camB, wReproj, wEpipolar) {
  * @param {Session} session
  * @param {Object} [opts]
  * @param {boolean} [opts.perFrame=false] - If true, use per-frame identity overrides instead of global
- * @returns {{groups: Array<Map<string, Instance>>, numIdentities: number}}
+ * @param {Map<string, number>} [opts.prevAssignments] - Previous frame's "camName:trackIdx" → identityId for temporal bias
+ * @returns {{groups: Array<Map<string, Instance>>, numIdentities: number, assignments: Map<string, number>}}
  */
 function matchFrameInstances(frameGroup, cameras, session, opts) {
     opts = opts || {};
@@ -199,6 +200,9 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
         return { groups: [], numIdentities: 0 };
     }
 
+    var prevAssignments = opts.prevAssignments || null;
+    var TEMPORAL_BONUS = 0.3;  // bonus for matching same identity as previous frame
+
     // --- Step 1: Match first two cameras ---
     var cam1 = camMap[activeCams[0]];
     var cam2 = camMap[activeCams[1]];
@@ -210,10 +214,20 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
     for (var a = 0; a < insts1.length; a++) {
         scoreMatrix[a] = [];
         for (var b = 0; b < insts2.length; b++) {
-            scoreMatrix[a][b] = crossViewScore(insts1[a], cam1, insts2[b], cam2);
+            var geoScore = crossViewScore(insts1[a], cam1, insts2[b], cam2);
+
+            // Temporal consistency bonus: if both instances had the same identity last frame
+            if (prevAssignments) {
+                var prevIdA = prevAssignments.get(activeCams[0] + ':' + insts1[a].trackIdx);
+                var prevIdB = prevAssignments.get(activeCams[1] + ':' + insts2[b].trackIdx);
+                if (prevIdA != null && prevIdB != null && prevIdA === prevIdB) {
+                    geoScore += TEMPORAL_BONUS;
+                }
+            }
+
+            scoreMatrix[a][b] = geoScore;
         }
     }
-    console.log('[matchFrame] score matrix (' + activeCams[0] + ' vs ' + activeCams[1] + '):', scoreMatrix);
 
     // Negate for Hungarian (minimizer)
     var costMatrix = scoreMatrix.map(function(row) {
@@ -279,27 +293,42 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
             // Reproject to cam3 and compare with each candidate instance
             var reproj3 = pts3d ? reprojectPoints(pts3d, cam3.projectionMatrix) : null;
 
+            // Find which identity this group maps to (from group members' previous assignments)
+            var groupPrevId = null;
+            if (prevAssignments) {
+                groups[gi].forEach(function(inst, cn) {
+                    var pid = prevAssignments.get(cn + ':' + inst.trackIdx);
+                    if (pid != null) groupPrevId = pid;
+                });
+            }
+
             for (var ii = 0; ii < insts3.length; ii++) {
+                var score3 = 0;
                 if (reproj3) {
                     var dist = computeInstanceDistance(reproj3, insts3[ii].points);
-                    // Also add epipolar score from one of the group's cameras
                     var bestEpi = 0;
                     groups[gi].forEach(function(inst, cn) {
                         var epi = epipolarConstraintScore(inst, camMap[cn], insts3[ii], cam3);
                         if (epi > bestEpi) bestEpi = epi;
                     });
-                    // Convert distance to score (lower distance = higher score)
                     var distScore = Math.exp(-dist / 30.0);
-                    costMatrix3[gi][ii] = -(0.6 * distScore + 0.4 * bestEpi);
+                    score3 = 0.6 * distScore + 0.4 * bestEpi;
                 } else {
-                    // No 3D available — use epipolar only
                     var bestEpi2 = 0;
                     groups[gi].forEach(function(inst, cn) {
                         var epi2 = epipolarConstraintScore(inst, camMap[cn], insts3[ii], cam3);
                         if (epi2 > bestEpi2) bestEpi2 = epi2;
                     });
-                    costMatrix3[gi][ii] = -bestEpi2;
+                    score3 = bestEpi2;
                 }
+                // Temporal bonus
+                if (prevAssignments && groupPrevId != null) {
+                    var prevId3 = prevAssignments.get(camName + ':' + insts3[ii].trackIdx);
+                    if (prevId3 != null && prevId3 === groupPrevId) {
+                        score3 += TEMPORAL_BONUS;
+                    }
+                }
+                costMatrix3[gi][ii] = -score3;
             }
         }
 
@@ -352,10 +381,22 @@ function matchFrameInstances(frameGroup, cameras, session, opts) {
         });
     }
 
-    console.log('[matchFrame] assigned', groups.length, 'identities across',
-        activeCams.length, 'cameras');
+    // Build assignments map for temporal continuity
+    var assignments = new Map();
+    for (var g3 = 0; g3 < groups.length; g3++) {
+        var idName3 = 'id_' + g3;
+        var idObj = null;
+        for (var eid = 0; eid < session.identities.length; eid++) {
+            if (session.identities[eid].name === idName3) { idObj = session.identities[eid]; break; }
+        }
+        if (idObj) {
+            groups[g3].forEach(function(inst, cn) {
+                assignments.set(cn + ':' + inst.trackIdx, idObj.id);
+            });
+        }
+    }
 
-    return { groups: groups, numIdentities: groups.length };
+    return { groups: groups, numIdentities: groups.length, assignments: assignments };
 }
 
 
