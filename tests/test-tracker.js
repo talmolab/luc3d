@@ -245,3 +245,156 @@
         });
     });
 })();
+
+(function () {
+    const { describe, it, assertEqual, assertApprox, assertNotNull, assertTrue,
+        assertGreaterThan, assertLessThan } = TestFramework;
+
+    function makeTestCamera(name, rvec, tvec) {
+        return new Camera(
+            name,
+            [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+            [0, 0, 0, 0, 0],
+            rvec, tvec, [640, 480]
+        );
+    }
+
+    describe('CrossViewTracker - multi-frame integration', function () {
+        it('maintains 2 identities across 3 frames with 2 animals', function () {
+            if (typeof CrossViewTracker === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var session = new Session([cam1, cam2], Skeleton.defaultMouse(), ['t0', 't1']);
+
+            // Two animals with slight movement over 3 frames
+            var animals = [
+                [[10, 5, 50], [11, 5, 50], [12, 5, 50]],
+                [[-10, -5, 60], [-9, -5, 60], [-8, -5, 60]]
+            ];
+
+            var tracker = new CrossViewTracker();
+
+            for (var f = 0; f < 3; f++) {
+                var fg = new FrameGroup(f);
+                for (var a = 0; a < 2; a++) {
+                    fg.addInstance('c1', new Instance([cam1.project(animals[a][f])], a, 'predicted', 1));
+                    fg.addInstance('c2', new Instance([cam2.project(animals[a][f])], a, 'predicted', 1));
+                }
+                session.addFrameGroup(fg);
+                tracker.trackFrame(fg, [cam1, cam2], session);
+            }
+
+            assertEqual(tracker.prevTargets.length, 2, '2 targets maintained');
+            // Each target should have unique trackId
+            var ids = tracker.prevTargets.map(function (t) { return t.trackId; });
+            assertTrue(ids[0] !== ids[1], 'unique track IDs');
+        });
+
+        it('handles track ID swaps across views correctly', function () {
+            if (typeof CrossViewTracker === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var session = new Session([cam1, cam2], Skeleton.defaultMouse(), ['t0', 't1']);
+
+            var animal1 = [10, 5, 50];
+            var animal2 = [-10, -5, 60];
+
+            // Frame 0: cam1 has track 0,1 and cam2 has track 0,1
+            var fg0 = new FrameGroup(0);
+            fg0.addInstance('c1', new Instance([cam1.project(animal1)], 0, 'predicted', 1));
+            fg0.addInstance('c1', new Instance([cam1.project(animal2)], 1, 'predicted', 1));
+            fg0.addInstance('c2', new Instance([cam2.project(animal1)], 0, 'predicted', 1));
+            fg0.addInstance('c2', new Instance([cam2.project(animal2)], 1, 'predicted', 1));
+            session.addFrameGroup(fg0);
+
+            var tracker = new CrossViewTracker();
+            tracker.trackFrame(fg0, [cam1, cam2], session);
+
+            // Frame 1: cam2 has SWAPPED track IDs (track 1 is animal1, track 0 is animal2)
+            var fg1 = new FrameGroup(1);
+            fg1.addInstance('c1', new Instance([cam1.project(animal1)], 0, 'predicted', 1));
+            fg1.addInstance('c1', new Instance([cam1.project(animal2)], 1, 'predicted', 1));
+            fg1.addInstance('c2', new Instance([cam2.project(animal1)], 1, 'predicted', 1)); // swapped!
+            fg1.addInstance('c2', new Instance([cam2.project(animal2)], 0, 'predicted', 1)); // swapped!
+            session.addFrameGroup(fg1);
+
+            tracker.trackFrame(fg1, [cam1, cam2], session);
+
+            // Should still have 2 targets (not 4)
+            assertEqual(tracker.prevTargets.length, 2, '2 targets despite track swap');
+        });
+
+        it('applyResults creates correct identity mappings', function () {
+            if (typeof CrossViewTracker === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var session = new Session([cam1, cam2], Skeleton.defaultMouse(), ['t0']);
+
+            var fg = new FrameGroup(0);
+            fg.addInstance('c1', new Instance([cam1.project([10, 5, 50])], 0, 'predicted', 1));
+            fg.addInstance('c2', new Instance([cam2.project([10, 5, 50])], 3, 'predicted', 1));
+            session.addFrameGroup(fg);
+
+            var tracker = new CrossViewTracker();
+            tracker.trackFrame(fg, [cam1, cam2], session);
+            tracker.applyResults(session);
+
+            // Both track indices should map to the same identity
+            var id1 = session.trackIdentityMap.get('c1:0');
+            var id2 = session.trackIdentityMap.get('c2:3');
+            assertNotNull(id1, 'c1:0 mapped');
+            assertNotNull(id2, 'c2:3 mapped');
+            assertEqual(id1, id2, 'same identity for both views');
+        });
+
+        it('findMatchesForInstance finds correct match', function () {
+            if (typeof CrossViewTracker === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+
+            var animal1 = [10, 5, 50];
+            var animal2 = [-10, -5, 60];
+
+            var fg = new FrameGroup(0);
+            var inst1_c1 = new Instance([cam1.project(animal1)], 0, 'predicted', 1);
+            var inst2_c1 = new Instance([cam1.project(animal2)], 1, 'predicted', 1);
+            var inst1_c2 = new Instance([cam2.project(animal1)], 0, 'predicted', 1);
+            var inst2_c2 = new Instance([cam2.project(animal2)], 1, 'predicted', 1);
+            fg.addInstance('c1', inst1_c1);
+            fg.addInstance('c1', inst2_c1);
+            fg.addInstance('c2', inst1_c2);
+            fg.addInstance('c2', inst2_c2);
+
+            var tracker = new CrossViewTracker();
+            var matches = tracker.findMatchesForInstance(inst1_c1, 'c1', fg, [cam1, cam2]);
+
+            assertTrue(matches.has('c2'), 'found match in c2');
+            // The best match for animal1 in cam1 should be the animal1 projection in cam2
+            var matchedInst = matches.get('c2').instance;
+            assertEqual(matchedInst, inst1_c2, 'matched correct instance');
+        });
+    });
+
+    describe('CrossViewTracker - 3 camera views', function () {
+        it('tracks with 3 cameras', function () {
+            if (typeof CrossViewTracker === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var cam3 = makeTestCamera('c3', [0.2, 0, 0], [0, 15, 0]);
+            var session = new Session([cam1, cam2, cam3], Skeleton.defaultMouse(), ['t0']);
+
+            var animal = [10, 5, 50];
+
+            var fg = new FrameGroup(0);
+            fg.addInstance('c1', new Instance([cam1.project(animal)], 0, 'predicted', 1));
+            fg.addInstance('c2', new Instance([cam2.project(animal)], 0, 'predicted', 1));
+            fg.addInstance('c3', new Instance([cam3.project(animal)], 0, 'predicted', 1));
+            session.addFrameGroup(fg);
+
+            var tracker = new CrossViewTracker();
+            tracker.trackFrame(fg, [cam1, cam2, cam3], session);
+
+            assertTrue(tracker.prevTargets.length >= 1, 'at least 1 target with 3 views');
+        });
+    });
+})();
