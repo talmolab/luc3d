@@ -259,6 +259,7 @@
                             <thead>
                                 <tr>
                                     <th>Track</th>
+                                    <th>ID</th>
                                     <th>Type</th>
                                     <th>Points</th>
                                     <th>Score</th>
@@ -7369,6 +7370,39 @@
                         })(ul, ul.instance, trackSelect, cam.name);
                         tdTrackUl.appendChild(trackSelect);
 
+                        // Identity column for unlinked instances
+                        const tdIdUl = document.createElement('td');
+                        var idSelectUl = document.createElement('select');
+                        idSelectUl.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:70px;';
+                        var optNoneUl = document.createElement('option');
+                        optNoneUl.value = '-1';
+                        optNoneUl.textContent = '—';
+                        idSelectUl.appendChild(optNoneUl);
+                        for (var idi = 0; idi < (state.session.identities || []).length; idi++) {
+                            var idOpt = document.createElement('option');
+                            idOpt.value = state.session.identities[idi].id;
+                            idOpt.textContent = state.session.identities[idi].name;
+                            idSelectUl.appendChild(idOpt);
+                        }
+                        // Pre-select based on trackIdentityMap
+                        var currentIdForTrack = state.session.trackIdentityMap.get(ul.instance.trackIdx);
+                        idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
+                        (function (inst, sel) {
+                            sel.addEventListener('change', function (ev) {
+                                ev.stopPropagation();
+                                var newIdVal = parseInt(sel.value);
+                                if (newIdVal >= 0) {
+                                    state.session.assignTrackToIdentity(inst.trackIdx, newIdVal);
+                                } else {
+                                    state.session.trackIdentityMap.delete(inst.trackIdx);
+                                }
+                                drawAllOverlays(state.currentFrame);
+                                updateInfoPanel();
+                            });
+                            sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                        })(ul.instance, idSelectUl);
+                        tdIdUl.appendChild(idSelectUl);
+
                         const tdType = document.createElement('td');
                         var instType = ul.instance.type || 'user';
                         var typeBadge = document.createElement('span');
@@ -7386,6 +7420,7 @@
                         tdScore.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
 
                         tr.appendChild(tdTrackUl);
+                        tr.appendChild(tdIdUl);
                         tr.appendChild(tdType);
                         tr.appendChild(tdPoints);
                         tr.appendChild(tdScore);
