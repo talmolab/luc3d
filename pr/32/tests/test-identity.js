@@ -132,20 +132,23 @@
     });
 
     describe('Identity color resolution', function () {
-        it('getGroupColor uses identity color when colorByIdentity is on', function () {
-            // Set global state for color mode
-            var origState = typeof state !== 'undefined' ? state.colorByIdentity : undefined;
-            if (typeof state !== 'undefined') state.colorByIdentity = true;
-
+        it('getGroupColor uses identity color when useIdentity is true', function () {
             var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
             var id = s.addIdentity('mouse_A', '#ff0000');
             var group = new InstanceGroup(1, 0);
             s.assignIdentityToGroup(group, id.id);
-            var color = getGroupColor(group, s);
+            // Pass useIdentity=true as third param
+            var color = getGroupColor(group, s, true);
             assertEqual(color, '#ff0000');
+        });
 
-            // Restore
-            if (typeof state !== 'undefined') state.colorByIdentity = origState;
+        it('getGroupColor uses track color when useIdentity is false', function () {
+            var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
+            var id = s.addIdentity('mouse_A', '#ff0000');
+            var group = new InstanceGroup(1, 0);
+            s.assignIdentityToGroup(group, id.id);
+            var color = getGroupColor(group, s, false);
+            assertEqual(color, getTrackColor(0));
         });
 
         it('getGroupColor falls back to track color when unassigned', function () {
