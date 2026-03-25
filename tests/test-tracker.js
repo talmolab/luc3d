@@ -75,3 +75,88 @@
         });
     });
 })();
+
+(function () {
+    const { describe, it, assertEqual, assertApprox, assertNotNull, assertTrue } = TestFramework;
+
+    function makeTestCamera(name, rvec, tvec) {
+        return new Camera(
+            name,
+            [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+            [0, 0, 0, 0, 0],
+            rvec, tvec, [640, 480]
+        );
+    }
+
+    describe('Detection2D', function () {
+        it('fromInstance undistorts points and stores camera info', function () {
+            if (typeof Detection2D === 'undefined') return;
+            var cam = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var inst = new Instance([[100, 200], [300, 400]], 0, 'predicted', 0.9);
+            var det = Detection2D.fromInstance(inst, cam, 5);
+            assertEqual(det.cameraName, 'c1');
+            assertEqual(det.frameIdx, 5);
+            assertEqual(det.trackIdx, 0);
+            assertEqual(det.points.length, 2);
+            assertNotNull(det.points[0]);
+            assertNotNull(det.points[1]);
+        });
+
+        it('handles null points', function () {
+            if (typeof Detection2D === 'undefined') return;
+            var cam = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var inst = new Instance([[100, 200], null], 0, 'predicted', 0.9);
+            var det = Detection2D.fromInstance(inst, cam, 0);
+            assertNotNull(det.points[0]);
+            assertEqual(det.points[1], null);
+        });
+    });
+
+    describe('Target3D', function () {
+        it('can be created from 2 detections and triangulated', function () {
+            if (typeof Target3D === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var point3d = [10, 5, 50];
+            var inst1 = new Instance([cam1.project(point3d)], 0, 'predicted', 1);
+            var inst2 = new Instance([cam2.project(point3d)], 0, 'predicted', 1);
+            var det1 = Detection2D.fromInstance(inst1, cam1, 0);
+            var det2 = Detection2D.fromInstance(inst2, cam2, 0);
+            var target = Target3D.fromDetections([det1, det2], 0);
+            assertNotNull(target.points);
+            assertApprox(target.points[0][0], 10, 2.0, 'X');
+            assertApprox(target.points[0][1], 5, 2.0, 'Y');
+            assertApprox(target.points[0][2], 50, 2.0, 'Z');
+            assertEqual(target.detectionsByCamera.size, 2);
+        });
+
+        it('addDetection replaces existing camera and updates frameIdx', function () {
+            if (typeof Target3D === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var p3d = [10, 5, 50];
+            var det1 = Detection2D.fromInstance(new Instance([cam1.project(p3d)], 0, 'predicted', 1), cam1, 0);
+            var det2 = Detection2D.fromInstance(new Instance([cam2.project(p3d)], 0, 'predicted', 1), cam2, 0);
+            var target = Target3D.fromDetections([det1, det2], 0);
+            // Add new detection from cam1 at frame 1
+            var det1b = Detection2D.fromInstance(new Instance([cam1.project(p3d)], 0, 'predicted', 1), cam1, 1);
+            target.addDetection(det1b);
+            assertEqual(target.detectionsByCamera.size, 2, 'still 2 cameras');
+            assertApprox(target.frameIdx, 0.5, 0.01, 'mean frame idx');
+        });
+
+        it('stores trackIdx in detectionsByCamera', function () {
+            if (typeof Target3D === 'undefined') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var p3d = [10, 5, 50];
+            var inst1 = new Instance([cam1.project(p3d)], 5, 'predicted', 1);
+            var inst2 = new Instance([cam2.project(p3d)], 3, 'predicted', 1);
+            var det1 = Detection2D.fromInstance(inst1, cam1, 0);
+            var det2 = Detection2D.fromInstance(inst2, cam2, 0);
+            var target = Target3D.fromDetections([det1, det2], 0);
+            assertEqual(target.detectionsByCamera.get('c1').trackIdx, 5);
+            assertEqual(target.detectionsByCamera.get('c2').trackIdx, 3);
+        });
+    });
+})();
