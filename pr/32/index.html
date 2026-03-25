@@ -7089,7 +7089,12 @@
                     (function (g, sel) {
                         sel.addEventListener('change', function (e) {
                             e.stopPropagation();
-                            state.session.assignIdentityToGroup(g, parseInt(sel.value));
+                            var newIdentityId = parseInt(sel.value);
+                            state.session.assignIdentityToGroup(g, newIdentityId);
+                            // Also sync trackIdentityMap so unlinked predictions with same track match
+                            if (newIdentityId >= 0) {
+                                state.session.assignTrackToIdentity(g.trackIdx, newIdentityId);
+                            }
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
                         });

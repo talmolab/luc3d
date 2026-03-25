@@ -66,11 +66,7 @@ function getInstanceColor(instance, session) {
     var useIdentity = (typeof state !== 'undefined' && state.colorByIdentity);
     if (useIdentity && session && instance.trackIdx != null) {
         var identity = session.getIdentityForTrack(instance.trackIdx);
-        if (identity && identity.color) {
-            console.log('[color] trackIdx=' + instance.trackIdx + ' → identity=' + identity.name + ' color=' + identity.color);
-            return identity.color;
-        }
-        console.log('[color] trackIdx=' + instance.trackIdx + ' → no identity mapped, falling back to track color');
+        if (identity && identity.color) return identity.color;
     }
     return getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
 }
