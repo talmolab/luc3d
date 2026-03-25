@@ -6966,6 +6966,9 @@
             document.getElementById('infoTracks').textContent = state.session.tracks.join(', ');
             document.getElementById('infoFrames').textContent = state.session.numFrames;
 
+            // Rebuild instance detail panel (track/identity dropdowns)
+            updateFrameInfo(state.currentFrame, getInstanceGroupsForFrame(state.currentFrame));
+
             // Also populate static tables
             populateVideosTable();
             populateCamerasTable();
