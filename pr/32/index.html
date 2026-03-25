@@ -809,6 +809,16 @@
         async function loadDemoSession() {
             showLoading('Loading demo videos...');
             try {
+                // Clear existing state
+                if (videoController && state.isPlaying) videoController.stopPlayback();
+                videoController = null;
+                state.views = [];
+                state.videoFiles = [];
+                state.session = null;
+                state.sessions = [];
+                state.triangulationResults = new Map();
+                paneManager.clearAll();
+
                 // Load videos and create view objects (no grid cells needed - dockview creates them)
                 const basePath = 'sample_session/';
                 for (let i = 0; i < VIEW_NAMES.length; i++) {
