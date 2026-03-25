@@ -11663,6 +11663,16 @@
             oldSession._views = state.views;           // preserve live views with decoders+canvases
             oldSession._videoController = videoController;
 
+            // Pause old session's video elements to free resources
+            if (videoController && state.isPlaying) {
+                videoController.stopPlayback();
+            }
+            for (var ovi = 0; ovi < state.views.length; ovi++) {
+                if (state.views[ovi].decoder && state.views[ovi].decoder.pauseNative) {
+                    state.views[ovi].decoder.pauseNative();
+                }
+            }
+
             // Switch active session
             state.activeSessionIdx = newIdx;
             var newSession = state.sessions[newIdx];
@@ -11673,30 +11683,25 @@
             var trustCheck = document.getElementById('menuTrustTracksCheck');
             if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
 
-            // Stop playback
-            if (videoController && state.isPlaying) {
-                videoController.stopPlayback();
-            }
-
             // Restore saved views or build new ones
             if (newSession._views && newSession._views.length > 0) {
-                // Session has been visited before — restore its views and controller
                 state.views = newSession._views;
-                videoController = newSession._videoController || null;
 
-                // Re-dock the panels
                 paneManager.clearAll();
                 paneManager.addAllViewsAsGrid();
 
-                // Re-render after dockview creates panels
+                // Rebuild video controller with current state.views
+                rebuildVideoController();
+
+                var targetFrame = newSession.lastFrame || 0;
                 setTimeout(function() {
                     fitCanvasesToCells();
                     refreshPaneInteractions();
-                    state.currentFrame = newSession.lastFrame || 0;
+                    state.currentFrame = targetFrame;
                     if (videoController) {
-                        videoController.seekToFrame(state.currentFrame);
+                        videoController.seekToFrame(targetFrame);
                     }
-                    drawAllOverlays(state.currentFrame);
+                    drawAllOverlays(targetFrame);
                 }, 50);
             } else {
                 // First visit — build views from videoFileIndices
