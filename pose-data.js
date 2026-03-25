@@ -563,6 +563,8 @@ class Session {
         /** @type {Identity[]} */
         this.identities = [];
         this.trustTracks = false;
+        /** @type {Map<number, number>} trackIdx → identityId (tracklet-to-identity mapping) */
+        this.trackIdentityMap = new Map();
     }
 
     addIdentity(name, color) {
@@ -580,15 +582,39 @@ class Session {
     }
 
     getOrCreateIdentityForTrack(trackIdx) {
+        // Check if this track already has an identity
+        var existing = this.getIdentityForTrack(trackIdx);
+        if (existing) return existing;
+        // Create new identity and map it
         var idName = 'id_' + trackIdx;
-        for (var i = 0; i < this.identities.length; i++) {
-            if (this.identities[i].name === idName) return this.identities[i];
-        }
-        return this.addIdentity(idName);
+        var identity = this.addIdentity(idName);
+        this.trackIdentityMap.set(trackIdx, identity.id);
+        return identity;
     }
 
     assignIdentityToGroup(group, identityId) {
         group.identityId = identityId;
+    }
+
+    /**
+     * Assign a tracklet (trackIdx) to an Identity.
+     * Multiple tracklets can map to the same identity (stitching).
+     * @param {number} trackIdx
+     * @param {number} identityId
+     */
+    assignTrackToIdentity(trackIdx, identityId) {
+        this.trackIdentityMap.set(trackIdx, identityId);
+    }
+
+    /**
+     * Get the Identity for a tracklet (trackIdx).
+     * @param {number} trackIdx
+     * @returns {Identity|null}
+     */
+    getIdentityForTrack(trackIdx) {
+        var identityId = this.trackIdentityMap.get(trackIdx);
+        if (identityId != null) return this.getIdentity(identityId);
+        return null;
     }
 
     /**

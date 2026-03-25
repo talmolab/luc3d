@@ -7703,6 +7703,7 @@
                                 return { id: id.id, name: id.name, color: id.color };
                             }),
                             trustTracks: sess.trustTracks || false,
+                            trackIdentityMap: Array.from(sess.trackIdentityMap.entries()),
                             videoManifest: sess.videoFileIndices.map(function(vfIdx) {
                                 var vf = state.videoFiles[vfIdx];
                                 return vf ? {
@@ -7746,6 +7747,7 @@
                     return { id: id.id, name: id.name, color: id.color };
                 }),
                 trustTracks: state.session.trustTracks || false,
+                trackIdentityMap: Array.from(state.session.trackIdentityMap.entries()),
                 videoManifest: (state.videoFiles || []).map(function (vf) {
                     return { filename: vf.name, assignedCamera: vf.assignedCamera || null };
                 }),
@@ -8179,6 +8181,11 @@
                 }
             }
             if (data.trustTracks != null) session.trustTracks = data.trustTracks;
+            if (data.trackIdentityMap) {
+                for (var tmi = 0; tmi < data.trackIdentityMap.length; tmi++) {
+                    session.trackIdentityMap.set(data.trackIdentityMap[tmi][0], data.trackIdentityMap[tmi][1]);
+                }
+            }
 
             if (data.frames) {
                 for (var frameIdxStr in data.frames) {
