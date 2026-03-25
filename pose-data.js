@@ -563,7 +563,7 @@ class Session {
         /** @type {Identity[]} */
         this.identities = [];
         this.trustTracks = false;
-        /** @type {Map<number, number>} trackIdx → identityId (tracklet-to-identity mapping) */
+        /** @type {Map<string, number>} "camName:trackIdx" → identityId (per-camera tracklet-to-identity) */
         this.trackIdentityMap = new Map();
     }
 
@@ -582,13 +582,16 @@ class Session {
     }
 
     getOrCreateIdentityForTrack(trackIdx) {
-        // Check if this track already has an identity
-        var existing = this.getIdentityForTrack(trackIdx);
-        if (existing) return existing;
-        // Create new identity and map it
+        // Check if any camera has this track mapped already
         var idName = 'id_' + trackIdx;
+        for (var i = 0; i < this.identities.length; i++) {
+            if (this.identities[i].name === idName) return this.identities[i];
+        }
+        // Create new identity and map it for all cameras
         var identity = this.addIdentity(idName);
-        this.trackIdentityMap.set(trackIdx, identity.id);
+        for (var ci = 0; ci < this.cameras.length; ci++) {
+            this.trackIdentityMap.set(this.cameras[ci].name + ':' + trackIdx, identity.id);
+        }
         return identity;
     }
 
@@ -597,23 +600,36 @@ class Session {
     }
 
     /**
-     * Assign a tracklet (trackIdx) to an Identity.
-     * Multiple tracklets can map to the same identity (stitching).
+     * Assign a tracklet (trackIdx) in a specific camera to an Identity.
      * @param {number} trackIdx
      * @param {number} identityId
+     * @param {string} [cameraName] - If omitted, assigns for ALL cameras
      */
-    assignTrackToIdentity(trackIdx, identityId) {
-        this.trackIdentityMap.set(trackIdx, identityId);
+    assignTrackToIdentity(trackIdx, identityId, cameraName) {
+        if (cameraName) {
+            this.trackIdentityMap.set(cameraName + ':' + trackIdx, identityId);
+        } else {
+            for (var ci = 0; ci < this.cameras.length; ci++) {
+                this.trackIdentityMap.set(this.cameras[ci].name + ':' + trackIdx, identityId);
+            }
+        }
     }
 
     /**
-     * Get the Identity for a tracklet (trackIdx).
+     * Get the Identity for a tracklet (trackIdx) in a specific camera.
      * @param {number} trackIdx
+     * @param {string} [cameraName] - If omitted, checks first matching camera
      * @returns {Identity|null}
      */
-    getIdentityForTrack(trackIdx) {
-        var identityId = this.trackIdentityMap.get(trackIdx);
-        if (identityId != null) return this.getIdentity(identityId);
+    getIdentityForTrack(trackIdx, cameraName) {
+        if (cameraName) {
+            var identityId = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
+            if (identityId != null) return this.getIdentity(identityId);
+        }
+        // Fallback: check any camera
+        for (var [key, idVal] of this.trackIdentityMap) {
+            if (key.endsWith(':' + trackIdx)) return this.getIdentity(idVal);
+        }
         return null;
     }
 
