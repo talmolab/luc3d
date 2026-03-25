@@ -987,9 +987,16 @@ class Timeline {
      * @private
      */
     _handleWheel(e) {
-        e.preventDefault();
-
         var mouseX = e.offsetX;
+        var contentRight = this._cssWidth - this.RIGHT_PADDING;
+
+        // Left label area or right edge: let container scroll vertically
+        if (mouseX < this.LEFT_MARGIN || mouseX > contentRight) {
+            // Don't preventDefault — let the container handle vertical scroll
+            return;
+        }
+
+        e.preventDefault();
 
         // Frame under cursor before zoom
         const frameUnderCursor = this._xToFrame(mouseX);
