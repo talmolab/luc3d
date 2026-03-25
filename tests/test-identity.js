@@ -70,10 +70,11 @@
             assertNull(s.getIdentity(999));
         });
 
-        it('getOrCreateIdentityForTrack creates identity matching track name', function () {
-            var s = new Session([], new Skeleton('s', ['a'], []), ['track_0', 'track_1']);
+        it('getOrCreateIdentityForTrack creates identity named id_N', function () {
+            var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0', 'track_1']);
             var id = s.getOrCreateIdentityForTrack(0);
-            assertEqual(id.name, 'track_0');
+            assertEqual(id.name, 'id_0');
             var id2 = s.getOrCreateIdentityForTrack(0);
             assertEqual(id, id2);
         });
@@ -131,13 +132,20 @@
     });
 
     describe('Identity color resolution', function () {
-        it('getGroupColor uses identity color when assigned', function () {
+        it('getGroupColor uses identity color when colorByIdentity is on', function () {
+            // Set global state for color mode
+            var origState = typeof state !== 'undefined' ? state.colorByIdentity : undefined;
+            if (typeof state !== 'undefined') state.colorByIdentity = true;
+
             var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
             var id = s.addIdentity('mouse_A', '#ff0000');
             var group = new InstanceGroup(1, 0);
             s.assignIdentityToGroup(group, id.id);
             var color = getGroupColor(group, s);
             assertEqual(color, '#ff0000');
+
+            // Restore
+            if (typeof state !== 'undefined') state.colorByIdentity = origState;
         });
 
         it('getGroupColor falls back to track color when unassigned', function () {
