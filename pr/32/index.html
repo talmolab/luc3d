@@ -7379,23 +7379,23 @@
                             idOpt.textContent = state.session.identities[idi].name;
                             idSelectUl.appendChild(idOpt);
                         }
-                        // Pre-select based on trackIdentityMap
-                        var currentIdForTrack = state.session.trackIdentityMap.get(ul.instance.trackIdx);
+                        // Pre-select based on trackIdentityMap (per-camera)
+                        var currentIdForTrack = state.session.trackIdentityMap.get(cam.name + ':' + ul.instance.trackIdx);
                         idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
-                        (function (inst, sel) {
+                        (function (inst, sel, camNameForId) {
                             sel.addEventListener('change', function (ev) {
                                 ev.stopPropagation();
                                 var newIdVal = parseInt(sel.value);
                                 if (newIdVal >= 0) {
-                                    state.session.assignTrackToIdentity(inst.trackIdx, newIdVal);
+                                    state.session.assignTrackToIdentity(inst.trackIdx, newIdVal, camNameForId);
                                 } else {
-                                    state.session.trackIdentityMap.delete(inst.trackIdx);
+                                    state.session.trackIdentityMap.delete(camNameForId + ':' + inst.trackIdx);
                                 }
                                 drawAllOverlays(state.currentFrame);
                                 updateInfoPanel();
                             });
                             sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
-                        })(ul.instance, idSelectUl);
+                        })(ul.instance, idSelectUl, cam.name);
                         tdIdUl.appendChild(idSelectUl);
 
                         const tdType = document.createElement('td');
