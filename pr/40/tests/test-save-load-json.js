@@ -173,6 +173,7 @@
                             points3d: group.points3d || null,
                             reprojections: group.reprojections || null,
                             observedPoints: group.observedPoints || null,
+                            dirty: group.dirty || false,
                         };
                         if (group.usedCameras) {
                             groupData.usedCameras = Array.from(group.usedCameras);
@@ -198,7 +199,7 @@
             for (var [camName2, unlinkedList] of fg.unlinkedInstances) {
                 for (var unlinked of unlinkedList) {
                     var ulType = unlinked.instance.type || 'user';
-                    if (ulType === 'user' || unlinked.instance.modified) {
+                    {
                         var ulData = {
                             cameraName: camName2,
                             points: unlinked.instance.points,
@@ -288,6 +289,23 @@
                             }
                             group.addInstance(camName, inst);
                             fg.addInstance(camName, inst);
+                        }
+
+                        if (groupData.dirty) {
+                            group.markDirty();
+                        } else if (group.points3d) {
+                            group.markClean();
+                        }
+
+                        // Rebuild reprojectedInstances from saved reprojections
+                        if (group.reprojections) {
+                            for (var rCamName in group.reprojections) {
+                                var rPts = group.reprojections[rCamName];
+                                if (rPts) {
+                                    var rInst = new Instance(rPts, group.trackIdx, 'reprojected', 0);
+                                    group.addReprojectedInstance(rCamName, rInst);
+                                }
+                            }
                         }
 
                         if (!trackMap.has(group.trackIdx)) trackMap.set(group.trackIdx, []);
@@ -603,6 +621,34 @@
             var r = roundtrip();
             var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 1; });
             assertTrue(!g1.points3d, 'no points3d');
+        });
+    });
+
+    // ============================================
+    // Dirty flag and reprojectedInstances
+    // ============================================
+
+    describe('JSON roundtrip - dirty flag and reprojectedInstances', function () {
+        it('clean group stays clean after roundtrip', function () {
+            var r = roundtrip();
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            assertFalse(g0.dirty, 'triangulated group is clean');
+        });
+
+        it('reprojectedInstances rebuilt from reprojections', function () {
+            var r = roundtrip();
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            assertNotNull(g0.getReprojectedInstance('CamA'), 'CamA reproj instance exists');
+            assertNotNull(g0.getReprojectedInstance('CamB'), 'CamB reproj instance exists');
+        });
+
+        it('reprojected instance has correct points', function () {
+            var r = roundtrip();
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var ri = g0.getReprojectedInstance('CamA');
+            assertEqual(ri.type, 'reprojected', 'type is reprojected');
+            assertDeepEqual(ri.points[0], [101, 151], 'reproj point 0');
+            assertDeepEqual(ri.points[1], [201, 251], 'reproj point 1');
         });
     });
 
