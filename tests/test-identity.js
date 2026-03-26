@@ -1151,4 +1151,234 @@
                 'per-frame cleared');
         });
     });
+
+    // =========================================================================
+    // Track change propagation + timeline refresh integration tests
+    // =========================================================================
+
+    describe('Track change propagation via info panel dropdown', function () {
+        // Simulates what the info panel dropdown handler should do:
+        // call swapAssignTrack for each camera in the group, then
+        // verify all future frames are updated.
+
+        function makeMultiFrameSession() {
+            var cams = [
+                new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
+                new Camera('cam2', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])
+            ];
+            var skel = new Skeleton('s', ['a'], []);
+            var session = new Session(cams, skel, ['track_0', 'track_1', 'track_2']);
+
+            // 5 frames, each with 2 instances per camera
+            for (var f = 0; f < 5; f++) {
+                var fg = new FrameGroup(f);
+                fg.addInstance('cam1', new Instance([[10 + f, 20]], 0, 'predicted'));
+                fg.addInstance('cam1', new Instance([[30 + f, 40]], 1, 'predicted'));
+                fg.addInstance('cam2', new Instance([[50 + f, 60]], 0, 'predicted'));
+                fg.addInstance('cam2', new Instance([[70 + f, 80]], 1, 'predicted'));
+                session.addFrameGroup(fg);
+            }
+            return session;
+        }
+
+        it('swapAssignTrack propagates track change to future frames', function () {
+            if (typeof swapAssignTrack !== 'function') return;
+            var session = makeMultiFrameSession();
+            // On frame 1, change track_0 instance to track_2 in cam1
+            var fg1 = session.getFrameGroup(1);
+            var cam1Insts = fg1.getInstances('cam1');
+            var instToChange = null;
+            for (var i = 0; i < cam1Insts.length; i++) {
+                if (cam1Insts[i].trackIdx === 0) { instToChange = cam1Insts[i]; break; }
+            }
+            assertNotNull(instToChange, 'should find track_0 instance');
+
+            var propagated = swapAssignTrack(1, 'cam1', instToChange, 2, session);
+
+            // Frame 1: instance should now be track_2
+            assertEqual(instToChange.trackIdx, 2, 'current frame instance is track_2');
+
+            // Frames 2-4: all cam1 instances that were track_0 should now be track_2
+            for (var f = 2; f < 5; f++) {
+                var fg = session.getFrameGroup(f);
+                var insts = fg.getInstances('cam1');
+                var hasTrack2 = false;
+                for (var j = 0; j < insts.length; j++) {
+                    if (insts[j].trackIdx === 2) hasTrack2 = true;
+                }
+                assertTrue(hasTrack2, 'frame ' + f + ' cam1 should have track_2 after propagation');
+            }
+
+            // Frame 0 should be unaffected
+            var fg0 = session.getFrameGroup(0);
+            var f0Insts = fg0.getInstances('cam1');
+            var f0HasTrack0 = false;
+            for (var k = 0; k < f0Insts.length; k++) {
+                if (f0Insts[k].trackIdx === 0) f0HasTrack0 = true;
+            }
+            assertTrue(f0HasTrack0, 'frame 0 cam1 should still have track_0');
+        });
+
+        it('swapAssignTrack swaps conflicting tracks', function () {
+            if (typeof swapAssignTrack !== 'function') return;
+            var session = makeMultiFrameSession();
+            // On frame 1, change track_0 → track_1 (which already exists)
+            var fg1 = session.getFrameGroup(1);
+            var cam1Insts = fg1.getInstances('cam1');
+            var inst0 = null, inst1 = null;
+            for (var i = 0; i < cam1Insts.length; i++) {
+                if (cam1Insts[i].trackIdx === 0) inst0 = cam1Insts[i];
+                if (cam1Insts[i].trackIdx === 1) inst1 = cam1Insts[i];
+            }
+            assertNotNull(inst0, 'should find track_0');
+            assertNotNull(inst1, 'should find track_1');
+
+            swapAssignTrack(1, 'cam1', inst0, 1, session);
+
+            // Frame 1: inst0 is now track_1, inst1 swapped to track_0
+            assertEqual(inst0.trackIdx, 1, 'inst0 should be track_1');
+            assertEqual(inst1.trackIdx, 0, 'inst1 should swap to track_0');
+
+            // Future frames should also be swapped
+            for (var f = 2; f < 5; f++) {
+                var fg = session.getFrameGroup(f);
+                var insts = fg.getInstances('cam1');
+                var tracks = {};
+                for (var j = 0; j < insts.length; j++) {
+                    tracks[insts[j].trackIdx] = true;
+                }
+                assertTrue(tracks[0] && tracks[1],
+                    'frame ' + f + ' should still have both tracks 0 and 1 (swapped)');
+            }
+        });
+
+        it('identity change via propagateIdentity updates all future frames', function () {
+            var session = makeMultiFrameSession();
+            var id0 = session.addIdentity('id_0');
+            var id1 = session.addIdentity('id_1');
+
+            // Set all frames to id_0 initially
+            for (var f = 0; f < 5; f++) {
+                session.setFrameIdentity(f, 'cam1', 0, id0.id);
+            }
+
+            // Change to id_1 at frame 2, propagating forward
+            session.propagateIdentity(2, 'cam1', 0, id1.id);
+
+            // Frames 0-1 should still be id_0
+            assertEqual(session.getIdentityIdForTrack('cam1', 0, 0), id0.id, 'frame 0: id_0');
+            assertEqual(session.getIdentityIdForTrack('cam1', 0, 1), id0.id, 'frame 1: id_0');
+            // Frames 2-4 should be id_1
+            assertEqual(session.getIdentityIdForTrack('cam1', 0, 2), id1.id, 'frame 2: id_1');
+            assertEqual(session.getIdentityIdForTrack('cam1', 0, 3), id1.id, 'frame 3: id_1');
+            assertEqual(session.getIdentityIdForTrack('cam1', 0, 4), id1.id, 'frame 4: id_1');
+        });
+    });
+
+    describe('Timeline reflects track/identity changes', function () {
+        function createContainer(w, h) {
+            var c = document.createElement('div');
+            c.style.cssText = 'width:' + w + 'px;height:' + h + 'px;position:absolute;left:-9999px;';
+            document.body.appendChild(c);
+            return c;
+        }
+        function cleanup(tl, container) {
+            if (tl && tl.destroy) tl.destroy();
+            if (container && container.parentNode) container.parentNode.removeChild(container);
+        }
+
+        it('timeline updates segment count after track change', function () {
+            if (typeof Timeline !== 'function') return;
+            var container = createContainer(800, 80);
+            var tl = new Timeline(container, { totalFrames: 10 });
+
+            var cams = [new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var session = new Session(cams, new Skeleton('s', ['a'], []), ['track_0', 'track_1']);
+            var fg = new FrameGroup(0);
+            fg.addInstance('cam1', new Instance([[10, 20]], 0, 'predicted'));
+            session.addFrameGroup(fg);
+
+            tl.setData(session);
+            var segsBefore = tl._trackSegments.length;
+
+            // Add instance with a new track
+            session.tracks.push('track_2');
+            var fg2 = new FrameGroup(1);
+            fg2.addInstance('cam1', new Instance([[30, 40]], 2, 'predicted'));
+            session.addFrameGroup(fg2);
+
+            // Refresh should pick up new track
+            tl.refreshTracks(session);
+            var segsAfter = tl._trackSegments.length;
+
+            assertTrue(segsAfter > segsBefore,
+                'timeline should have more segments after adding track (before=' + segsBefore + ' after=' + segsAfter + ')');
+            cleanup(tl, container);
+        });
+
+        it('timeline updates after identity assignment', function () {
+            if (typeof Timeline !== 'function') return;
+            var container = createContainer(800, 80);
+            var tl = new Timeline(container, { totalFrames: 10 });
+
+            var cams = [new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var session = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
+            var id0 = session.addIdentity('id_0');
+            var fg = new FrameGroup(0);
+            fg.addInstance('cam1', new Instance([[10, 20]], 0, 'predicted'));
+            session.addFrameGroup(fg);
+            session.trackIdentityMap.set('cam1:0', id0.id);
+
+            // Switch to identity mode
+            tl.setDisplayMode('identities');
+            tl.setData(session);
+
+            assertTrue(tl._trackSegments.length > 0,
+                'identity mode should show segments when identity assigned');
+
+            // Change identity
+            var id1 = session.addIdentity('id_1');
+            session.trackIdentityMap.set('cam1:0', id1.id);
+            tl.refreshTracks(session);
+
+            // Should still have segments (now under id_1)
+            assertTrue(tl._trackSegments.length > 0,
+                'timeline should update after identity change');
+
+            cleanup(tl, container);
+        });
+
+        it('refreshTracks rebuilds segments without mode toggle', function () {
+            if (typeof Timeline !== 'function') return;
+            var container = createContainer(800, 80);
+            var tl = new Timeline(container, { totalFrames: 10 });
+
+            var cams = [new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var session = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
+            var fg = new FrameGroup(0);
+            fg.addInstance('cam1', new Instance([[10, 20]], 0, 'predicted'));
+            session.addFrameGroup(fg);
+
+            tl.setData(session);
+            assertEqual(tl._trackSegments.length, 1, 'starts with 1 segment');
+
+            // Add another frame with same track
+            var fg2 = new FrameGroup(5);
+            fg2.addInstance('cam1', new Instance([[30, 40]], 0, 'predicted'));
+            session.addFrameGroup(fg2);
+
+            // refreshTracks without any mode toggle should pick up new data
+            tl.refreshTracks(session);
+            var seg = tl._trackSegments[0];
+            assertTrue(seg.segments.length >= 1, 'should have segments');
+            // Check that frame 5 is included in the segment data
+            var hasFrame5 = false;
+            for (var s = 0; s < seg.segments.length; s++) {
+                if (seg.segments[s].start <= 5 && seg.segments[s].end >= 5) hasFrame5 = true;
+            }
+            assertTrue(hasFrame5, 'frame 5 should be in segments after refreshTracks');
+
+            cleanup(tl, container);
+        });
+    });
 })();

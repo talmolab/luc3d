@@ -7347,26 +7347,15 @@
                         sel.addEventListener('change', function (ev) {
                             ev.stopPropagation();
                             var newTrack = parseInt(sel.value);
-                            var oldTrack = g.trackIdx;
-                            // Swap on current frame per camera
-                            if (oldTrack !== newTrack) {
-                                var fg = state.session.getFrameGroup(state.currentFrame);
-                                if (fg) {
-                                    for (var [cn, ginst] of g.instances) {
-                                        var camInsts = fg.getInstances(cn);
-                                        for (var si = 0; si < camInsts.length; si++) {
-                                            if (camInsts[si] !== ginst && camInsts[si].trackIdx === newTrack) camInsts[si].trackIdx = oldTrack;
-                                        }
-                                        var camUl = fg.getUnlinkedInstances(cn);
-                                        for (var su = 0; su < camUl.length; su++) {
-                                            if (camUl[su].instance !== ginst && camUl[su].instance.trackIdx === newTrack) camUl[su].instance.trackIdx = oldTrack;
-                                        }
-                                        ginst.trackIdx = newTrack;
-                                    }
-                                }
+                            if (newTrack === g.trackIdx) return;
+                            // Swap-assign with propagation for each camera
+                            var totalProp = 0;
+                            for (var [cn, ginst] of g.instances) {
+                                totalProp += swapAssignTrack(state.currentFrame, cn, ginst, newTrack, state.session);
                             }
                             g.trackIdx = newTrack;
-                            setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack), 'success');
+                            setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) +
+                                (totalProp > 0 ? ' (propagated ' + totalProp + ')' : ''), 'success');
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
                             if (timeline) timeline.refreshTracks(state.session);
