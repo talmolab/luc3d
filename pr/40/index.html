@@ -12020,8 +12020,9 @@
                 paneManager.clearAll();
                 paneManager.addAllViewsAsGrid();
 
-                // Rebuild video controller with current state.views
+                // Rebuild video controller and update frame count for this session
                 rebuildVideoController();
+                updateTotalFrames();
 
                 var targetFrame = newSession.lastFrame || 0;
                 setTimeout(function() {
@@ -12090,7 +12091,10 @@
                 setReprojErrorVisible(true);
             }
             updateInfoPanel();
-            if (timeline) timeline.setData(newSession);
+            if (timeline) {
+                timeline.setData(newSession);
+                timeline.setTotalFrames(state.totalFrames);
+            }
 
             setStatus('Switched to ' + newSession.name, 'info');
         }
