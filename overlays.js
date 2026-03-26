@@ -41,7 +41,7 @@ function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
 
-function getGroupColor(group, session, useIdentity) {
+function getGroupColor(group, session, useIdentity, frameIdx) {
 
     if (useIdentity && session) {
         // Try group's direct identity first
@@ -49,9 +49,9 @@ function getGroupColor(group, session, useIdentity) {
             var identity = session.getIdentity(group.identityId);
             if (identity && identity.color) return identity.color;
         }
-        // Fall back to track→identity map
+        // Fall back to track→identity map (with per-frame support)
         var trackId = group.trackIdx != null ? group.trackIdx : 0;
-        var trackIdentity = session.getIdentityForTrack(trackId);
+        var trackIdentity = session.getIdentityForTrack(trackId, null, frameIdx);
         if (trackIdentity && trackIdentity.color) return trackIdentity.color;
     }
     // Color by track (default)
@@ -62,9 +62,9 @@ function getGroupColor(group, session, useIdentity) {
  * Get color for an instance using the track→identity map.
  * Used for unlinked/ungrouped predictions.
  */
-function getInstanceColor(instance, session, cameraName, useIdentity) {
+function getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) {
     if (useIdentity && session && instance.trackIdx != null) {
-        var identity = session.getIdentityForTrack(instance.trackIdx, cameraName);
+        var identity = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
         if (identity && identity.color) return identity.color;
     }
     return getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
@@ -1062,7 +1062,10 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
         const trackName = inst.trackIdx != null && trackNames[inst.trackIdx]
             ? trackNames[inst.trackIdx]
             : ('Track ' + (inst.trackIdx != null ? inst.trackIdx : instIdx));
-        const color = options.color || getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx);
+        var trackColors = options.trackColors || null;
+        const color = (trackColors && trackColors[inst.trackIdx])
+            ? trackColors[inst.trackIdx]
+            : (options.color || getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx));
 
         var fontSize = adjustedLabelSize;
         if (fontSize <= 0) continue; // label size 0 = hidden
@@ -1265,6 +1268,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     const assignmentColor = options.assignmentColor || '#fbbf24';
     const ulColorByIdentity = !!options.colorByIdentity;
     const ulSession = options.session || null;
+    const ulFrameIdx = options.frameIdx != null ? options.frameIdx : null;
     const selectedUnlinkedId = options.selectedUnlinkedId || null;
     const predictedRender = options.predictedRender || null;
 
@@ -1305,7 +1309,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
-        var baseTrackColor = isPredicted ? (getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity) || '#888888') : UNGROUPED_USER_COLOR;
+        var baseTrackColor = isPredicted ? (getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity, ulFrameIdx) || '#888888') : UNGROUPED_USER_COLOR;
         const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
         const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
@@ -1504,6 +1508,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
  */
 function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, options) {
     options = options || {};
+    var _frameIdx = frameGroup ? frameGroup.frameIdx : null;
 
     // Per-type visibility flags
     const showUser        = options.showUser !== undefined ? options.showUser : (options.showDetected !== false);
@@ -1583,7 +1588,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             const group = instanceGroups[g];
 
             // Draw reprojected instances — color-matched to identity or track
-            var trackBaseColor = getGroupColor(group, session, colorByIdentity);
+            var trackBaseColor = getGroupColor(group, session, colorByIdentity, _frameIdx);
             var reprojTrackColor = complementaryColor(trackBaseColor);
 
             // Always draw reprojections — one per group per view
@@ -1648,7 +1653,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (instType !== 'predicted') continue;
 
             var parentGroup = instToGroup.get(inst);
-            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity) : getInstanceColor(inst, session, viewName, colorByIdentity);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity, _frameIdx) : getInstanceColor(inst, session, viewName, colorByIdentity, _frameIdx);
             var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
@@ -1669,6 +1674,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             typeFilter: 'predicted',
             colorByIdentity: colorByIdentity,
             session: session,
+            frameIdx: _frameIdx,
         }));
     }
 
@@ -1681,7 +1687,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             if (instType === 'predicted') continue;
 
             var parentGroup = instToGroup.get(inst);
-            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity) : getInstanceColor(inst, session, viewName, colorByIdentity);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity, _frameIdx) : getInstanceColor(inst, session, viewName, colorByIdentity, _frameIdx);
             var isSelected = !selectedReprojected && selectedInstanceGroup &&
                 selectedInstanceGroup.getInstance &&
                 selectedInstanceGroup.getInstance(viewName) === inst;
@@ -1696,9 +1702,23 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
 
         // 4a. Draw track name labels (user instances only)
         if (userOpts.showLabels && userInstances.length > 0) {
-            const trackNames = session && session.tracks ? session.tracks : [];
+            var labelNames = session && session.tracks ? session.tracks.slice() : [];
+            var labelColors = null;
+            // When coloring by identity, show identity names and colors on labels
+            if (colorByIdentity && session) {
+                labelColors = {};
+                for (var li = 0; li < userInstances.length; li++) {
+                    var lInst = userInstances[li];
+                    var lIdentity = session.getIdentityForTrack(lInst.trackIdx, viewName, _frameIdx);
+                    if (lIdentity) {
+                        labelNames[lInst.trackIdx] = lIdentity.name;
+                        labelColors[lInst.trackIdx] = lIdentity.color;
+                    }
+                }
+            }
             drawInstanceLabels(ctx, userInstances, skeleton, viewName, Object.assign({}, userRender, {
-                trackNames: trackNames,
+                trackNames: labelNames,
+                trackColors: labelColors,
             }));
         }
     }
@@ -1709,6 +1729,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
             typeFilter: 'user',
             colorByIdentity: colorByIdentity,
             session: session,
+            frameIdx: _frameIdx,
         }));
     }
 

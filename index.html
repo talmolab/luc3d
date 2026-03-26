@@ -35,6 +35,15 @@
             <button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;margin-top:12px;">Dismiss</button>
         </div>
 
+        <!-- Tracker progress overlay -->
+        <div class="tracker-progress" id="trackerProgress" style="display:none;">
+            <div class="tracker-progress-inner">
+                <div class="tracker-progress-bar" id="trackerProgressBar" style="width:0%"></div>
+            </div>
+            <span id="trackerProgressText">Tracking...</span>
+            <button class="toolbar-btn" id="trackerCancel" style="margin-left:8px;">Cancel</button>
+        </div>
+
         <!-- Menu Bar -->
         <div class="menu-bar" id="menuBar">
             <div class="menu-item" data-menu="file">
@@ -79,6 +88,7 @@
                     <div class="menu-dropdown-item" id="menuTriangulateMulti">Triangulate Multiple Frames</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuGroupByTrack">Group by Track &amp; Triangulate All</div>
+                    <div class="menu-dropdown-item" id="menuGroupByIdentity">Group by Identity &amp; Triangulate All</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuTrustTracks">
                         <span id="menuTrustTracksCheck">☐</span> Trust Track Labels
@@ -145,6 +155,11 @@
                 <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All</button>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
+            <div class="toolbar-separator"></div>
+            <div class="toolbar-group">
+                <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame</button>
+                <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
+            </div>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group toolbar-checkboxes">
                 <label><input type="checkbox" id="visUser" checked> User</label>
@@ -566,6 +581,17 @@
                     </div>
                 </div>
 
+                <details class="tracker-settings" id="trackerSettingsPanel" style="display:none;">
+                    <summary>Tracker Settings</summary>
+                    <div class="tracker-settings-body">
+                        <label>2D Weight <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerWeight2d"><span id="trackerWeight2dVal">1.0</span></label>
+                        <label>3D Weight <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerWeight3d"><span id="trackerWeight3dVal">1.0</span></label>
+                        <label>Velocity <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerVelocity"><span id="trackerVelocityVal">1.0</span></label>
+                        <label>Distance <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerDistance"><span id="trackerDistanceVal">1.0</span></label>
+                        <label>Time Penalty <input type="range" min="0" max="5" step="0.1" value="1.0" id="trackerTimePenalty"><span id="trackerTimePenaltyVal">1.0</span></label>
+                    </div>
+                </details>
+
                 <!-- Hidden legacy element for backward compat -->
                 <div class="instance-list" id="instanceList" style="display:none;"></div>
             </div>
@@ -576,6 +602,11 @@
         <div class="split-handle horizontal" id="timelineResizeHandle"></div>
         <!-- Timeline -->
         <div class="timeline-container" id="timelineContainer">
+            <div class="timeline-mode-toggle" id="timelineModeToggle">
+                <button class="timeline-mode-btn active" data-mode="tracks" title="Show tracks">Tracks</button>
+                <button class="timeline-mode-btn" data-mode="identities" title="Show identities">IDs</button>
+                <button class="timeline-mode-btn" data-mode="both" title="Show both">Both</button>
+            </div>
         </div>
 
         <!-- Playback Controls -->
@@ -638,6 +669,7 @@
     <script src="video.js?v=4"></script>
     <script src="pose-data.js?v=5"></script>
     <script src="triangulation.js?v=5"></script>
+    <script src="tracker.js"></script>
     <script src="demo-data.js"></script>
     <script src="overlays.js?v=8"></script>
     <script src="interaction.js?v=6"></script>
@@ -1581,6 +1613,159 @@
             });
         }
 
+        // ============================================
+        // Group by Identity & Triangulate All
+        // ============================================
+
+        /**
+         * Group instances by their assigned Identity (from tracker), then triangulate.
+         * Uses session.trackIdentityMap to find which camera:trackIdx -> identityId.
+         * For each frame, groups instances that share the same identity into InstanceGroups,
+         * then triangulates each group.
+         */
+        async function groupByIdentityAndTriangulateAll() {
+            var session = getActiveSession();
+            if (!session) {
+                setStatus('No session loaded', 'warning');
+                return;
+            }
+            if (session.cameras.length < 2) {
+                setStatus('Need at least 2 cameras', 'warning');
+                return;
+            }
+            if (session.identities.length === 0) {
+                setStatus('No identities assigned yet — run Track Frame or Track All first', 'warning');
+                return;
+            }
+
+            var cameras = session.cameras;
+            var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
+            if (allFrameIndices.length === 0) {
+                setStatus('No frames', 'warning');
+                return;
+            }
+
+            showLoading('Grouping by identity & triangulating 0/' + allFrameIndices.length + ' frames...');
+
+            var totalGrouped = 0;
+            var totalTriangulated = 0;
+            var YIELD_EVERY = 100;
+
+            for (var fi = 0; fi < allFrameIndices.length; fi++) {
+                var frameIdx = allFrameIndices[fi];
+                var fg = session.frameGroups.get(frameIdx);
+                if (!fg) continue;
+
+                // 1. Collect all instances, bucket by identityId
+                //    identityId -> { camName -> Instance }
+                var idBuckets = {};
+
+                // Collect ALL instances (with or without identity)
+                var allInstancesByCam = {};  // camName -> Instance[]
+
+                // From grouped instances
+                for (var [camName, instances] of fg.instances) {
+                    for (var ii = 0; ii < instances.length; ii++) {
+                        var inst = instances[ii];
+                        if (!allInstancesByCam[camName]) allInstancesByCam[camName] = [];
+                        allInstancesByCam[camName].push(inst);
+
+                        var identityId = session.getIdentityIdForTrack
+                            ? session.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx)
+                            : session.trackIdentityMap.get(camName + ':' + inst.trackIdx);
+                        if (identityId == null) continue;
+                        if (!idBuckets[identityId]) idBuckets[identityId] = {};
+                        if (!idBuckets[identityId][camName]) idBuckets[identityId][camName] = inst;
+                    }
+                }
+
+                // From unlinked instances
+                for (var [camName2, ulList] of fg.unlinkedInstances) {
+                    for (var ui = 0; ui < ulList.length; ui++) {
+                        var ulInst = ulList[ui].instance;
+                        if (!allInstancesByCam[camName2]) allInstancesByCam[camName2] = [];
+                        allInstancesByCam[camName2].push(ulInst);
+
+                        var identityId2 = session.getIdentityIdForTrack
+                            ? session.getIdentityIdForTrack(camName2, ulInst.trackIdx, frameIdx)
+                            : session.trackIdentityMap.get(camName2 + ':' + ulInst.trackIdx);
+                        if (identityId2 == null) continue;
+                        if (!idBuckets[identityId2]) idBuckets[identityId2] = {};
+                        if (!idBuckets[identityId2][camName2]) idBuckets[identityId2][camName2] = ulInst;
+                    }
+                }
+
+                // 2. Clear existing groups and instances for this frame
+                session.instanceGroups.delete(frameIdx);
+                for (var [cn] of fg.instances) fg.instances.set(cn, []);
+                for (var [cn2] of fg.unlinkedInstances) fg.unlinkedInstances.set(cn2, []);
+
+                // Add ALL instances back to fg.instances (they're now grouped/linked)
+                for (var cn3 in allInstancesByCam) {
+                    for (var ai = 0; ai < allInstancesByCam[cn3].length; ai++) {
+                        fg.addInstance(cn3, allInstancesByCam[cn3][ai]);
+                    }
+                }
+
+                // 3. Create InstanceGroups from identity buckets
+                for (var idStr in idBuckets) {
+                    var identityId3 = parseInt(idStr);
+                    var bucket = idBuckets[idStr];
+                    var camNames = Object.keys(bucket);
+
+                    if (camNames.length < 2) continue;
+
+                    // Create InstanceGroup
+                    var groupId = session.instanceGroups.size + totalGrouped;
+                    var trackIdx = bucket[camNames[0]].trackIdx;
+                    var group = new InstanceGroup(groupId, trackIdx);
+                    group.identityId = identityId3;
+
+                    for (var ci2 = 0; ci2 < camNames.length; ci2++) {
+                        group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
+                    }
+
+                    // Add to session
+                    if (!session.instanceGroups.has(frameIdx)) {
+                        session.instanceGroups.set(frameIdx, new Map());
+                    }
+                    var frameMap = session.instanceGroups.get(frameIdx);
+                    if (!frameMap.has(trackIdx)) frameMap.set(trackIdx, []);
+                    frameMap.get(trackIdx).push(group);
+
+                    // Triangulate
+                    var triResult = triangulateAndReproject(group, cameras);
+                    group.points3d = triResult.points3d;
+                    group.markClean();
+
+                    // Store reprojections
+                    for (var ci3 = 0; ci3 < cameras.length; ci3++) {
+                        var reprojPts = triResult.reprojections[cameras[ci3].name];
+                        if (reprojPts) {
+                            var reprojInst = new Instance(reprojPts, trackIdx, 'reprojected', 0);
+                            group.addReprojectedInstance(cameras[ci3].name, reprojInst);
+                        }
+                    }
+
+                    totalGrouped++;
+                    totalTriangulated++;
+                }
+
+                // Yield to UI
+                if (fi % YIELD_EVERY === 0) {
+                    document.getElementById('loadingStatus').textContent =
+                        'Grouping by identity & triangulating ' + (fi + 1) + '/' + allFrameIndices.length + ' frames...';
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+            }
+
+            hideLoading();
+            drawAllOverlays(state.currentFrame);
+            updateInfoPanel();
+            setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
+                totalTriangulated + ' across ' + allFrameIndices.length + ' frames', 'success');
+        }
+
         function swapTracks(trackA, trackB, frameStart, frameEnd) {
             if (!state.session) return 0;
             var swapped = 0;
@@ -2072,6 +2257,7 @@
                 let overlayFrameGroup = null;
                 if (frameGroup) {
                     overlayFrameGroup = {
+                        frameIdx: frameGroup.frameIdx,
                         instances: {}
                     };
                     for (const [camName, instances] of frameGroup.instances) {
@@ -2621,6 +2807,139 @@
             if (state.session) {
                 timeline.setData(state.session);
             }
+
+            // Timeline display mode toggles
+            var modeToggle = document.getElementById('timelineModeToggle');
+            if (modeToggle) {
+                modeToggle.querySelectorAll('.timeline-mode-btn').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        modeToggle.querySelectorAll('.timeline-mode-btn').forEach(function (b) { b.classList.remove('active'); });
+                        btn.classList.add('active');
+                        if (timeline) timeline.setDisplayMode(btn.getAttribute('data-mode'));
+                    });
+                });
+            }
+        }
+
+        // ============================================
+        // Track/Identity helpers (top-level so all code can access)
+        // ============================================
+
+        /**
+         * Swap-assign a track: if another instance on the same frame/camera
+         * already has the target track, swap their tracks instead of creating
+         * a duplicate. Then propagate the swap forward.
+         */
+        function swapAssignTrack(frameIdx, camName, instance, newTrack, session) {
+            var oldTrack = instance.trackIdx;
+            if (oldTrack === newTrack) return 0;
+
+            var fg = session.getFrameGroup(frameIdx);
+            if (!fg) return 0;
+
+            var camInsts = fg.getInstances(camName);
+            var ulInsts = fg.getUnlinkedInstances(camName);
+
+            // Swap on current frame
+            for (var i = 0; i < camInsts.length; i++) {
+                if (camInsts[i] !== instance && camInsts[i].trackIdx === newTrack) {
+                    camInsts[i].trackIdx = oldTrack;
+                }
+            }
+            for (var u = 0; u < ulInsts.length; u++) {
+                if (ulInsts[u].instance !== instance && ulInsts[u].instance.trackIdx === newTrack) {
+                    ulInsts[u].instance.trackIdx = oldTrack;
+                }
+            }
+            instance.trackIdx = newTrack;
+
+            // Propagate swap to subsequent frames
+            var propagated = 0;
+            for (var [fIdx, fgP] of session.frameGroups) {
+                if (fIdx <= frameIdx) continue;
+                var allInsts = [];
+                for (var [cn, insts] of fgP.instances) {
+                    if (cn === camName) for (var j = 0; j < insts.length; j++) allInsts.push(insts[j]);
+                }
+                for (var [cn2, ulL] of fgP.unlinkedInstances) {
+                    if (cn2 === camName) for (var k = 0; k < ulL.length; k++) allInsts.push(ulL[k].instance);
+                }
+                for (var m = 0; m < allInsts.length; m++) {
+                    if (allInsts[m].trackIdx === oldTrack) { allInsts[m].trackIdx = -99; propagated++; }
+                }
+                for (var m = 0; m < allInsts.length; m++) {
+                    if (allInsts[m].trackIdx === newTrack) { allInsts[m].trackIdx = oldTrack; propagated++; }
+                }
+                for (var m = 0; m < allInsts.length; m++) {
+                    if (allInsts[m].trackIdx === -99) { allInsts[m].trackIdx = newTrack; }
+                }
+            }
+            return propagated;
+        }
+
+        function assignTrackToSelected(trackIdx) {
+            if (!state.session) return;
+            var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+            var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
+            if (!sel && !selUl) { setStatus('Select an instance first', 'warning'); return; }
+
+            if (sel) {
+                var totalProp = 0;
+                for (var [cn, inst] of sel.instances) {
+                    totalProp += swapAssignTrack(state.currentFrame, cn, inst, trackIdx, state.session);
+                }
+                sel.trackIdx = trackIdx;
+                setStatus('Assigned ' + state.session.tracks[trackIdx] + (totalProp > 0 ? ' (swapped & propagated ' + totalProp + ')' : ''), 'success');
+            } else if (selUl) {
+                var propagated = swapAssignTrack(state.currentFrame, selUl.cameraName, selUl.instance, trackIdx, state.session);
+                setStatus('Assigned ' + state.session.tracks[trackIdx] + (propagated > 0 ? ' (swapped & propagated ' + propagated + ')' : ''), 'success');
+            }
+            drawAllOverlays(state.currentFrame);
+            updateInfoPanel();
+            if (timeline) timeline.refreshTracks(state.session);
+        }
+
+        /**
+         * Propagate identity forward from current frame using per-frame overrides.
+         */
+        function propagateIdentityForward(trackIdx, identityId, cameraName) {
+            var session = state.session;
+            if (!session) return 0;
+            return session.propagateIdentity(state.currentFrame, cameraName, trackIdx, identityId);
+        }
+
+        /**
+         * Assign identity to selected instance/group and propagate forward.
+         */
+        function assignIdentityToSelected(identityId, identityName) {
+            var session = state.session;
+            if (!session) return;
+            var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
+            var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
+            if (!sel && !selUl) {
+                setStatus('Select an instance first', 'warning');
+                return;
+            }
+
+            var propagated = 0;
+            if (sel) {
+                session.assignIdentityToGroup(sel, identityId);
+                for (var [cn, inst] of sel.instances) {
+                    session.trackIdentityMap.set(cn + ':' + inst.trackIdx, identityId);
+                    propagated += propagateIdentityForward(inst.trackIdx, identityId, cn);
+                }
+            } else if (selUl) {
+                session.assignTrackToIdentity(selUl.instance.trackIdx, identityId, selUl.cameraName);
+                propagated = propagateIdentityForward(selUl.instance.trackIdx, identityId, selUl.cameraName);
+            }
+
+            drawAllOverlays(state.currentFrame);
+            updateInfoPanel();
+            if (timeline) timeline.refreshTracks(state.session);
+
+            var msg = 'Assigned ' + identityName;
+            if (propagated > 0) msg += ' (propagated to ' + propagated + ' future instances)';
+            setStatus(msg, 'success');
         }
 
         // ============================================
@@ -2699,6 +3018,10 @@
                 closeMenus();
                 showGroupByTrackModal();
             });
+            document.getElementById('menuGroupByIdentity').addEventListener('click', function () {
+                closeMenus();
+                groupByIdentityAndTriangulateAll();
+            });
 
             document.getElementById('menuTrustTracks').addEventListener('click', function () {
                 closeMenus();
@@ -2728,6 +3051,7 @@
                     setStatus('Trust Track Labels: ON — ' + state.session.tracks.length + ' identities from tracks', 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
+                    if (timeline) timeline.refreshTracks(state.session);
                 } else {
                     setStatus('Trust Track Labels: OFF — tracks and identities are independent', 'success');
                 }
@@ -2772,6 +3096,7 @@
                 setStatus('Created track: ' + name, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             document.getElementById('menuRenameTrack').addEventListener('click', function () {
@@ -2786,6 +3111,7 @@
                 setStatus('Renamed track ' + (idx + 1) + ' to: ' + newName, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             document.getElementById('menuDeleteTrack').addEventListener('click', function () {
@@ -2815,83 +3141,10 @@
                 setStatus('Deleted track: ' + name, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
-            // Track assign helper (reused by submenu and hotkeys)
-            /**
-             * Swap-assign a track: if another instance on the same frame/camera
-             * already has the target track, swap their tracks instead of creating
-             * a duplicate. Then propagate the swap forward.
-             */
-            function swapAssignTrack(frameIdx, camName, instance, newTrack, session) {
-                var oldTrack = instance.trackIdx;
-                if (oldTrack === newTrack) return 0;
-
-                // Find conflicting instance on this frame with the target track
-                var fg = session.getFrameGroup(frameIdx);
-                if (!fg) return 0;
-
-                var camInsts = fg.getInstances(camName);
-                var ulInsts = fg.getUnlinkedInstances(camName);
-
-                // Swap on current frame
-                for (var i = 0; i < camInsts.length; i++) {
-                    if (camInsts[i] !== instance && camInsts[i].trackIdx === newTrack) {
-                        camInsts[i].trackIdx = oldTrack;
-                    }
-                }
-                for (var u = 0; u < ulInsts.length; u++) {
-                    if (ulInsts[u].instance !== instance && ulInsts[u].instance.trackIdx === newTrack) {
-                        ulInsts[u].instance.trackIdx = oldTrack;
-                    }
-                }
-                instance.trackIdx = newTrack;
-
-                // Propagate swap to subsequent frames (swap, not just reassign)
-                var propagated = 0;
-                for (var [fIdx, fgP] of session.frameGroups) {
-                    if (fIdx <= frameIdx) continue;
-                    // Use temp value to avoid overwriting
-                    var allInsts = [];
-                    for (var [cn, insts] of fgP.instances) {
-                        if (cn === camName) for (var j = 0; j < insts.length; j++) allInsts.push(insts[j]);
-                    }
-                    for (var [cn2, ulL] of fgP.unlinkedInstances) {
-                        if (cn2 === camName) for (var k = 0; k < ulL.length; k++) allInsts.push(ulL[k].instance);
-                    }
-                    for (var m = 0; m < allInsts.length; m++) {
-                        if (allInsts[m].trackIdx === oldTrack) { allInsts[m].trackIdx = -99; propagated++; }
-                    }
-                    for (var m = 0; m < allInsts.length; m++) {
-                        if (allInsts[m].trackIdx === newTrack) { allInsts[m].trackIdx = oldTrack; propagated++; }
-                    }
-                    for (var m = 0; m < allInsts.length; m++) {
-                        if (allInsts[m].trackIdx === -99) { allInsts[m].trackIdx = newTrack; }
-                    }
-                }
-                return propagated;
-            }
-
-            function assignTrackToSelected(trackIdx) {
-                if (!state.session) return;
-                var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
-                var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
-                if (!sel && !selUl) { setStatus('Select an instance first', 'warning'); return; }
-
-                if (sel) {
-                    var totalProp = 0;
-                    for (var [cn, inst] of sel.instances) {
-                        totalProp += swapAssignTrack(state.currentFrame, cn, inst, trackIdx, state.session);
-                    }
-                    sel.trackIdx = trackIdx;
-                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (totalProp > 0 ? ' (swapped & propagated ' + totalProp + ')' : ''), 'success');
-                } else if (selUl) {
-                    var propagated = swapAssignTrack(state.currentFrame, selUl.cameraName, selUl.instance, trackIdx, state.session);
-                    setStatus('Assigned ' + state.session.tracks[trackIdx] + (propagated > 0 ? ' (swapped & propagated ' + propagated + ')' : ''), 'success');
-                }
-                drawAllOverlays(state.currentFrame);
-                updateInfoPanel();
-            }
+            // Track/identity helpers are now top-level functions (above setupMenus)
 
             // Populate Assign Track submenu on hover
             document.getElementById('menuAssignTrack').addEventListener('mouseenter', function () {
@@ -2922,6 +3175,10 @@
                     if (state.session.tracks.indexOf(name) < 0) state.session.tracks.push(name);
                     var idx = state.session.tracks.indexOf(name);
                     assignTrackToSelected(idx);
+                    // Always refresh UI (assignTrackToSelected may return early if nothing selected)
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                    if (timeline) timeline.refreshTracks(state.session);
                 });
                 sub.appendChild(newItem);
             });
@@ -2944,6 +3201,7 @@
                     ' (' + count + ' instances, frames ' + (frameStart + 1) + '–' + (frameEnd + 1) + ')', 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             // ============================================
@@ -2961,6 +3219,7 @@
                 setStatus('Created identity: ' + name, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             document.getElementById('menuRenameIdentity').addEventListener('click', function () {
@@ -2975,6 +3234,7 @@
                 setStatus('Renamed identity to: ' + newName, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             document.getElementById('menuDeleteIdentity').addEventListener('click', function () {
@@ -2997,6 +3257,7 @@
                 setStatus('Deleted identity: ' + identity.name, 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             // Populate Assign Identity submenu on hover
@@ -3014,20 +3275,7 @@
                         closeMenus();
                         var newId = parseInt(this.getAttribute('data-id'));
                         var idName = this.textContent;
-                        var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
-                        var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
-                        if (sel) {
-                            state.session.assignIdentityToGroup(sel, newId);
-                            setStatus('Assigned ' + idName + ' to group', 'success');
-                        } else if (selUl) {
-                            state.session.assignTrackToIdentity(selUl.instance.trackIdx, newId, selUl.cameraName);
-                            setStatus('Assigned ' + idName + ' to ' + selUl.cameraName, 'success');
-                        } else {
-                            setStatus('Select an instance first', 'warning');
-                            return;
-                        }
-                        drawAllOverlays(state.currentFrame);
-                        updateInfoPanel();
+                        assignIdentityToSelected(newId, idName);
                     });
                     sub.appendChild(item);
                 }
@@ -3041,19 +3289,11 @@
                     var name = prompt('New identity name:', 'identity_' + state.session.identities.length);
                     if (!name) return;
                     var identity = state.session.addIdentity(name);
-                    var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
-                    var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
-                    if (sel) {
-                        state.session.assignIdentityToGroup(sel, identity.id);
-                        setStatus('Created and assigned: ' + name, 'success');
-                    } else if (selUl) {
-                        state.session.assignTrackToIdentity(selUl.instance.trackIdx, identity.id, selUl.cameraName);
-                        setStatus('Created and assigned: ' + name + ' to ' + selUl.cameraName, 'success');
-                    } else {
-                        setStatus('Created identity: ' + name, 'success');
-                    }
+                    assignIdentityToSelected(identity.id, name);
+                    // Always refresh UI (assignIdentityToSelected may return early if nothing selected)
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
+                    if (timeline) timeline.refreshTracks(state.session);
                 });
                 sub.appendChild(newItem);
             });
@@ -3610,15 +3850,7 @@
                         state.session.addIdentity('id_' + state.session.identities.length);
                     }
                     var identity = state.session.identities[identityNum];
-                    if (selectedGroup) {
-                        state.session.assignIdentityToGroup(selectedGroup, identity.id);
-                        setStatus('Assigned ' + identity.name + ' to group', 'success');
-                    } else if (selectedUl) {
-                        state.session.assignTrackToIdentity(selectedUl.instance.trackIdx, identity.id, selectedUl.cameraName);
-                        setStatus('Assigned ' + identity.name + ' to ' + selectedUl.cameraName + ' track ' + selectedUl.instance.trackIdx, 'success');
-                    }
-                    drawAllOverlays(state.currentFrame);
-                    updateInfoPanel();
+                    assignIdentityToSelected(identity.id, identity.name);
                     return;
                 }
 
@@ -3643,28 +3875,40 @@
                         selectedGroup.trackIdx = newTrackIdx;
                         setStatus('Set track to ' + trackName + (totalProp > 0 ? ' (swapped ' + totalProp + ')' : ''), 'success');
                     } else if (selectedUl) {
-                        // Inline swap for unlinked instance
-                        var oldT = selectedUl.instance.trackIdx;
-                        var fg = state.session.getFrameGroup(state.currentFrame);
-                        if (fg && oldT !== newTrackIdx) {
-                            var camUl = fg.getUnlinkedInstances(selectedUl.cameraName);
-                            for (var su = 0; su < camUl.length; su++) {
-                                if (camUl[su].instance !== selectedUl.instance && camUl[su].instance.trackIdx === newTrackIdx) {
-                                    camUl[su].instance.trackIdx = oldT;
-                                }
-                            }
-                        }
-                        selectedUl.instance.trackIdx = newTrackIdx;
-                        setStatus('Set track to ' + trackName + ' on ' + selectedUl.cameraName, 'success');
+                        // Swap-assign with propagation (same as assignTrackToSelected)
+                        var propagated = swapAssignTrack(state.currentFrame, selectedUl.cameraName, selectedUl.instance, newTrackIdx, state.session);
+                        setStatus('Set track to ' + trackName + (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
                     }
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
+                    if (timeline) timeline.refreshTracks(state.session);
                     return;
                 }
             });
 
             // --- New keyboard shortcuts (Prompt 36) ---
             document.addEventListener('keydown', function (e) {
+                // --- Ctrl+Shift+T = Track All ---
+                if (e.key === 'T' && e.shiftKey && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    trackAll();
+                    return;
+                }
+                // --- Shift+T = Track Frame ---
+                if (e.key === 'T' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                    e.preventDefault();
+                    trackCurrentFrame();
+                    return;
+                }
+                // F = Find Match for selected instance
+                if (e.key === 'f' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                    if (interactionManager && (interactionManager.selectedUnlinked || interactionManager.selectedInstanceGroup)) {
+                        e.preventDefault();
+                        findMatchForSelected();
+                    }
+                }
                 // --- Cmd/Ctrl shortcuts (work even in inputs) ---
                 if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
                     switch (e.key) {
@@ -6721,6 +6965,9 @@
             document.getElementById('infoTracks').textContent = state.session.tracks.join(', ');
             document.getElementById('infoFrames').textContent = state.session.numFrames;
 
+            // Rebuild instance detail panel (track/identity dropdowns)
+            updateFrameInfo(state.currentFrame, getInstanceGroupsForFrame(state.currentFrame));
+
             // Also populate static tables
             populateVideosTable();
             populateCamerasTable();
@@ -7097,28 +7344,17 @@
                         sel.addEventListener('change', function (ev) {
                             ev.stopPropagation();
                             var newTrack = parseInt(sel.value);
-                            var oldTrack = g.trackIdx;
-                            // Swap on current frame per camera
-                            if (oldTrack !== newTrack) {
-                                var fg = state.session.getFrameGroup(state.currentFrame);
-                                if (fg) {
-                                    for (var [cn, ginst] of g.instances) {
-                                        var camInsts = fg.getInstances(cn);
-                                        for (var si = 0; si < camInsts.length; si++) {
-                                            if (camInsts[si] !== ginst && camInsts[si].trackIdx === newTrack) camInsts[si].trackIdx = oldTrack;
-                                        }
-                                        var camUl = fg.getUnlinkedInstances(cn);
-                                        for (var su = 0; su < camUl.length; su++) {
-                                            if (camUl[su].instance !== ginst && camUl[su].instance.trackIdx === newTrack) camUl[su].instance.trackIdx = oldTrack;
-                                        }
-                                        ginst.trackIdx = newTrack;
-                                    }
-                                }
+                            if (newTrack === g.trackIdx) return;
+                            var totalProp = 0;
+                            for (var [cn, ginst] of g.instances) {
+                                totalProp += swapAssignTrack(state.currentFrame, cn, ginst, newTrack, state.session);
                             }
                             g.trackIdx = newTrack;
-                            setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack), 'success');
+                            setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) +
+                                (totalProp > 0 ? ' (propagated ' + totalProp + ')' : ''), 'success');
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
+                            if (timeline) timeline.refreshTracks(state.session);
                         });
                         sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                     })(group, trackSelect);
@@ -7153,8 +7389,14 @@
                             e.stopPropagation();
                             var newIdentityId = parseInt(sel.value);
                             state.session.assignIdentityToGroup(g, newIdentityId);
+                            // Propagate forward for all cameras in the group
+                            for (var [cn, inst] of g.instances) {
+                                state.session.trackIdentityMap.set(cn + ':' + inst.trackIdx, newIdentityId);
+                                propagateIdentityForward(inst.trackIdx, newIdentityId, cn);
+                            }
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
+                            if (timeline) timeline.refreshTracks(state.session);
                         });
                         sel.addEventListener('click', function (e) { e.stopPropagation(); });
                     })(group, idSelect);
@@ -7389,28 +7631,13 @@
                             sel.addEventListener('change', function (ev) {
                                 ev.stopPropagation();
                                 var newTrack = parseInt(sel.value);
-                                var oldTrack = inst.trackIdx;
-                                // Inline swap on current frame
-                                var fg = state.session.getFrameGroup(state.currentFrame);
-                                if (fg && oldTrack !== newTrack) {
-                                    var camInsts = fg.getInstances(camNameForUl);
-                                    for (var si = 0; si < camInsts.length; si++) {
-                                        if (camInsts[si] !== inst && camInsts[si].trackIdx === newTrack) camInsts[si].trackIdx = oldTrack;
-                                    }
-                                    var camUl = fg.getUnlinkedInstances(camNameForUl);
-                                    for (var su = 0; su < camUl.length; su++) {
-                                        if (camUl[su].instance !== inst && camUl[su].instance.trackIdx === newTrack) camUl[su].instance.trackIdx = oldTrack;
-                                    }
-                                }
-                                inst.trackIdx = newTrack;
-                                console.log('[TRACK CHANGE] ' + camNameForUl + ': ' + oldTrack + ' → ' + newTrack + ' | color should be: ' + getTrackColor(newTrack));
-                                setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl, 'success');
-                                try {
-                                    drawAllOverlays(state.currentFrame);
-                                } catch (err) {
-                                    console.error('[TRACK CHANGE] drawAllOverlays error:', err);
-                                }
+                                if (newTrack === inst.trackIdx) return;
+                                var propagated = swapAssignTrack(state.currentFrame, camNameForUl, inst, newTrack, state.session);
+                                setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl +
+                                    (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
+                                drawAllOverlays(state.currentFrame);
                                 updateInfoPanel();
+                                if (timeline) timeline.refreshTracks(state.session);
                             });
                             sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                         })(ul, ul.instance, trackSelect, cam.name);
@@ -7431,7 +7658,9 @@
                             idSelectUl.appendChild(idOpt);
                         }
                         // Pre-select based on trackIdentityMap (per-camera)
-                        var currentIdForTrack = state.session.trackIdentityMap.get(cam.name + ':' + ul.instance.trackIdx);
+                        var currentIdForTrack = state.session.getIdentityIdForTrack
+                            ? state.session.getIdentityIdForTrack(cam.name, ul.instance.trackIdx, state.currentFrame)
+                            : state.session.trackIdentityMap.get(cam.name + ':' + ul.instance.trackIdx);
                         idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
                         (function (inst, sel, camNameForId) {
                             sel.addEventListener('change', function (ev) {
@@ -7439,11 +7668,13 @@
                                 var newIdVal = parseInt(sel.value);
                                 if (newIdVal >= 0) {
                                     state.session.assignTrackToIdentity(inst.trackIdx, newIdVal, camNameForId);
+                                    propagateIdentityForward(inst.trackIdx, newIdVal, camNameForId);
                                 } else {
                                     state.session.trackIdentityMap.delete(camNameForId + ':' + inst.trackIdx);
                                 }
                                 drawAllOverlays(state.currentFrame);
                                 updateInfoPanel();
+                                if (timeline) timeline.refreshTracks(state.session);
                             });
                             sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                         })(ul.instance, idSelectUl, cam.name);
@@ -12008,6 +12239,238 @@
                     if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
                 });
                 input.addEventListener('blur', commit);
+            });
+        })();
+
+        // ============================================
+        // Cross-View Tracker Integration
+        // ============================================
+
+        var globalTracker = null;
+        var trackerWorker = null;
+
+        function getTrackerHyperparams() {
+            var el2d = document.getElementById('trackerWeight2d');
+            return {
+                correspondenceWeight2d: el2d ? parseFloat(el2d.value) : 1.0,
+                correspondenceWeight3d: document.getElementById('trackerWeight3d') ? parseFloat(document.getElementById('trackerWeight3d').value) : 1.0,
+                velocityThreshold: document.getElementById('trackerVelocity') ? parseFloat(document.getElementById('trackerVelocity').value) : 1.0,
+                distanceThreshold: document.getElementById('trackerDistance') ? parseFloat(document.getElementById('trackerDistance').value) : 1.0,
+                timePenalty: document.getElementById('trackerTimePenalty') ? parseFloat(document.getElementById('trackerTimePenalty').value) : 1.0
+            };
+        }
+
+        // Tracker state: number of animals (null = unconstrained)
+        var trackerNumAnimals = null;
+
+        function promptNumAnimals() {
+            var input = prompt('Number of animals (leave empty for auto-detect):', trackerNumAnimals || '');
+            if (input === null) return false;  // cancelled
+            input = input.trim();
+            if (input === '') {
+                trackerNumAnimals = null;
+            } else {
+                var n = parseInt(input);
+                if (isNaN(n) || n < 1) {
+                    setStatus('Invalid number', 'error');
+                    return false;
+                }
+                trackerNumAnimals = n;
+            }
+            return true;
+        }
+
+        function trackCurrentFrame() {
+            var session = getActiveSession();
+            if (!session || !session.cameras || session.cameras.length === 0) {
+                setStatus('No session with cameras loaded', 'error');
+                return;
+            }
+            var fg = session.getFrameGroup(state.currentFrame);
+            if (!fg) {
+                setStatus('No frame data at frame ' + state.currentFrame, 'error');
+                return;
+            }
+
+            // Prompt for number of animals on first use
+            if (trackerNumAnimals == null) {
+                if (!promptNumAnimals()) return;
+            }
+
+            try {
+                var result = matchFrameInstances(fg, session.cameras, session, {
+                    numAnimals: trackerNumAnimals
+                });
+                drawAllOverlays(state.currentFrame);
+                updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
+                if (result.numIdentities > 0) {
+                    setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
+                        (trackerNumAnimals ? ' (constrained to ' + trackerNumAnimals + ')' : ''), 'success');
+                } else {
+                    setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
+                }
+            } catch (e) {
+                console.error('[Tracker] error:', e, e.stack);
+                setStatus('Tracker error: ' + e.message + ' | ' + (e.stack ? e.stack.split('\n')[1] : ''), 'error');
+            }
+        }
+
+        function findMatchForSelected() {
+            var session = getActiveSession();
+            if (!session || !session.cameras || session.cameras.length === 0) return;
+            if (!interactionManager) return;
+
+            // Determine the selected instance and its camera
+            var selectedInst = null;
+            var selectedCam = null;
+
+            if (interactionManager.selectedUnlinked) {
+                // Unlinked instance: single-view, has .instance and .cameraName
+                selectedInst = interactionManager.selectedUnlinked.instance;
+                selectedCam = interactionManager.selectedUnlinked.cameraName;
+            } else if (interactionManager.selectedInstanceGroup) {
+                // Grouped instance: pick the first camera's instance
+                var group = interactionManager.selectedInstanceGroup;
+                var iter = group.instances.entries();
+                var first = iter.next();
+                if (!first.done) {
+                    selectedCam = first.value[0];
+                    selectedInst = first.value[1];
+                }
+            }
+
+            if (!selectedInst || !selectedCam) {
+                setStatus('Select an instance first', 'warning');
+                return;
+            }
+            if (!globalTracker) {
+                globalTracker = new CrossViewTracker(getTrackerHyperparams());
+            }
+            var fg = session.getFrameGroup(state.currentFrame);
+            if (!fg) return;
+
+            var matches = globalTracker.findMatchesForInstance(selectedInst, selectedCam, fg, session.cameras);
+            if (matches.size === 0) {
+                setStatus('No matches found in other views', 'warning');
+                return;
+            }
+
+            // Report matches
+            var parts = [];
+            matches.forEach(function (match, camName) {
+                parts.push(camName + ' (err=' + match.score.toFixed(1) + ')');
+            });
+            setStatus('Matches: ' + parts.join(', '), 'success');
+
+            // TODO: Visual highlight of matched instances (phase 2)
+        }
+
+        async function trackAll() {
+            var session = getActiveSession();
+            if (!session || !session.cameras || session.cameras.length === 0) {
+                setStatus('No session with cameras loaded', 'error');
+                return;
+            }
+
+            var cameras = session.cameras;
+            if (cameras.length < 2) {
+                setStatus('Need at least 2 cameras', 'warning');
+                return;
+            }
+
+            var frameIndices = session.frameIndices;
+            if (frameIndices.length === 0) {
+                setStatus('No frames to track', 'error');
+                return;
+            }
+
+            // Prompt for number of animals
+            if (trackerNumAnimals == null) {
+                if (!promptNumAnimals()) return;
+            }
+            console.log('[TrackAll] numAnimals:', trackerNumAnimals, 'frames:', frameIndices.length);
+            console.time('[TrackAll] total');
+
+            // Clear old identities for fresh run
+            session.identities = [];
+            session.trackIdentityMap = new Map();
+            session.frameIdentityMap = new Map();
+
+            showLoading('Assigning identities: 0/' + frameIndices.length + ' frames...');
+
+            var YIELD_EVERY = 50;
+
+            var prevAssignments = null;
+            var prevTargets3d = null;
+            try {
+                for (var f = 0; f < frameIndices.length; f++) {
+                    var fi = frameIndices[f];
+                    var fg = session.getFrameGroup(fi);
+                    if (fg) {
+                        try {
+                            var result = matchFrameInstances(fg, cameras, session, {
+                                numAnimals: trackerNumAnimals,
+                                perFrame: true,
+                                prevAssignments: prevAssignments,
+                                prevTargets3d: prevTargets3d
+                            });
+                            if (result.assignments && result.assignments.size > 0) {
+                                prevAssignments = result.assignments;
+                            }
+                            if (result.targets3d && result.targets3d.length > 0) {
+                                prevTargets3d = result.targets3d;
+                            }
+                        } catch (frameErr) {
+                            console.error('[TrackAll] Error at frame ' + fi + ':', frameErr);
+                            // Continue to next frame instead of aborting
+                        }
+                    }
+
+                    if (f % YIELD_EVERY === 0) {
+                        document.getElementById('loadingStatus').textContent =
+                            'Assigning identities: ' + (f + 1) + '/' + frameIndices.length + ' frames...';
+                        await new Promise(function (r) { setTimeout(r, 0); });
+                    }
+                }
+
+                hideLoading();
+                drawAllOverlays(state.currentFrame);
+                console.timeEnd('[TrackAll] total');
+                updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
+                setStatus('Tracked ' + frameIndices.length + ' frames, ' +
+                    session.identities.length + ' identities', 'success');
+            } catch (e) {
+                hideLoading();
+                console.error('[TrackAll] error:', e, e.stack);
+                setStatus('Track All error: ' + e.message + ' | ' + (e.stack ? e.stack.split('\n')[1] : ''), 'error');
+            }
+        }
+
+        // Wire up tracker buttons
+        (function () {
+            var btnTrackFrame = document.getElementById('tbTrackFrame');
+            var btnTrackAll = document.getElementById('tbTrackAll');
+            var btnCancel = document.getElementById('trackerCancel');
+
+            if (btnTrackFrame) btnTrackFrame.addEventListener('click', trackCurrentFrame);
+            if (btnTrackAll) btnTrackAll.addEventListener('click', trackAll);
+            if (btnCancel) btnCancel.addEventListener('click', function () {
+                if (trackerWorker) trackerWorker.postMessage({ type: 'cancel' });
+            });
+
+            // Slider value display
+            ['trackerWeight2d', 'trackerWeight3d', 'trackerVelocity', 'trackerDistance', 'trackerTimePenalty'].forEach(function (id) {
+                var slider = document.getElementById(id);
+                var valSpan = document.getElementById(id + 'Val');
+                if (slider && valSpan) {
+                    slider.addEventListener('input', function () {
+                        valSpan.textContent = slider.value;
+                        // Reset tracker so new hyperparams take effect
+                        globalTracker = null;
+                    });
+                }
             });
         })();
 

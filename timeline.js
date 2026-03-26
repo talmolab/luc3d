@@ -66,6 +66,15 @@ class Timeline {
         /** Track names (string[]) */
         this._trackNames = [];
 
+        /**
+         * Display mode: 'tracks', 'identities', or 'both'
+         * Controls what the timeline bars represent.
+         */
+        this._displayMode = 'tracks';
+
+        /** Cached session reference for rebuilding segments on mode change */
+        this._session = null;
+
         /** Range selection state */
         this._rangeStart = null;
         this._rangeEnd = null;
@@ -80,6 +89,9 @@ class Timeline {
 
         /** @const {number} Vertical gap between track rows (px) */
         this.TRACK_ROW_GAP = 1;
+
+        /** @const {number} Extra gap between camera/view groups (px) */
+        this.VIEW_GROUP_GAP = 8;
 
         /** @const {number} Height of the frame-marker area (px) */
         this.MARKER_AREA_HEIGHT = 20;
@@ -196,6 +208,7 @@ class Timeline {
      * @param {Session} session - The session (has .tracks, .frameGroups)
      */
     setData(session) {
+        this._session = session;
         if (!session) {
             this._trackSegments = [];
             this._frameMarkers.clear();
@@ -204,7 +217,7 @@ class Timeline {
             return;
         }
 
-        this._buildTrackSegments(session);
+        this._rebuildSegments(session);
         this._buildFrameMarkers(session);
         this.redraw();
     }
@@ -247,9 +260,16 @@ class Timeline {
         var dpr = window.devicePixelRatio || 1;
         var rect = this._container.getBoundingClientRect();
         var w = Math.round(rect.width);
-        // Compute needed height based on track rows
+        // Compute needed height based on track rows + extra gaps between camera groups
         var numRows = this._trackSegments.length;
-        var neededH = this.TOP_PADDING + (numRows > 0 ? numRows * (this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP) : 0) + 8 + this.MARKER_AREA_HEIGHT + this.LABEL_AREA_HEIGHT;
+        var numViewGaps = 0;
+        var _prevCamResize = null;
+        for (var _ri = 0; _ri < numRows; _ri++) {
+            var _thisCam = this._trackSegments[_ri].cameraName;
+            if (_prevCamResize != null && _thisCam !== _prevCamResize) numViewGaps++;
+            _prevCamResize = _thisCam;
+        }
+        var neededH = this.TOP_PADDING + (numRows > 0 ? numRows * (this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP) + numViewGaps * this.VIEW_GROUP_GAP : 0) + 8 + this.MARKER_AREA_HEIGHT + this.LABEL_AREA_HEIGHT;
         var h = Math.max(Math.round(rect.height), neededH);
         this._canvas.width = w * dpr;
         this._canvas.height = h * dpr;
@@ -352,9 +372,35 @@ class Timeline {
      * @private
      */
     _buildTrackSegments(session) {
-        var numTracks = session.tracks ? session.tracks.length : 0;
         this._trackSegments = [];
         this._trackNames = [];
+
+        // Find max track index across all data (not just session.tracks.length,
+        // which may be stale if tracks were added dynamically)
+        var maxTrackIdx = session.tracks ? session.tracks.length - 1 : -1;
+        if (session.instanceGroups) {
+            for (var [_fi, trackMap] of session.instanceGroups) {
+                for (var [_mk, grps] of trackMap) {
+                    for (var _gi = 0; _gi < grps.length; _gi++) {
+                        if (grps[_gi].trackIdx > maxTrackIdx) maxTrackIdx = grps[_gi].trackIdx;
+                    }
+                }
+            }
+        }
+        for (var [_fi2, fg] of session.frameGroups) {
+            for (var [_cn, insts] of fg.instances) {
+                for (var _ii = 0; _ii < insts.length; _ii++) {
+                    if (insts[_ii].trackIdx > maxTrackIdx) maxTrackIdx = insts[_ii].trackIdx;
+                }
+            }
+            for (var [_cn2, ulList] of fg.unlinkedInstances) {
+                for (var _ui = 0; _ui < ulList.length; _ui++) {
+                    if (ulList[_ui].instance.trackIdx > maxTrackIdx) maxTrackIdx = ulList[_ui].instance.trackIdx;
+                }
+            }
+        }
+
+        var numTracks = maxTrackIdx + 1;
         if (numTracks === 0) return;
 
         // Collect camera names
@@ -367,10 +413,13 @@ class Timeline {
         // Scan grouped instances (instanceGroups)
         if (session.instanceGroups) {
             for (var [frameIdx, trackMap] of session.instanceGroups) {
-                for (var [trackIdx, groups] of trackMap) {
+                for (var [_mapKey, groups] of trackMap) {
                     for (var gi = 0; gi < groups.length; gi++) {
+                        // Use the group's actual trackIdx, not the map key
+                        // (map key may be stale after track reassignment)
+                        var grpTrack = groups[gi].trackIdx;
                         for (var [camName] of groups[gi].instances) {
-                            var key = trackIdx + ':' + camName;
+                            var key = grpTrack + ':' + camName;
                             if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
                             trackCamFrames[key].add(frameIdx);
                         }
@@ -385,7 +434,7 @@ class Timeline {
             for (var [camName2, instances] of fg.instances) {
                 for (var i = 0; i < instances.length; i++) {
                     var t = instances[i].trackIdx;
-                    if (t >= 0 && t < numTracks) {
+                    if (t >= 0) {
                         var key2 = t + ':' + camName2;
                         if (!trackCamFrames[key2]) trackCamFrames[key2] = new Set();
                         trackCamFrames[key2].add(frameIdx2);
@@ -396,7 +445,7 @@ class Timeline {
             for (var [camName3, ulList] of fg.unlinkedInstances) {
                 for (var u = 0; u < ulList.length; u++) {
                     var t2 = ulList[u].instance.trackIdx;
-                    if (t2 >= 0 && t2 < numTracks) {
+                    if (t2 >= 0) {
                         var key3 = t2 + ':' + camName3;
                         if (!trackCamFrames[key3]) trackCamFrames[key3] = new Set();
                         trackCamFrames[key3].add(frameIdx2);
@@ -405,9 +454,18 @@ class Timeline {
             }
         }
 
-        // Build segments per track per camera, ordered by track then camera
-        for (var t3 = 0; t3 < numTracks; t3++) {
-            for (var ci = 0; ci < cameraNames.length; ci++) {
+        // Collect all track indices that actually have data
+        var allTrackIndices = new Set();
+        for (var tcfKey in trackCamFrames) {
+            var colonPos = tcfKey.indexOf(':');
+            if (colonPos > 0) allTrackIndices.add(parseInt(tcfKey.substring(0, colonPos)));
+        }
+        var sortedTrackIndices = Array.from(allTrackIndices).sort(function(a, b) { return a - b; });
+
+        // Build segments ordered by camera then track (view-first layout)
+        for (var ci = 0; ci < cameraNames.length; ci++) {
+            for (var ti = 0; ti < sortedTrackIndices.length; ti++) {
+                var t3 = sortedTrackIndices[ti];
                 var camKey = t3 + ':' + cameraNames[ci];
                 var frameSet = trackCamFrames[camKey];
                 if (!frameSet || frameSet.size === 0) continue;
@@ -432,8 +490,127 @@ class Timeline {
                     color: color,
                     segments: segments,
                 });
-                this._trackNames.push(trackName + ' / ' + cameraNames[ci]);
+                this._trackNames.push(cameraNames[ci] + ' / ' + trackName);
             }
+        }
+    }
+
+    /**
+     * Rebuild segments based on current display mode.
+     * @param {Session} session
+     * @private
+     */
+    _rebuildSegments(session) {
+        if (this._displayMode === 'identities') {
+            this._buildIdentitySegments(session);
+        } else if (this._displayMode === 'both') {
+            this._buildTrackSegments(session);
+            // Append identity segments after track segments
+            var trackCount = this._trackSegments.length;
+            var trackNames = this._trackNames.slice();
+            this._buildIdentitySegments(session);
+            // Merge: track segments first, then identity segments
+            var idSegments = this._trackSegments;
+            var idNames = this._trackNames;
+            this._trackSegments = [];
+            this._trackNames = [];
+            // Re-build track segments
+            this._buildTrackSegments(session);
+            // Append identity segments
+            for (var i = 0; i < idSegments.length; i++) {
+                this._trackSegments.push(idSegments[i]);
+                this._trackNames.push(idNames[i]);
+            }
+        } else {
+            this._buildTrackSegments(session);
+        }
+    }
+
+    /**
+     * Build segments grouped by identity instead of track.
+     * Uses session.trackIdentityMap to find identity per camera:trackIdx,
+     * then colors by identity color.
+     *
+     * @param {Session} session
+     * @private
+     */
+    _buildIdentitySegments(session) {
+        this._trackSegments = [];
+        this._trackNames = [];
+
+        if (!session.identities || session.identities.length === 0) return;
+
+        var cameraNames = session.cameras ? session.cameras.map(function (c) { return c.name; }) : [];
+
+        // Build identity -> camName -> Set<frameIdx>
+        var idCamFrames = {};  // "identityId:camName" -> Set<frameIdx>
+
+        for (var [frameIdx, fg] of session.frameGroups) {
+            // Grouped instances
+            for (var [camName, instances] of fg.instances) {
+                for (var i = 0; i < instances.length; i++) {
+                    var idId = session.getIdentityIdForTrack
+                        ? session.getIdentityIdForTrack(camName, instances[i].trackIdx, frameIdx)
+                        : session.trackIdentityMap.get(camName + ':' + instances[i].trackIdx);
+                    if (idId == null) continue;
+                    var segKey = idId + ':' + camName;
+                    if (!idCamFrames[segKey]) idCamFrames[segKey] = new Set();
+                    idCamFrames[segKey].add(frameIdx);
+                }
+            }
+            // Unlinked instances
+            for (var [camName2, ulList] of fg.unlinkedInstances) {
+                for (var u = 0; u < ulList.length; u++) {
+                    var idId2 = session.getIdentityIdForTrack
+                        ? session.getIdentityIdForTrack(camName2, ulList[u].instance.trackIdx, frameIdx)
+                        : session.trackIdentityMap.get(camName2 + ':' + ulList[u].instance.trackIdx);
+                    if (idId2 == null) continue;
+                    var segKey2 = idId2 + ':' + camName2;
+                    if (!idCamFrames[segKey2]) idCamFrames[segKey2] = new Set();
+                    idCamFrames[segKey2].add(frameIdx);
+                }
+            }
+        }
+
+        // Build segments per camera per identity (view-first layout)
+        for (var ci = 0; ci < cameraNames.length; ci++) {
+            for (var idIdx = 0; idIdx < session.identities.length; idIdx++) {
+                var ident = session.identities[idIdx];
+                var sKey = ident.id + ':' + cameraNames[ci];
+                var frameSet = idCamFrames[sKey];
+                if (!frameSet || frameSet.size === 0) continue;
+
+                var sorted = Array.from(frameSet).sort(function (a, b) { return a - b; });
+                var segments = [];
+                var segStart = -1, segEnd = -1;
+                for (var si = 0; si < sorted.length; si++) {
+                    var f = sorted[si];
+                    if (segStart < 0) { segStart = f; segEnd = f; }
+                    else if (f === segEnd + 1) { segEnd = f; }
+                    else { segments.push({ start: segStart, end: segEnd }); segStart = f; segEnd = f; }
+                }
+                if (segStart >= 0) segments.push({ start: segStart, end: segEnd });
+
+                this._trackSegments.push({
+                    trackIdx: ident.id,
+                    cameraName: cameraNames[ci],
+                    color: ident.color || '#667eea',
+                    segments: segments,
+                });
+                this._trackNames.push(cameraNames[ci] + ' / ' + ident.name);
+            }
+        }
+    }
+
+    /**
+     * Set the timeline display mode and refresh.
+     * @param {'tracks'|'identities'|'both'} mode
+     */
+    setDisplayMode(mode) {
+        this._displayMode = mode;
+        if (this._session) {
+            this._rebuildSegments(this._session);
+            this.resize();  // resize recalculates canvas height for new row count + redraws
         }
     }
 
@@ -502,9 +679,23 @@ class Timeline {
         const trackW = W - this.LEFT_MARGIN - this.RIGHT_PADDING;
         if (trackW <= 0) return;
 
+        // Precompute row Y positions with extra gap between camera groups
+        var rowYPositions = [];
+        var cumY = 0;
+        var prevCam = null;
+        for (var ry = 0; ry < this._trackSegments.length; ry++) {
+            var thisCam = this._trackSegments[ry].cameraName;
+            if (prevCam != null && thisCam !== prevCam) {
+                cumY += this.VIEW_GROUP_GAP;
+            }
+            rowYPositions.push(cumY);
+            cumY += this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP;
+            prevCam = thisCam;
+        }
+
         for (let t = 0; t < this._trackSegments.length; t++) {
             const track = this._trackSegments[t];
-            const rowY = top + t * (this.TRACK_ROW_HEIGHT + this.TRACK_ROW_GAP);
+            const rowY = top + rowYPositions[t];
 
             // Track label
             ctx.fillStyle = this.LABEL_COLOR;
@@ -1141,8 +1332,9 @@ class Timeline {
      */
     refreshTracks(session) {
         if (!session) return;
-        this._buildTrackSegments(session);
-        this.redraw();
+        this._session = session;
+        this._rebuildSegments(session);
+        this.resize();
     }
 
     /**
