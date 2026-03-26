@@ -7356,10 +7356,9 @@
                             g.trackIdx = newTrack;
                             setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) +
                                 (totalProp > 0 ? ' (propagated ' + totalProp + ')' : ''), 'success');
-                            setTimeout(function () {
-                                drawAllOverlays(state.currentFrame);
-                                if (timeline) timeline.refreshTracks(state.session);
-                            }, 0);
+                            drawAllOverlays(state.currentFrame);
+                            updateInfoPanel();
+                            if (timeline) timeline.refreshTracks(state.session);
                         });
                         sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                     })(group, trackSelect);
@@ -7394,14 +7393,14 @@
                             e.stopPropagation();
                             var newIdentityId = parseInt(sel.value);
                             state.session.assignIdentityToGroup(g, newIdentityId);
+                            // Propagate forward for all cameras in the group
                             for (var [cn, inst] of g.instances) {
                                 state.session.trackIdentityMap.set(cn + ':' + inst.trackIdx, newIdentityId);
                                 propagateIdentityForward(inst.trackIdx, newIdentityId, cn);
                             }
-                            setTimeout(function () {
-                                drawAllOverlays(state.currentFrame);
-                                if (timeline) timeline.refreshTracks(state.session);
-                            }, 0);
+                            drawAllOverlays(state.currentFrame);
+                            updateInfoPanel();
+                            if (timeline) timeline.refreshTracks(state.session);
                         });
                         sel.addEventListener('click', function (e) { e.stopPropagation(); });
                     })(group, idSelect);
@@ -7640,11 +7639,9 @@
                                 var propagated = swapAssignTrack(state.currentFrame, camNameForUl, inst, newTrack, state.session);
                                 setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl +
                                     (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
-                                // Defer UI refresh so data changes settle before rebuilding
-                                setTimeout(function () {
-                                    drawAllOverlays(state.currentFrame);
-                                    if (timeline) timeline.refreshTracks(state.session);
-                                }, 0);
+                                drawAllOverlays(state.currentFrame);
+                                updateInfoPanel();
+                                if (timeline) timeline.refreshTracks(state.session);
                             });
                             sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                         })(ul, ul.instance, trackSelect, cam.name);
@@ -7679,10 +7676,9 @@
                                 } else {
                                     state.session.trackIdentityMap.delete(camNameForId + ':' + inst.trackIdx);
                                 }
-                                setTimeout(function () {
-                                    drawAllOverlays(state.currentFrame);
-                                    if (timeline) timeline.refreshTracks(state.session);
-                                }, 0);
+                                drawAllOverlays(state.currentFrame);
+                                updateInfoPanel();
+                                if (timeline) timeline.refreshTracks(state.session);
                             });
                             sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                         })(ul.instance, idSelectUl, cam.name);
