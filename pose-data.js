@@ -634,8 +634,11 @@ class Session {
         }
         // Per-frame without cameraName: check any camera at this frame
         if (frameIdx != null && !cameraName) {
+            var framePrefix = frameIdx + ':';
+            var trackSuffix = ':' + trackIdx;
             for (var [fKey, fIdVal] of this.frameIdentityMap) {
-                if (fKey.startsWith(frameIdx + ':') && fKey.endsWith(':' + trackIdx)) {
+                if (fKey.substring(0, framePrefix.length) === framePrefix &&
+                    fKey.substring(fKey.length - trackSuffix.length) === trackSuffix) {
                     return this.getIdentity(fIdVal);
                 }
             }

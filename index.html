@@ -2930,6 +2930,7 @@
                     setStatus('Trust Track Labels: ON — ' + state.session.tracks.length + ' identities from tracks', 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
+                    if (timeline) timeline.refreshTracks(state.session);
                 } else {
                     setStatus('Trust Track Labels: OFF — tracks and identities are independent', 'success');
                 }
@@ -3207,6 +3208,7 @@
                     ' (' + count + ' instances, frames ' + (frameStart + 1) + '–' + (frameEnd + 1) + ')', 'success');
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
+                if (timeline) timeline.refreshTracks(state.session);
             });
 
             // ============================================

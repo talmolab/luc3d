@@ -994,4 +994,161 @@
             assertTrue(!trackCamFrames['0:CamB'], 'CamB should NOT have track_0');
         });
     });
+
+    // =========================================================================
+    // Per-frame identity map + propagation tests
+    // =========================================================================
+
+    describe('Per-frame identity map', function () {
+        function makeSession() {
+            var cams = [new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var skel = new Skeleton('s', ['a'], []);
+            var session = new Session(cams, skel, ['track_0', 'track_1']);
+            var id0 = session.addIdentity('id_0');
+            var id1 = session.addIdentity('id_1');
+            // Add 3 frames with 2 instances each
+            for (var f = 0; f < 3; f++) {
+                var fg = new FrameGroup(f);
+                fg.addInstance('cam1', new Instance([[10, 20]], 0, 'predicted'));
+                fg.addInstance('cam1', new Instance([[30, 40]], 1, 'predicted'));
+                session.addFrameGroup(fg);
+            }
+            return { session: session, id0: id0, id1: id1 };
+        }
+
+        it('setFrameIdentity writes per-frame override', function () {
+            var s = makeSession().session;
+            var id0 = s.identities[0];
+            s.setFrameIdentity(0, 'cam1', 0, id0.id);
+            var val = s.frameIdentityMap.get('0:cam1:0');
+            assertEqual(val, id0.id, 'per-frame override should be set');
+        });
+
+        it('getIdentityIdForTrack checks per-frame first', function () {
+            var s = makeSession().session;
+            var id0 = s.identities[0], id1 = s.identities[1];
+            // Set global to id_0
+            s.trackIdentityMap.set('cam1:0', id0.id);
+            // Set per-frame override to id_1 for frame 5
+            s.setFrameIdentity(5, 'cam1', 0, id1.id);
+            // Frame 5 should return id_1 (per-frame wins)
+            assertEqual(s.getIdentityIdForTrack('cam1', 0, 5), id1.id, 'per-frame should win');
+            // Frame 3 (no per-frame) should return id_0 (global)
+            assertEqual(s.getIdentityIdForTrack('cam1', 0, 3), id0.id, 'global fallback');
+        });
+
+        it('getIdentityForTrack returns Identity object with per-frame', function () {
+            var s = makeSession().session;
+            var id1 = s.identities[1];
+            s.setFrameIdentity(2, 'cam1', 0, id1.id);
+            var identity = s.getIdentityForTrack(0, 'cam1', 2);
+            assertNotNull(identity, 'should find identity');
+            assertEqual(identity.id, id1.id, 'should be id_1');
+        });
+
+        it('getIdentityForTrack without cameraName checks per-frame', function () {
+            var s = makeSession().session;
+            var id1 = s.identities[1];
+            s.setFrameIdentity(2, 'cam1', 0, id1.id);
+            var identity = s.getIdentityForTrack(0, null, 2);
+            assertNotNull(identity, 'should find identity without cameraName');
+            assertEqual(identity.id, id1.id, 'should be id_1');
+        });
+
+        it('propagateIdentity sets current frame and forward', function () {
+            var data = makeSession();
+            var s = data.session, id0 = data.id0;
+            // Propagate id_0 for cam1:track_0 starting from frame 1
+            var count = s.propagateIdentity(1, 'cam1', 0, id0.id);
+            assertTrue(count >= 2, 'should affect frames 1 and 2');
+            // Frame 0 should NOT have override
+            assertNull(s.frameIdentityMap.get('0:cam1:0') != null ? 'set' : null,
+                'frame 0 should not be set');
+            // Frame 1 and 2 should have override
+            assertEqual(s.frameIdentityMap.get('1:cam1:0'), id0.id, 'frame 1 should be set');
+            assertEqual(s.frameIdentityMap.get('2:cam1:0'), id0.id, 'frame 2 should be set');
+        });
+
+        it('manual identity change overrides Track All per-frame value', function () {
+            var data = makeSession();
+            var s = data.session, id0 = data.id0, id1 = data.id1;
+            // Simulate Track All: set per-frame for all frames to id_0
+            for (var f = 0; f < 3; f++) {
+                s.setFrameIdentity(f, 'cam1', 0, id0.id);
+            }
+            // Simulate manual change on frame 1: set to id_1
+            s.setFrameIdentity(1, 'cam1', 0, id1.id);
+            s.trackIdentityMap.set('cam1:0', id1.id);
+            // Frame 1 should now be id_1
+            assertEqual(s.getIdentityIdForTrack('cam1', 0, 1), id1.id,
+                'manual change should override Track All');
+            // Frame 0 should still be id_0
+            assertEqual(s.getIdentityIdForTrack('cam1', 0, 0), id0.id,
+                'frame 0 unchanged');
+        });
+
+        it('propagation from manual change overrides forward frames', function () {
+            var data = makeSession();
+            var s = data.session, id0 = data.id0, id1 = data.id1;
+            // Track All: all frames id_0
+            for (var f = 0; f < 3; f++) {
+                s.setFrameIdentity(f, 'cam1', 0, id0.id);
+            }
+            // Manual change at frame 1: propagate id_1 forward
+            s.propagateIdentity(1, 'cam1', 0, id1.id);
+            // Frame 0: still id_0
+            assertEqual(s.getIdentityIdForTrack('cam1', 0, 0), id0.id, 'frame 0 still id_0');
+            // Frame 1: id_1
+            assertEqual(s.getIdentityIdForTrack('cam1', 0, 1), id1.id, 'frame 1 now id_1');
+            // Frame 2: id_1 (propagated)
+            assertEqual(s.getIdentityIdForTrack('cam1', 0, 2), id1.id, 'frame 2 propagated to id_1');
+        });
+    });
+
+    describe('Session identity state consistency', function () {
+        it('assignTrackToIdentity updates global map', function () {
+            var cams = [new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0']);
+            var id = s.addIdentity('id_0');
+            s.assignTrackToIdentity(0, id.id, 'cam1');
+            assertEqual(s.trackIdentityMap.get('cam1:0'), id.id, 'global map updated');
+        });
+
+        it('assignTrackToIdentity without camera sets all cameras', function () {
+            var cams = [
+                new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
+                new Camera('cam2', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])
+            ];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0']);
+            var id = s.addIdentity('id_0');
+            s.assignTrackToIdentity(0, id.id);
+            assertEqual(s.trackIdentityMap.get('cam1:0'), id.id, 'cam1 set');
+            assertEqual(s.trackIdentityMap.get('cam2:0'), id.id, 'cam2 set');
+        });
+
+        it('new tracks beyond original count are accessible', function () {
+            var s = new Session([], new Skeleton('s', ['a'], []), ['track_0']);
+            assertEqual(s.tracks.length, 1);
+            s.tracks.push('track_1');
+            assertEqual(s.tracks.length, 2);
+            assertEqual(s.tracks[1], 'track_1');
+        });
+
+        it('new identity is immediately queryable', function () {
+            var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
+            var id = s.addIdentity('new_id');
+            var found = s.getIdentity(id.id);
+            assertEqual(found, id, 'new identity should be immediately queryable');
+        });
+
+        it('frameIdentityMap cleared separately from trackIdentityMap', function () {
+            var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
+            s.trackIdentityMap.set('cam1:0', 0);
+            s.frameIdentityMap.set('5:cam1:0', 1);
+            s.frameIdentityMap = new Map();
+            assertEqual(s.trackIdentityMap.get('cam1:0'), 0, 'global unaffected');
+            assertNull(s.frameIdentityMap.get('5:cam1:0') != null ? 'set' : null,
+                'per-frame cleared');
+        });
+    });
 })();
