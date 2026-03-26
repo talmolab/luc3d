@@ -803,7 +803,7 @@ class InteractionManager {
                 }
             }
             var hitInst = linkedHit.instanceGroup.getInstance(viewName);
-            // Block drag for predicted and reprojected instances (select only)
+            // Block drag for reprojected; auto-convert predicted to user for editing
             if (linkedHit.hitReprojected) {
                 // Reprojected instance hit: select group with reprojected flag
                 this.select(linkedHit.instanceGroup, linkedHit.nodeIdx, true);
@@ -812,14 +812,22 @@ class InteractionManager {
                 e.stopPropagation();
                 e._consumedByInteraction = true;
                 // Fall through to the end (no drag)
-            } else if (hitInst && (hitInst.type === 'predicted' || hitInst.type === 'reprojected')) {
-                // Single click: select only. Double click converts to user (handled elsewhere).
+            } else if (hitInst && hitInst.type === 'reprojected') {
+                // Reprojected (non-editable projection): select only, no drag
                 this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
                 this._requestRedraw();
                 e.preventDefault();
                 e.stopPropagation();
                 e._consumedByInteraction = true;
-            } else {
+            } else if (hitInst && hitInst.type === 'predicted') {
+                // Predicted instance: auto-convert to user so it becomes editable,
+                // then fall through to the drag logic below.
+                this._convertToUserInstance(linkedHit.instanceGroup);
+                hitInst = linkedHit.instanceGroup.getInstance(viewName);
+            }
+
+            // User instance (or freshly converted predicted): select + drag
+            if (hitInst && hitInst.type !== 'reprojected' && !linkedHit.hitReprojected) {
                 // Resolve edge hits (nodeIdx=-1) to the nearest node
                 var dragNodeIdx = linkedHit.nodeIdx;
                 if (dragNodeIdx === -1) {
