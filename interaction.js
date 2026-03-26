@@ -851,10 +851,23 @@ class InteractionManager {
         // --- Unlinked node: double-click predicted → create user instance ---
         } else if (useUnlinked && e.detail >= 2 && ulHit.unlinked.instance && ulHit.unlinked.instance.type === 'predicted') {
             var predInst = ulHit.unlinked.instance;
-            var clonedPoints = predInst.points.map(function(pt) {
-                return pt != null ? [pt[0], pt[1]] : null;
+            // Compute centroid of visible points for placing missing nodes
+            var _cx = 0, _cy = 0, _cc = 0;
+            for (var _pi = 0; _pi < predInst.points.length; _pi++) {
+                if (predInst.points[_pi] != null) {
+                    _cx += predInst.points[_pi][0]; _cy += predInst.points[_pi][1]; _cc++;
+                }
+            }
+            if (_cc > 0) { _cx = Math.round(_cx / _cc); _cy = Math.round(_cy / _cc); }
+            var _nulled = new Set();
+            var clonedPoints = predInst.points.map(function(pt, idx) {
+                if (pt != null) return [pt[0], pt[1]];
+                // Missing point — place at centroid and mark occluded
+                if (_cc > 0) { _nulled.add(idx); return [_cx, _cy]; }
+                return null;
             });
             var newInst = new Instance(clonedPoints, predInst.trackIdx, 'user', 1.0);
+            if (_nulled.size > 0) newInst.nulledNodes = _nulled;
             newInst.modified = true;
             var newUl = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
             this.select(null, -1);
@@ -1576,10 +1589,41 @@ class InteractionManager {
         // Iterate over all views in the group
         for (const [camName, instance] of group.instances) {
             if (instance.type === 'predicted') {
-                // Deep copy the points array
-                instance.points = instance.points.map(pt =>
-                    pt != null ? [pt[0], pt[1]] : null
-                );
+                // For null points, try to fill from reprojected instance and mark occluded
+                var reprojInst = group.getReprojectedInstance
+                    ? group.getReprojectedInstance(camName) : null;
+                var nulled = instance.nulledNodes || new Set();
+
+                // Compute centroid of visible points as fallback for missing nodes
+                var cx = 0, cy = 0, cCount = 0;
+                for (var ci = 0; ci < instance.points.length; ci++) {
+                    if (instance.points[ci] != null) {
+                        cx += instance.points[ci][0];
+                        cy += instance.points[ci][1];
+                        cCount++;
+                    }
+                }
+                if (cCount > 0) { cx = Math.round(cx / cCount); cy = Math.round(cy / cCount); }
+
+                // Deep copy the points array, filling nulls from reprojection or centroid
+                instance.points = instance.points.map(function (pt, idx) {
+                    if (pt != null) return [pt[0], pt[1]];
+                    // Point is null — try reprojection first
+                    if (reprojInst && reprojInst.points && reprojInst.points[idx] != null) {
+                        nulled.add(idx);
+                        return [reprojInst.points[idx][0], reprojInst.points[idx][1]];
+                    }
+                    // No reprojection — use centroid so the node is visible as occluded
+                    if (cCount > 0) {
+                        nulled.add(idx);
+                        return [cx, cy];
+                    }
+                    return null;
+                });
+                if (nulled.size > 0) {
+                    instance.nulledNodes = nulled;
+                }
+
                 instance.type = 'user';
                 converted = true;
             }

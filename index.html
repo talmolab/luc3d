@@ -2521,7 +2521,34 @@
                     var trackName = state.session.tracks[trackIdx] || 'Track ' + trackIdx;
 
                     // Convert predicted instances to user IN PLACE — no new group
+                    // Fill null points from reprojection and mark as occluded
                     for (var [camName, inst] of predGroup.instances) {
+                        var reprojInst = predGroup.getReprojectedInstance
+                            ? predGroup.getReprojectedInstance(camName) : null;
+                        var nulled = inst.nulledNodes || new Set();
+                        // Centroid of visible points as fallback for missing nodes
+                        var cx = 0, cy = 0, cCount = 0;
+                        for (var ci = 0; ci < inst.points.length; ci++) {
+                            if (inst.points[ci] != null) {
+                                cx += inst.points[ci][0];
+                                cy += inst.points[ci][1];
+                                cCount++;
+                            }
+                        }
+                        if (cCount > 0) { cx = Math.round(cx / cCount); cy = Math.round(cy / cCount); }
+                        inst.points = inst.points.map(function (pt, idx) {
+                            if (pt != null) return [pt[0], pt[1]];
+                            if (reprojInst && reprojInst.points && reprojInst.points[idx] != null) {
+                                nulled.add(idx);
+                                return [reprojInst.points[idx][0], reprojInst.points[idx][1]];
+                            }
+                            if (cCount > 0) {
+                                nulled.add(idx);
+                                return [cx, cy];
+                            }
+                            return null;
+                        });
+                        if (nulled.size > 0) inst.nulledNodes = nulled;
                         inst.type = 'user';
                         inst.modified = true;
                         recordUserPoints(camName, inst.points);
