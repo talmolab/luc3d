@@ -436,8 +436,8 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     }
     // Grayed-out (nulled) nodes
     if (nulledNodes && nulledNodes.size > 0) {
-        ctx.fillStyle = '#888888';
-        ctx.globalAlpha = alpha * 0.4;
+        ctx.fillStyle = '#aaaaaa';
+        ctx.globalAlpha = alpha * 0.55;
         for (const ni of nulledNodes) {
             const cp = canvasPoints[ni];
             if (!cp) continue;
@@ -780,8 +780,8 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
     }
     // Grayed-out (nulled) nodes
     if (nulledNodes && nulledNodes.size > 0) {
-        ctx.fillStyle = '#888888';
-        ctx.globalAlpha = 0.4;
+        ctx.fillStyle = '#aaaaaa';
+        ctx.globalAlpha = 0.55;
         for (const ni of nulledNodes) {
             const cp = canvasPoints[ni];
             if (!cp) continue;
@@ -1387,8 +1387,8 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         }
         // Grayed-out (nulled) nodes
         if (nulledNodes && nulledNodes.size > 0) {
-            ctx.fillStyle = '#888888';
-            ctx.globalAlpha = alpha * 0.4;
+            ctx.fillStyle = '#aaaaaa';
+            ctx.globalAlpha = alpha * 0.55;
             for (const ni of nulledNodes) {
                 const cp = canvasPoints[ni];
                 if (!cp) continue;
