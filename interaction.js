@@ -860,10 +860,22 @@ class InteractionManager {
             }
             if (_cc > 0) { _cx = Math.round(_cx / _cc); _cy = Math.round(_cy / _cc); }
             var _nulled = new Set();
+            var _nullCount = 0;
+            for (var _ni = 0; _ni < predInst.points.length; _ni++) {
+                if (predInst.points[_ni] == null) _nullCount++;
+            }
+            var _nullIdx = 0;
             var clonedPoints = predInst.points.map(function(pt, idx) {
                 if (pt != null) return [pt[0], pt[1]];
-                // Missing point — place at centroid and mark occluded
-                if (_cc > 0) { _nulled.add(idx); return [_cx, _cy]; }
+                // Missing point — fan out from centroid so they don't overlap
+                if (_cc > 0) {
+                    _nulled.add(idx);
+                    var angle = (2 * Math.PI * _nullIdx) / Math.max(_nullCount, 1);
+                    var spread = 20;
+                    _nullIdx++;
+                    return [Math.round(_cx + Math.cos(angle) * spread),
+                            Math.round(_cy + Math.sin(angle) * spread)];
+                }
                 return null;
             });
             var newInst = new Instance(clonedPoints, predInst.trackIdx, 'user', 1.0);
@@ -1605,6 +1617,13 @@ class InteractionManager {
                 }
                 if (cCount > 0) { cx = Math.round(cx / cCount); cy = Math.round(cy / cCount); }
 
+                // Count null points for fan-out spacing
+                var nullTotal = 0;
+                for (var ni = 0; ni < instance.points.length; ni++) {
+                    if (instance.points[ni] == null) nullTotal++;
+                }
+                var nullSeq = 0;
+
                 // Deep copy the points array, filling nulls from reprojection or centroid
                 instance.points = instance.points.map(function (pt, idx) {
                     if (pt != null) return [pt[0], pt[1]];
@@ -1613,10 +1632,14 @@ class InteractionManager {
                         nulled.add(idx);
                         return [reprojInst.points[idx][0], reprojInst.points[idx][1]];
                     }
-                    // No reprojection — use centroid so the node is visible as occluded
+                    // No reprojection — fan out from centroid so nodes don't overlap
                     if (cCount > 0) {
                         nulled.add(idx);
-                        return [cx, cy];
+                        var angle = (2 * Math.PI * nullSeq) / Math.max(nullTotal, 1);
+                        var spread = 20;
+                        nullSeq++;
+                        return [Math.round(cx + Math.cos(angle) * spread),
+                                Math.round(cy + Math.sin(angle) * spread)];
                     }
                     return null;
                 });

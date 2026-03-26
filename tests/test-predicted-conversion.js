@@ -349,7 +349,7 @@
             cleanupCanvases();
         });
 
-        it('null point without reprojection gets centroid position and marked occluded', function () {
+        it('null point without reprojection gets offset from centroid and marked occluded', function () {
             var env = buildPredictedGroupEnv({
                 // shoulder=0, elbow=1, wrist=2 (null), tail=3
                 points: [[100, 100], [200, 200], null, [400, 400]],
@@ -358,19 +358,21 @@
 
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
 
-            // Wrist should get centroid of visible points: (100+200+400)/3=233, (100+200+400)/3=233
-            assertNotNull(env.inst.points[2], 'wrist filled with centroid');
-            var expectedX = Math.round((100 + 200 + 400) / 3);
-            var expectedY = Math.round((100 + 200 + 400) / 3);
-            assertEqual(env.inst.points[2][0], expectedX, 'wrist x is centroid');
-            assertEqual(env.inst.points[2][1], expectedY, 'wrist y is centroid');
+            // Wrist should be near centroid but offset (spread=20px)
+            assertNotNull(env.inst.points[2], 'wrist filled near centroid');
+            var centroidX = Math.round((100 + 200 + 400) / 3);
+            var centroidY = Math.round((100 + 200 + 400) / 3);
+            // Should be within spread distance of centroid
+            var dx = env.inst.points[2][0] - centroidX;
+            var dy = env.inst.points[2][1] - centroidY;
+            assertTrue(Math.sqrt(dx*dx + dy*dy) <= 21, 'wrist near centroid (within spread)');
             assertTrue(env.inst.nulledNodes.has(2), 'wrist marked occluded');
             assertEqual(env.inst.type, 'user', 'converted to user');
 
             cleanupCanvases();
         });
 
-        it('null point without reprojection (reproj also null) gets centroid', function () {
+        it('null point without reprojection (reproj also null) gets offset from centroid', function () {
             var env = buildPredictedGroupEnv({
                 points: [[100, 100], [200, 200], null, [400, 400]],
                 reprojPoints: [[101, 101], [201, 201], null, [401, 401]],
@@ -378,8 +380,7 @@
 
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
 
-            // Reprojection is also null for wrist, so fallback to centroid
-            assertNotNull(env.inst.points[2], 'wrist filled with centroid');
+            assertNotNull(env.inst.points[2], 'wrist filled near centroid');
             assertTrue(env.inst.nulledNodes.has(2), 'wrist marked occluded');
 
             cleanupCanvases();
@@ -407,15 +408,17 @@
             assertFalse(env.inst.nulledNodes.has(1), 'elbow is NOT occluded');
             assertEqual(env.inst.type, 'user', 'type is user');
 
-            // Centroid: ((120+200)/2, (80+150)/2) = (160, 115)
-            assertEqual(env.inst.points[2][0], 160, 'wrist x at centroid');
-            assertEqual(env.inst.points[2][1], 115, 'wrist y at centroid');
+            // Should be near centroid ((120+200)/2, (80+150)/2) = (160, 115) with spread offset
+            var cdx = env.inst.points[2][0] - 160;
+            var cdy = env.inst.points[2][1] - 115;
+            assertTrue(Math.sqrt(cdx*cdx + cdy*cdy) <= 21, 'wrist near centroid');
 
             // User can now drag the occluded wrist to correct position
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 120, 80), env.camName);
 
-            // Drag the wrist node
-            env.mgr.onMouseDown(makeMouseEvent('mousedown', 160, 115), env.camName);
+            // Drag the wrist node (click at its actual position)
+            var wristX = env.inst.points[2][0], wristY = env.inst.points[2][1];
+            env.mgr.onMouseDown(makeMouseEvent('mousedown', wristX, wristY), env.camName);
             assertTrue(env.mgr.isDragging, 'can drag the occluded wrist');
             env.mgr._onDragMove(makeMouseEvent('mousemove', 250, 200));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 250, 200), env.camName);
@@ -601,10 +604,11 @@
             assertNotNull(userInst, 'user instance was created');
             assertEqual(userInst.type, 'user', 'type is user');
 
-            // Wrist should be filled at centroid of shoulder+elbow
+            // Wrist should be filled near centroid of shoulder+elbow (160, 115) with spread offset
             assertNotNull(userInst.points[2], 'wrist has position');
-            assertEqual(userInst.points[2][0], 160, 'wrist x = centroid (120+200)/2');
-            assertEqual(userInst.points[2][1], 115, 'wrist y = centroid (80+150)/2');
+            var udx = userInst.points[2][0] - 160;
+            var udy = userInst.points[2][1] - 115;
+            assertTrue(Math.sqrt(udx*udx + udy*udy) <= 21, 'wrist near centroid');
 
             // Wrist should be marked occluded
             assertTrue(userInst.nulledNodes instanceof Set, 'nulledNodes exists');
@@ -633,12 +637,13 @@
             }
 
             assertNotNull(userInst, 'user instance created');
-            // Centroid is just shoulder position (only visible point)
+            // Centroid is shoulder (150,200); elbow+wrist should be near it but spread apart
             assertNotNull(userInst.points[1], 'elbow filled');
-            assertEqual(userInst.points[1][0], 150, 'elbow x at shoulder pos');
-            assertEqual(userInst.points[1][1], 200, 'elbow y at shoulder pos');
             assertNotNull(userInst.points[2], 'wrist filled');
-            assertEqual(userInst.points[2][0], 150, 'wrist x at shoulder pos');
+            // They should be near shoulder but NOT at the same position as each other
+            var e2w = Math.abs(userInst.points[1][0] - userInst.points[2][0]) +
+                      Math.abs(userInst.points[1][1] - userInst.points[2][1]);
+            assertTrue(e2w > 0, 'elbow and wrist are at different positions');
 
             assertTrue(userInst.nulledNodes.has(1), 'elbow occluded');
             assertTrue(userInst.nulledNodes.has(2), 'wrist occluded');

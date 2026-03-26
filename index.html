@@ -2369,6 +2369,9 @@
                         timeline.setFrameModified(state.currentFrame, true);
                     }
 
+                    // Update 3D viewport
+                    update3DViewport(state.currentFrame);
+
                     setStatus('Node moved in ' + viewName, 'success');
                 },
 
@@ -2395,6 +2398,7 @@
                     }
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
+                    update3DViewport(state.currentFrame);
                 },
 
                 onUserInstanceCreated: function (viewName, points) {
@@ -2536,6 +2540,10 @@
                             }
                         }
                         if (cCount > 0) { cx = Math.round(cx / cCount); cy = Math.round(cy / cCount); }
+                        var nullTotal = 0, nullSeq = 0;
+                        for (var nci = 0; nci < inst.points.length; nci++) {
+                            if (inst.points[nci] == null) nullTotal++;
+                        }
                         inst.points = inst.points.map(function (pt, idx) {
                             if (pt != null) return [pt[0], pt[1]];
                             if (reprojInst && reprojInst.points && reprojInst.points[idx] != null) {
@@ -2544,7 +2552,11 @@
                             }
                             if (cCount > 0) {
                                 nulled.add(idx);
-                                return [cx, cy];
+                                var angle = (2 * Math.PI * nullSeq) / Math.max(nullTotal, 1);
+                                var spread = 20;
+                                nullSeq++;
+                                return [Math.round(cx + Math.cos(angle) * spread),
+                                        Math.round(cy + Math.sin(angle) * spread)];
                             }
                             return null;
                         });
@@ -2561,6 +2573,7 @@
                     if (timeline) timeline.setFrameModified(frameIdx, true);
                     drawAllOverlays(frameIdx);
                     updateInfoPanel();
+                    update3DViewport(frameIdx);
                 },
 
                 onNodeSetNull: function (viewName, instanceGroup, nodeIdx) {
