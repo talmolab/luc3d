@@ -7991,6 +7991,7 @@
                                 points3d: group.points3d || null,
                                 reprojections: group.reprojections || null,
                                 observedPoints: group.observedPoints || null,
+                                dirty: group.dirty || false,
                             };
                             if (group.usedCameras) {
                                 groupData.usedCameras = Array.from(group.usedCameras);
@@ -8146,6 +8147,7 @@
                                 points3d: group.points3d || null,
                                 reprojections: group.reprojections || null,
                                 observedPoints: group.observedPoints || null,
+                                dirty: group.dirty || false,
                             };
                             if (group.usedCameras) {
                                 groupData.usedCameras = Array.from(group.usedCameras);
@@ -8630,6 +8632,22 @@
 
                             if (groupData.usedCameras) {
                                 group.usedCameras = new Set(groupData.usedCameras);
+                            }
+                            if (groupData.dirty) {
+                                group.markDirty();
+                            } else if (group.points3d) {
+                                group.markClean();
+                            }
+
+                            // Rebuild reprojectedInstances from saved reprojections
+                            if (group.reprojections) {
+                                for (var rCamName in group.reprojections) {
+                                    var rPts = group.reprojections[rCamName];
+                                    if (rPts) {
+                                        var rInst = new Instance(rPts, group.trackIdx, 'reprojected', 0);
+                                        group.addReprojectedInstance(rCamName, rInst);
+                                    }
+                                }
                             }
 
                             if (!trackMap.has(group.trackIdx)) {
