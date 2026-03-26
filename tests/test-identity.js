@@ -1380,5 +1380,77 @@
 
             cleanup(tl, container);
         });
+
+        it('timeline shows unlinked instance after track reassignment to new track', function () {
+            if (typeof Timeline !== 'function') return;
+            var container = createContainer(800, 80);
+            var tl = new Timeline(container, { totalFrames: 10 });
+
+            var cams = [new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var session = new Session(cams, new Skeleton('s', ['a'], []), ['track_0', 'track_1']);
+
+            // Frame 0: one unlinked instance on track_0
+            var fg = new FrameGroup(0);
+            var inst = new Instance([[10, 20]], 0, 'predicted');
+            var ul = new UnlinkedInstance(inst, 'cam1');
+            fg.addUnlinkedInstance('cam1', ul);
+            session.addFrameGroup(fg);
+
+            tl.setData(session);
+            // Should have 1 segment for track_0/cam1
+            var segsBefore = tl._trackSegments.length;
+            assertTrue(segsBefore >= 1, 'should have at least 1 segment initially');
+
+            // Reassign the unlinked instance to a NEW track_2
+            session.tracks.push('track_2');
+            inst.trackIdx = 2;
+
+            tl.refreshTracks(session);
+
+            // Should now have a segment for track_2/cam1
+            var hasTrack2 = false;
+            for (var i = 0; i < tl._trackSegments.length; i++) {
+                if (tl._trackSegments[i].trackIdx === 2 && tl._trackSegments[i].cameraName === 'cam1') {
+                    hasTrack2 = true;
+                }
+            }
+            assertTrue(hasTrack2, 'timeline should show track_2 segment after reassignment');
+
+            // track_0 should no longer have a segment (instance moved away)
+            var hasTrack0 = false;
+            for (var j = 0; j < tl._trackSegments.length; j++) {
+                if (tl._trackSegments[j].trackIdx === 0 && tl._trackSegments[j].cameraName === 'cam1') {
+                    hasTrack0 = true;
+                }
+            }
+            assertTrue(!hasTrack0, 'timeline should NOT show track_0 segment after instance moved to track_2');
+
+            cleanup(tl, container);
+        });
+
+        it('timeline shows segment for track index beyond original session.tracks.length', function () {
+            if (typeof Timeline !== 'function') return;
+            var container = createContainer(800, 80);
+            var tl = new Timeline(container, { totalFrames: 10 });
+
+            // Session starts with only 2 tracks
+            var cams = [new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
+            var session = new Session(cams, new Skeleton('s', ['a'], []), ['track_0', 'track_1']);
+
+            // But instance has trackIdx=5 (beyond tracks array)
+            var fg = new FrameGroup(0);
+            fg.addInstance('cam1', new Instance([[10, 20]], 5, 'predicted'));
+            session.addFrameGroup(fg);
+
+            tl.setData(session);
+
+            var hasTrack5 = false;
+            for (var i = 0; i < tl._trackSegments.length; i++) {
+                if (tl._trackSegments[i].trackIdx === 5) hasTrack5 = true;
+            }
+            assertTrue(hasTrack5, 'timeline should show track_5 even though session.tracks only has 2 entries');
+
+            cleanup(tl, container);
+        });
     });
 })();

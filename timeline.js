@@ -445,7 +445,7 @@ class Timeline {
             for (var [camName3, ulList] of fg.unlinkedInstances) {
                 for (var u = 0; u < ulList.length; u++) {
                     var t2 = ulList[u].instance.trackIdx;
-                    if (t2 >= 0 && t2 < numTracks) {
+                    if (t2 >= 0) {
                         var key3 = t2 + ':' + camName3;
                         if (!trackCamFrames[key3]) trackCamFrames[key3] = new Set();
                         trackCamFrames[key3].add(frameIdx2);
@@ -454,9 +454,18 @@ class Timeline {
             }
         }
 
+        // Collect all track indices that actually have data
+        var allTrackIndices = new Set();
+        for (var tcfKey in trackCamFrames) {
+            var colonPos = tcfKey.indexOf(':');
+            if (colonPos > 0) allTrackIndices.add(parseInt(tcfKey.substring(0, colonPos)));
+        }
+        var sortedTrackIndices = Array.from(allTrackIndices).sort(function(a, b) { return a - b; });
+
         // Build segments ordered by camera then track (view-first layout)
         for (var ci = 0; ci < cameraNames.length; ci++) {
-            for (var t3 = 0; t3 < numTracks; t3++) {
+            for (var ti = 0; ti < sortedTrackIndices.length; ti++) {
+                var t3 = sortedTrackIndices[ti];
                 var camKey = t3 + ':' + cameraNames[ci];
                 var frameSet = trackCamFrames[camKey];
                 if (!frameSet || frameSet.size === 0) continue;
