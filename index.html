@@ -3175,6 +3175,10 @@
                     if (state.session.tracks.indexOf(name) < 0) state.session.tracks.push(name);
                     var idx = state.session.tracks.indexOf(name);
                     assignTrackToSelected(idx);
+                    // Always refresh UI (assignTrackToSelected may return early if nothing selected)
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                    if (timeline) timeline.refreshTracks(state.session);
                 });
                 sub.appendChild(newItem);
             });
@@ -3286,6 +3290,10 @@
                     if (!name) return;
                     var identity = state.session.addIdentity(name);
                     assignIdentityToSelected(identity.id, name);
+                    // Always refresh UI (assignIdentityToSelected may return early if nothing selected)
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                    if (timeline) timeline.refreshTracks(state.session);
                 });
                 sub.appendChild(newItem);
             });
