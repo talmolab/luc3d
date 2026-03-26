@@ -563,8 +563,10 @@ class Session {
         /** @type {Identity[]} */
         this.identities = [];
         this.trustTracks = false;
-        /** @type {Map<string, number>} "camName:trackIdx" → identityId (per-camera tracklet-to-identity) */
+        /** @type {Map<string, number>} "camName:trackIdx" → identityId (global default mapping) */
         this.trackIdentityMap = new Map();
+        /** @type {Map<string, number>} "frameIdx:camName:trackIdx" → identityId (per-frame overrides) */
+        this.frameIdentityMap = new Map();
     }
 
     addIdentity(name, color) {
@@ -617,20 +619,105 @@ class Session {
 
     /**
      * Get the Identity for a tracklet (trackIdx) in a specific camera.
+     * Checks per-frame override first (if frameIdx provided), then global.
      * @param {number} trackIdx
      * @param {string} [cameraName] - If omitted, checks first matching camera
+     * @param {number} [frameIdx] - If provided, checks per-frame overrides first
      * @returns {Identity|null}
      */
-    getIdentityForTrack(trackIdx, cameraName) {
+    getIdentityForTrack(trackIdx, cameraName, frameIdx) {
+        // Check per-frame override first
+        if (frameIdx != null && cameraName) {
+            var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
+            var frameIdVal = this.frameIdentityMap.get(frameKey);
+            if (frameIdVal != null) return this.getIdentity(frameIdVal);
+        }
+        // Per-frame without cameraName: check any camera at this frame
+        if (frameIdx != null && !cameraName) {
+            var framePrefix = frameIdx + ':';
+            var trackSuffix = ':' + trackIdx;
+            for (var [fKey, fIdVal] of this.frameIdentityMap) {
+                if (fKey.substring(0, framePrefix.length) === framePrefix &&
+                    fKey.substring(fKey.length - trackSuffix.length) === trackSuffix) {
+                    return this.getIdentity(fIdVal);
+                }
+            }
+        }
+        // Fall back to global
         if (cameraName) {
             var identityId = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
             if (identityId != null) return this.getIdentity(identityId);
         }
-        // Fallback: check any camera
+        // Fallback: check any camera in global
         for (var [key, idVal] of this.trackIdentityMap) {
             if (key.endsWith(':' + trackIdx)) return this.getIdentity(idVal);
         }
         return null;
+    }
+
+    /**
+     * Get identity ID for a track at a specific frame (checks per-frame first, then global).
+     * @param {string} cameraName
+     * @param {number} trackIdx
+     * @param {number} [frameIdx]
+     * @returns {number|null} identityId or null
+     */
+    getIdentityIdForTrack(cameraName, trackIdx, frameIdx) {
+        if (frameIdx != null) {
+            var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
+            var frameIdVal = this.frameIdentityMap.get(frameKey);
+            if (frameIdVal != null) return frameIdVal;
+        }
+        var globalVal = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
+        return globalVal != null ? globalVal : null;
+    }
+
+    /**
+     * Set identity for a track at a specific frame (per-frame override).
+     * @param {number} frameIdx
+     * @param {string} cameraName
+     * @param {number} trackIdx
+     * @param {number} identityId
+     */
+    setFrameIdentity(frameIdx, cameraName, trackIdx, identityId) {
+        this.frameIdentityMap.set(frameIdx + ':' + cameraName + ':' + trackIdx, identityId);
+    }
+
+    /**
+     * Set identity for a track from a start frame forward through all subsequent frames.
+     * Sets per-frame overrides for every frame where this camera:trackIdx appears.
+     * @param {number} startFrame
+     * @param {string} cameraName
+     * @param {number} trackIdx
+     * @param {number} identityId
+     * @returns {number} Number of frames affected
+     */
+    propagateIdentity(startFrame, cameraName, trackIdx, identityId) {
+        var count = 0;
+        for (var [frameIdx, fg] of this.frameGroups) {
+            if (frameIdx < startFrame) continue;
+            // Check if this track exists in this frame for this camera
+            var found = false;
+            var linked = fg.getInstances(cameraName);
+            if (linked) {
+                for (var i = 0; i < linked.length; i++) {
+                    if (linked[i].trackIdx === trackIdx) { found = true; break; }
+                }
+            }
+            if (!found) {
+                var unlinked = fg.getUnlinkedInstances(cameraName);
+                if (unlinked) {
+                    for (var j = 0; j < unlinked.length; j++) {
+                        if (unlinked[j].instance.trackIdx === trackIdx) { found = true; break; }
+                    }
+                }
+            }
+            if (found) {
+                this.frameIdentityMap.set(frameIdx + ':' + cameraName + ':' + trackIdx, identityId);
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
