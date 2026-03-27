@@ -8275,7 +8275,11 @@
                     }
                 }
 
-                var cameraNames = cameras.map(function (c) { return c.name; });
+                // For V3, use active session's cameras; for V2, use the single session's cameras
+                var activeCameras = (data.version === 3 && state.sessions[state.activeSessionIdx])
+                    ? state.sessions[state.activeSessionIdx].cameras
+                    : cameras;
+                var cameraNames = activeCameras.map(function (c) { return c.name; });
                 var manifestFilenames = videoManifest.map(function (m) { return m.filename; }).filter(Boolean);
 
                 // Check which manifest videos are already loaded in state.videoFiles
@@ -8420,9 +8424,10 @@
                     }
                 }
 
-                // Resolve stale manifest camera names
+                // Resolve stale manifest camera names (active session only for V3)
                 for (var ri = 0; ri < state.videoFiles.length; ri++) {
                     var rvf = state.videoFiles[ri];
+                    if (data.version === 3 && rvf.sessionIdx != null && rvf.sessionIdx !== state.activeSessionIdx) continue;
                     if (rvf.assignedCamera && cameraNames.indexOf(rvf.assignedCamera) < 0) {
                         var rvfLower = rvf.assignedCamera.toLowerCase();
                         for (var rci = 0; rci < cameraNames.length; rci++) {
@@ -8442,18 +8447,23 @@
 
                 autoAssignVideosToCameras();
 
-                // For any still-unassigned video, try exact camera name match
+                // For any still-unassigned video, try exact camera name match (active session only for V3)
                 for (var vi = 0; vi < state.videoFiles.length; vi++) {
                     var vf2 = state.videoFiles[vi];
+                    if (data.version === 3 && vf2.sessionIdx != null && vf2.sessionIdx !== state.activeSessionIdx) continue;
                     if (!vf2.assignedCamera && cameraNames.indexOf(vf2.name) >= 0) {
                         vf2.assignedCamera = vf2.name;
                     }
                 }
 
-                // Create views for assigned videos
+                // Create views for assigned videos (active session only for V3)
                 showLoading('Creating views...');
                 for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
                     var vf3 = state.videoFiles[vi2];
+                    // For V3 projects, only create views for the active session
+                    if (data.version === 3 && vf3.sessionIdx != null && vf3.sessionIdx !== state.activeSessionIdx) {
+                        continue;
+                    }
                     if (vf3.assignedCamera) {
                         var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
                         if (!hasView) {
@@ -8483,9 +8493,9 @@
                     await videoController.seekToFrame(firstFrame);
                 }
 
-                // 3. Set up 3D viewport
+                // 3. Set up 3D viewport (use active session's cameras)
                 if (viewport3d) {
-                    viewport3d.cameras = cameras;
+                    viewport3d.cameras = state.session.cameras;
                     viewport3d.skeleton = state.session.skeleton;
                     viewport3d.addCameraPyramids();
                     viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
