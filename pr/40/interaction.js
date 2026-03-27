@@ -805,13 +805,25 @@ class InteractionManager {
             var hitInst = linkedHit.instanceGroup.getInstance(viewName);
             // Block drag for reprojected; auto-convert predicted to user for editing
             if (linkedHit.hitReprojected) {
-                // Reprojected instance hit: select group with reprojected flag
-                this.select(linkedHit.instanceGroup, linkedHit.nodeIdx, true);
-                this._requestRedraw();
-                e.preventDefault();
-                e.stopPropagation();
-                e._consumedByInteraction = true;
-                // Fall through to the end (no drag)
+                // Reprojected instance hit — check if group has a main instance we can edit instead
+                var mainInst = linkedHit.instanceGroup.getInstance(viewName);
+                if (mainInst && (mainInst.type === 'predicted' || mainInst.type === 'user')) {
+                    // Redirect to main instance for editing
+                    hitInst = mainInst;
+                    linkedHit.hitReprojected = false;
+                    if (mainInst.type === 'predicted') {
+                        this._convertToUserInstance(linkedHit.instanceGroup);
+                        hitInst = linkedHit.instanceGroup.getInstance(viewName);
+                    }
+                    // Fall through to drag logic below
+                } else {
+                    // No main instance — select reprojection only
+                    this.select(linkedHit.instanceGroup, linkedHit.nodeIdx, true);
+                    this._requestRedraw();
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e._consumedByInteraction = true;
+                }
             } else if (hitInst && hitInst.type === 'reprojected') {
                 // Reprojected (non-editable projection): select only, no drag
                 this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
