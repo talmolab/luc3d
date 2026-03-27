@@ -794,7 +794,7 @@ class Viewport3D {
             const pts = group.points3d;
             if (!pts || pts.length === 0) continue;
 
-            const trackIdx = group.trackIdx != null ? group.trackIdx : g;
+            const trackIdx = group.identityId >= 0 ? group.identityId : g;
             const colorStr = this.getTrackColor(trackIdx);
             const color = new THREE.Color(colorStr);
             const isSelected = (this.selectedInstanceIdx === g);
