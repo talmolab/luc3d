@@ -748,14 +748,20 @@ class InteractionManager {
         if (linkedHit && ulHit) {
             // In assignment mode, prefer unlinked targets so clicks always
             // add to the assignment selection instead of exiting the mode.
-            // Otherwise prefer unlinked (ungrouped) instances since they render
-            // on top of grouped instances — use strict less-than so that equal
-            // distances resolve to the visually-frontmost (unlinked) layer.
             if (this.assignmentMode) {
                 useUnlinked = true;
             } else {
-                useLinked = linkedHit.distance < ulHit.distance;
-                useUnlinked = !useLinked;
+                // User grouped instances always win over predicted unlinked
+                var linkedInst = linkedHit.instanceGroup.getInstance(viewName);
+                var linkedIsUser = linkedInst && (linkedInst.type === 'user' || linkedInst.modified);
+                var ulIsPredicted = ulHit.unlinked.instance && ulHit.unlinked.instance.type === 'predicted';
+                if (linkedIsUser && ulIsPredicted) {
+                    useLinked = true;
+                } else {
+                    // Otherwise prefer closer, with unlinked winning ties (renders on top)
+                    useLinked = linkedHit.distance < ulHit.distance;
+                    useUnlinked = !useLinked;
+                }
             }
         } else if (linkedHit) {
             useLinked = true;
