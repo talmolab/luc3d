@@ -1811,9 +1811,9 @@ class InteractionManager {
         const frameIdx = state.currentFrame;
         const group = state.session.createGroupFromUnlinked(frameIdx, this.assignmentSelection);
 
-        // Update instance trackIdx to match group for consistent coloring
+        // Update instance trackIdx to match group's identity for consistent coloring
         for (const [camName, inst] of group.instances) {
-            inst.trackIdx = group.trackIdx;
+            inst.trackIdx = group.identityId >= 0 ? group.identityId : 0;
         }
 
         // Clear assignment mode
