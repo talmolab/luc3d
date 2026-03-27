@@ -12004,6 +12004,8 @@
             // Save current session state — keep views alive
             var oldSession = state.sessions[state.activeSessionIdx];
             oldSession.lastFrame = state.currentFrame;
+            oldSession.totalFrames = state.totalFrames;
+            oldSession.fps = state.fps;
             oldSession.triangulationResults = state.triangulationResults;
             oldSession._views = state.views;           // preserve live views with decoders+canvases
             oldSession._videoController = videoController;
@@ -12106,6 +12108,15 @@
                 setReprojErrorVisible(true);
             }
             updateInfoPanel();
+            // Restore per-session frame count — updateTotalFrames() may not
+            // find decoders if they haven't been rebuilt yet, so use saved value
+            if (newSession.totalFrames) {
+                state.totalFrames = newSession.totalFrames;
+                state.fps = newSession.fps || 30;
+                document.getElementById('totalFrames').textContent = state.totalFrames;
+                document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
+            }
+
             if (timeline) {
                 timeline.setData(newSession);
                 timeline.setTotalFrames(state.totalFrames);
