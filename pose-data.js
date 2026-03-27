@@ -464,12 +464,11 @@ class Identity {
 class InstanceGroup {
     /**
      * @param {number} id
-     * @param {number} trackIdx
+     * @param {number} identityId
      */
-    constructor(id, trackIdx) {
+    constructor(id, identityId) {
         this.id = id;
-        this.trackIdx = trackIdx;
-        this.identityId = -1;
+        this.identityId = identityId != null ? identityId : -1;
         /** @type {Map<string, Instance>} camera name -> single instance */
         this.instances = new Map();
         /** @type {number[][]|null} N x [x, y, z] triangulated 3D points, or null */
