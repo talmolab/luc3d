@@ -291,13 +291,17 @@ class InteractionManager {
                         candidates.push({ inst: mainInst, isReproj: false });
                     }
                 }
-                // Also consider reprojected instance (may coexist with main instance)
-                var visReprojEl2 = document.getElementById('visReprojections');
-                if (typePassFilters[pass]('reprojected') &&
-                    (!visReprojEl2 || visReprojEl2.checked)) {
-                    var reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
-                    if (reprojInst && reprojInst.points) {
-                        candidates.push({ inst: reprojInst, isReproj: true });
+                // Also consider reprojected instance, but ONLY if there's no main
+                // instance for this view — reprojected should never block clicking
+                // the main instance (user or predicted)
+                if (!mainInst || !mainInst.points) {
+                    var visReprojEl2 = document.getElementById('visReprojections');
+                    if (typePassFilters[pass]('reprojected') &&
+                        (!visReprojEl2 || visReprojEl2.checked)) {
+                        var reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
+                        if (reprojInst && reprojInst.points) {
+                            candidates.push({ inst: reprojInst, isReproj: true });
+                        }
                     }
                 }
 
@@ -751,14 +755,13 @@ class InteractionManager {
             if (this.assignmentMode) {
                 useUnlinked = true;
             } else {
-                // User grouped instances always win over predicted unlinked
-                var linkedInst = linkedHit.instanceGroup.getInstance(viewName);
-                var linkedIsUser = linkedInst && (linkedInst.type === 'user' || linkedInst.modified);
+                // Grouped instances always win over unlinked predicted —
+                // user labels take priority, and predicted groups auto-convert on click
                 var ulIsPredicted = ulHit.unlinked.instance && ulHit.unlinked.instance.type === 'predicted';
-                if (linkedIsUser && ulIsPredicted) {
+                if (ulIsPredicted) {
                     useLinked = true;
                 } else {
-                    // Otherwise prefer closer, with unlinked winning ties (renders on top)
+                    // Both are user type — prefer closer, unlinked wins ties (renders on top)
                     useLinked = linkedHit.distance < ulHit.distance;
                     useUnlinked = !useLinked;
                 }
@@ -811,25 +814,14 @@ class InteractionManager {
             var hitInst = linkedHit.instanceGroup.getInstance(viewName);
             // Block drag for reprojected; auto-convert predicted to user for editing
             if (linkedHit.hitReprojected) {
-                // Reprojected instance hit — check if group has a main instance we can edit instead
-                var mainInst = linkedHit.instanceGroup.getInstance(viewName);
-                if (mainInst && (mainInst.type === 'predicted' || mainInst.type === 'user')) {
-                    // Redirect to main instance for editing
-                    hitInst = mainInst;
-                    linkedHit.hitReprojected = false;
-                    if (mainInst.type === 'predicted') {
-                        this._convertToUserInstance(linkedHit.instanceGroup);
-                        hitInst = linkedHit.instanceGroup.getInstance(viewName);
-                    }
-                    // Fall through to drag logic below
-                } else {
-                    // No main instance — select reprojection only
-                    this.select(linkedHit.instanceGroup, linkedHit.nodeIdx, true);
-                    this._requestRedraw();
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e._consumedByInteraction = true;
-                }
+                // Reprojected hit only occurs when no main instance exists for this view
+                // (findNearestNode excludes reprojected when main exists)
+                // Select only — double-click handled separately above
+                this.select(linkedHit.instanceGroup, linkedHit.nodeIdx, true);
+                this._requestRedraw();
+                e.preventDefault();
+                e.stopPropagation();
+                e._consumedByInteraction = true;
             } else if (hitInst && hitInst.type === 'reprojected') {
                 // Reprojected (non-editable projection): select only, no drag
                 this.select(linkedHit.instanceGroup, linkedHit.nodeIdx);
