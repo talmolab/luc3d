@@ -232,7 +232,7 @@
             // Create an instance group with 3D points
             const group = new InstanceGroup(1, 0);
             group.points3d = [[10, 20, 30], [40, 50, 60]];
-            session.instanceGroups.set(5, new Map([[0, [group]]]));
+            session.instanceGroups.set(5, [group]);
 
             const data = buildPoints3dExportData(session);
             assertEqual(data.frame_indices.length, 1);

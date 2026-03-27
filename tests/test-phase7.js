@@ -40,13 +40,7 @@
                 return { currentFrame: 0, session: session, views: views };
             },
             getInstanceGroups: function (frameIdx) {
-                var trackMap = session.instanceGroups.get(frameIdx || 0);
-                if (!trackMap) return [];
-                var result = [];
-                for (var entry of trackMap) {
-                    for (var g of entry[1]) result.push(g);
-                }
-                return result;
+                return session.instanceGroups.get(frameIdx || 0) || [];
             },
             onSelectionChanged: function (group, nodeIdx) {
                 selectionChanges.push({ group: group, nodeIdx: nodeIdx });
@@ -169,13 +163,8 @@
             env.mgr.lastInteractedView = 'cam1';
             env.mgr._addNewInstance();
 
-            var trackMap = env.session.instanceGroups.get(0);
-            var hasGroups = false;
-            if (trackMap) {
-                for (var entry of trackMap) {
-                    if (entry[1].length > 0) hasGroups = true;
-                }
-            }
+            var groups = env.session.instanceGroups.get(0);
+            var hasGroups = groups && groups.length > 0;
             assert(!hasGroups, 'No InstanceGroups should be created');
         });
 
@@ -442,14 +431,9 @@
             var event = new KeyboardEvent('keydown', { key: 'c', ctrlKey: false, metaKey: false, altKey: false });
             env.mgr.onKeyDown(event);
 
-            var trackMap = env.session.instanceGroups.get(0);
-            assertNotNull(trackMap, 'Instance groups should exist');
-            var hasGroup = false;
-            if (trackMap) {
-                for (var entry of trackMap) {
-                    if (entry[1].length > 0) hasGroup = true;
-                }
-            }
+            var groups = env.session.instanceGroups.get(0);
+            assertNotNull(groups, 'Instance groups should exist');
+            var hasGroup = groups && groups.length > 0;
             assert(hasGroup, 'InstanceGroup should be created by C key');
             assert(!env.mgr.assignmentMode, 'Assignment mode should be cleared');
         });
@@ -469,8 +453,8 @@
             // Enter key is now handled in index.html, call method directly
             env.mgr._createGroupFromAssignment();
 
-            var trackMap = env.session.instanceGroups.get(0);
-            assertNotNull(trackMap, 'Instance groups should exist after group creation');
+            var groups = env.session.instanceGroups.get(0);
+            assertNotNull(groups, 'Instance groups should exist after group creation');
         });
     });
 
@@ -505,8 +489,8 @@
             assertEqual(fg.getUnlinkedInstances('cam2').length, 0, 'cam2 unlinked cleared');
 
             // Verify it's in instanceGroups
-            var trackMap = env.session.instanceGroups.get(0);
-            assertNotNull(trackMap, 'instanceGroups should have frame 0');
+            var groups = env.session.instanceGroups.get(0);
+            assertNotNull(groups, 'instanceGroups should have frame 0');
         });
 
         it('add multiple unlinked on same camera', function () {
@@ -533,7 +517,7 @@
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', new Instance([[100, 100], [200, 200]], 0, 'user', 1.0));
             group.addInstance('cam2', new Instance([[150, 150], [250, 250]], 0, 'user', 1.0));
-            env.session.instanceGroups.set(0, new Map([[0, [group]]]));
+            env.session.instanceGroups.set(0, [group]);
 
             var fg = new FrameGroup(0);
             fg.addInstance('cam1', group.getInstance('cam1'));
@@ -545,8 +529,8 @@
             env.mgr.lastInteractedView = 'cam1';
             env.mgr._deleteSelected(true); // Shift+Delete
 
-            var trackMap = env.session.instanceGroups.get(0);
-            var empty = !trackMap || trackMap.size === 0;
+            var groups = env.session.instanceGroups.get(0);
+            var empty = !groups || groups.length === 0;
             assert(empty, 'Instance group should be fully removed');
         });
 
@@ -556,7 +540,7 @@
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', new Instance([[100, 100], [200, 200]], 0, 'user', 1.0));
             group.addInstance('cam2', new Instance([[150, 150], [250, 250]], 0, 'user', 1.0));
-            env.session.instanceGroups.set(0, new Map([[0, [group]]]));
+            env.session.instanceGroups.set(0, [group]);
 
             var fg = new FrameGroup(0);
             fg.addInstance('cam1', group.getInstance('cam1'));
@@ -584,7 +568,7 @@
             var group = new InstanceGroup(1, 0);
             var inst = new Instance([[100, 100], [200, 200]], 0, 'user', 1.0);
             group.addInstance('cam1', inst);
-            env.session.instanceGroups.set(0, new Map([[0, [group]]]));
+            env.session.instanceGroups.set(0, [group]);
 
             var fg = new FrameGroup(0);
             fg.addInstance('cam1', inst);
@@ -611,20 +595,17 @@
                 var fg2 = entry[1];
                 var frameData = { instanceGroups: [], unlinkedInstances: [] };
 
-                var trackMap = env.session.instanceGroups.get(frameIdx);
-                if (trackMap) {
-                    for (var tEntry of trackMap) {
-                        for (var g of tEntry[1]) {
-                            var groupData = { id: g.id, trackIdx: g.trackIdx, instances: {} };
-                            for (var iEntry of g.instances) {
-                                groupData.instances[iEntry[0]] = {
-                                    points: iEntry[1].points,
-                                    trackIdx: iEntry[1].trackIdx,
-                                };
-                            }
-                            frameData.instanceGroups.push(groupData);
-                        }
+                var frameGroups = env.session.instanceGroups.get(frameIdx) || [];
+                for (var gi = 0; gi < frameGroups.length; gi++) {
+                    var g = frameGroups[gi];
+                    var groupData = { id: g.id, identityId: g.identityId, instances: {} };
+                    for (var iEntry of g.instances) {
+                        groupData.instances[iEntry[0]] = {
+                            points: iEntry[1].points,
+                            trackIdx: iEntry[1].trackIdx,
+                        };
                     }
+                    frameData.instanceGroups.push(groupData);
                 }
 
                 for (var uEntry of fg2.unlinkedInstances) {
@@ -681,28 +662,27 @@
                         trackInstances.get(tIdx).push({ camName: camName, instance: inst });
                     }
                 }
-                if (!env.session.instanceGroups.has(frameIdx)) env.session.instanceGroups.set(frameIdx, new Map());
-                var trackMap = env.session.instanceGroups.get(frameIdx);
+                if (!env.session.instanceGroups.has(frameIdx)) env.session.instanceGroups.set(frameIdx, []);
+                var frameGroups = env.session.instanceGroups.get(frameIdx);
                 for (var tEntry of trackInstances) {
                     var trackIdx = tEntry[0];
                     var entries = tEntry[1];
                     var group = new InstanceGroup(Date.now() + trackIdx, trackIdx);
                     for (var e of entries) group.addInstance(e.camName, e.instance);
-                    if (!trackMap.has(trackIdx)) trackMap.set(trackIdx, []);
-                    trackMap.get(trackIdx).push(group);
+                    frameGroups.push(group);
                 }
             }
 
             // Verify reconstruction
-            var trackMap2 = env.session.instanceGroups.get(0);
-            assertNotNull(trackMap2, 'Should have instance groups for frame 0');
+            var allGroups = env.session.instanceGroups.get(0);
+            assertNotNull(allGroups, 'Should have instance groups for frame 0');
 
-            var track0Groups = trackMap2.get(0);
+            var track0Groups = allGroups.filter(function(g) { return g.identityId === 0; });
             assertEqual(track0Groups.length, 1, 'Should have 1 group for track 0');
             assertNotNull(track0Groups[0].getInstance('cam1'), 'Track 0 group should have cam1');
             assertNotNull(track0Groups[0].getInstance('cam2'), 'Track 0 group should have cam2');
 
-            var track1Groups = trackMap2.get(1);
+            var track1Groups = allGroups.filter(function(g) { return g.identityId === 1; });
             assertEqual(track1Groups.length, 1, 'Should have 1 group for track 1');
             assertNotNull(track1Groups[0].getInstance('cam1'), 'Track 1 group should have cam1');
             assertNull(track1Groups[0].getInstance('cam2'), 'Track 1 group should not have cam2');
@@ -807,14 +787,14 @@
         it('should not crash when group is null', function () {
             // Simulate the callback logic from index.html
             var group = null;
-            var trackName = group ? ('Track ' + group.trackIdx) : 'unlinked instance';
+            var trackName = group ? ('Track ' + group.identityId) : 'unlinked instance';
             assertEqual(trackName, 'unlinked instance', 'Should use fallback name for null group');
         });
 
         it('should use track name when group exists', function () {
             var group = new InstanceGroup(1, 2);
             var tracks = ['track_0', 'track_1', 'track_2'];
-            var trackName = group ? (tracks[group.trackIdx] || 'Track ' + group.trackIdx) : 'unlinked instance';
+            var trackName = group ? (tracks[group.identityId] || 'Track ' + group.identityId) : 'unlinked instance';
             assertEqual(trackName, 'track_2', 'Should use track name from session');
         });
     });
@@ -1043,14 +1023,9 @@
             env.mgr.onKeyDown(event);
 
             // Verify group created
-            var trackMap = env.session.instanceGroups.get(0);
-            assertNotNull(trackMap, 'Should have instance groups');
-            var hasGroup = false;
-            if (trackMap) {
-                for (var entry of trackMap) {
-                    if (entry[1].length > 0) hasGroup = true;
-                }
-            }
+            var groups = env.session.instanceGroups.get(0);
+            assertNotNull(groups, 'Should have instance groups');
+            var hasGroup = groups && groups.length > 0;
             assert(hasGroup, 'Group should be created from click-click-C workflow');
             assert(!env.mgr.assignmentMode, 'Assignment mode should be off after group creation');
             assertEqual(fg.getUnlinkedInstances('cam1').length, 0, 'cam1 unlinked should be cleared');

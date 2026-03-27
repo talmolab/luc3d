@@ -28,7 +28,7 @@
             const fg = new FrameGroup(0);
             fg.addInstance('cam1', inst);
             session.addFrameGroup(fg);
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             const canvas = document.createElement('canvas');
             canvas.width = 640;
@@ -73,7 +73,7 @@
             const fg = new FrameGroup(0);
             fg.addInstance('cam1', inst);
             session.addFrameGroup(fg);
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             const canvas = document.createElement('canvas');
             canvas.width = 640;
@@ -184,7 +184,7 @@
             const inst = new Instance([[150, 200], [400, 300]], 0, 'user', 1);
             const group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             const canvas = document.createElement('canvas');
             canvas.width = 640;

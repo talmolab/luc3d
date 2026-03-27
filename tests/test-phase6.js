@@ -66,13 +66,8 @@
             mgr._addNewInstance();
 
             // Should NOT create any InstanceGroups
-            var trackMap = session.instanceGroups.get(0);
-            var hasGroups = false;
-            if (trackMap) {
-                for (var entry of trackMap) {
-                    if (entry[1].length > 0) hasGroups = true;
-                }
-            }
+            var groups = session.instanceGroups.get(0);
+            var hasGroups = groups && groups.length > 0;
             assert(!hasGroups, 'Should not create InstanceGroups');
 
             // Should create an UnlinkedInstance on cam1
@@ -165,7 +160,7 @@
             group.addInstance('cam2', new Instance([[100, 100], [200, 200]], 0, 'user', 1.0));
             group.addInstance('cam3', new Instance([[100, 100], [200, 200]], 0, 'user', 1.0));
 
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             var fg = new FrameGroup(0);
             fg.addInstance('cam1', group.getInstance('cam1'));
@@ -178,13 +173,7 @@
                     return { currentFrame: 0, session: session, views: [] };
                 },
                 getInstanceGroups: function () {
-                    var trackMap = session.instanceGroups.get(0);
-                    if (!trackMap) return [];
-                    var result = [];
-                    for (var entry of trackMap) {
-                        for (var g of entry[1]) result.push(g);
-                    }
-                    return result;
+                    return session.instanceGroups.get(0) || [];
                 },
                 onSelectionChanged: function () {},
                 onInstanceDeleted: function () {},
@@ -218,8 +207,8 @@
             ctx.mgr.lastInteractedView = 'cam3';
             ctx.mgr._deleteSelected(false);
 
-            var trackMap = ctx.session.instanceGroups.get(0);
-            var empty = !trackMap || trackMap.size === 0;
+            var groups = ctx.session.instanceGroups.get(0);
+            var empty = !groups || groups.length === 0;
             assert(empty, 'Instance group should be removed when last camera is deleted');
         });
 
@@ -231,8 +220,8 @@
 
             ctx.mgr._deleteSelected(true);
 
-            var trackMap = ctx.session.instanceGroups.get(0);
-            var empty = !trackMap || trackMap.size === 0;
+            var groups = ctx.session.instanceGroups.get(0);
+            var empty = !groups || groups.length === 0;
             assert(empty, 'Shift+Delete should remove entire group');
         });
     });

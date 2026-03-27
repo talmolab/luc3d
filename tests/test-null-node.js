@@ -52,7 +52,7 @@
         var group = new InstanceGroup(1, 0);
         group.addInstance('cam1', inst1);
         group.addInstance('cam2', inst2);
-        session.instanceGroups.set(0, new Map([[0, [group]]]));
+        session.instanceGroups.set(0, [group]);
 
         return {
             session: session,

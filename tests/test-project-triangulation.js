@@ -73,11 +73,9 @@
         }
 
         if (!session.instanceGroups.has(frameIdx)) {
-            session.instanceGroups.set(frameIdx, new Map());
+            session.instanceGroups.set(frameIdx, []);
         }
-        var trackMap = session.instanceGroups.get(frameIdx);
-        if (!trackMap.has(trackIdx)) trackMap.set(trackIdx, []);
-        trackMap.get(trackIdx).push(group);
+        session.instanceGroups.get(frameIdx).push(group);
 
         return group;
     }
@@ -194,14 +192,12 @@
             fg.addInstance('cam1', inst1);
             fg.addInstance('cam2', inst2);
 
-            if (!session.instanceGroups.has(5)) session.instanceGroups.set(5, new Map());
-            var trackMap = session.instanceGroups.get(5);
-            trackMap.set(0, [group]);
+            if (!session.instanceGroups.has(5)) session.instanceGroups.set(5, []);
+            session.instanceGroups.get(5).push(group);
             session.addFrameGroup(fg);
 
-            var retrieved = session.instanceGroups.get(5);
-            assert(retrieved != null, 'should have instanceGroups for frame 5');
-            var groups = retrieved.get(0);
+            var groups = session.instanceGroups.get(5);
+            assert(groups != null, 'should have instanceGroups for frame 5');
             assertEqual(groups.length, 1);
 
             var g = groups[0];
@@ -324,7 +320,7 @@
                     var reprojPts = result.reprojections[cam.name];
                     var filledInstance = new Instance(
                         reprojPts.map(function (p) { return p ? [p[0], p[1]] : null; }),
-                        group.trackIdx, 'predicted', 0.5
+                        group.identityId, 'predicted', 0.5
                     );
                     group.addInstance(cam.name, filledInstance);
                     filledCount++;
@@ -439,8 +435,8 @@
             fg.addInstance('CamA', inst1);
             fg.addInstance('CamB', inst2);
             session.addFrameGroup(fg);
-            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, new Map());
-            session.instanceGroups.get(0).set(0, [group]);
+            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, []);
+            session.instanceGroups.get(0).push(group);
 
             // Verify keys before rename
             assert(group.getInstance('CamA') != null, 'before: should have CamA');
@@ -518,8 +514,8 @@
             fg.addInstance('CamA', instA);
             fg.addInstance('CamB', instB);
             session.addFrameGroup(fg);
-            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, new Map());
-            session.instanceGroups.get(0).set(0, [group]);
+            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, []);
+            session.instanceGroups.get(0).push(group);
 
             // Before rename: triangulation should fail (camera names don't match)
             var viewsBefore = 0;
@@ -810,8 +806,8 @@
             fg.addInstance('A', instA);
             fg.addInstance('B', instB);
             session.addFrameGroup(fg);
-            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, new Map());
-            session.instanceGroups.get(0).set(0, [group]);
+            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, []);
+            session.instanceGroups.get(0).push(group);
 
             // Triangulate
             var result = triangulateAndReproject(group, cameras);
@@ -849,8 +845,8 @@
             fg.addInstance('CamA', group.getInstance('CamA'));
             fg.addInstance('CamB', group.getInstance('CamB'));
             session.addFrameGroup(fg);
-            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, new Map());
-            session.instanceGroups.get(0).set(0, [group]);
+            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, []);
+            session.instanceGroups.get(0).push(group);
 
             // Step 2: Verify triangulation fails with wrong names
             var viewsBefore = 0;
