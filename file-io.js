@@ -652,23 +652,21 @@ function buildSlpExportData(session, views, videoFiles) {
 
     // Build frame_group_dicts with 3D triangulated data
     const frameGroupDicts = [];
-    for (const [frameIdx, trackMap] of session.instanceGroups) {
+    for (const [frameIdx, groups] of session.instanceGroups) {
         const instanceGroupsData = [];
-        for (const [trackIdx, groups] of trackMap) {
-            for (const group of groups) {
-                const camToLfAndInst = {};
-                for (const [camName, inst] of group.instances) {
-                    const camIdx = session.cameras.findIndex(function (c) { return c.name === camName; });
-                    if (camIdx >= 0) {
-                        camToLfAndInst[String(camIdx)] = [frameIdx, 0];
-                    }
+        for (const group of groups) {
+            const camToLfAndInst = {};
+            for (const [camName, inst] of group.instances) {
+                const camIdx = session.cameras.findIndex(function (c) { return c.name === camName; });
+                if (camIdx >= 0) {
+                    camToLfAndInst[String(camIdx)] = [frameIdx, 0];
                 }
-                instanceGroupsData.push({
-                    camcorder_to_lf_and_inst_idx_map: camToLfAndInst,
-                    score: 1.0,
-                    points: group.points3d || [],
-                });
             }
+            instanceGroupsData.push({
+                camcorder_to_lf_and_inst_idx_map: camToLfAndInst,
+                score: 1.0,
+                points: group.points3d || [],
+            });
         }
 
         const labeledFrameByCamera = {};
@@ -712,9 +710,14 @@ function buildSlpExportData(session, views, videoFiles) {
  */
 function buildPoints3dExportData(session) {
     const nodeNames = session.skeleton.nodes.slice();
-    const trackNames = session.tracks.slice();
+    const trackNames = (session.identities && session.identities.length > 0)
+        ? session.identities.map(function (id) { return id.name; })
+        : session.tracks.slice();
     const numNodes = nodeNames.length;
-    const numTracks = trackNames.length;
+    const numTracks = Math.max(
+        (session.identities ? session.identities.length : 0),
+        session.tracks.length
+    );
 
     const frameIndices = [];
     const points3dFrames = [];
@@ -725,7 +728,7 @@ function buildPoints3dExportData(session) {
 
     for (let fi = 0; fi < sortedFrameIndices.length; fi++) {
         const frameIdx = sortedFrameIndices[fi];
-        const trackMap = session.instanceGroups.get(frameIdx);
+        const groups = session.instanceGroups.get(frameIdx);
 
         // Build a per-track array for this frame
         const framePts = new Array(numTracks);
@@ -741,15 +744,14 @@ function buildPoints3dExportData(session) {
             }
         }
 
-        if (trackMap) {
-            for (const [trackIdx, groups] of trackMap) {
-                if (trackIdx >= numTracks) continue;
-                for (const group of groups) {
-                    if (group.points3d) {
-                        hasData = true;
-                        for (let n = 0; n < Math.min(numNodes, group.points3d.length); n++) {
-                            framePts[trackIdx][n] = group.points3d[n];
-                        }
+        if (groups) {
+            for (const group of groups) {
+                const idIdx = group.identityId;
+                if (idIdx < 0 || idIdx >= numTracks) continue;
+                if (group.points3d) {
+                    hasData = true;
+                    for (let n = 0; n < Math.min(numNodes, group.points3d.length); n++) {
+                        framePts[idIdx][n] = group.points3d[n];
                     }
                 }
             }
@@ -914,14 +916,12 @@ function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo)
 
         // Also collect reprojected instances for this frame+camera
         var reprojInstances = [];
-        var trackMap = session.instanceGroups.get(frameIdx);
-        if (trackMap) {
-            for (var [trackIdx, groups] of trackMap) {
-                for (var gi = 0; gi < groups.length; gi++) {
-                    var reprojInst = groups[gi].getReprojectedInstance(cameraName);
-                    if (reprojInst) {
-                        reprojInstances.push(reprojInst);
-                    }
+        var groups = session.instanceGroups.get(frameIdx);
+        if (groups) {
+            for (var gi = 0; gi < groups.length; gi++) {
+                var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                if (reprojInst) {
+                    reprojInstances.push(reprojInst);
                 }
             }
         }
@@ -1121,15 +1121,13 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
         // Collect reprojected instances with their group's trackIdx
         var reprojInstances = [];
         if (!instanceFilter || instanceFilter.reprojected !== false) {
-            var trackMap = session.instanceGroups.get(frameIdx);
-            if (trackMap) {
-                for (var [trackIdx, groups] of trackMap) {
-                    for (var gi = 0; gi < groups.length; gi++) {
-                        var reprojInst = groups[gi].getReprojectedInstance(cameraName);
-                        if (reprojInst) {
-                            reprojInst._groupTrackIdx = groups[gi].trackIdx;
-                            reprojInstances.push(reprojInst);
-                        }
+            var groups = session.instanceGroups.get(frameIdx);
+            if (groups) {
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                    if (reprojInst) {
+                        reprojInst._groupIdentityId = groups[gi].identityId;
+                        reprojInstances.push(reprojInst);
                     }
                 }
             }
@@ -1187,8 +1185,8 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
             for (var ri = 0; ri < reprojInstances.length; ri++) {
                 var rInst = reprojInstances[ri];
                 var rPts = _buildSioPoints(rInst, numNodes);
-                var rTrackIdx = rInst._groupTrackIdx;
-                var rTrack = (rTrackIdx >= 0 && rTrackIdx < tracks.length) ? tracks[rTrackIdx] : null;
+                var rIdentityId = rInst._groupIdentityId;
+                var rTrack = (rIdentityId >= 0 && rIdentityId < tracks.length) ? tracks[rIdentityId] : null;
 
                 if (reprojAsUser) {
                     frameInstances.push(new SIO.Instance({
@@ -1499,10 +1497,15 @@ async function buildReprojH5(session) {
 
     const cameras = session.cameras;
     const nodeNames = session.skeleton.nodes;
-    const trackNames = session.tracks;
+    const trackNames = (session.identities && session.identities.length > 0)
+        ? session.identities.map(function (id) { return id.name; })
+        : session.tracks.slice();
     const nCameras = cameras.length;
     const nNodes = nodeNames.length;
-    const nTracks = trackNames.length;
+    const nTracks = Math.max(
+        (session.identities ? session.identities.length : 0),
+        session.tracks.length
+    );
     const cameraNames = cameras.map(function (c) { return c.name; });
 
     // Collect frames sorted
@@ -1515,24 +1518,23 @@ async function buildReprojH5(session) {
 
     for (var fi = 0; fi < nFrames; fi++) {
         var frameIdx = sortedFrameIndices[fi];
-        var trackMap = session.instanceGroups.get(frameIdx);
-        if (!trackMap) continue;
+        var groups = session.instanceGroups.get(frameIdx);
+        if (!groups) continue;
 
-        for (var [trackIdx, groups] of trackMap) {
-            if (trackIdx >= nTracks) continue;
-            for (var group of groups) {
-                if (!group.reprojections) continue;
-                for (var ci = 0; ci < nCameras; ci++) {
-                    var camName = cameraNames[ci];
-                    var reprojPts = group.reprojections[camName];
-                    if (!reprojPts) continue;
-                    for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
-                        var rpt = reprojPts[ni];
-                        if (rpt) {
-                            var rbase = (((fi * nTracks + trackIdx) * nCameras + ci) * nNodes + ni) * 2;
-                            reproj[rbase] = rpt[0];
-                            reproj[rbase + 1] = rpt[1];
-                        }
+        for (var group of groups) {
+            var idIdx = group.identityId;
+            if (idIdx < 0 || idIdx >= nTracks) continue;
+            if (!group.reprojections) continue;
+            for (var ci = 0; ci < nCameras; ci++) {
+                var camName = cameraNames[ci];
+                var reprojPts = group.reprojections[camName];
+                if (!reprojPts) continue;
+                for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
+                    var rpt = reprojPts[ni];
+                    if (rpt) {
+                        var rbase = (((fi * nTracks + idIdx) * nCameras + ci) * nNodes + ni) * 2;
+                        reproj[rbase] = rpt[0];
+                        reproj[rbase + 1] = rpt[1];
                     }
                 }
             }
