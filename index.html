@@ -978,7 +978,7 @@
                     if (existing) {
                         existing.points = reprojPts;
                     } else {
-                        var reprojInstance = new Instance(reprojPts, group.trackIdx, 'reprojected', 1.0);
+                        var reprojInstance = new Instance(reprojPts, group.identityId, 'reprojected', 1.0);
                         group.addReprojectedInstance(cam.name, reprojInstance);
                     }
                 }
@@ -990,11 +990,10 @@
 
             const cameras = state.session.cameras;
 
-            for (const [frameIdx, trackMap] of state.session.instanceGroups) {
+            for (const [frameIdx, frameGroups] of state.session.instanceGroups) {
                 const frameResults = [];
 
-                for (const [trackIdx, groups] of trackMap) {
-                    for (const group of groups) {
+                for (const group of frameGroups) {
                         const result = triangulateAndReproject(group, cameras);
 
                         // Store reprojections and observed points on the group for overlay rendering
@@ -1009,14 +1008,13 @@
                             }
                         }
 
-                        frameResults.push({
-                            group: group,
-                            points3d: result.points3d,
-                            reprojections: result.reprojections,
-                            errors: result.errors,
-                            meanError: result.meanError,
-                        });
-                    }
+                    frameResults.push({
+                        group: group,
+                        points3d: result.points3d,
+                        reprojections: result.reprojections,
+                        errors: result.errors,
+                        meanError: result.meanError,
+                    });
                 }
 
                 state.triangulationResults.set(frameIdx, frameResults);
@@ -1125,8 +1123,8 @@
 
             const frameIdx = state.currentFrame;
             const cameras = state.session.cameras;
-            const trackMap = state.session.instanceGroups.get(frameIdx);
-            if (!trackMap) {
+            const frameGroupsList = state.session.instanceGroups.get(frameIdx);
+            if (!frameGroupsList || frameGroupsList.length === 0) {
                 console.warn('[triangulate] No instanceGroups for frame', frameIdx);
                 setStatus('No instance groups on frame ' + (frameIdx + 1) + ' - assign instances to groups first (A key)', 'warning');
                 updateTriangulationBadge('needs-triangulation', 'No groups');
@@ -1138,8 +1136,7 @@
 
             const frameResults = [];
 
-            for (const [trackIdx, groups] of trackMap) {
-                for (const group of groups) {
+            for (const group of frameGroupsList) {
                     // Resolve any camera name mismatches in this group
                     // (e.g., instances keyed by video name "CamA" but camera named "A")
                     const groupKeys = group.cameraNames;
@@ -1175,7 +1172,7 @@
                             camStatus[cam.name] = inst ? 'no-points' : 'missing';
                         }
                     }
-                    console.log('[triangulate] Track', trackIdx, '| views with labels:', viewsWithLabels,
+                    console.log('[triangulate] Identity', group.identityId, '| views with labels:', viewsWithLabels,
                         '| cam status:', camStatus);
 
                     if (viewsWithLabels < 2) {
@@ -1236,7 +1233,6 @@
                         meanError: result.meanError,
                     });
                 }
-            }
 
             state.triangulationResults.set(frameIdx, frameResults);
 
@@ -1315,14 +1311,13 @@
 
             for (var fi = 0; fi < frameIndices.length; fi++) {
                 var frameIdx = frameIndices[fi];
-                var trackMap = state.session.instanceGroups.get(frameIdx);
-                if (!trackMap) continue;
+                var frameGroupsList = state.session.instanceGroups.get(frameIdx);
+                if (!frameGroupsList || frameGroupsList.length === 0) continue;
 
                 var frameResults = [];
 
-                for (var [trackIdx, groups] of trackMap) {
-                    for (var gi = 0; gi < groups.length; gi++) {
-                        var group = groups[gi];
+                for (var gi = 0; gi < frameGroupsList.length; gi++) {
+                        var group = frameGroupsList[gi];
 
                         // Resolve camera name mismatches
                         var groupKeys = group.cameraNames;
@@ -1391,7 +1386,6 @@
                             totalErrors.push(result.meanError);
                         }
                     }
-                }
 
                 if (frameResults.length > 0) {
                     state.triangulationResults.set(frameIdx, frameResults);
@@ -1718,8 +1712,7 @@
                     // Create InstanceGroup
                     var groupId = session.instanceGroups.size + totalGrouped;
                     var trackIdx = bucket[camNames[0]].trackIdx;
-                    var group = new InstanceGroup(groupId, trackIdx);
-                    group.identityId = identityId3;
+                    var group = new InstanceGroup(groupId, identityId3);
 
                     for (var ci2 = 0; ci2 < camNames.length; ci2++) {
                         group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
@@ -1727,11 +1720,9 @@
 
                     // Add to session
                     if (!session.instanceGroups.has(frameIdx)) {
-                        session.instanceGroups.set(frameIdx, new Map());
+                        session.instanceGroups.set(frameIdx, []);
                     }
-                    var frameMap = session.instanceGroups.get(frameIdx);
-                    if (!frameMap.has(trackIdx)) frameMap.set(trackIdx, []);
-                    frameMap.get(trackIdx).push(group);
+                    session.instanceGroups.get(frameIdx).push(group);
 
                     // Triangulate
                     var triResult = triangulateAndReproject(group, cameras);
@@ -1888,24 +1879,18 @@
                     if (camNames.length < 2) continue;
 
                     // Create InstanceGroup
-                    var group = new InstanceGroup(Date.now() + trackIdx, trackIdx);
+                    // Auto-assign identity from track
+                    var identity = session.getOrCreateIdentityForTrack(trackIdx);
+                    var group = new InstanceGroup(Date.now() + trackIdx, identity.id);
                     for (var ci2 = 0; ci2 < camNames.length; ci2++) {
                         group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
                     }
 
-                    // Auto-assign identity from track
-                    var identity = session.getOrCreateIdentityForTrack(trackIdx);
-                    session.assignIdentityToGroup(group, identity.id);
-
                     // Store in session.instanceGroups
                     if (!session.instanceGroups.has(frameIdx)) {
-                        session.instanceGroups.set(frameIdx, new Map());
+                        session.instanceGroups.set(frameIdx, []);
                     }
-                    var trackMap = session.instanceGroups.get(frameIdx);
-                    if (!trackMap.has(trackIdx)) {
-                        trackMap.set(trackIdx, []);
-                    }
-                    trackMap.get(trackIdx).push(group);
+                    session.instanceGroups.get(frameIdx).push(group);
 
                     totalGrouped++;
 
@@ -1999,15 +1984,7 @@
         // ============================================
 
         function getInstanceGroupsForFrame(frameIdx) {
-            const trackMap = state.session ? state.session.instanceGroups.get(frameIdx) : null;
-            if (!trackMap) return [];
-            const result = [];
-            for (const [trackIdx, groups] of trackMap) {
-                for (const g of groups) {
-                    result.push(g);
-                }
-            }
-            return result;
+            return state.session ? (state.session.instanceGroups.get(frameIdx) || []) : [];
         }
 
         /**
@@ -2407,15 +2384,15 @@
 
                 onDoubleClickReprojected: function (group, viewName) {
                     var frameIdx = state.currentFrame;
-                    var trackIdx = group.trackIdx;
-                    var trackName = state.session.tracks[trackIdx] || 'Track ' + trackIdx;
+                    var identityId = group.identityId;
+                    var trackName = state.session.tracks[identityId] || 'Track ' + identityId;
 
                     // Search all groups for an existing UserInstance group with this track
                     // Find the existing group for this track (user or predicted)
                     var existingGroup = null;
                     var allGroups = getInstanceGroupsForFrame(frameIdx);
                     for (var gi = 0; gi < allGroups.length; gi++) {
-                        if (allGroups[gi].trackIdx === trackIdx) {
+                        if (allGroups[gi].identityId === identityId) {
                             existingGroup = allGroups[gi];
                             break;
                         }
@@ -2440,12 +2417,12 @@
 
                     console.log('[dblclick-reproj] existingGroup:', !!existingGroup,
                         '| group === existingGroup:', group === existingGroup,
-                        '| trackIdx:', trackIdx, '| viewName:', viewName,
+                        '| identityId:', identityId, '| viewName:', viewName,
                         '| reprojInstances:', group.reprojectedInstances ? group.reprojectedInstances.size : 0);
 
                     if (existingGroup) {
                         // Case 2: Group exists but not in this view — add user instance to it
-                        var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
+                        var newInst = new Instance(clonedPoints, identityId, 'user', 1.0);
                         newInst.modified = true;
                         existingGroup.addInstance(viewName, newInst);
                         if (fg) fg.addInstance(viewName, newInst);
@@ -2463,7 +2440,7 @@
                             if (inst.type === 'predicted') {
                                 var userClone = new Instance(
                                     inst.points.map(function(pt) { return pt != null ? [pt[0], pt[1]] : null; }),
-                                    trackIdx, 'user', 1.0
+                                    identityId, 'user', 1.0
                                 );
                                 userClone.modified = true;
                                 recordUserPoints(camName, userClone.points);
@@ -2473,16 +2450,16 @@
                         }
                         // Add clicked view if not already a PredictedInstance view
                         if (!predGroup.getInstance(viewName)) {
-                            var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
+                            var newInst = new Instance(clonedPoints, identityId, 'user', 1.0);
                             newInst.modified = true;
                             recordUserPoints(viewName, clonedPoints);
                             var ul = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
                             unlinkedList.push(ul);
                         }
                         if (unlinkedList.length > 0) {
-                            group = state.session.createGroupFromUnlinked(frameIdx, unlinkedList, trackIdx);
+                            group = state.session.createGroupFromUnlinked(frameIdx, unlinkedList, identityId);
                             for (var [cn, ni] of group.instances) {
-                                ni.trackIdx = group.trackIdx;
+                                ni.trackIdx = group.identityId;
                             }
                             // Transfer all reprojected instances from predicted group to new user group
                             // (kept until next re-triangulation replaces them)
@@ -2589,7 +2566,7 @@
                 },
 
                 onInstanceDeleted: function (frameIdx, group, deletedViews) {
-                    var trackName = group ? (state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx) : 'unlinked instance';
+                    var trackName = group ? (state.session.tracks[group.identityId] || 'Track ' + group.identityId) : 'unlinked instance';
                     setStatus('Deleted ' + trackName, 'success');
 
                     // Clear per-view cache only for the views whose instance was deleted
@@ -2634,7 +2611,7 @@
 
                 onAssignmentGroupCreated: function (group) {
                     cleanupManualAssignment();
-                    var trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
+                    var trackName = state.session.tracks[group.identityId] || 'Track ' + group.identityId;
 
                     // Auto-triangulate the new group
                     reTriangulateGroup(group);
@@ -2691,7 +2668,7 @@
 
                     // Add to group
                     group.addInstance(viewName, inst);
-                    inst.trackIdx = group.trackIdx;
+                    inst.trackIdx = group.identityId;
 
                     // Remove from unlinked list in FrameGroup
                     if (fg) {
@@ -3077,12 +3054,10 @@
                         state.session.getOrCreateIdentityForTrack(ti);
                     }
                     // Assign identities to existing groups by track
-                    for (var [fIdx2, trackMap] of state.session.instanceGroups) {
-                        for (var [tIdx, groups] of trackMap) {
-                            for (var gi = 0; gi < groups.length; gi++) {
-                                var identity = state.session.getOrCreateIdentityForTrack(groups[gi].trackIdx);
-                                state.session.assignIdentityToGroup(groups[gi], identity.id);
-                            }
+                    for (var [fIdx2, groups] of state.session.instanceGroups) {
+                        for (var gi = 0; gi < groups.length; gi++) {
+                            var identity = state.session.getOrCreateIdentityForTrack(groups[gi].identityId);
+                            state.session.assignIdentityToGroup(groups[gi], identity.id);
                         }
                     }
                     // Auto-switch to Color by Identity
@@ -3286,11 +3261,9 @@
                 var identity = state.session.identities[idx];
                 if (!confirm('Delete identity "' + identity.name + '"? Groups will become unassigned.')) return;
                 // Unassign all groups with this identity
-                for (var [fIdx, trackMap] of state.session.instanceGroups) {
-                    for (var [tIdx, groups] of trackMap) {
-                        for (var gi = 0; gi < groups.length; gi++) {
-                            if (groups[gi].identityId === identity.id) groups[gi].identityId = -1;
-                        }
+                for (var [fIdx, groups] of state.session.instanceGroups) {
+                    for (var gi = 0; gi < groups.length; gi++) {
+                        if (groups[gi].identityId === identity.id) groups[gi].identityId = -1;
                     }
                 }
                 state.session.identities.splice(idx, 1);
@@ -3441,7 +3414,7 @@
                     var bucket = trackBuckets[tidStr];
                     var bucketCamNames = Object.keys(bucket);
                     if (bucketCamNames.length < 2) continue;
-                    var group = new InstanceGroup(Date.now() + parseInt(tidStr), parseInt(tidStr));
+                    var group = new InstanceGroup(Date.now() + parseInt(tidStr), parseInt(tidStr)); // identityId = trackIdx for backwards compat
                     for (var bci = 0; bci < bucketCamNames.length; bci++) {
                         group.addInstance(bucketCamNames[bci], bucket[bucketCamNames[bci]]);
                     }
@@ -3713,7 +3686,7 @@
                 interactionManager.clearSelection();
             }
 
-            var trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
+            var trackName = state.session.tracks[group.identityId] || 'Track ' + group.identityId;
             state.session.unlinkGroup(frameIdx, group);
             setStatus('Unlinked ' + trackName, 'success');
 
@@ -4669,7 +4642,7 @@
                     costMatrix[a] = [];
                     for (var b = 0; b < nOther; b++) {
                         // Create temporary group with instances from both views
-                        var tempGroup = new InstanceGroup(-1, 0);
+                        var tempGroup = new InstanceGroup(-1, -1);
                         tempGroup.addInstance(refView, refInstances[a].instance);
                         tempGroup.addInstance(otherView, otherInstances[b].instance);
                         var result = triangulateAndReproject(tempGroup, cameras);
@@ -4704,9 +4677,9 @@
                     );
                     // Update instance trackIdx on both the group's map AND the
                     // FrameGroup's instances array (same objects by reference)
-                    var newTrackIdx = group.trackIdx;
+                    var newIdentityId = group.identityId;
                     for (var [camName, inst] of group.instances) {
-                        inst.trackIdx = newTrackIdx;
+                        inst.trackIdx = newIdentityId;
                     }
                     groupsCreated++;
                 }
@@ -4908,14 +4881,14 @@
                     if (assigned) assignedUnlinked.push(assigned);
                 }
                 if (assignedUnlinked.length >= 2) {
+                    var prevIdentityId = validPrevGroups[tgi].identityId;
                     var group = state.session.createGroupFromUnlinked(
-                        state.currentFrame, assignedUnlinked, validPrevGroups[tgi].trackIdx
+                        state.currentFrame, assignedUnlinked, prevIdentityId
                     );
-                    // Preserve track index from previous frame
-                    var prevTrackIdx = validPrevGroups[tgi].trackIdx;
-                    group.trackIdx = prevTrackIdx;
+                    // Preserve identity from previous frame
+                    group.identityId = prevIdentityId;
                     for (var [camName, inst] of group.instances) {
-                        inst.trackIdx = prevTrackIdx;
+                        inst.trackIdx = prevIdentityId;
                     }
 
                     // Triangulate to get updated 3D points
@@ -5424,15 +5397,10 @@
                     }
                     if (hasEdits) break;
                     // Check reprojected instances
-                    var trackMap = state.session.instanceGroups.get(frameIdx);
-                    if (trackMap) {
-                        for (var [tIdx, groups] of trackMap) {
-                            for (var gi = 0; gi < groups.length; gi++) {
-                                if (groups[gi].getReprojectedInstance(camName)) {
-                                    hasEdits = true; break;
-                                }
-                            }
-                            if (hasEdits) break;
+                    var frameGroupsList = state.session.instanceGroups.get(frameIdx) || [];
+                    for (var gi = 0; gi < frameGroupsList.length; gi++) {
+                        if (frameGroupsList[gi].getReprojectedInstance(camName)) {
+                            hasEdits = true; break;
                         }
                     }
                     if (hasEdits) break;
@@ -5457,15 +5425,9 @@
                         }
                     }
                     if (sfHasLabeled) labeledFrames++;
-                    var sfTm = state.session.instanceGroups.get(sfIdx);
-                    if (sfTm) {
-                        for (var sfGroups of sfTm.values()) {
-                            var sfFound = false;
-                            for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
-                                if (sfGroups[sfgi].points3d) { triangulatedFrames++; sfFound = true; break; }
-                            }
-                            if (sfFound) break;
-                        }
+                    var sfGroups = state.session.instanceGroups.get(sfIdx) || [];
+                    for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
+                        if (sfGroups[sfgi].points3d) { triangulatedFrames++; break; }
                     }
                 }
 
@@ -5655,15 +5617,9 @@
                             if ((sfUl[sui].instance.type || 'user') === 'user') { sfHasLabeled = true; instanceCount++; }
                         }
                         if (sfHasLabeled) labeledFrames++;
-                        var sfTm = sess.instanceGroups.get(sfIdx);
-                        if (sfTm) {
-                            for (var sfGroups of sfTm.values()) {
-                                var sfFound = false;
-                                for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
-                                    if (sfGroups[sfgi].points3d) { triangulatedFrames++; sfFound = true; break; }
-                                }
-                                if (sfFound) break;
-                            }
+                        var sfGroups = sess.instanceGroups.get(sfIdx) || [];
+                        for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
+                            if (sfGroups[sfgi].points3d) { triangulatedFrames++; break; }
                         }
                     }
 
@@ -6028,8 +5984,8 @@
                 // Validate: check all frames in range have identity assignment
                 var missingFrames = [];
                 for (var f = startFrame; f <= endFrame; f++) {
-                    var trackMap = state.session.instanceGroups.get(f);
-                    if (!trackMap || trackMap.size === 0) {
+                    var frameGroupsList = state.session.instanceGroups.get(f);
+                    if (!frameGroupsList || frameGroupsList.length === 0) {
                         missingFrames.push(f);
                     }
                 }
@@ -6069,13 +6025,12 @@
             var totalErrors = [];
 
             for (var f = startFrame; f <= endFrame; f++) {
-                var trackMap = state.session.instanceGroups.get(f);
-                if (trackMap) {
+                var frameGroupsList2 = state.session.instanceGroups.get(f);
+                if (frameGroupsList2) {
                     var frameResults = [];
 
-                    for (var [trackIdx, groups] of trackMap) {
-                        for (var gi = 0; gi < groups.length; gi++) {
-                            var group = groups[gi];
+                    for (var gi = 0; gi < frameGroupsList2.length; gi++) {
+                            var group = frameGroupsList2[gi];
 
                             // Resolve camera name mismatches
                             var groupKeys = group.cameraNames;
@@ -6140,7 +6095,6 @@
                                 totalErrors.push(result.meanError);
                             }
                         }
-                    }
 
                     if (frameResults.length > 0) {
                         state.triangulationResults.set(f, frameResults);
@@ -6415,11 +6369,9 @@
                             }
                         }
                     }
-                    for (const [frameIdx, trackMap] of state.session.instanceGroups) {
-                        for (const groups of trackMap.values()) {
-                            for (const g of groups) {
-                                if (g.getInstance(camName)) groupCount++;
-                            }
+                    for (const [frameIdx, groups] of state.session.instanceGroups) {
+                        for (const g of groups) {
+                            if (g.getInstance(camName)) groupCount++;
                         }
                     }
                 }
@@ -6967,14 +6919,9 @@
                 if (hasLabeled) labeledCount++;
 
                 // Triangulated: frame has at least one InstanceGroup with points3d
-                var trackMap = state.session.instanceGroups.get(frameIdx);
-                if (trackMap) {
-                    outer:
-                    for (var groups of trackMap.values()) {
-                        for (var g = 0; g < groups.length; g++) {
-                            if (groups[g].points3d) { triangulatedCount++; break outer; }
-                        }
-                    }
+                var frameGroupsList = state.session.instanceGroups.get(frameIdx) || [];
+                for (var g = 0; g < frameGroupsList.length; g++) {
+                    if (frameGroupsList[g].points3d) { triangulatedCount++; break; }
                 }
             });
 
@@ -7379,17 +7326,17 @@
                         tOpt.textContent = state.session.tracks[tsi];
                         trackSelect.appendChild(tOpt);
                     }
-                    trackSelect.value = group.trackIdx != null ? group.trackIdx : 0;
+                    trackSelect.value = group.identityId != null ? group.identityId : 0;
                     (function (g, sel) {
                         sel.addEventListener('change', function (ev) {
                             ev.stopPropagation();
                             var newTrack = parseInt(sel.value);
-                            if (newTrack === g.trackIdx) return;
+                            if (newTrack === g.identityId) return;
                             var totalProp = 0;
                             for (var [cn, ginst] of g.instances) {
                                 totalProp += swapAssignTrack(state.currentFrame, cn, ginst, newTrack, state.session);
                             }
-                            g.trackIdx = newTrack;
+                            g.identityId = newTrack;
                             setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) +
                                 (totalProp > 0 ? ' (propagated ' + totalProp + ')' : ''), 'success');
                             drawAllOverlays(state.currentFrame);
@@ -7979,40 +7926,36 @@
             var frames = {};
             for (var [frameIdx, fg] of session.frameGroups) {
                 var frameData = { instanceGroups: [], unlinkedInstances: [] };
-                var trackMap = session.instanceGroups.get(frameIdx);
-                if (trackMap) {
-                    for (var [trackIdx, groups] of trackMap) {
-                        for (var group of groups) {
-                            var groupData = {
-                                id: group.id,
-                                trackIdx: group.trackIdx,
-                                identityId: group.identityId != null ? group.identityId : -1,
-                                instances: {},
-                                points3d: group.points3d || null,
-                                reprojections: group.reprojections || null,
-                                observedPoints: group.observedPoints || null,
-                                dirty: group.dirty || false,
-                            };
-                            if (group.usedCameras) {
-                                groupData.usedCameras = Array.from(group.usedCameras);
-                            }
-                            for (var [camName, inst] of group.instances) {
-                                var instData = {
-                                    points: inst.points,
-                                    trackIdx: inst.trackIdx,
-                                    type: inst.type,
-                                    score: inst.score,
-                                    modified: inst.modified,
-                                    occluded: inst.occluded,
-                                };
-                                if (inst.nulledNodes && inst.nulledNodes.size > 0) {
-                                    instData.nulledNodes = Array.from(inst.nulledNodes);
-                                }
-                                groupData.instances[camName] = instData;
-                            }
-                            frameData.instanceGroups.push(groupData);
-                        }
+                var groups = session.instanceGroups.get(frameIdx) || [];
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var group = groups[gi];
+                    var groupData = {
+                        id: group.id,
+                        identityId: group.identityId != null ? group.identityId : -1,
+                        instances: {},
+                        points3d: group.points3d || null,
+                        reprojections: group.reprojections || null,
+                        observedPoints: group.observedPoints || null,
+                        dirty: group.dirty || false,
+                    };
+                    if (group.usedCameras) {
+                        groupData.usedCameras = Array.from(group.usedCameras);
                     }
+                    for (var [camName, inst] of group.instances) {
+                        var instData = {
+                            points: inst.points,
+                            trackIdx: inst.trackIdx,
+                            type: inst.type,
+                            score: inst.score,
+                            modified: inst.modified,
+                            occluded: inst.occluded,
+                        };
+                        if (inst.nulledNodes && inst.nulledNodes.size > 0) {
+                            instData.nulledNodes = Array.from(inst.nulledNodes);
+                        }
+                        groupData.instances[camName] = instData;
+                    }
+                    frameData.instanceGroups.push(groupData);
                 }
                 for (var [camName2, unlinkedList] of fg.unlinkedInstances) {
                     for (var unlinked of unlinkedList) {
@@ -8135,40 +8078,35 @@
                 };
 
                 // Serialize instance groups
-                const trackMap = state.session.instanceGroups.get(frameIdx);
-                if (trackMap) {
-                    for (const [trackIdx, groups] of trackMap) {
-                        for (const group of groups) {
-                            const groupData = {
-                                id: group.id,
-                                trackIdx: group.trackIdx,
-                                identityId: group.identityId != null ? group.identityId : -1,
-                                instances: {},
-                                points3d: group.points3d || null,
-                                reprojections: group.reprojections || null,
-                                observedPoints: group.observedPoints || null,
-                                dirty: group.dirty || false,
-                            };
-                            if (group.usedCameras) {
-                                groupData.usedCameras = Array.from(group.usedCameras);
-                            }
-                            for (const [camName, inst] of group.instances) {
-                                const instData = {
-                                    points: inst.points,
-                                    trackIdx: inst.trackIdx,
-                                    type: inst.type,
-                                    score: inst.score,
-                                    modified: inst.modified,
-                                    occluded: inst.occluded,
-                                };
-                                if (inst.nulledNodes && inst.nulledNodes.size > 0) {
-                                    instData.nulledNodes = Array.from(inst.nulledNodes);
-                                }
-                                groupData.instances[camName] = instData;
-                            }
-                            frameData.instanceGroups.push(groupData);
-                        }
+                const groups = state.session.instanceGroups.get(frameIdx) || [];
+                for (const group of groups) {
+                    const groupData = {
+                        id: group.id,
+                        identityId: group.identityId != null ? group.identityId : -1,
+                        instances: {},
+                        points3d: group.points3d || null,
+                        reprojections: group.reprojections || null,
+                        observedPoints: group.observedPoints || null,
+                        dirty: group.dirty || false,
+                    };
+                    if (group.usedCameras) {
+                        groupData.usedCameras = Array.from(group.usedCameras);
                     }
+                    for (const [camName, inst] of group.instances) {
+                        const instData = {
+                            points: inst.points,
+                            trackIdx: inst.trackIdx,
+                            type: inst.type,
+                            score: inst.score,
+                            modified: inst.modified,
+                            occluded: inst.occluded,
+                        };
+                        if (inst.nulledNodes && inst.nulledNodes.size > 0) {
+                            instData.nulledNodes = Array.from(inst.nulledNodes);
+                        }
+                        groupData.instances[camName] = instData;
+                    }
+                    frameData.instanceGroups.push(groupData);
                 }
 
                 // Serialize unlinked instances
@@ -8605,14 +8543,15 @@
 
                     if (frameData.instanceGroups) {
                         if (!session.instanceGroups.has(frameIdx)) {
-                            session.instanceGroups.set(frameIdx, new Map());
+                            session.instanceGroups.set(frameIdx, []);
                         }
-                        var trackMap = session.instanceGroups.get(frameIdx);
 
                         for (var gi = 0; gi < frameData.instanceGroups.length; gi++) {
                             var groupData = frameData.instanceGroups[gi];
-                            var group = new InstanceGroup(groupData.id || Date.now(), groupData.trackIdx);
-                            if (groupData.identityId != null) group.identityId = groupData.identityId;
+                            // Backwards compat: if groupData has trackIdx but no identityId, use trackIdx as identityId
+                            var loadedIdentityId = groupData.identityId != null ? groupData.identityId
+                                : (groupData.trackIdx != null ? groupData.trackIdx : -1);
+                            var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                             if (groupData.points3d) {
                                 group.points3d = groupData.points3d;
                             }
@@ -8627,7 +8566,7 @@
                                 var instData = groupData.instances[camName];
                                 var inst = new Instance(
                                     instData.points,
-                                    instData.trackIdx || groupData.trackIdx,
+                                    instData.trackIdx != null ? instData.trackIdx : (groupData.trackIdx != null ? groupData.trackIdx : 0),
                                     instData.type || 'user',
                                     instData.score || 1.0
                                 );
@@ -8654,16 +8593,13 @@
                                 for (var rCamName in group.reprojections) {
                                     var rPts = group.reprojections[rCamName];
                                     if (rPts) {
-                                        var rInst = new Instance(rPts, group.trackIdx, 'reprojected', 0);
+                                        var rInst = new Instance(rPts, group.identityId, 'reprojected', 0);
                                         group.addReprojectedInstance(rCamName, rInst);
                                     }
                                 }
                             }
 
-                            if (!trackMap.has(group.trackIdx)) {
-                                trackMap.set(group.trackIdx, []);
-                            }
-                            trackMap.get(group.trackIdx).push(group);
+                            session.instanceGroups.get(frameIdx).push(group);
                         }
                     }
 
@@ -8758,11 +8694,9 @@
 
             // Collect all instance keys actually used in the data
             var usedKeys = new Set();
-            for (var [fIdx, trackMap] of session.instanceGroups) {
-                for (var [tIdx, groups] of trackMap) {
-                    for (var g of groups) {
-                        for (var key of g.instances.keys()) usedKeys.add(key);
-                    }
+            for (var [fIdx, groups] of session.instanceGroups) {
+                for (var g of groups) {
+                    for (var key of g.instances.keys()) usedKeys.add(key);
                 }
             }
             for (var [fIdx2, fg] of session.frameGroups) {
@@ -8889,13 +8823,11 @@
                         trackInstances.get(tIdx).push({ camName: cn, instance: insts[ii] });
                     }
                 }
-                if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, new Map());
-                var tMap = session.instanceGroups.get(frameIdx2);
+                if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, []);
                 for (var [trkIdx, entries] of trackInstances) {
-                    var grp = new InstanceGroup(Date.now() + trkIdx, trkIdx);
+                    var grp = new InstanceGroup(Date.now() + trkIdx, trkIdx); // identityId = trackIdx for backwards compat
                     for (var ei = 0; ei < entries.length; ei++) grp.addInstance(entries[ei].camName, entries[ei].instance);
-                    if (!tMap.has(trkIdx)) tMap.set(trkIdx, []);
-                    tMap.get(trkIdx).push(grp);
+                    session.instanceGroups.get(frameIdx2).push(grp);
                 }
             }
 
@@ -9659,13 +9591,11 @@
                             trackInstances.get(tIdx).push({ camName, instance: inst });
                         }
                     }
-                    if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, new Map());
-                    const trackMap2 = session.instanceGroups.get(frameIdx2);
+                    if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, []);
                     for (const [trackIdx, entries] of trackInstances) {
-                        const group = new InstanceGroup(Date.now() + trackIdx, trackIdx);
+                        const group = new InstanceGroup(Date.now() + trackIdx, trackIdx); // identityId = trackIdx for backwards compat
                         for (const e of entries) group.addInstance(e.camName, e.instance);
-                        if (!trackMap2.has(trackIdx)) trackMap2.set(trackIdx, []);
-                        trackMap2.get(trackIdx).push(group);
+                        session.instanceGroups.get(frameIdx2).push(group);
                     }
                 }
 
@@ -10422,13 +10352,11 @@
                         }
                     }
                     if (trackInstances.size > 0) {
-                        session.instanceGroups.set(frameIdx2, new Map());
-                        var trackMap2 = session.instanceGroups.get(frameIdx2);
+                        session.instanceGroups.set(frameIdx2, []);
                         for (var [trackIdx, entries] of trackInstances) {
-                            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx);
+                            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx); // identityId = trackIdx for backwards compat
                             for (var e of entries) group.addInstance(e.camName, e.instance);
-                            if (!trackMap2.has(trackIdx)) trackMap2.set(trackIdx, []);
-                            trackMap2.get(trackIdx).push(group);
+                            session.instanceGroups.get(frameIdx2).push(group);
                         }
                     }
                     fgCount++;
@@ -11131,24 +11059,29 @@
                 for (var [frameIdx, trackMap] of ptsData.points3d) {
                     // Ensure instanceGroups entry exists for this frame
                     if (!state.session.instanceGroups.has(frameIdx)) {
-                        state.session.instanceGroups.set(frameIdx, new Map());
+                        state.session.instanceGroups.set(frameIdx, []);
                     }
-                    var sessionTrackMap = state.session.instanceGroups.get(frameIdx);
+                    var frameGroupsList = state.session.instanceGroups.get(frameIdx);
 
                     for (var [trackIdx, pts3d] of trackMap) {
-                        // Find or create InstanceGroup for this track
-                        var groups = sessionTrackMap.get(trackIdx);
-                        if (groups && groups.length > 0) {
+                        // Find or create InstanceGroup for this track (identity)
+                        var existingGroup = null;
+                        for (var egi = 0; egi < frameGroupsList.length; egi++) {
+                            if (frameGroupsList[egi].identityId === trackIdx) {
+                                existingGroup = frameGroupsList[egi];
+                                break;
+                            }
+                        }
+                        if (existingGroup) {
                             // Assign 3D points to existing group
-                            groups[0].points3d = pts3d;
-                            groups[0].markClean();
+                            existingGroup.points3d = pts3d;
+                            existingGroup.markClean();
                         } else {
                             // Create a new InstanceGroup with just 3D data
-                            var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx);
+                            var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
                             newGroup.points3d = pts3d;
                             newGroup.markClean();
-                            if (!sessionTrackMap.has(trackIdx)) sessionTrackMap.set(trackIdx, []);
-                            sessionTrackMap.get(trackIdx).push(newGroup);
+                            frameGroupsList.push(newGroup);
                         }
                     }
                     framesUpdated++;
