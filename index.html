@@ -50,8 +50,9 @@
                 File
                 <div class="menu-dropdown" id="menuFile">
                     <div class="menu-dropdown-item" id="menuNewProject">New Project</div>
-                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project</div>
+                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project (SLP)</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
+                    <div class="menu-dropdown-item" id="menuSaveProjectJson">Save Project (JSON legacy)</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
@@ -3506,6 +3507,11 @@
 
             document.getElementById('menuSaveProject').addEventListener('click', function () {
                 closeMenus();
+                saveProjectSlp();
+            });
+
+            document.getElementById('menuSaveProjectJson').addEventListener('click', function () {
+                closeMenus();
                 saveProject();
             });
 
@@ -3534,12 +3540,15 @@
                 handleLoadSessionFolder();
             });
 
-            document.getElementById('menuLoadSlp').addEventListener('click', function () {
+            document.getElementById('menuLoadSlp').addEventListener('click', async function () {
                 closeMenus();
                 if (state.session) {
                     handleAddSlp();
                 } else {
-                    handleLoadSlp();
+                    setStatus('Pick SLP file...', 'warning');
+                    var slpFiles = await pickFiles({ accept: '.slp,.h5' });
+                    if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                    handleLoadSlpFile(slpFiles[0]);
                 }
             });
 
@@ -7988,6 +7997,41 @@
             return frames;
         }
 
+        async function saveProjectSlp() {
+            if (!state.session) {
+                setStatus('No session to save', 'error');
+                return;
+            }
+            try {
+                var SIO = window.SleapIO;
+                if (!SIO) { setStatus('sleap-io.js not loaded', 'error'); return; }
+
+                setStatus('Building SLP...', 'warning');
+                var labels = buildSlpLabelsAllViews(state.session, state.views, state.videoFiles);
+                var bytes = await SIO.saveSlpToBytes(labels);
+                var blob = new Blob([bytes], { type: 'application/x-hdf5' });
+
+                var filename = 'project.slp';
+                if (state.session.name) {
+                    filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
+                }
+
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+
+                setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
+            } catch (err) {
+                console.error('Save project SLP failed:', err);
+                setStatus('Save failed: ' + err.message, 'error');
+            }
+        }
+
         function saveProject() {
             if (!state.session) {
                 setStatus('No session to save', 'error');
@@ -8174,13 +8218,21 @@
         async function handleLoadProject() {
             try {
                 setStatus('Picking project file...', 'warning');
-                const files = await pickFiles({ accept: '.json' });
+                const files = await pickFiles({ accept: '.slp,.json,.h5' });
                 if (files.length === 0) {
                     setStatus('No file selected', 'warning');
                     return;
                 }
 
-                var fileSize = files[0].size;
+                var file = files[0];
+
+                // Route SLP/H5 files to the SLP loader
+                var ext = file.name.split('.').pop().toLowerCase();
+                if (ext === 'slp' || ext === 'h5') {
+                    return handleLoadSlpFile(file);
+                }
+
+                var fileSize = file.size;
                 if (fileSize > 50 * 1024 * 1024) {
                     if (!confirm('Project file is ' + (fileSize / 1024 / 1024).toFixed(0) + 'MB — this may be slow. Continue?')) {
                         setStatus('Load cancelled', 'warning');
@@ -8189,7 +8241,7 @@
                 }
                 showLoading('Loading project (' + (fileSize / 1024 / 1024).toFixed(1) + ' MB)...');
 
-                const text = await files[0].text();
+                const text = await file.text();
                 showLoading('Parsing project...');
                 const data = JSON.parse(text);
 
@@ -10201,15 +10253,8 @@
         // SLP H5 Import
         // ============================================
 
-        async function handleLoadSlp() {
+        async function handleLoadSlpFile(slpFile) {
             try {
-                setStatus('Pick SLP file...', 'warning');
-                var slpFiles = await pickFiles({ accept: '.slp,.h5' });
-                if (slpFiles.length === 0) {
-                    setStatus('No file selected', 'warning');
-                    return;
-                }
-                var slpFile = slpFiles[0];
 
                 showLoading('Reading SLP file (' + (slpFile.size / 1024 / 1024).toFixed(1) + ' MB)...');
                 console.log('[load-slp] SLP:', slpFile.name);
