@@ -1397,6 +1397,16 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
     // 5. Build RecordingSession with CameraGroup
     var cameraGroup = new SIO.CameraGroup({ cameras: sioCameras });
     var sioSession = new SIO.RecordingSession({ cameraGroup: cameraGroup });
+
+    // Attach lucid-specific session metadata
+    sioSession.metadata = sioSession.metadata || {};
+    sioSession.metadata.lucid = {
+        trustTracks: session.trustTracks || false,
+        trackIdentityMap: Array.from(session.trackIdentityMap.entries()),
+        frameIdentityMap: session.frameIdentityMap
+            ? Array.from(session.frameIdentityMap.entries())
+            : [],
+    };
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });
@@ -1490,10 +1500,36 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
                 identity = lucidIdToSioId.get(group.identityId);
             }
 
+            // Collect per-instance lucid metadata (nulledNodes, occluded)
+            var igLucidMeta = {};
+            var hasNulled = false, hasOccluded = false;
+            for (var [metaCam, metaInst] of group.instances) {
+                if (metaInst.nulledNodes && metaInst.nulledNodes.size > 0) {
+                    if (!igLucidMeta.nulledNodes) igLucidMeta.nulledNodes = {};
+                    igLucidMeta.nulledNodes[metaCam] = Array.from(metaInst.nulledNodes);
+                    hasNulled = true;
+                }
+                if (metaInst.occluded) {
+                    var hasAnyOcc = false;
+                    for (var ok in metaInst.occluded) { if (metaInst.occluded[ok]) { hasAnyOcc = true; break; } }
+                    if (hasAnyOcc) {
+                        if (!igLucidMeta.occluded) igLucidMeta.occluded = {};
+                        igLucidMeta.occluded[metaCam] = metaInst.occluded;
+                        hasOccluded = true;
+                    }
+                }
+            }
+
+            var igMetadata = {};
+            if (hasNulled || hasOccluded) {
+                igMetadata.lucid = igLucidMeta;
+            }
+
             sioInstanceGroups.push(new SIO.InstanceGroup({
                 instanceByCamera: instanceByCamera,
                 instance3d: instance3d,
                 identity: identity,
+                metadata: igMetadata,
             }));
         }
 

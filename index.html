@@ -10372,6 +10372,148 @@
                     }
                 }
 
+                // Restore identities from SLP
+                if (slpData.identities && slpData.identities.length > 0) {
+                    session.identities = slpData.identities.map(function (idData, idx) {
+                        return new Identity(idx, idData.name || ('id_' + idx), idData.color || null);
+                    });
+                    console.log('[load-slp] Loaded', session.identities.length, 'identities');
+                }
+
+                // Overlay 3D data + metadata from frame_group_dicts
+                if (slpData.sessions && slpData.sessions.length > 0) {
+                    var sessData2 = slpData.sessions[0];
+                    var fgDicts = sessData2.frame_group_dicts || [];
+
+                    // Restore lucid session-level metadata
+                    var lucidMeta = (sessData2.metadata && sessData2.metadata.lucid) || {};
+                    if (lucidMeta.trustTracks != null) session.trustTracks = lucidMeta.trustTracks;
+                    if (lucidMeta.trackIdentityMap) {
+                        session.trackIdentityMap = new Map(lucidMeta.trackIdentityMap);
+                    }
+                    if (lucidMeta.frameIdentityMap) {
+                        session.frameIdentityMap = new Map(lucidMeta.frameIdentityMap);
+                    }
+
+                    // Build camera key → name map for matching
+                    // In SLP, instance_groups use camera names as keys (same as calibration keys)
+                    var camKeyToName = {};
+                    var calibKeys = Object.keys(sessData2.calibration || {}).filter(function (k) { return k !== 'metadata'; });
+                    for (var cki = 0; cki < calibKeys.length; cki++) {
+                        var ck2 = calibKeys[cki];
+                        var cd2 = sessData2.calibration[ck2];
+                        var cName = (cd2 && cd2.name) || ck2;
+                        camKeyToName[ck2] = cName;
+                    }
+
+                    for (var fdi = 0; fdi < fgDicts.length; fdi++) {
+                        var fgDict = fgDicts[fdi];
+                        var fgFrameIdx = fgDict.frame_idx != null ? fgDict.frame_idx : (fgDict.frameIdx || 0);
+                        var igDicts = fgDict.instance_groups || [];
+                        var lucidGroups = session.instanceGroups.get(fgFrameIdx);
+                        if (!lucidGroups || igDicts.length === 0) continue;
+
+                        for (var igi = 0; igi < igDicts.length; igi++) {
+                            var igDict = igDicts[igi];
+
+                            // Match igDict to lucidGroup by camera overlap
+                            var igCamNames = new Set();
+                            var igInstances = igDict.instances || {};
+                            for (var igCamKey in igInstances) {
+                                igCamNames.add(camKeyToName[igCamKey] || igCamKey);
+                            }
+                            // Also check camcorder_to_lf_and_inst_idx_map
+                            var igCamMap = igDict.camcorder_to_lf_and_inst_idx_map || {};
+                            for (var igCmk in igCamMap) {
+                                igCamNames.add(camKeyToName[igCmk] || igCmk);
+                            }
+
+                            var lGroup = null;
+                            // First try positional match
+                            if (igi < lucidGroups.length) lGroup = lucidGroups[igi];
+                            // If cameras don't overlap, search for best match
+                            if (lGroup && igCamNames.size > 0) {
+                                var lCams = lGroup.cameraNames || [];
+                                var overlap = lCams.filter(function (c) { return igCamNames.has(c); });
+                                if (overlap.length === 0) {
+                                    lGroup = null;
+                                    for (var lgi = 0; lgi < lucidGroups.length; lgi++) {
+                                        var lCams2 = lucidGroups[lgi].cameraNames || [];
+                                        var overlap2 = lCams2.filter(function (c) { return igCamNames.has(c); });
+                                        if (overlap2.length > 0) { lGroup = lucidGroups[lgi]; break; }
+                                    }
+                                }
+                            }
+                            if (!lGroup) continue;
+
+                            // Restore 3D points
+                            if (igDict.points && Array.isArray(igDict.points)) {
+                                lGroup.points3d = igDict.points;
+                            }
+
+                            // Restore identity assignment
+                            if (igDict.identity_idx != null && session.identities.length > 0) {
+                                lGroup.identityId = igDict.identity_idx;
+                            }
+
+                            // Restore lucid-specific per-group metadata
+                            var igLucid = (igDict.metadata && igDict.metadata.lucid) || {};
+                            if (igLucid.nulledNodes) {
+                                for (var nnCam in igLucid.nulledNodes) {
+                                    var inst = lGroup.getInstance(nnCam);
+                                    if (inst) {
+                                        inst.nulledNodes = new Set(igLucid.nulledNodes[nnCam]);
+                                    }
+                                }
+                            }
+                            if (igLucid.occluded) {
+                                for (var occCam in igLucid.occluded) {
+                                    var inst2 = lGroup.getInstance(occCam);
+                                    if (inst2) {
+                                        inst2.occluded = igLucid.occluded[occCam];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    console.log('[load-slp] Restored 3D data from', fgDicts.length, 'frame groups');
+                }
+
+                // Recompute reprojections from stored 3D points + calibration
+                if (session.cameras.length >= 2) {
+                    var hasAny3d = false;
+                    for (var [, groups3d] of session.instanceGroups) {
+                        for (var g3d of groups3d) {
+                            if (g3d.points3d && g3d.points3d.some(function (p) { return p != null; })) {
+                                hasAny3d = true;
+                                break;
+                            }
+                        }
+                        if (hasAny3d) break;
+                    }
+                    if (hasAny3d) {
+                        showLoading('Recomputing reprojections from 3D data...');
+                        await new Promise(function (r) { setTimeout(r, 0); });
+                        for (var [frameIdx3, groups3] of session.instanceGroups) {
+                            for (var grp of groups3) {
+                                if (!grp.points3d || !grp.points3d.some(function (p) { return p != null; })) continue;
+                                // Build reprojections from 3D points for each camera
+                                var reprojResult = { reprojections: {} };
+                                for (var ci2 = 0; ci2 < session.cameras.length; ci2++) {
+                                    var cam2 = session.cameras[ci2];
+                                    if (cam2.projectionMatrix) {
+                                        reprojResult.reprojections[cam2.name] = reprojectPoints(grp.points3d, cam2.projectionMatrix);
+                                    }
+                                }
+                                grp.reprojections = reprojResult.reprojections;
+                                storeReprojectedInstances(grp, reprojResult, session.cameras);
+                                grp.markClean();
+                            }
+                        }
+                        console.log('[load-slp] Recomputed reprojections from 3D data');
+                    }
+                }
+
                 state.session = session;
                 if (state.sessions.indexOf(state.session) < 0) {
                     state.sessions.push(state.session);
