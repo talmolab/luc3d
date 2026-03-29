@@ -18,7 +18,7 @@
 
     describe('InstanceGroup identityId', function () {
         it('defaults to -1 (unassigned)', function () {
-            var group = new InstanceGroup(1, 0);
+            var group = new InstanceGroup(1);
             assertEqual(group.identityId, -1);
         });
 

@@ -368,6 +368,17 @@ async function parseSlp(file) {
             }
         } catch (e) { /* no sessions */ }
 
+        // --- Identities JSON ---
+        var identitiesArr = [];
+        try {
+            var idDs = f.get('identities_json');
+            if (idDs && idDs.shape[0] > 0) {
+                for (var idi = 0; idi < idDs.shape[0]; idi++) {
+                    identitiesArr.push(JSON.parse(idDs.value[idi]));
+                }
+            }
+        } catch (e) { /* no identities */ }
+
         // NOTE: Embedded video frame bytes are NOT extracted here.
         // A separate frame-worker.js handles on-demand frame extraction
         // using SLPPackageReader, which avoids loading all frames into memory.
@@ -395,6 +406,7 @@ async function parseSlp(file) {
                 frames: frames,
                 videos: videos,
                 sessions: sessionsArr,
+                identities: identitiesArr,
             }
         });
 
