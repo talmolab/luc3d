@@ -687,7 +687,7 @@
             Camera as SioCamera, CameraGroup, RecordingSession,
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D
-        } from './lib/sleap-io/index.browser.js';
+        } from './lib/sleap-io/index.browser.js?v=2';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
@@ -7997,18 +7997,23 @@
             return frames;
         }
 
+        async function ensureSleapIO() {
+            if (window.SleapIO) return window.SleapIO;
+            var mod = await import('./lib/sleap-io/index.browser.js?v=2');
+            window.SleapIO = mod;
+            return mod;
+        }
+
         async function saveProjectSlp() {
             if (!state.session) {
                 setStatus('No session to save', 'error');
                 return;
             }
             try {
-                var SIO = window.SleapIO;
-                if (!SIO) { setStatus('sleap-io.js not loaded', 'error'); return; }
-
+                await ensureSleapIO();
                 setStatus('Building SLP...', 'warning');
                 var labels = buildSlpLabelsAllViews(state.session, state.views, state.videoFiles);
-                var bytes = await SIO.saveSlpToBytes(labels);
+                var bytes = await window.SleapIO.saveSlpToBytes(labels);
                 var blob = new Blob([bytes], { type: 'application/x-hdf5' });
 
                 var filename = 'project.slp';
