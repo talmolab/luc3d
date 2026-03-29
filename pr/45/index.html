@@ -682,11 +682,17 @@
     <script type="module">
         import {
             Labels, LabeledFrame, Instance, PredictedInstance,
-            Skeleton, Node, Edge, Video, Track, saveSlpToBytes
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
+            Camera as SioCamera, CameraGroup, RecordingSession,
+            InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
+            Identity as SioIdentity, Instance3D, PredictedInstance3D
         } from './lib/sleap-io/index.browser.js';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
-            Skeleton, Node, Edge, Video, Track, saveSlpToBytes
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
+            Camera: SioCamera, CameraGroup, RecordingSession,
+            InstanceGroup: SioInstanceGroup, FrameGroup: SioFrameGroup,
+            Identity: SioIdentity, Instance3D, PredictedInstance3D
         };
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
