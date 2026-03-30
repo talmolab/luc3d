@@ -10678,51 +10678,63 @@
                         createViewForVideoFile(state.videoFiles[evi2]);
                     }
                 } else {
-                    // --- No embedded videos: prompt for video files ---
+                    // --- No embedded videos: prompt for session folder ---
                     hideLoading();
 
-                    // Extract video basenames from SLP metadata
-                    var slpVideoRefs = slpData.videos.map(function (v) {
-                        var fn = v.sourceFilename || v.filename || '';
-                        if (fn === '.') return '';
-                        return fn.replace(/^.*[\/\\]/, '');
-                    });
-                    var refInfo = slpVideoRefs.filter(function (r) { return r; }).join(', ') || '(unknown)';
-                    console.log('[load-slp] SLP references videos:', slpVideoRefs);
+                    // Extract camera names for the folder prompt
+                    var slpCameraNames = cameras.map(function (c) { return c.name; });
+                    var refInfo = slpCameraNames.length > 0
+                        ? 'Cameras: ' + slpCameraNames.join(', ')
+                        : '(select folder with video files)';
+                    console.log('[load-slp] Prompting for session folder, cameras:', slpCameraNames);
 
-                    // Show blocking overlay forcing user to select video files
-                    var videoFiles = await forceVideoSelection(refInfo);
+                    // Prompt for session folder — matches videos by camera subdirectory or filename
+                    var videoFiles = await forceVideoSelectionWithFolder(refInfo, session.name || 'Session');
 
                     if (videoFiles.length > 0) {
-                        for (var mvi = 0; mvi < videoFiles.length; mvi++) {
-                            var vFile = videoFiles[mvi];
+                        // Filter to video files only
+                        var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
+                        var vidFiles = Array.from(videoFiles).filter(function (f) {
+                            var ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
+                            return vidExts.indexOf(ext) >= 0;
+                        });
+                        var cameraNames = cameras.map(function (c) { return c.name; });
+
+                        for (var mvi = 0; mvi < vidFiles.length; mvi++) {
+                            var vFile = vidFiles[mvi];
                             var stem = vFile.name.replace(/\.[^.]+$/, '');
-                            showLoading('Loading ' + vFile.name + ' (' + (mvi + 1) + '/' + videoFiles.length + ')...');
+                            showLoading('Loading ' + vFile.name + ' (' + (mvi + 1) + '/' + vidFiles.length + ')...');
                             try {
                                 var vdec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
                                 await vdec.init(vFile);
 
-                                // Match to SLP video reference by filename
+                                // Match to camera by parent directory name or filename
                                 var assignedCam = null;
-                                var matchedSlpVideoPath = null;
-                                var vStem = stem.toLowerCase();
-                                for (var rvi = 0; rvi < slpVideoRefs.length; rvi++) {
-                                    var refName = slpVideoRefs[rvi];
-                                    if (!refName) continue;
-                                    var refStem = refName.replace(/\.[^.]+$/, '').toLowerCase();
-                                    if (vFile.name.toLowerCase() === refName.toLowerCase() ||
-                                        vStem === refStem ||
-                                        vStem.indexOf(refStem) >= 0 ||
-                                        refStem.indexOf(vStem) >= 0) {
-                                        if (videoIdxToCameraName[rvi]) {
-                                            assignedCam = videoIdxToCameraName[rvi];
+                                var relPath = vFile.webkitRelativePath || vFile.name;
+                                var pathParts = relPath.split('/');
+                                var parentDir = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
+
+                                // Try parent directory name → camera name
+                                if (parentDir && cameraNames.indexOf(parentDir) >= 0) {
+                                    assignedCam = parentDir;
+                                }
+                                // Try video stem → camera name
+                                if (!assignedCam && cameraNames.indexOf(stem) >= 0) {
+                                    assignedCam = stem;
+                                }
+                                // Try matching against SLP video references
+                                if (!assignedCam) {
+                                    for (var cmi in videoIdxToCameraName) {
+                                        var camN = videoIdxToCameraName[cmi];
+                                        var vMeta = slpData.videos[cmi];
+                                        if (!vMeta) continue;
+                                        var refPath = vMeta.sourceFilename || vMeta.filename || '';
+                                        if (refPath === '.') continue;
+                                        var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
+                                        if (stem.toLowerCase() === refBase || stem.toLowerCase().indexOf(refBase) >= 0) {
+                                            assignedCam = camN;
+                                            break;
                                         }
-                                        var matchedMeta = slpData.videos[rvi];
-                                        if (matchedMeta) {
-                                            var origPath = matchedMeta.sourceFilename || matchedMeta.filename || null;
-                                            if (origPath && origPath !== '.') matchedSlpVideoPath = origPath;
-                                        }
-                                        break;
                                     }
                                 }
 
@@ -10733,32 +10745,14 @@
                                     frameCount: vdec.samples.length,
                                     assignedCamera: assignedCam,
                                     slpFilename: slpFile.name,
-                                    videoPath: matchedSlpVideoPath || vFile.webkitRelativePath || vFile.name,
+                                    videoPath: vFile.webkitRelativePath || vFile.name,
                                 });
                             } catch (videoErr) {
                                 console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);
                             }
                         }
 
-                        var cameraNames = cameras.map(function (c) { return c.name; });
-                        for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
-                            var vf = state.videoFiles[vfi];
-                            if (vf.assignedCamera) continue;
-                            if (cameraNames.indexOf(vf.name) >= 0) {
-                                vf.assignedCamera = vf.name;
-                            }
-                        }
                         autoAssignVideosToCameras();
-                        for (var oi = 0; oi < state.videoFiles.length; oi++) {
-                            if (!state.videoFiles[oi].assignedCamera && oi < cameraNames.length) {
-                                var alreadyUsed = state.videoFiles.some(function(other) {
-                                    return other.assignedCamera === cameraNames[oi];
-                                });
-                                if (!alreadyUsed) {
-                                    state.videoFiles[oi].assignedCamera = cameraNames[oi];
-                                }
-                            }
-                        }
 
                         showLoading('Creating views...');
                         for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
