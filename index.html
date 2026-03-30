@@ -679,6 +679,11 @@
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
 
+    <!-- Stub out mediabunny — sleap-io.js imports it but lucid doesn't use video backends -->
+    <script type="importmap">
+    { "imports": { "mediabunny": "data:text/javascript,export default{}" } }
+    </script>
+
     <!-- sleap-io.js bridge: expose saveSlpToBytes and data model to window -->
     <script type="module">
         import {
@@ -7502,7 +7507,8 @@
                         rdot.style.backgroundColor = REPROJECTION_COLOR;
                         rdot.style.marginRight = '4px';
                         rtdTrack.appendChild(rdot);
-                        rtdTrack.appendChild(document.createTextNode(trackName));
+                        var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + gi);
+                        rtdTrack.appendChild(document.createTextNode(reprojTrackName));
 
                         const rtdViews = document.createElement('td');
                         rtdViews.className = 'mono';
