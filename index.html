@@ -560,6 +560,13 @@
                         </div>
                     </div>
 
+                    <div class="info-section" id="unassignedVideosSection" style="display:none;">
+                        <h3>Unassigned Videos</h3>
+                        <table class="data-table" id="unassignedVideosTable" style="table-layout:fixed;width:100%;">
+                            <tbody></tbody>
+                        </table>
+                    </div>
+
                     <div class="info-section">
                         <h3>Shortcuts</h3>
                         <div style="font-size:11px;color:var(--text-muted);line-height:1.8;">
@@ -1126,6 +1133,11 @@
         function triangulateCurrentFrame() {
             if (!state.session) return;
 
+            if (!sessionHasCalibration()) {
+                showCalibrationRequiredPopup();
+                return;
+            }
+
             const frameIdx = state.currentFrame;
             const cameras = state.session.cameras;
             const trackMap = state.session.instanceGroups.get(frameIdx);
@@ -1292,6 +1304,10 @@
         async function triangulateAllFrames() {
             if (!state.session) {
                 setStatus('No session loaded', 'warning');
+                return;
+            }
+            if (!sessionHasCalibration()) {
+                showCalibrationRequiredPopup();
                 return;
             }
 
@@ -1627,6 +1643,10 @@
          * then triangulates each group.
          */
         async function groupByIdentityAndTriangulateAll() {
+            if (!sessionHasCalibration()) {
+                showCalibrationRequiredPopup();
+                return;
+            }
             var session = getActiveSession();
             if (!session) {
                 setStatus('No session loaded', 'warning');
@@ -1794,6 +1814,10 @@
         async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCameraNames) {
             if (!state.session) {
                 setStatus('No session loaded', 'warning');
+                return;
+            }
+            if (!sessionHasCalibration()) {
+                showCalibrationRequiredPopup();
                 return;
             }
 
@@ -2774,6 +2798,46 @@
                 if (t && (t[0] !== 0 || t[1] !== 0 || t[2] !== 0)) return true;
             }
             return false;
+        }
+
+        function showCalibrationRequiredPopup() {
+            var overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;';
+
+            var card = document.createElement('div');
+            card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:420px;width:90%;text-align:center;';
+
+            var icon = document.createElement('div');
+            icon.style.cssText = 'font-size:36px;margin-bottom:12px;';
+            icon.textContent = '\u26A0';
+            card.appendChild(icon);
+
+            var title = document.createElement('div');
+            title.style.cssText = 'color:#fff;font-size:16px;font-weight:600;margin-bottom:8px;';
+            title.textContent = 'Calibration Required';
+            card.appendChild(title);
+
+            var msg = document.createElement('div');
+            msg.style.cssText = 'color:#aaa;font-size:13px;margin-bottom:16px;line-height:1.5;';
+            msg.textContent = 'Triangulation, reprojection, and 3D features require a calibration file. Load a calibration.toml via File \u2192 Load Calibration or by loading a session folder that includes one.';
+            card.appendChild(msg);
+
+            var btn = document.createElement('button');
+            btn.style.cssText = 'padding:8px 24px;font-size:14px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
+            btn.textContent = 'OK';
+            function dismiss() {
+                overlay.remove();
+                document.removeEventListener('keydown', onKey);
+            }
+            btn.addEventListener('click', dismiss);
+            function onKey(e) {
+                if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); dismiss(); }
+            }
+            document.addEventListener('keydown', onKey);
+
+            card.appendChild(btn);
+            overlay.appendChild(card);
+            document.body.appendChild(overlay);
         }
 
         function update3DViewport(frameIdx) {
@@ -5941,6 +6005,10 @@
                 setStatus('No session loaded', 'warning');
                 return;
             }
+            if (!sessionHasCalibration()) {
+                showCalibrationRequiredPopup();
+                return;
+            }
             if (state.session.cameras.length < 2) {
                 setStatus('Need at least 2 cameras for triangulation', 'warning');
                 return;
@@ -7122,6 +7190,7 @@
             if (!state.session || state.session.cameras.length === 0) {
                 document.getElementById('sessionAssignTable').style.display = 'none';
                 empty.style.display = '';
+                populateUnassignedVideos(null);
                 return;
             }
 
@@ -7211,6 +7280,38 @@
                 tr.appendChild(tdStatus);
                 tbody.appendChild(tr);
             });
+
+            populateUnassignedVideos(sessionVideos);
+        }
+
+        function populateUnassignedVideos(sessionVideos) {
+            var section = document.getElementById('unassignedVideosSection');
+            var tbody = document.querySelector('#unassignedVideosTable tbody');
+            if (!section || !tbody) return;
+            tbody.textContent = '';
+
+            if (!sessionVideos) {
+                sessionVideos = state.videoFiles.filter(function (vf) {
+                    return vf.sessionIdx === state.activeSessionIdx || vf.sessionIdx === undefined;
+                });
+            }
+
+            var unassigned = sessionVideos.filter(function (vf) { return !vf.assignedCamera; });
+
+            if (unassigned.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            section.style.display = '';
+
+            for (var i = 0; i < unassigned.length; i++) {
+                var tr = document.createElement('tr');
+                var td = document.createElement('td');
+                td.style.cssText = 'white-space:nowrap;overflow-x:auto;overflow-y:hidden;display:block;max-width:100%;scrollbar-width:thin;';
+                td.textContent = unassigned[i].file ? unassigned[i].file.name : unassigned[i].name;
+                tr.appendChild(td);
+                tbody.appendChild(tr);
+            }
         }
 
         function updateFrameInfo(frameIdx, instanceGroups) {
@@ -9312,9 +9413,8 @@
         }
 
         function createViewForVideoFile(videoFile) {
-            if (!videoFile.assignedCamera) return null;
-
-            var name = videoFile.assignedCamera;
+            var name = videoFile.assignedCamera || videoFile.name;
+            if (!name) return null;
 
             // Create view data object (canvases created by VideoPaneRenderer)
             var view = {
@@ -9767,19 +9867,16 @@
                 overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;';
 
                 var card = document.createElement('div');
-                card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:10px;padding:28px;max-width:720px;width:90%;';
+                card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:10px;padding:28px;max-width:90vw;';
 
                 var title = document.createElement('div');
                 title.style.cssText = 'color:#fff;font-size:18px;font-weight:600;margin-bottom:20px;text-align:center;';
                 title.textContent = 'Choose Session Folder Structure';
                 card.appendChild(title);
 
-                var grid = document.createElement('div');
-                grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:14px;';
-
                 function makeOption(name, desc, iconLines, mode) {
                     var opt = document.createElement('div');
-                    opt.style.cssText = 'padding:14px;border:2px solid var(--border-color,#333);border-radius:8px;cursor:pointer;transition:border-color 0.15s,background 0.15s;';
+                    opt.style.cssText = 'padding:14px 16px;border:2px solid var(--border-color,#333);border-radius:8px;cursor:pointer;transition:border-color 0.15s,background 0.15s;white-space:nowrap;';
                     opt.addEventListener('mouseenter', function () {
                         opt.style.borderColor = 'var(--accent,#4a9eff)';
                         opt.style.background = 'rgba(74,158,255,0.08)';
@@ -9790,17 +9887,17 @@
                     });
 
                     var optTitle = document.createElement('div');
-                    optTitle.style.cssText = 'color:#fff;font-size:13px;font-weight:600;margin-bottom:3px;';
+                    optTitle.style.cssText = 'color:#fff;font-size:12px;font-weight:600;margin-bottom:3px;';
                     optTitle.textContent = name;
                     opt.appendChild(optTitle);
 
                     var optDesc = document.createElement('div');
-                    optDesc.style.cssText = 'color:#aaa;font-size:11px;margin-bottom:10px;';
+                    optDesc.style.cssText = 'color:#aaa;font-size:10px;margin-bottom:8px;';
                     optDesc.textContent = desc;
                     opt.appendChild(optDesc);
 
                     var iconBlock = document.createElement('pre');
-                    iconBlock.style.cssText = 'margin:0;padding:8px;background:rgba(0,0,0,0.3);border-radius:6px;font-size:10px;line-height:1.5;color:#ccc;font-family:monospace;overflow-x:auto;';
+                    iconBlock.style.cssText = 'margin:0;padding:6px;background:rgba(0,0,0,0.3);border-radius:6px;font-size:9px;line-height:1.5;color:#ccc;font-family:monospace;overflow-x:auto;';
                     iconBlock.textContent = iconLines;
                     opt.appendChild(iconBlock);
 
@@ -9812,37 +9909,74 @@
                     return opt;
                 }
 
-                grid.appendChild(makeOption(
-                    'Single Session \u2014 Per-Camera SLP',
-                    'Each camera subdirectory has its own SLP and video files.',
-                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} skeleton.json\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F4C4} cam1.slp\n\u2502   \u251C\u2500\u2500 \u{1F3AC} video_sess1.mp4\n\u2502   \u2514\u2500\u2500 \u{1F3AC} video_sess2.mp4\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F4C4} cam2.slp\n    \u251C\u2500\u2500 \u{1F3AC} video_sess1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} video_sess2.mp4',
-                    'per-camera'
-                ));
+                // Two-column layout
+                var columns = document.createElement('div');
+                columns.style.cssText = 'display:flex;gap:14px;justify-content:center;';
 
-                grid.appendChild(makeOption(
-                    'Multi-Session \u2014 Single SLP',
-                    'One SLP in root with all annotations. Videos in a videos/ subfolder.',
-                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} skeleton.json\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_sess1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_sess2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_sess1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_sess2.mp4',
-                    'single-slp'
-                ));
+                var bubbleStyle = 'padding:14px;border:1px solid var(--border-color,#333);border-radius:10px;background:rgba(255,255,255,0.02);';
+                var groupTitleStyle = 'color:var(--text-muted,#888);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;text-align:center;';
+
+                // Left bubble: Single Session
+                var leftBubble = document.createElement('div');
+                leftBubble.style.cssText = bubbleStyle;
+
+                var leftTitle = document.createElement('div');
+                leftTitle.style.cssText = groupTitleStyle;
+                leftTitle.textContent = 'Single Session';
+                leftBubble.appendChild(leftTitle);
+
+                var leftOptions = document.createElement('div');
+                leftOptions.style.cssText = 'display:flex;gap:10px;justify-content:center;';
 
                 if (showAllOptions) {
-                    grid.appendChild(makeOption(
-                        'Current Videos + New Calibration',
-                        'Reuse loaded videos with a different calibration file.',
-                        '\u{1F3AC} current videos\n+ \u{1F4C4} new calibration.toml\n\u2192 \u{1F4C1} new session',
-                        'new-calib'
-                    ));
-
-                    grid.appendChild(makeOption(
+                    leftOptions.appendChild(makeOption(
                         'Empty Session',
-                        'Start a blank session with no imports.',
+                        'Blank session, no imports.',
                         '\u{1F4C1} empty session/\n\u2514\u2500\u2500 (no files)',
                         'empty'
                     ));
                 }
 
-                card.appendChild(grid);
+                leftOptions.appendChild(makeOption(
+                    'Per-Camera SLP',
+                    'One SLP + one video per camera.',
+                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} video.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} video.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
+                    'per-camera'
+                ));
+
+                leftBubble.appendChild(leftOptions);
+                columns.appendChild(leftBubble);
+
+                // Right bubble: Multi-Session
+                var rightBubble = document.createElement('div');
+                rightBubble.style.cssText = bubbleStyle;
+
+                var rightTitle = document.createElement('div');
+                rightTitle.style.cssText = groupTitleStyle;
+                rightTitle.textContent = 'Multi-Session';
+                rightBubble.appendChild(rightTitle);
+
+                var rightOptions = document.createElement('div');
+                rightOptions.style.cssText = 'display:flex;gap:10px;justify-content:center;';
+
+                rightOptions.appendChild(makeOption(
+                    'Per-Camera SLP',
+                    'One SLP + multiple videos per camera.',
+                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} v_sess1.mp4\n\u2502   \u251C\u2500\u2500 \u{1F3AC} v_sess2.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} v_sess1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} v_sess2.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
+                    'per-camera'
+                ));
+
+                rightOptions.appendChild(makeOption(
+                    'Single SLP',
+                    'One SLP in root. Videos in videos/ folder.',
+                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
+                    'single-slp'
+                ));
+
+                rightBubble.appendChild(rightOptions);
+                columns.appendChild(rightBubble);
+
+                card.appendChild(columns);
 
                 // Cancel button
                 var btnRow = document.createElement('div');
@@ -9880,105 +10014,9 @@
                 await handleLoadSessionFolderSingleSlp();
             } else if (mode === 'per-camera') {
                 await handleLoadSessionFolderPerCamera();
-            } else if (mode === 'new-calib') {
-                await handleNewCalibSession();
             } else if (mode === 'empty') {
                 handleEmptySession();
             }
-        }
-
-        async function handleNewCalibSession() {
-            // Prompt for calibration file
-            var calibFiles = await pickFiles({ accept: '.toml,.json' });
-            if (calibFiles.length === 0) return;
-            var calibFile = calibFiles[0];
-            var calibText = await calibFile.text();
-            var cameras = [];
-            try {
-                if (calibFile.name.toLowerCase().endsWith('.toml')) {
-                    cameras = parseCalibrationTOML(calibText);
-                } else {
-                    cameras = parseCalibrationJSON(calibText);
-                }
-            } catch (e) {
-                setStatus('Calibration parse error: ' + e.message, 'error');
-                return;
-            }
-            if (cameras.length === 0) {
-                setStatus('No cameras found in calibration file', 'error');
-                return;
-            }
-
-            // Reuse skeleton from current session or create empty
-            var skeleton = state.session ? state.session.skeleton : new Skeleton('skeleton', [], []);
-            var tracks = state.session ? state.session.tracks.slice() : ['track_0'];
-            var sessionName = calibFile.name.replace(/\.[^.]+$/, '');
-            var session = new Session(cameras, skeleton, tracks, sessionName);
-
-            // Copy video file indices from the current session
-            if (state.session && state.session.videoFileIndices) {
-                session.videoFileIndices = state.session.videoFileIndices.slice();
-            }
-
-            state.sessions.push(session);
-            state.activeSessionIdx = state.sessions.length - 1;
-            state.session = session;
-            state.triangulationResults = new Map();
-
-            // Rebuild views from existing video files
-            state.views = [];
-            if (videoController && state.isPlaying) videoController.stopPlayback();
-            videoController = null;
-            paneManager.clearAll();
-
-            for (var vi = 0; vi < session.videoFileIndices.length; vi++) {
-                var vf = state.videoFiles[session.videoFileIndices[vi]];
-                if (vf && vf.assignedCamera) {
-                    var hasView = state.views.some(function (v) { return v.name === vf.assignedCamera; });
-                    if (!hasView) {
-                        state.views.push({
-                            name: vf.assignedCamera, decoder: vf.decoder,
-                            canvas: null, ctx: null, overlayCanvas: null, overlayCtx: null,
-                            videoWidth: vf.videoWidth, videoHeight: vf.videoHeight, wrapper: null,
-                        });
-                    }
-                }
-            }
-
-            if (state.views.length > 0) {
-                paneManager._suppressActiveHighlight = true;
-                populateViewStrip();
-                paneManager.addAllViewsAsGrid();
-                paneManager._suppressActiveHighlight = false;
-                rebuildVideoController();
-                updateTotalFrames();
-                fitCanvasesToCells();
-            }
-            populateSessionStrip();
-
-            // Set up 3D viewport with new calibration
-            var vp3dMsg = document.getElementById('viewport3dMessage');
-            if (vp3dMsg) vp3dMsg.classList.add('hidden');
-            if (viewport3d) {
-                viewport3d.cameras = cameras;
-                viewport3d.skeleton = skeleton;
-                viewport3d.addCameraPyramids();
-                viewport3d.setFrame([]);
-                viewport3d.fitToScene();
-            } else {
-                setup3DViewport();
-            }
-
-            if (!interactionManager) setupInteraction();
-            if (interactionManager && state.views.length > 0) {
-                interactionManager.detach();
-                interactionManager.attach(state.views);
-            }
-
-            updateInfoPanel();
-            if (timeline) timeline.setData(session);
-            if (videoController) await videoController.seekToFrame(0);
-            setStatus('Created session "' + sessionName + '" with ' + cameras.length + ' cameras from ' + calibFile.name, 'success');
         }
 
         function handleEmptySession() {
@@ -10106,9 +10144,11 @@
                     } catch (e) { /* ignore */ }
                 }
 
-                // Build camera names from SLP video metadata if no calibration
+                // Build video index to name mapping
                 var videoIdxToCameraName = {};
                 if (cameras.length === 0) {
+                    // No calibration — map video indices to names from SLP metadata for frame loading,
+                    // but do NOT create Camera objects. No camera assignments or 3D functionality.
                     for (var dvi = 0; dvi < Math.max(slpData.videos.length, 1); dvi++) {
                         var vMeta = slpData.videos[dvi];
                         var dName = vMeta ? (vMeta.sourceFilename || vMeta.filename) : null;
@@ -10117,8 +10157,6 @@
                         } else {
                             dName = 'cam_' + dvi;
                         }
-                        cameras.push(new Camera(dName, [[1,0,0],[0,1,0],[0,0,1]],
-                            [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
                         videoIdxToCameraName[dvi] = dName;
                     }
                 } else {
@@ -10191,7 +10229,7 @@
                 for (var vfi = 0; vfi < videoFiles.length; vfi++) {
                     var vFile = videoFiles[vfi];
                     var vStemName = vFile.name.replace(/\.[^.]+$/, '');
-                    // Match to a camera
+                    // Match to a camera only if calibration provides cameras
                     var matchedCam = null;
                     for (var mci = 0; mci < cameras.length; mci++) {
                         if (vStemName.toLowerCase().indexOf(cameras[mci].name.toLowerCase()) >= 0) {
@@ -10199,7 +10237,7 @@
                             break;
                         }
                     }
-                    if (!matchedCam) matchedCam = vStemName;
+                    var viewName = matchedCam || vStemName;
 
                     try {
                         var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
@@ -10207,17 +10245,17 @@
                         var vw = decoder.videoTrack.video.width;
                         var vh = decoder.videoTrack.video.height;
                         state.videoFiles.push({
-                            file: vFile, name: matchedCam, decoder: decoder,
+                            file: vFile, name: viewName, decoder: decoder,
                             videoWidth: vw, videoHeight: vh, frameCount: decoder.samples.length,
                             assignedCamera: matchedCam,
                             videoPath: vFile.webkitRelativePath || vFile.name,
                             sessionIdx: state.activeSessionIdx,
                         });
                         session.videoFileIndices.push(state.videoFiles.length - 1);
-                        var hasView = state.views.some(function (v) { return v.name === matchedCam; });
+                        var hasView = state.views.some(function (v) { return v.name === viewName; });
                         if (!hasView) {
                             state.views.push({
-                                name: matchedCam, decoder: decoder,
+                                name: viewName, decoder: decoder,
                                 canvas: null, ctx: null, overlayCanvas: null, overlayCtx: null,
                                 videoWidth: vw, videoHeight: vh, wrapper: null,
                             });
@@ -10433,7 +10471,8 @@
                     }
 
                 } else {
-                    // No calibration — treat every directory as a camera (even if no video but has SLP)
+                    // No calibration — load videos from all directories but do NOT create cameras.
+                    // Videos can be viewed but camera assignments and 3D features require calibration.
                     for (var dirName in cameraDirs) {
                         if (cameraDirs[dirName].videos.length > 0 || cameraDirs[dirName].slps.length > 0) {
                             matchedCameraDirs.push({
@@ -10441,7 +10480,8 @@
                                 camName: dirName,
                                 videos: cameraDirs[dirName].videos,
                                 slps: cameraDirs[dirName].slps,
-                                envSlps: cameraDirs[dirName].envSlps
+                                envSlps: cameraDirs[dirName].envSlps,
+                                noCalibration: true
                             });
                         }
                     }
@@ -10665,14 +10705,16 @@
 
                             var sessionIdx = state.sessions.indexOf(state.session);
                             var videoStem = videoFile.name.replace(/\.[^.]+$/, '');
+                            var assignCam = camDir.noCalibration ? null : camName;
+                            var viewName = camDir.noCalibration ? videoStem : camName;
                             state.videoFiles.push({
                                 file: videoFile,
-                                name: videoStem,
+                                name: viewName,
                                 decoder: decoder,
                                 videoWidth: vw,
                                 videoHeight: vh,
                                 frameCount: decoder.samples.length,
-                                assignedCamera: camName,
+                                assignedCamera: assignCam,
                                 slpFilename: slpFilenameForCam,
                                 videoPath: videoFile.webkitRelativePath || videoFile.name,
                                 sessionIdx: sessionIdx,
@@ -10683,7 +10725,7 @@
                                 state.session.videoFileIndices.push(loadedVfIdx);
                             }
 
-                            if (!state.session.cameras.some(function (c) { return c.name === camName; })) {
+                            if (assignCam && !state.session.cameras.some(function (c) { return c.name === camName; })) {
                                 state.session.cameras.push(
                                     new Camera(camName, [[600,0,vw/2],[0,600,vh/2],[0,0,1]],
                                         [0,0,0,0,0], [0,0,0], [0,0,0], [vw, vh])
@@ -10691,7 +10733,7 @@
                             }
 
                             state.views.push({
-                                name: camName,
+                                name: viewName,
                                 decoder: decoder,
                                 canvas: null, ctx: null,
                                 overlayCanvas: null, overlayCtx: null,
@@ -12968,7 +13010,7 @@
                 for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
                     var vfIdx = newSession.videoFileIndices[vi];
                     var vf = state.videoFiles[vfIdx];
-                    if (vf && vf.assignedCamera) {
+                    if (vf) {
                         createViewForVideoFile(vf);
                     }
                 }
