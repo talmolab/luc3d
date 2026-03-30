@@ -2396,6 +2396,9 @@
                         timeline.setFrameModified(state.currentFrame, true);
                     }
 
+                    // Update 3D viewport
+                    update3DViewport(state.currentFrame);
+
                     setStatus('Node moved in ' + viewName, 'success');
                 },
 
@@ -2422,6 +2425,7 @@
                     }
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
+                    update3DViewport(state.currentFrame);
                 },
 
                 onUserInstanceCreated: function (viewName, points) {
@@ -2548,7 +2552,42 @@
                     var trackName = state.session.tracks[trackIdx] || 'Track ' + trackIdx;
 
                     // Convert predicted instances to user IN PLACE — no new group
+                    // Fill null points from reprojection and mark as occluded
                     for (var [camName, inst] of predGroup.instances) {
+                        var reprojInst = predGroup.getReprojectedInstance
+                            ? predGroup.getReprojectedInstance(camName) : null;
+                        var nulled = inst.nulledNodes || new Set();
+                        // Centroid of visible points as fallback for missing nodes
+                        var cx = 0, cy = 0, cCount = 0;
+                        for (var ci = 0; ci < inst.points.length; ci++) {
+                            if (inst.points[ci] != null) {
+                                cx += inst.points[ci][0];
+                                cy += inst.points[ci][1];
+                                cCount++;
+                            }
+                        }
+                        if (cCount > 0) { cx = Math.round(cx / cCount); cy = Math.round(cy / cCount); }
+                        var nullTotal = 0, nullSeq = 0;
+                        for (var nci = 0; nci < inst.points.length; nci++) {
+                            if (inst.points[nci] == null) nullTotal++;
+                        }
+                        inst.points = inst.points.map(function (pt, idx) {
+                            if (pt != null) return [pt[0], pt[1]];
+                            if (reprojInst && reprojInst.points && reprojInst.points[idx] != null) {
+                                nulled.add(idx);
+                                return [reprojInst.points[idx][0], reprojInst.points[idx][1]];
+                            }
+                            if (cCount > 0) {
+                                nulled.add(idx);
+                                var angle = (2 * Math.PI * nullSeq) / Math.max(nullTotal, 1);
+                                var spread = 20;
+                                nullSeq++;
+                                return [Math.round(cx + Math.cos(angle) * spread),
+                                        Math.round(cy + Math.sin(angle) * spread)];
+                            }
+                            return null;
+                        });
+                        if (nulled.size > 0) inst.nulledNodes = nulled;
                         inst.type = 'user';
                         inst.modified = true;
                         recordUserPoints(camName, inst.points);
@@ -2561,6 +2600,7 @@
                     if (timeline) timeline.setFrameModified(frameIdx, true);
                     drawAllOverlays(frameIdx);
                     updateInfoPanel();
+                    update3DViewport(frameIdx);
                 },
 
                 onNodeSetNull: function (viewName, instanceGroup, nodeIdx) {
@@ -8132,9 +8172,13 @@
                                 points3d: group.points3d || null,
                                 reprojections: group.reprojections || null,
                                 observedPoints: group.observedPoints || null,
+                                dirty: group.dirty || false,
                             };
+                            if (group.usedCameras) {
+                                groupData.usedCameras = Array.from(group.usedCameras);
+                            }
                             for (var [camName, inst] of group.instances) {
-                                groupData.instances[camName] = {
+                                var instData = {
                                     points: inst.points,
                                     trackIdx: inst.trackIdx,
                                     type: inst.type,
@@ -8142,6 +8186,10 @@
                                     modified: inst.modified,
                                     occluded: inst.occluded,
                                 };
+                                if (inst.nulledNodes && inst.nulledNodes.size > 0) {
+                                    instData.nulledNodes = Array.from(inst.nulledNodes);
+                                }
+                                groupData.instances[camName] = instData;
                             }
                             frameData.instanceGroups.push(groupData);
                         }
@@ -8149,19 +8197,20 @@
                 }
                 for (var [camName2, unlinkedList] of fg.unlinkedInstances) {
                     for (var unlinked of unlinkedList) {
-                        // Only save user-created or modified instances — predictions reload from H5
                         var ulType = unlinked.instance.type || 'user';
-                        if (ulType === 'user' || unlinked.instance.modified) {
-                            frameData.unlinkedInstances.push({
-                                cameraName: camName2,
-                                points: unlinked.instance.points,
-                                trackIdx: unlinked.instance.trackIdx,
-                                type: ulType,
-                                score: unlinked.instance.score || 1.0,
-                                modified: unlinked.instance.modified || false,
-                                occluded: unlinked.instance.occluded,
-                            });
+                        var ulData = {
+                            cameraName: camName2,
+                            points: unlinked.instance.points,
+                            trackIdx: unlinked.instance.trackIdx,
+                            type: ulType,
+                            score: unlinked.instance.score || 1.0,
+                            modified: unlinked.instance.modified || false,
+                            occluded: unlinked.instance.occluded,
+                        };
+                        if (unlinked.instance.nulledNodes && unlinked.instance.nulledNodes.size > 0) {
+                            ulData.nulledNodes = Array.from(unlinked.instance.nulledNodes);
                         }
+                        frameData.unlinkedInstances.push(ulData);
                     }
                 }
                 // Skip empty frames
@@ -8203,6 +8252,9 @@
                             }),
                             trustTracks: sess.trustTracks || false,
                             trackIdentityMap: Array.from(sess.trackIdentityMap.entries()),
+                            frameIdentityMap: sess.frameIdentityMap
+                                ? Array.from(sess.frameIdentityMap.entries())
+                                : [],
                             videoManifest: sess.videoFileIndices.map(function(vfIdx) {
                                 var vf = state.videoFiles[vfIdx];
                                 return vf ? {
@@ -8247,6 +8299,9 @@
                 }),
                 trustTracks: state.session.trustTracks || false,
                 trackIdentityMap: Array.from(state.session.trackIdentityMap.entries()),
+                frameIdentityMap: state.session.frameIdentityMap
+                    ? Array.from(state.session.frameIdentityMap.entries())
+                    : [],
                 videoManifest: (state.videoFiles || []).map(function (vf) {
                     return { filename: vf.name, assignedCamera: vf.assignedCamera || null };
                 }),
@@ -8273,9 +8328,13 @@
                                 points3d: group.points3d || null,
                                 reprojections: group.reprojections || null,
                                 observedPoints: group.observedPoints || null,
+                                dirty: group.dirty || false,
                             };
+                            if (group.usedCameras) {
+                                groupData.usedCameras = Array.from(group.usedCameras);
+                            }
                             for (const [camName, inst] of group.instances) {
-                                groupData.instances[camName] = {
+                                const instData = {
                                     points: inst.points,
                                     trackIdx: inst.trackIdx,
                                     type: inst.type,
@@ -8283,6 +8342,10 @@
                                     modified: inst.modified,
                                     occluded: inst.occluded,
                                 };
+                                if (inst.nulledNodes && inst.nulledNodes.size > 0) {
+                                    instData.nulledNodes = Array.from(inst.nulledNodes);
+                                }
+                                groupData.instances[camName] = instData;
                             }
                             frameData.instanceGroups.push(groupData);
                         }
@@ -8292,14 +8355,19 @@
                 // Serialize unlinked instances
                 for (const [camName, unlinkedList] of fg.unlinkedInstances) {
                     for (const unlinked of unlinkedList) {
-                        frameData.unlinkedInstances.push({
+                        const ulData = {
                             cameraName: camName,
                             points: unlinked.instance.points,
+                            trackIdx: unlinked.instance.trackIdx,
                             type: unlinked.instance.type || 'user',
                             score: unlinked.instance.score || 1.0,
                             modified: unlinked.instance.modified || false,
                             occluded: unlinked.instance.occluded,
-                        });
+                        };
+                        if (unlinked.instance.nulledNodes && unlinked.instance.nulledNodes.size > 0) {
+                            ulData.nulledNodes = Array.from(unlinked.instance.nulledNodes);
+                        }
+                        frameData.unlinkedInstances.push(ulData);
                     }
                 }
 
@@ -8388,7 +8456,11 @@
                     }
                 }
 
-                var cameraNames = cameras.map(function (c) { return c.name; });
+                // For V3, use active session's cameras; for V2, use the single session's cameras
+                var activeCameras = (data.version === 3 && state.sessions[state.activeSessionIdx])
+                    ? state.sessions[state.activeSessionIdx].cameras
+                    : cameras;
+                var cameraNames = activeCameras.map(function (c) { return c.name; });
                 var manifestFilenames = videoManifest.map(function (m) { return m.filename; }).filter(Boolean);
 
                 // Check which manifest videos are already loaded in state.videoFiles
@@ -8533,9 +8605,10 @@
                     }
                 }
 
-                // Resolve stale manifest camera names
+                // Resolve stale manifest camera names (active session only for V3)
                 for (var ri = 0; ri < state.videoFiles.length; ri++) {
                     var rvf = state.videoFiles[ri];
+                    if (data.version === 3 && rvf.sessionIdx != null && rvf.sessionIdx !== state.activeSessionIdx) continue;
                     if (rvf.assignedCamera && cameraNames.indexOf(rvf.assignedCamera) < 0) {
                         var rvfLower = rvf.assignedCamera.toLowerCase();
                         for (var rci = 0; rci < cameraNames.length; rci++) {
@@ -8555,18 +8628,23 @@
 
                 autoAssignVideosToCameras();
 
-                // For any still-unassigned video, try exact camera name match
+                // For any still-unassigned video, try exact camera name match (active session only for V3)
                 for (var vi = 0; vi < state.videoFiles.length; vi++) {
                     var vf2 = state.videoFiles[vi];
+                    if (data.version === 3 && vf2.sessionIdx != null && vf2.sessionIdx !== state.activeSessionIdx) continue;
                     if (!vf2.assignedCamera && cameraNames.indexOf(vf2.name) >= 0) {
                         vf2.assignedCamera = vf2.name;
                     }
                 }
 
-                // Create views for assigned videos
+                // Create views for assigned videos (active session only for V3)
                 showLoading('Creating views...');
                 for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
                     var vf3 = state.videoFiles[vi2];
+                    // For V3 projects, only create views for the active session
+                    if (data.version === 3 && vf3.sessionIdx != null && vf3.sessionIdx !== state.activeSessionIdx) {
+                        continue;
+                    }
                     if (vf3.assignedCamera) {
                         var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
                         if (!hasView) {
@@ -8596,9 +8674,9 @@
                     await videoController.seekToFrame(firstFrame);
                 }
 
-                // 3. Set up 3D viewport
+                // 3. Set up 3D viewport (use active session's cameras)
                 if (viewport3d) {
-                    viewport3d.cameras = cameras;
+                    viewport3d.cameras = state.session.cameras;
                     viewport3d.skeleton = state.session.skeleton;
                     viewport3d.addCameraPyramids();
                     viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
@@ -8693,6 +8771,12 @@
                     session.trackIdentityMap.set(data.trackIdentityMap[tmi][0], data.trackIdentityMap[tmi][1]);
                 }
             }
+            if (data.frameIdentityMap && data.frameIdentityMap.length > 0) {
+                if (!session.frameIdentityMap) session.frameIdentityMap = new Map();
+                for (var fmi = 0; fmi < data.frameIdentityMap.length; fmi++) {
+                    session.frameIdentityMap.set(data.frameIdentityMap[fmi][0], data.frameIdentityMap[fmi][1]);
+                }
+            }
 
             if (data.frames) {
                 for (var frameIdxStr in data.frames) {
@@ -8730,8 +8814,31 @@
                                 );
                                 inst.modified = instData.modified || false;
                                 if (instData.occluded) inst.occluded = instData.occluded;
+                                if (instData.nulledNodes && instData.nulledNodes.length > 0) {
+                                    inst.nulledNodes = new Set(instData.nulledNodes);
+                                }
                                 group.addInstance(camName, inst);
                                 fg.addInstance(camName, inst);
+                            }
+
+                            if (groupData.usedCameras) {
+                                group.usedCameras = new Set(groupData.usedCameras);
+                            }
+                            if (groupData.dirty) {
+                                group.markDirty();
+                            } else if (group.points3d) {
+                                group.markClean();
+                            }
+
+                            // Rebuild reprojectedInstances from saved reprojections
+                            if (group.reprojections) {
+                                for (var rCamName in group.reprojections) {
+                                    var rPts = group.reprojections[rCamName];
+                                    if (rPts) {
+                                        var rInst = new Instance(rPts, group.trackIdx, 'reprojected', 0);
+                                        group.addReprojectedInstance(rCamName, rInst);
+                                    }
+                                }
                             }
 
                             if (!trackMap.has(group.trackIdx)) {
@@ -8752,6 +8859,9 @@
                             );
                             ulInst.modified = ulData.modified || false;
                             if (ulData.occluded) ulInst.occluded = ulData.occluded;
+                            if (ulData.nulledNodes && ulData.nulledNodes.length > 0) {
+                                ulInst.nulledNodes = new Set(ulData.nulledNodes);
+                            }
                             var unlinked = new UnlinkedInstance(ulInst, ulData.cameraName);
                             fg.addUnlinkedInstance(ulData.cameraName, unlinked);
                         }
@@ -12939,6 +13049,8 @@
             // Save current session state — keep views alive
             var oldSession = state.sessions[state.activeSessionIdx];
             oldSession.lastFrame = state.currentFrame;
+            oldSession.totalFrames = state.totalFrames;
+            oldSession.fps = state.fps;
             oldSession.triangulationResults = state.triangulationResults;
             oldSession._views = state.views;           // preserve live views with decoders+canvases
             oldSession._videoController = videoController;
@@ -12979,8 +13091,9 @@
                 paneManager.clearAll();
                 paneManager.addAllViewsAsGrid();
 
-                // Rebuild video controller with current state.views
+                // Rebuild video controller and update frame count for this session
                 rebuildVideoController();
+                updateTotalFrames();
 
                 var targetFrame = newSession.lastFrame || 0;
                 setTimeout(function() {
@@ -13071,7 +13184,19 @@
                 setReprojErrorVisible(true);
             }
             updateInfoPanel();
-            if (timeline) timeline.setData(newSession);
+            // Restore per-session frame count — updateTotalFrames() may not
+            // find decoders if they haven't been rebuilt yet, so use saved value
+            if (newSession.totalFrames) {
+                state.totalFrames = newSession.totalFrames;
+                state.fps = newSession.fps || 30;
+                document.getElementById('totalFrames').textContent = state.totalFrames;
+                document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
+            }
+
+            if (timeline) {
+                timeline.setData(newSession);
+                timeline.setTotalFrames(state.totalFrames);
+            }
 
             setStatus('Switched to ' + newSession.name, 'info');
         }
