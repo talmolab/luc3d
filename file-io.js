@@ -1401,6 +1401,7 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
     // Attach lucid-specific session metadata
     sioSession.metadata = sioSession.metadata || {};
     sioSession.metadata.lucid = {
+        sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
         trackIdentityMap: Array.from(session.trackIdentityMap.entries()),
         frameIdentityMap: session.frameIdentityMap

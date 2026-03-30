@@ -8017,13 +8017,68 @@
             }
             try {
                 await ensureSleapIO();
+                var SIO = window.SleapIO;
                 setStatus('Building SLP...', 'warning');
-                var labels = buildSlpLabelsAllViews(state.session, state.views, state.videoFiles);
-                var bytes = await window.SleapIO.saveSlpToBytes(labels);
+
+                // Build Labels with all sessions
+                var allLabeledFrames = [];
+                var allVideos = [];
+                var allSessions = [];
+                var allSkeletons = [];
+                var allTracks = [];
+                var allIdentities = [];
+                var seenSkeletonNames = new Set();
+                var seenTrackNames = new Set();
+
+                var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
+                for (var si = 0; si < sessionsToExport.length; si++) {
+                    var sess = sessionsToExport[si];
+                    // Find views and videoFiles for this session
+                    var sessViews = state.views.filter(function (v) {
+                        return sess.cameras.some(function (c) { return c.name === v.name; });
+                    });
+                    var sessVideoFiles = state.videoFiles.filter(function (vf) {
+                        return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
+                    });
+
+                    var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
+
+                    // Merge into combined Labels
+                    allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
+                    allVideos = allVideos.concat(sessLabels.videos || []);
+                    for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
+                        var skel = sessLabels.skeletons[sk];
+                        if (!seenSkeletonNames.has(skel.name)) {
+                            allSkeletons.push(skel);
+                            seenSkeletonNames.add(skel.name);
+                        }
+                    }
+                    for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
+                        var trk = sessLabels.tracks[ti];
+                        if (!seenTrackNames.has(trk.name)) {
+                            allTracks.push(trk);
+                            seenTrackNames.add(trk.name);
+                        }
+                    }
+                    allIdentities = allIdentities.concat(sessLabels.identities || []);
+                    allSessions = allSessions.concat(sessLabels.sessions || []);
+                }
+
+                var labels = new SIO.Labels({
+                    labeledFrames: allLabeledFrames,
+                    videos: allVideos,
+                    skeletons: allSkeletons,
+                    tracks: allTracks,
+                    identities: allIdentities,
+                    sessions: allSessions,
+                    provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+                });
+
+                var bytes = await SIO.saveSlpToBytes(labels);
                 var blob = new Blob([bytes], { type: 'application/x-hdf5' });
 
                 var filename = 'project.slp';
-                if (state.session.name) {
+                if (state.sessions.length === 1 && state.session.name) {
                     filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
                 }
 
@@ -10301,18 +10356,34 @@
                     predictedInstances: slpPredCount,
                 });
 
-                showLoading('Building session (' + totalFrames + ' frames)...');
+                showLoading('Building sessions...');
                 await new Promise(function (r) { setTimeout(r, 0); });
 
-                // 1. Build session from raw worker data
                 var skelData = slpData.skeleton || { name: 'skeleton', nodes: [], edges: [] };
                 var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
 
-                // Extract cameras from sessions calibration
+                var numSlpSessions = (slpData.sessions && slpData.sessions.length > 0) ? slpData.sessions.length : 1;
+                console.log('[load-slp] SLP contains', numSlpSessions, 'session(s)');
+
+                // Clear previous state
+                if (videoController) {
+                    if (state.isPlaying) videoController.pause();
+                    videoController = null;
+                }
+                state.views = [];
+                state.videoFiles = [];
+                state.sessions = [];
+                paneManager.clearAll();
+
+                for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
+                showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
+                await new Promise(function (r) { setTimeout(r, 0); });
+
+                // 1. Build session from raw worker data
                 var cameras = [];
                 var videoIdxToCameraName = {};
-                if (slpData.sessions && slpData.sessions.length > 0) {
-                    var sessData = slpData.sessions[0];
+                if (slpData.sessions && slpData.sessions.length > slpSessIdx) {
+                    var sessData = slpData.sessions[slpSessIdx];
                     var calib = sessData.calibration || {};
                     var camMap = sessData.camcorder_to_video_idx_map || {};
 
@@ -10570,24 +10641,22 @@
                     }
                 }
 
-                state.session = session;
-                if (state.sessions.indexOf(state.session) < 0) {
-                    state.sessions.push(state.session);
-                    state.activeSessionIdx = state.sessions.length - 1;
+                // Give session a name from lucid metadata or index
+                var sessMetaName = null;
+                if (slpData.sessions && slpData.sessions[slpSessIdx]) {
+                    var sm = slpData.sessions[slpSessIdx].metadata;
+                    if (sm && sm.lucid && sm.lucid.sessionName) sessMetaName = sm.lucid.sessionName;
                 }
-                console.log('[load-slp] Session:', session.numFrames, 'frames,',
+                session.name = sessMetaName || ('Session ' + (slpSessIdx + 1));
+
+                state.sessions.push(session);
+                state.session = session;
+                state.activeSessionIdx = state.sessions.length - 1;
+
+                console.log('[load-slp] Session', slpSessIdx + 1, ':', session.numFrames, 'frames,',
                     cameras.length, 'cameras, tracks:', tracks);
 
                 // 2. Video loading — embedded or external
-                // Clear previous views
-                if (videoController) {
-                    if (state.isPlaying) videoController.pause();
-                    videoController = null;
-                }
-                state.views = [];
-                state.videoFiles = [];
-                paneManager.clearAll();
-
                 var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
 
                 if (hasEmbedded) {
@@ -10765,6 +10834,14 @@
                     }
                 }
 
+                } // end session loop
+
+                // Set active session to the first one
+                if (state.sessions.length > 0) {
+                    state.activeSessionIdx = 0;
+                    state.session = state.sessions[0];
+                }
+
                 updateTotalFrames();
                 if (state.views.length > 0) {
                     populateViewStrip();
@@ -10775,18 +10852,18 @@
                 }
 
                 // Seek to first labeled frame
-                if (videoController && state.views.length > 0) {
+                if (videoController && state.views.length > 0 && state.session) {
                     var firstFrame = 0;
-                    var sortedFrames = session.frameIndices;
+                    var sortedFrames = state.session.frameIndices;
                     if (sortedFrames.length > 0) firstFrame = sortedFrames[0];
                     state.currentFrame = firstFrame;
                     await videoController.seekToFrame(firstFrame);
                 }
 
                 // 3. Set up 3D viewport
-                if (cameras.length > 0) {
+                if (state.session && state.session.cameras.length > 0) {
                     if (viewport3d) {
-                        viewport3d.cameras = cameras;
+                        viewport3d.cameras = state.session.cameras;
                         viewport3d.skeleton = skeleton;
                         viewport3d.addCameraPyramids();
                         viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
@@ -10807,10 +10884,9 @@
                 }
 
                 hideLoading();
-                var statusParts = [skeleton.nodes.length + ' nodes', session.numFrames + ' labeled frames'];
-                if (cameras.length > 0) statusParts.push(cameras.length + ' cameras');
+                var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
+                if (state.session) statusParts.push(state.session.numFrames + ' labeled frames');
                 if (state.views.length > 0) statusParts.push(state.views.length + ' views');
-                if (hasEmbedded) statusParts.push(slpData.videos.filter(function (v) { return v.embedded; }).length + ' embedded video(s)');
                 setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
             } catch (err) {
                 console.error('[load-slp] FATAL:', err);
