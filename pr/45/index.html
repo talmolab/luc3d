@@ -10541,7 +10541,8 @@
                         var camLower = cam.name.toLowerCase();
                         var found = false;
                         for (var dirName in cameraDirs) {
-                            if (cameraDirs[dirName].dirNameLower === camLower) {
+                            var dirLower = cameraDirs[dirName].dirNameLower;
+                            if (dirLower === camLower || dirLower === 'cam' + camLower || dirLower.replace('cam', '') === camLower) {
                                 // Include even if no videos — will show as "None" in assignment panel
                                 matchedCameraDirs.push({
                                     dirName: dirName,
