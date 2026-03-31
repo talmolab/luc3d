@@ -10098,15 +10098,7 @@
         }
 
         async function handleLoadSessionFolder(showAllOptions) {
-            var mode = await showSessionModeModal(!!showAllOptions);
-            if (!mode) return; // cancelled
-            if (mode === 'single-slp') {
-                await handleLoadSessionFolderSingleSlp();
-            } else if (mode === 'per-camera') {
-                await handleLoadSessionFolderPerCamera();
-            } else if (mode === 'empty') {
-                handleEmptySession();
-            }
+            await handleLoadSessionFolderPerCamera();
         }
 
         function handleEmptySession() {
