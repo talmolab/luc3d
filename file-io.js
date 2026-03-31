@@ -672,7 +672,11 @@ function buildSlpExportData(session, views, videoFiles) {
             if (group.identityId != null && group.identityId >= 0) {
                 // Map identityId to index in session.identities array
                 var idIdx = session.identities.findIndex(function (id) { return id.id === group.identityId; });
-                if (idIdx >= 0) igData.identity_idx = idIdx;
+                if (idIdx >= 0) {
+                    igData.identity_idx = idIdx;
+                } else {
+                    console.warn('[export] InstanceGroup has identityId ' + group.identityId + ' not found in session.identities — identity will be dropped from export');
+                }
             }
             instanceGroupsData.push(igData);
         }

@@ -11299,6 +11299,10 @@
                         for (var igi = 0; igi < igDicts.length; igi++) {
                             var igDict = igDicts[igi];
                             var identityId = igDict.identity_idx != null ? igDict.identity_idx : -1;
+                            if (identityId >= 0 && identityId >= session.identities.length) {
+                                console.warn('[load-slp] identity_idx ' + identityId + ' is out of bounds (only ' + session.identities.length + ' identities loaded) — dropping identity assignment');
+                                identityId = -1;
+                            }
                             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
 
                             // Create instances directly from inline point dicts
@@ -11307,7 +11311,11 @@
                             var instanceMetaMap = igLucid.instanceMeta || {};
 
                             for (var igCamKey in igInstances) {
-                                var igCamName = camKeyToName[igCamKey] || igCamKey;
+                                var igCamName = camKeyToName[igCamKey];
+                                if (!igCamName) {
+                                    console.warn('[load-slp] Camera key "' + igCamKey + '" not found in calibration — 2D instance will use raw key as camera name');
+                                    igCamName = igCamKey;
+                                }
                                 var igPointDict = igInstances[igCamKey];
                                 var instMeta = instanceMetaMap[igCamName] || instanceMetaMap[igCamKey] || {};
 
