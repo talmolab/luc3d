@@ -61,7 +61,6 @@
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
-                    <div class="menu-dropdown-item" id="menuLoadDemo">Load Demo Session</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
                     <div class="menu-dropdown-item" id="menuExportLabels">Export Labels (JSON)</div>
@@ -137,7 +136,6 @@
                 </div>
             </div>
             <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hot Keys</div>
-            <div class="menu-item" id="menuLoadDemoBar" style="cursor:pointer;">Load Demo</div>
         </div>
 
         <!-- Toolbar -->
@@ -799,7 +797,7 @@
                 setupMenus();
 
                 hideLoading();
-                setStatus('Ready - load videos via File menu or click Load Demo', 'success');
+                setStatus('Ready - load session via File menu', 'success');
 
             } catch (err) {
                 console.error('Initialization failed:', err);
@@ -3638,12 +3636,6 @@
                 document.getElementById('btnLoadSkeleton').click();
             });
 
-            document.getElementById('menuLoadDemo').addEventListener('click', function () {
-                closeMenus();
-                loadDemoSession();
-            });
-
-            // Standalone "Load Demo" menu bar button
             document.getElementById('menuHotkeys').addEventListener('click', showHotkeysHelp);
 
             function showHotkeysHelp() {
@@ -3689,11 +3681,6 @@
                 document.getElementById('hotkeysClose').addEventListener('click', function () { overlay.remove(); });
                 overlay.addEventListener('click', function (ev) { if (ev.target === overlay) overlay.remove(); });
             }
-
-            document.getElementById('menuLoadDemoBar').addEventListener('click', function () {
-                closeMenus();
-                loadDemoSession();
-            });
 
             document.getElementById('menuSaveSkeleton').addEventListener('click', function () {
                 closeMenus();
