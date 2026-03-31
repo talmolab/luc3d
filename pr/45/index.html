@@ -8535,18 +8535,48 @@
                 paneManager.clearAll();
 
                 if (data.version === 3 && data.sessions && needsVideoPrompt) {
-                    // V3: prompt for each session's folder individually
+                    // V3: prompt for session folders — with parent directory option
+                    var v3AllSessionNames = data.sessions.map(function (sd, idx) { return sd.name || ('Session ' + (idx + 1)); });
+                    var v3ParentFilesMap = null; // Map<sessionName, File[]> from parent dir pick
+
                     for (var psi = 0; psi < data.sessions.length; psi++) {
                         var sessData = data.sessions[psi];
                         var sessName = sessData.name || ('Session ' + (psi + 1));
                         var sessCameras = (sessData.videoManifest || []).map(function (m) { return m.assignedCamera; }).filter(Boolean);
 
-                        var folderFiles = await forceVideoSelectionWithFolder(
-                            'Cameras: ' + sessCameras.join(', '),
-                            sessName
-                        );
+                        var folderFiles;
+                        if (v3ParentFilesMap && v3ParentFilesMap.has(sessName)) {
+                            // Already resolved from parent directory pick
+                            folderFiles = v3ParentFilesMap.get(sessName);
+                        } else if (v3ParentFilesMap) {
+                            // Parent dir was picked but this session wasn't matched — prompt individually
+                            folderFiles = await forceVideoSelectionWithFolder(
+                                'Cameras: ' + sessCameras.join(', '),
+                                sessName
+                            );
+                            if (folderFiles && folderFiles.parentResult) folderFiles = []; // shouldn't happen here
+                        } else {
+                            // First session — offer parent directory option
+                            var promptResult = await forceVideoSelectionWithFolder(
+                                'Cameras: ' + sessCameras.join(', '),
+                                sessName,
+                                { allSessionNames: v3AllSessionNames }
+                            );
 
-                        if (folderFiles.length > 0) {
+                            if (promptResult && promptResult.parentResult) {
+                                // User picked parent directory
+                                v3ParentFilesMap = promptResult.parentResult.matched;
+                                var v3Unmatched = promptResult.parentResult.unmatched;
+                                await showParentDirMatchSummary(v3ParentFilesMap, v3Unmatched);
+
+                                // Use matched files for this session
+                                folderFiles = v3ParentFilesMap.has(sessName) ? v3ParentFilesMap.get(sessName) : [];
+                            } else {
+                                folderFiles = promptResult;
+                            }
+                        }
+
+                        if (folderFiles && folderFiles.length > 0) {
                             var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
                             for (var ffi = 0; ffi < folderFiles.length; ffi++) {
                                 var file = folderFiles[ffi];
@@ -9483,11 +9513,190 @@
         }
 
         /**
+         * Match a folder name to a session name using exact, case-insensitive, and contains matching.
+         * Returns true if a match is found.
+         */
+        function matchSessionFolder(folderName, sessionName) {
+            if (folderName === sessionName) return true;
+            var fLower = folderName.toLowerCase();
+            var sLower = sessionName.toLowerCase();
+            if (fLower === sLower) return true;
+            if (fLower.indexOf(sLower) >= 0 || sLower.indexOf(fLower) >= 0) return true;
+            return false;
+        }
+
+        /**
+         * Pick a parent directory and match subdirectories to session names.
+         * Uses File System Access API (showDirectoryPicker) to scan subdirs,
+         * then matches each subdir to a session name.
+         *
+         * @param {string[]} sessionNames - Names of sessions to match
+         * @returns {Promise<{matched: Map<string, File[]>, unmatched: string[]}>}
+         *   matched: Map of sessionName → files from that session's folder
+         *   unmatched: session names with no matching folder
+         */
+        async function pickParentDirectoryForSessions(sessionNames) {
+            if (!window.showDirectoryPicker) {
+                // Fall back to pickFolder (webkitdirectory) — can't enumerate subdirs individually
+                var allFiles = await pickFolder();
+                if (!allFiles || allFiles.length === 0) return null;
+
+                // Group files by top-level subdirectory
+                var dirFiles = {};
+                for (var i = 0; i < allFiles.length; i++) {
+                    var relPath = allFiles[i].webkitRelativePath || allFiles[i].name;
+                    var parts = relPath.split('/');
+                    // parts[0] = parent dir name, parts[1] = session subdir, parts[2+] = files
+                    if (parts.length < 3) continue;
+                    var dirName = parts[1];
+                    if (!dirFiles[dirName]) dirFiles[dirName] = [];
+                    dirFiles[dirName].push(allFiles[i]);
+                }
+
+                var matched = new Map();
+                var usedDirs = new Set();
+                for (var si = 0; si < sessionNames.length; si++) {
+                    var sessName = sessionNames[si];
+                    for (var dirName in dirFiles) {
+                        if (usedDirs.has(dirName)) continue;
+                        if (matchSessionFolder(dirName, sessName)) {
+                            matched.set(sessName, dirFiles[dirName]);
+                            usedDirs.add(dirName);
+                            break;
+                        }
+                    }
+                }
+                var unmatched = sessionNames.filter(function (n) { return !matched.has(n); });
+                return { matched: matched, unmatched: unmatched };
+            }
+
+            // Use File System Access API for reliable enumeration
+            var parentHandle;
+            try {
+                parentHandle = await window.showDirectoryPicker({ mode: 'read' });
+            } catch (e) {
+                if (e.name === 'AbortError') return null;
+                throw e;
+            }
+
+            // Scan immediate subdirectories
+            var subdirs = [];
+            for await (var [name, handle] of parentHandle) {
+                if (handle.kind === 'directory') {
+                    subdirs.push({ name: name, handle: handle });
+                }
+            }
+
+            // Match subdirs to session names
+            var matched = new Map();
+            var usedDirs = new Set();
+            for (var si = 0; si < sessionNames.length; si++) {
+                var sessName = sessionNames[si];
+                // Try exact first, then case-insensitive, then contains
+                var bestMatch = null;
+                for (var di = 0; di < subdirs.length; di++) {
+                    if (usedDirs.has(di)) continue;
+                    if (subdirs[di].name === sessName) { bestMatch = di; break; }
+                }
+                if (bestMatch === null) {
+                    for (var di = 0; di < subdirs.length; di++) {
+                        if (usedDirs.has(di)) continue;
+                        if (subdirs[di].name.toLowerCase() === sessName.toLowerCase()) { bestMatch = di; break; }
+                    }
+                }
+                if (bestMatch === null) {
+                    for (var di = 0; di < subdirs.length; di++) {
+                        if (usedDirs.has(di)) continue;
+                        var dLower = subdirs[di].name.toLowerCase();
+                        var sLower = sessName.toLowerCase();
+                        if (dLower.indexOf(sLower) >= 0 || sLower.indexOf(dLower) >= 0) { bestMatch = di; break; }
+                    }
+                }
+                if (bestMatch !== null) {
+                    usedDirs.add(bestMatch);
+                    showLoading('Scanning folder: ' + subdirs[bestMatch].name + '...');
+                    var files = await enumerateDirectoryHandle(subdirs[bestMatch].handle, subdirs[bestMatch].name, null);
+                    matched.set(sessName, files);
+                }
+            }
+
+            var unmatched = sessionNames.filter(function (n) { return !matched.has(n); });
+            return { matched: matched, unmatched: unmatched };
+        }
+
+        /**
+         * Show a summary of matched/unmatched sessions after parent directory scan.
+         * Returns a promise that resolves when the user clicks Continue.
+         */
+        function showParentDirMatchSummary(matched, unmatched) {
+            return new Promise(function (resolve) {
+                var overlay = document.createElement('div');
+                overlay.id = 'parentDirSummaryOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+
+                var box = document.createElement('div');
+                box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:32px;max-width:500px;width:90%;color:#fff;';
+
+                var title = document.createElement('div');
+                title.style.cssText = 'font-size:18px;font-weight:600;margin-bottom:16px;';
+                title.textContent = 'Session Folder Matching';
+                box.appendChild(title);
+
+                // Matched list
+                if (matched.size > 0) {
+                    var matchLabel = document.createElement('div');
+                    matchLabel.style.cssText = 'color:#4caf50;font-weight:600;margin-bottom:6px;';
+                    matchLabel.textContent = 'Matched (' + matched.size + '):';
+                    box.appendChild(matchLabel);
+                    matched.forEach(function (files, sessName) {
+                        var row = document.createElement('div');
+                        row.style.cssText = 'color:#ccc;font-size:13px;padding:2px 0 2px 12px;';
+                        row.textContent = '\u2713 ' + sessName;
+                        box.appendChild(row);
+                    });
+                }
+
+                // Unmatched list
+                if (unmatched.length > 0) {
+                    var unmatchLabel = document.createElement('div');
+                    unmatchLabel.style.cssText = 'color:#ff9800;font-weight:600;margin-top:12px;margin-bottom:6px;';
+                    unmatchLabel.textContent = 'Unmatched (' + unmatched.length + '):';
+                    box.appendChild(unmatchLabel);
+                    for (var i = 0; i < unmatched.length; i++) {
+                        var row = document.createElement('div');
+                        row.style.cssText = 'color:#ccc;font-size:13px;padding:2px 0 2px 12px;';
+                        row.textContent = '\u2717 ' + unmatched[i] + ' — will prompt individually';
+                        box.appendChild(row);
+                    }
+                }
+
+                var btnContinue = document.createElement('button');
+                btnContinue.style.cssText = 'margin-top:20px;padding:12px 36px;font-size:15px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
+                btnContinue.textContent = 'Continue';
+                btnContinue.addEventListener('click', function () {
+                    overlay.remove();
+                    resolve();
+                });
+                box.appendChild(btnContinue);
+
+                overlay.appendChild(box);
+                document.body.appendChild(overlay);
+            });
+        }
+
+        /**
          * Video selection dialog with "Select Session Folder" option.
          * Scans the folder for videos in camera subdirectories and matches them
          * to the manifest entries by camera name or filename.
+         *
+         * @param {string} refInfo - Camera info string
+         * @param {string} sessionName - Current session name
+         * @param {object} [options] - Optional settings
+         * @param {string[]} [options.allSessionNames] - All session names (enables parent dir option)
+         * @returns {Promise<File[]|{parentResult: {matched: Map, unmatched: string[]}}>}
          */
-        function forceVideoSelectionWithFolder(refInfo, sessionName) {
+        function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
+            var allSessionNames = options && options.allSessionNames;
             return new Promise(function (resolve) {
                 var overlay = document.createElement('div');
                 overlay.id = 'videoSelectOverlay';
@@ -9506,7 +9715,23 @@
                 }
 
                 var btnRow = document.createElement('div');
-                btnRow.style.cssText = 'display:flex;gap:16px;';
+                btnRow.style.cssText = 'display:flex;gap:16px;flex-wrap:wrap;justify-content:center;';
+
+                // Parent directory button (only when multiple sessions)
+                if (allSessionNames && allSessionNames.length > 1) {
+                    var btnParent = document.createElement('button');
+                    btnParent.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#7c4dff;color:#fff;border:none;border-radius:8px;';
+                    btnParent.textContent = 'Select Parent Directory';
+                    btnRow.appendChild(btnParent);
+
+                    btnParent.addEventListener('click', async function () {
+                        var result;
+                        try { result = await pickParentDirectoryForSessions(allSessionNames); } catch (e) { console.error(e); return; }
+                        if (!result) return; // cancelled
+                        overlay.remove();
+                        resolve({ parentResult: result });
+                    });
+                }
 
                 var btnFolder = document.createElement('button');
                 btnFolder.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
@@ -11088,6 +11313,19 @@
                 var numSlpSessions = (slpData.sessions && slpData.sessions.length > 0) ? slpData.sessions.length : 1;
                 console.log('[load-slp] SLP contains', numSlpSessions, 'session(s)');
 
+                // Pre-compute session names for parent directory matching
+                var slpAllSessionNames = [];
+                for (var sni = 0; sni < numSlpSessions; sni++) {
+                    var snName = 'Session ' + (sni + 1);
+                    if (slpData.sessions && slpData.sessions[sni]) {
+                        var snMeta = slpData.sessions[sni].metadata;
+                        if (snMeta && snMeta.lucid && snMeta.lucid.sessionName) snName = snMeta.lucid.sessionName;
+                        else if (slpData.sessions[sni].name) snName = slpData.sessions[sni].name;
+                    }
+                    slpAllSessionNames.push(snName);
+                }
+                var slpParentFilesMap = null; // Set after user picks parent directory
+
                 // Clear previous state
                 if (videoController) {
                     if (state.isPlaying) videoController.pause();
@@ -11553,10 +11791,34 @@
                         : '(select folder with video files)';
                     console.log('[load-slp] Prompting for session folder, cameras:', slpCameraNames);
 
-                    // Prompt for session folder — matches videos by camera subdirectory or filename
-                    var videoFiles = await forceVideoSelectionWithFolder(refInfo, session.name || 'Session');
+                    // Prompt for session folder — with parent directory option for multi-session
+                    var videoFiles;
+                    var currentSessName = session.name || 'Session';
+                    if (slpParentFilesMap && slpParentFilesMap.has(currentSessName)) {
+                        // Already resolved from parent directory pick
+                        videoFiles = slpParentFilesMap.get(currentSessName);
+                    } else if (slpParentFilesMap) {
+                        // Parent dir was picked but this session wasn't matched — prompt individually
+                        videoFiles = await forceVideoSelectionWithFolder(refInfo, currentSessName);
+                        if (videoFiles && videoFiles.parentResult) videoFiles = [];
+                    } else {
+                        // Offer parent directory option on first prompt
+                        var slpPromptResult = await forceVideoSelectionWithFolder(
+                            refInfo, currentSessName,
+                            numSlpSessions > 1 ? { allSessionNames: slpAllSessionNames } : null
+                        );
 
-                    if (videoFiles.length > 0) {
+                        if (slpPromptResult && slpPromptResult.parentResult) {
+                            slpParentFilesMap = slpPromptResult.parentResult.matched;
+                            var slpUnmatched = slpPromptResult.parentResult.unmatched;
+                            await showParentDirMatchSummary(slpParentFilesMap, slpUnmatched);
+                            videoFiles = slpParentFilesMap.has(currentSessName) ? slpParentFilesMap.get(currentSessName) : [];
+                        } else {
+                            videoFiles = slpPromptResult;
+                        }
+                    }
+
+                    if (videoFiles && videoFiles.length > 0) {
                         // Filter to video files only
                         var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
                         var vidFiles = Array.from(videoFiles).filter(function (f) {
