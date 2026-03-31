@@ -9,7 +9,7 @@ dev_addr: 0.0.0.0:9907
 theme:
   name: material
   logo: assets/logo.png
-  favicon: assets/logo.png
+  favicon: assets/favicon.png
   palette:
     - scheme: default
       primary: deep purple
