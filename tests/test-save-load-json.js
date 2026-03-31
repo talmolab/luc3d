@@ -87,10 +87,8 @@
         fg0.addInstance('CamA', instA0);
         fg0.addInstance('CamB', instB0);
 
-        if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, new Map());
-        var tm0 = session.instanceGroups.get(0);
-        if (!tm0.has(0)) tm0.set(0, []);
-        tm0.get(0).push(group0);
+        if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, []);
+        session.instanceGroups.get(0).push(group0);
 
         // --- Frame 0: second group (predicted, track 1) ---
         var instA0pred = new Instance([[400, 450], [500, 550], null], 1, 'predicted', 0.8);
@@ -105,8 +103,7 @@
         fg0.addInstance('CamA', instA0pred);
         fg0.addInstance('CamB', instB0pred);
 
-        if (!tm0.has(1)) tm0.set(1, []);
-        tm0.get(1).push(group1);
+        session.instanceGroups.get(0).push(group1);
 
         // --- Frame 0: unlinked instance with nulledNodes ---
         var ulInst = new Instance([[50, 60], [70, 80], [90, 100]], 0, 'user', 1.0);
@@ -124,10 +121,8 @@
 
         var group5 = new InstanceGroup(2001, 0);
         group5.addInstance('CamA', instA5);
-        if (!session.instanceGroups.has(5)) session.instanceGroups.set(5, new Map());
-        var tm5 = session.instanceGroups.get(5);
-        if (!tm5.has(0)) tm5.set(0, []);
-        tm5.get(0).push(group5);
+        if (!session.instanceGroups.has(5)) session.instanceGroups.set(5, []);
+        session.instanceGroups.get(5).push(group5);
 
         return session;
     }
@@ -161,40 +156,36 @@
 
         for (var [frameIdx, fg] of session.frameGroups) {
             var frameData = { instanceGroups: [], unlinkedInstances: [] };
-            var trackMap = session.instanceGroups.get(frameIdx);
-            if (trackMap) {
-                for (var [trackIdx, groups] of trackMap) {
-                    for (var group of groups) {
-                        var groupData = {
-                            id: group.id,
-                            trackIdx: group.trackIdx,
-                            identityId: group.identityId != null ? group.identityId : -1,
-                            instances: {},
-                            points3d: group.points3d || null,
-                            reprojections: group.reprojections || null,
-                            observedPoints: group.observedPoints || null,
-                            dirty: group.dirty || false,
-                        };
-                        if (group.usedCameras) {
-                            groupData.usedCameras = Array.from(group.usedCameras);
-                        }
-                        for (var [camName, inst] of group.instances) {
-                            var instData = {
-                                points: inst.points,
-                                trackIdx: inst.trackIdx,
-                                type: inst.type,
-                                score: inst.score,
-                                modified: inst.modified,
-                                occluded: inst.occluded,
-                            };
-                            if (inst.nulledNodes && inst.nulledNodes.size > 0) {
-                                instData.nulledNodes = Array.from(inst.nulledNodes);
-                            }
-                            groupData.instances[camName] = instData;
-                        }
-                        frameData.instanceGroups.push(groupData);
-                    }
+            var frameGroups = session.instanceGroups.get(frameIdx) || [];
+            for (var gi = 0; gi < frameGroups.length; gi++) {
+                var group = frameGroups[gi];
+                var groupData = {
+                    id: group.id,
+                    identityId: group.identityId != null ? group.identityId : -1,
+                    instances: {},
+                    points3d: group.points3d || null,
+                    reprojections: group.reprojections || null,
+                    observedPoints: group.observedPoints || null,
+                    dirty: group.dirty || false,
+                };
+                if (group.usedCameras) {
+                    groupData.usedCameras = Array.from(group.usedCameras);
                 }
+                for (var [camName, inst] of group.instances) {
+                    var instData = {
+                        points: inst.points,
+                        trackIdx: inst.trackIdx,
+                        type: inst.type,
+                        score: inst.score,
+                        modified: inst.modified,
+                        occluded: inst.occluded,
+                    };
+                    if (inst.nulledNodes && inst.nulledNodes.size > 0) {
+                        instData.nulledNodes = Array.from(inst.nulledNodes);
+                    }
+                    groupData.instances[camName] = instData;
+                }
+                frameData.instanceGroups.push(groupData);
             }
             for (var [camName2, unlinkedList] of fg.unlinkedInstances) {
                 for (var unlinked of unlinkedList) {
@@ -261,13 +252,12 @@
 
                 if (frameData.instanceGroups) {
                     if (!session.instanceGroups.has(frameIdx)) {
-                        session.instanceGroups.set(frameIdx, new Map());
+                        session.instanceGroups.set(frameIdx, []);
                     }
-                    var trackMap = session.instanceGroups.get(frameIdx);
 
                     for (var gi = 0; gi < frameData.instanceGroups.length; gi++) {
                         var groupData = frameData.instanceGroups[gi];
-                        var group = new InstanceGroup(groupData.id || Date.now(), groupData.trackIdx);
+                        var group = new InstanceGroup(groupData.id || Date.now(), groupData.identityId);
                         if (groupData.identityId != null) group.identityId = groupData.identityId;
                         if (groupData.points3d) group.points3d = groupData.points3d;
                         if (groupData.reprojections) group.reprojections = groupData.reprojections;
@@ -278,7 +268,7 @@
                             var instData = groupData.instances[camName];
                             var inst = new Instance(
                                 instData.points,
-                                instData.trackIdx || groupData.trackIdx,
+                                instData.trackIdx || groupData.identityId,
                                 instData.type || 'user',
                                 instData.score || 1.0
                             );
@@ -302,14 +292,13 @@
                             for (var rCamName in group.reprojections) {
                                 var rPts = group.reprojections[rCamName];
                                 if (rPts) {
-                                    var rInst = new Instance(rPts, group.trackIdx, 'reprojected', 0);
+                                    var rInst = new Instance(rPts, group.identityId, 'reprojected', 0);
                                     group.addReprojectedInstance(rCamName, rInst);
                                 }
                             }
                         }
 
-                        if (!trackMap.has(group.trackIdx)) trackMap.set(group.trackIdx, []);
-                        trackMap.get(group.trackIdx).push(group);
+                        session.instanceGroups.get(frameIdx).push(group);
                     }
                 }
 
@@ -449,25 +438,25 @@
         it('group id and trackIdx survive', function () {
             var r = roundtrip();
             var groups = r.restored.getInstanceGroupsForFrame(0);
-            var g0 = groups.find(function(g) { return g.trackIdx === 0; });
+            var g0 = groups.find(function(g) { return g.identityId === 0; });
             assertNotNull(g0, 'found group with track 0');
             assertEqual(g0.id, 1001);
-            assertEqual(g0.trackIdx, 0);
+            assertEqual(g0.identityId, 0);
         });
 
         it('group identityId survives', function () {
             var r = roundtrip();
             var groups = r.restored.getInstanceGroupsForFrame(0);
-            var g0 = groups.find(function(g) { return g.trackIdx === 0; });
+            var g0 = groups.find(function(g) { return g.identityId === 0; });
             assertEqual(g0.identityId, 0);
-            var g1 = groups.find(function(g) { return g.trackIdx === 1; });
+            var g1 = groups.find(function(g) { return g.identityId === 1; });
             assertEqual(g1.identityId, 1);
         });
 
         it('group has instances for both cameras', function () {
             var r = roundtrip();
             var groups = r.restored.getInstanceGroupsForFrame(0);
-            var g0 = groups.find(function(g) { return g.trackIdx === 0; });
+            var g0 = groups.find(function(g) { return g.identityId === 0; });
             assertNotNull(g0.getInstance('CamA'), 'has CamA');
             assertNotNull(g0.getInstance('CamB'), 'has CamB');
         });
@@ -486,7 +475,7 @@
     describe('JSON roundtrip - instance data', function () {
         it('2D points survive', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             var inst = g0.getInstance('CamA');
             assertDeepEqual(inst.points[0], [100, 150]);
             assertDeepEqual(inst.points[1], [200, 250]);
@@ -495,41 +484,41 @@
 
         it('instance type survives', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertEqual(g0.getInstance('CamA').type, 'user');
 
-            var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 1; });
+            var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 1; });
             assertEqual(g1.getInstance('CamA').type, 'predicted');
         });
 
         it('instance score survives', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertEqual(g0.getInstance('CamB').score, 0.95);
         });
 
         it('instance modified flag survives', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertTrue(g0.getInstance('CamA').modified, 'CamA modified');
         });
 
         it('instance trackIdx survives', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertEqual(g0.getInstance('CamA').trackIdx, 0);
         });
 
         it('null points survive', function () {
             var r = roundtrip();
-            var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 1; });
+            var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 1; });
             assertNull(g1.getInstance('CamA').points[2], 'CamA wrist is null');
             assertNull(g1.getInstance('CamB').points[1], 'CamB ear is null');
         });
 
         it('occluded array survives', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             var occ = g0.getInstance('CamA').occluded;
             assertDeepEqual(occ, [false, false, true]);
         });
@@ -542,7 +531,7 @@
     describe('JSON roundtrip - nulledNodes', function () {
         it('grouped instance nulledNodes survive', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             var inst = g0.getInstance('CamA');
             assertTrue(inst.nulledNodes instanceof Set, 'nulledNodes is a Set');
             assertTrue(inst.nulledNodes.has(2), 'wrist (idx 2) is nulled');
@@ -552,7 +541,7 @@
 
         it('predicted instance nulledNodes survive', function () {
             var r = roundtrip();
-            var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 1; });
+            var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 1; });
             var instB = g1.getInstance('CamB');
             assertTrue(instB.nulledNodes instanceof Set, 'nulledNodes is Set');
             assertTrue(instB.nulledNodes.has(1), 'ear nulled');
@@ -571,7 +560,7 @@
 
         it('instance without nulledNodes has no Set after load', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             var instB = g0.getInstance('CamB');
             // CamB instance in group 0 has no nulledNodes
             assertTrue(!instB.nulledNodes || instB.nulledNodes.size === 0,
@@ -586,7 +575,7 @@
     describe('JSON roundtrip - 3D triangulation data', function () {
         it('points3d survive', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertDeepEqual(g0.points3d[0], [1.0, 2.0, 3.0]);
             assertDeepEqual(g0.points3d[1], [4.0, 5.0, 6.0]);
             assertNull(g0.points3d[2], 'wrist not triangulated');
@@ -594,7 +583,7 @@
 
         it('reprojections survive per camera', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertNotNull(g0.reprojections, 'has reprojections');
             assertDeepEqual(g0.reprojections['CamA'][0], [101, 151]);
             assertDeepEqual(g0.reprojections['CamB'][1], [211, 261]);
@@ -603,7 +592,7 @@
 
         it('observedPoints survive per camera', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertNotNull(g0.observedPoints, 'has observedPoints');
             assertNotNull(g0.observedPoints['CamA'], 'CamA observed');
             assertNotNull(g0.observedPoints['CamB'], 'CamB observed');
@@ -611,7 +600,7 @@
 
         it('usedCameras survive', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertTrue(g0.usedCameras instanceof Set, 'usedCameras is Set');
             assertTrue(g0.usedCameras.has('CamA'), 'CamA used');
             assertTrue(g0.usedCameras.has('CamB'), 'CamB used');
@@ -619,7 +608,7 @@
 
         it('group without 3D data has null fields', function () {
             var r = roundtrip();
-            var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 1; });
+            var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 1; });
             assertTrue(!g1.points3d, 'no points3d');
         });
     });
@@ -631,20 +620,20 @@
     describe('JSON roundtrip - dirty flag and reprojectedInstances', function () {
         it('clean group stays clean after roundtrip', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertFalse(g0.dirty, 'triangulated group is clean');
         });
 
         it('reprojectedInstances rebuilt from reprojections', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             assertNotNull(g0.getReprojectedInstance('CamA'), 'CamA reproj instance exists');
             assertNotNull(g0.getReprojectedInstance('CamB'), 'CamB reproj instance exists');
         });
 
         it('reprojected instance has correct points', function () {
             var r = roundtrip();
-            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.trackIdx === 0; });
+            var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             var ri = g0.getReprojectedInstance('CamA');
             assertEqual(ri.type, 'reprojected', 'type is reprojected');
             assertDeepEqual(ri.points[0], [101, 151], 'reproj point 0');
@@ -715,7 +704,6 @@
             var r = roundtrip();
             var g = r.parsed.frames['0'].instanceGroups[0];
             assertTrue('id' in g, 'has id');
-            assertTrue('trackIdx' in g, 'has trackIdx');
             assertTrue('identityId' in g, 'has identityId');
             assertTrue('instances' in g, 'has instances');
             assertTrue('points3d' in g, 'has points3d');

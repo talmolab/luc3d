@@ -44,14 +44,9 @@
             }
             if (hasLabeled) labeledCount++;
 
-            var trackMap = session.instanceGroups.get(frameIdx);
-            if (trackMap) {
-                outer:
-                for (var groups of trackMap.values()) {
-                    for (var g = 0; g < groups.length; g++) {
-                        if (groups[g].points3d) { triangulatedCount++; break outer; }
-                    }
-                }
+            var frameGroups = session.instanceGroups.get(frameIdx) || [];
+            for (var g = 0; g < frameGroups.length; g++) {
+                if (frameGroups[g].points3d) { triangulatedCount++; break; }
             }
         });
 
@@ -202,7 +197,7 @@
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
             group.points3d = [[1,2,3],[4,5,6]];
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             var c = computeCounters(session, 'cam1');
             assertEqual(c.triangulated, 1, '1 triangulated frame');
@@ -218,7 +213,7 @@
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
             group.points3d = null;
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             var c = computeCounters(session, 'cam1');
             assertEqual(c.triangulated, 0, 'no points3d = not triangulated');
@@ -236,7 +231,7 @@
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam2', inst2);
             group.points3d = [[1,2,3],[4,5,6]];
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             // Even when viewing cam1, triangulated should count the frame
             var c = computeCounters(session, 'cam1');
@@ -259,7 +254,7 @@
             var g2 = new InstanceGroup(2, 0);
             g2.addInstance('cam1', inst2);
             g2.points3d = [[4,5,6]];
-            session.instanceGroups.set(0, new Map([[0, [g1, g2]]]));
+            session.instanceGroups.set(0, [g1, g2]);
 
             var c = computeCounters(session, 'cam1');
             assertEqual(c.triangulated, 1, 'at most 1 per frame');

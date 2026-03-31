@@ -410,7 +410,7 @@
             group = new InstanceGroup(1, 0);
             var inst = new Instance([[100, 100], [200, 200], [300, 300]], 0, 'user', 1.0);
             group.addInstance(camName, inst);
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             var fg = new FrameGroup(0);
             fg.addInstance(camName, inst);
@@ -534,7 +534,7 @@
             group = new InstanceGroup(1, 0);
             inst = new Instance([[100, 100], [200, 200], [300, 300]], 0, 'user', 1.0);
             group.addInstance(camName, inst);
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             var fg = new FrameGroup(0);
             fg.addInstance(camName, inst);
