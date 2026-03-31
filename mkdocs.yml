@@ -1,9 +1,11 @@
 site_name: LUC3D
 site_description: Label Unification and Correspondence in 3D — Multi-view pose annotation GUI
-site_url: https://talmolab.github.io/luc3d/docs
+site_url: https://talmolab.github.io/luc3d/docs/
 repo_url: https://github.com/talmolab/luc3d
 repo_name: talmolab/luc3d
 
+docs_dir: docs_src
+site_dir: docs
 dev_addr: 0.0.0.0:9907
 
 theme:

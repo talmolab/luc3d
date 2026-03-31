@@ -19,6 +19,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+
+      - name: Build docs
+        run: |
+          pip install mkdocs-material
+          mkdocs build
+
       - name: Deploy PR Preview
         uses: JamesIves/github-pages-deploy-action@v4
         with:
