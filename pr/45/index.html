@@ -3591,11 +3591,6 @@
                 saveProjectSlp();
             });
 
-            document.getElementById('menuSaveProjectJson').addEventListener('click', function () {
-                closeMenus();
-                saveProject();
-            });
-
             document.getElementById('menuLoadProject').addEventListener('click', function () {
                 closeMenus();
                 handleLoadProject();
@@ -3720,14 +3715,6 @@
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
                 showSlpExportModal();
-            });
-
-            document.getElementById('menuExportPoints3d').addEventListener('click', function () {
-                closeMenus();
-                if (!state.session) { setStatus('No session to export', 'error'); return; }
-                const data = buildPoints3dExportData(state.session);
-                downloadJSON(data, 'points3d.json');
-                setStatus('3D points exported', 'success');
             });
 
             document.getElementById('menuExportPoints3dH5').addEventListener('click', function () {
