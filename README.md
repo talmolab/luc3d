@@ -4,6 +4,10 @@ Multi-view pose annotation GUI. No build system — pure vanilla JS served as st
 
 ![lucidGUI](https://github.com/user-attachments/assets/bc89788a-bf2b-4816-89ff-b23fa4ef0b5b)
 
+## Documentation
+
+Full documentation, tutorials, and user guides: **[talmolab.github.io/luc3d-docs](https://talmolab.github.io/luc3d-docs/)**
+
 ## Architecture
 - `index.html` — Main SPA with all app logic in inline script
 - `pose-data.js` — Data model (Skeleton, Camera, Instance, FrameGroup, InstanceGroup, Session)
