@@ -1,19 +1,10 @@
-/* Make the header logo much bigger */
+/* Make the header logo a bit bigger than default */
 .md-header__button.md-logo img {
-  height: 3rem;
+  height: 2.2rem;
   width: auto;
 }
 
 /* Hide the site name text next to the logo */
 .md-header__topic .md-ellipsis {
   display: none;
-}
-
-/* Bump up the header height to fit the larger logo */
-.md-header {
-  height: 4rem;
-}
-
-.md-header__inner {
-  height: 4rem;
 }

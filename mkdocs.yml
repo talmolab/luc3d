@@ -1,8 +1,8 @@
 site_name: LUC3D
 site_description: Label Unification and Correspondence in 3D — Multi-view pose annotation GUI
-site_url: https://erl-ang.github.io/luc3d
-repo_url: https://github.com/erl-ang/lucid
-repo_name: erl-ang/lucid
+site_url: https://talmolab.github.io/luc3d
+repo_url: https://github.com/talmolab/luc3d
+repo_name: talmolab/luc3d
 
 dev_addr: 0.0.0.0:9907
 

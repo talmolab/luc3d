@@ -1,5 +1,5 @@
 <div style="text-align: center; margin-bottom: 2em;">
-  <img src="assets/logo.png" alt="LUC3D Logo" style="max-width: 500px; width: 100%;">
+  <img src="assets/logo.png" alt="LUC3D Logo" style="max-width: 320px; width: 100%;">
 </div>
 
 # LUC3D — Label Unification and Correspondence in 3D
