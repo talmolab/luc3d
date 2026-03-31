@@ -56,8 +56,8 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
-                    <div class="menu-dropdown-item" id="menuLoadSession">Load Session...</div>
                     <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Session Folder...</div>
+                    <div class="menu-dropdown-item" id="menuLoadMultiSession">Load Multi-Session Folder...</div>
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
@@ -3604,14 +3604,14 @@
                 handleLoadCalibration();
             });
 
-            document.getElementById('menuLoadSession').addEventListener('click', function () {
-                closeMenus();
-                handleLoadSession();
-            });
-
             document.getElementById('menuLoadSessionFolder').addEventListener('click', function () {
                 closeMenus();
                 handleLoadSessionFolder();
+            });
+
+            document.getElementById('menuLoadMultiSession').addEventListener('click', function () {
+                closeMenus();
+                handleLoadMultiSession();
             });
 
             document.getElementById('menuLoadSlp').addEventListener('click', async function () {
@@ -9805,100 +9805,76 @@
             }
         }
 
-        async function handleLoadSession() {
+        async function handleLoadMultiSession() {
             try {
-                setStatus('Picking session file...', 'warning');
-                const files = await pickFiles({ accept: '.json' });
-                if (files.length === 0) {
-                    setStatus('No session file selected', 'warning');
+                setStatus('Pick parent folder containing session subfolders...', 'warning');
+                var allFiles = await pickFolder();
+                if (allFiles.length === 0) {
+                    setStatus('No folder selected', 'warning');
                     return;
                 }
 
-                const text = await files[0].text();
-                const data = JSON.parse(text);
+                // Group files by session subdirectory.
+                // Expected structure: parent/session_name/calibration.toml
+                //                     parent/session_name/CamA/video.mp4
+                // webkitRelativePath: "parent/session_name/file" (3 parts = session root file)
+                //                     "parent/session_name/cam/file" (4 parts = camera file)
+                var sessionFiles = {};  // session_name -> [File]
+                for (var i = 0; i < allFiles.length; i++) {
+                    var relPath = allFiles[i].webkitRelativePath || '';
+                    var parts = relPath.split('/');
+                    if (parts.length < 3) continue;  // skip parent-root files
 
-                // Parse cameras
-                let cameras = [];
-                if (data.cameras) {
-                    cameras = parseCalibrationJSON(JSON.stringify({ cameras: data.cameras }));
+                    var sessionName = parts[1];
+                    if (!sessionFiles[sessionName]) sessionFiles[sessionName] = [];
+
+                    // Rewrite webkitRelativePath so it looks like the session folder is the root
+                    // e.g. "parent/sess1/calib.toml" -> "sess1/calib.toml"
+                    //       "parent/sess1/CamA/vid.mp4" -> "sess1/CamA/vid.mp4"
+                    var rewrittenPath = parts.slice(1).join('/');
+                    var wrappedFile = new File([allFiles[i]], allFiles[i].name, { type: allFiles[i].type });
+                    Object.defineProperty(wrappedFile, 'webkitRelativePath', { value: rewrittenPath });
+                    sessionFiles[sessionName].push(wrappedFile);
                 }
 
-                // Parse skeleton
-                let skeleton;
-                if (data.skeleton) {
-                    skeleton = new Skeleton(
-                        data.skeleton.name || 'skeleton',
-                        data.skeleton.nodes || [],
-                        data.skeleton.edges || []
-                    );
-                } else {
-                    skeleton = createDemoSkeleton();
-                }
-
-                const tracks = data.tracks || ['track_0'];
-                const session = new Session(cameras, skeleton, tracks);
-
-                // Parse frames
-                if (data.frames) {
-                    for (const frameIdxStr in data.frames) {
-                        const frameIdx = parseInt(frameIdxStr);
-                        const frameData = data.frames[frameIdxStr];
-                        const fg = new FrameGroup(frameIdx);
-
-                        for (const camName in frameData) {
-                            const instances = frameData[camName];
-                            for (let i = 0; i < instances.length; i++) {
-                                const instData = instances[i];
-                                const inst = new Instance(
-                                    instData.points,
-                                    instData.trackIdx || 0,
-                                    instData.type || 'user',
-                                    instData.score || 1.0
-                                );
-                                inst.modified = instData.modified || false;
-                                fg.addInstance(camName, inst);
-                            }
-                        }
-
-                        session.addFrameGroup(fg);
+                // Filter to directories that look like sessions (have a calibration file or camera subdirs)
+                var sessionNames = Object.keys(sessionFiles).filter(function (name) {
+                    var files = sessionFiles[name];
+                    for (var j = 0; j < files.length; j++) {
+                        var rp = files[j].webkitRelativePath;
+                        var p = rp.split('/');
+                        // Has calibration.toml at session root
+                        if (p.length === 2 && p[1].toLowerCase().indexOf('calib') >= 0) return true;
+                        // Has files in camera subdirectories
+                        if (p.length === 3) return true;
                     }
+                    return false;
+                }).sort();
+
+                if (sessionNames.length === 0) {
+                    setStatus('No session subfolders found in selected folder', 'error');
+                    return;
                 }
 
-                // Reconstruct InstanceGroups by grouping instances with the same trackIdx
-                for (const [frameIdx2, fg2] of session.frameGroups) {
-                    const trackInstances = new Map();
-                    for (const [camName, instances] of fg2.instances) {
-                        for (const inst of instances) {
-                            const tIdx = inst.trackIdx || 0;
-                            if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
-                            trackInstances.get(tIdx).push({ camName, instance: inst });
-                        }
-                    }
-                    if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, []);
-                    for (const [trackIdx, entries] of trackInstances) {
-                        const group = new InstanceGroup(Date.now() + trackIdx, trackIdx); // identityId = trackIdx for backwards compat
-                        for (const e of entries) group.addInstance(e.camName, e.instance);
-                        session.instanceGroups.get(frameIdx2).push(group);
-                    }
+                showLoading('Loading ' + sessionNames.length + ' sessions...');
+                console.log('[multi-session] Found sessions:', sessionNames);
+
+                // Load each session sequentially using the single-session loader
+                for (var si = 0; si < sessionNames.length; si++) {
+                    var sName = sessionNames[si];
+                    showLoading('Loading session ' + (si + 1) + '/' + sessionNames.length + ': ' + sName + '...');
+                    console.log('[multi-session] Loading session:', sName);
+                    await handleLoadSessionFolderPerCamera(sessionFiles[sName]);
                 }
 
-                state.session = session;
-                if (state.sessions.indexOf(state.session) < 0) {
-                    state.sessions.push(state.session);
-                    state.activeSessionIdx = state.sessions.length - 1;
-                }
-                updateInfoPanel();
-                setStatus('Session loaded (' + cameras.length + ' cameras, ' + session.numFrames + ' frames)', 'success');
+                hideLoading();
+                setStatus('Loaded ' + sessionNames.length + ' sessions', 'success');
+                populateSessionStrip();
 
-                // Rebuild 3D viewport
-                if (viewport3d) {
-                    viewport3d.cameras = cameras;
-                    viewport3d.addCameraPyramids();
-                    viewport3d.fitToScene();
-                }
             } catch (err) {
-                console.error('Failed to load session:', err);
-                setStatus('Session error: ' + err.message, 'error');
+                console.error('[multi-session] Error:', err);
+                hideLoading();
+                setStatus('Multi-session error: ' + err.message, 'error');
             }
         }
 
@@ -10089,35 +10065,6 @@
 
                 leftBubble.appendChild(leftOptions);
                 columns.appendChild(leftBubble);
-
-                // Right bubble: Multi-Session
-                var rightBubble = document.createElement('div');
-                rightBubble.style.cssText = bubbleStyle;
-
-                var rightTitle = document.createElement('div');
-                rightTitle.style.cssText = groupTitleStyle;
-                rightTitle.textContent = 'Multi-Session';
-                rightBubble.appendChild(rightTitle);
-
-                var rightOptions = document.createElement('div');
-                rightOptions.style.cssText = 'display:flex;gap:10px;justify-content:center;';
-
-                rightOptions.appendChild(makeOption(
-                    'Per-Camera SLP',
-                    'One SLP + multiple videos per camera.',
-                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} v_sess1.mp4\n\u2502   \u251C\u2500\u2500 \u{1F3AC} v_sess2.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} v_sess1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} v_sess2.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
-                    'per-camera'
-                ));
-
-                rightOptions.appendChild(makeOption(
-                    'Single SLP',
-                    'One SLP in root. Videos in videos/ folder.',
-                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
-                    'single-slp'
-                ));
-
-                rightBubble.appendChild(rightOptions);
-                columns.appendChild(rightBubble);
 
                 card.appendChild(columns);
 
@@ -10467,13 +10414,18 @@
             }
         }
 
-        async function handleLoadSessionFolderPerCamera() {
+        async function handleLoadSessionFolderPerCamera(preloadedFiles) {
             try {
-                setStatus('Pick session folder...', 'warning');
-                var allFiles = await pickFolder();
-                if (allFiles.length === 0) {
-                    setStatus('No folder selected', 'warning');
-                    return;
+                var allFiles;
+                if (preloadedFiles) {
+                    allFiles = preloadedFiles;
+                } else {
+                    setStatus('Pick session folder...', 'warning');
+                    allFiles = await pickFolder();
+                    if (allFiles.length === 0) {
+                        setStatus('No folder selected', 'warning');
+                        return;
+                    }
                 }
 
                 showLoading('Scanning folder...');
