@@ -961,8 +961,13 @@ class VideoController {
         }
 
         // Call overlay drawing callback (e.g., render pose skeletons)
+        // Wrapped in try-catch so seekbar always updates even if overlays fail
         if (this.callbacks.drawOverlays) {
-            this.callbacks.drawOverlays(frameIndex);
+            try {
+                this.callbacks.drawOverlays(frameIndex);
+            } catch (e) {
+                console.error('[seekToFrame] drawOverlays error:', e);
+            }
         }
 
         // Update seekbar position

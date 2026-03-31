@@ -1084,12 +1084,14 @@ var Camera = class {
   tvec;
   matrix;
   distortions;
+  size;
   constructor(options) {
     this.name = options.name;
     this.rvec = options.rvec;
     this.tvec = options.tvec;
     this.matrix = options.matrix;
     this.distortions = options.distortions;
+    this.size = options.size;
   }
 };
 var CameraGroup = class {
@@ -1201,7 +1203,8 @@ function makeCameraFromDict(data) {
     rvec: data.rotation ?? [0, 0, 0],
     tvec: data.translation ?? [0, 0, 0],
     matrix: data.matrix,
-    distortions: data.distortions
+    distortions: data.distortions,
+    size: data.size
   });
 }
 
@@ -4469,20 +4472,22 @@ function serializeSession(session, videos, labeledFrameIndex, identities) {
   const calibration = { metadata: session.cameraGroup.metadata ?? {} };
   session.cameraGroup.cameras.forEach((camera, idx) => {
     const key = camera.name ?? String(idx);
-    calibration[key] = {
+    const camData = {
       name: camera.name ?? key,
       rotation: camera.rvec,
       translation: camera.tvec,
       matrix: camera.matrix,
       distortions: camera.distortions
     };
+    if (camera.size) camData.size = camera.size;
+    calibration[key] = camData;
   });
   const camcorder_to_video_idx_map = {};
   for (const [camera, video] of session.videoByCamera.entries()) {
-    const cameraKey = cameraKeyForSession(camera, session);
+    const cameraIndex = session.cameraGroup.cameras.indexOf(camera);
     const videoIndex = videos.indexOf(video);
-    if (videoIndex >= 0) {
-      camcorder_to_video_idx_map[cameraKey] = videoIndex;
+    if (cameraIndex >= 0 && videoIndex >= 0) {
+      camcorder_to_video_idx_map[String(cameraIndex)] = videoIndex;
     }
   }
   const frame_group_dicts = [];
@@ -4811,7 +4816,15 @@ function writeEmbeddedVideos(file, labels, embeddedVideoData) {
 function createMatrixDataset(file, name, rows, fieldNames, dtype) {
   const rowCount = rows.length;
   const colCount = fieldNames.length;
-  const data = rows.flat();
+  const TypedArray = dtype.includes("i") ? dtype.includes("4") ? Int32Array : Float64Array : Float64Array;
+  const data = new TypedArray(rowCount * colCount);
+  for (let i = 0; i < rowCount; i++) {
+    const row = rows[i];
+    const offset = i * colCount;
+    for (let j = 0; j < colCount; j++) {
+      data[offset + j] = row[j];
+    }
+  }
   file.create_dataset({ name, data, shape: [rowCount, colCount], dtype });
   const dataset = file.get(name);
   setStringAttr(dataset, "field_names", JSON.stringify(fieldNames));
@@ -5249,7 +5262,8 @@ function readSessions(dataset, videos, skeletons, labeledFrames, identities) {
         rvec: cameraData.rotation ?? [0, 0, 0],
         tvec: cameraData.translation ?? [0, 0, 0],
         matrix: cameraData.matrix,
-        distortions: cameraData.distortions
+        distortions: cameraData.distortions,
+        size: cameraData.size
       });
       cameraGroup.cameras.push(camera);
       cameraMap.set(String(key), camera);
@@ -5257,7 +5271,13 @@ function readSessions(dataset, videos, skeletons, labeledFrames, identities) {
     const session = new RecordingSession({ cameraGroup, metadata: parsed.metadata ?? {} });
     const map = asRecord(parsed.camcorder_to_video_idx_map);
     for (const [cameraKey, videoIdx] of Object.entries(map)) {
-      const camera = cameraMap.get(cameraKey);
+      let camera = cameraMap.get(cameraKey);
+      if (!camera) {
+        const idx = Number(cameraKey);
+        if (!isNaN(idx) && idx >= 0 && idx < cameraGroup.cameras.length) {
+          camera = cameraGroup.cameras[idx];
+        }
+      }
       const video = videos[Number(videoIdx)];
       if (camera && video) {
         session.addVideo(video, camera);

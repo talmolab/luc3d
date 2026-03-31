@@ -1357,6 +1357,7 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
             tvec: cam.tvec || [0, 0, 0],
             matrix: cam.matrix,
             distortions: cam.dist,
+            size: cam.size,
         });
         sioCameras.push(sioCam);
         lucidCamToSioCam.set(cam.name, sioCam);
@@ -1400,18 +1401,28 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
 
     // Attach lucid-specific session metadata
     sioSession.metadata = sioSession.metadata || {};
+    console.log('[buildSlpLabelsAllViews] Saving session name:', session.name);
     sioSession.metadata.lucid = {
+        sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
         trackIdentityMap: Array.from(session.trackIdentityMap.entries()),
         frameIdentityMap: session.frameIdentityMap
             ? Array.from(session.frameIdentityMap.entries())
             : [],
+        skeleton: {
+            name: session.skeleton.name || 'skeleton',
+            nodes: session.skeleton.nodes,
+            edges: session.skeleton.edges,
+        },
+        tracks: session.tracks,
     };
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });
 
     // 6. Build labeled frames and session FrameGroups
+    //    Key optimization: create each SIO.Instance once and share between
+    //    LabeledFrames and InstanceGroups to avoid doubling memory usage.
     var labeledFrames = [];
     var numNodes = session.skeleton.nodes.length;
     var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
@@ -1423,20 +1434,28 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
         var frameIdx = allFrameIndices[fi];
         var fg = session.frameGroups.get(frameIdx);
 
-        // Build combined per-camera instance list (grouped + ungrouped)
-        var combinedInstances = new Map();
-        for (var [camName, camInsts] of fg.instances) {
-            combinedInstances.set(camName, camInsts.slice());
-        }
-        for (var [camName2, ulList] of fg.unlinkedInstances) {
-            if (!combinedInstances.has(camName2)) combinedInstances.set(camName2, []);
-            var arr = combinedInstances.get(camName2);
-            for (var u = 0; u < ulList.length; u++) arr.push(ulList[u].instance);
+        // Build SIO instances once per lucid instance, keyed by object identity
+        // so we can reuse them in both LabeledFrames and InstanceGroups
+        var lucidToSio = new Map(); // lucid Instance → SIO Instance
+
+        function _getOrCreateSioInst(inst) {
+            var existing = lucidToSio.get(inst);
+            if (existing) return existing;
+            var pts = _buildSioPoints(inst, numNodes);
+            var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+            var sioInst;
+            if (inst.type === 'user') {
+                sioInst = new SIO.Instance({ points: pts, skeleton: skeleton, track: track });
+            } else {
+                sioInst = new SIO.PredictedInstance({ points: pts, skeleton: skeleton, track: track, score: inst.score || 0 });
+            }
+            lucidToSio.set(inst, sioInst);
+            return sioInst;
         }
 
-        // Create per-camera LabeledFrames
+        // Create per-camera LabeledFrames from grouped + ungrouped instances
         var lfByCamera = new Map();
-        for (var [camName3, camInstances] of combinedInstances) {
+        for (var [camName3, camInstances] of fg.instances) {
             var sioCam = lucidCamToSioCam.get(camName3);
             var camIdx = session.cameras.findIndex(function (c) { return c.name === camName3; });
             var video = sioVideos[camIdx];
@@ -1444,20 +1463,13 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
 
             var frameInstances = [];
             for (var ii = 0; ii < camInstances.length; ii++) {
-                var inst = camInstances[ii];
-                var isUser = (inst.type === 'user');
-                var pts = _buildSioPoints(inst, numNodes);
-                var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+                frameInstances.push(_getOrCreateSioInst(camInstances[ii]));
+            }
 
-                if (isUser) {
-                    frameInstances.push(new SIO.Instance({
-                        points: pts, skeleton: skeleton, track: track,
-                    }));
-                } else {
-                    frameInstances.push(new SIO.PredictedInstance({
-                        points: pts, skeleton: skeleton, track: track, score: inst.score || 0,
-                    }));
-                }
+            // Also add ungrouped instances for this camera
+            var ulList = fg.getUnlinkedInstances(camName3);
+            for (var ui = 0; ui < ulList.length; ui++) {
+                frameInstances.push(_getOrCreateSioInst(ulList[ui].instance));
             }
 
             if (frameInstances.length > 0) {
@@ -1467,8 +1479,26 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
                 lfLookup.set(camIdx + ':' + frameIdx, lf);
             }
         }
+        // Handle ungrouped instances for cameras that had no grouped instances
+        for (var [ulCam, ulInstList] of fg.unlinkedInstances) {
+            if (fg.instances.has(ulCam)) continue; // already handled above
+            var ulSioCam = lucidCamToSioCam.get(ulCam);
+            var ulCamIdx = session.cameras.findIndex(function (c) { return c.name === ulCam; });
+            var ulVideo = sioVideos[ulCamIdx];
+            if (!ulVideo || !ulSioCam) continue;
+            var ulFrameInsts = [];
+            for (var ui2 = 0; ui2 < ulInstList.length; ui2++) {
+                ulFrameInsts.push(_getOrCreateSioInst(ulInstList[ui2].instance));
+            }
+            if (ulFrameInsts.length > 0) {
+                var ulLf = new SIO.LabeledFrame({ video: ulVideo, frameIdx: frameIdx, instances: ulFrameInsts });
+                labeledFrames.push(ulLf);
+                lfByCamera.set(ulSioCam, ulLf);
+                lfLookup.set(ulCamIdx + ':' + frameIdx, ulLf);
+            }
+        }
 
-        // Build sleap-io InstanceGroups from lucid groups (with Instance3D + Identity)
+        // Build sleap-io InstanceGroups — reuse SIO instances from above
         var sioInstanceGroups = [];
         var lucidGroups = session.instanceGroups.get(frameIdx) || [];
         for (var gi = 0; gi < lucidGroups.length; gi++) {
@@ -1477,15 +1507,8 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
             for (var [gCamName, gInst] of group.instances) {
                 var gSioCam = lucidCamToSioCam.get(gCamName);
                 if (!gSioCam) continue;
-                var gPts = _buildSioPoints(gInst, numNodes);
-                var gTrack = (gInst.trackIdx >= 0 && gInst.trackIdx < tracks.length) ? tracks[gInst.trackIdx] : null;
-                var sioInst;
-                if (gInst.type === 'user') {
-                    sioInst = new SIO.Instance({ points: gPts, skeleton: skeleton, track: gTrack });
-                } else {
-                    sioInst = new SIO.PredictedInstance({ points: gPts, skeleton: skeleton, track: gTrack, score: gInst.score || 0 });
-                }
-                instanceByCamera.set(gSioCam, sioInst);
+                // Reuse the SIO instance already created for the LabeledFrame
+                instanceByCamera.set(gSioCam, _getOrCreateSioInst(gInst));
             }
 
             // Build Instance3D from group.points3d
@@ -1500,30 +1523,27 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
                 identity = lucidIdToSioId.get(group.identityId);
             }
 
-            // Collect per-instance lucid metadata (nulledNodes, occluded)
-            var igLucidMeta = {};
-            var hasNulled = false, hasOccluded = false;
+            // Collect full per-instance lucid metadata for precise round-trip
+            var igLucidMeta = { instanceMeta: {} };
             for (var [metaCam, metaInst] of group.instances) {
+                var instMeta = {
+                    trackIdx: metaInst.trackIdx,
+                    type: metaInst.type || 'user',
+                    score: metaInst.score || 0,
+                    modified: metaInst.modified || false,
+                };
                 if (metaInst.nulledNodes && metaInst.nulledNodes.size > 0) {
-                    if (!igLucidMeta.nulledNodes) igLucidMeta.nulledNodes = {};
-                    igLucidMeta.nulledNodes[metaCam] = Array.from(metaInst.nulledNodes);
-                    hasNulled = true;
+                    instMeta.nulledNodes = Array.from(metaInst.nulledNodes);
                 }
                 if (metaInst.occluded) {
                     var hasAnyOcc = false;
                     for (var ok in metaInst.occluded) { if (metaInst.occluded[ok]) { hasAnyOcc = true; break; } }
-                    if (hasAnyOcc) {
-                        if (!igLucidMeta.occluded) igLucidMeta.occluded = {};
-                        igLucidMeta.occluded[metaCam] = metaInst.occluded;
-                        hasOccluded = true;
-                    }
+                    if (hasAnyOcc) instMeta.occluded = metaInst.occluded;
                 }
+                igLucidMeta.instanceMeta[metaCam] = instMeta;
             }
 
-            var igMetadata = {};
-            if (hasNulled || hasOccluded) {
-                igMetadata.lucid = igLucidMeta;
-            }
+            var igMetadata = { lucid: igLucidMeta };
 
             sioInstanceGroups.push(new SIO.InstanceGroup({
                 instanceByCamera: instanceByCamera,
@@ -1532,6 +1552,9 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
                 metadata: igMetadata,
             }));
         }
+
+        // Release per-frame map to free memory as we go
+        lucidToSio = null;
 
         if (sioInstanceGroups.length > 0 || lfByCamera.size > 0) {
             sioSession.frameGroups.set(frameIdx, new SIO.FrameGroup({
