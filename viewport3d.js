@@ -1024,27 +1024,49 @@ class Viewport3D {
      * Pass null to clear all highlights.
      * @param {string|null} cameraName
      */
+    /**
+     * Set which camera names have no associated video. These are rendered in red.
+     * @param {Set<string>|Array<string>} names
+     */
+    setMissingVideoCameras(names) {
+        this._missingVideoCameras = new Set(names);
+        this.highlightCamera(this.selectedCamera);
+    }
+
     highlightCamera(cameraName) {
         if (!this._cameraGroup) return;
-        var self = this;
+        var missingSet = this._missingVideoCameras || new Set();
         this._cameraGroup.traverse(function (child) {
             if (child.material && child.material.visible !== false) {
                 var name = child.name || '';
                 var isUpLine = name.startsWith('camUp_');
-                var belongsToCamera = name === 'camera_' + cameraName ||
-                    name === 'cameraBase_' + cameraName ||
-                    name === 'label_' + cameraName ||
-                    name === 'camSphere_' + cameraName ||
-                    name === 'camUp_' + cameraName;
-                if (cameraName && belongsToCamera) {
-                    child.material.color.set(isUpLine ? 0x66aaff : 0xff4444);
+
+                // Determine which camera this object belongs to
+                var objCamName = null;
+                var prefixes = ['camera_', 'cameraBase_', 'label_', 'camSphere_', 'camUp_'];
+                for (var pi = 0; pi < prefixes.length; pi++) {
+                    if (name.startsWith(prefixes[pi])) {
+                        objCamName = name.substring(prefixes[pi].length);
+                        break;
+                    }
+                }
+
+                var isSelected = cameraName && objCamName === cameraName;
+                var isMissing = objCamName && missingSet.has(objCamName);
+
+                if (isSelected) {
+                    // Selected: green
+                    child.material.color.set(isUpLine ? 0x66ffaa : 0x4caf50);
                     child.material.opacity = 1.0;
+                } else if (isMissing) {
+                    // Missing video: red
+                    child.material.color.set(isUpLine ? 0xff6666 : 0xef5350);
+                    child.material.opacity = 0.85;
                 } else if (isUpLine) {
-                    // Reset up-line to blue
                     child.material.color.set(0x4488ff);
                     child.material.opacity = 0.9;
                 } else {
-                    // Reset to default yellow
+                    // Default yellow
                     child.material.color.set(0xffdd44);
                     child.material.opacity = name.startsWith('camSphere_') ? 0.8 : 0.7;
                 }

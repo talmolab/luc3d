@@ -257,24 +257,51 @@ body {
 
 /* Session strip sidebar (far left) */
 .session-strip {
-    width: 48px;
+    width: 64px;
+    min-width: 40px;
     display: flex;
     flex-direction: column;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     flex-shrink: 0;
     overflow: hidden;
+    transition: width 0.15s ease, opacity 0.15s ease;
+    position: relative;
 }
 
-.session-strip-header {
-    padding: 6px 4px;
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-muted);
-    text-align: center;
-    border-bottom: 1px solid var(--border-color);
-    flex-shrink: 0;
+.session-strip-resize {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 4px;
+    height: 100%;
+    cursor: col-resize;
+    background: var(--border-color);
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 5;
+}
+
+.session-strip-resize:hover,
+.session-strip-resize.dragging {
+    opacity: 1;
+}
+
+.session-strip.session-strip-hidden {
+    width: 0;
+    min-width: 0;
+    border-right: none;
+    opacity: 0;
+    pointer-events: none;
+}
+
+#sessionHoverZone {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 6px;
+    height: 100%;
+    z-index: 9999;
 }
 
 .session-strip-list {
@@ -291,7 +318,7 @@ body {
     margin: 2px 4px;
     cursor: pointer;
     border-radius: 4px;
-    border: 2px solid transparent;
+    border: 2px solid var(--border-color);
     transition: background var(--transition-fast), border-color var(--transition-fast);
     position: relative;
 }
@@ -413,6 +440,11 @@ body {
   outline: 1px solid var(--accent);
 }
 
+.view-strip-item.strip-selected {
+  outline: 2px solid rgba(255, 221, 68, 0.5);
+  background: rgba(255, 221, 68, 0.1);
+}
+
 .view-strip-item.dragging {
   opacity: 0.5;
 }
@@ -508,6 +540,24 @@ body {
   position: relative;
   overflow: hidden;
   transition: width var(--transition-normal);
+}
+
+.viewport3d-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.viewport3d-message.hidden {
+  display: none;
 }
 
 .viewport3d-container.collapsed {
