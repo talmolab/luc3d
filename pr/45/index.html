@@ -150,7 +150,7 @@
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
-                <button class="toolbar-btn" id="tbTriangulate" title="Triangulate current frame (T)">Triangulate</button>
+                <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate</button>
                 <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All</button>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
@@ -4093,6 +4093,21 @@
                         e.preventDefault();
                         setGridMode();
                         showViewIndicator();
+                        break;
+                    }
+                    case 't': {
+                        e.preventDefault();
+                        var selGroup = interactionManager ? interactionManager.selectedInstanceGroup : null;
+                        if (selGroup) {
+                            reTriangulateGroup(selGroup);
+                            setReprojErrorVisible(true);
+                            drawAllOverlays(state.currentFrame);
+                            update3DViewport(state.currentFrame);
+                            updateInfoPanel();
+                            setStatus('Triangulated selected group', 'success');
+                        } else {
+                            setStatus('No instance group selected', 'warn');
+                        }
                         break;
                     }
                 }
