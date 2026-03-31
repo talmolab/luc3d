@@ -9805,70 +9805,100 @@
             }
         }
 
+        /**
+         * Recursively enumerate all files under a FileSystemDirectoryHandle.
+         * Returns File objects with webkitRelativePath set to rootName/relative/path.
+         */
+        async function enumerateDirectoryHandle(dirHandle, rootName, prefix) {
+            var files = [];
+            for await (var [name, handle] of dirHandle) {
+                if (handle.kind === 'file') {
+                    var file = await handle.getFile();
+                    var relPath = prefix ? prefix + '/' + name : rootName + '/' + name;
+                    var wrappedFile = new File([file], file.name, { type: file.type, lastModified: file.lastModified });
+                    Object.defineProperty(wrappedFile, 'webkitRelativePath', { value: relPath });
+                    files.push(wrappedFile);
+                } else if (handle.kind === 'directory') {
+                    var subPrefix = prefix ? prefix + '/' + name : rootName + '/' + name;
+                    var subFiles = await enumerateDirectoryHandle(handle, rootName, subPrefix);
+                    files = files.concat(subFiles);
+                }
+            }
+            return files;
+        }
+
         async function handleLoadMultiSession() {
             try {
                 setStatus('Pick parent folder containing session subfolders...', 'warning');
-                var allFiles = await pickFolder();
-                if (allFiles.length === 0) {
-                    setStatus('No folder selected', 'warning');
+
+                // Use File System Access API to get directory handle
+                // This lets us enumerate each session individually, avoiding
+                // the browser dropping files when webkitdirectory returns too many
+                var parentHandle;
+                if (window.showDirectoryPicker) {
+                    try {
+                        parentHandle = await window.showDirectoryPicker({ mode: 'read' });
+                    } catch (e) {
+                        if (e.name === 'AbortError') {
+                            setStatus('No folder selected', 'warning');
+                            return;
+                        }
+                        throw e;
+                    }
+                } else {
+                    // Fallback for browsers without File System Access API
+                    setStatus('This browser does not support showDirectoryPicker. Use Chrome or Edge.', 'error');
                     return;
                 }
 
-                // Group files by session subdirectory.
-                // Expected structure: parent/session_name/calibration.toml
-                //                     parent/session_name/CamA/video.mp4
-                // webkitRelativePath: "parent/session_name/file" (3 parts = session root file)
-                //                     "parent/session_name/cam/file" (4 parts = camera file)
-                var sessionFiles = {};  // session_name -> [File]
-                for (var i = 0; i < allFiles.length; i++) {
-                    var relPath = allFiles[i].webkitRelativePath || '';
-                    var parts = relPath.split('/');
-                    if (parts.length < 3) continue;  // skip parent-root files
+                showLoading('Scanning for sessions...');
 
-                    var sessionName = parts[1];
-                    if (!sessionFiles[sessionName]) sessionFiles[sessionName] = [];
-
-                    // Rewrite webkitRelativePath so it looks like the session folder is the root
-                    // e.g. "parent/sess1/calib.toml" -> "sess1/calib.toml"
-                    //       "parent/sess1/CamA/vid.mp4" -> "sess1/CamA/vid.mp4"
-                    var rewrittenPath = parts.slice(1).join('/');
-                    var wrappedFile = new File([allFiles[i]], allFiles[i].name, { type: allFiles[i].type });
-                    Object.defineProperty(wrappedFile, 'webkitRelativePath', { value: rewrittenPath });
-                    sessionFiles[sessionName].push(wrappedFile);
+                // Find session subdirectories (directories that contain calibration or camera subdirs)
+                var sessionDirs = [];  // { name, handle }
+                for await (var [name, handle] of parentHandle) {
+                    if (handle.kind === 'directory') {
+                        // Quick check: does this look like a session?
+                        var isSession = false;
+                        for await (var [subName, subHandle] of handle) {
+                            if (subHandle.kind === 'file' && subName.toLowerCase().indexOf('calib') >= 0) {
+                                isSession = true;
+                                break;
+                            }
+                            if (subHandle.kind === 'directory') {
+                                isSession = true;
+                                break;
+                            }
+                        }
+                        if (isSession) {
+                            sessionDirs.push({ name: name, handle: handle });
+                        }
+                    }
                 }
 
-                // Filter to directories that look like sessions (have a calibration file or camera subdirs)
-                var sessionNames = Object.keys(sessionFiles).filter(function (name) {
-                    var files = sessionFiles[name];
-                    for (var j = 0; j < files.length; j++) {
-                        var rp = files[j].webkitRelativePath;
-                        var p = rp.split('/');
-                        // Has calibration.toml at session root
-                        if (p.length === 2 && p[1].toLowerCase().indexOf('calib') >= 0) return true;
-                        // Has files in camera subdirectories
-                        if (p.length === 3) return true;
-                    }
-                    return false;
-                }).sort();
+                sessionDirs.sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
 
-                if (sessionNames.length === 0) {
+                if (sessionDirs.length === 0) {
+                    hideLoading();
                     setStatus('No session subfolders found in selected folder', 'error');
                     return;
                 }
 
-                showLoading('Loading ' + sessionNames.length + ' sessions...');
-                console.log('[multi-session] Found sessions:', sessionNames);
+                showLoading('Loading ' + sessionDirs.length + ' sessions...');
+                console.log('[multi-session] Found sessions:', sessionDirs.map(function (d) { return d.name; }));
 
-                // Load each session sequentially using the single-session loader
-                for (var si = 0; si < sessionNames.length; si++) {
-                    var sName = sessionNames[si];
-                    showLoading('Loading session ' + (si + 1) + '/' + sessionNames.length + ': ' + sName + '...');
-                    console.log('[multi-session] Loading session:', sName);
-                    await handleLoadSessionFolderPerCamera(sessionFiles[sName]);
+                // Load each session by enumerating its files individually
+                for (var si = 0; si < sessionDirs.length; si++) {
+                    var sess = sessionDirs[si];
+                    showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
+                    console.log('[multi-session] Enumerating session:', sess.name);
+
+                    var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
+                    console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
+                    await handleLoadSessionFolderPerCamera(sessionFiles);
                 }
 
                 hideLoading();
-                setStatus('Loaded ' + sessionNames.length + ' sessions', 'success');
+                setStatus('Loaded ' + sessionDirs.length + ' sessions', 'success');
                 populateSessionStrip();
 
             } catch (err) {
@@ -10535,6 +10565,9 @@
                 var matchedCameraDirs = [];  // { dirName, camName, videos, slps }
                 var missingCameras = [];
 
+                console.log('[session-folder] Camera names from calibration:', cameras.map(function(c) { return c.name; }));
+                console.log('[session-folder] Directory names found:', Object.keys(cameraDirs));
+
                 if (cameras.length > 0) {
                     for (var ci = 0; ci < cameras.length; ci++) {
                         var cam = cameras[ci];
@@ -10542,6 +10575,7 @@
                         var found = false;
                         for (var dirName in cameraDirs) {
                             var dirLower = cameraDirs[dirName].dirNameLower;
+                            console.log('[session-folder] Matching cam "' + cam.name + '" (lower: "' + camLower + '") vs dir "' + dirName + '" (lower: "' + dirLower + '"): exact=' + (dirLower === camLower) + ' cam+=' + (dirLower === 'cam' + camLower) + ' strip=' + (dirLower.replace('cam', '') === camLower));
                             if (dirLower === camLower || dirLower === 'cam' + camLower || dirLower.replace('cam', '') === camLower) {
                                 // Include even if no videos — will show as "None" in assignment panel
                                 matchedCameraDirs.push({
@@ -10590,14 +10624,14 @@
                     var popupSections = [];
                     if (missingDirItems.length > 0) {
                         popupSections.push({
-                            title: 'Missing Camera Directories',
+                            title: 'Missing Camera Directories' + (folderName ? ' — ' + folderName : ''),
                             subtitle: 'The following cameras from calibration have no matching directory.',
                             items: missingDirItems
                         });
                     }
                     if (missingVideoItems.length > 0) {
                         popupSections.push({
-                            title: 'Missing Video Files',
+                            title: 'Missing Video Files' + (folderName ? ' — ' + folderName : ''),
                             subtitle: 'The following cameras have SLP annotations but no video file.',
                             items: missingVideoItems
                         });
