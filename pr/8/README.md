@@ -1,13 +1,12 @@
-# lucid (Label Unification and Correspondence in 3D Annotation GUI)
+# luc3d (Label Unification and Correspondence in 3D Annotation GUI)
 Label Unification and Correspondence in 3D Annotation GUI in Web Browser
-
-# LUCID — Label Unification and Correspondence in 3D
-
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ![lucid](https://github.com/user-attachments/assets/eba5d7f9-51ba-4d17-9fad-1ebffd6cdbf2)
 
-![GUI image](https://github.com/user-attachments/assets/d102ab51-6951-4100-8df5-b64d390e98cd)
+![lucidGUI](https://github.com/user-attachments/assets/bc89788a-bf2b-4816-89ff-b23fa4ef0b5b)
+
+Full documentation, tutorials, and user guides: (https://talmolab.github.io/luc3d-docs)
 
 ## Architecture
 - `index.html` — Main SPA with all app logic in inline script
@@ -30,7 +29,7 @@ python3 -m http.server 8080 --bind 0.0.0.0
 ```
 ## Web Deployment from Main 
 ```bash
-https://talmolab.github.io/lucid/
+https://talmolab.github.io/luc3d/
 ```
 
 ## Dependencies (CDN only)

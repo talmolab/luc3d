@@ -6,20 +6,76 @@
  * All functions are globals (no imports/exports).
  */
 
-// Track colors (8-color palette from slp-viewer, cycling)
+// SLEAP default "alphabet" palette — 26 visually distinct colors (Green-Armytage)
+// Red entries removed: red is reserved exclusively for ReprojectedInstances.
 const TRACK_COLORS = [
-    '#667eea',  // blue
-    '#4ade80',  // green
-    '#fbbf24',  // yellow
-    '#f472b6',  // pink
-    '#06b6d4',  // cyan
-    '#f97316',  // orange
-    '#a855f7',  // purple
-    '#ef4444',  // red
+    '#ff6b6b',  // red
+    '#4ecdc4',  // teal
+    '#ffe66d',  // yellow
+    '#a78bfa',  // purple
+    '#2bce48',  // green
+    '#ff9f43',  // orange
+    '#5ef1f2',  // cyan
+    '#ff6eb4',  // hot pink
+    '#69db7c',  // lime
+    '#ffa405',  // amber
+    '#74b9ff',  // sky blue
+    '#f0a3ff',  // lavender
+    '#ffd93d',  // gold
+    '#6bcb77',  // emerald
+    '#ff8a5c',  // salmon
+    '#a8e6cf',  // mint
+    '#dda0dd',  // plum
+    '#87ceeb',  // light blue
+    '#ffb347',  // tangerine
+    '#98fb98',  // pale green
 ];
+
+// Fixed color for all ReprojectedInstances
+const REPROJECTION_COLOR = '#e53e3e';
+
+// Fixed color for ungrouped UserInstances
+const UNGROUPED_USER_COLOR = '#F8B195';
 
 function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
+}
+
+function getGroupColor(group, session, useIdentity, frameIdx) {
+    if (useIdentity && session) {
+        // Try group's direct identity first
+        if (group.identityId >= 0) {
+            var identity = session.getIdentity(group.identityId);
+            if (identity && identity.color) return identity.color;
+        }
+    }
+    // Fallback: color by identityId index, or first instance's trackIdx
+    if (group.identityId >= 0) {
+        return getTrackColor(group.identityId);
+    }
+    // Last resort: use first instance's trackIdx for color
+    for (var [, inst] of group.instances) {
+        if (inst.trackIdx != null) return getTrackColor(inst.trackIdx);
+    }
+    return getTrackColor(0);
+}
+
+/**
+ * Get color for an instance using the track→identity map.
+ * Used for unlinked/ungrouped predictions.
+ */
+function getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) {
+    if (useIdentity && session && instance.trackIdx != null) {
+        var identity = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
+        if (identity && identity.color) return identity.color;
+    }
+    return getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
+}
+
+function getLineDashPattern(style) {
+    if (style === 'dotted') return [2, 3];
+    if (style === 'dashed') return [6, 4];
+    return []; // solid
 }
 
 // ============================================
@@ -102,6 +158,142 @@ function hexToRgb(hex) {
     };
 }
 
+/** Lighten a hex color by a factor (0-1). factor=0.4 means 40% closer to white. */
+function brightenColor(hex, factor) {
+    const rgb = hexToRgb(hex);
+    const r = Math.min(255, Math.round(rgb.r + (255 - rgb.r) * factor));
+    const g = Math.min(255, Math.round(rgb.g + (255 - rgb.g) * factor));
+    const b = Math.min(255, Math.round(rgb.b + (255 - rgb.b) * factor));
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+/** Desaturate a hex color by blending toward mid-gray. amount=0.5 means 50% gray. */
+function desaturateColor(hex, amount) {
+    const rgb = hexToRgb(hex);
+    const gray = 128;
+    const r = Math.round(rgb.r + (gray - rgb.r) * amount);
+    const g = Math.round(rgb.g + (gray - rgb.g) * amount);
+    const b = Math.round(rgb.b + (gray - rgb.b) * amount);
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+/**
+ * Compute a complementary (opposite hue) color for visual contrast.
+ * Shifts hue by 180 degrees in HSL space.
+ * @param {string} hex - Hex color string
+ * @returns {string} Complementary hex color
+ */
+function complementaryColor(hex) {
+    var rgb = hexToRgb(hex);
+    var r = rgb.r / 255, g = rgb.g / 255, b = rgb.b / 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var h, s, l = (max + min) / 2;
+    if (max === min) {
+        h = 0; s = 0;
+    } else {
+        var d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+        else if (max === g) h = ((b - r) / d + 2) / 6;
+        else h = ((r - g) / d + 4) / 6;
+    }
+    // Shift hue by 180 degrees, boost saturation
+    h = (h + 0.5) % 1.0;
+    s = Math.min(1.0, s * 1.2 + 0.2);
+    // HSL to RGB
+    function hue2rgb(p, q, t) {
+        if (t < 0) t += 1; if (t > 1) t -= 1;
+        if (t < 1/6) return p + (q - p) * 6 * t;
+        if (t < 1/2) return q;
+        if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+        return p;
+    }
+    var rr, gg, bb;
+    if (s === 0) { rr = gg = bb = l; }
+    else {
+        var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        var p = 2 * l - q;
+        rr = hue2rgb(p, q, h + 1/3);
+        gg = hue2rgb(p, q, h);
+        bb = hue2rgb(p, q, h - 1/3);
+    }
+    var ri = Math.round(rr * 255), gi = Math.round(gg * 255), bi = Math.round(bb * 255);
+    return '#' + ((1 << 24) + (ri << 16) + (gi << 8) + bi).toString(16).slice(1);
+}
+
+// ============================================
+// SLEAP-style label placement
+// ============================================
+
+/**
+ * Compute label offset for a node using SLEAP-style placement.
+ * Finds the largest arc gap between connected edges and places the label
+ * at the bisector angle of that gap.
+ *
+ * @param {number} nodeIdx - Index of the node
+ * @param {Array} canvasPoints - Array of {x, y} or null for each node
+ * @param {Object} skeleton - Skeleton with .edges
+ * @param {string} labelText - The label text (for measuring width)
+ * @param {number} fontSize - Font size in canvas pixels
+ * @param {CanvasRenderingContext2D} ctx - Canvas context (for text measurement)
+ * @returns {{dx: number, dy: number}} Offset from node position
+ */
+function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, fontSize, ctx) {
+    var cp = canvasPoints[nodeIdx];
+    if (!cp) return { dx: fontSize * 0.3, dy: -fontSize * 0.3 };
+
+    // Measure label dimensions
+    var labelWidth = ctx.measureText(labelText).width;
+    var labelHeight = fontSize;
+
+    // Collect angles to neighboring nodes
+    var angles = [];
+    if (skeleton && skeleton.edges) {
+        for (var e = 0; e < skeleton.edges.length; e++) {
+            var edge = skeleton.edges[e];
+            var neighborIdx = -1;
+            if (edge[0] === nodeIdx) neighborIdx = edge[1];
+            else if (edge[1] === nodeIdx) neighborIdx = edge[0];
+            if (neighborIdx < 0) continue;
+            var np = canvasPoints[neighborIdx];
+            if (!np) continue;
+            angles.push(Math.atan2(np.y - cp.y, np.x - cp.x));
+        }
+    }
+
+    // Default: place to the upper-right if no neighbors
+    if (angles.length === 0) {
+        // SLEAP default: shift_angle=0 → shift_factor_x = 0.6-0.5=0.1, shift_factor_y = 0-0.5=-0.5
+        return { dx: labelWidth * 0.1, dy: labelHeight * -0.5 };
+    }
+
+    // Sort angles and find the largest arc gap (SLEAP algorithm)
+    angles.sort(function (a, b) { return a - b; });
+
+    // Append first angle + 2π for wrap-around
+    angles.push(angles[0] + Math.PI * 2);
+
+    var bestGapSize = 0;
+    var bestBisector = 0;
+    for (var i = 0; i < angles.length - 1; i++) {
+        var gapSize = angles[i + 1] - angles[i];
+        var bisector = (angles[i + 1] + angles[i]) / 2;
+        if (gapSize > bestGapSize) {
+            bestGapSize = gapSize;
+            bestBisector = bisector;
+        }
+    }
+
+    // Normalize bisector to [0, 2π)
+    bestBisector = bestBisector % (2 * Math.PI);
+
+    // SLEAP shift factors: (cos(angle) * 0.6) - 0.5
+    var shiftX = (Math.cos(bestBisector) * 0.6) - 0.5;
+    var shiftY = (Math.sin(bestBisector) * 0.6) - 0.5;
+
+    return { dx: labelWidth * shiftX, dy: labelHeight * shiftY };
+}
+
 // ============================================
 // Skeleton rendering
 // ============================================
@@ -129,10 +321,14 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     if (!points || points.length === 0) return;
 
     const color = options.color || getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
+    const edgeColor = options.edgeColor || color;
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
+    const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
     const alpha = options.alpha != null ? options.alpha : 1.0;
     const showLabels = !!options.showLabels;
+    const lineStyle = options.lineStyle || (options.dashed ? 'dashed' : 'solid');
+    const dashPattern = getLineDashPattern(lineStyle);
 
     const vw = options.videoWidth;
     const vh = options.videoHeight;
@@ -145,8 +341,15 @@ function drawSkeleton(ctx, instance, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const nodeSize = baseNodeSize * scale;
-    const lineWidth = baseLineWidth * scale;
+    // Screen-relative label sizing: scale baseLabelSize so labels appear the
+    // same visual size regardless of canvas backing resolution.
+    const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
+    const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
+
+    const nodeShape = options.nodeShape || 'circle';
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
+    const nulledNodes = instance.nulledNodes || null;
 
     // Pre-compute canvas positions for each point
     const canvasPoints = new Array(points.length);
@@ -171,90 +374,121 @@ function drawSkeleton(ctx, instance, skeleton, options) {
 
     // --- 1. Draw edges ---
     if (skeleton.edges) {
-        ctx.lineWidth = lineWidth;
         ctx.lineCap = 'round';
-        for (let i = 0; i < skeleton.edges.length; i++) {
-            const edge = skeleton.edges[i];
-            const srcIdx = edge[0];
-            const dstIdx = edge[1];
-            const src = canvasPoints[srcIdx];
-            const dst = canvasPoints[dstIdx];
-            if (src && dst) {
-                const eitherOccluded = occluded[srcIdx] || occluded[dstIdx];
-                if (eitherOccluded) {
-                    ctx.strokeStyle = color;
-                    ctx.globalAlpha = alpha * 0.35;
-                    ctx.setLineDash([4 * scale, 4 * scale]);
-                } else {
-                    ctx.strokeStyle = color;
-                    ctx.globalAlpha = alpha;
-                    ctx.setLineDash([]);
+        if (dashPattern.length) ctx.setLineDash(dashPattern);
+        // Draw normal edges first, then grayed edges
+        for (var pass = 0; pass < 2; pass++) {
+            ctx.lineWidth = lineWidth;
+            ctx.beginPath();
+            var hasStrokes = false;
+            for (let i = 0; i < skeleton.edges.length; i++) {
+                const edge = skeleton.edges[i];
+                const srcIdx = edge[0];
+                const dstIdx = edge[1];
+                const src = canvasPoints[srcIdx];
+                const dst = canvasPoints[dstIdx];
+                if (!src || !dst) continue;
+                var srcNulled = nulledNodes && nulledNodes.has(srcIdx);
+                var dstNulled = nulledNodes && nulledNodes.has(dstIdx);
+                var edgeGray = srcNulled || dstNulled;
+                if (pass === 0 && !edgeGray) {
+                    ctx.moveTo(src.x, src.y);
+                    ctx.lineTo(dst.x, dst.y);
+                    hasStrokes = true;
+                } else if (pass === 1 && edgeGray) {
+                    ctx.moveTo(src.x, src.y);
+                    ctx.lineTo(dst.x, dst.y);
+                    hasStrokes = true;
                 }
-                ctx.beginPath();
-                ctx.moveTo(src.x, src.y);
-                ctx.lineTo(dst.x, dst.y);
+            }
+            if (hasStrokes) {
+                if (pass === 0) {
+                    ctx.strokeStyle = edgeColor;
+                } else {
+                    ctx.strokeStyle = '#888888';
+                    ctx.globalAlpha = alpha * 0.4;
+                }
                 ctx.stroke();
+                if (pass === 1) ctx.globalAlpha = alpha;
             }
         }
-        ctx.setLineDash([]);
-        ctx.globalAlpha = alpha;
+        if (dashPattern.length) ctx.setLineDash([]);
     }
 
     // --- 2. Draw nodes ---
+    // Normal nodes
+    ctx.fillStyle = color;
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
-        if (occluded[i]) {
-            // Occluded: draw node at reduced opacity with same color
-            ctx.globalAlpha = alpha * 0.35;
-            ctx.fillStyle = color;
+        if (nulledNodes && nulledNodes.has(i)) continue;
+        if (nodeShape === 'x') {
+            var xr = nodeSize * 0.9;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = Math.max(2, nodeSize * 0.35);
             ctx.beginPath();
-            ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Draw a small "X" over the node to indicate occlusion
-            ctx.globalAlpha = alpha * 0.7;
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = Math.max(1, lineWidth * 0.6);
-            var xArm = nodeSize * 0.7;
-            ctx.beginPath();
-            ctx.moveTo(cp.x - xArm, cp.y - xArm);
-            ctx.lineTo(cp.x + xArm, cp.y + xArm);
-            ctx.moveTo(cp.x + xArm, cp.y - xArm);
-            ctx.lineTo(cp.x - xArm, cp.y + xArm);
+            ctx.moveTo(cp.x - xr, cp.y - xr); ctx.lineTo(cp.x + xr, cp.y + xr);
+            ctx.moveTo(cp.x + xr, cp.y - xr); ctx.lineTo(cp.x - xr, cp.y + xr);
             ctx.stroke();
         } else {
-            ctx.fillStyle = color;
-            ctx.globalAlpha = alpha;
             ctx.beginPath();
             ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
             ctx.fill();
         }
     }
-    ctx.globalAlpha = alpha;
+    // Grayed-out (nulled) nodes
+    if (nulledNodes && nulledNodes.size > 0) {
+        ctx.fillStyle = '#aaaaaa';
+        ctx.globalAlpha = alpha * 0.55;
+        for (const ni of nulledNodes) {
+            const cp = canvasPoints[ni];
+            if (!cp) continue;
+            if (nodeShape === 'x') {
+                var xr = nodeSize * 0.9;
+                ctx.strokeStyle = '#888888';
+                ctx.lineWidth = Math.max(2, nodeSize * 0.35);
+                ctx.beginPath();
+                ctx.moveTo(cp.x - xr, cp.y - xr); ctx.lineTo(cp.x + xr, cp.y + xr);
+                ctx.moveTo(cp.x + xr, cp.y - xr); ctx.lineTo(cp.x - xr, cp.y + xr);
+                ctx.stroke();
+            } else {
+                ctx.beginPath();
+                ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        ctx.globalAlpha = alpha;
+    }
 
     // --- 3. Optional labels (SLEAP-style with dark outline) ---
     if (showLabels) {
         var savedAlpha = ctx.globalAlpha;
         ctx.globalAlpha = 1.0;
-        ctx.fillStyle = '#ffffff';
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-        // Font size = 3x the node radius. Since nodeSize is already scaled
-        // to canvas coordinates, this ensures labels are always visible and
-        // proportional to the node display size.
-        var fontSize = Math.max(10, Math.round(nodeSize * 3));
-        ctx.lineWidth = Math.max(1, Math.round(nodeSize * 0.5));
+        // Use independent label size (scaled to canvas coordinates)
+        var fontSize = adjustedLabelSize;
+        if (fontSize <= 0) { ctx.globalAlpha = savedAlpha; ctx.restore(); return; }
+        ctx.lineWidth = Math.max(1, Math.round(fontSize * 0.15));
         ctx.font = 'bold ' + fontSize + 'px sans-serif';
         ctx.textBaseline = 'bottom';
         ctx.textAlign = 'left';
-        var labelOffset = Math.round(nodeSize * 0.5);
         for (var li = 0; li < canvasPoints.length; li++) {
             var lp = canvasPoints[li];
             if (!lp) continue;
+            var isNulled = nulledNodes && nulledNodes.has(li);
             var node = skeleton.nodes ? skeleton.nodes[li] : undefined;
             var name = typeof node === 'string' ? node : (node && node.name ? node.name : 'node_' + li);
-            var tx = lp.x + nodeSize + labelOffset;
-            var ty = lp.y - labelOffset;
+            var labelOff = computeLabelOffset(li, canvasPoints, skeleton, name, fontSize, ctx);
+            var tx = lp.x + labelOff.dx;
+            var ty = lp.y + labelOff.dy;
+            if (isNulled) {
+                ctx.globalAlpha = 0.4;
+                ctx.fillStyle = '#888888';
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+            } else {
+                ctx.globalAlpha = 1.0;
+                ctx.fillStyle = '#ffffff';
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+            }
             ctx.strokeText(name, tx, ty);
             ctx.fillText(name, tx, ty);
         }
@@ -294,8 +528,8 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const markerSize = baseNodeSize * scale;  // half-extent of the X
-    const lineWidth = baseLineWidth * scale;
+    const markerSize = baseNodeSize;  // half-extent of the X
+    const lineWidth = baseLineWidth;
 
     // Pre-compute canvas positions
     const canvasPoints = new Array(reprojectedPoints.length);
@@ -320,7 +554,7 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
 
     // --- 1. Draw edges as dashed lines ---
     if (skeleton.edges) {
-        ctx.setLineDash([4 * scale, 4 * scale]);
+        ctx.setLineDash([4, 4]);
         ctx.beginPath();
         for (let i = 0; i < skeleton.edges.length; i++) {
             const edge = skeleton.edges[i];
@@ -457,8 +691,8 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const nodeSize = baseNodeSize * scale;
-    const lineWidth = baseLineWidth * scale;
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
 
     // Pre-compute canvas positions
     const canvasPoints = new Array(points.length);
@@ -480,13 +714,16 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
 
     ctx.save();
 
+    const nulledNodes = options.nulledNodes || null;
+
     // --- 1. Glow circles behind nodes ---
     const rgb = hexToRgb(color);
-    const glowRadius = nodeSize * 2.5;
+    const glowRadius = nodeSize * 1.4;
     ctx.fillStyle = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.25)';
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
+        if (nulledNodes && nulledNodes.has(i)) continue;
         ctx.beginPath();
         ctx.arc(cp.x, cp.y, glowRadius, 0, Math.PI * 2);
         ctx.fill();
@@ -494,32 +731,67 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
 
     // --- 2. Thicker, brighter edges ---
     if (skeleton.edges) {
-        ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = lineWidth * 2;
         ctx.lineCap = 'round';
-        ctx.globalAlpha = 0.8;
-        ctx.beginPath();
-        for (let i = 0; i < skeleton.edges.length; i++) {
-            const edge = skeleton.edges[i];
-            const src = canvasPoints[edge[0]];
-            const dst = canvasPoints[edge[1]];
-            if (src && dst) {
-                ctx.moveTo(src.x, src.y);
-                ctx.lineTo(dst.x, dst.y);
+        // Two-pass: normal edges, then grayed (nulled) edges
+        for (var ePass = 0; ePass < 2; ePass++) {
+            ctx.beginPath();
+            var hasEdgeStrokes = false;
+            for (let i = 0; i < skeleton.edges.length; i++) {
+                const edge = skeleton.edges[i];
+                const src = canvasPoints[edge[0]];
+                const dst = canvasPoints[edge[1]];
+                if (!src || !dst) continue;
+                var srcNulled = nulledNodes && nulledNodes.has(edge[0]);
+                var dstNulled = nulledNodes && nulledNodes.has(edge[1]);
+                var edgeGray = srcNulled || dstNulled;
+                if (ePass === 0 && !edgeGray) {
+                    ctx.moveTo(src.x, src.y);
+                    ctx.lineTo(dst.x, dst.y);
+                    hasEdgeStrokes = true;
+                } else if (ePass === 1 && edgeGray) {
+                    ctx.moveTo(src.x, src.y);
+                    ctx.lineTo(dst.x, dst.y);
+                    hasEdgeStrokes = true;
+                }
+            }
+            if (hasEdgeStrokes) {
+                if (ePass === 0) {
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.globalAlpha = 0.8;
+                } else {
+                    ctx.strokeStyle = '#888888';
+                    ctx.globalAlpha = 0.8 * 0.4;
+                }
+                ctx.stroke();
             }
         }
-        ctx.stroke();
         ctx.globalAlpha = 1.0;
     }
 
     // --- 3. Brighter nodes ---
+    // Normal (non-nulled) nodes
     ctx.fillStyle = '#ffffff';
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
+        if (nulledNodes && nulledNodes.has(i)) continue;
         ctx.beginPath();
-        ctx.arc(cp.x, cp.y, nodeSize * 1.3, 0, Math.PI * 2);
+        ctx.arc(cp.x, cp.y, nodeSize * 1.1, 0, Math.PI * 2);
         ctx.fill();
+    }
+    // Grayed-out (nulled) nodes
+    if (nulledNodes && nulledNodes.size > 0) {
+        ctx.fillStyle = '#aaaaaa';
+        ctx.globalAlpha = 0.55;
+        for (const ni of nulledNodes) {
+            const cp = canvasPoints[ni];
+            if (!cp) continue;
+            ctx.beginPath();
+            ctx.arc(cp.x, cp.y, nodeSize * 1.1, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
     }
 
     // --- 4. Dashed bounding box ---
@@ -652,8 +924,8 @@ function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const nodeSize = baseNodeSize * scale;
-    const lineWidth = baseLineWidth * scale;
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
 
     // Build canvas points with the dragged node at its new position
     const canvasPoints = new Array(points.length);
@@ -689,7 +961,7 @@ function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
             // Use dashed style for edges connected to the dragged node
             const connectsToDrag = (edge[0] === dragNodeIdx || edge[1] === dragNodeIdx);
             if (connectsToDrag) {
-                ctx.setLineDash([4 * scale, 4 * scale]);
+                ctx.setLineDash([4, 4]);
             } else {
                 ctx.setLineDash([]);
             }
@@ -716,7 +988,7 @@ function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
         const dp = canvasPoints[dragNodeIdx];
         ctx.globalAlpha = 0.7;
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2 * scale;
+        ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(dp.x, dp.y, nodeSize * 1.5, 0, Math.PI * 2);
         ctx.stroke();
@@ -748,6 +1020,7 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
     const trackNames = options.trackNames || [];
     const selectedInstanceIdx = options.selectedInstanceIdx != null ? options.selectedInstanceIdx : -1;
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
+    const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
 
     const vw = options.videoWidth;
     const vh = options.videoHeight;
@@ -760,7 +1033,11 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
 
-    const nodeSize = baseNodeSize * scale;
+    // Screen-relative label sizing
+    const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
+    const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
+
+    const nodeSize = baseNodeSize;
 
     ctx.save();
 
@@ -787,49 +1064,79 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
         const trackName = inst.trackIdx != null && trackNames[inst.trackIdx]
             ? trackNames[inst.trackIdx]
             : ('Track ' + (inst.trackIdx != null ? inst.trackIdx : instIdx));
-        const color = getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx);
+        var trackColors = options.trackColors || null;
+        const color = (trackColors && trackColors[inst.trackIdx])
+            ? trackColors[inst.trackIdx]
+            : (options.color || getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx));
 
-        ctx.font = 'bold ' + Math.round(11 * scale) + 'px sans-serif';
+        var fontSize = adjustedLabelSize;
+        if (fontSize <= 0) continue; // label size 0 = hidden
+        ctx.font = 'bold ' + fontSize + 'px sans-serif';
         ctx.textBaseline = 'bottom';
 
         // Background pill for track label
         const textWidth = ctx.measureText(trackName).width;
-        const pillPad = 3 * scale;
+        const pillPad = 3;
         const pillX = firstCp.x - pillPad;
-        const pillY = firstCp.y - nodeSize * 2 - (11 * scale) - pillPad;
+        var labelYOffset = fontSize * 1.5;
+        const pillY = firstCp.y - labelYOffset - fontSize - pillPad;
         ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
         ctx.beginPath();
         if (ctx.roundRect) {
-            ctx.roundRect(pillX, pillY, textWidth + pillPad * 2, 11 * scale + pillPad * 2, 3);
+            ctx.roundRect(pillX, pillY, textWidth + pillPad * 2, fontSize + pillPad * 2, 3);
         } else {
-            ctx.rect(pillX, pillY, textWidth + pillPad * 2, 11 * scale + pillPad * 2);
+            ctx.rect(pillX, pillY, textWidth + pillPad * 2, fontSize + pillPad * 2);
         }
         ctx.fill();
 
         ctx.fillStyle = color;
-        ctx.fillText(trackName, firstCp.x, firstCp.y - nodeSize * 2);
+        ctx.fillText(trackName, firstCp.x, firstCp.y - labelYOffset);
 
         // Draw node name labels for the selected instance
         if (instIdx === selectedInstanceIdx && skeleton && skeleton.nodes) {
-            ctx.font = Math.round(9 * scale) + 'px sans-serif';
+            var nodeFontSize = adjustedLabelSize;
+            if (nodeFontSize <= 0) continue;
+            ctx.font = nodeFontSize + 'px sans-serif';
             ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.lineWidth = Math.max(1, Math.round(nodeFontSize * 0.15));
             ctx.textBaseline = 'bottom';
+            ctx.textAlign = 'left';
+            // Build canvasPoints for label offset computation
+            var instCanvasPoints = new Array(inst.points.length);
             for (let n = 0; n < inst.points.length; n++) {
                 const pt = inst.points[n];
-                if (pt == null) continue;
-                let cp;
+                if (pt == null) { instCanvasPoints[n] = null; continue; }
                 if (toCanvas) {
-                    cp = toCanvas(pt[0], pt[1]);
+                    instCanvasPoints[n] = toCanvas(pt[0], pt[1]);
                 } else {
-                    cp = { x: pt[0], y: pt[1] };
+                    instCanvasPoints[n] = { x: pt[0], y: pt[1] };
                 }
+            }
+            var instNulled = inst.nulledNodes || null;
+            for (let n = 0; n < inst.points.length; n++) {
+                var cp = instCanvasPoints[n];
+                if (!cp) continue;
                 const nodeName = typeof skeleton.nodes[n] === 'string'
                     ? skeleton.nodes[n]
                     : (skeleton.nodes[n] && skeleton.nodes[n].name ? skeleton.nodes[n].name : '');
                 if (nodeName) {
-                    ctx.fillText(nodeName, cp.x + nodeSize + 2 * scale, cp.y - 2 * scale);
+                    var isNodeNulled = instNulled && instNulled.has(n);
+                    if (isNodeNulled) {
+                        ctx.globalAlpha = 0.4;
+                        ctx.fillStyle = '#888888';
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+                    } else {
+                        ctx.globalAlpha = 1.0;
+                        ctx.fillStyle = '#ffffff';
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+                    }
+                    var loff = computeLabelOffset(n, instCanvasPoints, skeleton, nodeName, nodeFontSize, ctx);
+                    ctx.strokeText(nodeName, cp.x + loff.dx, cp.y + loff.dy);
+                    ctx.fillText(nodeName, cp.x + loff.dx, cp.y + loff.dy);
                 }
             }
+            ctx.globalAlpha = 1.0;
         }
     }
 
@@ -949,6 +1256,7 @@ function drawInstanceTypeIndicator(ctx, points, type, options) {
  * @param {number}   [options.canvasHeight]
  * @param {number[]} [options.assignmentSelectedIds] - IDs of unlinked instances selected for assignment
  * @param {string}   [options.assignmentColor] - Color for assignment selection highlight
+ * @param {string}   [options.typeFilter] - If set, only draw instances matching this type ('user' or 'predicted')
  */
 function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     options = options || {};
@@ -956,10 +1264,15 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
 
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
+    const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
     const showLabels = options.showLabels !== false; // default true for unlinked
     const assignmentSelectedIds = options.assignmentSelectedIds || [];
     const assignmentColor = options.assignmentColor || '#fbbf24';
+    const ulColorByIdentity = !!options.colorByIdentity;
+    const ulSession = options.session || null;
+    const ulFrameIdx = options.frameIdx != null ? options.frameIdx : null;
     const selectedUnlinkedId = options.selectedUnlinkedId || null;
+    const predictedRender = options.predictedRender || null;
 
     const vw = options.videoWidth;
     const vh = options.videoHeight;
@@ -971,8 +1284,15 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         ? makeVideoToCanvasTransform(vw, vh, cw, ch)
         : null;
     const scale = toCanvas ? toCanvas.scale : 1;
-    const nodeSize = baseNodeSize * scale;
-    const lineWidth = baseLineWidth * scale;
+
+    // Screen-relative label sizing
+    const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
+    const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
+
+    const nodeSize = baseNodeSize;
+    const lineWidth = baseLineWidth;
+
+    const typeFilter = options.typeFilter || null;
 
     for (let u = 0; u < unlinkedInstances.length; u++) {
         const ul = unlinkedInstances[u];
@@ -980,11 +1300,21 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
         const points = instance.points;
         if (!points || points.length === 0) continue;
 
+        // Filter by type if typeFilter is set
+        const instType = instance.type || 'user';
+        if (typeFilter && instType !== typeFilter) continue;
+
+        // Use per-type render options for predicted instances
+        const isPredicted = instance.type === 'predicted';
+        const instNodeSize = isPredicted && predictedRender ? (predictedRender.nodeSize || nodeSize) : nodeSize;
+        const instLineWidth = isPredicted && predictedRender ? (predictedRender.lineWidth || lineWidth) : lineWidth;
+
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
-        const isEditSelected = selectedUnlinkedId != null && ul.id === selectedUnlinkedId;
-        const isSelected = isAssignSelected || isEditSelected;
-        const color = isAssignSelected ? assignmentColor : isEditSelected ? '#60a5fa' : getTrackColor(instance.trackIdx != null ? instance.trackIdx : u);
-        const alpha = isSelected ? 0.95 : 0.5;
+        const isSelected = isAssignSelected;
+        var baseTrackColor = isPredicted ? (getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity, ulFrameIdx) || '#888888') : UNGROUPED_USER_COLOR;
+        const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
+        const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
+        const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
 
         // Pre-compute canvas positions
         const canvasPoints = new Array(points.length);
@@ -998,37 +1328,77 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
             }
         }
 
+        const nulledNodes = instance.nulledNodes || null;
+
         ctx.save();
         ctx.globalAlpha = alpha;
 
-        // Dashed edges
+        // Edges with per-type line style
         if (skeleton.edges) {
-            ctx.strokeStyle = color;
-            ctx.lineWidth = lineWidth;
+            const instLineStyle = isPredicted && predictedRender && predictedRender.lineStyle
+                ? predictedRender.lineStyle : (options.lineStyle || 'dashed');
+            const instDashPattern = getLineDashPattern(instLineStyle);
+            ctx.lineWidth = instLineWidth;
             ctx.lineCap = 'round';
-            ctx.setLineDash([4 * scale, 4 * scale]);
-            ctx.beginPath();
-            for (let i = 0; i < skeleton.edges.length; i++) {
-                const edge = skeleton.edges[i];
-                const src = canvasPoints[edge[0]];
-                const dst = canvasPoints[edge[1]];
-                if (src && dst) {
-                    ctx.moveTo(src.x, src.y);
-                    ctx.lineTo(dst.x, dst.y);
+            if (instDashPattern.length) ctx.setLineDash(instDashPattern);
+            // Two-pass: normal edges, then grayed (nulled) edges
+            for (var ePass = 0; ePass < 2; ePass++) {
+                ctx.beginPath();
+                var hasEdgeStrokes = false;
+                for (let i = 0; i < skeleton.edges.length; i++) {
+                    const edge = skeleton.edges[i];
+                    const src = canvasPoints[edge[0]];
+                    const dst = canvasPoints[edge[1]];
+                    if (!src || !dst) continue;
+                    var srcNulled = nulledNodes && nulledNodes.has(edge[0]);
+                    var dstNulled = nulledNodes && nulledNodes.has(edge[1]);
+                    var edgeGray = srcNulled || dstNulled;
+                    if (ePass === 0 && !edgeGray) {
+                        ctx.moveTo(src.x, src.y);
+                        ctx.lineTo(dst.x, dst.y);
+                        hasEdgeStrokes = true;
+                    } else if (ePass === 1 && edgeGray) {
+                        ctx.moveTo(src.x, src.y);
+                        ctx.lineTo(dst.x, dst.y);
+                        hasEdgeStrokes = true;
+                    }
+                }
+                if (hasEdgeStrokes) {
+                    if (ePass === 0) {
+                        ctx.strokeStyle = ulEdgeColor;
+                    } else {
+                        ctx.strokeStyle = '#888888';
+                        ctx.globalAlpha = alpha * 0.4;
+                    }
+                    ctx.stroke();
+                    if (ePass === 1) ctx.globalAlpha = alpha;
                 }
             }
-            ctx.stroke();
-            ctx.setLineDash([]);
+            if (instDashPattern.length) ctx.setLineDash([]);
         }
 
-        // Semi-transparent nodes
+        // Normal nodes
         ctx.fillStyle = color;
         for (let i = 0; i < canvasPoints.length; i++) {
             const cp = canvasPoints[i];
             if (!cp) continue;
+            if (nulledNodes && nulledNodes.has(i)) continue;
             ctx.beginPath();
-            ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
+            ctx.arc(cp.x, cp.y, instNodeSize, 0, Math.PI * 2);
             ctx.fill();
+        }
+        // Grayed-out (nulled) nodes
+        if (nulledNodes && nulledNodes.size > 0) {
+            ctx.fillStyle = '#aaaaaa';
+            ctx.globalAlpha = alpha * 0.55;
+            for (const ni of nulledNodes) {
+                const cp = canvasPoints[ni];
+                if (!cp) continue;
+                ctx.beginPath();
+                ctx.arc(cp.x, cp.y, instNodeSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = alpha;
         }
 
         // "?" badge near the first visible point
@@ -1037,54 +1407,64 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
             if (canvasPoints[i]) { anchorCp = canvasPoints[i]; break; }
         }
         if (anchorCp) {
-            const badgeSize = Math.round(10 * scale);
+            const badgeSize = 10;
             ctx.globalAlpha = 0.9;
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
             ctx.beginPath();
-            ctx.arc(anchorCp.x - nodeSize * 2, anchorCp.y - nodeSize * 2, badgeSize, 0, Math.PI * 2);
+            ctx.arc(anchorCp.x - instNodeSize * 2, anchorCp.y - instNodeSize * 2, badgeSize, 0, Math.PI * 2);
             ctx.fill();
             ctx.fillStyle = '#fbbf24';
             ctx.font = 'bold ' + badgeSize + 'px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText('?', anchorCp.x - nodeSize * 2, anchorCp.y - nodeSize * 2);
+            ctx.fillText('?', anchorCp.x - instNodeSize * 2, anchorCp.y - instNodeSize * 2);
         }
 
-        // Node name labels
-        if (showLabels) {
+        // Node name labels (never for predicted instances)
+        if (showLabels && !isPredicted) {
             ctx.globalAlpha = 1.0;
             ctx.fillStyle = '#ffffff';
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-            // Font size = 3x the node radius. Since nodeSize is already scaled
-            // to canvas coordinates, labels are always proportional to nodes.
-            var fontSize = Math.max(10, Math.round(nodeSize * 3));
-            ctx.lineWidth = Math.max(1, Math.round(nodeSize * 0.5));
-            ctx.font = 'bold ' + fontSize + 'px sans-serif';
-            ctx.textBaseline = 'bottom';
-            ctx.textAlign = 'left';
-            var labelOffset = Math.round(nodeSize * 0.5);
-            for (var li = 0; li < canvasPoints.length; li++) {
-                var lp = canvasPoints[li];
-                if (!lp) continue;
-                var node2 = skeleton.nodes ? skeleton.nodes[li] : undefined;
-                var lname = typeof node2 === 'string' ? node2 : (node2 && node2.name ? node2.name : 'node_' + li);
-                var ltx = lp.x + nodeSize + labelOffset;
-                var lty = lp.y - labelOffset;
-                ctx.strokeText(lname, ltx, lty);
-                ctx.fillText(lname, ltx, lty);
+            var fontSize = adjustedLabelSize;
+            if (fontSize > 0) {
+                ctx.lineWidth = Math.max(1, Math.round(fontSize * 0.15));
+                ctx.font = 'bold ' + fontSize + 'px sans-serif';
+                ctx.textBaseline = 'bottom';
+                ctx.textAlign = 'left';
+                for (var li = 0; li < canvasPoints.length; li++) {
+                    var lp = canvasPoints[li];
+                    if (!lp) continue;
+                    var isLabelNulled = nulledNodes && nulledNodes.has(li);
+                    var node2 = skeleton.nodes ? skeleton.nodes[li] : undefined;
+                    var lname = typeof node2 === 'string' ? node2 : (node2 && node2.name ? node2.name : 'node_' + li);
+                    var labelOff2 = computeLabelOffset(li, canvasPoints, skeleton, lname, fontSize, ctx);
+                    var ltx = lp.x + labelOff2.dx;
+                    var lty = lp.y + labelOff2.dy;
+                    if (isLabelNulled) {
+                        ctx.globalAlpha = 0.4;
+                        ctx.fillStyle = '#888888';
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+                    } else {
+                        ctx.globalAlpha = 1.0;
+                        ctx.fillStyle = '#ffffff';
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+                    }
+                    ctx.strokeText(lname, ltx, lty);
+                    ctx.fillText(lname, ltx, lty);
+                }
             }
         }
 
-        // Selection ring (assignment = yellow, edit = blue)
+        // Selection ring (assignment mode only)
         if (isSelected) {
             ctx.globalAlpha = 0.8;
-            ctx.strokeStyle = isAssignSelected ? assignmentColor : '#60a5fa';
-            ctx.lineWidth = 2 * scale;
+            ctx.strokeStyle = assignmentColor;
+            ctx.lineWidth = 2;
             for (let i = 0; i < canvasPoints.length; i++) {
                 const cp = canvasPoints[i];
                 if (!cp) continue;
                 ctx.beginPath();
-                ctx.arc(cp.x, cp.y, nodeSize * 2, 0, Math.PI * 2);
+                ctx.arc(cp.x, cp.y, instNodeSize * 2, 0, Math.PI * 2);
                 ctx.stroke();
             }
         }
@@ -1130,15 +1510,30 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
  */
 function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, options) {
     options = options || {};
-    const showDetected    = options.showDetected !== false;
+    var _frameIdx = frameGroup ? frameGroup.frameIdx : null;
+
+    // Per-type visibility flags
+    const showUser        = options.showUser !== undefined ? options.showUser : (options.showDetected !== false);
+    const showPredicted   = options.showPredicted !== undefined ? options.showPredicted : (options.showDetected !== false);
     const showReprojected = options.showReprojected !== false;
     const showErrors      = options.showErrors !== false;
     const showLegend      = options.showLegend !== false;
-    const nodeSize        = options.nodeSize != null ? options.nodeSize : 4;
-    const lineWidth       = options.lineWidth != null ? options.lineWidth : 2;
-    const showLabels      = !!options.showLabels;
+    const colorByIdentity = !!options.colorByIdentity;
+
+    // Per-type rendering options (fall back to flat options for backward compat)
+    const defaultOpts = {
+        nodeSize: options.nodeSize != null ? options.nodeSize : 4,
+        lineWidth: options.lineWidth != null ? options.lineWidth : 2,
+        labelSize: options.labelSize != null ? options.labelSize : 11,
+        alpha: 1.0,
+        showLabels: !!options.showLabels,
+    };
+    const userOpts = options.userOpts || defaultOpts;
+    const predictedOpts = options.predictedOpts || Object.assign({}, defaultOpts, { showLabels: false });
+    const reprojOpts = options.reprojOpts || defaultOpts;
 
     const selectedInstanceGroup = options.selectedInstanceGroup || null;
+    const selectedReprojected   = options.selectedReprojected || false;
     const selectedNodeIdx       = options.selectedNodeIdx != null ? options.selectedNodeIdx : -1;
     const hoveredNode           = options.hoveredNode || null;
     const dragInfo              = options.dragInfo || null;
@@ -1150,123 +1545,242 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
 
     const skeleton = session && session.skeleton ? session.skeleton : { nodes: [], edges: [] };
 
-    // Shared rendering options (passed to sub-functions)
-    const renderOpts = {
-        nodeSize: nodeSize,
-        lineWidth: lineWidth,
+    // Shared geometry options (used for coordinate transforms)
+    const geoOpts = {
         videoWidth: videoW,
         videoHeight: videoH,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
-        showLabels: showLabels,
     };
+
+    // Build per-type render option sets with geometry info
+    function makeRenderOpts(typeOpts) {
+        return Object.assign({}, typeOpts, geoOpts);
+    }
+
+    var userRender = makeRenderOpts(userOpts);
+    var predictedRender = makeRenderOpts(predictedOpts);
+    var reprojRender = makeRenderOpts(reprojOpts);
 
     // 1. Clear overlay
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // 2. Draw detected skeletons
-    if (showDetected && frameGroup && frameGroup.instances) {
-        const viewInstances = frameGroup.instances instanceof Map
+    // Gather view instances once for both passes
+    let viewInstances = null;
+    if (frameGroup && frameGroup.instances) {
+        viewInstances = frameGroup.instances instanceof Map
             ? frameGroup.instances.get(viewName)
             : frameGroup.instances[viewName];
-        if (viewInstances) {
-            for (let i = 0; i < viewInstances.length; i++) {
-                const inst = viewInstances[i];
-                drawSkeleton(ctx, inst, skeleton, Object.assign({}, renderOpts, {
-                    color: getTrackColor(inst.trackIdx != null ? inst.trackIdx : i),
-                }));
-            }
-        }
     }
 
-    // 2b. Draw unlinked instances (dashed, semi-transparent)
     const unlinkedInstances = options.unlinkedInstances || [];
-    if (unlinkedInstances.length > 0) {
-        drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, renderOpts, {
-            assignmentSelectedIds: options.assignmentSelectedIds || [],
-            assignmentColor: '#fbbf24',
-            selectedUnlinkedId: options.selectedUnlinkedId || null,
-        }));
-    }
+    const unlinkedOpts = {
+        lineStyle: userOpts.preLineStyle || 'dashed',
+        predictedRender: Object.assign({}, predictedRender, {
+            lineStyle: predictedOpts.preLineStyle || 'solid',
+        }),
+        assignmentSelectedIds: options.assignmentSelectedIds || [],
+        assignmentColor: '#fbbf24',
+        selectedUnlinkedId: options.selectedUnlinkedId || null,
+    };
 
-    // 3. Draw reprojected skeletons + error vectors
+    // 2. Draw reprojected instances + error vectors (back layer)
     if (instanceGroups) {
         for (let g = 0; g < instanceGroups.length; g++) {
             const group = instanceGroups[g];
 
-            // Reprojected points for this camera
-            const reprojPts = group.reprojections ? group.reprojections[viewName] : null;
+            // Draw reprojected instances — color-matched to identity or track
+            var trackBaseColor = getGroupColor(group, session, colorByIdentity, _frameIdx);
+            var reprojTrackColor = complementaryColor(trackBaseColor);
 
-            if (showReprojected && reprojPts) {
-                drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, renderOpts, {
-                    color: '#ff6b6b',
-                }));
+            // Always draw reprojections — one per group per view
+            if (showReprojected) {
+                var reprojInst = (group.reprojectedInstances && group.reprojectedInstances.size > 0)
+                    ? (group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null)
+                    : null;
+
+                if (reprojInst) {
+                    var isSelected = selectedReprojected && selectedInstanceGroup && selectedInstanceGroup === group;
+                    var drawColor = isSelected ? '#ffffff' : reprojTrackColor;
+                    drawSkeleton(ctx, reprojInst, skeleton, Object.assign({}, reprojRender, {
+                        color: drawColor,
+                        lineStyle: reprojOpts.lineStyle || 'dotted',
+                        nodeShape: 'x',
+                    }));
+
+                    if (reprojOpts.showLabels) {
+                        const trackNames = session && session.tracks ? session.tracks : [];
+                        drawInstanceLabels(ctx, [reprojInst], skeleton, viewName, Object.assign({}, reprojRender, {
+                            trackNames: trackNames,
+                            color: reprojTrackColor,
+                        }));
+                    }
+                } else {
+                    // Fall back to raw reprojection data
+                    var reprojPts = group.reprojections ? group.reprojections[viewName] : null;
+                    if (reprojPts) {
+                        drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
+                            color: reprojTrackColor,
+                        }));
+                    }
+                }
             }
 
             // Error vectors: need both observed and reprojected
-            if (showErrors && reprojPts) {
+            const reprojPtsForErrors = group.reprojections ? group.reprojections[viewName] : null;
+            if (showErrors && reprojPtsForErrors) {
                 const observedPts = group.observedPoints ? group.observedPoints[viewName] : null;
                 if (observedPts) {
-                    drawReprojectionErrors(ctx, observedPts, reprojPts, renderOpts);
+                    drawReprojectionErrors(ctx, observedPts, reprojPtsForErrors, reprojRender);
                 }
             }
         }
     }
 
-    // 4. Selection highlight
-    if (selectedInstanceGroup) {
-        const selInst = selectedInstanceGroup.getInstance
-            ? selectedInstanceGroup.getInstance(viewName)
-            : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
-        if (selInst && selInst.points) {
-            const trackColor = getTrackColor(
-                selectedInstanceGroup.trackIdx != null ? selectedInstanceGroup.trackIdx : 0
-            );
-            drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, renderOpts, {
-                color: trackColor,
-                selectedNodeIdx: selectedNodeIdx,
+    // Build map of instance -> group for identity coloring
+    var instToGroup = new Map();
+    if (instanceGroups) {
+        for (var _ig = 0; _ig < instanceGroups.length; _ig++) {
+            var _g = instanceGroups[_ig];
+            var _inst = _g.getInstance ? _g.getInstance(viewName) : null;
+            if (_inst) instToGroup.set(_inst, _g);
+        }
+    }
+
+    // 3. Linked predicted instances — drawn OVER reprojections so they're visible
+    if (viewInstances && showPredicted) {
+        for (let i = 0; i < viewInstances.length; i++) {
+            const inst = viewInstances[i];
+            const instType = inst.type || 'user';
+            if (instType !== 'predicted') continue;
+
+            var parentGroup = instToGroup.get(inst);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity, _frameIdx) : getInstanceColor(inst, session, viewName, colorByIdentity, _frameIdx);
+            var isSelected = !selectedReprojected && selectedInstanceGroup &&
+                selectedInstanceGroup.getInstance &&
+                selectedInstanceGroup.getInstance(viewName) === inst;
+            var drawColor = isSelected ? '#ffffff' : desaturateColor(baseColor, 0.2);
+            var drawAlpha = isSelected ? 1.0 : 0.85;
+            drawSkeleton(ctx, inst, skeleton, Object.assign({}, predictedRender, {
+                color: drawColor,
+                edgeColor: isSelected ? '#ffffff' : desaturateColor(baseColor, 0.4),
+                alpha: drawAlpha,
+                lineStyle: predictedOpts.postLineStyle || 'solid',
             }));
         }
     }
 
-    // 5. Hover highlight
-    if (hoveredNode && hoveredNode.viewName === viewName && instanceGroups) {
-        const hGroupIdx = hoveredNode.instanceGroupIdx;
-        const hNodeIdx = hoveredNode.nodeIdx;
-        if (hGroupIdx >= 0 && hGroupIdx < instanceGroups.length) {
-            const hGroup = instanceGroups[hGroupIdx];
-            const hInst = hGroup.getInstance
-                ? hGroup.getInstance(viewName)
-                : (hGroup.instances ? hGroup.instances[viewName] : null);
-            if (hInst && hInst.points && hNodeIdx >= 0 && hNodeIdx < hInst.points.length && hInst.points[hNodeIdx]) {
-                const hTrackColor = getTrackColor(
-                    hGroup.trackIdx != null ? hGroup.trackIdx : 0
-                );
-                drawHoverHighlight(ctx, hInst.points[hNodeIdx], hNodeIdx, Object.assign({}, renderOpts, {
-                    color: hTrackColor,
-                }));
+    // 3b. Unlinked predicted instances
+    if (unlinkedInstances.length > 0) {
+        drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, unlinkedOpts, {
+            typeFilter: 'predicted',
+            colorByIdentity: colorByIdentity,
+            session: session,
+            frameIdx: _frameIdx,
+        }));
+    }
+
+    // 4. Linked user instances (front layer) + user labels
+    if (viewInstances && showUser) {
+        var userInstances = [];
+        for (let i = 0; i < viewInstances.length; i++) {
+            const inst = viewInstances[i];
+            const instType = inst.type || 'user';
+            if (instType === 'predicted') continue;
+
+            var parentGroup = instToGroup.get(inst);
+            var baseColor = parentGroup ? getGroupColor(parentGroup, session, colorByIdentity, _frameIdx) : getInstanceColor(inst, session, viewName, colorByIdentity, _frameIdx);
+            var isSelected = !selectedReprojected && selectedInstanceGroup &&
+                selectedInstanceGroup.getInstance &&
+                selectedInstanceGroup.getInstance(viewName) === inst;
+            var drawColor = isSelected ? '#ffffff' : baseColor;
+            drawSkeleton(ctx, inst, skeleton, Object.assign({}, userRender, {
+                color: drawColor,
+                lineStyle: userOpts.postLineStyle || 'solid',
+            }));
+
+            userInstances.push(inst);
+        }
+
+        // 4a. Draw track name labels (user instances only)
+        if (userOpts.showLabels && userInstances.length > 0) {
+            var labelNames = session && session.tracks ? session.tracks.slice() : [];
+            var labelColors = null;
+            // When coloring by identity, show identity names and colors on labels
+            if (colorByIdentity && session) {
+                labelColors = {};
+                for (var li = 0; li < userInstances.length; li++) {
+                    var lInst = userInstances[li];
+                    var lIdentity = session.getIdentityForTrack(lInst.trackIdx, viewName, _frameIdx);
+                    if (lIdentity) {
+                        labelNames[lInst.trackIdx] = lIdentity.name;
+                        labelColors[lInst.trackIdx] = lIdentity.color;
+                    }
+                }
             }
+            drawInstanceLabels(ctx, userInstances, skeleton, viewName, Object.assign({}, userRender, {
+                trackNames: labelNames,
+                trackColors: labelColors,
+            }));
         }
     }
 
-    // 6. Drag preview
+    // 4b. Unlinked user instances
+    if (unlinkedInstances.length > 0) {
+        drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, Object.assign({}, userRender, unlinkedOpts, {
+            typeFilter: 'user',
+            colorByIdentity: colorByIdentity,
+            session: session,
+            frameIdx: _frameIdx,
+        }));
+    }
+
+    // 5. Selection highlight
+    if (selectedInstanceGroup && !selectedReprojected) {
+        const selInst = selectedInstanceGroup.getInstance
+            ? selectedInstanceGroup.getInstance(viewName)
+            : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
+        if (selInst && selInst.points) {
+            drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, userRender, {
+                color: '#ffffff',
+                selectedNodeIdx: selectedNodeIdx,
+                nulledNodes: selInst.nulledNodes || null,
+            }));
+        }
+    }
+
+    // 5b. Edit Group highlight — white ring around all group member instances
+    var editGroupTarget = options.editGroupTarget || null;
+    if (editGroupTarget) {
+        var egInst = editGroupTarget.getInstance
+            ? editGroupTarget.getInstance(viewName)
+            : null;
+        if (egInst && egInst.points) {
+            drawSelectionHighlight(ctx, egInst.points, skeleton, Object.assign({}, userRender, {
+                color: '#ffffff',
+                selectedNodeIdx: -1,
+                nulledNodes: egInst.nulledNodes || null,
+            }));
+        }
+    }
+
+    // 6. Hover highlight — disabled (cursor change handled by interaction manager)
+
+    // 7. Drag preview
     if (dragInfo && dragInfo.viewName === viewName && selectedInstanceGroup) {
         const dragInst = selectedInstanceGroup.getInstance
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
         if (dragInst && dragInst.points) {
-            const dragTrackColor = getTrackColor(
-                selectedInstanceGroup.trackIdx != null ? selectedInstanceGroup.trackIdx : 0
-            );
             drawDragPreview(ctx, dragInst.points, dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
-                Object.assign({}, renderOpts, { color: dragTrackColor }));
+                Object.assign({}, userRender, { color: '#ffffff' }));
         }
     }
 
-    // 7. Legend
+    // 8. Legend
     if (showLegend) {
         drawLegend(ctx, {
-            showDetected: showDetected,
+            showDetected: showUser || showPredicted,
             showReprojected: showReprojected,
             showErrors: showErrors,
         });
@@ -1339,9 +1853,9 @@ function drawLegend(ctx, options) {
             ctx.arc(ix + iconWidth / 2, iy, 4, 0, Math.PI * 2);
             ctx.fill();
         } else if (item.type === 'reprojected') {
-            // X marker in red
+            // X marker in reprojection red
             const cx = ix + iconWidth / 2;
-            ctx.strokeStyle = '#ff6b6b';
+            ctx.strokeStyle = REPROJECTION_COLOR;
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.moveTo(cx - 4, iy - 4);
@@ -1451,7 +1965,7 @@ function getFrameStats(frameGroup, instanceGroups, cameras) {
 
     for (let g = 0; g < instanceGroups.length; g++) {
         const group = instanceGroups[g];
-        const trackIdx = group.trackIdx != null ? group.trackIdx : g;
+        const trackIdx = group.identityId >= 0 ? group.identityId : g;
         const reproj = group.reprojections;
         const observed = group.observedPoints;
         if (!reproj || !observed) continue;

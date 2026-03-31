@@ -182,29 +182,29 @@
             }
         });
 
-        it('A key toggles assignment mode', function () {
+        it('setAssignmentMode toggles assignment mode programmatically', function () {
             var env = buildEnv();
             try {
                 assertFalse(env.mgr.assignmentMode, 'starts off');
 
-                env.mgr.onKeyDown(makeKeyEvent('a'));
-                assertTrue(env.mgr.assignmentMode, 'A key turns on');
+                env.mgr.setAssignmentMode(true);
+                assertTrue(env.mgr.assignmentMode, 'turned on');
 
-                env.mgr.onKeyDown(makeKeyEvent('a'));
-                assertFalse(env.mgr.assignmentMode, 'A key turns off');
+                env.mgr.setAssignmentMode(false);
+                assertFalse(env.mgr.assignmentMode, 'turned off');
             } finally {
                 env.cleanup();
             }
         });
 
-        it('Escape exits assignment mode', function () {
+        it('setAssignmentMode(false) exits assignment mode', function () {
             var env = buildEnv();
             try {
                 env.mgr.setAssignmentMode(true);
-                assertTrue(env.mgr.assignmentMode, 'on before escape');
+                assertTrue(env.mgr.assignmentMode, 'on before exit');
 
-                env.mgr.onKeyDown(makeKeyEvent('Escape'));
-                assertFalse(env.mgr.assignmentMode, 'off after escape');
+                env.mgr.setAssignmentMode(false);
+                assertFalse(env.mgr.assignmentMode, 'off after exit');
             } finally {
                 env.cleanup();
             }
@@ -371,9 +371,10 @@
                 env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), 'cam1');
                 assertEqual(env.mgr.assignmentSelection.length, 1, 'cam1 selected');
 
-                // Click cam2 unlinked at video (200,200) → client (640+200, 200)
-                // because cam2 canvas is offset 640px to the right
-                env.mgr.onMouseDown(makeMouseEvent('mousedown', 840, 200), 'cam2');
+                // Click cam2 unlinked at video (200,200)
+                // canvas2 is at left=640 in browser, so clientX = 200 + 640 = 840
+                var cam2Rect = env.canvas2.getBoundingClientRect();
+                env.mgr.onMouseDown(makeMouseEvent('mousedown', 200 + cam2Rect.left, 200 + cam2Rect.top), 'cam2');
                 assertEqual(env.mgr.assignmentSelection.length, 2, 'cam1 + cam2 selected');
             } finally {
                 env.cleanup();
@@ -434,12 +435,10 @@
             session.addFrameGroup(fg);
 
             // Create a linked InstanceGroup so findNearestNode can find it
-            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, new Map());
-            var trackMap = session.instanceGroups.get(0);
+            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, []);
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', linkedInst);
-            if (!trackMap.has(0)) trackMap.set(0, []);
-            trackMap.get(0).push(group);
+            session.instanceGroups.get(0).push(group);
 
             // Create an unlinked instance at (105, 105) - very close to linked
             var unlinkedInst = new Instance([[105, 105], [160, 160]], 0, 'user', 1.0);
@@ -490,18 +489,18 @@
 
     describe('Assignment - create group from selection', function () {
 
-        it('Enter key creates group from assignment selection', function () {
+        it('_createGroupFromAssignment creates group from selection', function () {
             var env = buildEnv();
             try {
                 env.mgr.setAssignmentMode(true);
                 env.mgr.addToAssignmentSelection(env.unlinked1);
                 env.mgr.addToAssignmentSelection(env.unlinked2);
 
-                // Press Enter
-                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+                // Directly invoke group creation (Enter key is handled in index.html)
+                env.mgr._createGroupFromAssignment();
 
                 // Assignment mode should be off
-                assertFalse(env.mgr.assignmentMode, 'mode off after Enter');
+                assertFalse(env.mgr.assignmentMode, 'mode off after group creation');
                 assertEqual(env.mgr.assignmentSelection.length, 0, 'selection cleared');
 
                 // An InstanceGroup should have been created
@@ -538,14 +537,14 @@
             }
         });
 
-        it('Enter does nothing with empty selection', function () {
+        it('_createGroupFromAssignment does nothing with empty selection', function () {
             var env = buildEnv();
             try {
                 env.mgr.setAssignmentMode(true);
-                // No selection
-                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+                // No selection — _createGroupFromAssignment requires >= 1
+                env.mgr._createGroupFromAssignment();
 
-                // Mode should still be on
+                // Mode should still be on (no group created)
                 assertTrue(env.mgr.assignmentMode, 'mode still on');
                 var groups = env.session.getInstanceGroupsForFrame(0);
                 assertEqual(groups.length, 0, 'no group created');
@@ -694,7 +693,7 @@
 
     describe('Assignment - full E2E workflow', function () {
 
-        it('complete workflow: A -> click cam1 -> click cam2 -> Enter', function () {
+        it('complete workflow: setAssignmentMode -> click cam1 -> click cam2 -> createGroup', function () {
             var env = buildEnv();
             try {
                 // Verify initial state: 2 unlinked, 0 groups
@@ -703,19 +702,21 @@
                 assertEqual(env.session.getInstanceGroupsForFrame(0).length, 0, 'no groups yet');
 
                 // Step 1: Enter assignment mode
-                env.mgr.onKeyDown(makeKeyEvent('a'));
+                env.mgr.setAssignmentMode(true);
                 assertTrue(env.mgr.assignmentMode, 'assignment mode active');
 
                 // Step 2: Click cam1 unlinked instance at video (100,100) → client (100,100)
                 env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), 'cam1');
                 assertEqual(env.mgr.assignmentSelection.length, 1, 'cam1 selected');
 
-                // Step 3: Click cam2 unlinked instance at video (200,200) → client (840,200)
-                env.mgr.onMouseDown(makeMouseEvent('mousedown', 840, 200), 'cam2');
+                // Step 3: Click cam2 unlinked instance at video (200,200)
+                // canvas2 is at left=640 in browser, so clientX = 200 + offset
+                var cam2Rect = env.canvas2.getBoundingClientRect();
+                env.mgr.onMouseDown(makeMouseEvent('mousedown', 200 + cam2Rect.left, 200 + cam2Rect.top), 'cam2');
                 assertEqual(env.mgr.assignmentSelection.length, 2, 'cam1 + cam2 selected');
 
-                // Step 4: Press Enter to create group
-                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+                // Step 4: Create group (Enter key is now in index.html, call directly)
+                env.mgr._createGroupFromAssignment();
                 assertFalse(env.mgr.assignmentMode, 'assignment mode exited');
 
                 // Verify results
@@ -730,7 +731,7 @@
             }
         });
 
-        it('N key creates unlinked instance that can be assigned', function () {
+        it('_addNewInstance creates unlinked instance that can be assigned', function () {
             if (typeof InteractionManager === 'undefined') return;
 
             var vw = 640, vh = 480;
@@ -764,11 +765,11 @@
             mgr.lastInteractedView = 'cam1';
 
             try {
-                // Press N to add new unlinked instance
-                mgr.onKeyDown(makeKeyEvent('n'));
+                // Add new unlinked instance (Ctrl+I shortcut is in index.html, calls _addNewInstance)
+                mgr._addNewInstance();
 
                 var ulList = session.getFrameGroup(0).getUnlinkedInstances('cam1');
-                assertEqual(ulList.length, 1, 'N creates 1 unlinked instance');
+                assertEqual(ulList.length, 1, '_addNewInstance creates 1 unlinked instance');
 
                 // The unlinked instance should be findable
                 var hit = mgr.findNearestUnlinkedNode(
@@ -797,7 +798,7 @@
                 env.mgr.setAssignmentMode(true);
                 env.mgr.addToAssignmentSelection(env.unlinked1);
                 env.mgr.addToAssignmentSelection(env.unlinked2);
-                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+                env.mgr._createGroupFromAssignment();
 
                 var groups = env.session.getInstanceGroupsForFrame(0);
                 assertEqual(groups.length, 1, 'group created');
@@ -840,7 +841,7 @@
                 env.mgr.setAssignmentMode(true);
                 env.mgr.addToAssignmentSelection(env.unlinked1);
                 env.mgr.addToAssignmentSelection(env.unlinked2);
-                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+                env.mgr._createGroupFromAssignment();
 
                 var groups = env.session.getInstanceGroupsForFrame(0);
                 assertEqual(groups.length, 1, 'group created');
@@ -868,7 +869,7 @@
             }
         });
 
-        it('U key triggers unlink when group is selected', function () {
+        it('_unlinkSelectedGroup unlinks when group is selected', function () {
             var env = buildEnv();
             try {
                 // Create a group
@@ -883,7 +884,7 @@
                 env.mgr.select(groups[0], -1);
 
                 // Press U to unlink
-                env.mgr.onKeyDown(makeKeyEvent('u'));
+                env.mgr._unlinkSelectedGroup();
 
                 // Group should be unlinked
                 var afterGroups = env.session.getInstanceGroupsForFrame(0);
@@ -897,14 +898,14 @@
             }
         });
 
-        it('U key is no-op when no group selected', function () {
+        it('_unlinkSelectedGroup is no-op when no group selected', function () {
             var env = buildEnv();
             try {
                 // Create a group but don't select it
                 env.mgr.setAssignmentMode(true);
                 env.mgr.addToAssignmentSelection(env.unlinked1);
                 env.mgr.addToAssignmentSelection(env.unlinked2);
-                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+                env.mgr._createGroupFromAssignment();
 
                 var groups = env.session.getInstanceGroupsForFrame(0);
                 assertEqual(groups.length, 1, 'group exists');
@@ -914,7 +915,7 @@
                 assertNull(env.mgr.selectedInstanceGroup, 'nothing selected');
 
                 // Press U — should be no-op
-                env.mgr.onKeyDown(makeKeyEvent('u'));
+                env.mgr._unlinkSelectedGroup();
 
                 var afterGroups = env.session.getInstanceGroupsForFrame(0);
                 assertEqual(afterGroups.length, 1, 'group still exists (no-op)');
@@ -930,7 +931,7 @@
                 env.mgr.setAssignmentMode(true);
                 env.mgr.addToAssignmentSelection(env.unlinked1);
                 env.mgr.addToAssignmentSelection(env.unlinked2);
-                env.mgr.onKeyDown(makeKeyEvent('Enter'));
+                env.mgr._createGroupFromAssignment();
 
                 var groups = env.session.getInstanceGroupsForFrame(0);
                 var group = groups[0];

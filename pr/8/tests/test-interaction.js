@@ -100,7 +100,7 @@
             const inst = new Instance([[100, 100], [200, 200]], 0, 'user', 1);
             const group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
-            mockState.session.instanceGroups.set(0, new Map([[0, [group]]]));
+            mockState.session.instanceGroups.set(0, [group]);
 
             // Also add to frame group for rendering
             const fg = new FrameGroup(0);
@@ -124,7 +124,8 @@
         });
 
         it('finds node within threshold', function () {
-            const hit = manager.findNearestNode(105, 105, 'cam1', 0);
+            // Default node threshold is ~5px, so search within that radius
+            const hit = manager.findNearestNode(103, 103, 'cam1', 0);
             assertNotNull(hit);
             assertEqual(hit.nodeIdx, 0);
         });
@@ -136,12 +137,9 @@
 
         it('returns closest node when multiple are near', function () {
             // Node 0 is at (100,100), node 1 is at (200,200).
-            // Increase threshold so BOTH nodes are within range, then verify
-            // the closer one is returned. Click at (140,140):
-            //   dist to node 0 = sqrt(40^2+40^2) ≈ 56.6
-            //   dist to node 1 = sqrt(60^2+60^2) ≈ 84.9
-            manager.hitThreshold = 500;
-            const hit = manager.findNearestNode(140, 140, 'cam1', 0);
+            // Click at (103,103): dist to node 0 ≈ 4.2, well within default 5px threshold
+            // Node 1 at dist ≈ 137 is out of range
+            const hit = manager.findNearestNode(103, 103, 'cam1', 0);
             assertNotNull(hit, 'Should find a node within threshold');
             assertEqual(hit.nodeIdx, 0, 'Should find the closer node (0)');
         });
@@ -205,7 +203,7 @@
             const fg = new FrameGroup(0);
             fg.addInstance('cam1', inst);
             mockState.session.addFrameGroup(fg);
-            mockState.session.instanceGroups.set(0, new Map([[0, [group]]]));
+            mockState.session.instanceGroups.set(0, [group]);
 
             manager = new InteractionManager({
                 getState: function () { return mockState; },

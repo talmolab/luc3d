@@ -58,14 +58,29 @@ class Viewport3D {
         /** @type {function(string): void|null} Callback when a camera is clicked */
         this.onCameraClicked = options.onCameraClicked || null;
 
+        /** @type {function(boolean): void|null} Callback when camera view mode changes */
+        this.onCameraViewChanged = null;
+
         /** @type {number|null} Index of the currently selected/highlighted instance */
         this.selectedInstanceIdx = null;
 
         /** @type {THREE.Raycaster} For picking camera objects */
         this._raycaster = null;
 
+        /** @type {string|null} Currently selected camera name */
+        this.selectedCamera = null;
+
+        /** @type {string|null} Camera whose perspective we are viewing (for declutter) */
+        this._viewingCamera = null;
+
+        /** @type {Object|null} Camera data for dynamic FOV recomputation during resize */
+        this._viewingCamData = null;
+
         /** @type {number|null} Animation frame timer for perspective animation */
         this._perspectiveAnimId = null;
+
+        /** @type {boolean} True while perspective animation is running — suppresses controls.update() */
+        this._animatingPerspective = false;
 
         // Three.js objects
         /** @type {THREE.Scene} */
@@ -165,6 +180,10 @@ class Viewport3D {
         this._skeletonGroup.name = 'skeletons';
         this.scene.add(this._skeletonGroup);
 
+        this._envGroup = new THREE.Group();
+        this._envGroup.name = 'environment';
+        this.scene.add(this._envGroup);
+
         // --- Draw camera pyramids ---
         this.addCameraPyramids();
 
@@ -240,7 +259,6 @@ class Viewport3D {
 
         this._sceneScale = sceneScale;
 
-        const pyramidScale = 20 * sceneScale;
         const pyramidDepth = 40 * sceneScale;
 
         for (let i = 0; i < this.cameras.length; i++) {
@@ -267,10 +285,18 @@ class Viewport3D {
                 camPos[2] + camForward[2] * pyramidDepth,
             ];
 
-            // Aspect ratio from camera image size
+            // Compute frustum-correct half dimensions from camera intrinsics
             const aspectRatio = cam.size ? cam.size[0] / cam.size[1] : 4 / 3;
-            const halfW = pyramidScale * aspectRatio;
-            const halfH = pyramidScale;
+            var halfH, halfW;
+            if (cam.matrix && cam.size) {
+                var fy = cam.matrix[1][1];
+                var fovY = 2 * Math.atan(cam.size[1] / (2 * fy));
+                halfH = pyramidDepth * Math.tan(fovY / 2);
+                halfW = halfH * aspectRatio;
+            } else {
+                halfH = 20 * sceneScale;
+                halfW = halfH * aspectRatio;
+            }
 
             // Four corners: top-left, top-right, bottom-right, bottom-left
             // "Top" in camera frame is -Y (since Y points down in OpenCV convention)
@@ -290,35 +316,98 @@ class Viewport3D {
             ];
 
             // --- Build wireframe geometry ---
-            // 4 edges from camera center to each corner + 4 edges around the rectangle
-            const positions = [];
-
-            // Edges from apex (camera center) to corners
+            // Apex edges: 4 lines from camera center to each corner
+            const apexPositions = [];
             for (let c = 0; c < 4; c++) {
-                positions.push(camPos[0], camPos[1], camPos[2]);
-                positions.push(corners[c][0], corners[c][1], corners[c][2]);
+                apexPositions.push(camPos[0], camPos[1], camPos[2]);
+                apexPositions.push(corners[c][0], corners[c][1], corners[c][2]);
             }
 
-            // Rectangle edges
-            for (let c = 0; c < 4; c++) {
-                const next = (c + 1) % 4;
-                positions.push(corners[c][0], corners[c][1], corners[c][2]);
-                positions.push(corners[next][0], corners[next][1], corners[next][2]);
-            }
-
-            const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position',
-                new THREE.Float32BufferAttribute(positions, 3));
-
-            const material = new THREE.LineBasicMaterial({
+            const apexGeo = new THREE.BufferGeometry();
+            apexGeo.setAttribute('position',
+                new THREE.Float32BufferAttribute(apexPositions, 3));
+            const apexMat = new THREE.LineBasicMaterial({
                 color: 0xffdd44,
                 transparent: true,
                 opacity: 0.7,
             });
+            const apexLines = new THREE.LineSegments(apexGeo, apexMat);
+            apexLines.name = 'camera_' + cam.name;
+            this._cameraGroup.add(apexLines);
 
-            const wireframe = new THREE.LineSegments(geometry, material);
-            wireframe.name = 'camera_' + cam.name;
-            this._cameraGroup.add(wireframe);
+            // Base edges: 4 lines around the rectangle
+            const basePositions = [];
+            for (let c = 0; c < 4; c++) {
+                const next = (c + 1) % 4;
+                basePositions.push(corners[c][0], corners[c][1], corners[c][2]);
+                basePositions.push(corners[next][0], corners[next][1], corners[next][2]);
+            }
+
+            const baseGeo = new THREE.BufferGeometry();
+            baseGeo.setAttribute('position',
+                new THREE.Float32BufferAttribute(basePositions, 3));
+            const baseMat = new THREE.LineBasicMaterial({
+                color: 0xffdd44,
+                transparent: true,
+                opacity: 0.7,
+            });
+            const baseLines = new THREE.LineSegments(baseGeo, baseMat);
+            baseLines.name = 'cameraBase_' + cam.name;
+            this._cameraGroup.add(baseLines);
+
+            // --- Invisible hitbox mesh for click detection ---
+            // 4 triangular side faces + 2 triangles for the base
+            const hitPositions = [];
+            // Side faces (apex to each base edge)
+            for (let c = 0; c < 4; c++) {
+                const next = (c + 1) % 4;
+                hitPositions.push(
+                    camPos[0], camPos[1], camPos[2],
+                    corners[c][0], corners[c][1], corners[c][2],
+                    corners[next][0], corners[next][1], corners[next][2]
+                );
+            }
+            // Base face (two triangles)
+            hitPositions.push(
+                corners[0][0], corners[0][1], corners[0][2],
+                corners[1][0], corners[1][1], corners[1][2],
+                corners[2][0], corners[2][1], corners[2][2],
+                corners[0][0], corners[0][1], corners[0][2],
+                corners[2][0], corners[2][1], corners[2][2],
+                corners[3][0], corners[3][1], corners[3][2]
+            );
+
+            const hitGeo = new THREE.BufferGeometry();
+            hitGeo.setAttribute('position',
+                new THREE.Float32BufferAttribute(hitPositions, 3));
+            const hitMat = new THREE.MeshBasicMaterial({
+                visible: false,
+                side: THREE.DoubleSide,
+            });
+            const hitbox = new THREE.Mesh(hitGeo, hitMat);
+            hitbox.name = 'camHitbox_' + cam.name;
+            this._cameraGroup.add(hitbox);
+
+            // --- Blue "up" direction line: camera center to top edge midpoint ---
+            const topMid = [
+                (corners[0][0] + corners[1][0]) / 2,
+                (corners[0][1] + corners[1][1]) / 2,
+                (corners[0][2] + corners[1][2]) / 2,
+            ];
+            const upLineGeo = new THREE.BufferGeometry();
+            upLineGeo.setAttribute('position',
+                new THREE.Float32BufferAttribute([
+                    camPos[0], camPos[1], camPos[2],
+                    topMid[0], topMid[1], topMid[2],
+                ], 3));
+            const upLineMat = new THREE.LineBasicMaterial({
+                color: 0x4488ff,
+                transparent: true,
+                opacity: 0.9,
+            });
+            const upLine = new THREE.LineSegments(upLineGeo, upLineMat);
+            upLine.name = 'camUp_' + cam.name;
+            this._cameraGroup.add(upLine);
 
             // --- Camera label sprite ---
             const label = this._createTextSprite(cam.name, {
@@ -374,14 +463,150 @@ class Viewport3D {
 
             const intersects = this._raycaster.intersectObjects(meshes, false);
             if (intersects.length > 0) {
-                // Find which camera was hit by checking the object name
                 const hitObj = intersects[0].object;
                 const camName = this._getCameraNameFromObject(hitObj);
                 if (camName) {
-                    this.animateToCameraPerspective(camName);
-                    if (this.onCameraClicked) {
-                        this.onCameraClicked(camName);
-                    }
+                    this.selectCamera(camName);
+                }
+            }
+        });
+
+        // Declutter: check distance to viewed camera on orbit changes
+        this.controls.addEventListener('change', () => {
+            this._checkDeclutter();
+        });
+    }
+
+    /**
+     * Select a camera by name. Highlights it in 3D and notifies the callback.
+     * @param {string} cameraName
+     */
+    selectCamera(cameraName) {
+        // Toggle if same camera clicked again
+        if (this.selectedCamera === cameraName) {
+            this.selectedCamera = null;
+            this.highlightCamera(null);
+            if (this.onCameraClicked) {
+                this.onCameraClicked(null);
+            }
+            return;
+        }
+        this.selectedCamera = cameraName;
+        this.highlightCamera(cameraName);
+        if (this.onCameraClicked) {
+            this.onCameraClicked(cameraName);
+        }
+    }
+
+    /**
+     * Animate to the selected camera's perspective.
+     * Called by the "Show Camera View" button.
+     */
+    showSelectedCameraView() {
+        if (!this.selectedCamera) return;
+        // Restore previous camera's geometry before switching
+        if (this._viewingCamera && this._viewingCamera !== this.selectedCamera) {
+            this._setDeclutter(this._viewingCamera, false);
+        }
+        this._viewingCamera = this.selectedCamera;
+        this.animateToCameraPerspective(this.selectedCamera);
+        // Declutter after animation completes
+        setTimeout(() => { this._setDeclutter(this._viewingCamera, true); }, 550);
+        // Notify callback for UI updates (e.g., showing "Initial View" button)
+        if (this.onCameraViewChanged) {
+            this.onCameraViewChanged(true);
+        }
+    }
+
+    /**
+     * Reset the 3D viewport to the initial fitted view.
+     * Called by the "Show Initial View" button.
+     */
+    showInitialView() {
+        // Restore decluttered camera if any
+        if (this._viewingCamera) {
+            this._setDeclutter(this._viewingCamera, false);
+            this._viewingCamera = null;
+        }
+        this._viewingCamData = null;
+        // Reset FOV and up vector to defaults before fitting
+        this.threeCamera.fov = 50;
+        this.threeCamera.up.set(0, 0, 1);
+        this.threeCamera.updateProjectionMatrix();
+        this.fitToScene();
+        if (this.onCameraViewChanged) {
+            this.onCameraViewChanged(false);
+        }
+    }
+
+    /**
+     * Check distance from three.js camera to the viewed camera.
+     * If close, hide that camera's geometry; if far, restore.
+     * @private
+     */
+    _checkDeclutter() {
+        if (!this._viewingCamera) return;
+        var cam = null;
+        for (var i = 0; i < this.cameras.length; i++) {
+            if (this.cameras[i].name === this._viewingCamera) {
+                cam = this.cameras[i];
+                break;
+            }
+        }
+        if (!cam) return;
+
+        var R = cam.rotationMatrix;
+        var t = cam.tvec;
+        var camPos = this._computeCameraPosition(R, t);
+        var dx = this.threeCamera.position.x - camPos[0];
+        var dy = this.threeCamera.position.y - camPos[1];
+        var dz = this.threeCamera.position.z - camPos[2];
+        var dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        // Threshold: hide when close, show when zoomed out far enough (hysteresis)
+        var hideThreshold = 80 * this._sceneScale;
+        var showThreshold = 200 * this._sceneScale;
+        if (dist < hideThreshold) {
+            this._setDeclutter(this._viewingCamera, true);
+        } else if (dist > showThreshold) {
+            this._setDeclutter(this._viewingCamera, false);
+            this._viewingCamera = null;
+            this._viewingCamData = null;
+            if (this.onCameraViewChanged) {
+                this.onCameraViewChanged(false);
+            }
+        }
+    }
+
+    /**
+     * Show or hide camera geometry for declutter.
+     * @param {string} cameraName
+     * @param {boolean} hide - true to hide, false to show
+     * @private
+     */
+    _setDeclutter(cameraName, hide) {
+        if (!this._cameraGroup) return;
+        var hidePrefixes = ['camera_', 'label_', 'camUp_', 'camSphere_', 'camHitbox_'];
+        var self = this;
+        this._cameraGroup.traverse(function (child) {
+            // Hide apex edges, label, up line, sphere, hitbox
+            for (var p = 0; p < hidePrefixes.length; p++) {
+                if (child.name === hidePrefixes[p] + cameraName) {
+                    child.visible = !hide;
+                }
+            }
+            // Bold the base when viewing, restore when not
+            if (child.name === 'cameraBase_' + cameraName) {
+                if (hide) {
+                    child.material.color.set(0xffffff);
+                    child.material.opacity = 1.0;
+                    child.visible = true;
+                } else {
+                    // Restore default (or highlighted) color
+                    var isSelected = self.selectedCamera === cameraName;
+                    child.material.color.set(isSelected ? 0xff4444 : 0xffdd44);
+                    child.material.opacity = isSelected ? 1.0 : 0.7;
+                    child.visible = true;
                 }
             }
         });
@@ -395,8 +620,8 @@ class Viewport3D {
      */
     _getCameraNameFromObject(obj) {
         if (!obj || !obj.name) return null;
-        // Objects are named: camera_NAME, label_NAME, camSphere_NAME
-        const prefixes = ['camSphere_', 'camera_', 'label_'];
+        // Objects are named: camera_NAME, cameraBase_NAME, camHitbox_NAME, label_NAME, camSphere_NAME, camUp_NAME
+        const prefixes = ['camSphere_', 'camera_', 'cameraBase_', 'camHitbox_', 'label_', 'camUp_'];
         for (const prefix of prefixes) {
             if (obj.name.startsWith(prefix)) {
                 return obj.name.substring(prefix.length);
@@ -447,13 +672,25 @@ class Viewport3D {
             camPos[2] + viewDir[2] * 100,
         ];
 
-        // Compute FOV from intrinsics: fov = 2 * atan(imageHeight / (2 * fy))
+        // Compute FOV to fit pyramid base within the viewer window.
+        // The vertical FOV from intrinsics defines the base height; we also
+        // need the base width to fit horizontally given the viewer's aspect ratio.
         let targetFov = 50; // default
         if (cam.matrix && cam.size) {
             const fy = cam.matrix[1][1];
             const imageH = cam.size[1];
-            targetFov = 2 * Math.atan(imageH / (2 * fy)) * (180 / Math.PI);
+            const cameraFovY = 2 * Math.atan(imageH / (2 * fy));
+            const cameraAspect = cam.size[0] / cam.size[1];
+            const viewerAspect = this.threeCamera.aspect;
+
+            // FOV needed to fit height vs width
+            var fovForHeight = cameraFovY;
+            var fovForWidth = 2 * Math.atan(Math.tan(cameraFovY / 2) * cameraAspect / viewerAspect);
+            targetFov = Math.max(fovForHeight, fovForWidth) * (180 / Math.PI);
         }
+
+        // Store viewing parameters for dynamic resize
+        this._viewingCamData = cam;
 
         // Animate over 500ms
         const startPos = this.threeCamera.position.clone();
@@ -473,24 +710,40 @@ class Viewport3D {
             cancelAnimationFrame(this._perspectiveAnimId);
         }
 
+        // Suppress orbit controls during animation to prevent fighting
+        this._animatingPerspective = true;
+        this.controls.enabled = false;
+
         const self = this;
         function animate() {
             const elapsed = performance.now() - startTime;
             const rawT = Math.min(1, elapsed / duration);
             // Ease in-out (smoothstep)
-            const t = rawT * rawT * (3 - 2 * rawT);
+            const progress = rawT * rawT * (3 - 2 * rawT);
 
-            self.threeCamera.position.lerpVectors(startPos, endPos, t);
-            self.controls.target.lerpVectors(startTarget, endTarget, t);
-            self.threeCamera.up.lerpVectors(startUp, endUp, t).normalize();
-            self.threeCamera.fov = startFov + (targetFov - startFov) * t;
+            self.threeCamera.position.lerpVectors(startPos, endPos, progress);
+            self.controls.target.copy(endTarget);  // Set target directly each frame
+            self.threeCamera.up.lerpVectors(startUp, endUp, progress).normalize();
+            self.threeCamera.fov = startFov + (targetFov - startFov) * progress;
             self.threeCamera.updateProjectionMatrix();
-            self.controls.update();
+
+            // Explicit render to ensure changes are visible
+            self.renderer.render(self.scene, self.threeCamera);
 
             if (rawT < 1) {
                 self._perspectiveAnimId = requestAnimationFrame(animate);
             } else {
                 self._perspectiveAnimId = null;
+                // Finalize: set exact end state
+                self.threeCamera.position.copy(endPos);
+                self.threeCamera.up.copy(endUp).normalize();
+                self.threeCamera.fov = targetFov;
+                self.threeCamera.updateProjectionMatrix();
+                self.controls.target.copy(endTarget);
+                // Re-enable orbit controls — reset internal state so it doesn't snap back
+                self.controls.enabled = true;
+                self._animatingPerspective = false;
+                self.controls.update();
             }
         }
 
@@ -541,7 +794,7 @@ class Viewport3D {
             const pts = group.points3d;
             if (!pts || pts.length === 0) continue;
 
-            const trackIdx = group.trackIdx != null ? group.trackIdx : g;
+            const trackIdx = group.identityId >= 0 ? group.identityId : g;
             const colorStr = this.getTrackColor(trackIdx);
             const color = new THREE.Color(colorStr);
             const isSelected = (this.selectedInstanceIdx === g);
@@ -606,6 +859,88 @@ class Viewport3D {
         }
 
         console.log('[3D] updateSkeleton complete:', this._skeletonGroup.children.length, 'instance groups in scene');
+    }
+
+    /**
+     * Set a persistent environment overlay from triangulated 3D points.
+     * This is rendered as a semi-transparent skeleton that persists across frame changes.
+     *
+     * @param {Array<InstanceGroup>} instanceGroups - Groups whose points3d to freeze as environment
+     */
+    setEnvironment(instanceGroups) {
+        this._clearGroup(this._envGroup);
+
+        if (!instanceGroups || instanceGroups.length === 0) {
+            console.log('[3D] clearEnvironment');
+            return;
+        }
+
+        const ss = this._sceneScale || 1;
+        const nodeRadius = 1.5 * ss;
+        const edgeRadius = 0.6 * ss;
+        const sphereSegments = 10;
+        const cylinderSegments = 6;
+        const sphereGeo = new THREE.SphereGeometry(nodeRadius, sphereSegments, sphereSegments);
+        const edges = this.skeleton.edges || [];
+        const nodes = this.skeleton.nodes || [];
+
+        var envColor = new THREE.Color(0xdddddd);
+
+        var nodeMaterial = new THREE.MeshPhongMaterial({
+            color: envColor,
+            opacity: 1.0,
+            shininess: 60,
+        });
+
+        var edgeMaterial = new THREE.MeshPhongMaterial({
+            color: envColor,
+            transparent: true,
+            opacity: 0.8,
+            shininess: 40,
+        });
+
+        for (var g = 0; g < instanceGroups.length; g++) {
+            var group = instanceGroups[g];
+            var pts = group.points3d;
+            if (!pts || pts.length === 0) continue;
+
+            var envGroup3D = new THREE.Group();
+            envGroup3D.name = 'env_' + g;
+
+            for (var n = 0; n < pts.length; n++) {
+                var pt = pts[n];
+                if (pt == null) continue;
+                var mesh = new THREE.Mesh(sphereGeo, nodeMaterial);
+                mesh.position.set(pt[0], pt[1], pt[2]);
+                mesh.name = 'env_node_' + (nodes[n] || n);
+                envGroup3D.add(mesh);
+            }
+
+            for (var e = 0; e < edges.length; e++) {
+                var srcIdx = edges[e][0];
+                var dstIdx = edges[e][1];
+                if (srcIdx >= pts.length || dstIdx >= pts.length) continue;
+                var srcPt = pts[srcIdx];
+                var dstPt = pts[dstIdx];
+                if (srcPt == null || dstPt == null) continue;
+
+                var cylinder = this._createCylinder(srcPt, dstPt, edgeRadius, edgeMaterial, cylinderSegments);
+                cylinder.name = 'env_edge_' + srcIdx + '_' + dstIdx;
+                envGroup3D.add(cylinder);
+            }
+
+            this._envGroup.add(envGroup3D);
+        }
+
+        console.log('[3D] setEnvironment:', instanceGroups.length, 'groups,', this._envGroup.children.length, 'in scene');
+    }
+
+    /**
+     * Clear the persistent environment overlay.
+     */
+    clearEnvironment() {
+        this._clearGroup(this._envGroup);
+        console.log('[3D] environment cleared');
     }
 
     /**
@@ -685,6 +1020,61 @@ class Viewport3D {
     }
 
     /**
+     * Highlight a camera by name in the 3D viewport.
+     * Pass null to clear all highlights.
+     * @param {string|null} cameraName
+     */
+    /**
+     * Set which camera names have no associated video. These are rendered in red.
+     * @param {Set<string>|Array<string>} names
+     */
+    setMissingVideoCameras(names) {
+        this._missingVideoCameras = new Set(names);
+        this.highlightCamera(this.selectedCamera);
+    }
+
+    highlightCamera(cameraName) {
+        if (!this._cameraGroup) return;
+        var missingSet = this._missingVideoCameras || new Set();
+        this._cameraGroup.traverse(function (child) {
+            if (child.material && child.material.visible !== false) {
+                var name = child.name || '';
+                var isUpLine = name.startsWith('camUp_');
+
+                // Determine which camera this object belongs to
+                var objCamName = null;
+                var prefixes = ['camera_', 'cameraBase_', 'label_', 'camSphere_', 'camUp_'];
+                for (var pi = 0; pi < prefixes.length; pi++) {
+                    if (name.startsWith(prefixes[pi])) {
+                        objCamName = name.substring(prefixes[pi].length);
+                        break;
+                    }
+                }
+
+                var isSelected = cameraName && objCamName === cameraName;
+                var isMissing = objCamName && missingSet.has(objCamName);
+
+                if (isSelected) {
+                    // Selected: green
+                    child.material.color.set(isUpLine ? 0x66ffaa : 0x4caf50);
+                    child.material.opacity = 1.0;
+                } else if (isMissing) {
+                    // Missing video: red
+                    child.material.color.set(isUpLine ? 0xff6666 : 0xef5350);
+                    child.material.opacity = 0.85;
+                } else if (isUpLine) {
+                    child.material.color.set(0x4488ff);
+                    child.material.opacity = 0.9;
+                } else {
+                    // Default yellow
+                    child.material.color.set(0xffdd44);
+                    child.material.opacity = name.startsWith('camSphere_') ? 0.8 : 0.7;
+                }
+            }
+        });
+    }
+
+    /**
      * Handle container resize. Updates renderer and camera aspect ratio.
      */
     resize() {
@@ -693,9 +1083,23 @@ class Viewport3D {
         if (width === 0 || height === 0) return;
 
         this.threeCamera.aspect = width / height;
+
+        // Recompute FOV to keep pyramid base fitted when in camera view
+        if (this._viewingCamera && this._viewingCamData) {
+            var cam = this._viewingCamData;
+            if (cam.matrix && cam.size) {
+                var fy = cam.matrix[1][1];
+                var cameraFovY = 2 * Math.atan(cam.size[1] / (2 * fy));
+                var cameraAspect = cam.size[0] / cam.size[1];
+                var viewerAspect = width / height;
+                var fovH = cameraFovY;
+                var fovW = 2 * Math.atan(Math.tan(cameraFovY / 2) * cameraAspect / viewerAspect);
+                this.threeCamera.fov = Math.max(fovH, fovW) * (180 / Math.PI);
+            }
+        }
+
         this.threeCamera.updateProjectionMatrix();
         this.renderer.setSize(width, height);
-
     }
 
     /**
@@ -856,7 +1260,8 @@ class Viewport3D {
 
         this._rafId = requestAnimationFrame(() => this._animate());
 
-        if (this.controls) {
+        // Skip orbit controls update during perspective animation to prevent fighting
+        if (this.controls && !this._animatingPerspective) {
             this.controls.update();
         }
 

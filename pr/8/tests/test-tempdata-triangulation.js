@@ -241,19 +241,13 @@ TestFramework.suite('Tempdata Triangulation Pipeline', function () {
 
         // Store in session
         if (!session.instanceGroups.has(0)) {
-            session.instanceGroups.set(0, new Map());
+            session.instanceGroups.set(0, []);
         }
-        session.instanceGroups.get(0).set(0, [group]);
+        session.instanceGroups.get(0).push(group);
         session.addFrameGroup(fg);
 
         // Retrieve through the same path as getInstanceGroupsForFrame
-        var trackMap = session.instanceGroups.get(0);
-        var result = [];
-        for (var entry of trackMap) {
-            for (var g of entry[1]) {
-                result.push(g);
-            }
-        }
+        var result = session.instanceGroups.get(0) || [];
 
         TestFramework.assertEqual(result.length, 1, 'Got 1 instance group');
         TestFramework.assert(result[0].points3d != null, 'points3d is preserved');

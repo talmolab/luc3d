@@ -242,12 +242,48 @@ async function parseSlp(file) {
             ['instance_id', 'instance_type', 'frame_id', 'skeleton', 'track',
                 'from_predicted', 'score', 'point_id_start', 'point_id_end', 'tracking_score']);
 
+        progress('framesData: ' + (framesData ? 'OK (' + framesData.frame_id.length + ' rows)' : 'NULL'));
+        progress('instancesData: ' + (instancesData ? 'OK (' + (instancesData.instance_type ? instancesData.instance_type.length : '?') + ' rows)' : 'NULL'));
+
         var pointsData = readPoints(f, 'points', ['x', 'y', 'visible', 'complete']);
         var predPointsData = readPoints(f, 'pred_points', ['x', 'y', 'visible', 'complete', 'score']);
+        progress('pointsData: ' + (pointsData ? 'OK (' + pointsData.x.length + ' rows)' : 'NULL'));
+        progress('predPointsData: ' + (predPointsData ? 'OK (' + predPointsData.x.length + ' rows)' : 'NULL'));
 
         progress('Frames: ' + (framesData ? framesData.frame_id.length : 0) +
             ', Points: ' + (pointsData ? pointsData.x.length : 0) +
             ', PredPoints: ' + (predPointsData ? predPointsData.x.length : 0));
+
+        // Diagnostic: check actual value types from compound dataset reads
+        if (pointsData && pointsData.x.length > 0) {
+            var sampleX = pointsData.x[0];
+            progress('points.x[0] type: ' + typeof sampleX + ', value: ' + sampleX +
+                ', isTypedArray: ' + (sampleX && typeof sampleX === 'object' && sampleX.length !== undefined));
+        }
+        if (framesData && framesData.frame_id.length > 0) {
+            var sampleFid = framesData.frame_id[0];
+            progress('frames.frame_id[0] type: ' + typeof sampleFid + ', value: ' + sampleFid);
+        }
+
+        // Diagnostic: show instances dataset structure and instance_type values
+        if (instancesData) {
+            progress('instances fields: ' + Object.keys(instancesData).join(', '));
+            var numInst = instancesData.instance_type ? instancesData.instance_type.length : 0;
+            progress('Total instances: ' + numInst);
+            // Show first few instance_type values to verify type detection
+            var typePreview = [];
+            for (var _ti2 = 0; _ti2 < Math.min(10, numInst); _ti2++) {
+                typePreview.push(instancesData.instance_type[_ti2]);
+            }
+            progress('instance_type values (first 10): [' + typePreview.join(', ') + ']');
+            // Count types
+            var typeCountMap = {};
+            for (var _ti3 = 0; _ti3 < numInst; _ti3++) {
+                var tv = instancesData.instance_type[_ti3];
+                typeCountMap[tv] = (typeCountMap[tv] || 0) + 1;
+            }
+            progress('instance_type distribution: ' + JSON.stringify(typeCountMap));
+        }
 
         // Diagnostic: show actual field names and first 3 frames
         if (framesData) {
@@ -285,7 +321,7 @@ async function parseSlp(file) {
                     var ptStart = Number(instancesData.point_id_start[ji]);
                     var ptEnd = Number(instancesData.point_id_end[ji]);
 
-                    var pts = instType === 1 ? predPointsData : pointsData;
+                    var pts = instType === 1 ? (predPointsData || pointsData) : pointsData;
                     if (!pts) continue;
 
                     var points = [];
@@ -327,10 +363,35 @@ async function parseSlp(file) {
         try {
             var sessDs = f.get('sessions_json');
             if (sessDs && sessDs.shape[0] > 0) {
-                var sessParsed = JSON.parse(sessDs.value[0]);
-                sessionsArr = Array.isArray(sessParsed) ? sessParsed : [sessParsed];
+                for (var si = 0; si < sessDs.shape[0]; si++) {
+                    var sessParsed = JSON.parse(sessDs.value[si]);
+                    // Each entry may be a single session dict or an array
+                    if (Array.isArray(sessParsed)) {
+                        for (var sp = 0; sp < sessParsed.length; sp++) sessionsArr.push(sessParsed[sp]);
+                    } else {
+                        sessionsArr.push(sessParsed);
+                    }
+                }
             }
         } catch (e) { /* no sessions */ }
+
+        // --- Identities JSON ---
+        var identitiesArr = [];
+        try {
+            var idDs = f.get('identities_json');
+            if (idDs && idDs.shape[0] > 0) {
+                for (var idi = 0; idi < idDs.shape[0]; idi++) {
+                    identitiesArr.push(JSON.parse(idDs.value[idi]));
+                }
+            }
+        } catch (e) { /* no identities */ }
+
+        // Warn about data the streaming worker doesn't process
+        try {
+            if (f.get('instance_groups')) {
+                progress('[warn] SLP file contains instance_groups data — Instance3D/identity linking is not supported by the streaming reader and will be skipped');
+            }
+        } catch (e) { /* dataset not present */ }
 
         // NOTE: Embedded video frame bytes are NOT extracted here.
         // A separate frame-worker.js handles on-demand frame extraction
@@ -338,6 +399,16 @@ async function parseSlp(file) {
 
         f.close();
         try { FS.unmount('/work'); } catch (e) { /* ignore */ }
+
+        // Count instances by type
+        var userCount = 0, predCount = 0;
+        for (var _ci = 0; _ci < frames.length; _ci++) {
+            for (var _cj = 0; _cj < frames[_ci].instances.length; _cj++) {
+                if (frames[_ci].instances[_cj].type === 'predicted') predCount++;
+                else userCount++;
+            }
+        }
+        progress('Instance types: ' + userCount + ' user, ' + predCount + ' predicted');
 
         progress('Done! Sending results...');
 
@@ -349,10 +420,259 @@ async function parseSlp(file) {
                 frames: frames,
                 videos: videos,
                 sessions: sessionsArr,
+                identities: identitiesArr,
             }
         });
 
     } catch (err) {
+        try { FS.unmount('/work'); } catch (e) { }
+        var errMsg = (err.message || String(err));
+        if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
+        postMessage({ type: 'error', message: errMsg });
+    }
+}
+
+// --- Analysis H5 parsing ---
+
+function parseAnalysisH5(f, filename) {
+    try {
+        // --- Read node names ---
+        var nodeNamesDs = f.get('node_names');
+        var nodeNames = [];
+        if (nodeNamesDs) {
+            var nnVal = nodeNamesDs.value;
+            for (var i = 0; i < nnVal.length; i++) {
+                nodeNames.push(String(nnVal[i]));
+            }
+        }
+        var nNodes = nodeNames.length;
+        progress('Nodes: ' + nNodes + ' — ' + nodeNames.slice(0, 5).join(', ') + (nNodes > 5 ? '...' : ''));
+
+        // --- Read track names ---
+        var trackNamesDs = f.get('track_names');
+        var trackNames = [];
+        if (trackNamesDs) {
+            var tnVal = trackNamesDs.value;
+            for (var ti = 0; ti < tnVal.length; ti++) {
+                trackNames.push(String(tnVal[ti]));
+            }
+        }
+        // nTracks will be determined from the tracks dataset shape below,
+        // since track_names can be empty for single-instance models
+        progress('Track names: ' + (trackNames.length > 0 ? trackNames.join(', ') : '(none — single instance)'));
+
+        // --- Read edges ---
+        var edges = [];
+        try {
+            var edgeIndsDs = f.get('edge_inds');
+            if (edgeIndsDs) {
+                var eiVal = edgeIndsDs.value;
+                var eiShape = edgeIndsDs.shape;
+                // Stored as [2, n_edges] (transposed) or [n_edges, 2]
+                if (eiShape.length === 2) {
+                    if (eiShape[0] === 2 && eiShape[1] !== 2) {
+                        // Transposed: [2, n_edges]
+                        var nEdges = eiShape[1];
+                        for (var ei = 0; ei < nEdges; ei++) {
+                            edges.push([Number(eiVal[ei]), Number(eiVal[nEdges + ei])]);
+                        }
+                    } else {
+                        // Normal: [n_edges, 2]
+                        var nEdges2 = eiShape[0];
+                        for (var ei2 = 0; ei2 < nEdges2; ei2++) {
+                            edges.push([Number(eiVal[ei2 * 2]), Number(eiVal[ei2 * 2 + 1])]);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            progress('Warning: could not read edge_inds: ' + e.message);
+        }
+        progress('Edges: ' + edges.length);
+
+        // --- Read tracks data ---
+        var tracksDs = f.get('tracks');
+        if (!tracksDs) {
+            throw new Error('No tracks dataset found in analysis H5');
+        }
+        var tracksVal = tracksDs.value;
+        var tracksShape = tracksDs.shape; // Expected: [n_tracks, 2, n_nodes, n_frames] (transposed)
+        progress('tracks shape: [' + tracksShape.join(', ') + ']');
+
+        // Determine orientation and extract dimensions
+        // nTracks is derived from the shape, not track_names (which can be empty)
+        var nTracks, nFrames, transposed;
+        if (tracksShape.length === 4) {
+            if (tracksShape[1] === 2 && tracksShape[2] === nNodes) {
+                // Transposed (MATLAB/default): [n_tracks, 2, n_nodes, n_frames]
+                transposed = true;
+                nTracks = tracksShape[0];
+                nFrames = tracksShape[3];
+            } else if (tracksShape[2] === 2 && tracksShape[1] === nNodes) {
+                // Non-transposed: [n_frames, n_nodes, 2, n_tracks]
+                transposed = false;
+                nTracks = tracksShape[3];
+                nFrames = tracksShape[0];
+            } else {
+                // Fallback: assume transposed
+                transposed = true;
+                nTracks = tracksShape[0];
+                nFrames = tracksShape[3];
+                progress('Warning: unexpected tracks shape, assuming transposed layout');
+            }
+        } else {
+            throw new Error('Unexpected tracks dimensionality: ' + tracksShape.length);
+        }
+        progress('nTracks: ' + nTracks + ', nFrames: ' + nFrames + ', transposed: ' + transposed);
+
+        // Backfill track names if empty
+        if (trackNames.length === 0) {
+            for (var tni = 0; tni < nTracks; tni++) {
+                trackNames.push(nTracks === 1 ? 'track' : 'track_' + tni);
+            }
+        }
+
+        // --- Read point scores (optional) ---
+        var pointScores = null;
+        var pointScoresShape = null;
+        try {
+            var psDs = f.get('point_scores');
+            if (psDs) {
+                pointScores = psDs.value;
+                pointScoresShape = psDs.shape;
+            }
+        } catch (e) { }
+
+        // --- Read instance scores (optional) ---
+        var instanceScores = null;
+        try {
+            var isDs = f.get('instance_scores');
+            if (isDs) { instanceScores = isDs.value; }
+        } catch (e) { }
+
+        // --- Read track occupancy (optional) ---
+        var trackOccupancy = null;
+        var trackOccShape = null;
+        try {
+            var toDs = f.get('track_occupancy');
+            if (toDs) {
+                trackOccupancy = toDs.value;
+                trackOccShape = toDs.shape;
+            }
+        } catch (e) { }
+
+        // --- Build frames array ---
+        progress('Building frame data...');
+        var frames = [];
+        for (var fr = 0; fr < nFrames; fr++) {
+            var instances = [];
+            for (var tr = 0; tr < nTracks; tr++) {
+                // Check occupancy if available
+                if (trackOccupancy) {
+                    // track_occupancy shape: [n_frames, n_tracks]
+                    var occIdx = fr * nTracks + tr;
+                    if (occIdx < trackOccupancy.length && !trackOccupancy[occIdx]) {
+                        continue;
+                    }
+                }
+
+                var points = [];
+                var hasAnyPoint = false;
+                for (var nd = 0; nd < nNodes; nd++) {
+                    var x, y;
+                    if (transposed) {
+                        // Shape [n_tracks, 2, n_nodes, n_frames]
+                        // index(t, c, n, f) = t*(2*N*F) + c*(N*F) + n*F + f
+                        var baseT = tr * (2 * nNodes * nFrames);
+                        x = Number(tracksVal[baseT + 0 * (nNodes * nFrames) + nd * nFrames + fr]);
+                        y = Number(tracksVal[baseT + 1 * (nNodes * nFrames) + nd * nFrames + fr]);
+                    } else {
+                        // Shape [n_frames, n_nodes, 2, n_tracks]
+                        // index(f, n, c, t) = f*(N*2*T) + n*(2*T) + c*T + t
+                        var baseF = fr * (nNodes * 2 * nTracks);
+                        x = Number(tracksVal[baseF + nd * (2 * nTracks) + 0 * nTracks + tr]);
+                        y = Number(tracksVal[baseF + nd * (2 * nTracks) + 1 * nTracks + tr]);
+                    }
+
+                    if (!isNaN(x) && !isNaN(y)) {
+                        points.push([x, y]);
+                        hasAnyPoint = true;
+                    } else {
+                        points.push(null);
+                    }
+                }
+
+                if (!hasAnyPoint) continue;
+
+                // Get instance score if available
+                var instScore = 0;
+                if (instanceScores) {
+                    // instance_scores shape: [n_tracks, n_frames] (transposed)
+                    var scoreIdx = tr * nFrames + fr;
+                    if (scoreIdx < instanceScores.length) {
+                        instScore = Number(instanceScores[scoreIdx]);
+                        if (isNaN(instScore)) instScore = 0;
+                    }
+                }
+
+                instances.push({
+                    trackIdx: tr,
+                    score: instScore,
+                    type: 'predicted',
+                    points: points,
+                });
+            }
+
+            if (instances.length > 0) {
+                frames.push({ frameIdx: fr, videoIdx: 0, instances: instances });
+            }
+        }
+
+        progress('Built ' + frames.length + ' frames with pose data');
+
+        // --- Build video entry from filename ---
+        // Strip .analysis.h5 or .h5 to get a base name
+        var vidName = filename;
+        vidName = vidName.replace(/\.analysis\.h5$/i, '').replace(/\.h5$/i, '');
+        // Try to extract the original video filename from SLEAP's naming convention:
+        // model_name.predictions.ORIGINAL_VIDEO_NAME.analysis.h5
+        var predIdx = vidName.indexOf('.predictions.');
+        var sourceVideo = null;
+        if (predIdx >= 0) {
+            sourceVideo = vidName.substring(predIdx + '.predictions.'.length);
+        }
+        var videos = [{
+            index: 0,
+            filename: sourceVideo || vidName,
+            sourceFilename: sourceVideo ? vidName : null,
+            backendType: 'AnalysisH5',
+            shape: null,
+            embedded: false,
+            dataset: null,
+        }];
+
+        // --- Build skeleton ---
+        var skelName = 'skeleton';
+        var skeleton = { name: skelName, nodes: nodeNames, edges: edges };
+
+        f.close();
+        try { FS.unmount('/work'); } catch (e) { /* ignore */ }
+
+        progress('Done! Sending results...');
+
+        postMessage({
+            type: 'result',
+            data: {
+                skeleton: skeleton,
+                tracks: trackNames,
+                frames: frames,
+                videos: videos,
+                sessions: [],
+            }
+        });
+
+    } catch (err) {
+        try { f.close(); } catch (e) { }
         try { FS.unmount('/work'); } catch (e) { }
         var errMsg = (err.message || String(err));
         if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
@@ -630,20 +950,54 @@ function readColumnar(h5file, name, fields) {
     }
 
     // Compound dataset
+    progress('[readColumnar] ' + name + ': type=' + ds.type + ', dtype=' + (ds.dtype || '?') + ', shape=' + JSON.stringify(ds.shape));
     var raw;
-    try { raw = ds.value; } catch (e) { return null; }
-    if (!raw) return null;
+    try { raw = ds.value; } catch (e) {
+        progress('Warning: failed to read ' + name + '.value: ' + e.message);
+        // Fallback: try json_value which unwraps TypedArrays
+        try { raw = ds.json_value; } catch (e2) {
+            progress('Warning: failed to read ' + name + '.json_value: ' + e2.message);
+            return null;
+        }
+    }
+    if (!raw) { progress('[readColumnar] ' + name + ': raw is null/empty'); return null; }
+    progress('[readColumnar] ' + name + ': raw type=' + typeof raw + ', isArray=' + Array.isArray(raw) +
+        ', length=' + (raw ? raw.length : 0) +
+        (Array.isArray(raw) && raw.length > 0 ? ', first=' + typeof raw[0] + ' isArray=' + Array.isArray(raw[0]) : ''));
 
     // Already columnar object with typed array fields
     if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw[fields[0]] !== undefined) {
         return raw;
     }
 
-    // Array of tuples
+    // 2D matrix format (written by sleap-io.js with field_names attribute)
+    // h5wasm returns a flat TypedArray for shape [N, M] datasets
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.length > 0
+        && ds.shape && ds.shape.length === 2) {
+        var numCols = ds.shape[1];
+        var numRows = ds.shape[0];
+        var data0 = {};
+        for (var j0 = 0; j0 < fields.length && j0 < numCols; j0++) {
+            var col = new Array(numRows);
+            for (var r = 0; r < numRows; r++) {
+                col[r] = raw[r * numCols + j0];
+            }
+            data0[fields[j0]] = col;
+        }
+        return data0;
+    }
+
+    // Helper: unwrap single-element TypedArrays from compound dataset reads
+    function unwrap(v) {
+        if (v && typeof v === 'object' && v.length === 1) return v[0];
+        return v;
+    }
+
+    // Array of tuples (compound datasets return TypedArray members)
     if (Array.isArray(raw) && raw.length > 0 && Array.isArray(raw[0])) {
         var data = {};
         for (var j = 0; j < fields.length; j++) {
-            data[fields[j]] = raw.map(function (row) { return row[j]; });
+            data[fields[j]] = raw.map(function (row) { return unwrap(row[j]); });
         }
         return data;
     }
@@ -653,7 +1007,7 @@ function readColumnar(h5file, name, fields) {
         var data2 = {};
         for (var k = 0; k < fields.length; k++) {
             var fld = fields[k];
-            data2[fld] = raw.map(function (row) { return row[fld]; });
+            data2[fld] = raw.map(function (row) { return unwrap(row[fld]); });
         }
         return data2;
     }
@@ -678,17 +1032,43 @@ function readPoints(h5file, name, fields) {
             return null;
         }
 
-        var raw = ds.value;
+        var raw;
+        try { raw = ds.value; } catch (e) {
+            try { raw = ds.json_value; } catch (e2) { return null; }
+        }
         if (!raw) return null;
 
         if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.x !== undefined) {
             return raw;
         }
 
+        // 2D matrix format (flat TypedArray with shape [N, M])
+        if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.length > 0
+            && ds.shape && ds.shape.length === 2) {
+            var numCols = ds.shape[1];
+            var numRows = ds.shape[0];
+            var data0 = {};
+            for (var j0 = 0; j0 < fields.length && j0 < numCols; j0++) {
+                var col = new Array(numRows);
+                for (var r = 0; r < numRows; r++) {
+                    col[r] = raw[r * numCols + j0];
+                }
+                data0[fields[j0]] = col;
+            }
+            if (data0.x && data0.x.length > 0) return data0;
+            return null;
+        }
+
+        // Helper: unwrap single-element TypedArrays from compound dataset reads
+        function unwrap(v) {
+            if (v && typeof v === 'object' && v.length === 1) return v[0];
+            return v;
+        }
+
         if (Array.isArray(raw) && raw.length > 0 && Array.isArray(raw[0])) {
             var data = {};
             for (var j = 0; j < fields.length; j++) {
-                data[fields[j]] = raw.map(function (row) { return row[j]; });
+                data[fields[j]] = raw.map(function (row) { return unwrap(row[j]); });
             }
             return data;
         }
@@ -697,7 +1077,7 @@ function readPoints(h5file, name, fields) {
             var data2 = {};
             for (var k = 0; k < fields.length; k++) {
                 var fld = fields[k];
-                data2[fld] = raw.map(function (row) { return row[fld]; });
+                data2[fld] = raw.map(function (row) { return unwrap(row[fld]); });
             }
             return data2;
         }

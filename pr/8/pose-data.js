@@ -122,9 +122,12 @@ class Camera {
      * @returns {number[][]} 3x3 rotation matrix
      */
     get rotationMatrix() {
+        if (this._cachedR) return this._cachedR;
+
         // If rvec is already a 3x3 rotation matrix, return it directly.
         // This handles anipose TOML format which stores rotation as a matrix.
         if (Array.isArray(this.rvec) && Array.isArray(this.rvec[0])) {
+            this._cachedR = this.rvec;
             return this.rvec;
         }
 
@@ -173,6 +176,7 @@ class Camera {
                 R[i][j] = (i === j ? 1 : 0) + sinT * K[i][j] + oneMinusCosT * KK[i][j];
             }
         }
+        this._cachedR = R;
         return R;
     }
 
@@ -181,13 +185,15 @@ class Camera {
      * @returns {number[][]} 3x4 matrix
      */
     get extrinsicMatrix() {
+        if (this._cachedRt) return this._cachedRt;
         const R = this.rotationMatrix;
         const t = this.tvec;
-        return [
+        this._cachedRt = [
             [R[0][0], R[0][1], R[0][2], t[0]],
             [R[1][0], R[1][1], R[1][2], t[1]],
             [R[2][0], R[2][1], R[2][2], t[2]]
         ];
+        return this._cachedRt;
     }
 
     /**
@@ -195,9 +201,12 @@ class Camera {
      * @returns {number[][]} 3x4 projection matrix
      */
     get projectionMatrix() {
-        const K = this.matrix;
-        const Rt = this.extrinsicMatrix;
-        return mat3x3Multiply3x4(K, Rt);
+        if (!this._cachedP) {
+            const K = this.matrix;
+            const Rt = this.extrinsicMatrix;
+            this._cachedP = mat3x3Multiply3x4(K, Rt);
+        }
+        return this._cachedP;
     }
 
     /**
@@ -272,7 +281,7 @@ class Instance {
     /**
      * @param {(number[]|null)[]} points - Array of [u, v] 2D keypoints (null if not visible)
      * @param {number} trackIdx - Track index
-     * @param {'user'|'predicted'} type
+     * @param {'user'|'predicted'|'reprojected'} type
      * @param {number} score - Confidence 0-1
      */
     constructor(points, trackIdx, type, score) {
@@ -435,14 +444,31 @@ class FrameGroup {
 }
 
 
+var _identityIdCounter = 0;
+
+var IDENTITY_COLORS = [
+    '#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff8800',
+    '#0088ff', '#ff0088', '#88ff00', '#8800ff', '#00ff88',
+    '#ff0000', '#0000ff', '#00ff44', '#ff4400', '#4400ff',
+    '#44ff00', '#ff0044', '#0044ff', '#ffaa00', '#aa00ff',
+];
+
+class Identity {
+    constructor(id, name, color) {
+        this.id = id != null ? id : _identityIdCounter++;
+        this.name = name || ('id_' + this.id);
+        this.color = color || IDENTITY_COLORS[this.id % IDENTITY_COLORS.length];
+    }
+}
+
 class InstanceGroup {
     /**
      * @param {number} id
-     * @param {number} trackIdx
+     * @param {number} identityId
      */
-    constructor(id, trackIdx) {
+    constructor(id, identityId) {
         this.id = id;
-        this.trackIdx = trackIdx;
+        this.identityId = identityId != null ? identityId : -1;
         /** @type {Map<string, Instance>} camera name -> single instance */
         this.instances = new Map();
         /** @type {number[][]|null} N x [x, y, z] triangulated 3D points, or null */
@@ -451,6 +477,8 @@ class InstanceGroup {
         this.dirty = false;
         /** @type {Set<string>|null} Camera names used for last triangulation */
         this.usedCameras = null;
+        /** @type {Map<string, Instance>} camera name -> reprojected instance */
+        this.reprojectedInstances = new Map();
     }
 
     /**
@@ -492,6 +520,24 @@ class InstanceGroup {
     markClean() {
         this.dirty = false;
     }
+
+    /**
+     * Add (or replace) the reprojected instance for a given camera view.
+     * @param {string} cameraName
+     * @param {Instance} instance
+     */
+    addReprojectedInstance(cameraName, instance) {
+        this.reprojectedInstances.set(cameraName, instance);
+    }
+
+    /**
+     * Get the reprojected instance for a given camera view.
+     * @param {string} cameraName
+     * @returns {Instance|undefined}
+     */
+    getReprojectedInstance(cameraName) {
+        return this.reprojectedInstances.get(cameraName);
+    }
 }
 
 
@@ -500,15 +546,177 @@ class Session {
      * @param {Camera[]} cameras
      * @param {Skeleton} skeleton
      * @param {string[]} tracks - Track names
+     * @param {string} name - Session name (optional, defaults to 'Session 1')
      */
-    constructor(cameras, skeleton, tracks) {
+    constructor(cameras, skeleton, tracks, name) {
         this.cameras = cameras;
         this.skeleton = skeleton;
         this.tracks = tracks;
+        this.name = name || 'Session 1';
+        this.videoFileIndices = [];
+        this.lastFrame = 0;
         /** @type {Map<number, FrameGroup>} frameIdx -> FrameGroup */
         this.frameGroups = new Map();
-        /** @type {Map<number, Map<number, InstanceGroup[]>>} frameIdx -> trackIdx -> InstanceGroup[] */
+        /** @type {Map<number, InstanceGroup[]>} frameIdx -> InstanceGroup[] */
         this.instanceGroups = new Map();
+        /** @type {Identity[]} */
+        this.identities = [];
+        this.trustTracks = false;
+        /** @type {Map<string, number>} "camName:trackIdx" → identityId (global default mapping) */
+        this.trackIdentityMap = new Map();
+        /** @type {Map<string, number>} "frameIdx:camName:trackIdx" → identityId (per-frame overrides) */
+        this.frameIdentityMap = new Map();
+    }
+
+    addIdentity(name, color) {
+        var maxId = this.identities.reduce(function (m, id) { return Math.max(m, id.id); }, -1);
+        var identity = new Identity(maxId + 1, name, color);
+        this.identities.push(identity);
+        return identity;
+    }
+
+    getIdentity(identityId) {
+        for (var i = 0; i < this.identities.length; i++) {
+            if (this.identities[i].id === identityId) return this.identities[i];
+        }
+        return null;
+    }
+
+    getOrCreateIdentityForTrack(trackIdx) {
+        // Check if any camera has this track mapped already
+        var idName = 'id_' + trackIdx;
+        for (var i = 0; i < this.identities.length; i++) {
+            if (this.identities[i].name === idName) return this.identities[i];
+        }
+        // Create new identity and map it for all cameras
+        var identity = this.addIdentity(idName);
+        for (var ci = 0; ci < this.cameras.length; ci++) {
+            this.trackIdentityMap.set(this.cameras[ci].name + ':' + trackIdx, identity.id);
+        }
+        return identity;
+    }
+
+    assignIdentityToGroup(group, identityId) {
+        group.identityId = identityId;
+    }
+
+    /**
+     * Assign a tracklet (trackIdx) in a specific camera to an Identity.
+     * @param {number} trackIdx
+     * @param {number} identityId
+     * @param {string} [cameraName] - If omitted, assigns for ALL cameras
+     */
+    assignTrackToIdentity(trackIdx, identityId, cameraName) {
+        if (cameraName) {
+            this.trackIdentityMap.set(cameraName + ':' + trackIdx, identityId);
+        } else {
+            for (var ci = 0; ci < this.cameras.length; ci++) {
+                this.trackIdentityMap.set(this.cameras[ci].name + ':' + trackIdx, identityId);
+            }
+        }
+    }
+
+    /**
+     * Get the Identity for a tracklet (trackIdx) in a specific camera.
+     * Checks per-frame override first (if frameIdx provided), then global.
+     * @param {number} trackIdx
+     * @param {string} [cameraName] - If omitted, checks first matching camera
+     * @param {number} [frameIdx] - If provided, checks per-frame overrides first
+     * @returns {Identity|null}
+     */
+    getIdentityForTrack(trackIdx, cameraName, frameIdx) {
+        // Check per-frame override first
+        if (frameIdx != null && cameraName) {
+            var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
+            var frameIdVal = this.frameIdentityMap.get(frameKey);
+            if (frameIdVal != null) return this.getIdentity(frameIdVal);
+        }
+        // Per-frame without cameraName: check any camera at this frame
+        if (frameIdx != null && !cameraName) {
+            var framePrefix = frameIdx + ':';
+            var trackSuffix = ':' + trackIdx;
+            for (var [fKey, fIdVal] of this.frameIdentityMap) {
+                if (fKey.substring(0, framePrefix.length) === framePrefix &&
+                    fKey.substring(fKey.length - trackSuffix.length) === trackSuffix) {
+                    return this.getIdentity(fIdVal);
+                }
+            }
+        }
+        // Fall back to global
+        if (cameraName) {
+            var identityId = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
+            if (identityId != null) return this.getIdentity(identityId);
+        }
+        // Fallback: check any camera in global
+        for (var [key, idVal] of this.trackIdentityMap) {
+            if (key.endsWith(':' + trackIdx)) return this.getIdentity(idVal);
+        }
+        return null;
+    }
+
+    /**
+     * Get identity ID for a track at a specific frame (checks per-frame first, then global).
+     * @param {string} cameraName
+     * @param {number} trackIdx
+     * @param {number} [frameIdx]
+     * @returns {number|null} identityId or null
+     */
+    getIdentityIdForTrack(cameraName, trackIdx, frameIdx) {
+        if (frameIdx != null) {
+            var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
+            var frameIdVal = this.frameIdentityMap.get(frameKey);
+            if (frameIdVal != null) return frameIdVal;
+        }
+        var globalVal = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
+        return globalVal != null ? globalVal : null;
+    }
+
+    /**
+     * Set identity for a track at a specific frame (per-frame override).
+     * @param {number} frameIdx
+     * @param {string} cameraName
+     * @param {number} trackIdx
+     * @param {number} identityId
+     */
+    setFrameIdentity(frameIdx, cameraName, trackIdx, identityId) {
+        this.frameIdentityMap.set(frameIdx + ':' + cameraName + ':' + trackIdx, identityId);
+    }
+
+    /**
+     * Set identity for a track from a start frame forward through all subsequent frames.
+     * Sets per-frame overrides for every frame where this camera:trackIdx appears.
+     * @param {number} startFrame
+     * @param {string} cameraName
+     * @param {number} trackIdx
+     * @param {number} identityId
+     * @returns {number} Number of frames affected
+     */
+    propagateIdentity(startFrame, cameraName, trackIdx, identityId) {
+        var count = 0;
+        for (var [frameIdx, fg] of this.frameGroups) {
+            if (frameIdx < startFrame) continue;
+            // Check if this track exists in this frame for this camera
+            var found = false;
+            var linked = fg.getInstances(cameraName);
+            if (linked) {
+                for (var i = 0; i < linked.length; i++) {
+                    if (linked[i].trackIdx === trackIdx) { found = true; break; }
+                }
+            }
+            if (!found) {
+                var unlinked = fg.getUnlinkedInstances(cameraName);
+                if (unlinked) {
+                    for (var j = 0; j < unlinked.length; j++) {
+                        if (unlinked[j].instance.trackIdx === trackIdx) { found = true; break; }
+                    }
+                }
+            }
+            if (found) {
+                this.frameIdentityMap.set(frameIdx + ':' + cameraName + ':' + trackIdx, identityId);
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
@@ -594,15 +802,7 @@ class Session {
      * @returns {InstanceGroup[]}
      */
     getInstanceGroupsForFrame(frameIdx) {
-        const trackMap = this.instanceGroups.get(frameIdx);
-        if (!trackMap) return [];
-        const result = [];
-        for (const groups of trackMap.values()) {
-            for (let i = 0; i < groups.length; i++) {
-                result.push(groups[i]);
-            }
-        }
-        return result;
+        return this.instanceGroups.get(frameIdx) || [];
     }
 
     /**
@@ -642,43 +842,34 @@ class Session {
      *
      * @param {number} frameIdx
      * @param {UnlinkedInstance[]} unlinkedList - Must have at least 1 entry
-     * @param {number} [trackIdx] - Track index (auto-determined if not provided)
+     * @param {number} [identityId] - Identity ID (auto-determined if not provided)
      * @returns {InstanceGroup} The newly created group
      */
-    createGroupFromUnlinked(frameIdx, unlinkedList, trackIdx) {
+    createGroupFromUnlinked(frameIdx, unlinkedList, identityId) {
         const fg = this.frameGroups.get(frameIdx);
         if (!fg) throw new Error('No FrameGroup for frame ' + frameIdx);
 
-        // Determine track index
-        if (trackIdx === undefined) {
-            const existing = this.getInstanceGroupsForFrame(frameIdx);
-            const usedTracks = new Set(existing.map(function (g) { return g.trackIdx; }));
-            trackIdx = 0;
-            while (usedTracks.has(trackIdx)) trackIdx++;
+        // Determine identity
+        if (identityId === undefined || identityId < 0) {
+            const firstTrackIdx = unlinkedList[0].instance.trackIdx;
+            const identity = this.getOrCreateIdentityForTrack(firstTrackIdx);
+            identityId = identity.id;
         }
 
-        const group = new InstanceGroup(Date.now(), trackIdx);
+        const group = new InstanceGroup(Date.now(), identityId);
 
         for (let i = 0; i < unlinkedList.length; i++) {
             const ul = unlinkedList[i];
             group.addInstance(ul.cameraName, ul.instance);
-
-            // Also add to FrameGroup.instances for overlay rendering
             fg.addInstance(ul.cameraName, ul.instance);
-
-            // Remove from unlinked lists
             fg.removeUnlinkedById(ul.id);
         }
 
-        // Store in instanceGroups map
+        // Store in instanceGroups (flat list per frame)
         if (!this.instanceGroups.has(frameIdx)) {
-            this.instanceGroups.set(frameIdx, new Map());
+            this.instanceGroups.set(frameIdx, []);
         }
-        const trackMap = this.instanceGroups.get(frameIdx);
-        if (!trackMap.has(trackIdx)) {
-            trackMap.set(trackIdx, []);
-        }
-        trackMap.get(trackIdx).push(group);
+        this.instanceGroups.get(frameIdx).push(group);
 
         return group;
     }
@@ -721,14 +912,12 @@ class Session {
         }
 
         // Rename in all InstanceGroups
-        for (const trackMap of this.instanceGroups.values()) {
-            for (const groups of trackMap.values()) {
-                for (const group of groups) {
-                    if (group.instances.has(oldName)) {
-                        const inst = group.instances.get(oldName);
-                        group.instances.delete(oldName);
-                        group.instances.set(newName, inst);
-                    }
+        for (const groups of this.instanceGroups.values()) {
+            for (const group of groups) {
+                if (group.instances.has(oldName)) {
+                    const inst = group.instances.get(oldName);
+                    group.instances.delete(oldName);
+                    group.instances.set(newName, inst);
                 }
             }
         }
@@ -801,12 +990,10 @@ class Session {
             }
         }
         // Mark all instance groups as dirty (triangulation needs recomputing)
-        for (const trackMap of this.instanceGroups.values()) {
-            for (const groups of trackMap.values()) {
-                for (const group of groups) {
-                    group.markDirty();
-                    group.points3d = null;
-                }
+        for (const groups of this.instanceGroups.values()) {
+            for (const group of groups) {
+                group.markDirty();
+                group.points3d = null;
             }
         }
     }
@@ -820,29 +1007,19 @@ class Session {
      * @returns {boolean} True if the group was found and removed
      */
     removeInstanceGroup(frameIdx, group) {
-        // Remove from instanceGroups map
-        const trackMap = this.instanceGroups.get(frameIdx);
+        const groups = this.instanceGroups.get(frameIdx);
         let removed = false;
-        if (trackMap) {
-            for (const [trackIdx, groups] of trackMap) {
-                const idx = groups.indexOf(group);
-                if (idx >= 0) {
-                    groups.splice(idx, 1);
-                    removed = true;
-                    // Clean up empty track entries
-                    if (groups.length === 0) {
-                        trackMap.delete(trackIdx);
-                    }
-                    break;
-                }
+        if (groups) {
+            const idx = groups.indexOf(group);
+            if (idx >= 0) {
+                groups.splice(idx, 1);
+                removed = true;
             }
-            // Clean up empty frame entries
-            if (trackMap.size === 0) {
+            if (groups.length === 0) {
                 this.instanceGroups.delete(frameIdx);
             }
         }
 
-        // Remove associated instances from the FrameGroup
         const fg = this.frameGroups.get(frameIdx);
         if (fg) {
             for (const [camName, instance] of group.instances) {
@@ -852,13 +1029,11 @@ class Session {
                     if (instIdx >= 0) {
                         camInstances.splice(instIdx, 1);
                     }
-                    // Clean up empty camera entries
                     if (camInstances.length === 0) {
                         fg.instances.delete(camName);
                     }
                 }
             }
-            // Clean up empty FrameGroups
             if (fg.instances.size === 0 && fg.unlinkedInstances.size === 0) {
                 this.frameGroups.delete(frameIdx);
             }
@@ -879,28 +1054,19 @@ class Session {
         const fg = this.frameGroups.get(frameIdx);
         const newUnlinked = [];
 
-        // Remove from instanceGroups map (same as removeInstanceGroup)
-        const trackMap = this.instanceGroups.get(frameIdx);
-        if (trackMap) {
-            for (const [trackIdx, groups] of trackMap) {
-                const idx = groups.indexOf(group);
-                if (idx >= 0) {
-                    groups.splice(idx, 1);
-                    if (groups.length === 0) {
-                        trackMap.delete(trackIdx);
-                    }
-                    break;
-                }
+        const groups = this.instanceGroups.get(frameIdx);
+        if (groups) {
+            const idx = groups.indexOf(group);
+            if (idx >= 0) {
+                groups.splice(idx, 1);
             }
-            if (trackMap.size === 0) {
+            if (groups.length === 0) {
                 this.instanceGroups.delete(frameIdx);
             }
         }
 
-        // Convert each linked instance to an UnlinkedInstance
         if (fg) {
             for (const [camName, instance] of group.instances) {
-                // Remove from FrameGroup.instances
                 const camInstances = fg.instances.get(camName);
                 if (camInstances) {
                     const instIdx = camInstances.indexOf(instance);
@@ -911,8 +1077,6 @@ class Session {
                         fg.instances.delete(camName);
                     }
                 }
-
-                // Add as unlinked
                 const ul = new UnlinkedInstance(instance, camName);
                 fg.addUnlinkedInstance(camName, ul);
                 newUnlinked.push(ul);
