@@ -51,7 +51,7 @@
                 File
                 <div class="menu-dropdown" id="menuFile">
                     <div class="menu-dropdown-item" id="menuNewProject">New Project</div>
-                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project (.luc3d.slp)</div>
+                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project (.slp)</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
@@ -8244,9 +8244,9 @@
                 var bytes = await SIO.saveSlpToBytes(labels);
                 var blob = new Blob([bytes], { type: 'application/x-hdf5' });
 
-                var filename = 'project.luc3d.slp';
+                var filename = 'project.slp';
                 if (state.sessions.length === 1 && state.session.name) {
-                    filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.luc3d.slp';
+                    filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
                 }
 
                 var url = URL.createObjectURL(blob);
