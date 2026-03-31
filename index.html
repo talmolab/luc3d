@@ -4097,17 +4097,7 @@
                     }
                     case 't': {
                         e.preventDefault();
-                        var selGroup = interactionManager ? interactionManager.selectedInstanceGroup : null;
-                        if (selGroup) {
-                            reTriangulateGroup(selGroup);
-                            setReprojErrorVisible(true);
-                            drawAllOverlays(state.currentFrame);
-                            update3DViewport(state.currentFrame);
-                            updateInfoPanel();
-                            setStatus('Triangulated selected group', 'success');
-                        } else {
-                            setStatus('No instance group selected', 'warn');
-                        }
+                        triangulateCurrentFrame();
                         break;
                     }
                 }
