@@ -20,7 +20,8 @@
     {
         "imports": {
             "h5wasm": "./lib/h5wasm/hdf5_hl.js",
-            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js"
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
+            "mediabunny": "./lib/sleap-io/mediabunny-stub.js"
         }
     }
     </script>
@@ -50,7 +51,7 @@
                 File
                 <div class="menu-dropdown" id="menuFile">
                     <div class="menu-dropdown-item" id="menuNewProject">New Project</div>
-                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project (SLP)</div>
+                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project (.luc3d.slp)</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
                     <div class="menu-dropdown-item" id="menuSaveProjectJson">Save Project (JSON legacy)</div>
                     <div class="menu-separator"></div>
@@ -65,8 +66,8 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
                     <div class="menu-dropdown-item" id="menuExportLabels">Export Labels (JSON)</div>
-                    <div class="menu-dropdown-item" id="menuExportSlpPerCam">Export SLP (Per Camera)</div>
-                    <div class="menu-dropdown-item" id="menuExportSlp">Export SLP (All Views)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlpPerCam">Export 2D SLP (Per Camera)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlp">Export 2D SLP (All Views)</div>
                     <div class="menu-dropdown-item" id="menuExportPoints3d">Export 3D Points (JSON)</div>
                     <div class="menu-dropdown-item" id="menuExportPoints3dH5">Export 3D Points (H5)</div>
                     <div class="menu-dropdown-item" id="menuExportReprojH5">Export Reprojections (H5)</div>
@@ -678,11 +679,6 @@
     <script src="timeline.js"></script>
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
-
-    <!-- Stub out mediabunny — sleap-io.js imports it but lucid doesn't use video backends -->
-    <script type="importmap">
-    { "imports": { "mediabunny": "./lib/sleap-io/mediabunny-stub.js" } }
-    </script>
 
     <!-- sleap-io.js bridge: expose saveSlpToBytes and data model to window -->
     <script type="module">
@@ -8033,6 +8029,19 @@
                 var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
                 for (var si = 0; si < sessionsToExport.length; si++) {
                     var sess = sessionsToExport[si];
+
+                    // Debug: count 3D data in this session
+                    var dbgGroupCount = 0, dbgWith3d = 0;
+                    for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
+                        for (var _dbgG of _dbgGroups) {
+                            dbgGroupCount++;
+                            if (_dbgG.points3d && _dbgG.points3d.some(function(p) { return p != null; })) dbgWith3d++;
+                        }
+                    }
+                    console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
+                        dbgGroupCount, 'instance groups,', dbgWith3d, 'with 3D points,',
+                        sess.cameras.length, 'cameras:', sess.cameras.map(function(c){return c.name;}).join(', '));
+
                     // Find views and videoFiles for this session
                     var sessViews = state.views.filter(function (v) {
                         return sess.cameras.some(function (c) { return c.name === v.name; });
@@ -8077,9 +8086,9 @@
                 var bytes = await SIO.saveSlpToBytes(labels);
                 var blob = new Blob([bytes], { type: 'application/x-hdf5' });
 
-                var filename = 'project.slp';
+                var filename = 'project.luc3d.slp';
                 if (state.sessions.length === 1 && state.session.name) {
-                    filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
+                    filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.luc3d.slp';
                 }
 
                 var url = URL.createObjectURL(blob);
@@ -10387,7 +10396,8 @@
                     var calib = sessData.calibration || {};
                     var camMap = sessData.camcorder_to_video_idx_map || {};
 
-                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; }).sort();
+                    // Don't sort — preserve insertion order from the saved JSON
+                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; });
                     for (var ck = 0; ck < camKeys.length; ck++) {
                         var cd = calib[camKeys[ck]];
                         if (!cd || typeof cd !== 'object') continue;
@@ -10401,10 +10411,23 @@
                         ));
                     }
                     for (var cmk in camMap) {
-                        var camIdx = parseInt(cmk.replace(/[^0-9]/g, ''));
                         var vidIdx = camMap[cmk];
-                        if (cameras[camIdx]) {
-                            videoIdxToCameraName[vidIdx] = cameras[camIdx].name;
+                        // Keys may be camera names or numeric indices
+                        var matchedCam = null;
+                        for (var mci = 0; mci < cameras.length; mci++) {
+                            if (cameras[mci].name === cmk) {
+                                matchedCam = cameras[mci];
+                                break;
+                            }
+                        }
+                        if (!matchedCam) {
+                            var cmkIdx = parseInt(cmk);
+                            if (!isNaN(cmkIdx) && cmkIdx >= 0 && cmkIdx < cameras.length) {
+                                matchedCam = cameras[cmkIdx];
+                            }
+                        }
+                        if (matchedCam) {
+                            videoIdxToCameraName[vidIdx] = matchedCam.name;
                         }
                     }
                 }
@@ -10425,24 +10448,54 @@
                     }
                 }
 
-                var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
+                // Use per-session skeleton/tracks from lucid metadata if available,
+                // otherwise fall back to global skeleton/tracks from SLP metadata
+                var sessSkeleton = skeleton;
+                var sessTracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
+                var sessName = 'Session ' + (slpSessIdx + 1);
 
-                // Ensure enough track slots
+                if (slpData.sessions && slpData.sessions[slpSessIdx]) {
+                    var earlyMeta = slpData.sessions[slpSessIdx].metadata;
+                    if (earlyMeta && earlyMeta.lucid) {
+                        if (earlyMeta.lucid.sessionName) sessName = earlyMeta.lucid.sessionName;
+                        if (earlyMeta.lucid.skeleton) {
+                            var sk = earlyMeta.lucid.skeleton;
+                            sessSkeleton = new Skeleton(sk.name || 'skeleton', sk.nodes || [], sk.edges || []);
+                        }
+                        if (earlyMeta.lucid.tracks) {
+                            sessTracks = earlyMeta.lucid.tracks;
+                        }
+                    }
+                }
+
+                // Build set of video indices that belong to this session
+                var sessVideoIndices = new Set();
+                for (var svk in videoIdxToCameraName) {
+                    sessVideoIndices.add(parseInt(svk));
+                }
+
+                // Ensure enough track slots for instances in this session
                 var maxTrack = 0;
                 for (var fri = 0; fri < totalFrames; fri++) {
                     var fd = slpData.frames[fri];
+                    if (sessVideoIndices.size > 0 && !sessVideoIndices.has(fd.videoIdx)) continue;
                     for (var ii = 0; ii < fd.instances.length; ii++) {
                         if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
                     }
                 }
-                while (tracks.length <= maxTrack) tracks.push('track_' + tracks.length);
+                while (sessTracks.length <= maxTrack) sessTracks.push('track_' + sessTracks.length);
 
-                var session = new Session(cameras, skeleton, tracks);
+                var session = new Session(cameras, sessSkeleton, sessTracks);
+                session.name = sessName;
 
                 // Populate FrameGroups from worker's frames array (yield every 20K for UI)
                 var BATCH = 20000;
                 for (var fi = 0; fi < totalFrames; fi++) {
                     var fd2 = slpData.frames[fi];
+
+                    // Skip frames that don't belong to this session's cameras
+                    if (sessVideoIndices.size > 0 && !sessVideoIndices.has(fd2.videoIdx)) continue;
+
                     var camName = videoIdxToCameraName[fd2.videoIdx];
                     if (!camName && cameras.length > 0) {
                         camName = cameras[fd2.videoIdx % cameras.length].name;
@@ -10471,34 +10524,6 @@
                     }
                 }
 
-                // Build InstanceGroups
-                showLoading('Building instance groups...');
-                await new Promise(function (r) { setTimeout(r, 0); });
-                var fgCount = 0;
-                for (var [frameIdx2, fg2] of session.frameGroups) {
-                    var trackInstances = new Map();
-                    for (var [cn, instances] of fg2.instances) {
-                        for (var inst3 of instances) {
-                            var tIdx = inst3.trackIdx >= 0 ? inst3.trackIdx : 0;
-                            if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
-                            trackInstances.get(tIdx).push({ camName: cn, instance: inst3 });
-                        }
-                    }
-                    if (trackInstances.size > 0) {
-                        session.instanceGroups.set(frameIdx2, []);
-                        for (var [trackIdx, entries] of trackInstances) {
-                            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx); // identityId = trackIdx for backwards compat
-                            for (var e of entries) group.addInstance(e.camName, e.instance);
-                            session.instanceGroups.get(frameIdx2).push(group);
-                        }
-                    }
-                    fgCount++;
-                    if (fgCount % BATCH === 0) {
-                        showLoading('Building instance groups (' + fgCount + '/' + session.frameGroups.size + ')...');
-                        await new Promise(function (r) { setTimeout(r, 0); });
-                    }
-                }
-
                 // Restore identities from SLP
                 if (slpData.identities && slpData.identities.length > 0) {
                     session.identities = slpData.identities.map(function (idData, idx) {
@@ -10507,9 +10532,15 @@
                     console.log('[load-slp] Loaded', session.identities.length, 'identities');
                 }
 
-                // Overlay 3D data + metadata from frame_group_dicts
-                if (slpData.sessions && slpData.sessions.length > 0) {
-                    var sessData2 = slpData.sessions[0];
+                // Build InstanceGroups from sessions_json if available (preserves
+                // identity-based grouping), otherwise fall back to track-based grouping
+                var hasSessionData = slpData.sessions && slpData.sessions.length > slpSessIdx
+                    && slpData.sessions[slpSessIdx].frame_group_dicts
+                    && slpData.sessions[slpSessIdx].frame_group_dicts.length > 0;
+
+                if (hasSessionData) {
+                    // === Reconstruct InstanceGroups from sessions_json ===
+                    var sessData2 = slpData.sessions[slpSessIdx];
                     var fgDicts = sessData2.frame_group_dicts || [];
 
                     // Restore lucid session-level metadata
@@ -10522,88 +10553,136 @@
                         session.frameIdentityMap = new Map(lucidMeta.frameIdentityMap);
                     }
 
-                    // Build camera key → name map for matching
-                    // In SLP, instance_groups use camera names as keys (same as calibration keys)
+                    // Build camera key → name map
                     var camKeyToName = {};
                     var calibKeys = Object.keys(sessData2.calibration || {}).filter(function (k) { return k !== 'metadata'; });
                     for (var cki = 0; cki < calibKeys.length; cki++) {
                         var ck2 = calibKeys[cki];
                         var cd2 = sessData2.calibration[ck2];
-                        var cName = (cd2 && cd2.name) || ck2;
-                        camKeyToName[ck2] = cName;
+                        camKeyToName[ck2] = (cd2 && cd2.name) || ck2;
                     }
 
+                    showLoading('Rebuilding instance groups from session data...');
+                    await new Promise(function (r) { setTimeout(r, 0); });
+
+                    // Build node name list for reconstructing points from dicts
+                    var nodeNames = session.skeleton.nodes.map(function (n) {
+                        return typeof n === 'string' ? n : (n.name || '');
+                    });
+                    var numNodes = nodeNames.length;
+
+                    var restoredGroups = 0, restoredWith3d = 0;
                     for (var fdi = 0; fdi < fgDicts.length; fdi++) {
                         var fgDict = fgDicts[fdi];
                         var fgFrameIdx = fgDict.frame_idx != null ? fgDict.frame_idx : (fgDict.frameIdx || 0);
                         var igDicts = fgDict.instance_groups || [];
-                        var lucidGroups = session.instanceGroups.get(fgFrameIdx);
-                        if (!lucidGroups || igDicts.length === 0) continue;
+                        if (igDicts.length === 0) continue;
 
+                        // Ensure FrameGroup exists
+                        var fg3 = session.frameGroups.get(fgFrameIdx);
+                        if (!fg3) {
+                            fg3 = new FrameGroup(fgFrameIdx);
+                            session.addFrameGroup(fg3);
+                        }
+
+                        // Build groups by creating instances directly from session data
+                        var groups = [];
                         for (var igi = 0; igi < igDicts.length; igi++) {
                             var igDict = igDicts[igi];
+                            var identityId = igDict.identity_idx != null ? igDict.identity_idx : -1;
+                            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
 
-                            // Match igDict to lucidGroup by camera overlap
-                            var igCamNames = new Set();
+                            // Create instances directly from inline point dicts
                             var igInstances = igDict.instances || {};
-                            for (var igCamKey in igInstances) {
-                                igCamNames.add(camKeyToName[igCamKey] || igCamKey);
-                            }
-                            // Also check camcorder_to_lf_and_inst_idx_map
-                            var igCamMap = igDict.camcorder_to_lf_and_inst_idx_map || {};
-                            for (var igCmk in igCamMap) {
-                                igCamNames.add(camKeyToName[igCmk] || igCmk);
-                            }
+                            var igLucid = (igDict.metadata && igDict.metadata.lucid) || {};
+                            var instanceMetaMap = igLucid.instanceMeta || {};
 
-                            var lGroup = null;
-                            // First try positional match
-                            if (igi < lucidGroups.length) lGroup = lucidGroups[igi];
-                            // If cameras don't overlap, search for best match
-                            if (lGroup && igCamNames.size > 0) {
-                                var lCams = lGroup.cameraNames || [];
-                                var overlap = lCams.filter(function (c) { return igCamNames.has(c); });
-                                if (overlap.length === 0) {
-                                    lGroup = null;
-                                    for (var lgi = 0; lgi < lucidGroups.length; lgi++) {
-                                        var lCams2 = lucidGroups[lgi].cameraNames || [];
-                                        var overlap2 = lCams2.filter(function (c) { return igCamNames.has(c); });
-                                        if (overlap2.length > 0) { lGroup = lucidGroups[lgi]; break; }
+                            for (var igCamKey in igInstances) {
+                                var igCamName = camKeyToName[igCamKey] || igCamKey;
+                                var igPointDict = igInstances[igCamKey];
+                                var instMeta = instanceMetaMap[igCamName] || instanceMetaMap[igCamKey] || {};
+
+                                // Reconstruct points array from node-name-keyed dict
+                                var points = [];
+                                var occluded = [];
+                                for (var ni = 0; ni < numNodes; ni++) {
+                                    var ptArr = igPointDict[nodeNames[ni]];
+                                    if (ptArr && ptArr.length >= 2 && ptArr[0] != null && ptArr[1] != null && isFinite(ptArr[0])) {
+                                        points.push([ptArr[0], ptArr[1]]);
+                                        occluded.push(ptArr.length >= 3 && ptArr[2] === 0);
+                                    } else {
+                                        points.push(null);
+                                        occluded.push(false);
                                     }
                                 }
+
+                                // Use precise metadata if available, otherwise infer from point data
+                                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : 0;
+                                var instType = instMeta.type || 'predicted';
+                                var instScore = instMeta.score || 0;
+
+                                var inst = new Instance(points, instTrackIdx, instType, instScore);
+                                inst.occluded = occluded;
+                                inst.modified = instMeta.modified || false;
+                                if (instMeta.nulledNodes) {
+                                    inst.nulledNodes = new Set(instMeta.nulledNodes);
+                                }
+                                if (instMeta.occluded) {
+                                    inst.occluded = instMeta.occluded;
+                                }
+
+                                // Add to both the group and the FrameGroup
+                                group.addInstance(igCamName, inst);
+                                fg3.addInstance(igCamName, inst);
                             }
-                            if (!lGroup) continue;
 
                             // Restore 3D points
                             if (igDict.points && Array.isArray(igDict.points)) {
-                                lGroup.points3d = igDict.points;
+                                group.points3d = igDict.points;
+                                restoredWith3d++;
                             }
 
-                            // Restore identity assignment
-                            if (igDict.identity_idx != null && session.identities.length > 0) {
-                                lGroup.identityId = igDict.identity_idx;
-                            }
+                            groups.push(group);
+                            restoredGroups++;
+                        }
 
-                            // Restore lucid-specific per-group metadata
-                            var igLucid = (igDict.metadata && igDict.metadata.lucid) || {};
-                            if (igLucid.nulledNodes) {
-                                for (var nnCam in igLucid.nulledNodes) {
-                                    var inst = lGroup.getInstance(nnCam);
-                                    if (inst) {
-                                        inst.nulledNodes = new Set(igLucid.nulledNodes[nnCam]);
-                                    }
-                                }
-                            }
-                            if (igLucid.occluded) {
-                                for (var occCam in igLucid.occluded) {
-                                    var inst2 = lGroup.getInstance(occCam);
-                                    if (inst2) {
-                                        inst2.occluded = igLucid.occluded[occCam];
-                                    }
-                                }
-                            }
+                        session.instanceGroups.set(fgFrameIdx, groups);
+
+                        if (fdi > 0 && fdi % BATCH === 0) {
+                            showLoading('Rebuilding instance groups (' + fdi + '/' + fgDicts.length + ')...');
+                            await new Promise(function (r) { setTimeout(r, 0); });
                         }
                     }
-                    console.log('[load-slp] Restored 3D data from', fgDicts.length, 'frame groups');
+                    console.log('[load-slp] Rebuilt', restoredGroups, 'instance groups from session data,', restoredWith3d, 'with 3D points');
+
+                } else {
+                    // === Fallback: group by trackIdx (no session data) ===
+                    showLoading('Building instance groups...');
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                    var fgCount = 0;
+                    for (var [frameIdx2, fg2] of session.frameGroups) {
+                        var trackInstances = new Map();
+                        for (var [cn, instances] of fg2.instances) {
+                            for (var inst3 of instances) {
+                                var tIdx = inst3.trackIdx >= 0 ? inst3.trackIdx : 0;
+                                if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
+                                trackInstances.get(tIdx).push({ camName: cn, instance: inst3 });
+                            }
+                        }
+                        if (trackInstances.size > 0) {
+                            session.instanceGroups.set(frameIdx2, []);
+                            for (var [trackIdx, entries] of trackInstances) {
+                                var group2 = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx);
+                                for (var e of entries) group2.addInstance(e.camName, e.instance);
+                                session.instanceGroups.get(frameIdx2).push(group2);
+                            }
+                        }
+                        fgCount++;
+                        if (fgCount % BATCH === 0) {
+                            showLoading('Building instance groups (' + fgCount + '/' + session.frameGroups.size + ')...');
+                            await new Promise(function (r) { setTimeout(r, 0); });
+                        }
+                    }
                 }
 
                 // Recompute reprojections from stored 3D points + calibration
@@ -10641,20 +10720,15 @@
                     }
                 }
 
-                // Give session a name from lucid metadata or index
-                var sessMetaName = null;
-                if (slpData.sessions && slpData.sessions[slpSessIdx]) {
-                    var sm = slpData.sessions[slpSessIdx].metadata;
-                    if (sm && sm.lucid && sm.lucid.sessionName) sessMetaName = sm.lucid.sessionName;
-                }
-                session.name = sessMetaName || ('Session ' + (slpSessIdx + 1));
+                console.log('[load-slp] Session', slpSessIdx, 'name:', session.name,
+                    'skeleton:', session.skeleton.nodes.length, 'nodes,', session.skeleton.edges.length, 'edges');
 
                 state.sessions.push(session);
                 state.session = session;
                 state.activeSessionIdx = state.sessions.length - 1;
 
                 console.log('[load-slp] Session', slpSessIdx + 1, ':', session.numFrames, 'frames,',
-                    cameras.length, 'cameras, tracks:', tracks);
+                    cameras.length, 'cameras, tracks:', session.tracks);
 
                 // 2. Video loading — embedded or external
                 var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
@@ -10815,6 +10889,7 @@
                                     assignedCamera: assignedCam,
                                     slpFilename: slpFile.name,
                                     videoPath: vFile.webkitRelativePath || vFile.name,
+                                    sessionIdx: slpSessIdx,
                                 });
                             } catch (videoErr) {
                                 console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);
@@ -10823,14 +10898,16 @@
 
                         autoAssignVideosToCameras();
 
-                        showLoading('Creating views...');
-                        for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
-                            var vf3 = state.videoFiles[vi2];
-                            if (vf3.assignedCamera) {
-                                var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
-                                if (!hasView) createViewForVideoFile(vf3);
-                            }
-                        }
+                        // Don't create views yet — wait until after session loop
+                        // so we only create views for the active session
+                    }
+                }
+
+                // Track which video file indices belong to this session
+                session.videoFileIndices = [];
+                for (var svfi = 0; svfi < state.videoFiles.length; svfi++) {
+                    if (state.videoFiles[svfi].sessionIdx === slpSessIdx) {
+                        session.videoFileIndices.push(svfi);
                     }
                 }
 
@@ -10840,6 +10917,17 @@
                 if (state.sessions.length > 0) {
                     state.activeSessionIdx = 0;
                     state.session = state.sessions[0];
+                }
+
+                // Create views for the active session only
+                showLoading('Creating views...');
+                for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
+                    var vf3 = state.videoFiles[vi2];
+                    if (vf3.sessionIdx !== state.activeSessionIdx) continue;
+                    if (vf3.assignedCamera) {
+                        var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
+                        if (!hasView) createViewForVideoFile(vf3);
+                    }
                 }
 
                 updateTotalFrames();
@@ -10953,7 +11041,8 @@
                     var sessData = slpData.sessions[0];
                     var calib = sessData.calibration || {};
                     var camMap = sessData.camcorder_to_video_idx_map || {};
-                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; }).sort();
+                    // Don't sort — preserve insertion order from the saved JSON
+                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; });
                     for (var ck = 0; ck < camKeys.length; ck++) {
                         var cd = calib[camKeys[ck]];
                         if (!cd || typeof cd !== 'object') continue;
@@ -10967,10 +11056,23 @@
                         ));
                     }
                     for (var cmk in camMap) {
-                        var camIdx = parseInt(cmk.replace(/[^0-9]/g, ''));
                         var vidIdx = camMap[cmk];
-                        if (cameras[camIdx]) {
-                            videoIdxToCameraName[vidIdx] = cameras[camIdx].name;
+                        // Keys may be camera names or numeric indices
+                        var matchedCam = null;
+                        for (var mci = 0; mci < cameras.length; mci++) {
+                            if (cameras[mci].name === cmk) {
+                                matchedCam = cameras[mci];
+                                break;
+                            }
+                        }
+                        if (!matchedCam) {
+                            var cmkIdx = parseInt(cmk);
+                            if (!isNaN(cmkIdx) && cmkIdx >= 0 && cmkIdx < cameras.length) {
+                                matchedCam = cameras[cmkIdx];
+                            }
+                        }
+                        if (matchedCam) {
+                            videoIdxToCameraName[vidIdx] = matchedCam.name;
                         }
                     }
                 }
