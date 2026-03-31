@@ -386,6 +386,13 @@ async function parseSlp(file) {
             }
         } catch (e) { /* no identities */ }
 
+        // Warn about data the streaming worker doesn't process
+        try {
+            if (f.get('instance_groups')) {
+                progress('[warn] SLP file contains instance_groups data — Instance3D/identity linking is not supported by the streaming reader and will be skipped');
+            }
+        } catch (e) { /* dataset not present */ }
+
         // NOTE: Embedded video frame bytes are NOT extracted here.
         // A separate frame-worker.js handles on-demand frame extraction
         // using SLPPackageReader, which avoids loading all frames into memory.
