@@ -1123,8 +1123,8 @@
                     if (indices[i] < cur) { target = indices[i]; break; }
                 }
             }
-            if (target != null && videoController) {
-                videoController.seekToFrame(target);
+            if (target != null) {
+                seekToFrameWithLazy(target);
                 setStatus('Frame ' + (target + 1), 'info');
             }
         }
@@ -2012,6 +2012,20 @@
         }
 
         // ============================================
+        // Helper: check if file should use lazy H5 loading
+        // ============================================
+
+        /**
+         * Check if a file is an analysis H5 that should use lazy loading.
+         * Returns true for .h5 files over 20MB.
+         */
+        function shouldUseLazyH5(file) {
+            var name = file.name.toLowerCase();
+            var isH5 = name.endsWith('.h5') || name.endsWith('.hdf5');
+            return isH5 && file.size > 20 * 1024 * 1024;
+        }
+
+        // ============================================
         // Helper: get instance groups for a frame
         // ============================================
 
@@ -2030,6 +2044,138 @@
                 }
             }
             return false;
+        }
+
+        // ============================================
+        // Lazy frame loading helpers
+        // ============================================
+
+        /**
+         * Ensure frame data is loaded for lazy sessions.
+         * For eager sessions, returns immediately. For lazy sessions,
+         * fetches the frame data from workers and populates a temporary FrameGroup.
+         */
+        async function ensureLazyFrameData(frameIdx) {
+            var session = state.session;
+            if (!session || !session.lazyLoader) return;
+
+            // Already have frame data?
+            if (session.frameGroups.has(frameIdx)) return;
+
+            // Fetch from lazy loader
+            var cameraData = await session.lazyLoader.getFrame(frameIdx);
+
+            // Don't overwrite if frame was populated while we were waiting
+            if (session.frameGroups.has(frameIdx)) return;
+
+            // Build a temporary FrameGroup from the lazy data
+            var fg = new FrameGroup(frameIdx);
+            for (var [camName, instances] of cameraData) {
+                for (var ii = 0; ii < instances.length; ii++) {
+                    var instData = instances[ii];
+                    var inst = new Instance(
+                        instData.points || [],
+                        instData.trackIdx,
+                        instData.type || 'predicted',
+                        instData.score || 0
+                    );
+                    fg.addInstance(camName, inst);
+                }
+            }
+            session.addFrameGroup(fg);
+
+            // Move to unlinked pool (same as eager loading does)
+            for (var [cn, camInsts] of fg.instances) {
+                for (var instItem of camInsts) {
+                    fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
+                }
+                fg.instances.set(cn, []);
+            }
+
+            // Trigger prefetch in the scrub direction
+            var direction = frameIdx >= (state._lastLazyFrame || 0) ? 1 : -1;
+            state._lastLazyFrame = frameIdx;
+            session.lazyLoader.prefetch(frameIdx, direction);
+        }
+
+        /**
+         * Evict old lazy-loaded frames to keep memory bounded.
+         * Keeps the most recent N frames and any frames with user edits.
+         */
+        function evictLazyFrames(currentFrame) {
+            var session = state.session;
+            if (!session || !session.lazyLoader) return;
+
+            var maxKeep = 200;
+            var keys = Array.from(session.frameGroups.keys());
+            if (keys.length <= maxKeep) return;
+
+            // Sort by distance from current frame
+            keys.sort(function (a, b) {
+                return Math.abs(a - currentFrame) - Math.abs(b - currentFrame);
+            });
+
+            // Evict distant frames that have no user edits
+            for (var i = maxKeep; i < keys.length; i++) {
+                var fIdx = keys[i];
+                var fg = session.frameGroups.get(fIdx);
+                if (!fg) continue;
+
+                var hasUserData = false;
+                for (var [, insts] of fg.instances) {
+                    for (var inst of insts) {
+                        if (inst.type === 'user') { hasUserData = true; break; }
+                    }
+                    if (hasUserData) break;
+                }
+                if (!hasUserData) {
+                    // Also check unlinked instances
+                    for (var [, uInsts] of fg.unlinkedInstances) {
+                        for (var uInst of uInsts) {
+                            if (uInst.instance && uInst.instance.type === 'user') { hasUserData = true; break; }
+                        }
+                        if (hasUserData) break;
+                    }
+                }
+                if (!hasUserData) {
+                    var groups = session.instanceGroups.get(fIdx);
+                    if (groups) {
+                        for (var gi = 0; gi < groups.length; gi++) {
+                            for (var [, gInst] of groups[gi].instances) {
+                                if (gInst.type === 'user') { hasUserData = true; break; }
+                            }
+                            if (hasUserData) break;
+                        }
+                    }
+                }
+
+                if (!hasUserData) {
+                    session.frameGroups.delete(fIdx);
+                    session.instanceGroups.delete(fIdx);
+                }
+            }
+        }
+
+        /**
+         * Seek to a frame, loading lazy data first if needed.
+         * Drop-in replacement for videoController.seekToFrame when lazy loading.
+         */
+        async function seekToFrameWithLazy(frameIdx) {
+            if (frameIdx < 0) frameIdx = 0;
+            if (frameIdx >= state.totalFrames && state.totalFrames > 0) frameIdx = state.totalFrames - 1;
+
+            if (state.session && state.session.lazyLoader) {
+                await ensureLazyFrameData(frameIdx);
+                evictLazyFrames(frameIdx);
+            }
+            if (videoController) {
+                await videoController.seekToFrame(frameIdx);
+            } else {
+                // No video controller — update state and redraw manually
+                state.currentFrame = frameIdx;
+                updateSeekbar(frameIdx);
+                drawAllOverlays(frameIdx);
+            }
         }
 
         /**
@@ -2899,7 +3045,7 @@
                         if (state.isPlaying) {
                             videoController.stopPlayback();
                         }
-                        videoController.seekToFrame(frameIdx);
+                        seekToFrameWithLazy(frameIdx);
                     }
                 },
                 onRangeSelect: function (startFrame, endFrame) {
@@ -3795,11 +3941,11 @@
 
         function setupUI() {
             // Transport controls
-            document.getElementById('btnFirst').addEventListener('click', function () { if (videoController) videoController.seekToFrame(0); });
-            document.getElementById('btnPrev').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame - 1); });
+            document.getElementById('btnFirst').addEventListener('click', function () { seekToFrameWithLazy(0); });
+            document.getElementById('btnPrev').addEventListener('click', function () { seekToFrameWithLazy(state.currentFrame - 1); });
             document.getElementById('btnPlay').addEventListener('click', function () { if (videoController) videoController.togglePlayback(); });
-            document.getElementById('btnNext').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame + 1); });
-            document.getElementById('btnLast').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.totalFrames - 1); });
+            document.getElementById('btnNext').addEventListener('click', function () { seekToFrameWithLazy(state.currentFrame + 1); });
+            document.getElementById('btnLast').addEventListener('click', function () { seekToFrameWithLazy(state.totalFrames - 1); });
 
             // Timeline toggle button
             document.getElementById('timelineToggleBtn').addEventListener('click', function () {
@@ -3855,44 +4001,44 @@
 
             document.addEventListener('keydown', function (e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-                if (!videoController) return;
+                if (!videoController && !state.session) return;
 
                 switch (e.key) {
                     case 'ArrowRight':
                         e.preventDefault();
                         if (e.shiftKey) { seekToLabeledFrame(1); }
-                        else { videoController.seekToFrame(state.currentFrame + 1); }
+                        else { seekToFrameWithLazy(state.currentFrame + 1); }
                         break;
                     case 'ArrowLeft':
                         e.preventDefault();
                         if (e.shiftKey) { seekToLabeledFrame(-1); }
-                        else { videoController.seekToFrame(state.currentFrame - 1); }
+                        else { seekToFrameWithLazy(state.currentFrame - 1); }
                         break;
                     case ' ':
                         e.preventDefault();
-                        videoController.togglePlayback();
+                        if (videoController) videoController.togglePlayback();
                         break;
                     case 'Home':
                         e.preventDefault();
-                        videoController.seekToFrame(0);
+                        seekToFrameWithLazy(0);
                         break;
                     case 'End':
                         e.preventDefault();
-                        videoController.seekToFrame(state.totalFrames - 1);
+                        seekToFrameWithLazy(state.totalFrames - 1);
                         break;
                     case '+':
                     case '=':
                         e.preventDefault();
-                        videoController.zoomAllVideos(1.2);
+                        if (videoController) videoController.zoomAllVideos(1.2);
                         break;
                     case '-':
                     case '_':
                         e.preventDefault();
-                        videoController.zoomAllVideos(1 / 1.2);
+                        if (videoController) videoController.zoomAllVideos(1 / 1.2);
                         break;
                     case '0':
                         e.preventDefault();
-                        videoController.resetAllZoom();
+                        if (videoController) videoController.resetAllZoom();
                         break;
                 }
             });
@@ -5425,7 +5571,7 @@
 
             for (var f = startFrame; f <= endFrame; f++) {
                 // Seek to frame
-                await videoController.seekToFrame(f);
+                await seekToFrameWithLazy(f);
 
                 var groupsCreated = 0;
 
@@ -7988,6 +8134,11 @@
             state.isPlaying = false;
             videoController = null;
 
+            // Close lazy loader if active
+            if (state.session && state.session.lazyLoader) {
+                state.session.lazyLoader.close();
+            }
+
             // Clear session and annotation data
             state.session = null;
             state.currentFrame = 0;
@@ -8750,7 +8901,7 @@
                         break;
                     }
                     state.currentFrame = firstFrame;
-                    await videoController.seekToFrame(firstFrame);
+                    await seekToFrameWithLazy(firstFrame);
                 }
 
                 // 3. Set up 3D viewport (use active session's cameras)
@@ -9410,8 +9561,8 @@
                 }
 
                 // Seek to frame 0 to display the first frame (await ensures it renders)
-                if (videoController && state.views.length > 0) {
-                    await videoController.seekToFrame(0);
+                if (state.views.length > 0) {
+                    await seekToFrameWithLazy(0);
                 }
 
                 hideLoading();
@@ -9901,9 +10052,9 @@
                                 break;
                             }
                             state.currentFrame = firstFrame;
-                            await videoController.seekToFrame(firstFrame);
+                            await seekToFrameWithLazy(firstFrame);
                         } else {
-                            await videoController.seekToFrame(state.currentFrame);
+                            await seekToFrameWithLazy(state.currentFrame);
                         }
                     }
                     drawAllOverlays(state.currentFrame);
@@ -10461,10 +10612,25 @@
                 });
 
                 // Load the SLP — reuse handleLoadSlp's parsing logic
+                // For large H5 files, use lazy loading instead of eagerly parsing all frames
+                var singleSlpLazyLoader = null;
                 showLoading('Reading SLP: ' + slpFile.name + '...');
                 var slpData;
                 try {
-                    slpData = await parseSlpH5(slpFile, function (msg) { showLoading(msg); });
+                    if (shouldUseLazyH5(slpFile)) {
+                        singleSlpLazyLoader = new LazyFrameLoader();
+                        var lazyCamName = slpFile.name.replace(/\.[^.]+$/, '');
+                        var lazyOpenMeta = await singleSlpLazyLoader.open(lazyCamName, slpFile);
+                        slpData = {
+                            skeleton: singleSlpLazyLoader.skeleton || null,
+                            tracks: singleSlpLazyLoader.trackNames.length > 0 ? singleSlpLazyLoader.trackNames : ['track_0'],
+                            videos: lazyOpenMeta.videos || [],
+                            frames: [],  // Empty — frames loaded on demand
+                            sessions: [],
+                        };
+                    } else {
+                        slpData = await parseSlpH5(slpFile, function (msg) { showLoading(msg); });
+                    }
                 } catch (parseErr) {
                     hideLoading();
                     setStatus('SLP parse error: ' + parseErr.message, 'error');
@@ -10569,6 +10735,14 @@
                     }
                 }
 
+                // Attach lazy loader to session if present
+                if (singleSlpLazyLoader) {
+                    session.lazyLoader = singleSlpLazyLoader;
+                    if (singleSlpLazyLoader.nFrames > 0) {
+                        state.totalFrames = Math.max(state.totalFrames, singleSlpLazyLoader.nFrames);
+                    }
+                }
+
                 // Set as active session
                 state.sessions.push(session);
                 state.activeSessionIdx = state.sessions.length - 1;
@@ -10667,7 +10841,7 @@
                 hideLoading();
                 updateInfoPanel();
                 if (timeline) timeline.setData(session);
-                if (videoController) await videoController.seekToFrame(0);
+                await seekToFrameWithLazy(0);
                 if (failedVideos.length > 0 && state.views.length === 0) {
                     setStatus('All videos failed to load: ' + failedVideos.join('; '), 'error');
                 } else if (failedVideos.length > 0) {
@@ -10946,8 +11120,10 @@
                 var slpVersionsLoaded = {}; // camName -> version number loaded
 
                 // Launch all SLP/H5 parses in parallel (each gets its own web worker)
+                // Split into lazy (large H5) and eager (small files / SLP) groups
                 showLoading('Parsing annotations (' + matchedCameraDirs.length + ' cameras)...');
                 var parseJobs = [];
+                var lazyJobs = [];
                 for (var cdi = 0; cdi < matchedCameraDirs.length; cdi++) {
                     var camDir = matchedCameraDirs[cdi];
                     if (camDir.slps.length > 0) {
@@ -10960,12 +11136,26 @@
                         }
                         slpVersionsLoaded[camDir.camName] = bestVersion;
                         for (var sli2 = 0; sli2 < camDir.slps.length; sli2++) {
-                            parseJobs.push({
-                                camName: camDir.camName,
-                                file: camDir.slps[sli2],
-                                promise: parseSlpH5(camDir.slps[sli2]).catch(function (e) { return null; }),
-                            });
+                            var slpFile = camDir.slps[sli2];
+                            if (shouldUseLazyH5(slpFile)) {
+                                lazyJobs.push({ camName: camDir.camName, file: slpFile });
+                            } else {
+                                parseJobs.push({
+                                    camName: camDir.camName,
+                                    file: slpFile,
+                                    promise: parseSlpH5(slpFile).catch(function (e) { return null; }),
+                                });
+                            }
                         }
+                    }
+                }
+
+                // Start lazy loader for large H5 files (if any)
+                var lazyLoader = null;
+                if (lazyJobs.length > 0) {
+                    lazyLoader = new LazyFrameLoader();
+                    for (var lji = 0; lji < lazyJobs.length; lji++) {
+                        await lazyLoader.open(lazyJobs[lji].camName, lazyJobs[lji].file);
                     }
                 }
 
@@ -11026,6 +11216,36 @@
                                 }
                             }
                         }
+                    }
+                }
+
+                // Integrate lazy loader metadata into session
+                if (lazyLoader) {
+                    if (!state.session) {
+                        // No eager files created a session — build from lazy metadata
+                        var lazySkeleton = new Skeleton('skeleton', [], []);
+                        var lazyTracks = lazyLoader.trackNames.length > 0 ? lazyLoader.trackNames : ['track_0'];
+                        var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
+                        state.session = new Session(cameras.length > 0 ? cameras : [], lazySkeleton, lazyTracks, sessionName);
+                        firstSession = state.session;
+                        if (state.sessions.indexOf(state.session) < 0) {
+                            state.sessions.push(state.session);
+                            state.activeSessionIdx = state.sessions.length - 1;
+                        }
+                    } else {
+                        // Merge track names from lazy loader
+                        if (lazyLoader.trackNames) {
+                            for (var lti = 0; lti < lazyLoader.trackNames.length; lti++) {
+                                if (state.session.tracks.indexOf(lazyLoader.trackNames[lti]) < 0) {
+                                    state.session.tracks.push(lazyLoader.trackNames[lti]);
+                                }
+                            }
+                        }
+                    }
+                    state.session.lazyLoader = lazyLoader;
+                    // Set totalFrames from lazy loader if it reports more frames
+                    if (lazyLoader.nFrames > state.totalFrames) {
+                        state.totalFrames = lazyLoader.nFrames;
                     }
                 }
 
@@ -11959,12 +12179,12 @@
                 }
 
                 // Seek to first labeled frame
-                if (videoController && state.views.length > 0 && state.session) {
+                if (state.views.length > 0 && state.session) {
                     var firstFrame = 0;
                     var sortedFrames = state.session.frameIndices;
                     if (sortedFrames.length > 0) firstFrame = sortedFrames[0];
                     state.currentFrame = firstFrame;
-                    await videoController.seekToFrame(firstFrame);
+                    await seekToFrameWithLazy(firstFrame);
                 }
 
                 // 3. Set up 3D viewport
@@ -12256,9 +12476,7 @@
                     rebuildVideoController();
                     requestAnimationFrame(function () { fitCanvasesToCells(); });
 
-                    if (videoController) {
-                        await videoController.seekToFrame(state.currentFrame);
-                    }
+                    await seekToFrameWithLazy(state.currentFrame);
                 } else {
                     // --- No embedded videos: prompt for video files ---
                     hideLoading();
@@ -12360,9 +12578,7 @@
                         updateTotalFrames();
                         rebuildVideoController();
                         requestAnimationFrame(function () { fitCanvasesToCells(); });
-                        if (videoController) {
-                            await videoController.seekToFrame(state.currentFrame);
-                        }
+                        await seekToFrameWithLazy(state.currentFrame);
                     } else {
                         // No videos selected — show per-cell prompts
                         console.log('[add-slp] Creating ' + cameras.length + ' prompt cells');
@@ -12960,9 +13176,7 @@
             }
             // Render current frame to newly created canvases and fit sizes
             fitCanvasesToCells();
-            if (videoController) {
-                videoController.seekToFrame(state.currentFrame);
-            }
+            seekToFrameWithLazy(state.currentFrame);
             drawAllOverlays(state.currentFrame);
         }
 
@@ -13474,8 +13688,13 @@
         function removeSession(idx) {
             if (!confirm('Delete session "' + state.sessions[idx].name + '"?')) return;
 
-            // Clean up session's video file entries
+            // Clean up lazy loader if present
             var sess = state.sessions[idx];
+            if (sess.lazyLoader) {
+                sess.lazyLoader.close();
+            }
+
+            // Clean up session's video file entries
             if (sess.videoFileIndices) {
                 for (var vi = 0; vi < sess.videoFileIndices.length; vi++) {
                     var vfIdx = sess.videoFileIndices[vi];
@@ -13580,7 +13799,7 @@
                     fitCanvasesToCells();
                     refreshPaneInteractions();
                     state.currentFrame = state.session.lastFrame || 0;
-                    if (videoController) videoController.seekToFrame(state.currentFrame);
+                    seekToFrameWithLazy(state.currentFrame);
                     drawAllOverlays(state.currentFrame);
                 }, 50);
             } else {
@@ -13614,7 +13833,7 @@
                         }
                     }
                     updateTotalFrames();
-                    if (videoController) videoController.seekToFrame(state.currentFrame);
+                    seekToFrameWithLazy(state.currentFrame);
                 })();
                 setTimeout(function () {
                     fitCanvasesToCells();
@@ -13726,9 +13945,7 @@
                 fitCanvasesToCells();
                 refreshPaneInteractions();
                 state.currentFrame = targetFrame;
-                if (videoController && state.views.length > 0) {
-                    videoController.seekToFrame(targetFrame);
-                }
+                seekToFrameWithLazy(targetFrame);
                 drawAllOverlays(targetFrame);
             }, 50);
 
@@ -13953,7 +14170,7 @@
                     var raw = input.value.trim();
                     var num = parseInt(raw, 10);
                     if (!isNaN(num) && num >= 1 && num <= state.totalFrames) {
-                        if (videoController) videoController.seekToFrame(num - 1);
+                        seekToFrameWithLazy(num - 1);
                     }
                     frameEl.textContent = state.currentFrame + 1;
                 }
