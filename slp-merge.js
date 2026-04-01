@@ -151,15 +151,14 @@ function rebuildInstanceGroupsForFrames(session, frameIndices) {
             }
         }
 
-        var tMap = new Map();
+        var groupsList = [];
         for (var [trkIdx, entries] of trackInstances) {
             var grp = new InstanceGroup(Date.now() + trkIdx + frameIdx, trkIdx);
             for (var ei = 0; ei < entries.length; ei++) {
                 grp.addInstance(entries[ei].camName, entries[ei].instance);
             }
-            if (!tMap.has(trkIdx)) tMap.set(trkIdx, []);
-            tMap.get(trkIdx).push(grp);
+            groupsList.push(grp);
         }
-        session.instanceGroups.set(frameIdx, tMap);
+        session.instanceGroups.set(frameIdx, groupsList);
     }
 }

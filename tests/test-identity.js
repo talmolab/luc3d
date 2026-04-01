@@ -18,7 +18,7 @@
 
     describe('InstanceGroup identityId', function () {
         it('defaults to -1 (unassigned)', function () {
-            var group = new InstanceGroup(1, 0);
+            var group = new InstanceGroup(1);
             assertEqual(group.identityId, -1);
         });
 
@@ -28,10 +28,10 @@
             assertEqual(group.identityId, 2);
         });
 
-        it('trackIdx and identityId are independent', function () {
+        it('identityId can be updated after construction', function () {
             var group = new InstanceGroup(1, 0);
+            assertEqual(group.identityId, 0);
             group.identityId = 5;
-            assertEqual(group.trackIdx, 0);
             assertEqual(group.identityId, 5);
         });
     });

@@ -281,7 +281,7 @@
             fg.addInstance('cam2', inst2);
 
             // Store in instanceGroups
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             // Verify setup
             assertEqual(session.getInstanceGroupsForFrame(0).length, 1);
@@ -303,7 +303,7 @@
             const group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
             fg.addInstance('cam1', inst);
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             session.removeInstanceGroup(0, group);
             // Empty frame group should be cleaned up
