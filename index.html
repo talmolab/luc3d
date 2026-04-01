@@ -20,7 +20,8 @@
     {
         "imports": {
             "h5wasm": "./lib/h5wasm/hdf5_hl.js",
-            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js"
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
+            "mediabunny": "./lib/sleap-io/mediabunny-stub.js"
         }
     }
     </script>
@@ -50,23 +51,21 @@
                 File
                 <div class="menu-dropdown" id="menuFile">
                     <div class="menu-dropdown-item" id="menuNewProject">New Project</div>
-                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project</div>
+                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project (.slp)</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
-                    <div class="menu-dropdown-item" id="menuLoadSession">Load Session...</div>
                     <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Session Folder...</div>
+                    <div class="menu-dropdown-item" id="menuLoadMultiSession">Load Multi-Session Folder...</div>
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
-                    <div class="menu-dropdown-item" id="menuLoadDemo">Load Demo Session</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
                     <div class="menu-dropdown-item" id="menuExportLabels">Export Labels (JSON)</div>
-                    <div class="menu-dropdown-item" id="menuExportSlpPerCam">Export SLP (Per Camera)</div>
-                    <div class="menu-dropdown-item" id="menuExportSlp">Export SLP (All Views)</div>
-                    <div class="menu-dropdown-item" id="menuExportPoints3d">Export 3D Points (JSON)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlpPerCam">Export 2D SLP (Per Camera)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlp">Export 2D SLP (All Views)</div>
                     <div class="menu-dropdown-item" id="menuExportPoints3dH5">Export 3D Points (H5)</div>
                     <div class="menu-dropdown-item" id="menuExportReprojH5">Export Reprojections (H5)</div>
                     <div class="menu-dropdown-item" id="menuExportCalib">Export Calibration (TOML)</div>
@@ -137,7 +136,6 @@
                 </div>
             </div>
             <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hot Keys</div>
-            <div class="menu-item" id="menuLoadDemoBar" style="cursor:pointer;">Load Demo</div>
         </div>
 
         <!-- Toolbar -->
@@ -152,7 +150,7 @@
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
-                <button class="toolbar-btn" id="tbTriangulate" title="Triangulate current frame (T)">Triangulate</button>
+                <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate</button>
                 <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All</button>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
@@ -692,11 +690,17 @@
     <script type="module">
         import {
             Labels, LabeledFrame, Instance, PredictedInstance,
-            Skeleton, Node, Edge, Video, Track, saveSlpToBytes
-        } from './lib/sleap-io/index.browser.js';
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
+            Camera as SioCamera, CameraGroup, RecordingSession,
+            InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
+            Identity as SioIdentity, Instance3D, PredictedInstance3D
+        } from './lib/sleap-io/index.browser.js?v=2';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
-            Skeleton, Node, Edge, Video, Track, saveSlpToBytes
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
+            Camera: SioCamera, CameraGroup, RecordingSession,
+            InstanceGroup: SioInstanceGroup, FrameGroup: SioFrameGroup,
+            Identity: SioIdentity, Instance3D, PredictedInstance3D
         };
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
@@ -733,6 +737,7 @@
             exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
             cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
             colorByIdentity: false,     // false = color by track, true = color by identity
+            decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
         };
 
         let videoController = null;
@@ -793,7 +798,7 @@
                 setupMenus();
 
                 hideLoading();
-                setStatus('Ready - load videos via File menu or click Load Demo', 'success');
+                setStatus('Ready - load session via File menu', 'success');
 
             } catch (err) {
                 console.error('Initialization failed:', err);
@@ -988,7 +993,7 @@
                     if (existing) {
                         existing.points = reprojPts;
                     } else {
-                        var reprojInstance = new Instance(reprojPts, group.trackIdx, 'reprojected', 1.0);
+                        var reprojInstance = new Instance(reprojPts, group.identityId, 'reprojected', 1.0);
                         group.addReprojectedInstance(cam.name, reprojInstance);
                     }
                 }
@@ -1000,11 +1005,10 @@
 
             const cameras = state.session.cameras;
 
-            for (const [frameIdx, trackMap] of state.session.instanceGroups) {
+            for (const [frameIdx, frameGroups] of state.session.instanceGroups) {
                 const frameResults = [];
 
-                for (const [trackIdx, groups] of trackMap) {
-                    for (const group of groups) {
+                for (const group of frameGroups) {
                         const result = triangulateAndReproject(group, cameras);
 
                         // Store reprojections and observed points on the group for overlay rendering
@@ -1019,14 +1023,13 @@
                             }
                         }
 
-                        frameResults.push({
-                            group: group,
-                            points3d: result.points3d,
-                            reprojections: result.reprojections,
-                            errors: result.errors,
-                            meanError: result.meanError,
-                        });
-                    }
+                    frameResults.push({
+                        group: group,
+                        points3d: result.points3d,
+                        reprojections: result.reprojections,
+                        errors: result.errors,
+                        meanError: result.meanError,
+                    });
                 }
 
                 state.triangulationResults.set(frameIdx, frameResults);
@@ -1140,8 +1143,8 @@
 
             const frameIdx = state.currentFrame;
             const cameras = state.session.cameras;
-            const trackMap = state.session.instanceGroups.get(frameIdx);
-            if (!trackMap) {
+            const frameGroupsList = state.session.instanceGroups.get(frameIdx);
+            if (!frameGroupsList || frameGroupsList.length === 0) {
                 console.warn('[triangulate] No instanceGroups for frame', frameIdx);
                 setStatus('No instance groups on frame ' + (frameIdx + 1) + ' - assign instances to groups first (A key)', 'warning');
                 updateTriangulationBadge('needs-triangulation', 'No groups');
@@ -1153,8 +1156,7 @@
 
             const frameResults = [];
 
-            for (const [trackIdx, groups] of trackMap) {
-                for (const group of groups) {
+            for (const group of frameGroupsList) {
                     // Resolve any camera name mismatches in this group
                     // (e.g., instances keyed by video name "CamA" but camera named "A")
                     const groupKeys = group.cameraNames;
@@ -1190,7 +1192,7 @@
                             camStatus[cam.name] = inst ? 'no-points' : 'missing';
                         }
                     }
-                    console.log('[triangulate] Track', trackIdx, '| views with labels:', viewsWithLabels,
+                    console.log('[triangulate] Identity', group.identityId, '| views with labels:', viewsWithLabels,
                         '| cam status:', camStatus);
 
                     if (viewsWithLabels < 2) {
@@ -1251,7 +1253,6 @@
                         meanError: result.meanError,
                     });
                 }
-            }
 
             state.triangulationResults.set(frameIdx, frameResults);
 
@@ -1334,14 +1335,13 @@
 
             for (var fi = 0; fi < frameIndices.length; fi++) {
                 var frameIdx = frameIndices[fi];
-                var trackMap = state.session.instanceGroups.get(frameIdx);
-                if (!trackMap) continue;
+                var frameGroupsList = state.session.instanceGroups.get(frameIdx);
+                if (!frameGroupsList || frameGroupsList.length === 0) continue;
 
                 var frameResults = [];
 
-                for (var [trackIdx, groups] of trackMap) {
-                    for (var gi = 0; gi < groups.length; gi++) {
-                        var group = groups[gi];
+                for (var gi = 0; gi < frameGroupsList.length; gi++) {
+                        var group = frameGroupsList[gi];
 
                         // Resolve camera name mismatches
                         var groupKeys = group.cameraNames;
@@ -1410,7 +1410,6 @@
                             totalErrors.push(result.meanError);
                         }
                     }
-                }
 
                 if (frameResults.length > 0) {
                     state.triangulationResults.set(frameIdx, frameResults);
@@ -1741,8 +1740,7 @@
                     // Create InstanceGroup
                     var groupId = session.instanceGroups.size + totalGrouped;
                     var trackIdx = bucket[camNames[0]].trackIdx;
-                    var group = new InstanceGroup(groupId, trackIdx);
-                    group.identityId = identityId3;
+                    var group = new InstanceGroup(groupId, identityId3);
 
                     for (var ci2 = 0; ci2 < camNames.length; ci2++) {
                         group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
@@ -1750,11 +1748,9 @@
 
                     // Add to session
                     if (!session.instanceGroups.has(frameIdx)) {
-                        session.instanceGroups.set(frameIdx, new Map());
+                        session.instanceGroups.set(frameIdx, []);
                     }
-                    var frameMap = session.instanceGroups.get(frameIdx);
-                    if (!frameMap.has(trackIdx)) frameMap.set(trackIdx, []);
-                    frameMap.get(trackIdx).push(group);
+                    session.instanceGroups.get(frameIdx).push(group);
 
                     // Triangulate
                     var triResult = triangulateAndReproject(group, cameras);
@@ -1915,24 +1911,18 @@
                     if (camNames.length < 2) continue;
 
                     // Create InstanceGroup
-                    var group = new InstanceGroup(Date.now() + trackIdx, trackIdx);
+                    // Auto-assign identity from track
+                    var identity = session.getOrCreateIdentityForTrack(trackIdx);
+                    var group = new InstanceGroup(Date.now() + trackIdx, identity.id);
                     for (var ci2 = 0; ci2 < camNames.length; ci2++) {
                         group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
                     }
 
-                    // Auto-assign identity from track
-                    var identity = session.getOrCreateIdentityForTrack(trackIdx);
-                    session.assignIdentityToGroup(group, identity.id);
-
                     // Store in session.instanceGroups
                     if (!session.instanceGroups.has(frameIdx)) {
-                        session.instanceGroups.set(frameIdx, new Map());
+                        session.instanceGroups.set(frameIdx, []);
                     }
-                    var trackMap = session.instanceGroups.get(frameIdx);
-                    if (!trackMap.has(trackIdx)) {
-                        trackMap.set(trackIdx, []);
-                    }
-                    trackMap.get(trackIdx).push(group);
+                    session.instanceGroups.get(frameIdx).push(group);
 
                     totalGrouped++;
 
@@ -2026,15 +2016,7 @@
         // ============================================
 
         function getInstanceGroupsForFrame(frameIdx) {
-            const trackMap = state.session ? state.session.instanceGroups.get(frameIdx) : null;
-            if (!trackMap) return [];
-            const result = [];
-            for (const [trackIdx, groups] of trackMap) {
-                for (const g of groups) {
-                    result.push(g);
-                }
-            }
-            return result;
+            return state.session ? (state.session.instanceGroups.get(frameIdx) || []) : [];
         }
 
         /**
@@ -2353,7 +2335,7 @@
                 onSelectionChanged: function (selectedGroup, selectedNodeIdx) {
                     // Update status bar
                     if (selectedGroup) {
-                        const trackName = state.session.tracks[selectedGroup.trackIdx] || 'Track ' + selectedGroup.trackIdx;
+                        const trackName = (selectedGroup.identityId >= 0 && state.session.tracks[selectedGroup.identityId]) || ('Group ' + selectedGroup.identityId);
                         const identity = selectedGroup.identityId >= 0 ? state.session.getIdentity(selectedGroup.identityId) : null;
                         const identityLabel = identity ? ' [' + identity.name + ']' : '';
                         const nodeName = selectedNodeIdx >= 0 && state.session.skeleton.nodes[selectedNodeIdx]
@@ -2434,15 +2416,15 @@
 
                 onDoubleClickReprojected: function (group, viewName) {
                     var frameIdx = state.currentFrame;
-                    var trackIdx = group.trackIdx;
-                    var trackName = state.session.tracks[trackIdx] || 'Track ' + trackIdx;
+                    var identityId = group.identityId;
+                    var trackName = state.session.tracks[identityId] || 'Track ' + identityId;
 
                     // Search all groups for an existing UserInstance group with this track
                     // Find the existing group for this track (user or predicted)
                     var existingGroup = null;
                     var allGroups = getInstanceGroupsForFrame(frameIdx);
                     for (var gi = 0; gi < allGroups.length; gi++) {
-                        if (allGroups[gi].trackIdx === trackIdx) {
+                        if (allGroups[gi].identityId === identityId) {
                             existingGroup = allGroups[gi];
                             break;
                         }
@@ -2467,12 +2449,12 @@
 
                     console.log('[dblclick-reproj] existingGroup:', !!existingGroup,
                         '| group === existingGroup:', group === existingGroup,
-                        '| trackIdx:', trackIdx, '| viewName:', viewName,
+                        '| identityId:', identityId, '| viewName:', viewName,
                         '| reprojInstances:', group.reprojectedInstances ? group.reprojectedInstances.size : 0);
 
                     if (existingGroup) {
                         // Case 2: Group exists but not in this view — add user instance to it
-                        var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
+                        var newInst = new Instance(clonedPoints, identityId, 'user', 1.0);
                         newInst.modified = true;
                         existingGroup.addInstance(viewName, newInst);
                         if (fg) fg.addInstance(viewName, newInst);
@@ -2490,7 +2472,7 @@
                             if (inst.type === 'predicted') {
                                 var userClone = new Instance(
                                     inst.points.map(function(pt) { return pt != null ? [pt[0], pt[1]] : null; }),
-                                    trackIdx, 'user', 1.0
+                                    identityId, 'user', 1.0
                                 );
                                 userClone.modified = true;
                                 recordUserPoints(camName, userClone.points);
@@ -2500,16 +2482,16 @@
                         }
                         // Add clicked view if not already a PredictedInstance view
                         if (!predGroup.getInstance(viewName)) {
-                            var newInst = new Instance(clonedPoints, trackIdx, 'user', 1.0);
+                            var newInst = new Instance(clonedPoints, identityId, 'user', 1.0);
                             newInst.modified = true;
                             recordUserPoints(viewName, clonedPoints);
                             var ul = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
                             unlinkedList.push(ul);
                         }
                         if (unlinkedList.length > 0) {
-                            group = state.session.createGroupFromUnlinked(frameIdx, unlinkedList, trackIdx);
+                            group = state.session.createGroupFromUnlinked(frameIdx, unlinkedList, identityId);
                             for (var [cn, ni] of group.instances) {
-                                ni.trackIdx = group.trackIdx;
+                                ni.trackIdx = group.identityId;
                             }
                             // Transfer all reprojected instances from predicted group to new user group
                             // (kept until next re-triangulation replaces them)
@@ -2548,8 +2530,8 @@
 
                 onClonePredictedGroup: function (predGroup) {
                     var frameIdx = state.currentFrame;
-                    var trackIdx = predGroup.trackIdx;
-                    var trackName = state.session.tracks[trackIdx] || 'Track ' + trackIdx;
+                    var trackIdx = predGroup.identityId;
+                    var trackName = (trackIdx >= 0 && state.session.tracks[trackIdx]) || ('Group ' + trackIdx);
 
                     // Convert predicted instances to user IN PLACE — no new group
                     // Fill null points from reprojection and mark as occluded
@@ -2616,7 +2598,7 @@
                 },
 
                 onInstanceDeleted: function (frameIdx, group, deletedViews) {
-                    var trackName = group ? (state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx) : 'unlinked instance';
+                    var trackName = group ? (state.session.tracks[group.identityId] || 'Track ' + group.identityId) : 'unlinked instance';
                     setStatus('Deleted ' + trackName, 'success');
 
                     // Clear per-view cache only for the views whose instance was deleted
@@ -2661,7 +2643,7 @@
 
                 onAssignmentGroupCreated: function (group) {
                     cleanupManualAssignment();
-                    var trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
+                    var trackName = state.session.tracks[group.identityId] || 'Track ' + group.identityId;
 
                     // Auto-triangulate the new group
                     reTriangulateGroup(group);
@@ -2718,7 +2700,7 @@
 
                     // Add to group
                     group.addInstance(viewName, inst);
-                    inst.trackIdx = group.trackIdx;
+                    inst.trackIdx = group.identityId;
 
                     // Remove from unlinked list in FrameGroup
                     if (fg) {
@@ -3159,12 +3141,10 @@
                         state.session.getOrCreateIdentityForTrack(ti);
                     }
                     // Assign identities to existing groups by track
-                    for (var [fIdx2, trackMap] of state.session.instanceGroups) {
-                        for (var [tIdx, groups] of trackMap) {
-                            for (var gi = 0; gi < groups.length; gi++) {
-                                var identity = state.session.getOrCreateIdentityForTrack(groups[gi].trackIdx);
-                                state.session.assignIdentityToGroup(groups[gi], identity.id);
-                            }
+                    for (var [fIdx2, groups] of state.session.instanceGroups) {
+                        for (var gi = 0; gi < groups.length; gi++) {
+                            var identity = state.session.getOrCreateIdentityForTrack(groups[gi].identityId);
+                            state.session.assignIdentityToGroup(groups[gi], identity.id);
                         }
                     }
                     // Auto-switch to Color by Identity
@@ -3368,11 +3348,9 @@
                 var identity = state.session.identities[idx];
                 if (!confirm('Delete identity "' + identity.name + '"? Groups will become unassigned.')) return;
                 // Unassign all groups with this identity
-                for (var [fIdx, trackMap] of state.session.instanceGroups) {
-                    for (var [tIdx, groups] of trackMap) {
-                        for (var gi = 0; gi < groups.length; gi++) {
-                            if (groups[gi].identityId === identity.id) groups[gi].identityId = -1;
-                        }
+                for (var [fIdx, groups] of state.session.instanceGroups) {
+                    for (var gi = 0; gi < groups.length; gi++) {
+                        if (groups[gi].identityId === identity.id) groups[gi].identityId = -1;
                     }
                 }
                 state.session.identities.splice(idx, 1);
@@ -3523,7 +3501,7 @@
                     var bucket = trackBuckets[tidStr];
                     var bucketCamNames = Object.keys(bucket);
                     if (bucketCamNames.length < 2) continue;
-                    var group = new InstanceGroup(Date.now() + parseInt(tidStr), parseInt(tidStr));
+                    var group = new InstanceGroup(Date.now() + parseInt(tidStr), parseInt(tidStr)); // identityId = trackIdx for backwards compat
                     for (var bci = 0; bci < bucketCamNames.length; bci++) {
                         group.addInstance(bucketCamNames[bci], bucket[bucketCamNames[bci]]);
                     }
@@ -3609,7 +3587,7 @@
 
             document.getElementById('menuSaveProject').addEventListener('click', function () {
                 closeMenus();
-                saveProject();
+                saveProjectSlp();
             });
 
             document.getElementById('menuLoadProject').addEventListener('click', function () {
@@ -3627,22 +3605,25 @@
                 handleLoadCalibration();
             });
 
-            document.getElementById('menuLoadSession').addEventListener('click', function () {
-                closeMenus();
-                handleLoadSession();
-            });
-
             document.getElementById('menuLoadSessionFolder').addEventListener('click', function () {
                 closeMenus();
                 handleLoadSessionFolder();
             });
 
-            document.getElementById('menuLoadSlp').addEventListener('click', function () {
+            document.getElementById('menuLoadMultiSession').addEventListener('click', function () {
+                closeMenus();
+                handleLoadMultiSession();
+            });
+
+            document.getElementById('menuLoadSlp').addEventListener('click', async function () {
                 closeMenus();
                 if (state.session) {
                     handleAddSlp();
                 } else {
-                    handleLoadSlp();
+                    setStatus('Pick SLP file...', 'warning');
+                    var slpFiles = await pickFiles({ accept: '.slp,.h5' });
+                    if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                    handleLoadSlpFile(slpFiles[0]);
                 }
             });
 
@@ -3656,12 +3637,6 @@
                 document.getElementById('btnLoadSkeleton').click();
             });
 
-            document.getElementById('menuLoadDemo').addEventListener('click', function () {
-                closeMenus();
-                loadDemoSession();
-            });
-
-            // Standalone "Load Demo" menu bar button
             document.getElementById('menuHotkeys').addEventListener('click', showHotkeysHelp);
 
             function showHotkeysHelp() {
@@ -3708,11 +3683,6 @@
                 overlay.addEventListener('click', function (ev) { if (ev.target === overlay) overlay.remove(); });
             }
 
-            document.getElementById('menuLoadDemoBar').addEventListener('click', function () {
-                closeMenus();
-                loadDemoSession();
-            });
-
             document.getElementById('menuSaveSkeleton').addEventListener('click', function () {
                 closeMenus();
                 document.getElementById('btnSaveSkeleton').click();
@@ -3733,14 +3703,6 @@
                 closeMenus();
                 if (!state.session) { setStatus('No session to export', 'error'); return; }
                 showSlpExportModal();
-            });
-
-            document.getElementById('menuExportPoints3d').addEventListener('click', function () {
-                closeMenus();
-                if (!state.session) { setStatus('No session to export', 'error'); return; }
-                const data = buildPoints3dExportData(state.session);
-                downloadJSON(data, 'points3d.json');
-                setStatus('3D points exported', 'success');
             });
 
             document.getElementById('menuExportPoints3dH5').addEventListener('click', function () {
@@ -3795,7 +3757,7 @@
                 interactionManager.clearSelection();
             }
 
-            var trackName = state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx;
+            var trackName = state.session.tracks[group.identityId] || 'Track ' + group.identityId;
             state.session.unlinkGroup(frameIdx, group);
             setStatus('Unlinked ' + trackName, 'success');
 
@@ -3994,7 +3956,7 @@
                         for (var [camName, inst] of selectedGroup.instances) {
                             totalProp += swapAssignTrack(state.currentFrame, camName, inst, newTrackIdx, state.session);
                         }
-                        selectedGroup.trackIdx = newTrackIdx;
+                        selectedGroup.identityId = newTrackIdx;
                         setStatus('Set track to ' + trackName + (totalProp > 0 ? ' (swapped ' + totalProp + ')' : ''), 'success');
                     } else if (selectedUl) {
                         // Swap-assign with propagation (same as assignTrackToSelected)
@@ -4132,6 +4094,11 @@
                         e.preventDefault();
                         setGridMode();
                         showViewIndicator();
+                        break;
+                    }
+                    case 't': {
+                        e.preventDefault();
+                        triangulateCurrentFrame();
                         break;
                     }
                 }
@@ -4806,7 +4773,7 @@
                     costMatrix[a] = [];
                     for (var b = 0; b < nOther; b++) {
                         // Create temporary group with instances from both views
-                        var tempGroup = new InstanceGroup(-1, 0);
+                        var tempGroup = new InstanceGroup(-1, -1);
                         tempGroup.addInstance(refView, refInstances[a].instance);
                         tempGroup.addInstance(otherView, otherInstances[b].instance);
                         var result = triangulateAndReproject(tempGroup, cameras);
@@ -4841,9 +4808,9 @@
                     );
                     // Update instance trackIdx on both the group's map AND the
                     // FrameGroup's instances array (same objects by reference)
-                    var newTrackIdx = group.trackIdx;
+                    var newIdentityId = group.identityId;
                     for (var [camName, inst] of group.instances) {
-                        inst.trackIdx = newTrackIdx;
+                        inst.trackIdx = newIdentityId;
                     }
                     groupsCreated++;
                 }
@@ -5045,14 +5012,14 @@
                     if (assigned) assignedUnlinked.push(assigned);
                 }
                 if (assignedUnlinked.length >= 2) {
+                    var prevIdentityId = validPrevGroups[tgi].identityId;
                     var group = state.session.createGroupFromUnlinked(
-                        state.currentFrame, assignedUnlinked, validPrevGroups[tgi].trackIdx
+                        state.currentFrame, assignedUnlinked, prevIdentityId
                     );
-                    // Preserve track index from previous frame
-                    var prevTrackIdx = validPrevGroups[tgi].trackIdx;
-                    group.trackIdx = prevTrackIdx;
+                    // Preserve identity from previous frame
+                    group.identityId = prevIdentityId;
                     for (var [camName, inst] of group.instances) {
-                        inst.trackIdx = prevTrackIdx;
+                        inst.trackIdx = prevIdentityId;
                     }
 
                     // Triangulate to get updated 3D points
@@ -5561,15 +5528,10 @@
                     }
                     if (hasEdits) break;
                     // Check reprojected instances
-                    var trackMap = state.session.instanceGroups.get(frameIdx);
-                    if (trackMap) {
-                        for (var [tIdx, groups] of trackMap) {
-                            for (var gi = 0; gi < groups.length; gi++) {
-                                if (groups[gi].getReprojectedInstance(camName)) {
-                                    hasEdits = true; break;
-                                }
-                            }
-                            if (hasEdits) break;
+                    var frameGroupsList = state.session.instanceGroups.get(frameIdx) || [];
+                    for (var gi = 0; gi < frameGroupsList.length; gi++) {
+                        if (frameGroupsList[gi].getReprojectedInstance(camName)) {
+                            hasEdits = true; break;
                         }
                     }
                     if (hasEdits) break;
@@ -5594,15 +5556,9 @@
                         }
                     }
                     if (sfHasLabeled) labeledFrames++;
-                    var sfTm = state.session.instanceGroups.get(sfIdx);
-                    if (sfTm) {
-                        for (var sfGroups of sfTm.values()) {
-                            var sfFound = false;
-                            for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
-                                if (sfGroups[sfgi].points3d) { triangulatedFrames++; sfFound = true; break; }
-                            }
-                            if (sfFound) break;
-                        }
+                    var sfGroups = state.session.instanceGroups.get(sfIdx) || [];
+                    for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
+                        if (sfGroups[sfgi].points3d) { triangulatedFrames++; break; }
                     }
                 }
 
@@ -5792,15 +5748,9 @@
                             if ((sfUl[sui].instance.type || 'user') === 'user') { sfHasLabeled = true; instanceCount++; }
                         }
                         if (sfHasLabeled) labeledFrames++;
-                        var sfTm = sess.instanceGroups.get(sfIdx);
-                        if (sfTm) {
-                            for (var sfGroups of sfTm.values()) {
-                                var sfFound = false;
-                                for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
-                                    if (sfGroups[sfgi].points3d) { triangulatedFrames++; sfFound = true; break; }
-                                }
-                                if (sfFound) break;
-                            }
+                        var sfGroups = sess.instanceGroups.get(sfIdx) || [];
+                        for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
+                            if (sfGroups[sfgi].points3d) { triangulatedFrames++; break; }
                         }
                     }
 
@@ -6169,8 +6119,8 @@
                 // Validate: check all frames in range have identity assignment
                 var missingFrames = [];
                 for (var f = startFrame; f <= endFrame; f++) {
-                    var trackMap = state.session.instanceGroups.get(f);
-                    if (!trackMap || trackMap.size === 0) {
+                    var frameGroupsList = state.session.instanceGroups.get(f);
+                    if (!frameGroupsList || frameGroupsList.length === 0) {
                         missingFrames.push(f);
                     }
                 }
@@ -6210,13 +6160,12 @@
             var totalErrors = [];
 
             for (var f = startFrame; f <= endFrame; f++) {
-                var trackMap = state.session.instanceGroups.get(f);
-                if (trackMap) {
+                var frameGroupsList2 = state.session.instanceGroups.get(f);
+                if (frameGroupsList2) {
                     var frameResults = [];
 
-                    for (var [trackIdx, groups] of trackMap) {
-                        for (var gi = 0; gi < groups.length; gi++) {
-                            var group = groups[gi];
+                    for (var gi = 0; gi < frameGroupsList2.length; gi++) {
+                            var group = frameGroupsList2[gi];
 
                             // Resolve camera name mismatches
                             var groupKeys = group.cameraNames;
@@ -6281,7 +6230,6 @@
                                 totalErrors.push(result.meanError);
                             }
                         }
-                    }
 
                     if (frameResults.length > 0) {
                         state.triangulationResults.set(f, frameResults);
@@ -6556,11 +6504,9 @@
                             }
                         }
                     }
-                    for (const [frameIdx, trackMap] of state.session.instanceGroups) {
-                        for (const groups of trackMap.values()) {
-                            for (const g of groups) {
-                                if (g.getInstance(camName)) groupCount++;
-                            }
+                    for (const [frameIdx, groups] of state.session.instanceGroups) {
+                        for (const g of groups) {
+                            if (g.getInstance(camName)) groupCount++;
                         }
                     }
                 }
@@ -7108,14 +7054,9 @@
                 if (hasLabeled) labeledCount++;
 
                 // Triangulated: frame has at least one InstanceGroup with points3d
-                var trackMap = state.session.instanceGroups.get(frameIdx);
-                if (trackMap) {
-                    outer:
-                    for (var groups of trackMap.values()) {
-                        for (var g = 0; g < groups.length; g++) {
-                            if (groups[g].points3d) { triangulatedCount++; break outer; }
-                        }
-                    }
+                var frameGroupsList = state.session.instanceGroups.get(frameIdx) || [];
+                for (var g = 0; g < frameGroupsList.length; g++) {
+                    if (frameGroupsList[g].points3d) { triangulatedCount++; break; }
                 }
             });
 
@@ -7560,17 +7501,17 @@
                         tOpt.textContent = state.session.tracks[tsi];
                         trackSelect.appendChild(tOpt);
                     }
-                    trackSelect.value = group.trackIdx != null ? group.trackIdx : 0;
+                    trackSelect.value = group.identityId != null ? group.identityId : 0;
                     (function (g, sel) {
                         sel.addEventListener('change', function (ev) {
                             ev.stopPropagation();
                             var newTrack = parseInt(sel.value);
-                            if (newTrack === g.trackIdx) return;
+                            if (newTrack === g.identityId) return;
                             var totalProp = 0;
                             for (var [cn, ginst] of g.instances) {
                                 totalProp += swapAssignTrack(state.currentFrame, cn, ginst, newTrack, state.session);
                             }
-                            g.trackIdx = newTrack;
+                            g.identityId = newTrack;
                             setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) +
                                 (totalProp > 0 ? ' (propagated ' + totalProp + ')' : ''), 'success');
                             drawAllOverlays(state.currentFrame);
@@ -7721,7 +7662,8 @@
                         rdot.style.backgroundColor = REPROJECTION_COLOR;
                         rdot.style.marginRight = '4px';
                         rtdTrack.appendChild(rdot);
-                        rtdTrack.appendChild(document.createTextNode(state.session.tracks[group.trackIdx] || 'Track ' + group.trackIdx));
+                        var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + gi);
+                        rtdTrack.appendChild(document.createTextNode(reprojTrackName));
 
                         const rtdViews = document.createElement('td');
                         rtdViews.className = 'mono';
@@ -8160,40 +8102,36 @@
             var frames = {};
             for (var [frameIdx, fg] of session.frameGroups) {
                 var frameData = { instanceGroups: [], unlinkedInstances: [] };
-                var trackMap = session.instanceGroups.get(frameIdx);
-                if (trackMap) {
-                    for (var [trackIdx, groups] of trackMap) {
-                        for (var group of groups) {
-                            var groupData = {
-                                id: group.id,
-                                trackIdx: group.trackIdx,
-                                identityId: group.identityId != null ? group.identityId : -1,
-                                instances: {},
-                                points3d: group.points3d || null,
-                                reprojections: group.reprojections || null,
-                                observedPoints: group.observedPoints || null,
-                                dirty: group.dirty || false,
-                            };
-                            if (group.usedCameras) {
-                                groupData.usedCameras = Array.from(group.usedCameras);
-                            }
-                            for (var [camName, inst] of group.instances) {
-                                var instData = {
-                                    points: inst.points,
-                                    trackIdx: inst.trackIdx,
-                                    type: inst.type,
-                                    score: inst.score,
-                                    modified: inst.modified,
-                                    occluded: inst.occluded,
-                                };
-                                if (inst.nulledNodes && inst.nulledNodes.size > 0) {
-                                    instData.nulledNodes = Array.from(inst.nulledNodes);
-                                }
-                                groupData.instances[camName] = instData;
-                            }
-                            frameData.instanceGroups.push(groupData);
-                        }
+                var groups = session.instanceGroups.get(frameIdx) || [];
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var group = groups[gi];
+                    var groupData = {
+                        id: group.id,
+                        identityId: group.identityId != null ? group.identityId : -1,
+                        instances: {},
+                        points3d: group.points3d || null,
+                        reprojections: group.reprojections || null,
+                        observedPoints: group.observedPoints || null,
+                        dirty: group.dirty || false,
+                    };
+                    if (group.usedCameras) {
+                        groupData.usedCameras = Array.from(group.usedCameras);
                     }
+                    for (var [camName, inst] of group.instances) {
+                        var instData = {
+                            points: inst.points,
+                            trackIdx: inst.trackIdx,
+                            type: inst.type,
+                            score: inst.score,
+                            modified: inst.modified,
+                            occluded: inst.occluded,
+                        };
+                        if (inst.nulledNodes && inst.nulledNodes.size > 0) {
+                            instData.nulledNodes = Array.from(inst.nulledNodes);
+                        }
+                        groupData.instances[camName] = instData;
+                    }
+                    frameData.instanceGroups.push(groupData);
                 }
                 for (var [camName2, unlinkedList] of fg.unlinkedInstances) {
                     for (var unlinked of unlinkedList) {
@@ -8218,6 +8156,114 @@
                 frames[frameIdx] = frameData;
             }
             return frames;
+        }
+
+        async function ensureSleapIO() {
+            if (window.SleapIO) return window.SleapIO;
+            var mod = await import('./lib/sleap-io/index.browser.js?v=2');
+            window.SleapIO = mod;
+            return mod;
+        }
+
+        async function saveProjectSlp() {
+            if (!state.session) {
+                setStatus('No session to save', 'error');
+                return;
+            }
+            try {
+                await ensureSleapIO();
+                var SIO = window.SleapIO;
+                setStatus('Building SLP...', 'warning');
+
+                // Build Labels with all sessions
+                var allLabeledFrames = [];
+                var allVideos = [];
+                var allSessions = [];
+                var allSkeletons = [];
+                var allTracks = [];
+                var allIdentities = [];
+                var seenSkeletonNames = new Set();
+                var seenTrackNames = new Set();
+
+                var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
+                for (var si = 0; si < sessionsToExport.length; si++) {
+                    var sess = sessionsToExport[si];
+
+                    // Debug: count 3D data in this session
+                    var dbgGroupCount = 0, dbgWith3d = 0;
+                    for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
+                        for (var _dbgG of _dbgGroups) {
+                            dbgGroupCount++;
+                            if (_dbgG.points3d && _dbgG.points3d.some(function(p) { return p != null; })) dbgWith3d++;
+                        }
+                    }
+                    console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
+                        dbgGroupCount, 'instance groups,', dbgWith3d, 'with 3D points,',
+                        sess.cameras.length, 'cameras:', sess.cameras.map(function(c){return c.name;}).join(', '));
+
+                    // Find views and videoFiles for this session
+                    var sessViews = state.views.filter(function (v) {
+                        return sess.cameras.some(function (c) { return c.name === v.name; });
+                    });
+                    var sessVideoFiles = state.videoFiles.filter(function (vf) {
+                        return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
+                    });
+
+                    var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
+
+                    // Merge into combined Labels
+                    allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
+                    allVideos = allVideos.concat(sessLabels.videos || []);
+                    for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
+                        var skel = sessLabels.skeletons[sk];
+                        if (!seenSkeletonNames.has(skel.name)) {
+                            allSkeletons.push(skel);
+                            seenSkeletonNames.add(skel.name);
+                        }
+                    }
+                    for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
+                        var trk = sessLabels.tracks[ti];
+                        if (!seenTrackNames.has(trk.name)) {
+                            allTracks.push(trk);
+                            seenTrackNames.add(trk.name);
+                        }
+                    }
+                    allIdentities = allIdentities.concat(sessLabels.identities || []);
+                    allSessions = allSessions.concat(sessLabels.sessions || []);
+                }
+
+                var labels = new SIO.Labels({
+                    labeledFrames: allLabeledFrames,
+                    videos: allVideos,
+                    skeletons: allSkeletons,
+                    tracks: allTracks,
+                    identities: allIdentities,
+                    sessions: allSessions,
+                    provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+                });
+
+                var bytes = await SIO.saveSlpToBytes(labels);
+                var blob = new Blob([bytes], { type: 'application/x-hdf5' });
+
+                var filename = 'project.slp';
+                if (state.sessions.length === 1 && state.session.name) {
+                    filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
+                }
+
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+
+                setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
+            } catch (err) {
+                console.error('Save project SLP failed:', err);
+                setStatus('Save failed: ' + err.message, 'error');
+            }
         }
 
         function saveProject() {
@@ -8316,40 +8362,35 @@
                 };
 
                 // Serialize instance groups
-                const trackMap = state.session.instanceGroups.get(frameIdx);
-                if (trackMap) {
-                    for (const [trackIdx, groups] of trackMap) {
-                        for (const group of groups) {
-                            const groupData = {
-                                id: group.id,
-                                trackIdx: group.trackIdx,
-                                identityId: group.identityId != null ? group.identityId : -1,
-                                instances: {},
-                                points3d: group.points3d || null,
-                                reprojections: group.reprojections || null,
-                                observedPoints: group.observedPoints || null,
-                                dirty: group.dirty || false,
-                            };
-                            if (group.usedCameras) {
-                                groupData.usedCameras = Array.from(group.usedCameras);
-                            }
-                            for (const [camName, inst] of group.instances) {
-                                const instData = {
-                                    points: inst.points,
-                                    trackIdx: inst.trackIdx,
-                                    type: inst.type,
-                                    score: inst.score,
-                                    modified: inst.modified,
-                                    occluded: inst.occluded,
-                                };
-                                if (inst.nulledNodes && inst.nulledNodes.size > 0) {
-                                    instData.nulledNodes = Array.from(inst.nulledNodes);
-                                }
-                                groupData.instances[camName] = instData;
-                            }
-                            frameData.instanceGroups.push(groupData);
-                        }
+                const groups = state.session.instanceGroups.get(frameIdx) || [];
+                for (const group of groups) {
+                    const groupData = {
+                        id: group.id,
+                        identityId: group.identityId != null ? group.identityId : -1,
+                        instances: {},
+                        points3d: group.points3d || null,
+                        reprojections: group.reprojections || null,
+                        observedPoints: group.observedPoints || null,
+                        dirty: group.dirty || false,
+                    };
+                    if (group.usedCameras) {
+                        groupData.usedCameras = Array.from(group.usedCameras);
                     }
+                    for (const [camName, inst] of group.instances) {
+                        const instData = {
+                            points: inst.points,
+                            trackIdx: inst.trackIdx,
+                            type: inst.type,
+                            score: inst.score,
+                            modified: inst.modified,
+                            occluded: inst.occluded,
+                        };
+                        if (inst.nulledNodes && inst.nulledNodes.size > 0) {
+                            instData.nulledNodes = Array.from(inst.nulledNodes);
+                        }
+                        groupData.instances[camName] = instData;
+                    }
+                    frameData.instanceGroups.push(groupData);
                 }
 
                 // Serialize unlinked instances
@@ -8411,13 +8452,21 @@
         async function handleLoadProject() {
             try {
                 setStatus('Picking project file...', 'warning');
-                const files = await pickFiles({ accept: '.json' });
+                const files = await pickFiles({ accept: '.slp,.json,.h5' });
                 if (files.length === 0) {
                     setStatus('No file selected', 'warning');
                     return;
                 }
 
-                var fileSize = files[0].size;
+                var file = files[0];
+
+                // Route SLP/H5 files to the SLP loader
+                var ext = file.name.split('.').pop().toLowerCase();
+                if (ext === 'slp' || ext === 'h5') {
+                    return handleLoadSlpFile(file);
+                }
+
+                var fileSize = file.size;
                 if (fileSize > 50 * 1024 * 1024) {
                     if (!confirm('Project file is ' + (fileSize / 1024 / 1024).toFixed(0) + 'MB — this may be slow. Continue?')) {
                         setStatus('Load cancelled', 'warning');
@@ -8426,7 +8475,7 @@
                 }
                 showLoading('Loading project (' + (fileSize / 1024 / 1024).toFixed(1) + ' MB)...');
 
-                const text = await files[0].text();
+                const text = await file.text();
                 showLoading('Parsing project...');
                 const data = JSON.parse(text);
 
@@ -8487,18 +8536,48 @@
                 paneManager.clearAll();
 
                 if (data.version === 3 && data.sessions && needsVideoPrompt) {
-                    // V3: prompt for each session's folder individually
+                    // V3: prompt for session folders — with parent directory option
+                    var v3AllSessionNames = data.sessions.map(function (sd, idx) { return sd.name || ('Session ' + (idx + 1)); });
+                    var v3ParentFilesMap = null; // Map<sessionName, File[]> from parent dir pick
+
                     for (var psi = 0; psi < data.sessions.length; psi++) {
                         var sessData = data.sessions[psi];
                         var sessName = sessData.name || ('Session ' + (psi + 1));
                         var sessCameras = (sessData.videoManifest || []).map(function (m) { return m.assignedCamera; }).filter(Boolean);
 
-                        var folderFiles = await forceVideoSelectionWithFolder(
-                            'Cameras: ' + sessCameras.join(', '),
-                            sessName
-                        );
+                        var folderFiles;
+                        if (v3ParentFilesMap && v3ParentFilesMap.has(sessName)) {
+                            // Already resolved from parent directory pick
+                            folderFiles = v3ParentFilesMap.get(sessName);
+                        } else if (v3ParentFilesMap) {
+                            // Parent dir was picked but this session wasn't matched — prompt individually
+                            folderFiles = await forceVideoSelectionWithFolder(
+                                'Cameras: ' + sessCameras.join(', '),
+                                sessName
+                            );
+                            if (folderFiles && folderFiles.parentResult) folderFiles = []; // shouldn't happen here
+                        } else {
+                            // First session — offer parent directory option
+                            var promptResult = await forceVideoSelectionWithFolder(
+                                'Cameras: ' + sessCameras.join(', '),
+                                sessName,
+                                { allSessionNames: v3AllSessionNames }
+                            );
 
-                        if (folderFiles.length > 0) {
+                            if (promptResult && promptResult.parentResult) {
+                                // User picked parent directory
+                                v3ParentFilesMap = promptResult.parentResult.matched;
+                                var v3Unmatched = promptResult.parentResult.unmatched;
+                                await showParentDirMatchSummary(v3ParentFilesMap, v3Unmatched);
+
+                                // Use matched files for this session
+                                folderFiles = v3ParentFilesMap.has(sessName) ? v3ParentFilesMap.get(sessName) : [];
+                            } else {
+                                folderFiles = promptResult;
+                            }
+                        }
+
+                        if (folderFiles && folderFiles.length > 0) {
                             var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
                             for (var ffi = 0; ffi < folderFiles.length; ffi++) {
                                 var file = folderFiles[ffi];
@@ -8786,14 +8865,15 @@
 
                     if (frameData.instanceGroups) {
                         if (!session.instanceGroups.has(frameIdx)) {
-                            session.instanceGroups.set(frameIdx, new Map());
+                            session.instanceGroups.set(frameIdx, []);
                         }
-                        var trackMap = session.instanceGroups.get(frameIdx);
 
                         for (var gi = 0; gi < frameData.instanceGroups.length; gi++) {
                             var groupData = frameData.instanceGroups[gi];
-                            var group = new InstanceGroup(groupData.id || Date.now(), groupData.trackIdx);
-                            if (groupData.identityId != null) group.identityId = groupData.identityId;
+                            // Backwards compat: if groupData has trackIdx but no identityId, use trackIdx as identityId
+                            var loadedIdentityId = groupData.identityId != null ? groupData.identityId
+                                : (groupData.trackIdx != null ? groupData.trackIdx : -1);
+                            var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                             if (groupData.points3d) {
                                 group.points3d = groupData.points3d;
                             }
@@ -8808,7 +8888,7 @@
                                 var instData = groupData.instances[camName];
                                 var inst = new Instance(
                                     instData.points,
-                                    instData.trackIdx || groupData.trackIdx,
+                                    instData.trackIdx != null ? instData.trackIdx : (groupData.trackIdx != null ? groupData.trackIdx : 0),
                                     instData.type || 'user',
                                     instData.score || 1.0
                                 );
@@ -8835,16 +8915,13 @@
                                 for (var rCamName in group.reprojections) {
                                     var rPts = group.reprojections[rCamName];
                                     if (rPts) {
-                                        var rInst = new Instance(rPts, group.trackIdx, 'reprojected', 0);
+                                        var rInst = new Instance(rPts, group.identityId, 'reprojected', 0);
                                         group.addReprojectedInstance(rCamName, rInst);
                                     }
                                 }
                             }
 
-                            if (!trackMap.has(group.trackIdx)) {
-                                trackMap.set(group.trackIdx, []);
-                            }
-                            trackMap.get(group.trackIdx).push(group);
+                            session.instanceGroups.get(frameIdx).push(group);
                         }
                     }
 
@@ -8879,9 +8956,8 @@
             state.triangulationResults = new Map();
 
             // Rebuild triangulationResults from saved reprojection/error data
-            for (var [trFrameIdx, trTrackMap] of session.instanceGroups) {
+            for (var [trFrameIdx, trGroups] of session.instanceGroups) {
                 var trFrameResults = [];
-                for (var [trTrackIdx, trGroups] of trTrackMap) {
                     for (var trgi = 0; trgi < trGroups.length; trgi++) {
                         var trGroup = trGroups[trgi];
                         if (trGroup.points3d && trGroup.reprojections) {
@@ -8917,7 +8993,6 @@
                             storeReprojectedInstances(trGroup, { reprojections: trGroup.reprojections, points3d: trGroup.points3d }, cameras);
                         }
                     }
-                }
                 if (trFrameResults.length > 0) {
                     state.triangulationResults.set(trFrameIdx, trFrameResults);
                 }
@@ -8939,11 +9014,9 @@
 
             // Collect all instance keys actually used in the data
             var usedKeys = new Set();
-            for (var [fIdx, trackMap] of session.instanceGroups) {
-                for (var [tIdx, groups] of trackMap) {
-                    for (var g of groups) {
-                        for (var key of g.instances.keys()) usedKeys.add(key);
-                    }
+            for (var [fIdx, groups] of session.instanceGroups) {
+                for (var g of groups) {
+                    for (var key of g.instances.keys()) usedKeys.add(key);
                 }
             }
             for (var [fIdx2, fg] of session.frameGroups) {
@@ -9070,13 +9143,11 @@
                         trackInstances.get(tIdx).push({ camName: cn, instance: insts[ii] });
                     }
                 }
-                if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, new Map());
-                var tMap = session.instanceGroups.get(frameIdx2);
+                if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, []);
                 for (var [trkIdx, entries] of trackInstances) {
-                    var grp = new InstanceGroup(Date.now() + trkIdx, trkIdx);
+                    var grp = new InstanceGroup(Date.now() + trkIdx, trkIdx); // identityId = trackIdx for backwards compat
                     for (var ei = 0; ei < entries.length; ei++) grp.addInstance(entries[ei].camName, entries[ei].instance);
-                    if (!tMap.has(trkIdx)) tMap.set(trkIdx, []);
-                    tMap.get(trkIdx).push(grp);
+                    session.instanceGroups.get(frameIdx2).push(grp);
                 }
             }
 
@@ -9443,11 +9514,198 @@
         }
 
         /**
+         * Match a folder name to a session name using exact, case-insensitive, and contains matching.
+         * Returns true if a match is found.
+         */
+        function matchSessionFolder(folderName, sessionName) {
+            if (folderName === sessionName) return true;
+            var fLower = folderName.toLowerCase();
+            var sLower = sessionName.toLowerCase();
+            if (fLower === sLower) return true;
+            if (fLower.indexOf(sLower) >= 0 || sLower.indexOf(fLower) >= 0) return true;
+            return false;
+        }
+
+        /**
+         * Pick a parent directory and match subdirectories to session names.
+         * Uses File System Access API (showDirectoryPicker) to scan subdirs,
+         * then matches each subdir to a session name.
+         *
+         * @param {string[]} sessionNames - Names of sessions to match
+         * @returns {Promise<{matched: Map<string, File[]>, unmatched: string[]}>}
+         *   matched: Map of sessionName → files from that session's folder
+         *   unmatched: session names with no matching folder
+         */
+        async function pickParentDirectoryForSessions(sessionNames) {
+            if (!window.showDirectoryPicker) {
+                // Fall back to pickFolder (webkitdirectory) — can't enumerate subdirs individually
+                var allFiles = await pickFolder();
+                if (!allFiles || allFiles.length === 0) return null;
+
+                // Group files by top-level subdirectory
+                var dirFiles = {};
+                for (var i = 0; i < allFiles.length; i++) {
+                    var relPath = allFiles[i].webkitRelativePath || allFiles[i].name;
+                    var parts = relPath.split('/');
+                    // parts[0] = parent dir, parts[1] = session subdir, parts[2] = camera subdir, parts[3+] = files
+                    // Skip files at session root (only include files inside camera subdirs)
+                    if (parts.length < 4) continue;
+                    var dirName = parts[1];
+                    if (!dirFiles[dirName]) dirFiles[dirName] = [];
+                    dirFiles[dirName].push(allFiles[i]);
+                }
+
+                var matched = new Map();
+                var usedDirs = new Set();
+                for (var si = 0; si < sessionNames.length; si++) {
+                    var sessName = sessionNames[si];
+                    for (var dirName in dirFiles) {
+                        if (usedDirs.has(dirName)) continue;
+                        if (matchSessionFolder(dirName, sessName)) {
+                            matched.set(sessName, dirFiles[dirName]);
+                            usedDirs.add(dirName);
+                            break;
+                        }
+                    }
+                }
+                var unmatched = sessionNames.filter(function (n) { return !matched.has(n); });
+                return { matched: matched, unmatched: unmatched };
+            }
+
+            // Use File System Access API for reliable enumeration
+            var parentHandle;
+            try {
+                parentHandle = await window.showDirectoryPicker({ mode: 'read' });
+            } catch (e) {
+                if (e.name === 'AbortError') return null;
+                throw e;
+            }
+
+            // Scan immediate subdirectories
+            var subdirs = [];
+            for await (var [name, handle] of parentHandle) {
+                if (handle.kind === 'directory') {
+                    subdirs.push({ name: name, handle: handle });
+                }
+            }
+
+            // Match subdirs to session names
+            var matched = new Map();
+            var usedDirs = new Set();
+            for (var si = 0; si < sessionNames.length; si++) {
+                var sessName = sessionNames[si];
+                // Try exact first, then case-insensitive, then contains
+                var bestMatch = null;
+                for (var di = 0; di < subdirs.length; di++) {
+                    if (usedDirs.has(di)) continue;
+                    if (subdirs[di].name === sessName) { bestMatch = di; break; }
+                }
+                if (bestMatch === null) {
+                    for (var di = 0; di < subdirs.length; di++) {
+                        if (usedDirs.has(di)) continue;
+                        if (subdirs[di].name.toLowerCase() === sessName.toLowerCase()) { bestMatch = di; break; }
+                    }
+                }
+                if (bestMatch === null) {
+                    for (var di = 0; di < subdirs.length; di++) {
+                        if (usedDirs.has(di)) continue;
+                        var dLower = subdirs[di].name.toLowerCase();
+                        var sLower = sessName.toLowerCase();
+                        if (dLower.indexOf(sLower) >= 0 || sLower.indexOf(dLower) >= 0) { bestMatch = di; break; }
+                    }
+                }
+                if (bestMatch !== null) {
+                    usedDirs.add(bestMatch);
+                    showLoading('Scanning folder: ' + subdirs[bestMatch].name + '...');
+                    var allFiles = await enumerateDirectoryHandle(subdirs[bestMatch].handle, subdirs[bestMatch].name, null);
+                    // Only include files inside camera subdirectories (not at session root)
+                    // Root files have paths like "Session/file.mp4" (2 parts)
+                    // Camera subdir files have "Session/CamA/file.mp4" (3+ parts)
+                    var files = allFiles.filter(function (f) {
+                        var rp = f.webkitRelativePath || f.name;
+                        return rp.split('/').length >= 3;
+                    });
+                    matched.set(sessName, files);
+                }
+            }
+
+            var unmatched = sessionNames.filter(function (n) { return !matched.has(n); });
+            return { matched: matched, unmatched: unmatched };
+        }
+
+        /**
+         * Show a summary of matched/unmatched sessions after parent directory scan.
+         * Returns a promise that resolves when the user clicks Continue.
+         */
+        function showParentDirMatchSummary(matched, unmatched) {
+            return new Promise(function (resolve) {
+                var overlay = document.createElement('div');
+                overlay.id = 'parentDirSummaryOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+
+                var box = document.createElement('div');
+                box.style.cssText = 'background:#1e1e2e;border-radius:12px;padding:32px;max-width:500px;width:90%;color:#fff;';
+
+                var title = document.createElement('div');
+                title.style.cssText = 'font-size:18px;font-weight:600;margin-bottom:16px;';
+                title.textContent = 'Session Folder Matching';
+                box.appendChild(title);
+
+                // Matched list
+                if (matched.size > 0) {
+                    var matchLabel = document.createElement('div');
+                    matchLabel.style.cssText = 'color:#4caf50;font-weight:600;margin-bottom:6px;';
+                    matchLabel.textContent = 'Matched (' + matched.size + '):';
+                    box.appendChild(matchLabel);
+                    matched.forEach(function (files, sessName) {
+                        var row = document.createElement('div');
+                        row.style.cssText = 'color:#ccc;font-size:13px;padding:2px 0 2px 12px;';
+                        row.textContent = '\u2713 ' + sessName;
+                        box.appendChild(row);
+                    });
+                }
+
+                // Unmatched list
+                if (unmatched.length > 0) {
+                    var unmatchLabel = document.createElement('div');
+                    unmatchLabel.style.cssText = 'color:#ff9800;font-weight:600;margin-top:12px;margin-bottom:6px;';
+                    unmatchLabel.textContent = 'Unmatched (' + unmatched.length + '):';
+                    box.appendChild(unmatchLabel);
+                    for (var i = 0; i < unmatched.length; i++) {
+                        var row = document.createElement('div');
+                        row.style.cssText = 'color:#ccc;font-size:13px;padding:2px 0 2px 12px;';
+                        row.textContent = '\u2717 ' + unmatched[i] + ' — will prompt individually';
+                        box.appendChild(row);
+                    }
+                }
+
+                var btnContinue = document.createElement('button');
+                btnContinue.style.cssText = 'margin-top:20px;padding:12px 36px;font-size:15px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
+                btnContinue.textContent = 'Continue';
+                btnContinue.addEventListener('click', function () {
+                    overlay.remove();
+                    resolve();
+                });
+                box.appendChild(btnContinue);
+
+                overlay.appendChild(box);
+                document.body.appendChild(overlay);
+            });
+        }
+
+        /**
          * Video selection dialog with "Select Session Folder" option.
          * Scans the folder for videos in camera subdirectories and matches them
          * to the manifest entries by camera name or filename.
+         *
+         * @param {string} refInfo - Camera info string
+         * @param {string} sessionName - Current session name
+         * @param {object} [options] - Optional settings
+         * @param {string[]} [options.allSessionNames] - All session names (enables parent dir option)
+         * @returns {Promise<File[]|{parentResult: {matched: Map, unmatched: string[]}}>}
          */
-        function forceVideoSelectionWithFolder(refInfo, sessionName) {
+        function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
+            var allSessionNames = options && options.allSessionNames;
             return new Promise(function (resolve) {
                 var overlay = document.createElement('div');
                 overlay.id = 'videoSelectOverlay';
@@ -9466,7 +9724,23 @@
                 }
 
                 var btnRow = document.createElement('div');
-                btnRow.style.cssText = 'display:flex;gap:16px;';
+                btnRow.style.cssText = 'display:flex;gap:16px;flex-wrap:wrap;justify-content:center;';
+
+                // Parent directory button (only when multiple sessions)
+                if (allSessionNames && allSessionNames.length > 1) {
+                    var btnParent = document.createElement('button');
+                    btnParent.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#7c4dff;color:#fff;border:none;border-radius:8px;';
+                    btnParent.textContent = 'Select Parent Directory';
+                    btnRow.appendChild(btnParent);
+
+                    btnParent.addEventListener('click', async function () {
+                        var result;
+                        try { result = await pickParentDirectoryForSessions(allSessionNames); } catch (e) { console.error(e); return; }
+                        if (!result) return; // cancelled
+                        overlay.remove();
+                        resolve({ parentResult: result });
+                    });
+                }
 
                 var btnFolder = document.createElement('button');
                 btnFolder.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:#4a9eff;color:#fff;border:none;border-radius:8px;';
@@ -9770,102 +10044,113 @@
             }
         }
 
-        async function handleLoadSession() {
+        /**
+         * Recursively enumerate all files under a FileSystemDirectoryHandle.
+         * Returns File objects with webkitRelativePath set to rootName/relative/path.
+         */
+        async function enumerateDirectoryHandle(dirHandle, rootName, prefix) {
+            var files = [];
+            for await (var [name, handle] of dirHandle) {
+                if (handle.kind === 'file') {
+                    var file = await handle.getFile();
+                    var relPath = prefix ? prefix + '/' + name : rootName + '/' + name;
+                    var wrappedFile = new File([file], file.name, { type: file.type, lastModified: file.lastModified });
+                    Object.defineProperty(wrappedFile, 'webkitRelativePath', { value: relPath });
+                    files.push(wrappedFile);
+                } else if (handle.kind === 'directory') {
+                    var subPrefix = prefix ? prefix + '/' + name : rootName + '/' + name;
+                    var subFiles = await enumerateDirectoryHandle(handle, rootName, subPrefix);
+                    files = files.concat(subFiles);
+                }
+            }
+            return files;
+        }
+
+        async function handleLoadMultiSession() {
             try {
-                setStatus('Picking session file...', 'warning');
-                const files = await pickFiles({ accept: '.json' });
-                if (files.length === 0) {
-                    setStatus('No session file selected', 'warning');
+                setStatus('Pick parent folder containing session subfolders...', 'warning');
+
+                // Use File System Access API to get directory handle
+                // This lets us enumerate each session individually, avoiding
+                // the browser dropping files when webkitdirectory returns too many
+                var parentHandle;
+                if (window.showDirectoryPicker) {
+                    try {
+                        parentHandle = await window.showDirectoryPicker({ mode: 'read' });
+                    } catch (e) {
+                        if (e.name === 'AbortError') {
+                            setStatus('No folder selected', 'warning');
+                            return;
+                        }
+                        throw e;
+                    }
+                } else {
+                    // Fallback for browsers without File System Access API
+                    setStatus('This browser does not support showDirectoryPicker. Use Chrome or Edge.', 'error');
                     return;
                 }
 
-                const text = await files[0].text();
-                const data = JSON.parse(text);
+                showLoading('Scanning for sessions...');
 
-                // Parse cameras
-                let cameras = [];
-                if (data.cameras) {
-                    cameras = parseCalibrationJSON(JSON.stringify({ cameras: data.cameras }));
-                }
-
-                // Parse skeleton
-                let skeleton;
-                if (data.skeleton) {
-                    skeleton = new Skeleton(
-                        data.skeleton.name || 'skeleton',
-                        data.skeleton.nodes || [],
-                        data.skeleton.edges || []
-                    );
-                } else {
-                    skeleton = createDemoSkeleton();
-                }
-
-                const tracks = data.tracks || ['track_0'];
-                const session = new Session(cameras, skeleton, tracks);
-
-                // Parse frames
-                if (data.frames) {
-                    for (const frameIdxStr in data.frames) {
-                        const frameIdx = parseInt(frameIdxStr);
-                        const frameData = data.frames[frameIdxStr];
-                        const fg = new FrameGroup(frameIdx);
-
-                        for (const camName in frameData) {
-                            const instances = frameData[camName];
-                            for (let i = 0; i < instances.length; i++) {
-                                const instData = instances[i];
-                                const inst = new Instance(
-                                    instData.points,
-                                    instData.trackIdx || 0,
-                                    instData.type || 'user',
-                                    instData.score || 1.0
-                                );
-                                inst.modified = instData.modified || false;
-                                fg.addInstance(camName, inst);
+                // Find session subdirectories (directories that contain calibration or camera subdirs)
+                var sessionDirs = [];  // { name, handle }
+                for await (var [name, handle] of parentHandle) {
+                    if (handle.kind === 'directory') {
+                        // Quick check: does this look like a session?
+                        var isSession = false;
+                        for await (var [subName, subHandle] of handle) {
+                            if (subHandle.kind === 'file' && subName.toLowerCase().indexOf('calib') >= 0) {
+                                isSession = true;
+                                break;
+                            }
+                            if (subHandle.kind === 'directory') {
+                                isSession = true;
+                                break;
                             }
                         }
-
-                        session.addFrameGroup(fg);
-                    }
-                }
-
-                // Reconstruct InstanceGroups by grouping instances with the same trackIdx
-                for (const [frameIdx2, fg2] of session.frameGroups) {
-                    const trackInstances = new Map();
-                    for (const [camName, instances] of fg2.instances) {
-                        for (const inst of instances) {
-                            const tIdx = inst.trackIdx || 0;
-                            if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
-                            trackInstances.get(tIdx).push({ camName, instance: inst });
+                        if (isSession) {
+                            sessionDirs.push({ name: name, handle: handle });
                         }
                     }
-                    if (!session.instanceGroups.has(frameIdx2)) session.instanceGroups.set(frameIdx2, new Map());
-                    const trackMap2 = session.instanceGroups.get(frameIdx2);
-                    for (const [trackIdx, entries] of trackInstances) {
-                        const group = new InstanceGroup(Date.now() + trackIdx, trackIdx);
-                        for (const e of entries) group.addInstance(e.camName, e.instance);
-                        if (!trackMap2.has(trackIdx)) trackMap2.set(trackIdx, []);
-                        trackMap2.get(trackIdx).push(group);
-                    }
                 }
 
-                state.session = session;
-                if (state.sessions.indexOf(state.session) < 0) {
-                    state.sessions.push(state.session);
+                sessionDirs.sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; });
+
+                if (sessionDirs.length === 0) {
+                    hideLoading();
+                    setStatus('No session subfolders found in selected folder', 'error');
+                    return;
+                }
+
+                showLoading('Loading ' + sessionDirs.length + ' sessions...');
+                console.log('[multi-session] Found sessions:', sessionDirs.map(function (d) { return d.name; }));
+
+                // Load each session — first gets full video init, rest defer decoders
+                for (var si = 0; si < sessionDirs.length; si++) {
+                    var sess = sessionDirs[si];
+                    showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
+                    console.log('[multi-session] Enumerating session:', sess.name);
+
+                    var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
+                    console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
+                    await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
+                }
+
+                hideLoading();
+                setStatus('Loaded ' + sessionDirs.length + ' sessions', 'success');
+
+                // Display first session's grid (it has live decoders from eager load)
+                if (state.sessions.length > 1) {
                     state.activeSessionIdx = state.sessions.length - 1;
+                    await switchSession(0);
                 }
-                updateInfoPanel();
-                setStatus('Session loaded (' + cameras.length + ' cameras, ' + session.numFrames + ' frames)', 'success');
 
-                // Rebuild 3D viewport
-                if (viewport3d) {
-                    viewport3d.cameras = cameras;
-                    viewport3d.addCameraPyramids();
-                    viewport3d.fitToScene();
-                }
+                populateSessionStrip();
+
             } catch (err) {
-                console.error('Failed to load session:', err);
-                setStatus('Session error: ' + err.message, 'error');
+                console.error('[multi-session] Error:', err);
+                hideLoading();
+                setStatus('Multi-session error: ' + err.message, 'error');
             }
         }
 
@@ -10057,35 +10342,6 @@
                 leftBubble.appendChild(leftOptions);
                 columns.appendChild(leftBubble);
 
-                // Right bubble: Multi-Session
-                var rightBubble = document.createElement('div');
-                rightBubble.style.cssText = bubbleStyle;
-
-                var rightTitle = document.createElement('div');
-                rightTitle.style.cssText = groupTitleStyle;
-                rightTitle.textContent = 'Multi-Session';
-                rightBubble.appendChild(rightTitle);
-
-                var rightOptions = document.createElement('div');
-                rightOptions.style.cssText = 'display:flex;gap:10px;justify-content:center;';
-
-                rightOptions.appendChild(makeOption(
-                    'Per-Camera SLP',
-                    'One SLP + multiple videos per camera.',
-                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} v_sess1.mp4\n\u2502   \u251C\u2500\u2500 \u{1F3AC} v_sess2.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} v_sess1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} v_sess2.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
-                    'per-camera'
-                ));
-
-                rightOptions.appendChild(makeOption(
-                    'Single SLP',
-                    'One SLP in root. Videos in videos/ folder.',
-                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
-                    'single-slp'
-                ));
-
-                rightBubble.appendChild(rightOptions);
-                columns.appendChild(rightBubble);
-
                 card.appendChild(columns);
 
                 // Cancel button
@@ -10118,15 +10374,7 @@
         }
 
         async function handleLoadSessionFolder(showAllOptions) {
-            var mode = await showSessionModeModal(!!showAllOptions);
-            if (!mode) return; // cancelled
-            if (mode === 'single-slp') {
-                await handleLoadSessionFolderSingleSlp();
-            } else if (mode === 'per-camera') {
-                await handleLoadSessionFolderPerCamera();
-            } else if (mode === 'empty') {
-                handleEmptySession();
-            }
+            await handleLoadSessionFolderPerCamera();
         }
 
         function handleEmptySession() {
@@ -10434,13 +10682,18 @@
             }
         }
 
-        async function handleLoadSessionFolderPerCamera() {
+        async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos) {
             try {
-                setStatus('Pick session folder...', 'warning');
-                var allFiles = await pickFolder();
-                if (allFiles.length === 0) {
-                    setStatus('No folder selected', 'warning');
-                    return;
+                var allFiles;
+                if (preloadedFiles) {
+                    allFiles = preloadedFiles;
+                } else {
+                    setStatus('Pick session folder...', 'warning');
+                    allFiles = await pickFolder();
+                    if (allFiles.length === 0) {
+                        setStatus('No folder selected', 'warning');
+                        return;
+                    }
                 }
 
                 showLoading('Scanning folder...');
@@ -10558,13 +10811,18 @@
                 var matchedCameraDirs = [];  // { dirName, camName, videos, slps }
                 var missingCameras = [];
 
+                console.log('[session-folder] Camera names from calibration:', cameras.map(function(c) { return c.name; }));
+                console.log('[session-folder] Directory names found:', Object.keys(cameraDirs));
+
                 if (cameras.length > 0) {
                     for (var ci = 0; ci < cameras.length; ci++) {
                         var cam = cameras[ci];
                         var camLower = cam.name.toLowerCase();
                         var found = false;
                         for (var dirName in cameraDirs) {
-                            if (cameraDirs[dirName].dirNameLower === camLower) {
+                            var dirLower = cameraDirs[dirName].dirNameLower;
+                            console.log('[session-folder] Matching cam "' + cam.name + '" (lower: "' + camLower + '") vs dir "' + dirName + '" (lower: "' + dirLower + '"): exact=' + (dirLower === camLower) + ' cam+=' + (dirLower === 'cam' + camLower) + ' strip=' + (dirLower.replace('cam', '') === camLower));
+                            if (dirLower === camLower || dirLower === 'cam' + camLower || dirLower.replace('cam', '') === camLower) {
                                 // Include even if no videos — will show as "None" in assignment panel
                                 matchedCameraDirs.push({
                                     dirName: dirName,
@@ -10612,14 +10870,14 @@
                     var popupSections = [];
                     if (missingDirItems.length > 0) {
                         popupSections.push({
-                            title: 'Missing Camera Directories',
+                            title: 'Missing Camera Directories' + (folderName ? ' — ' + folderName : ''),
                             subtitle: 'The following cameras from calibration have no matching directory.',
                             items: missingDirItems
                         });
                     }
                     if (missingVideoItems.length > 0) {
                         popupSections.push({
-                            title: 'Missing Video Files',
+                            title: 'Missing Video Files' + (folderName ? ' — ' + folderName : ''),
                             subtitle: 'The following cameras have SLP annotations but no video file.',
                             items: missingVideoItems
                         });
@@ -10796,71 +11054,90 @@
                     // Load video (first in directory)
                     if (camDir.videos.length > 0) {
                         var videoFile = camDir.videos[0];
-                        showLoading('Loading video: ' + videoFile.name + '...');
 
-                        try {
-                            var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
-                            await decoder.init(videoFile);
-                            var vw = decoder.videoTrack.video.width;
-                            var vh = decoder.videoTrack.video.height;
-
-                            if (!state.session) {
-                                var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
-                                state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0'], sessionName);
-                                if (state.sessions.indexOf(state.session) < 0) {
-                                    state.sessions.push(state.session);
-                                    state.activeSessionIdx = state.sessions.length - 1;
-                                }
+                        if (!state.session) {
+                            var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
+                            state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0'], sessionName);
+                            if (state.sessions.indexOf(state.session) < 0) {
+                                state.sessions.push(state.session);
+                                state.activeSessionIdx = state.sessions.length - 1;
                             }
+                        }
 
-                            var sessionIdx = state.sessions.indexOf(state.session);
-                            var videoStem = videoFile.name.replace(/\.[^.]+$/, '');
-                            var assignCam = camDir.noCalibration ? null : camName;
-                            var viewName = camDir.noCalibration ? videoStem : camName;
+                        var sessionIdx = state.sessions.indexOf(state.session);
+                        var videoStem = videoFile.name.replace(/\.[^.]+$/, '');
+                        var assignCam = camDir.noCalibration ? null : camName;
+                        var viewName = camDir.noCalibration ? videoStem : camName;
+
+                        if (deferVideos) {
+                            // Store file ref only — decoder created on session switch
                             state.videoFiles.push({
                                 file: videoFile,
                                 name: viewName,
-                                decoder: decoder,
-                                videoWidth: vw,
-                                videoHeight: vh,
-                                frameCount: decoder.samples.length,
+                                decoder: null,
+                                videoWidth: 0, videoHeight: 0,
+                                frameCount: 0,
                                 assignedCamera: assignCam,
                                 slpFilename: slpFilenameForCam,
                                 videoPath: videoFile.webkitRelativePath || videoFile.name,
                                 sessionIdx: sessionIdx,
                             });
-
                             var loadedVfIdx = state.videoFiles.length - 1;
                             if (state.session.videoFileIndices.indexOf(loadedVfIdx) < 0) {
                                 state.session.videoFileIndices.push(loadedVfIdx);
                             }
+                        } else {
+                            showLoading('Loading video: ' + videoFile.name + '...');
+                            try {
+                                var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                                await decoder.init(videoFile);
+                                state.decoderPool.push(decoder);
+                                var vw = decoder.videoTrack.video.width;
+                                var vh = decoder.videoTrack.video.height;
 
-                            if (assignCam && !state.session.cameras.some(function (c) { return c.name === camName; })) {
-                                state.session.cameras.push(
-                                    new Camera(camName, [[600,0,vw/2],[0,600,vh/2],[0,0,1]],
-                                        [0,0,0,0,0], [0,0,0], [0,0,0], [vw, vh])
-                                );
-                            }
+                                state.videoFiles.push({
+                                    file: videoFile,
+                                    name: viewName,
+                                    decoder: decoder,
+                                    videoWidth: vw, videoHeight: vh,
+                                    frameCount: decoder.samples.length,
+                                    assignedCamera: assignCam,
+                                    slpFilename: slpFilenameForCam,
+                                    videoPath: videoFile.webkitRelativePath || videoFile.name,
+                                    sessionIdx: sessionIdx,
+                                });
+                                var loadedVfIdx = state.videoFiles.length - 1;
+                                if (state.session.videoFileIndices.indexOf(loadedVfIdx) < 0) {
+                                    state.session.videoFileIndices.push(loadedVfIdx);
+                                }
 
-                            state.views.push({
-                                name: viewName,
-                                decoder: decoder,
-                                canvas: null, ctx: null,
-                                overlayCanvas: null, overlayCtx: null,
-                                videoWidth: vw, videoHeight: vh,
-                                wrapper: null,
-                            });
+                                if (assignCam && !state.session.cameras.some(function (c) { return c.name === camName; })) {
+                                    state.session.cameras.push(
+                                        new Camera(camName, [[600,0,vw/2],[0,600,vh/2],[0,0,1]],
+                                            [0,0,0,0,0], [0,0,0], [0,0,0], [vw, vh])
+                                    );
+                                }
 
-                            if (state.totalFrames === 0 || decoder.samples.length > state.totalFrames) {
-                                state.totalFrames = decoder.samples.length;
+                                state.views.push({
+                                    name: viewName,
+                                    decoder: decoder,
+                                    canvas: null, ctx: null,
+                                    overlayCanvas: null, overlayCtx: null,
+                                    videoWidth: vw, videoHeight: vh,
+                                    wrapper: null,
+                                });
+
+                                if (state.totalFrames === 0 || decoder.samples.length > state.totalFrames) {
+                                    state.totalFrames = decoder.samples.length;
+                                }
+                                if (state.fps === 0 || state.fps === 30) {
+                                    state.fps = decoder.videoTrack.duration > 0
+                                        ? decoder.samples.length / (decoder.videoTrack.duration / decoder.videoTrack.timescale)
+                                        : 30;
+                                }
+                            } catch (vidErr) {
+                                console.error('[session-folder] Failed to load video ' + videoFile.name + ':', vidErr);
                             }
-                            if (state.fps === 0 || state.fps === 30) {
-                                state.fps = decoder.videoTrack.duration > 0
-                                    ? decoder.samples.length / (decoder.videoTrack.duration / decoder.videoTrack.timescale)
-                                    : 30;
-                            }
-                        } catch (vidErr) {
-                            console.error('[session-folder] Failed to load video ' + videoFile.name + ':', vidErr);
                         }
                     }
                 }
@@ -11025,15 +11302,8 @@
         // SLP H5 Import
         // ============================================
 
-        async function handleLoadSlp() {
+        async function handleLoadSlpFile(slpFile) {
             try {
-                setStatus('Pick SLP file...', 'warning');
-                var slpFiles = await pickFiles({ accept: '.slp,.h5' });
-                if (slpFiles.length === 0) {
-                    setStatus('No file selected', 'warning');
-                    return;
-                }
-                var slpFile = slpFiles[0];
 
                 showLoading('Reading SLP file (' + (slpFile.size / 1024 / 1024).toFixed(1) + ' MB)...');
                 console.log('[load-slp] SLP:', slpFile.name);
@@ -11069,22 +11339,52 @@
                     predictedInstances: slpPredCount,
                 });
 
-                showLoading('Building session (' + totalFrames + ' frames)...');
+                showLoading('Building sessions...');
                 await new Promise(function (r) { setTimeout(r, 0); });
 
-                // 1. Build session from raw worker data
                 var skelData = slpData.skeleton || { name: 'skeleton', nodes: [], edges: [] };
                 var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
 
-                // Extract cameras from sessions calibration
+                var numSlpSessions = (slpData.sessions && slpData.sessions.length > 0) ? slpData.sessions.length : 1;
+                console.log('[load-slp] SLP contains', numSlpSessions, 'session(s)');
+
+                // Pre-compute session names for parent directory matching
+                var slpAllSessionNames = [];
+                for (var sni = 0; sni < numSlpSessions; sni++) {
+                    var snName = 'Session ' + (sni + 1);
+                    if (slpData.sessions && slpData.sessions[sni]) {
+                        var snMeta = slpData.sessions[sni].metadata;
+                        if (snMeta && snMeta.lucid && snMeta.lucid.sessionName) snName = snMeta.lucid.sessionName;
+                        else if (slpData.sessions[sni].name) snName = slpData.sessions[sni].name;
+                    }
+                    slpAllSessionNames.push(snName);
+                }
+                var slpParentFilesMap = null; // Set after user picks parent directory
+
+                // Clear previous state
+                if (videoController) {
+                    if (state.isPlaying) videoController.pause();
+                    videoController = null;
+                }
+                state.views = [];
+                state.videoFiles = [];
+                state.sessions = [];
+                paneManager.clearAll();
+
+                for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
+                showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
+                await new Promise(function (r) { setTimeout(r, 0); });
+
+                // 1. Build session from raw worker data
                 var cameras = [];
                 var videoIdxToCameraName = {};
-                if (slpData.sessions && slpData.sessions.length > 0) {
-                    var sessData = slpData.sessions[0];
+                if (slpData.sessions && slpData.sessions.length > slpSessIdx) {
+                    var sessData = slpData.sessions[slpSessIdx];
                     var calib = sessData.calibration || {};
                     var camMap = sessData.camcorder_to_video_idx_map || {};
 
-                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; }).sort();
+                    // Don't sort — preserve insertion order from the saved JSON
+                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; });
                     for (var ck = 0; ck < camKeys.length; ck++) {
                         var cd = calib[camKeys[ck]];
                         if (!cd || typeof cd !== 'object') continue;
@@ -11098,10 +11398,23 @@
                         ));
                     }
                     for (var cmk in camMap) {
-                        var camIdx = parseInt(cmk.replace(/[^0-9]/g, ''));
                         var vidIdx = camMap[cmk];
-                        if (cameras[camIdx]) {
-                            videoIdxToCameraName[vidIdx] = cameras[camIdx].name;
+                        // Keys may be camera names or numeric indices
+                        var matchedCam = null;
+                        for (var mci = 0; mci < cameras.length; mci++) {
+                            if (cameras[mci].name === cmk) {
+                                matchedCam = cameras[mci];
+                                break;
+                            }
+                        }
+                        if (!matchedCam) {
+                            var cmkIdx = parseInt(cmk);
+                            if (!isNaN(cmkIdx) && cmkIdx >= 0 && cmkIdx < cameras.length) {
+                                matchedCam = cameras[cmkIdx];
+                            }
+                        }
+                        if (matchedCam) {
+                            videoIdxToCameraName[vidIdx] = matchedCam.name;
                         }
                     }
                 }
@@ -11122,24 +11435,54 @@
                     }
                 }
 
-                var tracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
+                // Use per-session skeleton/tracks from lucid metadata if available,
+                // otherwise fall back to global skeleton/tracks from SLP metadata
+                var sessSkeleton = skeleton;
+                var sessTracks = slpData.tracks.length > 0 ? slpData.tracks : ['track_0'];
+                var sessName = 'Session ' + (slpSessIdx + 1);
 
-                // Ensure enough track slots
+                if (slpData.sessions && slpData.sessions[slpSessIdx]) {
+                    var earlyMeta = slpData.sessions[slpSessIdx].metadata;
+                    if (earlyMeta && earlyMeta.lucid) {
+                        if (earlyMeta.lucid.sessionName) sessName = earlyMeta.lucid.sessionName;
+                        if (earlyMeta.lucid.skeleton) {
+                            var sk = earlyMeta.lucid.skeleton;
+                            sessSkeleton = new Skeleton(sk.name || 'skeleton', sk.nodes || [], sk.edges || []);
+                        }
+                        if (earlyMeta.lucid.tracks) {
+                            sessTracks = earlyMeta.lucid.tracks;
+                        }
+                    }
+                }
+
+                // Build set of video indices that belong to this session
+                var sessVideoIndices = new Set();
+                for (var svk in videoIdxToCameraName) {
+                    sessVideoIndices.add(parseInt(svk));
+                }
+
+                // Ensure enough track slots for instances in this session
                 var maxTrack = 0;
                 for (var fri = 0; fri < totalFrames; fri++) {
                     var fd = slpData.frames[fri];
+                    if (sessVideoIndices.size > 0 && !sessVideoIndices.has(fd.videoIdx)) continue;
                     for (var ii = 0; ii < fd.instances.length; ii++) {
                         if (fd.instances[ii].trackIdx > maxTrack) maxTrack = fd.instances[ii].trackIdx;
                     }
                 }
-                while (tracks.length <= maxTrack) tracks.push('track_' + tracks.length);
+                while (sessTracks.length <= maxTrack) sessTracks.push('track_' + sessTracks.length);
 
-                var session = new Session(cameras, skeleton, tracks);
+                var session = new Session(cameras, sessSkeleton, sessTracks);
+                session.name = sessName;
 
                 // Populate FrameGroups from worker's frames array (yield every 20K for UI)
                 var BATCH = 20000;
                 for (var fi = 0; fi < totalFrames; fi++) {
                     var fd2 = slpData.frames[fi];
+
+                    // Skip frames that don't belong to this session's cameras
+                    if (sessVideoIndices.size > 0 && !sessVideoIndices.has(fd2.videoIdx)) continue;
+
                     var camName = videoIdxToCameraName[fd2.videoIdx];
                     if (!camName && cameras.length > 0) {
                         camName = cameras[fd2.videoIdx % cameras.length].name;
@@ -11168,54 +11511,221 @@
                     }
                 }
 
-                // Build InstanceGroups
-                showLoading('Building instance groups...');
-                await new Promise(function (r) { setTimeout(r, 0); });
-                var fgCount = 0;
-                for (var [frameIdx2, fg2] of session.frameGroups) {
-                    var trackInstances = new Map();
-                    for (var [cn, instances] of fg2.instances) {
-                        for (var inst3 of instances) {
-                            var tIdx = inst3.trackIdx >= 0 ? inst3.trackIdx : 0;
-                            if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
-                            trackInstances.get(tIdx).push({ camName: cn, instance: inst3 });
+                // Restore identities from SLP
+                if (slpData.identities && slpData.identities.length > 0) {
+                    session.identities = slpData.identities.map(function (idData, idx) {
+                        return new Identity(idx, idData.name || ('id_' + idx), idData.color || null);
+                    });
+                    console.log('[load-slp] Loaded', session.identities.length, 'identities');
+                }
+
+                // Build InstanceGroups from sessions_json if available (preserves
+                // identity-based grouping), otherwise fall back to track-based grouping
+                var hasSessionData = slpData.sessions && slpData.sessions.length > slpSessIdx
+                    && slpData.sessions[slpSessIdx].frame_group_dicts
+                    && slpData.sessions[slpSessIdx].frame_group_dicts.length > 0;
+
+                if (hasSessionData) {
+                    // === Reconstruct InstanceGroups from sessions_json ===
+                    var sessData2 = slpData.sessions[slpSessIdx];
+                    var fgDicts = sessData2.frame_group_dicts || [];
+
+                    // Restore lucid session-level metadata
+                    var lucidMeta = (sessData2.metadata && sessData2.metadata.lucid) || {};
+                    if (lucidMeta.trustTracks != null) session.trustTracks = lucidMeta.trustTracks;
+                    if (lucidMeta.trackIdentityMap) {
+                        session.trackIdentityMap = new Map(lucidMeta.trackIdentityMap);
+                    }
+                    if (lucidMeta.frameIdentityMap) {
+                        session.frameIdentityMap = new Map(lucidMeta.frameIdentityMap);
+                    }
+
+                    // Build camera key → name map
+                    var camKeyToName = {};
+                    var calibKeys = Object.keys(sessData2.calibration || {}).filter(function (k) { return k !== 'metadata'; });
+                    for (var cki = 0; cki < calibKeys.length; cki++) {
+                        var ck2 = calibKeys[cki];
+                        var cd2 = sessData2.calibration[ck2];
+                        camKeyToName[ck2] = (cd2 && cd2.name) || ck2;
+                    }
+
+                    showLoading('Rebuilding instance groups from session data...');
+                    await new Promise(function (r) { setTimeout(r, 0); });
+
+                    // Build node name list for reconstructing points from dicts
+                    var nodeNames = session.skeleton.nodes.map(function (n) {
+                        return typeof n === 'string' ? n : (n.name || '');
+                    });
+                    var numNodes = nodeNames.length;
+
+                    var restoredGroups = 0, restoredWith3d = 0;
+                    for (var fdi = 0; fdi < fgDicts.length; fdi++) {
+                        var fgDict = fgDicts[fdi];
+                        var fgFrameIdx = fgDict.frame_idx != null ? fgDict.frame_idx : (fgDict.frameIdx || 0);
+                        var igDicts = fgDict.instance_groups || [];
+                        if (igDicts.length === 0) continue;
+
+                        // Ensure FrameGroup exists
+                        var fg3 = session.frameGroups.get(fgFrameIdx);
+                        if (!fg3) {
+                            fg3 = new FrameGroup(fgFrameIdx);
+                            session.addFrameGroup(fg3);
+                        }
+
+                        // Build groups by creating instances directly from session data
+                        var groups = [];
+                        for (var igi = 0; igi < igDicts.length; igi++) {
+                            var igDict = igDicts[igi];
+                            var identityId = igDict.identity_idx != null ? igDict.identity_idx : -1;
+                            if (identityId >= 0 && identityId >= session.identities.length) {
+                                console.warn('[load-slp] identity_idx ' + identityId + ' is out of bounds (only ' + session.identities.length + ' identities loaded) — dropping identity assignment');
+                                identityId = -1;
+                            }
+                            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
+
+                            // Create instances directly from inline point dicts
+                            var igInstances = igDict.instances || {};
+                            var igLucid = (igDict.metadata && igDict.metadata.lucid) || {};
+                            var instanceMetaMap = igLucid.instanceMeta || {};
+
+                            for (var igCamKey in igInstances) {
+                                var igCamName = camKeyToName[igCamKey];
+                                if (!igCamName) {
+                                    console.warn('[load-slp] Camera key "' + igCamKey + '" not found in calibration — 2D instance will use raw key as camera name');
+                                    igCamName = igCamKey;
+                                }
+                                var igPointDict = igInstances[igCamKey];
+                                var instMeta = instanceMetaMap[igCamName] || instanceMetaMap[igCamKey] || {};
+
+                                // Reconstruct points array from node-name-keyed dict
+                                var points = [];
+                                var occluded = [];
+                                for (var ni = 0; ni < numNodes; ni++) {
+                                    var ptArr = igPointDict[nodeNames[ni]];
+                                    if (ptArr && ptArr.length >= 2 && ptArr[0] != null && ptArr[1] != null && isFinite(ptArr[0])) {
+                                        points.push([ptArr[0], ptArr[1]]);
+                                        occluded.push(ptArr.length >= 3 && ptArr[2] === 0);
+                                    } else {
+                                        points.push(null);
+                                        occluded.push(false);
+                                    }
+                                }
+
+                                // Use precise metadata if available, otherwise infer from point data
+                                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : 0;
+                                var instType = instMeta.type || 'predicted';
+                                var instScore = instMeta.score || 0;
+
+                                var inst = new Instance(points, instTrackIdx, instType, instScore);
+                                inst.occluded = occluded;
+                                inst.modified = instMeta.modified || false;
+                                if (instMeta.nulledNodes) {
+                                    inst.nulledNodes = new Set(instMeta.nulledNodes);
+                                }
+                                if (instMeta.occluded) {
+                                    inst.occluded = instMeta.occluded;
+                                }
+
+                                // Add to both the group and the FrameGroup
+                                group.addInstance(igCamName, inst);
+                                fg3.addInstance(igCamName, inst);
+                            }
+
+                            // Restore 3D points
+                            if (igDict.points && Array.isArray(igDict.points)) {
+                                group.points3d = igDict.points;
+                                restoredWith3d++;
+                            }
+
+                            groups.push(group);
+                            restoredGroups++;
+                        }
+
+                        session.instanceGroups.set(fgFrameIdx, groups);
+
+                        if (fdi > 0 && fdi % BATCH === 0) {
+                            showLoading('Rebuilding instance groups (' + fdi + '/' + fgDicts.length + ')...');
+                            await new Promise(function (r) { setTimeout(r, 0); });
                         }
                     }
-                    if (trackInstances.size > 0) {
-                        session.instanceGroups.set(frameIdx2, new Map());
-                        var trackMap2 = session.instanceGroups.get(frameIdx2);
-                        for (var [trackIdx, entries] of trackInstances) {
-                            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx);
-                            for (var e of entries) group.addInstance(e.camName, e.instance);
-                            if (!trackMap2.has(trackIdx)) trackMap2.set(trackIdx, []);
-                            trackMap2.get(trackIdx).push(group);
+                    console.log('[load-slp] Rebuilt', restoredGroups, 'instance groups from session data,', restoredWith3d, 'with 3D points');
+
+                } else {
+                    // === Fallback: group by trackIdx (no session data) ===
+                    showLoading('Building instance groups...');
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                    var fgCount = 0;
+                    for (var [frameIdx2, fg2] of session.frameGroups) {
+                        var trackInstances = new Map();
+                        for (var [cn, instances] of fg2.instances) {
+                            for (var inst3 of instances) {
+                                var tIdx = inst3.trackIdx >= 0 ? inst3.trackIdx : 0;
+                                if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
+                                trackInstances.get(tIdx).push({ camName: cn, instance: inst3 });
+                            }
                         }
-                    }
-                    fgCount++;
-                    if (fgCount % BATCH === 0) {
-                        showLoading('Building instance groups (' + fgCount + '/' + session.frameGroups.size + ')...');
-                        await new Promise(function (r) { setTimeout(r, 0); });
+                        if (trackInstances.size > 0) {
+                            session.instanceGroups.set(frameIdx2, []);
+                            for (var [trackIdx, entries] of trackInstances) {
+                                var group2 = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx);
+                                for (var e of entries) group2.addInstance(e.camName, e.instance);
+                                session.instanceGroups.get(frameIdx2).push(group2);
+                            }
+                        }
+                        fgCount++;
+                        if (fgCount % BATCH === 0) {
+                            showLoading('Building instance groups (' + fgCount + '/' + session.frameGroups.size + ')...');
+                            await new Promise(function (r) { setTimeout(r, 0); });
+                        }
                     }
                 }
 
-                state.session = session;
-                if (state.sessions.indexOf(state.session) < 0) {
-                    state.sessions.push(state.session);
-                    state.activeSessionIdx = state.sessions.length - 1;
+                // Recompute reprojections from stored 3D points + calibration
+                if (session.cameras.length >= 2) {
+                    var hasAny3d = false;
+                    for (var [, groups3d] of session.instanceGroups) {
+                        for (var g3d of groups3d) {
+                            if (g3d.points3d && g3d.points3d.some(function (p) { return p != null; })) {
+                                hasAny3d = true;
+                                break;
+                            }
+                        }
+                        if (hasAny3d) break;
+                    }
+                    if (hasAny3d) {
+                        showLoading('Recomputing reprojections from 3D data...');
+                        await new Promise(function (r) { setTimeout(r, 0); });
+                        for (var [frameIdx3, groups3] of session.instanceGroups) {
+                            for (var grp of groups3) {
+                                if (!grp.points3d || !grp.points3d.some(function (p) { return p != null; })) continue;
+                                // Build reprojections from 3D points for each camera
+                                var reprojResult = { reprojections: {} };
+                                for (var ci2 = 0; ci2 < session.cameras.length; ci2++) {
+                                    var cam2 = session.cameras[ci2];
+                                    if (cam2.projectionMatrix) {
+                                        reprojResult.reprojections[cam2.name] = reprojectPoints(grp.points3d, cam2.projectionMatrix);
+                                    }
+                                }
+                                grp.reprojections = reprojResult.reprojections;
+                                storeReprojectedInstances(grp, reprojResult, session.cameras);
+                                grp.markClean();
+                            }
+                        }
+                        console.log('[load-slp] Recomputed reprojections from 3D data');
+                    }
                 }
-                console.log('[load-slp] Session:', session.numFrames, 'frames,',
-                    cameras.length, 'cameras, tracks:', tracks);
+
+                console.log('[load-slp] Session', slpSessIdx, 'name:', session.name,
+                    'skeleton:', session.skeleton.nodes.length, 'nodes,', session.skeleton.edges.length, 'edges');
+
+                state.sessions.push(session);
+                state.session = session;
+                state.activeSessionIdx = state.sessions.length - 1;
+
+                console.log('[load-slp] Session', slpSessIdx + 1, ':', session.numFrames, 'frames,',
+                    cameras.length, 'cameras, tracks:', session.tracks);
 
                 // 2. Video loading — embedded or external
-                // Clear previous views
-                if (videoController) {
-                    if (state.isPlaying) videoController.pause();
-                    videoController = null;
-                }
-                state.views = [];
-                state.videoFiles = [];
-                paneManager.clearAll();
-
                 var hasEmbedded = slpData.videos.some(function (v) { return v.embedded; });
 
                 if (hasEmbedded) {
@@ -11306,51 +11816,87 @@
                         createViewForVideoFile(state.videoFiles[evi2]);
                     }
                 } else {
-                    // --- No embedded videos: prompt for video files ---
+                    // --- No embedded videos: prompt for session folder ---
                     hideLoading();
 
-                    // Extract video basenames from SLP metadata
-                    var slpVideoRefs = slpData.videos.map(function (v) {
-                        var fn = v.sourceFilename || v.filename || '';
-                        if (fn === '.') return '';
-                        return fn.replace(/^.*[\/\\]/, '');
-                    });
-                    var refInfo = slpVideoRefs.filter(function (r) { return r; }).join(', ') || '(unknown)';
-                    console.log('[load-slp] SLP references videos:', slpVideoRefs);
+                    // Extract camera names for the folder prompt
+                    var slpCameraNames = cameras.map(function (c) { return c.name; });
+                    var refInfo = slpCameraNames.length > 0
+                        ? 'Cameras: ' + slpCameraNames.join(', ')
+                        : '(select folder with video files)';
+                    console.log('[load-slp] Prompting for session folder, cameras:', slpCameraNames);
 
-                    // Show blocking overlay forcing user to select video files
-                    var videoFiles = await forceVideoSelection(refInfo);
+                    // Prompt for session folder — with parent directory option for multi-session
+                    var videoFiles;
+                    var currentSessName = session.name || 'Session';
+                    if (slpParentFilesMap && slpParentFilesMap.has(currentSessName)) {
+                        // Already resolved from parent directory pick
+                        videoFiles = slpParentFilesMap.get(currentSessName);
+                    } else if (slpParentFilesMap) {
+                        // Parent dir was picked but this session wasn't matched — prompt individually
+                        videoFiles = await forceVideoSelectionWithFolder(refInfo, currentSessName);
+                        if (videoFiles && videoFiles.parentResult) videoFiles = [];
+                    } else {
+                        // Offer parent directory option on first prompt
+                        var slpPromptResult = await forceVideoSelectionWithFolder(
+                            refInfo, currentSessName,
+                            numSlpSessions > 1 ? { allSessionNames: slpAllSessionNames } : null
+                        );
 
-                    if (videoFiles.length > 0) {
-                        for (var mvi = 0; mvi < videoFiles.length; mvi++) {
-                            var vFile = videoFiles[mvi];
+                        if (slpPromptResult && slpPromptResult.parentResult) {
+                            slpParentFilesMap = slpPromptResult.parentResult.matched;
+                            var slpUnmatched = slpPromptResult.parentResult.unmatched;
+                            await showParentDirMatchSummary(slpParentFilesMap, slpUnmatched);
+                            videoFiles = slpParentFilesMap.has(currentSessName) ? slpParentFilesMap.get(currentSessName) : [];
+                        } else {
+                            videoFiles = slpPromptResult;
+                        }
+                    }
+
+                    if (videoFiles && videoFiles.length > 0) {
+                        // Filter to video files only
+                        var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
+                        var vidFiles = Array.from(videoFiles).filter(function (f) {
+                            var ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
+                            return vidExts.indexOf(ext) >= 0;
+                        });
+                        var cameraNames = cameras.map(function (c) { return c.name; });
+
+                        for (var mvi = 0; mvi < vidFiles.length; mvi++) {
+                            var vFile = vidFiles[mvi];
                             var stem = vFile.name.replace(/\.[^.]+$/, '');
-                            showLoading('Loading ' + vFile.name + ' (' + (mvi + 1) + '/' + videoFiles.length + ')...');
+                            showLoading('Loading ' + vFile.name + ' (' + (mvi + 1) + '/' + vidFiles.length + ')...');
                             try {
                                 var vdec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
                                 await vdec.init(vFile);
 
-                                // Match to SLP video reference by filename
+                                // Match to camera by parent directory name or filename
                                 var assignedCam = null;
-                                var matchedSlpVideoPath = null;
-                                var vStem = stem.toLowerCase();
-                                for (var rvi = 0; rvi < slpVideoRefs.length; rvi++) {
-                                    var refName = slpVideoRefs[rvi];
-                                    if (!refName) continue;
-                                    var refStem = refName.replace(/\.[^.]+$/, '').toLowerCase();
-                                    if (vFile.name.toLowerCase() === refName.toLowerCase() ||
-                                        vStem === refStem ||
-                                        vStem.indexOf(refStem) >= 0 ||
-                                        refStem.indexOf(vStem) >= 0) {
-                                        if (videoIdxToCameraName[rvi]) {
-                                            assignedCam = videoIdxToCameraName[rvi];
+                                var relPath = vFile.webkitRelativePath || vFile.name;
+                                var pathParts = relPath.split('/');
+                                var parentDir = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
+
+                                // Try parent directory name → camera name
+                                if (parentDir && cameraNames.indexOf(parentDir) >= 0) {
+                                    assignedCam = parentDir;
+                                }
+                                // Try video stem → camera name
+                                if (!assignedCam && cameraNames.indexOf(stem) >= 0) {
+                                    assignedCam = stem;
+                                }
+                                // Try matching against SLP video references
+                                if (!assignedCam) {
+                                    for (var cmi in videoIdxToCameraName) {
+                                        var camN = videoIdxToCameraName[cmi];
+                                        var vMeta = slpData.videos[cmi];
+                                        if (!vMeta) continue;
+                                        var refPath = vMeta.sourceFilename || vMeta.filename || '';
+                                        if (refPath === '.') continue;
+                                        var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
+                                        if (stem.toLowerCase() === refBase || stem.toLowerCase().indexOf(refBase) >= 0) {
+                                            assignedCam = camN;
+                                            break;
                                         }
-                                        var matchedMeta = slpData.videos[rvi];
-                                        if (matchedMeta) {
-                                            var origPath = matchedMeta.sourceFilename || matchedMeta.filename || null;
-                                            if (origPath && origPath !== '.') matchedSlpVideoPath = origPath;
-                                        }
-                                        break;
                                     }
                                 }
 
@@ -11361,41 +11907,45 @@
                                     frameCount: vdec.samples.length,
                                     assignedCamera: assignedCam,
                                     slpFilename: slpFile.name,
-                                    videoPath: matchedSlpVideoPath || vFile.webkitRelativePath || vFile.name,
+                                    videoPath: vFile.webkitRelativePath || vFile.name,
+                                    sessionIdx: slpSessIdx,
                                 });
                             } catch (videoErr) {
                                 console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);
                             }
                         }
 
-                        var cameraNames = cameras.map(function (c) { return c.name; });
-                        for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
-                            var vf = state.videoFiles[vfi];
-                            if (vf.assignedCamera) continue;
-                            if (cameraNames.indexOf(vf.name) >= 0) {
-                                vf.assignedCamera = vf.name;
-                            }
-                        }
                         autoAssignVideosToCameras();
-                        for (var oi = 0; oi < state.videoFiles.length; oi++) {
-                            if (!state.videoFiles[oi].assignedCamera && oi < cameraNames.length) {
-                                var alreadyUsed = state.videoFiles.some(function(other) {
-                                    return other.assignedCamera === cameraNames[oi];
-                                });
-                                if (!alreadyUsed) {
-                                    state.videoFiles[oi].assignedCamera = cameraNames[oi];
-                                }
-                            }
-                        }
 
-                        showLoading('Creating views...');
-                        for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
-                            var vf3 = state.videoFiles[vi2];
-                            if (vf3.assignedCamera) {
-                                var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
-                                if (!hasView) createViewForVideoFile(vf3);
-                            }
-                        }
+                        // Don't create views yet — wait until after session loop
+                        // so we only create views for the active session
+                    }
+                }
+
+                // Track which video file indices belong to this session
+                session.videoFileIndices = [];
+                for (var svfi = 0; svfi < state.videoFiles.length; svfi++) {
+                    if (state.videoFiles[svfi].sessionIdx === slpSessIdx) {
+                        session.videoFileIndices.push(svfi);
+                    }
+                }
+
+                } // end session loop
+
+                // Set active session to the first one
+                if (state.sessions.length > 0) {
+                    state.activeSessionIdx = 0;
+                    state.session = state.sessions[0];
+                }
+
+                // Create views for the active session only
+                showLoading('Creating views...');
+                for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
+                    var vf3 = state.videoFiles[vi2];
+                    if (vf3.sessionIdx !== state.activeSessionIdx) continue;
+                    if (vf3.assignedCamera) {
+                        var hasView = state.views.some(function (v) { return v.name === vf3.assignedCamera; });
+                        if (!hasView) createViewForVideoFile(vf3);
                     }
                 }
 
@@ -11409,18 +11959,18 @@
                 }
 
                 // Seek to first labeled frame
-                if (videoController && state.views.length > 0) {
+                if (videoController && state.views.length > 0 && state.session) {
                     var firstFrame = 0;
-                    var sortedFrames = session.frameIndices;
+                    var sortedFrames = state.session.frameIndices;
                     if (sortedFrames.length > 0) firstFrame = sortedFrames[0];
                     state.currentFrame = firstFrame;
                     await videoController.seekToFrame(firstFrame);
                 }
 
                 // 3. Set up 3D viewport
-                if (cameras.length > 0) {
+                if (state.session && state.session.cameras.length > 0) {
                     if (viewport3d) {
-                        viewport3d.cameras = cameras;
+                        viewport3d.cameras = state.session.cameras;
                         viewport3d.skeleton = skeleton;
                         viewport3d.addCameraPyramids();
                         viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
@@ -11441,10 +11991,9 @@
                 }
 
                 hideLoading();
-                var statusParts = [skeleton.nodes.length + ' nodes', session.numFrames + ' labeled frames'];
-                if (cameras.length > 0) statusParts.push(cameras.length + ' cameras');
+                var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
+                if (state.session) statusParts.push(state.session.numFrames + ' labeled frames');
                 if (state.views.length > 0) statusParts.push(state.views.length + ' views');
-                if (hasEmbedded) statusParts.push(slpData.videos.filter(function (v) { return v.embedded; }).length + ' embedded video(s)');
                 setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
             } catch (err) {
                 console.error('[load-slp] FATAL:', err);
@@ -11511,7 +12060,8 @@
                     var sessData = slpData.sessions[0];
                     var calib = sessData.calibration || {};
                     var camMap = sessData.camcorder_to_video_idx_map || {};
-                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; }).sort();
+                    // Don't sort — preserve insertion order from the saved JSON
+                    var camKeys = Object.keys(calib).filter(function (k) { return k !== 'metadata'; });
                     for (var ck = 0; ck < camKeys.length; ck++) {
                         var cd = calib[camKeys[ck]];
                         if (!cd || typeof cd !== 'object') continue;
@@ -11525,10 +12075,23 @@
                         ));
                     }
                     for (var cmk in camMap) {
-                        var camIdx = parseInt(cmk.replace(/[^0-9]/g, ''));
                         var vidIdx = camMap[cmk];
-                        if (cameras[camIdx]) {
-                            videoIdxToCameraName[vidIdx] = cameras[camIdx].name;
+                        // Keys may be camera names or numeric indices
+                        var matchedCam = null;
+                        for (var mci = 0; mci < cameras.length; mci++) {
+                            if (cameras[mci].name === cmk) {
+                                matchedCam = cameras[mci];
+                                break;
+                            }
+                        }
+                        if (!matchedCam) {
+                            var cmkIdx = parseInt(cmk);
+                            if (!isNaN(cmkIdx) && cmkIdx >= 0 && cmkIdx < cameras.length) {
+                                matchedCam = cameras[cmkIdx];
+                            }
+                        }
+                        if (matchedCam) {
+                            videoIdxToCameraName[vidIdx] = matchedCam.name;
                         }
                     }
                 }
@@ -11891,24 +12454,29 @@
                 for (var [frameIdx, trackMap] of ptsData.points3d) {
                     // Ensure instanceGroups entry exists for this frame
                     if (!state.session.instanceGroups.has(frameIdx)) {
-                        state.session.instanceGroups.set(frameIdx, new Map());
+                        state.session.instanceGroups.set(frameIdx, []);
                     }
-                    var sessionTrackMap = state.session.instanceGroups.get(frameIdx);
+                    var frameGroupsList = state.session.instanceGroups.get(frameIdx);
 
                     for (var [trackIdx, pts3d] of trackMap) {
-                        // Find or create InstanceGroup for this track
-                        var groups = sessionTrackMap.get(trackIdx);
-                        if (groups && groups.length > 0) {
+                        // Find or create InstanceGroup for this track (identity)
+                        var existingGroup = null;
+                        for (var egi = 0; egi < frameGroupsList.length; egi++) {
+                            if (frameGroupsList[egi].identityId === trackIdx) {
+                                existingGroup = frameGroupsList[egi];
+                                break;
+                            }
+                        }
+                        if (existingGroup) {
                             // Assign 3D points to existing group
-                            groups[0].points3d = pts3d;
-                            groups[0].markClean();
+                            existingGroup.points3d = pts3d;
+                            existingGroup.markClean();
                         } else {
                             // Create a new InstanceGroup with just 3D data
-                            var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx);
+                            var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
                             newGroup.points3d = pts3d;
                             newGroup.markClean();
-                            if (!sessionTrackMap.has(trackIdx)) sessionTrackMap.set(trackIdx, []);
-                            sessionTrackMap.get(trackIdx).push(newGroup);
+                            frameGroupsList.push(newGroup);
                         }
                     }
                     framesUpdated++;
@@ -12785,8 +13353,7 @@
 
             // 2. Remove view from all InstanceGroups in origin and re-triangulate
             var retriangulated = 0;
-            for (var [frameIdx2, trackMap] of fromSession.instanceGroups) {
-                for (var [trackIdx, groups] of trackMap) {
+            for (var [frameIdx2, groups] of fromSession.instanceGroups) {
                     for (var gi = 0; gi < groups.length; gi++) {
                         var group = groups[gi];
                         if (group.instances.has(viewName) || group.reprojectedInstances.has(viewName)) {
@@ -12817,7 +13384,6 @@
                             }
                         }
                     }
-                }
             }
 
             // 3. Move video file reference
@@ -13018,17 +13584,38 @@
                     drawAllOverlays(state.currentFrame);
                 }, 50);
             } else {
-                // First visit — build views
+                // Build views using pool decoders
                 videoController = null;
                 state.views = [];
                 paneManager.clearAll();
+                var rmVi = 0;
                 for (var nvi = 0; nvi < state.session.videoFileIndices.length; nvi++) {
                     var vf = state.videoFiles[state.session.videoFileIndices[nvi]];
-                    if (vf && vf.assignedCamera) createViewForVideoFile(vf);
+                    if (vf && vf.file && rmVi < state.decoderPool.length) {
+                        vf.decoder = state.decoderPool[rmVi];
+                        rmVi++;
+                        createViewForVideoFile(vf);
+                    }
                 }
                 updateTotalFrames();
                 paneManager.addAllViewsAsGrid();
                 rebuildVideoController();
+                // Async: swap pool decoders to correct sources
+                (async function() {
+                    for (var rvi = 0; rvi < state.session.videoFileIndices.length; rvi++) {
+                        var rvf = state.videoFiles[state.session.videoFileIndices[rvi]];
+                        if (rvf && rvf.file && rvf.decoder) {
+                            try {
+                                await rvf.decoder.switchSource(rvf.file);
+                                rvf.videoWidth = rvf.decoder.videoTrack.video.width;
+                                rvf.videoHeight = rvf.decoder.videoTrack.video.height;
+                                rvf.frameCount = rvf.decoder.samples.length;
+                            } catch (e) { console.error('[removeSession] switchSource failed:', e); }
+                        }
+                    }
+                    updateTotalFrames();
+                    if (videoController) videoController.seekToFrame(state.currentFrame);
+                })();
                 setTimeout(function () {
                     fitCanvasesToCells();
                     refreshPaneInteractions();
@@ -13042,18 +13629,20 @@
             setStatus('Session removed', 'success');
         }
 
-        function switchSession(newIdx) {
+        async function switchSession(newIdx) {
             if (newIdx === state.activeSessionIdx) return;
             if (newIdx < 0 || newIdx >= state.sessions.length) return;
 
-            // Save current session state — keep views alive
+            // Save current session state
             var oldSession = state.sessions[state.activeSessionIdx];
             oldSession.lastFrame = state.currentFrame;
             oldSession.totalFrames = state.totalFrames;
             oldSession.fps = state.fps;
             oldSession.triangulationResults = state.triangulationResults;
-            oldSession._views = state.views;           // preserve live views with decoders+canvases
-            oldSession._videoController = videoController;
+
+            // Detach decoders from old session (they stay alive in decoderPool)
+            oldSession._views = null;
+            oldSession._videoController = null;
 
             // Save 3D viewport state
             if (viewport3d && viewport3d.threeCamera && viewport3d.controls) {
@@ -13064,14 +13653,15 @@
                 };
             }
 
-            // Pause old session's video elements to free resources
+            // Pause old session
             if (videoController && state.isPlaying) {
                 videoController.stopPlayback();
             }
-            for (var ovi = 0; ovi < state.views.length; ovi++) {
-                if (state.views[ovi].decoder && state.views[ovi].decoder.pauseNative) {
-                    state.views[ovi].decoder.pauseNative();
-                }
+
+            // Null out old session's decoder references (decoders stay in pool)
+            for (var ovi = 0; ovi < oldSession.videoFileIndices.length; ovi++) {
+                var oldVf = state.videoFiles[oldSession.videoFileIndices[ovi]];
+                if (oldVf) oldVf.decoder = null;
             }
 
             // Switch active session
@@ -13084,64 +13674,63 @@
             var trustCheck = document.getElementById('menuTrustTracksCheck');
             if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
 
-            // Restore saved views or build new ones
-            if (newSession._views && newSession._views.length > 0) {
-                state.views = newSession._views;
+            // Rebuild views — reuse pool decoders via switchSource
+            videoController = null;
+            state.views = [];
+            paneManager.clearAll();
 
-                paneManager.clearAll();
-                paneManager.addAllViewsAsGrid();
-
-                // Rebuild video controller and update frame count for this session
-                rebuildVideoController();
-                updateTotalFrames();
-
-                var targetFrame = newSession.lastFrame || 0;
-                setTimeout(function() {
-                    fitCanvasesToCells();
-                    refreshPaneInteractions();
-                    state.currentFrame = targetFrame;
-                    if (videoController) {
-                        videoController.seekToFrame(targetFrame);
-                    }
-                    drawAllOverlays(targetFrame);
-                }, 50);
-            } else {
-                // First visit — build views from videoFileIndices
-                videoController = null;
-                state.views = [];
-                paneManager.clearAll();
-
-                // Ensure videoFileIndices is populated
-                if (newSession.videoFileIndices.length === 0) {
-                    for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
-                        if (state.videoFiles[nvi].sessionIdx === newIdx) {
-                            newSession.videoFileIndices.push(nvi);
-                        }
+            if (newSession.videoFileIndices.length === 0) {
+                for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
+                    if (state.videoFiles[nvi].sessionIdx === newIdx) {
+                        newSession.videoFileIndices.push(nvi);
                     }
                 }
-
-                for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
-                    var vfIdx = newSession.videoFileIndices[vi];
-                    var vf = state.videoFiles[vfIdx];
-                    if (vf) {
-                        createViewForVideoFile(vf);
-                    }
-                }
-
-                updateTotalFrames();
-                paneManager.addAllViewsAsGrid();
-                rebuildVideoController();
-
-                setTimeout(function() {
-                    fitCanvasesToCells();
-                    refreshPaneInteractions();
-                    state.currentFrame = newSession.lastFrame || 0;
-                    if (videoController && state.views.length > 0) {
-                        videoController.seekToFrame(state.currentFrame);
-                    }
-                    drawAllOverlays(state.currentFrame);
-                }, 50);
             }
+
+            for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
+                var vfIdx = newSession.videoFileIndices[vi];
+                var vf = state.videoFiles[vfIdx];
+                if (vf && vf.file) {
+                    showLoading('Loading video: ' + vf.file.name + '...');
+                    try {
+                        if (vi < state.decoderPool.length) {
+                            // Reuse pool decoder — swap source without creating new video element
+                            await state.decoderPool[vi].switchSource(vf.file);
+                            vf.decoder = state.decoderPool[vi];
+                        } else {
+                            // More cameras than pool — create new decoder and add to pool
+                            var newDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                            await newDec.init(vf.file);
+                            vf.decoder = newDec;
+                            state.decoderPool.push(newDec);
+                        }
+                        vf.videoWidth = vf.decoder.videoTrack.video.width;
+                        vf.videoHeight = vf.decoder.videoTrack.video.height;
+                        vf.frameCount = vf.decoder.samples.length;
+                    } catch (e) {
+                        console.error('[switchSession] Video init failed:', e);
+                    }
+                }
+                if (vf && vf.decoder) {
+                    createViewForVideoFile(vf);
+                }
+            }
+            hideLoading();
+
+            updateTotalFrames();
+            paneManager.addAllViewsAsGrid();
+            rebuildVideoController();
+
+            var targetFrame = newSession.lastFrame || 0;
+            setTimeout(function() {
+                fitCanvasesToCells();
+                refreshPaneInteractions();
+                state.currentFrame = targetFrame;
+                if (videoController && state.views.length > 0) {
+                    videoController.seekToFrame(targetFrame);
+                }
+                drawAllOverlays(targetFrame);
+            }, 50);
 
             // Update sidebars and panels (immediate, no delay needed)
             populateViewStrip();

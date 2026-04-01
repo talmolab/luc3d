@@ -435,12 +435,10 @@
             session.addFrameGroup(fg);
 
             // Create a linked InstanceGroup so findNearestNode can find it
-            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, new Map());
-            var trackMap = session.instanceGroups.get(0);
+            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, []);
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', linkedInst);
-            if (!trackMap.has(0)) trackMap.set(0, []);
-            trackMap.get(0).push(group);
+            session.instanceGroups.get(0).push(group);
 
             // Create an unlinked instance at (105, 105) - very close to linked
             var unlinkedInst = new Instance([[105, 105], [160, 160]], 0, 'user', 1.0);

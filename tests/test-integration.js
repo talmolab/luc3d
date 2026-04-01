@@ -49,7 +49,7 @@
             const group = new InstanceGroup(1, 0);
             group.addInstance('back', inst1);
             group.addInstance('side', inst2);
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             // 8. Triangulate (if available)
             if (typeof triangulateAndReproject === 'function') {
@@ -132,10 +132,7 @@
             group2.addInstance('cam1', inst2a);
             fg.addInstance('cam1', inst2a);
 
-            session.instanceGroups.set(0, new Map([
-                [0, [group1]],
-                [1, [group2]]
-            ]));
+            session.instanceGroups.set(0, [group1, group2]);
 
             // Verify setup
             assertEqual(session.getInstanceGroupsForFrame(0).length, 2);
@@ -170,7 +167,7 @@
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
             fg.addInstance('cam1', inst);
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             session.removeInstanceGroup(0, group);
 
@@ -227,7 +224,7 @@
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
             group.points3d = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
-            session.instanceGroups.set(0, new Map([[0, [group]]]));
+            session.instanceGroups.set(0, [group]);
 
             // Remove middle node 'b'
             skeleton.removeNode(1);

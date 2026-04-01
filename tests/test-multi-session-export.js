@@ -75,9 +75,8 @@
             // Add instanceGroup to session1 only
             var ig = new InstanceGroup(0);
             ig.addInstance('CamA', makeInstance(null, 0, 'user'));
-            if (!session1.instanceGroups.has(0)) session1.instanceGroups.set(0, new Map());
-            if (!session1.instanceGroups.get(0).has(0)) session1.instanceGroups.get(0).set(0, []);
-            session1.instanceGroups.get(0).get(0).push(ig);
+            if (!session1.instanceGroups.has(0)) session1.instanceGroups.set(0, []);
+            session1.instanceGroups.get(0).push(ig);
 
             assertGreaterThan(session1.instanceGroups.size, 0, 'session1 should have instanceGroups');
             assertEqual(session2.instanceGroups.size, 0, 'session2 should remain empty');

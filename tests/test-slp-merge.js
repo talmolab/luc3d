@@ -216,19 +216,18 @@ describe('SLP Merge Helpers', function () {
 
             rebuildInstanceGroupsForFrames(session, [0]);
 
-            var igMap = session.instanceGroups.get(0);
-            assertNotNull(igMap, 'Instance groups should exist for frame 0');
+            var allGroups = session.instanceGroups.get(0);
+            assertNotNull(allGroups, 'Instance groups should exist for frame 0');
+            assertEqual(allGroups.length, 2, 'Should have 2 groups');
 
             // Track 0 should have instances from both cameras
-            var track0Groups = igMap.get(0);
-            assertNotNull(track0Groups, 'Track 0 groups should exist');
+            var track0Groups = allGroups.filter(function(g) { return g.identityId === 0; });
             assertEqual(track0Groups.length, 1, 'One group for track 0');
             assertNotNull(track0Groups[0].getInstance('back'), 'Track 0 should have back instance');
             assertNotNull(track0Groups[0].getInstance('side'), 'Track 0 should have side instance');
 
             // Track 1 should have instances from both cameras
-            var track1Groups = igMap.get(1);
-            assertNotNull(track1Groups, 'Track 1 groups should exist');
+            var track1Groups = allGroups.filter(function(g) { return g.identityId === 1; });
             assertEqual(track1Groups.length, 1, 'One group for track 1');
             assertNotNull(track1Groups[0].getInstance('back'), 'Track 1 should have back instance');
             assertNotNull(track1Groups[0].getInstance('side'), 'Track 1 should have side instance');
@@ -244,12 +243,11 @@ describe('SLP Merge Helpers', function () {
 
             rebuildInstanceGroupsForFrames(session, [10]);
 
-            var igMap = session.instanceGroups.get(10);
-            assertNotNull(igMap, 'Instance groups should exist');
-            var groups = igMap.get(0);
-            assertEqual(groups.length, 1, 'One group');
-            assertNotNull(groups[0].getInstance('back'), 'Has back instance');
-            assertNull(groups[0].getInstance('side'), 'No side instance yet');
+            var allGroups = session.instanceGroups.get(10);
+            assertNotNull(allGroups, 'Instance groups should exist');
+            assertEqual(allGroups.length, 1, 'One group');
+            assertNotNull(allGroups[0].getInstance('back'), 'Has back instance');
+            assertNull(allGroups[0].getInstance('side'), 'No side instance yet');
         });
     });
 
@@ -321,10 +319,9 @@ describe('SLP Merge Helpers', function () {
 
             // Instance group for frame 0: track 0 should have both cameras
             var ig0 = session.instanceGroups.get(0);
-            var ig0Track0 = ig0.get(0);
-            assertEqual(ig0Track0.length, 1, 'Frame 0 track 0: 1 group');
-            assertNotNull(ig0Track0[0].getInstance('back'), 'Group has back');
-            assertNotNull(ig0Track0[0].getInstance('side'), 'Group has side');
+            assertEqual(ig0.length, 1, 'Frame 0: 1 group');
+            assertNotNull(ig0[0].getInstance('back'), 'Group has back');
+            assertNotNull(ig0[0].getInstance('side'), 'Group has side');
 
             // Frame 10: side only
             var fg10 = session.frameGroups.get(10);

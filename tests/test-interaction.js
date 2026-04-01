@@ -100,7 +100,7 @@
             const inst = new Instance([[100, 100], [200, 200]], 0, 'user', 1);
             const group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
-            mockState.session.instanceGroups.set(0, new Map([[0, [group]]]));
+            mockState.session.instanceGroups.set(0, [group]);
 
             // Also add to frame group for rendering
             const fg = new FrameGroup(0);
@@ -203,7 +203,7 @@
             const fg = new FrameGroup(0);
             fg.addInstance('cam1', inst);
             mockState.session.addFrameGroup(fg);
-            mockState.session.instanceGroups.set(0, new Map([[0, [group]]]));
+            mockState.session.instanceGroups.set(0, [group]);
 
             manager = new InteractionManager({
                 getState: function () { return mockState; },
