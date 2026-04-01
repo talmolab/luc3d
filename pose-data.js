@@ -566,6 +566,8 @@ class Session {
         this.trackIdentityMap = new Map();
         /** @type {Map<string, number>} "frameIdx:camName:trackIdx" → identityId (per-frame overrides) */
         this.frameIdentityMap = new Map();
+        /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
+        this.lazyLoader = null;
     }
 
     addIdentity(name, color) {
