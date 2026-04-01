@@ -4613,9 +4613,15 @@
             document.getElementById('tbTriangulate').addEventListener('click', function () {
                 triangulateCurrentFrame();
             });
-            // Triangulate all frames with instance groups
+            // Triangulate all: group by identity first, then triangulate
             document.getElementById('tbTriangulateAll').addEventListener('click', function () {
-                triangulateAllFrames();
+                // If identities exist, group by identity first then triangulate
+                if (state.session && state.session.identities.length > 0) {
+                    groupByIdentityAndTriangulateAll();
+                } else {
+                    // No identities — fall back to triangulating existing groups
+                    triangulateAllFrames();
+                }
             });
 
             // Context menu for instance groups
