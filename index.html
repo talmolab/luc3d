@@ -154,12 +154,7 @@
                 <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All</button>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
-            <div class="toolbar-separator"></div>
-            <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbPrevQC" title="Previous flagged frame (Shift+Q)">&lt;QC</button>
-                <button class="toolbar-btn" id="tbNextQC" title="Next flagged frame (Q)">QC&gt;</button>
-                <span class="qc-toolbar-badge" id="qcToolbarBadge" style="display:none"></span>
-            </div>
+            <span class="qc-toolbar-badge" id="qcToolbarBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame</button>
@@ -627,7 +622,11 @@
                                         </select>
                                     </label>
                                 </div>
-                                <button id="qcRunBtn" style="margin-top:8px;padding:6px 16px;background:#4a9eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">Run QC</button>
+                                <div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+                                    <button id="qcRunBtn" style="padding:6px 16px;background:#4a9eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">Run QC</button>
+                                    <button id="tbPrevQC" class="panel-btn" title="Previous flagged frame (Shift+Q)" style="padding:4px 8px;font-size:12px;">&lt;</button>
+                                    <button id="tbNextQC" class="panel-btn" title="Next flagged frame (Q)" style="padding:4px 8px;font-size:12px;">&gt;</button>
+                                </div>
                             </div>
                             <div id="qcStats" style="display:none;">
                                 <div style="font-size:13px;color:#aaa;margin-bottom:6px;" id="qcStatsLine"></div>
