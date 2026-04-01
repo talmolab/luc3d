@@ -1367,7 +1367,9 @@ var QC = (function () {
             }
 
             // Swap detection (multi-instance per frame)
-            var swapIssues = detectSwaps(frameResults, cameras, numKeypoints, swapConfig);
+            // Swap detection disabled — current detector is geometric (within-frame),
+            // but real identity swaps are temporal (across frames). TODO: rewrite as temporal detector.
+            var swapIssues = [];
 
             for (var r = 0; r < frameResults.length; r++) {
                 var res = frameResults[r];
