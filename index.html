@@ -13584,17 +13584,38 @@
                     drawAllOverlays(state.currentFrame);
                 }, 50);
             } else {
-                // First visit — build views
+                // Build views using pool decoders
                 videoController = null;
                 state.views = [];
                 paneManager.clearAll();
+                var rmVi = 0;
                 for (var nvi = 0; nvi < state.session.videoFileIndices.length; nvi++) {
                     var vf = state.videoFiles[state.session.videoFileIndices[nvi]];
-                    if (vf && vf.assignedCamera) createViewForVideoFile(vf);
+                    if (vf && vf.file && rmVi < state.decoderPool.length) {
+                        vf.decoder = state.decoderPool[rmVi];
+                        rmVi++;
+                        createViewForVideoFile(vf);
+                    }
                 }
                 updateTotalFrames();
                 paneManager.addAllViewsAsGrid();
                 rebuildVideoController();
+                // Async: swap pool decoders to correct sources
+                (async function() {
+                    for (var rvi = 0; rvi < state.session.videoFileIndices.length; rvi++) {
+                        var rvf = state.videoFiles[state.session.videoFileIndices[rvi]];
+                        if (rvf && rvf.file && rvf.decoder) {
+                            try {
+                                await rvf.decoder.switchSource(rvf.file);
+                                rvf.videoWidth = rvf.decoder.videoTrack.video.width;
+                                rvf.videoHeight = rvf.decoder.videoTrack.video.height;
+                                rvf.frameCount = rvf.decoder.samples.length;
+                            } catch (e) { console.error('[removeSession] switchSource failed:', e); }
+                        }
+                    }
+                    updateTotalFrames();
+                    if (videoController) videoController.seekToFrame(state.currentFrame);
+                })();
                 setTimeout(function () {
                     fitCanvasesToCells();
                     refreshPaneInteractions();
