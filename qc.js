@@ -1021,14 +1021,14 @@ var QC = (function () {
         extra = extra || {};
         var issues = [];
 
-        // MISS: keypoints visible in too few cameras
+        // MISS: keypoints visible in too few cameras (always low — normal for predicted labels)
         if (completenessMetrics.missingKeypoints.length > 0) {
             var missingNames = completenessMetrics.missingKeypoints.map(function (ki) {
                 return nodeNames && nodeNames[ki] ? nodeNames[ki] : 'kp' + ki;
             });
             issues.push({
                 type: 'miss',
-                severity: completenessMetrics.severity,
+                severity: 'low',
                 keypoints: completenessMetrics.missingKeypoints,
                 description: missingNames.join(', ') + ' — visible in <' +
                     (DEFAULT_CONFIG.completeness.minCameras) + ' cameras',
@@ -1453,7 +1453,15 @@ var QC = (function () {
                     allSortedIssues.push(issue);
                 }
 
-                if (issues.length > 0) {
+                // Only flag frames with high or medium severity issues
+                var hasSignificant = false;
+                for (var issi = 0; issi < issues.length; issi++) {
+                    if (issues[issi].severity === 'high' || issues[issi].severity === 'medium') {
+                        hasSignificant = true;
+                        break;
+                    }
+                }
+                if (hasSignificant) {
                     flaggedFrames.add(frameIdx);
                 }
 
