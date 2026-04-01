@@ -227,6 +227,7 @@
                     <button class="panel-tab" data-tab="tabCameras">Cameras</button>
                     <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
                     <button class="panel-tab" data-tab="tabSession">Session</button>
+                    <button class="panel-tab" data-tab="tabQC">QC</button>
                 </div>
 
                 <!-- ==================== Instances Tab ==================== -->
@@ -603,6 +604,57 @@
                 <!-- Hidden legacy element for backward compat -->
                 <div class="instance-list" id="instanceList" style="display:none;"></div>
             </div>
+                <div class="panel-tab-content" id="tabQC">
+                    <div class="info-section">
+                        <h3>Quality Control</h3>
+                        <div id="qcSummary">
+                            <div id="qcNotRun" style="color:#888;font-size:13px;padding:8px 0;">
+                                Run QC analysis to check label quality.
+                                <div style="margin-top:8px;">
+                                    <label style="font-size:12px;color:#aaa;">Sampling:
+                                        <select id="qcSampleRate" style="margin-left:4px;background:#2a2a3e;color:#ccc;border:1px solid #555;border-radius:4px;padding:2px 4px;font-size:12px;">
+                                            <option value="0">All frames</option>
+                                            <option value="10">Every 10th</option>
+                                            <option value="50" selected>Every 50th</option>
+                                            <option value="100">Every 100th</option>
+                                        </select>
+                                    </label>
+                                </div>
+                                <button id="qcRunBtn" style="margin-top:8px;padding:6px 16px;background:#4a9eff;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">Run QC</button>
+                            </div>
+                            <div id="qcStats" style="display:none;">
+                                <div style="font-size:13px;color:#aaa;margin-bottom:6px;" id="qcStatsLine"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="info-section" id="qcHistogramSection" style="display:none;">
+                        <h3>Outlier Thresholds</h3>
+                        <div style="display:grid;gap:8px;">
+                            <div style="font-size:11px;color:#aaa;">Reprojection Error (px)</div>
+                            <canvas id="qcHistReproj" width="280" height="90" style="width:100%;cursor:default;"></canvas>
+                            <div style="font-size:11px;color:#aaa;">Epipolar Distance (px)</div>
+                            <canvas id="qcHistEpipolar" width="280" height="90" style="width:100%;cursor:default;"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="info-section" id="qcIssueListSection" style="display:none;">
+                        <h3>Flagged Frames</h3>
+                        <div style="display:flex;gap:6px;margin-bottom:6px;">
+                            <select id="qcFilterType" style="flex:1;background:#2a2a3e;color:#ccc;border:1px solid #555;border-radius:4px;padding:3px;font-size:12px;">
+                                <option value="all">All Types</option>
+                                <option value="reprojection">Reprojection</option>
+                                <option value="epipolar">Epipolar</option>
+                                <option value="miss">Missing</option>
+                                <option value="jitter">Jitter</option>
+                                <option value="inversion">Inversion</option>
+                                <option value="limb_outlier">Limb Outlier</option>
+                                <option value="swap">Swap</option>
+                            </select>
+                        </div>
+                        <div id="qcIssueList" style="max-height:400px;overflow-y:auto;"></div>
+                    </div>
+                </div>
             </div><!-- end info-panel-wrapper -->
         </div>
 

@@ -2498,3 +2498,52 @@ kbd {
     color: #fff;
     border-color: #667eea;
 }
+
+/* QC Panel */
+.qc-issue-row {
+    padding: 4px 6px;
+    font-size: 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #333;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.qc-issue-row:hover {
+    background: #2a2a3e;
+}
+.qc-issue-frame {
+    color: #4a9eff;
+    font-weight: 600;
+    min-width: 55px;
+    font-size: 11px;
+}
+.qc-issue-type {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    text-transform: uppercase;
+    min-width: 40px;
+    text-align: center;
+}
+.qc-issue-type.high { background: #ef444433; color: #ef4444; }
+.qc-issue-type.medium { background: #f9731633; color: #f97316; }
+.qc-issue-type.low { background: #6b728033; color: #9ca3af; }
+.qc-issue-desc {
+    color: #ccc;
+    font-size: 11px;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.qc-toolbar-badge {
+    background: #ef4444;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 8px;
+    margin-left: 2px;
+}
