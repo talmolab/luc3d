@@ -698,6 +698,101 @@ class OnDemandVideoDecoder {
         }
     }
 
+    /**
+     * Switch to a new source, reusing the existing video element to avoid
+     * Chrome browser-process crashes from repeated element creation/destruction.
+     */
+    async switchSource(source) {
+        // Clear cached frames
+        for (var entry of this.cache) {
+            if (entry[1] && typeof entry[1].close === "function") {
+                entry[1].close();
+            }
+        }
+        this.cache.clear();
+
+        // Close WebCodecs decoder if active
+        if (this.decoder) {
+            try { this.decoder.close(); } catch (_) {}
+            this.decoder = null;
+        }
+
+        this._source = source;
+        this.file = source;
+        this.sourceType = "file";
+        this.fileSize = source.size;
+        this.supportsRangeRequests = true;
+        this.mp4boxFile = null;
+        this._mp4boxReady = false;
+
+        // Revoke old blob URL
+        if (this._videoEl && this._videoEl.src && this._videoEl.src.startsWith("blob:")) {
+            URL.revokeObjectURL(this._videoEl.src);
+        }
+
+        // Reuse existing video element — just change src
+        var self = this;
+        var metadataPromise = new Promise(function (resolve, reject) {
+            self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
+            self._videoEl.addEventListener("error", function () {
+                var err = self._videoEl.error;
+                reject(new Error(err ? "Video error " + err.code : "Video load failed"));
+            }, { once: true });
+        });
+
+        this._videoEl.src = URL.createObjectURL(source);
+        await metadataPromise;
+
+        var width = this._videoEl.videoWidth;
+        var height = this._videoEl.videoHeight;
+        var duration = this._videoEl.duration;
+        var fps = 30;
+        this._fps = fps;
+        var totalFrames = Math.round(duration * fps);
+
+        // Resize offscreen canvas if needed
+        if (this._offCanvas.width !== width || this._offCanvas.height !== height) {
+            this._offCanvas.width = width;
+            this._offCanvas.height = height;
+        }
+
+        this.videoTrack = {
+            video: { width: width, height: height },
+            codec: "html5",
+            timescale: fps,
+            duration: Math.round(duration * fps),
+        };
+        this.config = { codec: "html5", codedWidth: width, codedHeight: height };
+
+        this.samples = new Array(totalFrames);
+        for (var i = 0; i < totalFrames; i++) {
+            this.samples[i] = { index: i, cts: Math.round(i * 1000000 / fps), duration: Math.round(1000000 / fps), is_sync: false, offset: 0, size: 0 };
+        }
+        var kfInterval = Math.max(1, Math.round(fps));
+        this.keyframeIndices = [];
+        for (var j = 0; j < totalFrames; j += kfInterval) {
+            this.samples[j].is_sync = true;
+            this.keyframeIndices.push(j);
+        }
+        if (totalFrames > 0) {
+            this.samples[0].is_sync = true;
+            if (this.keyframeIndices[0] !== 0) this.keyframeIndices.unshift(0);
+        }
+
+        this._videoReady = true;
+        this.isDecoding = false;
+        this.pendingFrame = null;
+
+        // Re-init mp4box in background (non-blocking, metadata only)
+        try {
+            this._initMp4box();
+        } catch (e) {
+            videoLog("MP4Box re-init failed (HTML5 fallback will be used): " + e.message, "warn");
+        }
+
+        videoLog("Source switched: " + (source.name || "file") + " (" + width + "x" + height + ", ~" + totalFrames + " frames)");
+    }
+
     close() {
         // Close all cached frames
         for (var entry of this.cache) {
