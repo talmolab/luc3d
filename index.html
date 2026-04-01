@@ -610,7 +610,8 @@
 
                 <!-- Hidden legacy element for backward compat -->
                 <div class="instance-list" id="instanceList" style="display:none;"></div>
-            </div>
+
+                <!-- ==================== QC Tab ==================== -->
                 <div class="panel-tab-content" id="tabQC">
                     <div class="info-section">
                         <h3>Quality Control</h3>
@@ -662,6 +663,7 @@
                         <div id="qcIssueList" style="max-height:400px;overflow-y:auto;"></div>
                     </div>
                 </div>
+            </div>
             </div><!-- end info-panel-wrapper -->
         </div>
 
@@ -4379,7 +4381,20 @@
             document.getElementById('tbTriangulateAll').addEventListener('click', function () {
                 triangulateAllFrames();
             });
-            document.getElementById('tbRunQC').addEventListener('click', runQCAnalysis);
+            document.getElementById('tbRunQC').addEventListener('click', function () {
+                // Switch to QC tab in info panel
+                document.querySelectorAll('.panel-tab').forEach(function (t) { t.classList.remove('active'); });
+                document.querySelectorAll('.panel-tab-content').forEach(function (c) { c.classList.remove('active'); });
+                var qcTab = document.querySelector('.panel-tab[data-tab="tabQC"]');
+                if (qcTab) qcTab.classList.add('active');
+                var qcContent = document.getElementById('tabQC');
+                if (qcContent) qcContent.classList.add('active');
+                // Show info panel if hidden
+                var wrapper = document.getElementById('infoPanelWrapper');
+                if (wrapper && wrapper.style.display === 'none') {
+                    wrapper.style.display = '';
+                }
+            });
             document.getElementById('tbPrevQC').addEventListener('click', qcPrevIssue);
             document.getElementById('tbNextQC').addEventListener('click', qcNextIssue);
             document.getElementById('qcRunBtn').addEventListener('click', runQCAnalysis);
