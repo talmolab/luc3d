@@ -2128,6 +2128,15 @@
                 while (this.cacheOrder.length > this.maxCacheSize) { this.cache.delete(this.cacheOrder.shift()); }
             }
 
+            /** Return cached frame data synchronously, or null if not cached. */
+            getFrameSync(frameIdx) {
+                if (this.cache.has(frameIdx)) {
+                    this._touchCache(frameIdx);
+                    return this.cache.get(frameIdx);
+                }
+                return null;
+            }
+
             close() {
                 for (var entry of this.workers) {
                     try { entry[1].postMessage({ type: 'close' }); entry[1].terminate(); } catch (e) { }
@@ -2222,6 +2231,41 @@
             var direction = frameIdx >= (state._lastLazyFrame || 0) ? 1 : -1;
             state._lastLazyFrame = frameIdx;
             session.lazyLoader.prefetch(frameIdx, direction);
+        }
+
+        /**
+         * Build a FrameGroup from cached lazy data (synchronous).
+         * Returns true if data was available and FrameGroup was created.
+         */
+        function buildLazyFrameGroupSync(frameIdx) {
+            var session = state.session;
+            if (!session || !session.lazyLoader) return false;
+            if (session.frameGroups.has(frameIdx)) return true;
+
+            var cached = session.lazyLoader.getFrameSync(frameIdx);
+            if (!cached) return false;
+
+            var fg = new FrameGroup(frameIdx);
+            for (var [camName, instances] of cached) {
+                for (var ii = 0; ii < instances.length; ii++) {
+                    var instData = instances[ii];
+                    var inst = new Instance(
+                        instData.points || [],
+                        instData.trackIdx,
+                        instData.type || 'predicted',
+                        instData.score || 0
+                    );
+                    fg.addInstance(camName, inst);
+                }
+            }
+            session.addFrameGroup(fg);
+            for (var [cn, camInsts] of fg.instances) {
+                for (var instItem of camInsts) {
+                    fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
+                }
+                fg.instances.set(cn, []);
+            }
+            return true;
         }
 
         /**
@@ -2447,19 +2491,21 @@
 
             // Lazy H5: fetch frame data on demand if not yet loaded
             if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
-                if (state.isPlaying) {
-                    // During playback: skip overlays, prefetch ahead
-                    state.session.lazyLoader.prefetch(frameIdx, 1);
+                // Try sync path first (data already in worker cache from prefetch)
+                if (buildLazyFrameGroupSync(frameIdx)) {
+                    // Data was cached — fall through to normal rendering
+                    evictLazyFrames(frameIdx);
                 } else {
-                    // Stopped/scrubbing: fetch and redraw when ready
+                    // Not cached yet — async fetch, prefetch ahead
+                    state.session.lazyLoader.prefetch(frameIdx, 1);
                     ensureLazyFrameData(frameIdx).then(function () {
                         evictLazyFrames(frameIdx);
                         if (state.currentFrame === frameIdx) {
                             drawAllOverlays(frameIdx);
                         }
                     });
+                    return;
                 }
-                return;
             }
 
             // Auto-finish edit group mode on frame change
@@ -4634,6 +4680,18 @@
             const btn = document.getElementById('btnPlay');
             btn.textContent = isPlaying ? '\u275A\u275A' : '\u25B6';
             btn.classList.toggle('active', isPlaying);
+
+            // Lazy H5: prefetch ahead when playback starts, reload current frame when stopped
+            if (state.session && state.session.lazyLoader) {
+                if (isPlaying) {
+                    state.session.lazyLoader.prefetch(state.currentFrame, 1);
+                } else {
+                    // Stopped — ensure current frame data is loaded and overlays drawn
+                    ensureLazyFrameData(state.currentFrame).then(function () {
+                        drawAllOverlays(state.currentFrame);
+                    });
+                }
+            }
         }
 
         function toggleInfoPanel() {
