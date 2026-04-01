@@ -59,7 +59,9 @@ var QC = (function () {
         },
         // Swap detection (cross-instance identity swap)
         swap: {
-            marginRatio: 0.8,
+            marginRatio: 0.5,       // A must be closer to B's reproj by this ratio (lower = stricter)
+            minReprojError: 15,     // minimum reproj error to even consider swap (px)
+            minSwapKeypoints: 3,    // need at least this many crossed keypoints to flag
         },
         // Auto-thresholding (percentile-based)
         autoThreshold: {
@@ -820,14 +822,15 @@ var QC = (function () {
                         var dAB = Math.sqrt(dxAB * dxAB + dyAB * dyAB);
 
                         // If A's detection is closer to B's reprojection by a margin
-                        if (dAB < dAA * config.marginRatio && dAA > 5) {
+                        // and A's own reprojection error is large enough to be meaningful
+                        if (dAB < dAA * config.marginRatio && dAA > config.minReprojError) {
                             swapCount++;
                             if (swapKeypoints.indexOf(ki) < 0) swapKeypoints.push(ki);
                         }
                     }
                 }
 
-                if (swapCount > 0) {
+                if (swapCount >= (config.minSwapKeypoints || 3)) {
                     issues.push({
                         type: 'swap',
                         severity: swapCount >= 3 ? 'high' : 'medium',
