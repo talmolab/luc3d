@@ -10138,6 +10138,13 @@
 
                 hideLoading();
                 setStatus('Loaded ' + sessionDirs.length + ' sessions', 'success');
+
+                // Display first session's grid (it has live decoders from eager load)
+                if (state.sessions.length > 1) {
+                    state.activeSessionIdx = state.sessions.length - 1;
+                    await switchSession(0);
+                }
+
                 populateSessionStrip();
 
             } catch (err) {
