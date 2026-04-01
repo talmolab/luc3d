@@ -814,16 +814,7 @@
         function setupEmptyVideoController() {
             videoController = new VideoController(state, {
                 updateSeekbar: updateSeekbar,
-                drawOverlays: function (frameIdx) {
-                    if (state.session && state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
-                        ensureLazyFrameData(frameIdx).then(function () {
-                            evictLazyFrames(frameIdx);
-                            drawAllOverlays(frameIdx);
-                        });
-                    } else {
-                        drawAllOverlays(frameIdx);
-                    }
-                },
+                drawOverlays: drawAllOverlays,
                 onPlaybackStateChange: onPlaybackStateChange,
                 log: window.logMessage,
                 onZoomChange: function () {
@@ -2315,6 +2306,15 @@
 
         function drawAllOverlays(frameIdx) {
             if (!state.session) return;
+
+            // Lazy H5: fetch frame data on demand if not yet loaded
+            if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
+                ensureLazyFrameData(frameIdx).then(function () {
+                    evictLazyFrames(frameIdx);
+                    drawAllOverlays(frameIdx);
+                });
+                return;
+            }
 
             // Auto-finish edit group mode on frame change
             if (editGroupState && frameIdx !== state.currentFrame) {
@@ -10114,16 +10114,7 @@
             // Recreate video controller
             videoController = new VideoController(state, {
                 updateSeekbar: updateSeekbar,
-                drawOverlays: function (frameIdx) {
-                    if (state.session && state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
-                        ensureLazyFrameData(frameIdx).then(function () {
-                            evictLazyFrames(frameIdx);
-                            drawAllOverlays(frameIdx);
-                        });
-                    } else {
-                        drawAllOverlays(frameIdx);
-                    }
-                },
+                drawOverlays: drawAllOverlays,
                 onPlaybackStateChange: onPlaybackStateChange,
                 log: window.logMessage,
                 onZoomChange: function () {
