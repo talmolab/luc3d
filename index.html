@@ -156,9 +156,8 @@
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbRunQC" title="Run Quality Control analysis">QC</button>
-                <button class="toolbar-btn" id="tbPrevQC" title="Previous flagged frame (Shift+Q)">&lt;</button>
-                <button class="toolbar-btn" id="tbNextQC" title="Next flagged frame (Q)">&gt;</button>
+                <button class="toolbar-btn" id="tbPrevQC" title="Previous flagged frame (Shift+Q)">&lt;QC</button>
+                <button class="toolbar-btn" id="tbNextQC" title="Next flagged frame (Q)">QC&gt;</button>
                 <span class="qc-toolbar-badge" id="qcToolbarBadge" style="display:none"></span>
             </div>
             <div class="toolbar-separator"></div>
@@ -4380,20 +4379,6 @@
             // Triangulate all frames with instance groups
             document.getElementById('tbTriangulateAll').addEventListener('click', function () {
                 triangulateAllFrames();
-            });
-            document.getElementById('tbRunQC').addEventListener('click', function () {
-                // Switch to QC tab in info panel
-                document.querySelectorAll('.panel-tab').forEach(function (t) { t.classList.remove('active'); });
-                document.querySelectorAll('.panel-tab-content').forEach(function (c) { c.classList.remove('active'); });
-                var qcTab = document.querySelector('.panel-tab[data-tab="tabQC"]');
-                if (qcTab) qcTab.classList.add('active');
-                var qcContent = document.getElementById('tabQC');
-                if (qcContent) qcContent.classList.add('active');
-                // Show info panel if hidden
-                var wrapper = document.getElementById('infoPanelWrapper');
-                if (wrapper && wrapper.style.display === 'none') {
-                    wrapper.style.display = '';
-                }
             });
             document.getElementById('tbPrevQC').addEventListener('click', qcPrevIssue);
             document.getElementById('tbNextQC').addEventListener('click', qcNextIssue);
