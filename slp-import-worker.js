@@ -5,11 +5,18 @@
  * Uses WORKERFS to mount File objects directly (no memory duplication).
  *
  * Messages IN:
- *   { type: 'parse', file: File }
+ *   { type: 'parse', file: File }              — Full eager parse (existing)
+ *   { type: 'open', file: File }               — Lazy mode: open H5, read metadata only
+ *   { type: 'getFrame', frameIdx, requestId }  — Lazy mode: read single frame
+ *   { type: 'getFrames', startIdx, endIdx, requestId } — Lazy mode: read frame range
+ *   { type: 'close' }                          — Lazy mode: close file, free resources
  *
  * Messages OUT:
  *   { type: 'progress', message: string }
  *   { type: 'result', data: { skeleton, tracks, frames, videos, embeddedVideos, sessions } }
+ *   { type: 'metadata', data: { skeleton, trackNames, nodeNames, nFrames, nTracks, nNodes, videos } }
+ *   { type: 'frameData', frameIdx, requestId, instances }
+ *   { type: 'framesData', startIdx, endIdx, requestId, frames }
  *   { type: 'error', message: string }
  */
 
@@ -18,6 +25,16 @@ importScripts('https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/dist/iife/h5wasm.js');
 var h5wasmReady = false;
 var FS = null;
 var pendingMessages = [];
+
+// --- Lazy H5 data service state ---
+var lazyFile = null;       // h5wasm.File handle (kept open)
+var lazyTracksDs = null;   // tracks dataset reference
+var lazyTracksShape = null; // [n_tracks, 2, n_nodes, n_frames] or similar
+var lazyNTracks = 0;
+var lazyNNodes = 0;
+var lazyNFrames = 0;
+var lazyTransposed = false;
+var lazyTrackOccupancy = null; // optional, full array (small: nFrames * nTracks bytes)
 
 // Initialize h5wasm, then drain any queued messages
 (async function () {
@@ -40,6 +57,14 @@ var pendingMessages = [];
 async function handleMessage(data) {
     if (data.type === 'parse' && data.file) {
         await parseSlp(data.file);
+    } else if (data.type === 'open' && data.file) {
+        openH5Lazy(data.file);
+    } else if (data.type === 'getFrame') {
+        readFrameLazy(data.frameIdx, data.requestId);
+    } else if (data.type === 'getFrames') {
+        readFramesLazy(data.startIdx, data.endIdx, data.requestId);
+    } else if (data.type === 'close') {
+        closeLazy();
     }
 }
 
@@ -678,6 +703,311 @@ function parseAnalysisH5(f, filename) {
         if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
         postMessage({ type: 'error', message: errMsg });
     }
+}
+
+// --- Lazy H5 data service functions ---
+
+function openH5Lazy(file) {
+    try {
+        progress('Mounting file (' + (file.size / 1048576).toFixed(1) + ' MB)...');
+
+        try { FS.mkdir('/work'); } catch (e) { /* exists */ }
+        try { FS.unmount('/work'); } catch (e) { /* not mounted */ }
+        FS.mount(FS.filesystems.WORKERFS, { files: [file] }, '/work');
+
+        var h5path = '/work/' + file.name;
+        lazyFile = new h5wasm.File(h5path, 'r');
+
+        progress('Reading metadata...');
+
+        // Read node names
+        var nodeNamesDs = lazyFile.get('node_names');
+        var nodeNames = [];
+        if (nodeNamesDs) {
+            var nnVal = nodeNamesDs.value;
+            for (var i = 0; i < nnVal.length; i++) {
+                nodeNames.push(String(nnVal[i]));
+            }
+        }
+        lazyNNodes = nodeNames.length;
+
+        // Read track names
+        var trackNamesDs = lazyFile.get('track_names');
+        var trackNames = [];
+        if (trackNamesDs) {
+            var tnVal = trackNamesDs.value;
+            for (var ti = 0; ti < tnVal.length; ti++) {
+                trackNames.push(String(tnVal[ti]));
+            }
+        }
+
+        // Read edges
+        var edges = [];
+        try {
+            var edgeIndsDs = lazyFile.get('edge_inds');
+            if (edgeIndsDs) {
+                var eiVal = edgeIndsDs.value;
+                var eiShape = edgeIndsDs.shape;
+                if (eiShape.length === 2) {
+                    if (eiShape[0] === 2 && eiShape[1] !== 2) {
+                        var nEdges = eiShape[1];
+                        for (var ei = 0; ei < nEdges; ei++) {
+                            edges.push([Number(eiVal[ei]), Number(eiVal[nEdges + ei])]);
+                        }
+                    } else {
+                        var nEdges2 = eiShape[0];
+                        for (var ei2 = 0; ei2 < nEdges2; ei2++) {
+                            edges.push([Number(eiVal[ei2 * 2]), Number(eiVal[ei2 * 2 + 1])]);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            progress('Warning: could not read edge_inds: ' + e.message);
+        }
+
+        // Read tracks dataset metadata (NOT the data itself)
+        lazyTracksDs = lazyFile.get('tracks');
+        if (!lazyTracksDs) {
+            throw new Error('No tracks dataset found in analysis H5');
+        }
+        lazyTracksShape = lazyTracksDs.shape;
+
+        // Determine orientation
+        if (lazyTracksShape.length === 4) {
+            if (lazyTracksShape[1] === 2 && lazyTracksShape[2] === lazyNNodes) {
+                lazyTransposed = true;
+                lazyNTracks = lazyTracksShape[0];
+                lazyNFrames = lazyTracksShape[3];
+            } else if (lazyTracksShape[2] === 2 && lazyTracksShape[1] === lazyNNodes) {
+                lazyTransposed = false;
+                lazyNTracks = lazyTracksShape[3];
+                lazyNFrames = lazyTracksShape[0];
+            } else {
+                lazyTransposed = true;
+                lazyNTracks = lazyTracksShape[0];
+                lazyNFrames = lazyTracksShape[3];
+            }
+        } else {
+            throw new Error('Unexpected tracks dimensionality: ' + lazyTracksShape.length);
+        }
+
+        // Backfill track names if empty
+        if (trackNames.length === 0) {
+            for (var tni = 0; tni < lazyNTracks; tni++) {
+                trackNames.push(lazyNTracks === 1 ? 'track' : 'track_' + tni);
+            }
+        }
+
+        // Read track occupancy (small: nFrames * nTracks uint8 = ~360KB for 180K frames, 2 tracks)
+        try {
+            var toDs = lazyFile.get('track_occupancy');
+            if (toDs) {
+                lazyTrackOccupancy = toDs.value;
+            }
+        } catch (e) { }
+
+        // Build video entry from filename
+        var vidName = file.name;
+        vidName = vidName.replace(/\.analysis\.h5$/i, '').replace(/\.h5$/i, '');
+        var predIdx = vidName.indexOf('.predictions.');
+        var sourceVideo = null;
+        if (predIdx >= 0) {
+            sourceVideo = vidName.substring(predIdx + '.predictions.'.length);
+        }
+        var videos = [{
+            index: 0,
+            filename: sourceVideo || vidName,
+            sourceFilename: sourceVideo ? vidName : null,
+            backendType: 'AnalysisH5',
+            shape: null,
+            embedded: false,
+            dataset: null,
+        }];
+
+        progress('Lazy H5 ready: ' + lazyNFrames + ' frames, ' + lazyNTracks + ' tracks, ' + lazyNNodes + ' nodes');
+
+        postMessage({
+            type: 'metadata',
+            data: {
+                skeleton: { name: 'skeleton', nodes: nodeNames, edges: edges },
+                trackNames: trackNames,
+                nodeNames: nodeNames,
+                nFrames: lazyNFrames,
+                nTracks: lazyNTracks,
+                nNodes: lazyNNodes,
+                videos: videos,
+            }
+        });
+
+    } catch (err) {
+        closeLazy();
+        var errMsg = (err.message || String(err));
+        if (err.stack) errMsg += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
+        postMessage({ type: 'error', message: errMsg });
+    }
+}
+
+function readFrameLazy(frameIdx, requestId) {
+    try {
+        if (!lazyTracksDs) {
+            postMessage({ type: 'error', message: 'No H5 file open', requestId: requestId });
+            return;
+        }
+
+        var instances = [];
+        for (var tr = 0; tr < lazyNTracks; tr++) {
+            // Check occupancy
+            if (lazyTrackOccupancy) {
+                var occIdx = frameIdx * lazyNTracks + tr;
+                if (occIdx < lazyTrackOccupancy.length && !lazyTrackOccupancy[occIdx]) {
+                    continue;
+                }
+            }
+
+            // Slice one frame of data for this track
+            var sliceData;
+            if (lazyTransposed) {
+                // Shape [n_tracks, 2, n_nodes, n_frames] → slice [tr:tr+1, :, :, frameIdx:frameIdx+1]
+                sliceData = lazyTracksDs.slice([[tr, tr + 1], [0, 2], [0, lazyNNodes], [frameIdx, frameIdx + 1]]);
+            } else {
+                // Shape [n_frames, n_nodes, 2, n_tracks] → slice [frameIdx:frameIdx+1, :, :, tr:tr+1]
+                sliceData = lazyTracksDs.slice([[frameIdx, frameIdx + 1], [0, lazyNNodes], [0, 2], [tr, tr + 1]]);
+            }
+
+            // Extract points
+            var points = [];
+            var hasAnyPoint = false;
+            for (var nd = 0; nd < lazyNNodes; nd++) {
+                var x, y;
+                if (lazyTransposed) {
+                    // sliceData is flat: [2 * nNodes] for one track, one frame
+                    x = Number(sliceData[0 * lazyNNodes + nd]);
+                    y = Number(sliceData[1 * lazyNNodes + nd]);
+                } else {
+                    // sliceData is flat: [nNodes * 2] for one frame, one track
+                    x = Number(sliceData[nd * 2 + 0]);
+                    y = Number(sliceData[nd * 2 + 1]);
+                }
+
+                if (!isNaN(x) && !isNaN(y)) {
+                    points.push([x, y]);
+                    hasAnyPoint = true;
+                } else {
+                    points.push(null);
+                }
+            }
+
+            if (!hasAnyPoint) continue;
+
+            instances.push({
+                trackIdx: tr,
+                score: 0,
+                type: 'predicted',
+                points: points,
+            });
+        }
+
+        postMessage({
+            type: 'frameData',
+            frameIdx: frameIdx,
+            requestId: requestId,
+            instances: instances,
+        });
+
+    } catch (err) {
+        var errMsg = (err.message || String(err));
+        postMessage({ type: 'error', message: errMsg, requestId: requestId });
+    }
+}
+
+function readFramesLazy(startIdx, endIdx, requestId) {
+    try {
+        if (!lazyTracksDs) {
+            postMessage({ type: 'error', message: 'No H5 file open', requestId: requestId });
+            return;
+        }
+
+        var frames = [];
+        for (var fi = startIdx; fi < endIdx && fi < lazyNFrames; fi++) {
+            var instances = [];
+            for (var tr = 0; tr < lazyNTracks; tr++) {
+                if (lazyTrackOccupancy) {
+                    var occIdx = fi * lazyNTracks + tr;
+                    if (occIdx < lazyTrackOccupancy.length && !lazyTrackOccupancy[occIdx]) {
+                        continue;
+                    }
+                }
+
+                var sliceData;
+                if (lazyTransposed) {
+                    sliceData = lazyTracksDs.slice([[tr, tr + 1], [0, 2], [0, lazyNNodes], [fi, fi + 1]]);
+                } else {
+                    sliceData = lazyTracksDs.slice([[fi, fi + 1], [0, lazyNNodes], [0, 2], [tr, tr + 1]]);
+                }
+
+                var points = [];
+                var hasAnyPoint = false;
+                for (var nd = 0; nd < lazyNNodes; nd++) {
+                    var x, y;
+                    if (lazyTransposed) {
+                        x = Number(sliceData[0 * lazyNNodes + nd]);
+                        y = Number(sliceData[1 * lazyNNodes + nd]);
+                    } else {
+                        x = Number(sliceData[nd * 2 + 0]);
+                        y = Number(sliceData[nd * 2 + 1]);
+                    }
+                    if (!isNaN(x) && !isNaN(y)) {
+                        points.push([x, y]);
+                        hasAnyPoint = true;
+                    } else {
+                        points.push(null);
+                    }
+                }
+
+                if (!hasAnyPoint) continue;
+
+                instances.push({
+                    trackIdx: tr,
+                    score: 0,
+                    type: 'predicted',
+                    points: points,
+                });
+            }
+
+            frames.push({
+                frameIdx: fi,
+                instances: instances,
+            });
+        }
+
+        postMessage({
+            type: 'framesData',
+            startIdx: startIdx,
+            endIdx: endIdx,
+            requestId: requestId,
+            frames: frames,
+        });
+
+    } catch (err) {
+        var errMsg = (err.message || String(err));
+        postMessage({ type: 'error', message: errMsg, requestId: requestId });
+    }
+}
+
+function closeLazy() {
+    try {
+        if (lazyFile) { lazyFile.close(); }
+    } catch (e) { }
+    try { FS.unmount('/work'); } catch (e) { }
+    lazyFile = null;
+    lazyTracksDs = null;
+    lazyTracksShape = null;
+    lazyTrackOccupancy = null;
+    lazyNTracks = 0;
+    lazyNNodes = 0;
+    lazyNFrames = 0;
+    lazyTransposed = false;
 }
 
 // --- Dataset reading helpers ---
