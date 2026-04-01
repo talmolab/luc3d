@@ -2435,10 +2435,18 @@
 
             // Lazy H5: fetch frame data on demand if not yet loaded
             if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
-                ensureLazyFrameData(frameIdx).then(function () {
-                    evictLazyFrames(frameIdx);
-                    drawAllOverlays(frameIdx);
-                });
+                if (state.isPlaying) {
+                    // During playback: skip overlays, prefetch ahead
+                    state.session.lazyLoader.prefetch(frameIdx, 1);
+                } else {
+                    // Stopped/scrubbing: fetch and redraw when ready
+                    ensureLazyFrameData(frameIdx).then(function () {
+                        evictLazyFrames(frameIdx);
+                        if (state.currentFrame === frameIdx) {
+                            drawAllOverlays(frameIdx);
+                        }
+                    });
+                }
                 return;
             }
 
