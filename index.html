@@ -14148,6 +14148,72 @@
             return runs;
         }
 
+        // Draggable histogram thresholds
+        (function setupQCHistogramDrag() {
+            var configs = [
+                { canvasId: 'qcHistReproj', threshKey: 'reproj', distKey: 'reproj', title: 'Reprojection (px)' },
+                { canvasId: 'qcHistEpipolar', threshKey: 'epipolar', distKey: 'epipolar', title: 'Epipolar (px)' },
+            ];
+
+            for (var ci = 0; ci < configs.length; ci++) {
+                (function (cfg) {
+                    var canvas = document.getElementById(cfg.canvasId);
+                    if (!canvas) return;
+                    var dragging = false;
+
+                    function xToValue(e) {
+                        var layout = canvas._histLayout;
+                        if (!layout) return null;
+                        var rect = canvas.getBoundingClientRect();
+                        var scaleX = canvas.width / rect.width;
+                        var px = (e.clientX - rect.left) * scaleX;
+                        var frac = (px - layout.padLeft) / layout.plotWidth;
+                        frac = Math.max(0.01, Math.min(1, frac));
+                        return frac * layout.displayMax;
+                    }
+
+                    function isNearThreshold(e) {
+                        if (!state.qcResults) return false;
+                        var layout = canvas._histLayout;
+                        if (!layout) return false;
+                        var thresh = state.qcResults.autoThresholds[cfg.threshKey];
+                        var rect = canvas.getBoundingClientRect();
+                        var scaleX = canvas.width / rect.width;
+                        var px = (e.clientX - rect.left) * scaleX;
+                        var threshPx = layout.padLeft + (thresh / layout.displayMax) * layout.plotWidth;
+                        return Math.abs(px - threshPx) < 10;
+                    }
+
+                    canvas.addEventListener('mousemove', function (e) {
+                        if (dragging) {
+                            var val = xToValue(e);
+                            if (val != null && state.qcResults) {
+                                state.qcResults.autoThresholds[cfg.threshKey] = val;
+                                QC.drawHistogram(canvas, state.qcResults.distributions[cfg.distKey],
+                                    val, { title: cfg.title, color: '#6b7280' });
+                            }
+                        } else {
+                            canvas.style.cursor = isNearThreshold(e) ? 'ew-resize' : 'default';
+                        }
+                    });
+
+                    canvas.addEventListener('mousedown', function (e) {
+                        if (isNearThreshold(e)) {
+                            dragging = true;
+                            e.preventDefault();
+                        }
+                    });
+
+                    window.addEventListener('mouseup', function () {
+                        if (dragging) {
+                            dragging = false;
+                            canvas.style.cursor = 'default';
+                        }
+                    });
+                })(configs[ci]);
+            }
+        })();
+
         // ============================================
         // Split Handles
         // ============================================
