@@ -26,9 +26,9 @@ var QC = (function () {
     var DEFAULT_CONFIG = {
         // Reprojection error thresholds (pixels)
         reprojError: {
-            low: 2,       // green
-            medium: 5,    // yellow
-            high: 10,     // red / outlier
+            low: 5,       // green
+            medium: 15,   // yellow
+            high: 25,     // red / outlier
         },
         // Limb length consistency (coefficient of variation threshold)
         limbLength: {
@@ -36,7 +36,7 @@ var QC = (function () {
         },
         // Temporal smoothness (velocity in units/frame)
         temporal: {
-            velocityPercentile: 95,  // flag above this percentile
+            velocityPercentile: 99,  // flag above this percentile
             maxVelocity: null,       // absolute threshold (auto-computed if null)
         },
         // Completeness thresholds
@@ -47,15 +47,15 @@ var QC = (function () {
         // Outlier detection
         outlier: {
             method: 'percentile',   // 'percentile' or 'threshold'
-            percentile: 95,         // for percentile method
+            percentile: 99,         // for percentile method (top 1%)
         },
         // Epipolar distance (pairwise geometric consistency)
         epipolar: {
-            percentile: 95,
+            percentile: 99,
         },
         // Per-frame limb length outliers (z-score based)
         limbLengthOutlier: {
-            zScoreThreshold: 3.0,
+            zScoreThreshold: 4.0,
         },
         // Swap detection (cross-instance identity swap)
         swap: {
@@ -65,7 +65,7 @@ var QC = (function () {
         },
         // Auto-thresholding (percentile-based)
         autoThreshold: {
-            percentile: 95,
+            percentile: 99,     // top 1% flagged per metric
         },
     };
 
