@@ -13612,6 +13612,10 @@
             oldSession.fps = state.fps;
             oldSession.triangulationResults = state.triangulationResults;
 
+            // Detach decoders from old session (they stay alive in decoderPool)
+            oldSession._views = null;
+            oldSession._videoController = null;
+
             // Save 3D viewport state
             if (viewport3d && viewport3d.threeCamera && viewport3d.controls) {
                 oldSession._viewport3dState = {
@@ -13626,15 +13630,11 @@
                 videoController.stopPlayback();
             }
 
-            // Collect old session's decoders for reuse (avoid creating new video elements)
-            var oldDecoders = [];
-            for (var ovi = 0; ovi < state.views.length; ovi++) {
-                if (state.views[ovi].decoder) {
-                    oldDecoders.push(state.views[ovi].decoder);
-                }
+            // Null out old session's decoder references (decoders stay in pool)
+            for (var ovi = 0; ovi < oldSession.videoFileIndices.length; ovi++) {
+                var oldVf = state.videoFiles[oldSession.videoFileIndices[ovi]];
+                if (oldVf) oldVf.decoder = null;
             }
-            oldSession._views = null;
-            oldSession._videoController = null;
 
             // Switch active session
             state.activeSessionIdx = newIdx;
@@ -13646,7 +13646,7 @@
             var trustCheck = document.getElementById('menuTrustTracksCheck');
             if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
 
-            // Rebuild views — reuse decoder instances via switchSource
+            // Rebuild views — reuse pool decoders via switchSource
             videoController = null;
             state.views = [];
             paneManager.clearAll();
@@ -13665,16 +13665,16 @@
                 if (vf && vf.file) {
                     showLoading('Loading video: ' + vf.file.name + '...');
                     try {
-                        if (oldDecoders.length > 0) {
-                            // Reuse existing decoder — swap source without creating new video element
-                            var reusedDec = oldDecoders.shift();
-                            await reusedDec.switchSource(vf.file);
-                            vf.decoder = reusedDec;
+                        if (vi < state.decoderPool.length) {
+                            // Reuse pool decoder — swap source without creating new video element
+                            await state.decoderPool[vi].switchSource(vf.file);
+                            vf.decoder = state.decoderPool[vi];
                         } else {
-                            // No decoder to reuse — create new (only happens on first visit)
+                            // More cameras than pool — create new decoder and add to pool
                             var newDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
                             await newDec.init(vf.file);
                             vf.decoder = newDec;
+                            state.decoderPool.push(newDec);
                         }
                         vf.videoWidth = vf.decoder.videoTrack.video.width;
                         vf.videoHeight = vf.decoder.videoTrack.video.height;
@@ -13686,10 +13686,6 @@
                 if (vf && vf.decoder) {
                     createViewForVideoFile(vf);
                 }
-            }
-            // Close any leftover old decoders not reused
-            for (var ldi = 0; ldi < oldDecoders.length; ldi++) {
-                oldDecoders[ldi].close();
             }
             hideLoading();
 
