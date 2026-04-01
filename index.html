@@ -737,6 +737,7 @@
             exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
             cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
             colorByIdentity: false,     // false = color by track, true = color by identity
+            decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
         };
 
         let videoController = null;
@@ -10124,7 +10125,7 @@
                 showLoading('Loading ' + sessionDirs.length + ' sessions...');
                 console.log('[multi-session] Found sessions:', sessionDirs.map(function (d) { return d.name; }));
 
-                // Load each session by enumerating its files individually
+                // Load each session — first gets full video init, rest defer decoders
                 for (var si = 0; si < sessionDirs.length; si++) {
                     var sess = sessionDirs[si];
                     showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
@@ -10132,7 +10133,7 @@
 
                     var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
                     console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
-                    await handleLoadSessionFolderPerCamera(sessionFiles);
+                    await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
                 }
 
                 hideLoading();
@@ -10674,7 +10675,7 @@
             }
         }
 
-        async function handleLoadSessionFolderPerCamera(preloadedFiles) {
+        async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos) {
             try {
                 var allFiles;
                 if (preloadedFiles) {
@@ -11046,71 +11047,90 @@
                     // Load video (first in directory)
                     if (camDir.videos.length > 0) {
                         var videoFile = camDir.videos[0];
-                        showLoading('Loading video: ' + videoFile.name + '...');
 
-                        try {
-                            var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
-                            await decoder.init(videoFile);
-                            var vw = decoder.videoTrack.video.width;
-                            var vh = decoder.videoTrack.video.height;
-
-                            if (!state.session) {
-                                var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
-                                state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0'], sessionName);
-                                if (state.sessions.indexOf(state.session) < 0) {
-                                    state.sessions.push(state.session);
-                                    state.activeSessionIdx = state.sessions.length - 1;
-                                }
+                        if (!state.session) {
+                            var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
+                            state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0'], sessionName);
+                            if (state.sessions.indexOf(state.session) < 0) {
+                                state.sessions.push(state.session);
+                                state.activeSessionIdx = state.sessions.length - 1;
                             }
+                        }
 
-                            var sessionIdx = state.sessions.indexOf(state.session);
-                            var videoStem = videoFile.name.replace(/\.[^.]+$/, '');
-                            var assignCam = camDir.noCalibration ? null : camName;
-                            var viewName = camDir.noCalibration ? videoStem : camName;
+                        var sessionIdx = state.sessions.indexOf(state.session);
+                        var videoStem = videoFile.name.replace(/\.[^.]+$/, '');
+                        var assignCam = camDir.noCalibration ? null : camName;
+                        var viewName = camDir.noCalibration ? videoStem : camName;
+
+                        if (deferVideos) {
+                            // Store file ref only — decoder created on session switch
                             state.videoFiles.push({
                                 file: videoFile,
                                 name: viewName,
-                                decoder: decoder,
-                                videoWidth: vw,
-                                videoHeight: vh,
-                                frameCount: decoder.samples.length,
+                                decoder: null,
+                                videoWidth: 0, videoHeight: 0,
+                                frameCount: 0,
                                 assignedCamera: assignCam,
                                 slpFilename: slpFilenameForCam,
                                 videoPath: videoFile.webkitRelativePath || videoFile.name,
                                 sessionIdx: sessionIdx,
                             });
-
                             var loadedVfIdx = state.videoFiles.length - 1;
                             if (state.session.videoFileIndices.indexOf(loadedVfIdx) < 0) {
                                 state.session.videoFileIndices.push(loadedVfIdx);
                             }
+                        } else {
+                            showLoading('Loading video: ' + videoFile.name + '...');
+                            try {
+                                var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                                await decoder.init(videoFile);
+                                state.decoderPool.push(decoder);
+                                var vw = decoder.videoTrack.video.width;
+                                var vh = decoder.videoTrack.video.height;
 
-                            if (assignCam && !state.session.cameras.some(function (c) { return c.name === camName; })) {
-                                state.session.cameras.push(
-                                    new Camera(camName, [[600,0,vw/2],[0,600,vh/2],[0,0,1]],
-                                        [0,0,0,0,0], [0,0,0], [0,0,0], [vw, vh])
-                                );
-                            }
+                                state.videoFiles.push({
+                                    file: videoFile,
+                                    name: viewName,
+                                    decoder: decoder,
+                                    videoWidth: vw, videoHeight: vh,
+                                    frameCount: decoder.samples.length,
+                                    assignedCamera: assignCam,
+                                    slpFilename: slpFilenameForCam,
+                                    videoPath: videoFile.webkitRelativePath || videoFile.name,
+                                    sessionIdx: sessionIdx,
+                                });
+                                var loadedVfIdx = state.videoFiles.length - 1;
+                                if (state.session.videoFileIndices.indexOf(loadedVfIdx) < 0) {
+                                    state.session.videoFileIndices.push(loadedVfIdx);
+                                }
 
-                            state.views.push({
-                                name: viewName,
-                                decoder: decoder,
-                                canvas: null, ctx: null,
-                                overlayCanvas: null, overlayCtx: null,
-                                videoWidth: vw, videoHeight: vh,
-                                wrapper: null,
-                            });
+                                if (assignCam && !state.session.cameras.some(function (c) { return c.name === camName; })) {
+                                    state.session.cameras.push(
+                                        new Camera(camName, [[600,0,vw/2],[0,600,vh/2],[0,0,1]],
+                                            [0,0,0,0,0], [0,0,0], [0,0,0], [vw, vh])
+                                    );
+                                }
 
-                            if (state.totalFrames === 0 || decoder.samples.length > state.totalFrames) {
-                                state.totalFrames = decoder.samples.length;
+                                state.views.push({
+                                    name: viewName,
+                                    decoder: decoder,
+                                    canvas: null, ctx: null,
+                                    overlayCanvas: null, overlayCtx: null,
+                                    videoWidth: vw, videoHeight: vh,
+                                    wrapper: null,
+                                });
+
+                                if (state.totalFrames === 0 || decoder.samples.length > state.totalFrames) {
+                                    state.totalFrames = decoder.samples.length;
+                                }
+                                if (state.fps === 0 || state.fps === 30) {
+                                    state.fps = decoder.videoTrack.duration > 0
+                                        ? decoder.samples.length / (decoder.videoTrack.duration / decoder.videoTrack.timescale)
+                                        : 30;
+                                }
+                            } catch (vidErr) {
+                                console.error('[session-folder] Failed to load video ' + videoFile.name + ':', vidErr);
                             }
-                            if (state.fps === 0 || state.fps === 30) {
-                                state.fps = decoder.videoTrack.duration > 0
-                                    ? decoder.samples.length / (decoder.videoTrack.duration / decoder.videoTrack.timescale)
-                                    : 30;
-                            }
-                        } catch (vidErr) {
-                            console.error('[session-folder] Failed to load video ' + videoFile.name + ':', vidErr);
                         }
                     }
                 }
@@ -13581,18 +13601,16 @@
             setStatus('Session removed', 'success');
         }
 
-        function switchSession(newIdx) {
+        async function switchSession(newIdx) {
             if (newIdx === state.activeSessionIdx) return;
             if (newIdx < 0 || newIdx >= state.sessions.length) return;
 
-            // Save current session state — keep views alive
+            // Save current session state
             var oldSession = state.sessions[state.activeSessionIdx];
             oldSession.lastFrame = state.currentFrame;
             oldSession.totalFrames = state.totalFrames;
             oldSession.fps = state.fps;
             oldSession.triangulationResults = state.triangulationResults;
-            oldSession._views = state.views;           // preserve live views with decoders+canvases
-            oldSession._videoController = videoController;
 
             // Save 3D viewport state
             if (viewport3d && viewport3d.threeCamera && viewport3d.controls) {
@@ -13603,15 +13621,20 @@
                 };
             }
 
-            // Pause old session's video elements to free resources
+            // Pause old session
             if (videoController && state.isPlaying) {
                 videoController.stopPlayback();
             }
+
+            // Collect old session's decoders for reuse (avoid creating new video elements)
+            var oldDecoders = [];
             for (var ovi = 0; ovi < state.views.length; ovi++) {
-                if (state.views[ovi].decoder && state.views[ovi].decoder.pauseNative) {
-                    state.views[ovi].decoder.pauseNative();
+                if (state.views[ovi].decoder) {
+                    oldDecoders.push(state.views[ovi].decoder);
                 }
             }
+            oldSession._views = null;
+            oldSession._videoController = null;
 
             // Switch active session
             state.activeSessionIdx = newIdx;
@@ -13623,64 +13646,67 @@
             var trustCheck = document.getElementById('menuTrustTracksCheck');
             if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
 
-            // Restore saved views or build new ones
-            if (newSession._views && newSession._views.length > 0) {
-                state.views = newSession._views;
+            // Rebuild views — reuse decoder instances via switchSource
+            videoController = null;
+            state.views = [];
+            paneManager.clearAll();
 
-                paneManager.clearAll();
-                paneManager.addAllViewsAsGrid();
-
-                // Rebuild video controller and update frame count for this session
-                rebuildVideoController();
-                updateTotalFrames();
-
-                var targetFrame = newSession.lastFrame || 0;
-                setTimeout(function() {
-                    fitCanvasesToCells();
-                    refreshPaneInteractions();
-                    state.currentFrame = targetFrame;
-                    if (videoController) {
-                        videoController.seekToFrame(targetFrame);
-                    }
-                    drawAllOverlays(targetFrame);
-                }, 50);
-            } else {
-                // First visit — build views from videoFileIndices
-                videoController = null;
-                state.views = [];
-                paneManager.clearAll();
-
-                // Ensure videoFileIndices is populated
-                if (newSession.videoFileIndices.length === 0) {
-                    for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
-                        if (state.videoFiles[nvi].sessionIdx === newIdx) {
-                            newSession.videoFileIndices.push(nvi);
-                        }
+            if (newSession.videoFileIndices.length === 0) {
+                for (var nvi = 0; nvi < state.videoFiles.length; nvi++) {
+                    if (state.videoFiles[nvi].sessionIdx === newIdx) {
+                        newSession.videoFileIndices.push(nvi);
                     }
                 }
-
-                for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
-                    var vfIdx = newSession.videoFileIndices[vi];
-                    var vf = state.videoFiles[vfIdx];
-                    if (vf) {
-                        createViewForVideoFile(vf);
-                    }
-                }
-
-                updateTotalFrames();
-                paneManager.addAllViewsAsGrid();
-                rebuildVideoController();
-
-                setTimeout(function() {
-                    fitCanvasesToCells();
-                    refreshPaneInteractions();
-                    state.currentFrame = newSession.lastFrame || 0;
-                    if (videoController && state.views.length > 0) {
-                        videoController.seekToFrame(state.currentFrame);
-                    }
-                    drawAllOverlays(state.currentFrame);
-                }, 50);
             }
+
+            for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
+                var vfIdx = newSession.videoFileIndices[vi];
+                var vf = state.videoFiles[vfIdx];
+                if (vf && vf.file) {
+                    showLoading('Loading video: ' + vf.file.name + '...');
+                    try {
+                        if (oldDecoders.length > 0) {
+                            // Reuse existing decoder — swap source without creating new video element
+                            var reusedDec = oldDecoders.shift();
+                            await reusedDec.switchSource(vf.file);
+                            vf.decoder = reusedDec;
+                        } else {
+                            // No decoder to reuse — create new (only happens on first visit)
+                            var newDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                            await newDec.init(vf.file);
+                            vf.decoder = newDec;
+                        }
+                        vf.videoWidth = vf.decoder.videoTrack.video.width;
+                        vf.videoHeight = vf.decoder.videoTrack.video.height;
+                        vf.frameCount = vf.decoder.samples.length;
+                    } catch (e) {
+                        console.error('[switchSession] Video init failed:', e);
+                    }
+                }
+                if (vf && vf.decoder) {
+                    createViewForVideoFile(vf);
+                }
+            }
+            // Close any leftover old decoders not reused
+            for (var ldi = 0; ldi < oldDecoders.length; ldi++) {
+                oldDecoders[ldi].close();
+            }
+            hideLoading();
+
+            updateTotalFrames();
+            paneManager.addAllViewsAsGrid();
+            rebuildVideoController();
+
+            var targetFrame = newSession.lastFrame || 0;
+            setTimeout(function() {
+                fitCanvasesToCells();
+                refreshPaneInteractions();
+                state.currentFrame = targetFrame;
+                if (videoController && state.views.length > 0) {
+                    videoController.seekToFrame(targetFrame);
+                }
+                drawAllOverlays(targetFrame);
+            }, 50);
 
             // Update sidebars and panels (immediate, no delay needed)
             populateViewStrip();
