@@ -14135,13 +14135,25 @@
             }
 
             for (var j = 0; j < runs.length; j++) {
-                var rIdx = Math.floor(Math.random() * runs[j].issues.length);
-                runs[j].representative = runs[j].issues[rIdx];
+                // Pick the issue with the worst error value as representative
+                var worstIdx = 0;
+                var worstVal = 0;
+                for (var wi = 0; wi < runs[j].issues.length; wi++) {
+                    var desc = runs[j].issues[wi].description || '';
+                    var numMatch = desc.match(/([\d.]+)\s*px/);
+                    var val = numMatch ? parseFloat(numMatch[1]) : 0;
+                    if (val > worstVal) { worstVal = val; worstIdx = wi; }
+                }
+                runs[j].representative = runs[j].issues[worstIdx];
+                runs[j].worstError = worstVal;
             }
 
             runs.sort(function (a, b) {
                 if (severityOrder[a.severity] !== severityOrder[b.severity])
                     return severityOrder[a.severity] - severityOrder[b.severity];
+                // Within same severity, worst error first
+                if (a.worstError !== b.worstError)
+                    return b.worstError - a.worstError;
                 return a.startFrame - b.startFrame;
             });
 
