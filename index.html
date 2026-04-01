@@ -156,6 +156,13 @@
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
+                <button class="toolbar-btn" id="tbRunQC" title="Run Quality Control analysis">QC</button>
+                <button class="toolbar-btn" id="tbPrevQC" title="Previous flagged frame (Shift+Q)">&lt;</button>
+                <button class="toolbar-btn" id="tbNextQC" title="Next flagged frame (Q)">&gt;</button>
+                <span class="qc-toolbar-badge" id="qcToolbarBadge" style="display:none"></span>
+            </div>
+            <div class="toolbar-separator"></div>
+            <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame</button>
                 <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
             </div>
@@ -4152,6 +4159,18 @@
                     case 't': {
                         e.preventDefault();
                         triangulateCurrentFrame();
+                        break;
+                    }
+                    case 'q':
+                    case 'Q': {
+                        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+                            e.preventDefault();
+                            if (e.shiftKey) {
+                                qcPrevIssue();
+                            } else {
+                                qcNextIssue();
+                            }
+                        }
                         break;
                     }
                 }
