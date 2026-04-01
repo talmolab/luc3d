@@ -798,6 +798,7 @@ var QC = (function () {
 
                 var swapCount = 0;
                 var swapKeypoints = [];
+                var comparedCount = 0; // total keypoints we actually compared
 
                 var camNames = Object.keys(reprojA);
                 for (var ci = 0; ci < camNames.length; ci++) {
@@ -808,12 +809,21 @@ var QC = (function () {
                     var instB = resB.group.getInstance ? resB.group.getInstance(cam) : null;
                     if (!instA || !instB || !instA.points || !instB.points) continue;
 
+                    // Skip cameras where either instance has mostly null points (appearing/disappearing)
+                    var visA = 0, visB = 0;
+                    for (var vi = 0; vi < numKeypoints; vi++) {
+                        if (instA.points[vi]) visA++;
+                        if (instB.points[vi]) visB++;
+                    }
+                    if (visA < numKeypoints * 0.5 || visB < numKeypoints * 0.5) continue;
+
                     for (var ki = 0; ki < numKeypoints; ki++) {
                         var detA = instA.points[ki];
                         var detB = instB.points[ki];
                         var rpA = reprojA[cam][ki];
                         var rpB = reprojB[cam][ki];
                         if (!detA || !detB || !rpA || !rpB) continue;
+                        comparedCount++;
 
                         // Distance from A's detection to A's reprojection vs B's reprojection
                         var dxAA = detA[0] - rpA[0], dyAA = detA[1] - rpA[1];
@@ -830,7 +840,8 @@ var QC = (function () {
                     }
                 }
 
-                if (swapCount >= (config.minSwapKeypoints || 3)) {
+                // Require minimum crossed keypoints AND a meaningful fraction of compared points
+                if (swapCount >= (config.minSwapKeypoints || 3) && comparedCount > 0 && swapCount / comparedCount > 0.2) {
                     issues.push({
                         type: 'swap',
                         severity: swapCount >= 3 ? 'high' : 'medium',
