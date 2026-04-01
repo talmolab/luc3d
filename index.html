@@ -2231,19 +2231,28 @@
             var session = state.session;
             if (!session || !session.lazyLoader) return;
 
-            var maxKeep = 200;
+            var maxKeep = 500;
             var keys = Array.from(session.frameGroups.keys());
             if (keys.length <= maxKeep) return;
+
+            // Only evict every 50 frames to avoid constant GC overhead
+            if (!evictLazyFrames._counter) evictLazyFrames._counter = 0;
+            if (++evictLazyFrames._counter % 50 !== 0) return;
 
             keys.sort(function (a, b) {
                 return Math.abs(a - currentFrame) - Math.abs(b - currentFrame);
             });
 
+            var evicted = 0;
             for (var i = maxKeep; i < keys.length; i++) {
                 var fIdx = keys[i];
+                // Never evict the current frame
+                if (fIdx === currentFrame) continue;
+
                 var fgEvict = session.frameGroups.get(fIdx);
                 if (!fgEvict) continue;
 
+                // Keep frames with ANY user data
                 var hasUserData = false;
                 for (var [, insts] of fgEvict.instances) {
                     for (var instCheck of insts) {
@@ -2259,10 +2268,13 @@
                         if (hasUserData) break;
                     }
                 }
+                if (!hasUserData && session.instanceGroups.has(fIdx)) {
+                    hasUserData = true; // Keep frames with any instance groups
+                }
 
                 if (!hasUserData) {
                     session.frameGroups.delete(fIdx);
-                    session.instanceGroups.delete(fIdx);
+                    evicted++;
                 }
             }
         }
