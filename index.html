@@ -4687,10 +4687,29 @@
             btn.textContent = isPlaying ? '\u275A\u275A' : '\u25B6';
             btn.classList.toggle('active', isPlaying);
 
-            // Lazy H5: prefetch ahead when playback starts, reload current frame when stopped
+            // Lazy H5: background frame loader during playback
             if (state.session && state.session.lazyLoader) {
                 if (isPlaying) {
-                    state.session.lazyLoader.prefetch(state.currentFrame, 1);
+                    // Start background loader that continuously fills frames ahead
+                    (async function lazyPlaybackLoader() {
+                        var session = state.session;
+                        if (!session || !session.lazyLoader) return;
+                        while (state.isPlaying && state.session === session) {
+                            var cur = state.currentFrame;
+                            var loaded = 0;
+                            // Try to stay 50 frames ahead
+                            for (var i = 0; i < 50 && loaded < 10; i++) {
+                                var fi = cur + i;
+                                if (fi >= session.lazyLoader.nFrames) break;
+                                if (!session.frameGroups.has(fi)) {
+                                    await ensureLazyFrameData(fi);
+                                    loaded++;
+                                }
+                            }
+                            // Yield to let playback proceed
+                            await new Promise(function(r) { setTimeout(r, loaded > 0 ? 1 : 50); });
+                        }
+                    })();
                 } else {
                     // Stopped — ensure current frame data is loaded and overlays drawn
                     ensureLazyFrameData(state.currentFrame).then(function () {
