@@ -55,6 +55,9 @@ class Viewport3D {
         /** @type {function(number): string} */
         this.getTrackColor = options.getTrackColor || function () { return '#667eea'; };
 
+        /** @type {function(InstanceGroup): string|null} Optional: color a group using the same logic as 2D overlays */
+        this.getGroupColorFn = options.getGroupColor || null;
+
         /** @type {function(string): void|null} Callback when a camera is clicked */
         this.onCameraClicked = options.onCameraClicked || null;
 
@@ -794,8 +797,9 @@ class Viewport3D {
             const pts = group.points3d;
             if (!pts || pts.length === 0) continue;
 
-            const trackIdx = group.identityId >= 0 ? group.identityId : g;
-            const colorStr = this.getTrackColor(trackIdx);
+            const colorStr = this.getGroupColorFn
+                ? this.getGroupColorFn(group)
+                : this.getTrackColor(group.identityId >= 0 ? group.identityId : g);
             const color = new THREE.Color(colorStr);
             const isSelected = (this.selectedInstanceIdx === g);
 
