@@ -2500,21 +2500,12 @@
 
             // Lazy H5: fetch frame data on demand if not yet loaded
             if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
-                // Try sync path first (data already in worker cache from prefetch)
-                if (buildLazyFrameGroupSync(frameIdx)) {
-                    // Data was cached — fall through to normal rendering
-                    evictLazyFrames(frameIdx);
-                } else {
-                    // Not cached yet — async fetch, prefetch ahead
-                    state.session.lazyLoader.prefetch(frameIdx, 1);
-                    ensureLazyFrameData(frameIdx).then(function () {
-                        evictLazyFrames(frameIdx);
-                        if (state.currentFrame === frameIdx) {
-                            drawAllOverlays(frameIdx);
-                        }
-                    });
-                    return;
-                }
+                ensureLazyFrameData(frameIdx).then(function () {
+                    if (state.currentFrame === frameIdx) {
+                        drawAllOverlays(frameIdx);
+                    }
+                });
+                return;
             }
 
             // Auto-finish edit group mode on frame change
