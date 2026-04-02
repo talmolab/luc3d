@@ -35,6 +35,7 @@ var lazyNNodes = 0;
 var lazyNFrames = 0;
 var lazyTransposed = false;
 var lazyTrackOccupancy = null; // optional, full array (small: nFrames * nTracks bytes)
+var lazyTracksVal = null;      // full decompressed tracks TypedArray (loaded once, fast indexing)
 
 // Initialize h5wasm, then drain any queued messages
 (async function () {
@@ -807,6 +808,11 @@ function openH5Lazy(file) {
             }
         } catch (e) { }
 
+        // Load full tracks array into memory for instant frame reads
+        progress('Loading tracks data (' + (lazyTracksDs.metadata.size * lazyTracksShape.reduce(function(a,b){return a*b;},1) / 1048576).toFixed(0) + ' MB)...');
+        lazyTracksVal = lazyTracksDs.value;
+        progress('Tracks loaded into memory');
+
         // Build video entry from filename
         var vidName = file.name;
         vidName = vidName.replace(/\.analysis\.h5$/i, '').replace(/\.h5$/i, '');
@@ -848,141 +854,65 @@ function openH5Lazy(file) {
     }
 }
 
+function extractFrameInstances(frameIdx) {
+    // Extract instances for one frame from the in-memory tracksVal array
+    var instances = [];
+    for (var tr = 0; tr < lazyNTracks; tr++) {
+        if (lazyTrackOccupancy) {
+            var occIdx = frameIdx * lazyNTracks + tr;
+            if (occIdx < lazyTrackOccupancy.length && !lazyTrackOccupancy[occIdx]) continue;
+        }
+
+        var points = [];
+        var hasAnyPoint = false;
+        for (var nd = 0; nd < lazyNNodes; nd++) {
+            var x, y;
+            if (lazyTransposed) {
+                // Shape [n_tracks, 2, n_nodes, n_frames]
+                var baseT = tr * (2 * lazyNNodes * lazyNFrames);
+                x = Number(lazyTracksVal[baseT + 0 * (lazyNNodes * lazyNFrames) + nd * lazyNFrames + frameIdx]);
+                y = Number(lazyTracksVal[baseT + 1 * (lazyNNodes * lazyNFrames) + nd * lazyNFrames + frameIdx]);
+            } else {
+                var baseF = frameIdx * (lazyNNodes * 2 * lazyNTracks);
+                x = Number(lazyTracksVal[baseF + nd * (2 * lazyNTracks) + 0 * lazyNTracks + tr]);
+                y = Number(lazyTracksVal[baseF + nd * (2 * lazyNTracks) + 1 * lazyNTracks + tr]);
+            }
+            if (!isNaN(x) && !isNaN(y)) {
+                points.push([x, y]);
+                hasAnyPoint = true;
+            } else {
+                points.push(null);
+            }
+        }
+        if (!hasAnyPoint) continue;
+        instances.push({ trackIdx: tr, score: 0, type: 'predicted', points: points });
+    }
+    return instances;
+}
+
 function readFrameLazy(frameIdx, requestId) {
     try {
-        if (!lazyTracksDs) {
+        if (!lazyTracksVal) {
             postMessage({ type: 'error', message: 'No H5 file open', requestId: requestId });
             return;
         }
-
-        var instances = [];
-        for (var tr = 0; tr < lazyNTracks; tr++) {
-            // Check occupancy
-            if (lazyTrackOccupancy) {
-                var occIdx = frameIdx * lazyNTracks + tr;
-                if (occIdx < lazyTrackOccupancy.length && !lazyTrackOccupancy[occIdx]) {
-                    continue;
-                }
-            }
-
-            // Slice one frame of data for this track
-            var sliceData;
-            if (lazyTransposed) {
-                // Shape [n_tracks, 2, n_nodes, n_frames] → slice [tr:tr+1, :, :, frameIdx:frameIdx+1]
-                sliceData = lazyTracksDs.slice([[tr, tr + 1], [0, 2], [0, lazyNNodes], [frameIdx, frameIdx + 1]]);
-            } else {
-                // Shape [n_frames, n_nodes, 2, n_tracks] → slice [frameIdx:frameIdx+1, :, :, tr:tr+1]
-                sliceData = lazyTracksDs.slice([[frameIdx, frameIdx + 1], [0, lazyNNodes], [0, 2], [tr, tr + 1]]);
-            }
-
-            // Extract points
-            var points = [];
-            var hasAnyPoint = false;
-            for (var nd = 0; nd < lazyNNodes; nd++) {
-                var x, y;
-                if (lazyTransposed) {
-                    // sliceData is flat: [2 * nNodes] for one track, one frame
-                    x = Number(sliceData[0 * lazyNNodes + nd]);
-                    y = Number(sliceData[1 * lazyNNodes + nd]);
-                } else {
-                    // sliceData is flat: [nNodes * 2] for one frame, one track
-                    x = Number(sliceData[nd * 2 + 0]);
-                    y = Number(sliceData[nd * 2 + 1]);
-                }
-
-                if (!isNaN(x) && !isNaN(y)) {
-                    points.push([x, y]);
-                    hasAnyPoint = true;
-                } else {
-                    points.push(null);
-                }
-            }
-
-            if (!hasAnyPoint) continue;
-
-            instances.push({
-                trackIdx: tr,
-                score: 0,
-                type: 'predicted',
-                points: points,
-            });
-        }
-
-        postMessage({
-            type: 'frameData',
-            frameIdx: frameIdx,
-            requestId: requestId,
-            instances: instances,
-        });
-
+        postMessage({ type: 'frameData', frameIdx: frameIdx, requestId: requestId, instances: extractFrameInstances(frameIdx) });
     } catch (err) {
-        var errMsg = (err.message || String(err));
-        postMessage({ type: 'error', message: errMsg, requestId: requestId });
+        postMessage({ type: 'error', message: (err.message || String(err)), requestId: requestId });
     }
 }
 
 function readFramesLazy(startIdx, endIdx, requestId) {
     try {
-        if (!lazyTracksDs) {
+        if (!lazyTracksVal) {
             postMessage({ type: 'error', message: 'No H5 file open', requestId: requestId });
             return;
         }
 
         var actualEnd = Math.min(endIdx, lazyNFrames);
-        var nBatch = actualEnd - startIdx;
-        if (nBatch <= 0) {
-            postMessage({ type: 'framesData', startIdx: startIdx, endIdx: endIdx, requestId: requestId, frames: [] });
-            return;
-        }
-
-        // Bulk-read all tracks for the entire frame range (1 H5 read per track)
-        var bulkPerTrack = [];
-        for (var tr = 0; tr < lazyNTracks; tr++) {
-            if (lazyTransposed) {
-                // Shape [n_tracks, 2, n_nodes, n_frames] → [tr:tr+1, :, :, start:end]
-                bulkPerTrack.push(lazyTracksDs.slice([[tr, tr + 1], [0, 2], [0, lazyNNodes], [startIdx, actualEnd]]));
-            } else {
-                bulkPerTrack.push(lazyTracksDs.slice([[startIdx, actualEnd], [0, lazyNNodes], [0, 2], [tr, tr + 1]]));
-            }
-        }
-
-        // Build per-frame instance data from bulk arrays
         var frames = [];
-        for (var fi = 0; fi < nBatch; fi++) {
-            var absFrame = startIdx + fi;
-            var instances = [];
-            for (var tr2 = 0; tr2 < lazyNTracks; tr2++) {
-                if (lazyTrackOccupancy) {
-                    var occIdx = absFrame * lazyNTracks + tr2;
-                    if (occIdx < lazyTrackOccupancy.length && !lazyTrackOccupancy[occIdx]) continue;
-                }
-
-                var bulk = bulkPerTrack[tr2];
-                var points = [];
-                var hasAnyPoint = false;
-                for (var nd = 0; nd < lazyNNodes; nd++) {
-                    var x, y;
-                    if (lazyTransposed) {
-                        // bulk layout: [1, 2, nNodes, nBatch] flat → coord*nNodes*nBatch + nd*nBatch + fi
-                        x = Number(bulk[0 * lazyNNodes * nBatch + nd * nBatch + fi]);
-                        y = Number(bulk[1 * lazyNNodes * nBatch + nd * nBatch + fi]);
-                    } else {
-                        // bulk layout: [nBatch, nNodes, 2, 1] flat → fi*nNodes*2 + nd*2 + coord
-                        x = Number(bulk[fi * lazyNNodes * 2 + nd * 2 + 0]);
-                        y = Number(bulk[fi * lazyNNodes * 2 + nd * 2 + 1]);
-                    }
-                    if (!isNaN(x) && !isNaN(y)) {
-                        points.push([x, y]);
-                        hasAnyPoint = true;
-                    } else {
-                        points.push(null);
-                    }
-                }
-
-                if (!hasAnyPoint) continue;
-                instances.push({ trackIdx: tr2, score: 0, type: 'predicted', points: points });
-            }
-            frames.push({ frameIdx: absFrame, instances: instances });
+        for (var fi = startIdx; fi < actualEnd; fi++) {
+            frames.push({ frameIdx: fi, instances: extractFrameInstances(fi) });
         }
 
         postMessage({ type: 'framesData', startIdx: startIdx, endIdx: endIdx, requestId: requestId, frames: frames });
@@ -1000,6 +930,7 @@ function closeLazy() {
     try { FS.unmount('/work'); } catch (e) { }
     lazyFile = null;
     lazyTracksDs = null;
+    lazyTracksVal = null;
     lazyTracksShape = null;
     lazyTrackOccupancy = null;
     lazyNTracks = 0;
