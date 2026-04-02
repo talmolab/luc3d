@@ -363,10 +363,35 @@ async function parseSlp(file) {
         try {
             var sessDs = f.get('sessions_json');
             if (sessDs && sessDs.shape[0] > 0) {
-                var sessParsed = JSON.parse(sessDs.value[0]);
-                sessionsArr = Array.isArray(sessParsed) ? sessParsed : [sessParsed];
+                for (var si = 0; si < sessDs.shape[0]; si++) {
+                    var sessParsed = JSON.parse(sessDs.value[si]);
+                    // Each entry may be a single session dict or an array
+                    if (Array.isArray(sessParsed)) {
+                        for (var sp = 0; sp < sessParsed.length; sp++) sessionsArr.push(sessParsed[sp]);
+                    } else {
+                        sessionsArr.push(sessParsed);
+                    }
+                }
             }
         } catch (e) { /* no sessions */ }
+
+        // --- Identities JSON ---
+        var identitiesArr = [];
+        try {
+            var idDs = f.get('identities_json');
+            if (idDs && idDs.shape[0] > 0) {
+                for (var idi = 0; idi < idDs.shape[0]; idi++) {
+                    identitiesArr.push(JSON.parse(idDs.value[idi]));
+                }
+            }
+        } catch (e) { /* no identities */ }
+
+        // Warn about data the streaming worker doesn't process
+        try {
+            if (f.get('instance_groups')) {
+                progress('[warn] SLP file contains instance_groups data — Instance3D/identity linking is not supported by the streaming reader and will be skipped');
+            }
+        } catch (e) { /* dataset not present */ }
 
         // NOTE: Embedded video frame bytes are NOT extracted here.
         // A separate frame-worker.js handles on-demand frame extraction
@@ -395,6 +420,7 @@ async function parseSlp(file) {
                 frames: frames,
                 videos: videos,
                 sessions: sessionsArr,
+                identities: identitiesArr,
             }
         });
 
@@ -696,6 +722,23 @@ function readColumnar(h5file, name, fields) {
         return raw;
     }
 
+    // 2D matrix format (written by sleap-io.js with field_names attribute)
+    // h5wasm returns a flat TypedArray for shape [N, M] datasets
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.length > 0
+        && ds.shape && ds.shape.length === 2) {
+        var numCols = ds.shape[1];
+        var numRows = ds.shape[0];
+        var data0 = {};
+        for (var j0 = 0; j0 < fields.length && j0 < numCols; j0++) {
+            var col = new Array(numRows);
+            for (var r = 0; r < numRows; r++) {
+                col[r] = raw[r * numCols + j0];
+            }
+            data0[fields[j0]] = col;
+        }
+        return data0;
+    }
+
     // Helper: unwrap single-element TypedArrays from compound dataset reads
     function unwrap(v) {
         if (v && typeof v === 'object' && v.length === 1) return v[0];
@@ -749,6 +792,23 @@ function readPoints(h5file, name, fields) {
 
         if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.x !== undefined) {
             return raw;
+        }
+
+        // 2D matrix format (flat TypedArray with shape [N, M])
+        if (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.length > 0
+            && ds.shape && ds.shape.length === 2) {
+            var numCols = ds.shape[1];
+            var numRows = ds.shape[0];
+            var data0 = {};
+            for (var j0 = 0; j0 < fields.length && j0 < numCols; j0++) {
+                var col = new Array(numRows);
+                for (var r = 0; r < numRows; r++) {
+                    col[r] = raw[r * numCols + j0];
+                }
+                data0[fields[j0]] = col;
+            }
+            if (data0.x && data0.x.length > 0) return data0;
+            return null;
         }
 
         // Helper: unwrap single-element TypedArrays from compound dataset reads

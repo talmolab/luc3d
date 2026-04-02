@@ -652,23 +652,33 @@ function buildSlpExportData(session, views, videoFiles) {
 
     // Build frame_group_dicts with 3D triangulated data
     const frameGroupDicts = [];
-    for (const [frameIdx, trackMap] of session.instanceGroups) {
+    for (const [frameIdx, groups] of session.instanceGroups) {
         const instanceGroupsData = [];
-        for (const [trackIdx, groups] of trackMap) {
-            for (const group of groups) {
-                const camToLfAndInst = {};
-                for (const [camName, inst] of group.instances) {
-                    const camIdx = session.cameras.findIndex(function (c) { return c.name === camName; });
-                    if (camIdx >= 0) {
-                        camToLfAndInst[String(camIdx)] = [frameIdx, 0];
-                    }
+        for (const group of groups) {
+            const camToLfAndInst = {};
+            for (const [camName, inst] of group.instances) {
+                const camIdx = session.cameras.findIndex(function (c) { return c.name === camName; });
+                if (camIdx >= 0) {
+                    camToLfAndInst[String(camIdx)] = [frameIdx, 0];
                 }
-                instanceGroupsData.push({
-                    camcorder_to_lf_and_inst_idx_map: camToLfAndInst,
-                    score: 1.0,
-                    points: group.points3d || [],
-                });
             }
+            var igData = {
+                camcorder_to_lf_and_inst_idx_map: camToLfAndInst,
+                score: 1.0,
+            };
+            if (group.points3d) {
+                igData.points = group.points3d;
+            }
+            if (group.identityId != null && group.identityId >= 0) {
+                // Map identityId to index in session.identities array
+                var idIdx = session.identities.findIndex(function (id) { return id.id === group.identityId; });
+                if (idIdx >= 0) {
+                    igData.identity_idx = idIdx;
+                } else {
+                    console.warn('[export] InstanceGroup has identityId ' + group.identityId + ' not found in session.identities — identity will be dropped from export');
+                }
+            }
+            instanceGroupsData.push(igData);
         }
 
         const labeledFrameByCamera = {};
@@ -689,8 +699,21 @@ function buildSlpExportData(session, views, videoFiles) {
         frame_group_dicts: frameGroupDicts,
     }];
 
+    // Serialize identities
+    var identitiesJson = [];
+    if (session.identities && session.identities.length > 0) {
+        for (var ii2 = 0; ii2 < session.identities.length; ii2++) {
+            var sid = session.identities[ii2];
+            var idObj = { name: sid.name };
+            if (sid.color) idObj.color = sid.color;
+            identitiesJson.push(idObj);
+        }
+    }
+
+    var hasIdentities = identitiesJson.length > 0;
+
     return {
-        format_id: 1.4,
+        format_id: hasIdentities ? 1.9 : 1.4,
         metadata: metadata,
         videos: videos,
         tracks: tracks,
@@ -700,6 +723,7 @@ function buildSlpExportData(session, views, videoFiles) {
         instances: instances,
         points: points,
         pred_points: predPoints,
+        identities_json: identitiesJson.length > 0 ? identitiesJson : undefined,
     };
 }
 
@@ -712,9 +736,14 @@ function buildSlpExportData(session, views, videoFiles) {
  */
 function buildPoints3dExportData(session) {
     const nodeNames = session.skeleton.nodes.slice();
-    const trackNames = session.tracks.slice();
+    const trackNames = (session.identities && session.identities.length > 0)
+        ? session.identities.map(function (id) { return id.name; })
+        : session.tracks.slice();
     const numNodes = nodeNames.length;
-    const numTracks = trackNames.length;
+    const numTracks = Math.max(
+        (session.identities ? session.identities.length : 0),
+        session.tracks.length
+    );
 
     const frameIndices = [];
     const points3dFrames = [];
@@ -725,7 +754,7 @@ function buildPoints3dExportData(session) {
 
     for (let fi = 0; fi < sortedFrameIndices.length; fi++) {
         const frameIdx = sortedFrameIndices[fi];
-        const trackMap = session.instanceGroups.get(frameIdx);
+        const groups = session.instanceGroups.get(frameIdx);
 
         // Build a per-track array for this frame
         const framePts = new Array(numTracks);
@@ -741,15 +770,14 @@ function buildPoints3dExportData(session) {
             }
         }
 
-        if (trackMap) {
-            for (const [trackIdx, groups] of trackMap) {
-                if (trackIdx >= numTracks) continue;
-                for (const group of groups) {
-                    if (group.points3d) {
-                        hasData = true;
-                        for (let n = 0; n < Math.min(numNodes, group.points3d.length); n++) {
-                            framePts[trackIdx][n] = group.points3d[n];
-                        }
+        if (groups) {
+            for (const group of groups) {
+                const idIdx = group.identityId;
+                if (idIdx < 0 || idIdx >= numTracks) continue;
+                if (group.points3d) {
+                    hasData = true;
+                    for (let n = 0; n < Math.min(numNodes, group.points3d.length); n++) {
+                        framePts[idIdx][n] = group.points3d[n];
                     }
                 }
             }
@@ -914,14 +942,12 @@ function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo)
 
         // Also collect reprojected instances for this frame+camera
         var reprojInstances = [];
-        var trackMap = session.instanceGroups.get(frameIdx);
-        if (trackMap) {
-            for (var [trackIdx, groups] of trackMap) {
-                for (var gi = 0; gi < groups.length; gi++) {
-                    var reprojInst = groups[gi].getReprojectedInstance(cameraName);
-                    if (reprojInst) {
-                        reprojInstances.push(reprojInst);
-                    }
+        var groups = session.instanceGroups.get(frameIdx);
+        if (groups) {
+            for (var gi = 0; gi < groups.length; gi++) {
+                var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                if (reprojInst) {
+                    reprojInstances.push(reprojInst);
                 }
             }
         }
@@ -1121,15 +1147,23 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
         // Collect reprojected instances with their group's trackIdx
         var reprojInstances = [];
         if (!instanceFilter || instanceFilter.reprojected !== false) {
-            var trackMap = session.instanceGroups.get(frameIdx);
-            if (trackMap) {
-                for (var [trackIdx, groups] of trackMap) {
-                    for (var gi = 0; gi < groups.length; gi++) {
-                        var reprojInst = groups[gi].getReprojectedInstance(cameraName);
-                        if (reprojInst) {
-                            reprojInst._groupTrackIdx = groups[gi].trackIdx;
-                            reprojInstances.push(reprojInst);
+            var groups = session.instanceGroups.get(frameIdx);
+            if (groups) {
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                    if (reprojInst) {
+                        // Find track from the group's instance for this camera (or any camera)
+                        var grpTrackIdx = -1;
+                        var grpCamInst = groups[gi].getInstance(cameraName);
+                        if (grpCamInst && grpCamInst.trackIdx >= 0) {
+                            grpTrackIdx = grpCamInst.trackIdx;
+                        } else {
+                            for (var [, gInst] of groups[gi].instances) {
+                                if (gInst.trackIdx >= 0) { grpTrackIdx = gInst.trackIdx; break; }
+                            }
                         }
+                        reprojInst._groupTrackIdx = grpTrackIdx;
+                        reprojInstances.push(reprojInst);
                     }
                 }
             }
@@ -1214,12 +1248,22 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
         }));
     }
 
-    // 5. Create Labels
+    // 5. Build sleap-io Identity objects
+    var sioIdentities = [];
+    if (session.identities && session.identities.length > 0) {
+        for (var iid = 0; iid < session.identities.length; iid++) {
+            var lucidId = session.identities[iid];
+            sioIdentities.push(new SIO.Identity({ name: lucidId.name, color: lucidId.color }));
+        }
+    }
+
+    // 6. Create Labels
     return new SIO.Labels({
         labeledFrames: labeledFrames,
         videos: [video],
         skeletons: [skeleton],
         tracks: tracks,
+        identities: sioIdentities,
         provenance: { source: 'lucid', exported_at: new Date().toISOString() },
     });
 }
@@ -1294,14 +1338,36 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
     // 2. Build tracks
     var tracks = session.tracks.map(function (name) { return new SIO.Track(name); });
 
-    // 3. Build videos — one per camera
-    var camToVideoIdx = {};
+    // 3. Build sleap-io Identity objects
+    var sioIdentities = [];
+    var lucidIdToSioId = new Map(); // lucid identity.id → SIO.Identity
+    if (session.identities && session.identities.length > 0) {
+        for (var iid = 0; iid < session.identities.length; iid++) {
+            var lucidId = session.identities[iid];
+            var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color });
+            sioIdentities.push(sioId);
+            lucidIdToSioId.set(lucidId.id, sioId);
+        }
+    }
+
+    // 4. Build sleap-io Cameras and Videos — one per camera
+    var sioCameras = [];
     var sioVideos = [];
+    var lucidCamToSioCam = new Map(); // camName → SIO.Camera
     session.cameras.forEach(function (cam, i) {
-        camToVideoIdx[cam.name] = i;
+        var sioCam = new SIO.Camera({
+            name: cam.name,
+            rvec: cam.rvec || [0, 0, 0],
+            tvec: cam.tvec || [0, 0, 0],
+            matrix: cam.matrix,
+            distortions: cam.dist,
+            size: cam.size,
+        });
+        sioCameras.push(sioCam);
+        lucidCamToSioCam.set(cam.name, sioCam);
+
         var videoPath = cam.name + '.mp4';
         var vw = 0, vh = 0, fc = 0;
-        // Find matching view and videoFile info
         for (var vi = 0; vi < (views || []).length; vi++) {
             var v = views[vi];
             if (v.name === cam.name) {
@@ -1326,8 +1392,6 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
                 type: 'MediaVideo',
                 shape: [fc, vh, vw, 1],
                 filename: videoPath,
-                grayscale: false,
-                bgr: false,
             },
             openBackend: false,
         });
@@ -1335,61 +1399,173 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
         sioVideos.push(video);
     });
 
-    // 4. Build labeled frames — one per camera per frame group
+    // 5. Build RecordingSession with CameraGroup
+    var cameraGroup = new SIO.CameraGroup({ cameras: sioCameras });
+    var sioSession = new SIO.RecordingSession({ cameraGroup: cameraGroup });
+
+    // Attach lucid-specific session metadata
+    sioSession.metadata = sioSession.metadata || {};
+    console.log('[buildSlpLabelsAllViews] Saving session name:', session.name);
+    sioSession.metadata.lucid = {
+        sessionName: session.name || null,
+        trustTracks: session.trustTracks || false,
+        trackIdentityMap: Array.from(session.trackIdentityMap.entries()),
+        frameIdentityMap: session.frameIdentityMap
+            ? Array.from(session.frameIdentityMap.entries())
+            : [],
+        skeleton: {
+            name: session.skeleton.name || 'skeleton',
+            nodes: session.skeleton.nodes,
+            edges: session.skeleton.edges,
+        },
+        tracks: session.tracks,
+    };
+    session.cameras.forEach(function (cam, i) {
+        sioSession.addVideo(sioVideos[i], sioCameras[i]);
+    });
+
+    // 6. Build labeled frames and session FrameGroups
+    //    Key optimization: create each SIO.Instance once and share between
+    //    LabeledFrames and InstanceGroups to avoid doubling memory usage.
     var labeledFrames = [];
     var numNodes = session.skeleton.nodes.length;
     var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
+
+    // Map to look up labeled frames by (videoIdx, frameIdx)
+    var lfLookup = new Map(); // "videoIdx:frameIdx" → LabeledFrame
 
     for (var fi = 0; fi < allFrameIndices.length; fi++) {
         var frameIdx = allFrameIndices[fi];
         var fg = session.frameGroups.get(frameIdx);
 
-        // Build combined per-camera instance list (grouped + ungrouped)
-        var combinedInstances = new Map();
-        for (var [camName, camInsts] of fg.instances) {
-            combinedInstances.set(camName, camInsts.slice());
-        }
-        for (var [camName2, ulList] of fg.unlinkedInstances) {
-            if (!combinedInstances.has(camName2)) combinedInstances.set(camName2, []);
-            var arr = combinedInstances.get(camName2);
-            for (var u = 0; u < ulList.length; u++) arr.push(ulList[u].instance);
+        // Build SIO instances once per lucid instance, keyed by object identity
+        // so we can reuse them in both LabeledFrames and InstanceGroups
+        var lucidToSio = new Map(); // lucid Instance → SIO Instance
+
+        function _getOrCreateSioInst(inst) {
+            var existing = lucidToSio.get(inst);
+            if (existing) return existing;
+            var pts = _buildSioPoints(inst, numNodes);
+            var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+            var sioInst;
+            if (inst.type === 'user') {
+                sioInst = new SIO.Instance({ points: pts, skeleton: skeleton, track: track });
+            } else {
+                sioInst = new SIO.PredictedInstance({ points: pts, skeleton: skeleton, track: track, score: inst.score || 0 });
+            }
+            lucidToSio.set(inst, sioInst);
+            return sioInst;
         }
 
-        for (var [camName3, camInstances] of combinedInstances) {
-            var videoIdx = camToVideoIdx[camName3] !== undefined ? camToVideoIdx[camName3] : 0;
-            var video = sioVideos[videoIdx];
-            if (!video) continue;
+        // Create per-camera LabeledFrames from grouped + ungrouped instances
+        var lfByCamera = new Map();
+        for (var [camName3, camInstances] of fg.instances) {
+            var sioCam = lucidCamToSioCam.get(camName3);
+            var camIdx = session.cameras.findIndex(function (c) { return c.name === camName3; });
+            var video = sioVideos[camIdx];
+            if (!video || !sioCam) continue;
 
             var frameInstances = [];
             for (var ii = 0; ii < camInstances.length; ii++) {
-                var inst = camInstances[ii];
-                var isUser = (inst.type === 'user');
-                var pts = _buildSioPoints(inst, numNodes);
-                var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+                frameInstances.push(_getOrCreateSioInst(camInstances[ii]));
+            }
 
-                if (isUser) {
-                    frameInstances.push(new SIO.Instance({
-                        points: pts,
-                        skeleton: skeleton,
-                        track: track,
-                    }));
-                } else {
-                    frameInstances.push(new SIO.PredictedInstance({
-                        points: pts,
-                        skeleton: skeleton,
-                        track: track,
-                        score: inst.score || 0,
-                    }));
-                }
+            // Also add ungrouped instances for this camera
+            var ulList = fg.getUnlinkedInstances(camName3);
+            for (var ui = 0; ui < ulList.length; ui++) {
+                frameInstances.push(_getOrCreateSioInst(ulList[ui].instance));
             }
 
             if (frameInstances.length > 0) {
-                labeledFrames.push(new SIO.LabeledFrame({
-                    video: video,
-                    frameIdx: frameIdx,
-                    instances: frameInstances,
-                }));
+                var lf = new SIO.LabeledFrame({ video: video, frameIdx: frameIdx, instances: frameInstances });
+                labeledFrames.push(lf);
+                lfByCamera.set(sioCam, lf);
+                lfLookup.set(camIdx + ':' + frameIdx, lf);
             }
+        }
+        // Handle ungrouped instances for cameras that had no grouped instances
+        for (var [ulCam, ulInstList] of fg.unlinkedInstances) {
+            if (fg.instances.has(ulCam)) continue; // already handled above
+            var ulSioCam = lucidCamToSioCam.get(ulCam);
+            var ulCamIdx = session.cameras.findIndex(function (c) { return c.name === ulCam; });
+            var ulVideo = sioVideos[ulCamIdx];
+            if (!ulVideo || !ulSioCam) continue;
+            var ulFrameInsts = [];
+            for (var ui2 = 0; ui2 < ulInstList.length; ui2++) {
+                ulFrameInsts.push(_getOrCreateSioInst(ulInstList[ui2].instance));
+            }
+            if (ulFrameInsts.length > 0) {
+                var ulLf = new SIO.LabeledFrame({ video: ulVideo, frameIdx: frameIdx, instances: ulFrameInsts });
+                labeledFrames.push(ulLf);
+                lfByCamera.set(ulSioCam, ulLf);
+                lfLookup.set(ulCamIdx + ':' + frameIdx, ulLf);
+            }
+        }
+
+        // Build sleap-io InstanceGroups — reuse SIO instances from above
+        var sioInstanceGroups = [];
+        var lucidGroups = session.instanceGroups.get(frameIdx) || [];
+        for (var gi = 0; gi < lucidGroups.length; gi++) {
+            var group = lucidGroups[gi];
+            var instanceByCamera = new Map();
+            for (var [gCamName, gInst] of group.instances) {
+                var gSioCam = lucidCamToSioCam.get(gCamName);
+                if (!gSioCam) continue;
+                // Reuse the SIO instance already created for the LabeledFrame
+                instanceByCamera.set(gSioCam, _getOrCreateSioInst(gInst));
+            }
+
+            // Build Instance3D from group.points3d
+            var instance3d = undefined;
+            if (group.points3d && group.points3d.length > 0) {
+                instance3d = new SIO.Instance3D({ points: group.points3d, skeleton: skeleton });
+            }
+
+            // Resolve identity
+            var identity = undefined;
+            if (group.identityId != null && group.identityId >= 0) {
+                identity = lucidIdToSioId.get(group.identityId);
+            }
+
+            // Collect full per-instance lucid metadata for precise round-trip
+            var igLucidMeta = { instanceMeta: {} };
+            for (var [metaCam, metaInst] of group.instances) {
+                var instMeta = {
+                    trackIdx: metaInst.trackIdx,
+                    type: metaInst.type || 'user',
+                    score: metaInst.score || 0,
+                    modified: metaInst.modified || false,
+                };
+                if (metaInst.nulledNodes && metaInst.nulledNodes.size > 0) {
+                    instMeta.nulledNodes = Array.from(metaInst.nulledNodes);
+                }
+                if (metaInst.occluded) {
+                    var hasAnyOcc = false;
+                    for (var ok in metaInst.occluded) { if (metaInst.occluded[ok]) { hasAnyOcc = true; break; } }
+                    if (hasAnyOcc) instMeta.occluded = metaInst.occluded;
+                }
+                igLucidMeta.instanceMeta[metaCam] = instMeta;
+            }
+
+            var igMetadata = { lucid: igLucidMeta };
+
+            sioInstanceGroups.push(new SIO.InstanceGroup({
+                instanceByCamera: instanceByCamera,
+                instance3d: instance3d,
+                identity: identity,
+                metadata: igMetadata,
+            }));
+        }
+
+        // Release per-frame map to free memory as we go
+        lucidToSio = null;
+
+        if (sioInstanceGroups.length > 0 || lfByCamera.size > 0) {
+            sioSession.frameGroups.set(frameIdx, new SIO.FrameGroup({
+                frameIdx: frameIdx,
+                instanceGroups: sioInstanceGroups,
+                labeledFrameByCamera: lfByCamera,
+            }));
         }
     }
 
@@ -1398,6 +1574,8 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
         videos: sioVideos,
         skeletons: [skeleton],
         tracks: tracks,
+        identities: sioIdentities,
+        sessions: [sioSession],
         provenance: { source: 'lucid', exported_at: new Date().toISOString() },
     });
 }
@@ -1499,10 +1677,15 @@ async function buildReprojH5(session) {
 
     const cameras = session.cameras;
     const nodeNames = session.skeleton.nodes;
-    const trackNames = session.tracks;
+    const trackNames = (session.identities && session.identities.length > 0)
+        ? session.identities.map(function (id) { return id.name; })
+        : session.tracks.slice();
     const nCameras = cameras.length;
     const nNodes = nodeNames.length;
-    const nTracks = trackNames.length;
+    const nTracks = Math.max(
+        (session.identities ? session.identities.length : 0),
+        session.tracks.length
+    );
     const cameraNames = cameras.map(function (c) { return c.name; });
 
     // Collect frames sorted
@@ -1515,24 +1698,23 @@ async function buildReprojH5(session) {
 
     for (var fi = 0; fi < nFrames; fi++) {
         var frameIdx = sortedFrameIndices[fi];
-        var trackMap = session.instanceGroups.get(frameIdx);
-        if (!trackMap) continue;
+        var groups = session.instanceGroups.get(frameIdx);
+        if (!groups) continue;
 
-        for (var [trackIdx, groups] of trackMap) {
-            if (trackIdx >= nTracks) continue;
-            for (var group of groups) {
-                if (!group.reprojections) continue;
-                for (var ci = 0; ci < nCameras; ci++) {
-                    var camName = cameraNames[ci];
-                    var reprojPts = group.reprojections[camName];
-                    if (!reprojPts) continue;
-                    for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
-                        var rpt = reprojPts[ni];
-                        if (rpt) {
-                            var rbase = (((fi * nTracks + trackIdx) * nCameras + ci) * nNodes + ni) * 2;
-                            reproj[rbase] = rpt[0];
-                            reproj[rbase + 1] = rpt[1];
-                        }
+        for (var group of groups) {
+            var idIdx = group.identityId;
+            if (idIdx < 0 || idIdx >= nTracks) continue;
+            if (!group.reprojections) continue;
+            for (var ci = 0; ci < nCameras; ci++) {
+                var camName = cameraNames[ci];
+                var reprojPts = group.reprojections[camName];
+                if (!reprojPts) continue;
+                for (var ni = 0; ni < Math.min(nNodes, reprojPts.length); ni++) {
+                    var rpt = reprojPts[ni];
+                    if (rpt) {
+                        var rbase = (((fi * nTracks + idIdx) * nCameras + ci) * nNodes + ni) * 2;
+                        reproj[rbase] = rpt[0];
+                        reproj[rbase + 1] = rpt[1];
                     }
                 }
             }

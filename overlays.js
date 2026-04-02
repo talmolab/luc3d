@@ -42,20 +42,22 @@ function getTrackColor(trackIdx) {
 }
 
 function getGroupColor(group, session, useIdentity, frameIdx) {
-
     if (useIdentity && session) {
         // Try group's direct identity first
         if (group.identityId >= 0) {
             var identity = session.getIdentity(group.identityId);
             if (identity && identity.color) return identity.color;
         }
-        // Fall back to track→identity map (with per-frame support)
-        var trackId = group.trackIdx != null ? group.trackIdx : 0;
-        var trackIdentity = session.getIdentityForTrack(trackId, null, frameIdx);
-        if (trackIdentity && trackIdentity.color) return trackIdentity.color;
     }
-    // Color by track (default)
-    return getTrackColor(group.trackIdx != null ? group.trackIdx : 0);
+    // Fallback: color by identityId index, or first instance's trackIdx
+    if (group.identityId >= 0) {
+        return getTrackColor(group.identityId);
+    }
+    // Last resort: use first instance's trackIdx for color
+    for (var [, inst] of group.instances) {
+        if (inst.trackIdx != null) return getTrackColor(inst.trackIdx);
+    }
+    return getTrackColor(0);
 }
 
 /**
@@ -1963,7 +1965,7 @@ function getFrameStats(frameGroup, instanceGroups, cameras) {
 
     for (let g = 0; g < instanceGroups.length; g++) {
         const group = instanceGroups[g];
-        const trackIdx = group.trackIdx != null ? group.trackIdx : g;
+        const trackIdx = group.identityId >= 0 ? group.identityId : g;
         const reproj = group.reprojections;
         const observed = group.observedPoints;
         if (!reproj || !observed) continue;

@@ -379,11 +379,10 @@ class Timeline {
         // which may be stale if tracks were added dynamically)
         var maxTrackIdx = session.tracks ? session.tracks.length - 1 : -1;
         if (session.instanceGroups) {
-            for (var [_fi, trackMap] of session.instanceGroups) {
-                for (var [_mk, grps] of trackMap) {
-                    for (var _gi = 0; _gi < grps.length; _gi++) {
-                        if (grps[_gi].trackIdx > maxTrackIdx) maxTrackIdx = grps[_gi].trackIdx;
-                    }
+            for (var [_fi, grps] of session.instanceGroups) {
+                for (var _gi = 0; _gi < grps.length; _gi++) {
+                    var grpId = grps[_gi].identityId >= 0 ? grps[_gi].identityId : 0;
+                    if (grpId > maxTrackIdx) maxTrackIdx = grpId;
                 }
             }
         }
@@ -412,17 +411,13 @@ class Timeline {
 
         // Scan grouped instances (instanceGroups)
         if (session.instanceGroups) {
-            for (var [frameIdx, trackMap] of session.instanceGroups) {
-                for (var [_mapKey, groups] of trackMap) {
-                    for (var gi = 0; gi < groups.length; gi++) {
-                        // Use the group's actual trackIdx, not the map key
-                        // (map key may be stale after track reassignment)
-                        var grpTrack = groups[gi].trackIdx;
-                        for (var [camName] of groups[gi].instances) {
-                            var key = grpTrack + ':' + camName;
-                            if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
-                            trackCamFrames[key].add(frameIdx);
-                        }
+            for (var [frameIdx, groups] of session.instanceGroups) {
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var grpTrack = groups[gi].identityId >= 0 ? groups[gi].identityId : 0;
+                    for (var [camName] of groups[gi].instances) {
+                        var key = grpTrack + ':' + camName;
+                        if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
+                        trackCamFrames[key].add(frameIdx);
                     }
                 }
             }

@@ -119,8 +119,8 @@
             }
 
             assertEqual(groups.length, 2, 'should have 2 groups');
-            assertEqual(groups[0].trackIdx, 0);
-            assertEqual(groups[1].trackIdx, 1);
+            assertEqual(groups[0].identityId, 0);
+            assertEqual(groups[1].identityId, 1);
         });
     });
 
@@ -250,11 +250,11 @@
             // Find group with trackIdx 1
             var found = null;
             for (var i = 0; i < groups.length; i++) {
-                if (groups[i].trackIdx === 1) { found = groups[i]; break; }
+                if (groups[i].identityId === 1) { found = groups[i]; break; }
             }
 
-            assertNotNull(found, 'should find group with trackIdx 1');
-            assertEqual(found.trackIdx, 1);
+            assertNotNull(found, 'should find group with identityId 1');
+            assertEqual(found.identityId, 1);
         });
 
         it('finds group regardless of instance type', function () {
@@ -262,8 +262,8 @@
             group.addInstance('CamA', makeInstance(null, 0, 'predicted'));
 
             // Search should find it even though it's predicted
-            var found = (group.trackIdx === 0) ? group : null;
-            assertNotNull(found, 'should find predicted group by trackIdx');
+            var found = (group.identityId === 0) ? group : null;
+            assertNotNull(found, 'should find predicted group by identityId');
         });
     });
 
@@ -289,9 +289,8 @@
             fg.addInstance('CamA', instA);
             fg.addInstance('CamB', instB);
 
-            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, new Map());
-            if (!session.instanceGroups.get(0).has(0)) session.instanceGroups.get(0).set(0, []);
-            session.instanceGroups.get(0).get(0).push(group);
+            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, []);
+            session.instanceGroups.get(0).push(group);
 
             group.addReprojectedInstance('CamC', makeInstance([[50, 60], [70, 80], [90, 100]], 0, 'reprojected'));
 
@@ -302,7 +301,7 @@
             // Simulate double-click: find existing group, add user instance
             var existingGroup = null;
             for (var i = 0; i < groupsBefore.length; i++) {
-                if (groupsBefore[i].trackIdx === 0) { existingGroup = groupsBefore[i]; break; }
+                if (groupsBefore[i].identityId === 0) { existingGroup = groupsBefore[i]; break; }
             }
             assertNotNull(existingGroup);
 
