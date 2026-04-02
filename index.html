@@ -2570,8 +2570,6 @@
 
             // Lazy H5: fetch frame data on demand if not yet loaded
             if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
-                if (!state._lazyDebugCount) state._lazyDebugCount = 0;
-                if (state._lazyDebugCount++ < 10) console.log('[lazy-h5] drawAllOverlays miss: frame', frameIdx, 'frameGroups size:', state.session.frameGroups.size, 'isPlaying:', state.isPlaying);
                 ensureLazyFrameData(frameIdx).then(function () {
                     if (state.currentFrame === frameIdx) {
                         drawAllOverlays(frameIdx);
@@ -4185,11 +4183,10 @@
                 // Pre-load frames before starting playback for lazy sessions
                 if (state.session && state.session.lazyLoader) {
                     showLoading('Loading frames...');
-                    batchLoadLazyFrames(state.currentFrame, 500).then(function (n) {
-                        console.log('[lazy-h5] Pre-loaded', n, 'frames, frameGroups count:', state.session.frameGroups.size);
+                    batchLoadLazyFrames(state.currentFrame, 5000).then(function () {
                         hideLoading();
                         if (videoController) videoController.startPlayback();
-                    }).catch(function(e) { console.error('[lazy-h5] Pre-load failed:', e); hideLoading(); });
+                    }).catch(function(e) { hideLoading(); });
                 } else {
                     videoController.togglePlayback();
                 }
@@ -4268,7 +4265,7 @@
                         e.preventDefault();
                         if (state.isPlaying) { videoController.stopPlayback(); }
                         else if (state.session && state.session.lazyLoader) {
-                            batchLoadLazyFrames(state.currentFrame, 500).then(function () {
+                            batchLoadLazyFrames(state.currentFrame, 5000).then(function () {
                                 if (videoController) videoController.startPlayback();
                             });
                         } else { videoController.togglePlayback(); }
@@ -4787,7 +4784,7 @@
                         if (!session || !session.lazyLoader) return;
                         while (state.isPlaying && state.session === session) {
                             var cur = state.currentFrame;
-                            var loaded = await batchLoadLazyFrames(cur, 500);
+                            var loaded = await batchLoadLazyFrames(cur, 5000);
                             if (loaded === 0) {
                                 // All nearby frames loaded, wait before checking again
                                 await new Promise(function(r) { setTimeout(r, 100); });
