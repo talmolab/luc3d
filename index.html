@@ -387,6 +387,14 @@
                             <button class="line-style-btn active" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
+                    <div class="vis-line-style-row">
+                        <span>Node Color</span>
+                        <div class="line-style-options" id="visReprojNodeColor" data-value="white">
+                            <button class="line-style-btn active" data-style="white" title="White">White</button>
+                            <button class="line-style-btn" data-style="black" title="Black">Black</button>
+                            <button class="line-style-btn" data-style="track" title="Track Color">Track</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- ==================== Videos Tab ==================== -->
@@ -2559,6 +2567,7 @@
                 showUser: document.getElementById('visUser').checked,
                 showPredicted: document.getElementById('visPredicted').checked,
                 showReprojected: document.getElementById('visReprojections').checked,
+                reprojNodeColor: document.getElementById('visReprojNodeColor').getAttribute('data-value') || 'white',
                 showErrors: document.getElementById('visErrors').checked,
                 userOpts: {
                     nodeSize: parseInt(document.getElementById('visUserNodeSize').value) || 4,
@@ -2611,6 +2620,7 @@
 
             // Lazily compute reprojections for groups that have points3d but no reprojected instances
             if (instanceGroups && state.session.cameras.length >= 2) {
+                var _lazyFrameResults = null;
                 for (var _rg = 0; _rg < instanceGroups.length; _rg++) {
                     var _grp = instanceGroups[_rg];
                     if (_grp.points3d && _grp.points3d.length > 0 &&
@@ -2625,7 +2635,20 @@
                             var _inst = _grp.getInstance(_cam.name);
                             if (_inst) _grp.observedPoints[_cam.name] = _inst.points;
                         }
+                        // Store in triangulationResults for info panel
+                        if (!_lazyFrameResults) _lazyFrameResults = [];
+                        _lazyFrameResults.push({
+                            group: _grp,
+                            points3d: _triRes.points3d,
+                            reprojections: _triRes.reprojections,
+                            errors: _triRes.errors,
+                            meanError: _triRes.meanError,
+                        });
                     }
+                }
+                if (_lazyFrameResults) {
+                    var _existing = state.triangulationResults.get(frameIdx) || [];
+                    state.triangulationResults.set(frameIdx, _existing.concat(_lazyFrameResults));
                 }
             }
 
@@ -2713,6 +2736,7 @@
                     showUser: vis.showUser,
                     showPredicted: vis.showPredicted,
                     showReprojected: vis.showReprojected,
+                    reprojNodeColor: vis.reprojNodeColor,
                     showErrors: vis.showErrors,
                     userOpts: vis.userOpts,
                     predictedOpts: vis.predictedOpts,
@@ -3195,6 +3219,10 @@
                     cameras: state.session.cameras,
                     skeleton: state.session.skeleton,
                     getTrackColor: getTrackColor,
+                    getGroupColor: function (group) {
+                        var useIdentity = state.colorByIdentity || false;
+                        return getGroupColor(group, state.session, useIdentity, state.currentFrame);
+                    },
                     onCameraClicked: highlightVideoCell,
                 });
 

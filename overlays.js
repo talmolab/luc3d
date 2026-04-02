@@ -1522,6 +1522,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     const showUser        = options.showUser !== undefined ? options.showUser : (options.showDetected !== false);
     const showPredicted   = options.showPredicted !== undefined ? options.showPredicted : (options.showDetected !== false);
     const showReprojected = options.showReprojected !== false;
+    const reprojNodeColor = options.reprojNodeColor || 'white';
     const showErrors      = options.showErrors !== false;
     const showLegend      = options.showLegend !== false;
     const colorByIdentity = !!options.colorByIdentity;
@@ -1595,9 +1596,9 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
         for (let g = 0; g < instanceGroups.length; g++) {
             const group = instanceGroups[g];
 
-            // Draw reprojected instances — color-matched to identity or track
+            // Draw reprojected instances — same color as group/3D viewer
             var trackBaseColor = getGroupColor(group, session, colorByIdentity, _frameIdx, viewName);
-            var reprojTrackColor = complementaryColor(trackBaseColor);
+            var reprojTrackColor = trackBaseColor;
 
             // Always draw reprojections — one per group per view
             if (showReprojected) {
@@ -1607,9 +1608,13 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
 
                 if (reprojInst) {
                     var isSelected = selectedReprojected && selectedInstanceGroup && selectedInstanceGroup === group;
-                    var drawColor = isSelected ? '#ffffff' : reprojTrackColor;
+                    var reprojXColor = isSelected ? '#ffffff'
+                        : reprojNodeColor === 'black' ? '#000000'
+                        : reprojNodeColor === 'track' ? reprojTrackColor
+                        : '#ffffff';
                     drawSkeleton(ctx, reprojInst, skeleton, Object.assign({}, reprojRender, {
-                        color: drawColor,
+                        color: reprojXColor,
+                        edgeColor: isSelected ? '#ffffff' : reprojTrackColor,
                         lineStyle: reprojOpts.lineStyle || 'dotted',
                         nodeShape: 'x',
                     }));
