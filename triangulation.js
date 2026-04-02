@@ -469,7 +469,7 @@ function computeInstanceDistance(pointsA, pointsB) {
  *   errors: { cameraName: [error, ...] } per-keypoint reprojection errors per camera
  *   meanError: scalar mean error across all cameras and keypoints
  */
-function triangulateAndReproject(instanceGroup, cameras) {
+function triangulateAndReproject(instanceGroup, cameras, options) {
     // Build ordered list of camera names and their projection matrices
     const cameraNames = [];
     const projMatrices = [];
@@ -526,6 +526,11 @@ function triangulateAndReproject(instanceGroup, cameras) {
 
     // Step 2: Triangulate
     const points3d = triangulatePoints(allObservations, projMatrices);
+
+    // Fast path: skip reprojections/errors when only 3D points are needed (bulk ops)
+    if (options && options.triangulateOnly) {
+        return { points3d: points3d, reprojections: {}, errors: {}, meanError: null };
+    }
 
     // Step 3: Reproject to each camera
     const reprojections = {};
