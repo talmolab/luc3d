@@ -48,12 +48,12 @@ function getGroupColor(group, session, useIdentity, frameIdx) {
             var identity = session.getIdentity(group.identityId);
             if (identity && identity.color) return identity.color;
         }
+        // Fallback: color by identityId index
+        if (group.identityId >= 0) {
+            return getTrackColor(group.identityId);
+        }
     }
-    // Fallback: color by identityId index, or first instance's trackIdx
-    if (group.identityId >= 0) {
-        return getTrackColor(group.identityId);
-    }
-    // Last resort: use first instance's trackIdx for color
+    // Color by track: use first instance's trackIdx (consistent with predictions)
     for (var [, inst] of group.instances) {
         if (inst.trackIdx != null) return getTrackColor(inst.trackIdx);
     }
