@@ -928,34 +928,48 @@ function readFramesLazy(startIdx, endIdx, requestId) {
             return;
         }
 
+        var actualEnd = Math.min(endIdx, lazyNFrames);
+        var nBatch = actualEnd - startIdx;
+        if (nBatch <= 0) {
+            postMessage({ type: 'framesData', startIdx: startIdx, endIdx: endIdx, requestId: requestId, frames: [] });
+            return;
+        }
+
+        // Bulk-read all tracks for the entire frame range (1 H5 read per track)
+        var bulkPerTrack = [];
+        for (var tr = 0; tr < lazyNTracks; tr++) {
+            if (lazyTransposed) {
+                // Shape [n_tracks, 2, n_nodes, n_frames] → [tr:tr+1, :, :, start:end]
+                bulkPerTrack.push(lazyTracksDs.slice([[tr, tr + 1], [0, 2], [0, lazyNNodes], [startIdx, actualEnd]]));
+            } else {
+                bulkPerTrack.push(lazyTracksDs.slice([[startIdx, actualEnd], [0, lazyNNodes], [0, 2], [tr, tr + 1]]));
+            }
+        }
+
+        // Build per-frame instance data from bulk arrays
         var frames = [];
-        for (var fi = startIdx; fi < endIdx && fi < lazyNFrames; fi++) {
+        for (var fi = 0; fi < nBatch; fi++) {
+            var absFrame = startIdx + fi;
             var instances = [];
-            for (var tr = 0; tr < lazyNTracks; tr++) {
+            for (var tr2 = 0; tr2 < lazyNTracks; tr2++) {
                 if (lazyTrackOccupancy) {
-                    var occIdx = fi * lazyNTracks + tr;
-                    if (occIdx < lazyTrackOccupancy.length && !lazyTrackOccupancy[occIdx]) {
-                        continue;
-                    }
+                    var occIdx = absFrame * lazyNTracks + tr2;
+                    if (occIdx < lazyTrackOccupancy.length && !lazyTrackOccupancy[occIdx]) continue;
                 }
 
-                var sliceData;
-                if (lazyTransposed) {
-                    sliceData = lazyTracksDs.slice([[tr, tr + 1], [0, 2], [0, lazyNNodes], [fi, fi + 1]]);
-                } else {
-                    sliceData = lazyTracksDs.slice([[fi, fi + 1], [0, lazyNNodes], [0, 2], [tr, tr + 1]]);
-                }
-
+                var bulk = bulkPerTrack[tr2];
                 var points = [];
                 var hasAnyPoint = false;
                 for (var nd = 0; nd < lazyNNodes; nd++) {
                     var x, y;
                     if (lazyTransposed) {
-                        x = Number(sliceData[0 * lazyNNodes + nd]);
-                        y = Number(sliceData[1 * lazyNNodes + nd]);
+                        // bulk layout: [1, 2, nNodes, nBatch] flat → coord*nNodes*nBatch + nd*nBatch + fi
+                        x = Number(bulk[0 * lazyNNodes * nBatch + nd * nBatch + fi]);
+                        y = Number(bulk[1 * lazyNNodes * nBatch + nd * nBatch + fi]);
                     } else {
-                        x = Number(sliceData[nd * 2 + 0]);
-                        y = Number(sliceData[nd * 2 + 1]);
+                        // bulk layout: [nBatch, nNodes, 2, 1] flat → fi*nNodes*2 + nd*2 + coord
+                        x = Number(bulk[fi * lazyNNodes * 2 + nd * 2 + 0]);
+                        y = Number(bulk[fi * lazyNNodes * 2 + nd * 2 + 1]);
                     }
                     if (!isNaN(x) && !isNaN(y)) {
                         points.push([x, y]);
@@ -966,28 +980,12 @@ function readFramesLazy(startIdx, endIdx, requestId) {
                 }
 
                 if (!hasAnyPoint) continue;
-
-                instances.push({
-                    trackIdx: tr,
-                    score: 0,
-                    type: 'predicted',
-                    points: points,
-                });
+                instances.push({ trackIdx: tr2, score: 0, type: 'predicted', points: points });
             }
-
-            frames.push({
-                frameIdx: fi,
-                instances: instances,
-            });
+            frames.push({ frameIdx: absFrame, instances: instances });
         }
 
-        postMessage({
-            type: 'framesData',
-            startIdx: startIdx,
-            endIdx: endIdx,
-            requestId: requestId,
-            frames: frames,
-        });
+        postMessage({ type: 'framesData', startIdx: startIdx, endIdx: endIdx, requestId: requestId, frames: frames });
 
     } catch (err) {
         var errMsg = (err.message || String(err));
