@@ -2027,6 +2027,7 @@
                 this.skeleton = null;
                 this.trackNames = [];
                 this.videos = new Map();
+                this.trackOccupancy = new Map();
                 this._requestId = 0;
                 this._pending = new Map();
             }
@@ -2046,6 +2047,13 @@
                             }
                             if (msg.data.nFrames > self.nFrames) self.nFrames = msg.data.nFrames;
                             self.videos.set(cameraName, msg.data.videos ? msg.data.videos[0] : null);
+                            if (msg.data.trackOccupancy) {
+                                self.trackOccupancy.set(cameraName, {
+                                    data: msg.data.trackOccupancy,
+                                    nTracks: msg.data.nTracks,
+                                    nFrames: msg.data.nFrames,
+                                });
+                            }
                             resolve(msg.data);
                         } else if (msg.type === 'frameData') {
                             var cb = self._pending.get(msg.requestId);
@@ -11501,6 +11509,9 @@
                         }
                     }
                     state.session.lazyLoader = lazyLoader;
+                    if (lazyLoader.trackOccupancy.size > 0) {
+                        state.session.trackOccupancy = lazyLoader.trackOccupancy;
+                    }
                     if (lazyLoader.nFrames > state.totalFrames) {
                         state.totalFrames = lazyLoader.nFrames;
                     }

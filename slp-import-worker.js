@@ -843,6 +843,7 @@ function openH5Lazy(file) {
                 nTracks: lazyNTracks,
                 nNodes: lazyNNodes,
                 videos: videos,
+                trackOccupancy: lazyTrackOccupancy || null,
             }
         });
 

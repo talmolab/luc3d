@@ -568,6 +568,8 @@ class Session {
         this.frameIdentityMap = new Map();
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
+        /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */
+        this.trackOccupancy = null;
     }
 
     addIdentity(name, color) {
