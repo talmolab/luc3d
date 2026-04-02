@@ -2865,7 +2865,9 @@
 
                     if (existingGroup) {
                         // Case 2: Group exists but not in this view — add user instance to it
-                        var newInst = new Instance(clonedPoints, identityId, 'user', 1.0);
+                        // Use the prediction's trackIdx so colors stay consistent
+                        var srcTrackIdx = group.getInstance(viewName) ? group.getInstance(viewName).trackIdx : identityId;
+                        var newInst = new Instance(clonedPoints, srcTrackIdx, 'user', 1.0);
                         newInst.modified = true;
                         existingGroup.addInstance(viewName, newInst);
                         if (fg) fg.addInstance(viewName, newInst);
@@ -2883,7 +2885,7 @@
                             if (inst.type === 'predicted') {
                                 var userClone = new Instance(
                                     inst.points.map(function(pt) { return pt != null ? [pt[0], pt[1]] : null; }),
-                                    identityId, 'user', 1.0
+                                    inst.trackIdx, 'user', 1.0
                                 );
                                 userClone.modified = true;
                                 recordUserPoints(camName, userClone.points);
@@ -2893,7 +2895,9 @@
                         }
                         // Add clicked view if not already a PredictedInstance view
                         if (!predGroup.getInstance(viewName)) {
-                            var newInst = new Instance(clonedPoints, identityId, 'user', 1.0);
+                            // Use reprojected instance's source trackIdx if available
+                            var clickTrackIdx = reprojInst.trackIdx != null ? reprojInst.trackIdx : identityId;
+                            var newInst = new Instance(clonedPoints, clickTrackIdx, 'user', 1.0);
                             newInst.modified = true;
                             recordUserPoints(viewName, clonedPoints);
                             var ul = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
@@ -2901,9 +2905,6 @@
                         }
                         if (unlinkedList.length > 0) {
                             group = state.session.createGroupFromUnlinked(frameIdx, unlinkedList, identityId);
-                            for (var [cn, ni] of group.instances) {
-                                ni.trackIdx = group.identityId;
-                            }
                             // Transfer all reprojected instances from predicted group to new user group
                             // (kept until next re-triangulation replaces them)
                             if (predGroup.reprojectedInstances && predGroup.reprojectedInstances.size > 0) {
@@ -3109,9 +3110,8 @@
                     var fg = state.session.getFrameGroup(frameIdx);
                     var inst = unlinkedInstance.instance;
 
-                    // Add to group
+                    // Add to group (keep instance's original trackIdx for color consistency)
                     group.addInstance(viewName, inst);
-                    inst.trackIdx = group.identityId;
 
                     // Remove from unlinked list in FrameGroup
                     if (fg) {
@@ -5265,12 +5265,6 @@
                     var group = state.session.createGroupFromUnlinked(
                         state.currentFrame, assignedUnlinked
                     );
-                    // Update instance trackIdx on both the group's map AND the
-                    // FrameGroup's instances array (same objects by reference)
-                    var newIdentityId = group.identityId;
-                    for (var [camName, inst] of group.instances) {
-                        inst.trackIdx = newIdentityId;
-                    }
                     groupsCreated++;
                 }
             }
@@ -5477,9 +5471,6 @@
                     );
                     // Preserve identity from previous frame
                     group.identityId = prevIdentityId;
-                    for (var [camName, inst] of group.instances) {
-                        inst.trackIdx = prevIdentityId;
-                    }
 
                     // Triangulate to get updated 3D points
                     var groupCamNames = group.cameraNames;
