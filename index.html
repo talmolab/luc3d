@@ -2278,6 +2278,76 @@
         }
 
         /**
+         * Batch-load a range of frames from lazy loader into session.frameGroups.
+         * Uses the getFrames batch endpoint for efficiency (~100ms per 500 frames).
+         * @param {number} startIdx
+         * @param {number} count
+         * @param {function} [onProgress] - Called with (loaded, total)
+         * @returns {Promise<number>} Number of frames loaded
+         */
+        async function batchLoadLazyFrames(startIdx, count, onProgress) {
+            var session = state.session;
+            if (!session || !session.lazyLoader) return 0;
+            var loader = session.lazyLoader;
+            var endIdx = Math.min(startIdx + count, loader.nFrames);
+
+            // Find which frames need loading
+            var needStart = -1, needEnd = -1;
+            for (var fi = startIdx; fi < endIdx; fi++) {
+                if (!session.frameGroups.has(fi)) {
+                    if (needStart < 0) needStart = fi;
+                    needEnd = fi + 1;
+                }
+            }
+            if (needStart < 0) return 0;
+
+            // Request batch from all workers in parallel
+            var cameraNames = Array.from(loader.workers.keys());
+            var batchPromises = cameraNames.map(function (camName) {
+                var reqId = ++loader._requestId;
+                var worker = loader.workers.get(camName);
+                return new Promise(function (resolve, reject) {
+                    loader._pending.set(reqId, { resolve: resolve, reject: reject });
+                    worker.postMessage({ type: 'getFrames', startIdx: needStart, endIdx: needEnd, requestId: reqId });
+                });
+            });
+
+            var batchResults = await Promise.all(batchPromises);
+
+            // Build FrameGroups from results
+            // batchResults[camIdx] = [{frameIdx, instances}, ...]
+            var loaded = 0;
+            for (var bi = 0; bi < batchResults[0].length; bi++) {
+                var frameIdx = batchResults[0][bi].frameIdx;
+                if (session.frameGroups.has(frameIdx)) continue;
+
+                var fg = new FrameGroup(frameIdx);
+                for (var ci = 0; ci < cameraNames.length; ci++) {
+                    var camData = batchResults[ci][bi];
+                    if (!camData || !camData.instances) continue;
+                    for (var ii = 0; ii < camData.instances.length; ii++) {
+                        var instData = camData.instances[ii];
+                        var inst = new Instance(
+                            instData.points || [], instData.trackIdx,
+                            instData.type || 'predicted', instData.score || 0
+                        );
+                        fg.addInstance(cameraNames[ci], inst);
+                    }
+                }
+                session.addFrameGroup(fg);
+                for (var [cn, camInsts] of fg.instances) {
+                    for (var instItem of camInsts) {
+                        fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
+                    }
+                    fg.instances.set(cn, []);
+                }
+                loaded++;
+                if (onProgress && loaded % 100 === 0) onProgress(loaded, needEnd - needStart);
+            }
+            return loaded;
+        }
+
+        /**
          * Evict old lazy-loaded frames to keep memory bounded.
          */
         function evictLazyFrames(currentFrame) {
@@ -4687,27 +4757,20 @@
             btn.textContent = isPlaying ? '\u275A\u275A' : '\u25B6';
             btn.classList.toggle('active', isPlaying);
 
-            // Lazy H5: background frame loader during playback
+            // Lazy H5: batch-load frames during playback
             if (state.session && state.session.lazyLoader) {
                 if (isPlaying) {
-                    // Start background loader that continuously fills frames ahead
+                    // Background batch loader — loads 500 frames at a time ahead of playback
                     (async function lazyPlaybackLoader() {
                         var session = state.session;
                         if (!session || !session.lazyLoader) return;
                         while (state.isPlaying && state.session === session) {
                             var cur = state.currentFrame;
-                            var loaded = 0;
-                            // Try to stay 50 frames ahead
-                            for (var i = 0; i < 50 && loaded < 10; i++) {
-                                var fi = cur + i;
-                                if (fi >= session.lazyLoader.nFrames) break;
-                                if (!session.frameGroups.has(fi)) {
-                                    await ensureLazyFrameData(fi);
-                                    loaded++;
-                                }
+                            var loaded = await batchLoadLazyFrames(cur, 500);
+                            if (loaded === 0) {
+                                // All nearby frames loaded, wait before checking again
+                                await new Promise(function(r) { setTimeout(r, 100); });
                             }
-                            // Yield to let playback proceed
-                            await new Promise(function(r) { setTimeout(r, loaded > 0 ? 1 : 50); });
                         }
                     })();
                 } else {
