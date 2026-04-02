@@ -1757,19 +1757,11 @@
                     }
                     session.instanceGroups.get(frameIdx).push(group);
 
-                    // Triangulate
-                    var triResult = triangulateAndReproject(group, cameras);
+                    // Triangulate — store only points3d (compact).
+                    // Reprojections are computed on-the-fly when drawing.
+                    var triResult = triangulateAndReproject(group, cameras, { triangulateOnly: true });
                     group.points3d = triResult.points3d;
                     group.markClean();
-
-                    // Store reprojections
-                    for (var ci3 = 0; ci3 < cameras.length; ci3++) {
-                        var reprojPts = triResult.reprojections[cameras[ci3].name];
-                        if (reprojPts) {
-                            var reprojInst = new Instance(reprojPts, trackIdx, 'reprojected', 0);
-                            group.addReprojectedInstance(cameras[ci3].name, reprojInst);
-                        }
-                    }
 
                     totalGrouped++;
                     totalTriangulated++;
@@ -2616,6 +2608,26 @@
 
             const frameGroup = state.session.getFrameGroup(frameIdx);
             const instanceGroups = getInstanceGroupsForFrame(frameIdx);
+
+            // Lazily compute reprojections for groups that have points3d but no reprojected instances
+            if (instanceGroups && state.session.cameras.length >= 2) {
+                for (var _rg = 0; _rg < instanceGroups.length; _rg++) {
+                    var _grp = instanceGroups[_rg];
+                    if (_grp.points3d && _grp.points3d.length > 0 &&
+                        (!_grp.reprojectedInstances || _grp.reprojectedInstances.size === 0) &&
+                        !_grp.reprojections) {
+                        var _triRes = triangulateAndReproject(_grp, state.session.cameras);
+                        _grp.reprojections = _triRes.reprojections;
+                        storeReprojectedInstances(_grp, _triRes, state.session.cameras);
+                        _grp.observedPoints = {};
+                        for (var _rc = 0; _rc < state.session.cameras.length; _rc++) {
+                            var _cam = state.session.cameras[_rc];
+                            var _inst = _grp.getInstance(_cam.name);
+                            if (_inst) _grp.observedPoints[_cam.name] = _inst.points;
+                        }
+                    }
+                }
+            }
 
             var vis = getVisibilitySettings();
 
