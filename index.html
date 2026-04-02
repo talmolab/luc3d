@@ -2227,10 +2227,19 @@
                 fg.instances.set(cn, []);
             }
 
-            // Trigger prefetch in the scrub direction
+            // Trigger prefetch and pre-build any cached frames into frameGroups
             var direction = frameIdx >= (state._lastLazyFrame || 0) ? 1 : -1;
             state._lastLazyFrame = frameIdx;
             session.lazyLoader.prefetch(frameIdx, direction);
+
+            // Pre-populate frameGroups from any prefetched frames already in cache
+            var ahead = direction > 0 ? 1 : -1;
+            for (var pfi = 1; pfi <= 30; pfi++) {
+                var pfIdx = frameIdx + pfi * ahead;
+                if (pfIdx < 0 || pfIdx >= session.lazyLoader.nFrames) break;
+                if (session.frameGroups.has(pfIdx)) continue;
+                buildLazyFrameGroupSync(pfIdx);
+            }
         }
 
         /**
