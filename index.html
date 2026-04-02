@@ -11412,9 +11412,9 @@
                 if (lazyJobs.length > 0) {
                     lazyLoader = new LazyFrameLoader();
                     showLoading('Opening ' + lazyJobs.length + ' large H5 files (lazy mode)...');
-                    for (var lji = 0; lji < lazyJobs.length; lji++) {
-                        await lazyLoader.open(lazyJobs[lji].camName, lazyJobs[lji].file);
-                    }
+                    await Promise.all(lazyJobs.map(function (job) {
+                        return lazyLoader.open(job.camName, job.file);
+                    }));
                 }
 
                 var parseResults = await Promise.all(parseJobs.map(function (j) { return j.promise; }));
