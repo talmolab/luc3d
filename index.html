@@ -2570,6 +2570,8 @@
 
             // Lazy H5: fetch frame data on demand if not yet loaded
             if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
+                if (!state._lazyDebugCount) state._lazyDebugCount = 0;
+                if (state._lazyDebugCount++ < 10) console.log('[lazy-h5] drawAllOverlays miss: frame', frameIdx, 'frameGroups size:', state.session.frameGroups.size, 'isPlaying:', state.isPlaying);
                 ensureLazyFrameData(frameIdx).then(function () {
                     if (state.currentFrame === frameIdx) {
                         drawAllOverlays(frameIdx);
@@ -4183,10 +4185,11 @@
                 // Pre-load frames before starting playback for lazy sessions
                 if (state.session && state.session.lazyLoader) {
                     showLoading('Loading frames...');
-                    batchLoadLazyFrames(state.currentFrame, 500).then(function () {
+                    batchLoadLazyFrames(state.currentFrame, 500).then(function (n) {
+                        console.log('[lazy-h5] Pre-loaded', n, 'frames, frameGroups count:', state.session.frameGroups.size);
                         hideLoading();
                         if (videoController) videoController.startPlayback();
-                    });
+                    }).catch(function(e) { console.error('[lazy-h5] Pre-load failed:', e); hideLoading(); });
                 } else {
                     videoController.togglePlayback();
                 }
