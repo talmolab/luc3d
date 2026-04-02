@@ -4177,7 +4177,20 @@
             // Transport controls
             document.getElementById('btnFirst').addEventListener('click', function () { if (videoController) videoController.seekToFrame(0); });
             document.getElementById('btnPrev').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame - 1); });
-            document.getElementById('btnPlay').addEventListener('click', function () { if (videoController) videoController.togglePlayback(); });
+            document.getElementById('btnPlay').addEventListener('click', function () {
+                if (!videoController) return;
+                if (state.isPlaying) { videoController.stopPlayback(); return; }
+                // Pre-load frames before starting playback for lazy sessions
+                if (state.session && state.session.lazyLoader) {
+                    showLoading('Loading frames...');
+                    batchLoadLazyFrames(state.currentFrame, 500).then(function () {
+                        hideLoading();
+                        if (videoController) videoController.startPlayback();
+                    });
+                } else {
+                    videoController.togglePlayback();
+                }
+            });
             document.getElementById('btnNext').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame + 1); });
             document.getElementById('btnLast').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.totalFrames - 1); });
 
@@ -4250,7 +4263,12 @@
                         break;
                     case ' ':
                         e.preventDefault();
-                        videoController.togglePlayback();
+                        if (state.isPlaying) { videoController.stopPlayback(); }
+                        else if (state.session && state.session.lazyLoader) {
+                            batchLoadLazyFrames(state.currentFrame, 500).then(function () {
+                                if (videoController) videoController.startPlayback();
+                            });
+                        } else { videoController.togglePlayback(); }
                         break;
                     case 'Home':
                         e.preventDefault();
