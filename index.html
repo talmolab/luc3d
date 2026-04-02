@@ -1660,6 +1660,11 @@
                 return;
             }
 
+            // Lazy sessions: load all frames before bulk operation
+            if (session.lazyLoader) {
+                await loadAllLazyFrames();
+            }
+
             var cameras = session.cameras;
             var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
             if (allFrameIndices.length === 0) {
@@ -2353,6 +2358,24 @@
                 if (onProgress && loaded % 100 === 0) onProgress(loaded, needEnd - needStart);
             }
             return loaded;
+        }
+
+        /**
+         * Load ALL lazy frames in batches with progress UI.
+         * Used before bulk operations (triangulate all, etc.) that need every frame.
+         */
+        async function loadAllLazyFrames() {
+            var session = state.session;
+            if (!session || !session.lazyLoader) return;
+            var loader = session.lazyLoader;
+            var BATCH = 5000;
+            var totalLoaded = 0;
+            for (var start = 0; start < loader.nFrames; start += BATCH) {
+                showLoading('Loading frames ' + start + '/' + loader.nFrames + '...');
+                var loaded = await batchLoadLazyFrames(start, BATCH);
+                totalLoaded += loaded;
+            }
+            return totalLoaded;
         }
 
         /**
