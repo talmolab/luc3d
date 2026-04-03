@@ -55,10 +55,11 @@
                     <div class="menu-dropdown-item" id="menuSaveAs">Save As...</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
                     <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuSessionFolderWizard">Session Folder Wizard...</div>
+                    <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Single Session Folder</div>
+                    <div class="menu-dropdown-item" id="menuLoadMultiSessionFolder">Load Multi-Session Folder</div>
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
-                    <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Session Folder...</div>
-                    <div class="menu-dropdown-item" id="menuLoadMultiSession">Load Multi-Session Folder...</div>
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
                     <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
@@ -3540,7 +3541,7 @@
             });
 
             // Close menus when clicking elsewhere
-            document.addEventListener('click', function () {
+            document.addEventListener('click', function (e) {
                 document.querySelectorAll('.menu-dropdown').forEach(function (d) {
                     d.style.display = 'none';
                 });
@@ -3549,6 +3550,13 @@
                 });
                 hideGroupContextMenu();
                 activeMenu = null;
+                // Clear multi-select when clicking outside the view strip
+                if (typeof multiSelectViews !== 'undefined' && multiSelectViews.size > 0) {
+                    var viewStrip = document.getElementById('viewStripList');
+                    if (viewStrip && !viewStrip.contains(e.target)) {
+                        clearMultiSelect();
+                    }
+                }
             });
 
             // Prevent dropdown clicks from closing the menu immediately
@@ -4087,6 +4095,15 @@
                 }
             });
 
+            document.getElementById('menuSessionFolderWizard').addEventListener('click', function () {
+                closeMenus();
+                showSessionModeModal(true).then(function (mode) {
+                    if (!mode) return;
+                    localStorage.setItem('sessionFolderType', mode);
+                    setStatus('Session folder type set to: ' + mode, 'success');
+                });
+            });
+
             document.getElementById('menuLoadVideos').addEventListener('click', function () {
                 closeMenus();
                 handleLoadVideos();
@@ -4099,10 +4116,10 @@
 
             document.getElementById('menuLoadSessionFolder').addEventListener('click', function () {
                 closeMenus();
-                handleLoadSessionFolder();
+                loadSingleSessionFromCache();
             });
 
-            document.getElementById('menuLoadMultiSession').addEventListener('click', function () {
+            document.getElementById('menuLoadMultiSessionFolder').addEventListener('click', function () {
                 closeMenus();
                 handleLoadMultiSession();
             });
@@ -4544,9 +4561,9 @@
                         }
                         case 'o':
                         case 'O': {
-                            // Load session folder
+                            // Load single session folder using cached type
                             e.preventDefault();
-                            handleLoadSessionFolder();
+                            loadSingleSessionFromCache();
                             break;
                         }
                         case 'i':
@@ -4879,7 +4896,7 @@
 
             // Add session button
             document.getElementById('btnAddSession').addEventListener('click', function() {
-                handleLoadSessionFolder(true);
+                loadSingleSessionFromCache();
             });
             // Remove session button
             document.getElementById('btnRemoveSession').addEventListener('click', function() {
@@ -7726,7 +7743,7 @@
 
             // Wire Sessions list buttons
             var btnAddFolder = document.getElementById('btnAddSessionFolder');
-            if (btnAddFolder) btnAddFolder.onclick = function() { handleLoadSessionFolder(); };
+            if (btnAddFolder) btnAddFolder.onclick = function() { loadSingleSessionFromCache(); };
             var btnAddCalib = document.getElementById('btnAddSessionCalib');
             if (btnAddCalib) btnAddCalib.onclick = function() { handleLoadCalibration(); };
         }
@@ -10795,6 +10812,10 @@
                     showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
                     console.log('[multi-session] Enumerating session:', sess.name);
 
+                    // Reset frame count so each session computes its own video length
+                    state.totalFrames = 0;
+                    state.fps = 0;
+
                     var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
                     console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
                     await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
@@ -10935,6 +10956,7 @@
 
                 function makeOption(name, desc, iconLines, mode) {
                     var opt = document.createElement('div');
+                    opt.dataset.mode = mode;
                     opt.style.cssText = 'padding:14px 16px;border:2px solid var(--border-color,#333);border-radius:8px;cursor:pointer;transition:border-color 0.15s,background 0.15s;white-space:nowrap;';
                     opt.addEventListener('mouseenter', function () {
                         opt.style.borderColor = 'var(--accent,#4a9eff)';
@@ -10962,7 +10984,7 @@
 
                     opt.addEventListener('click', function () {
                         overlay.remove();
-                        document.removeEventListener('keydown', onEsc);
+                        document.removeEventListener('keydown', onKeyNav);
                         resolve(mode);
                     });
                     return opt;
@@ -10996,17 +11018,97 @@
                     ));
                 }
 
-                leftOptions.appendChild(makeOption(
+                var perCameraOpt = makeOption(
                     'Per-Camera SLP',
                     'One SLP + one video per camera.',
                     '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} video.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} video.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
                     'per-camera'
+                );
+                // Recommended highlight
+                perCameraOpt.style.borderColor = 'rgba(255,200,50,0.6)';
+                perCameraOpt.style.background = 'rgba(255,200,50,0.05)';
+                var recLabel = document.createElement('div');
+                recLabel.style.cssText = 'color:rgba(255,200,50,0.85);font-size:9px;font-weight:600;margin-bottom:4px;';
+                recLabel.textContent = '\u2605 Recommended';
+                perCameraOpt.insertBefore(recLabel, perCameraOpt.firstChild);
+                // Update hover to preserve yellow theme
+                perCameraOpt.addEventListener('mouseenter', function () {
+                    perCameraOpt.style.borderColor = 'rgba(255,200,50,0.9)';
+                    perCameraOpt.style.background = 'rgba(255,200,50,0.1)';
+                });
+                perCameraOpt.addEventListener('mouseleave', function () {
+                    perCameraOpt.style.borderColor = 'rgba(255,200,50,0.6)';
+                    perCameraOpt.style.background = 'rgba(255,200,50,0.05)';
+                });
+                leftOptions.appendChild(perCameraOpt);
+
+                leftOptions.appendChild(makeOption(
+                    'Single SLP',
+                    'One SLP in root. Videos in videos/ folder.',
+                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
+                    'single-slp'
                 ));
 
                 leftBubble.appendChild(leftOptions);
                 columns.appendChild(leftBubble);
 
+                // Right bubble: Multi-Session
+                var rightBubble = document.createElement('div');
+                rightBubble.style.cssText = bubbleStyle;
+
+                var rightTitle = document.createElement('div');
+                rightTitle.style.cssText = groupTitleStyle;
+                rightTitle.textContent = 'Multi-Session';
+                rightBubble.appendChild(rightTitle);
+
+                var rightOptions = document.createElement('div');
+                rightOptions.style.cssText = 'display:flex;gap:10px;justify-content:center;';
+
+                var parentOpt = makeOption(
+                    'Parent Folder',
+                    'Parent directory with Per-Camera SLP subdirectories.',
+                    '\u{1F4C1} parent/\n\u251C\u2500\u2500 \u{1F4C1} sess1/\n\u2502   \u251C\u2500\u2500 \u{1F4C4} calib.toml\n\u2502   \u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u2514\u2500\u2500 \u{1F4C1} cam2/\n\u2514\u2500\u2500 \u{1F4C1} sess2/\n    \u251C\u2500\u2500 \u{1F4C4} calib.toml\n    \u251C\u2500\u2500 \u{1F4C1} cam1/\n    \u2514\u2500\u2500 \u{1F4C1} cam2/',
+                    'multi-session'
+                );
+                // Not selectable from wizard (use Load Multi-Session Folder instead)
+                parentOpt.style.cursor = 'default';
+                parentOpt.style.pointerEvents = 'none';
+                parentOpt.dataset.disabled = 'true';
+                rightOptions.appendChild(parentOpt);
+
+                rightBubble.appendChild(rightOptions);
+                columns.appendChild(rightBubble);
+
                 card.appendChild(columns);
+
+                // Mark the currently saved option
+                var savedMode = localStorage.getItem('sessionFolderType') || 'per-camera';
+                var allOpts = Array.from(card.querySelectorAll('[data-mode]')).filter(function (o) { return o.dataset.disabled !== 'true'; });
+                allOpts.forEach(function (o) {
+                    if (o.dataset.mode === savedMode) {
+                        var badge = document.createElement('div');
+                        badge.style.cssText = 'color:var(--accent,#4a9eff);font-size:9px;font-weight:600;margin-bottom:4px;';
+                        badge.textContent = '\u2714 Current';
+                        o.insertBefore(badge, o.firstChild);
+                        o.style.borderColor = 'var(--accent,#4a9eff)';
+                        o.style.background = 'rgba(74,158,255,0.05)';
+                    }
+                });
+
+                // Keyboard navigation (skip disabled options)
+                var focusIdx = allOpts.findIndex(function (o) { return o.dataset.mode === savedMode; });
+                if (focusIdx < 0) focusIdx = allOpts.findIndex(function (o) { return o.dataset.mode === 'per-camera'; });
+                if (focusIdx < 0) focusIdx = 0;
+
+                function setFocus(idx) {
+                    allOpts.forEach(function (o) { o.style.outline = 'none'; });
+                    focusIdx = idx;
+                    var el = allOpts[focusIdx];
+                    el.style.outline = '2px solid var(--accent,#4a9eff)';
+                    el.style.outlineOffset = '2px';
+                    el.scrollIntoView({ block: 'nearest' });
+                }
+                setFocus(focusIdx);
 
                 // Cancel button
                 var btnRow = document.createElement('div');
@@ -11016,32 +11118,78 @@
                 cancelBtn.textContent = 'Cancel';
                 cancelBtn.addEventListener('click', function () {
                     overlay.remove();
-                    document.removeEventListener('keydown', onEsc);
+                    document.removeEventListener('keydown', onKeyNav);
                     resolve(null);
                 });
                 btnRow.appendChild(cancelBtn);
                 card.appendChild(btnRow);
 
-                function onEsc(e) {
+                function onKeyNav(e) {
                     if (e.key === 'Escape') {
                         e.preventDefault();
                         overlay.remove();
-                        document.removeEventListener('keydown', onEsc);
+                        document.removeEventListener('keydown', onKeyNav);
                         resolve(null);
+                    } else if (e.key === 'ArrowRight') {
+                        e.preventDefault();
+                        setFocus((focusIdx + 1) % allOpts.length);
+                    } else if (e.key === 'ArrowLeft') {
+                        e.preventDefault();
+                        setFocus((focusIdx - 1 + allOpts.length) % allOpts.length);
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        allOpts[focusIdx].click();
                     }
                 }
-                document.addEventListener('keydown', onEsc);
+                document.addEventListener('keydown', onKeyNav);
 
                 overlay.appendChild(card);
                 document.body.appendChild(overlay);
             });
         }
 
+        function loadSingleSessionFromCache() {
+            var mode = localStorage.getItem('sessionFolderType') || 'per-camera';
+            if (mode === 'empty') {
+                handleEmptySession();
+            } else if (mode === 'single-slp') {
+                handleLoadSessionFolderSingleSlp();
+            } else {
+                handleLoadSessionFolderPerCamera();
+            }
+        }
+
         async function handleLoadSessionFolder(showAllOptions) {
-            await handleLoadSessionFolderPerCamera();
+            var mode = await showSessionModeModal(!!showAllOptions);
+            if (!mode) return; // cancelled
+            if (mode === 'single-slp') {
+                await handleLoadSessionFolderSingleSlp();
+            } else if (mode === 'per-camera') {
+                await handleLoadSessionFolderPerCamera();
+            } else if (mode === 'multi-session') {
+                await handleLoadMultiSession();
+            } else if (mode === 'empty') {
+                handleEmptySession();
+            }
         }
 
         function handleEmptySession() {
+            // Save current session state before switching
+            if (state.sessions.length > 0) {
+                var oldSession = state.sessions[state.activeSessionIdx];
+                oldSession.lastFrame = state.currentFrame;
+                oldSession.triangulationResults = state.triangulationResults;
+                oldSession._views = state.views;
+                oldSession._videoController = videoController;
+                if (viewport3d && viewport3d.threeCamera && viewport3d.controls) {
+                    oldSession._viewport3dState = {
+                        cameraPosition: viewport3d.threeCamera.position.toArray(),
+                        cameraUp: viewport3d.threeCamera.up.toArray(),
+                        controlsTarget: viewport3d.controls.target.toArray(),
+                    };
+                }
+            }
+
             var sessionName = 'Session ' + (state.sessions.length + 1);
             var skeleton = new Skeleton('skeleton', [], []);
             var session = new Session([], skeleton, ['track_0'], sessionName);
@@ -11233,6 +11381,22 @@
                     }
                 }
 
+                // Save current session state before switching
+                if (state.sessions.length > 0 && state.session) {
+                    var oldSession = state.sessions[state.activeSessionIdx];
+                    oldSession.lastFrame = state.currentFrame;
+                    oldSession.triangulationResults = state.triangulationResults;
+                    oldSession._views = state.views;
+                    oldSession._videoController = videoController;
+                    if (viewport3d && viewport3d.threeCamera && viewport3d.controls) {
+                        oldSession._viewport3dState = {
+                            cameraPosition: viewport3d.threeCamera.position.toArray(),
+                            cameraUp: viewport3d.threeCamera.up.toArray(),
+                            controlsTarget: viewport3d.controls.target.toArray(),
+                        };
+                    }
+                }
+
                 // Set as active session
                 state.sessions.push(session);
                 state.activeSessionIdx = state.sessions.length - 1;
@@ -11242,7 +11406,6 @@
                 // Load videos — match to cameras by filename
                 showLoading('Loading videos...');
                 state.views = [];
-                state.videoFiles = [];
                 if (videoController && state.isPlaying) videoController.stopPlayback();
                 videoController = null;
                 paneManager.clearAll();
@@ -11977,6 +12140,8 @@
 
                 // Save this session's UI state for switching
                 if (state.session) {
+                    state.session.totalFrames = state.totalFrames;
+                    state.session.fps = state.fps;
                     state.session._views = state.views;
                     state.session._videoController = videoController;
                     // Store env file references for "Set Env" loading
@@ -12389,6 +12554,38 @@
                             await new Promise(function (r) { setTimeout(r, 0); });
                         }
                     }
+                }
+
+                // Move non-grouped instances into unlinkedInstances so they are
+                // interactive (clickable/draggable). Instances in fg.instances that
+                // are NOT referenced by any InstanceGroup are "orphan" predictions —
+                // they need to be in fg.unlinkedInstances for hit testing to find them.
+                var movedToUnlinked = 0;
+                for (var [ulFrameIdx, ulFg] of session.frameGroups) {
+                    var frameGroups = session.instanceGroups.get(ulFrameIdx) || [];
+                    // Collect all instances that belong to a group
+                    var groupedInstances = new Set();
+                    for (var ulGi = 0; ulGi < frameGroups.length; ulGi++) {
+                        for (var [, gInst] of frameGroups[ulGi].instances) {
+                            groupedInstances.add(gInst);
+                        }
+                    }
+                    // Move ungrouped instances to unlinked
+                    for (var [ulCam, ulInsts] of ulFg.instances) {
+                        var remaining = [];
+                        for (var ulI = 0; ulI < ulInsts.length; ulI++) {
+                            if (!groupedInstances.has(ulInsts[ulI])) {
+                                ulFg.addUnlinkedInstance(ulCam, new UnlinkedInstance(ulInsts[ulI], ulCam));
+                                movedToUnlinked++;
+                            } else {
+                                remaining.push(ulInsts[ulI]);
+                            }
+                        }
+                        ulFg.instances.set(ulCam, remaining);
+                    }
+                }
+                if (movedToUnlinked > 0) {
+                    console.log('[load-slp] Moved', movedToUnlinked, 'ungrouped instances to unlinked pool');
                 }
 
                 // Recompute reprojections from stored 3D points + calibration
@@ -13442,10 +13639,11 @@
 
                 // Handle external drops
                 this.api.onDidDrop(function (event) {
-                    var viewName = event.nativeEvent.dataTransfer
+                    var raw = event.nativeEvent.dataTransfer
                         ? event.nativeEvent.dataTransfer.getData('text/plain')
                         : null;
-                    if (!viewName) return;
+                    if (!raw) return;
+                    var names = parseDroppedViewNames(raw);
                     var direction = mapPositionToDirection(event.position);
                     var position;
                     if (event.group) {
@@ -13453,11 +13651,16 @@
                     } else {
                         position = { direction: direction };
                     }
-                    self.addVideoPanel(viewName, position);
+                    for (var di = 0; di < names.length; di++) {
+                        self.addVideoPanel(names[di], di === 0 ? position : undefined);
+                    }
                 });
 
                 // Track active panel — highlight selected video + camera in 3D
                 this.api.onDidActivePanelChange(function (event) {
+                    // Pause view correspondence during multi-selection
+                    if (multiSelectViews && multiSelectViews.size > 0) return;
+
                     document.querySelectorAll('.video-cell.video-selected').forEach(function (el) {
                         el.classList.remove('video-selected');
                     });
@@ -13713,9 +13916,21 @@
         // View Strip
         // ============================================
 
+        // Multi-selection state for view strip
+        var multiSelectViews = new Set();
+
+        function clearMultiSelect() {
+            if (multiSelectViews.size === 0) return;
+            multiSelectViews.clear();
+            document.querySelectorAll('.view-strip-item.strip-multi-selected').forEach(function (el) {
+                el.classList.remove('strip-multi-selected');
+            });
+        }
+
         function populateViewStrip() {
             var list = document.getElementById('viewStripList');
             list.textContent = '';
+            multiSelectViews.clear();
 
             for (var idx = 0; idx < state.views.length; idx++) {
                 (function (view) {
@@ -13744,17 +13959,54 @@
                     item.appendChild(status);
 
                     item.addEventListener('dragstart', function (e) {
-                        e.dataTransfer.setData('text/plain', view.name);
+                        // If multi-selected, pack all selected view names; otherwise just this one
+                        var names;
+                        if (multiSelectViews.size > 0 && multiSelectViews.has(view.name)) {
+                            names = Array.from(multiSelectViews);
+                        } else {
+                            names = [view.name];
+                        }
+                        e.dataTransfer.setData('text/plain', JSON.stringify(names));
                         e.dataTransfer.effectAllowed = 'move';
-                        item.classList.add('dragging');
+                        // Dim all dragged items
+                        if (names.length > 1) {
+                            document.querySelectorAll('.view-strip-item').forEach(function (el) {
+                                if (names.indexOf(el.getAttribute('data-view-name')) >= 0) {
+                                    el.classList.add('dragging');
+                                }
+                            });
+                        } else {
+                            item.classList.add('dragging');
+                        }
                     });
 
                     item.addEventListener('dragend', function () {
-                        item.classList.remove('dragging');
+                        document.querySelectorAll('.view-strip-item.dragging').forEach(function (el) {
+                            el.classList.remove('dragging');
+                        });
                     });
 
-                    // Single click: if already in dock, select that panel
-                    item.addEventListener('click', function () {
+                    // Single click: Ctrl/Cmd+Click for multi-select, plain click for panel focus
+                    item.addEventListener('click', function (e) {
+                        if (e.ctrlKey || e.metaKey) {
+                            // Toggle multi-selection
+                            if (multiSelectViews.has(view.name)) {
+                                multiSelectViews.delete(view.name);
+                                item.classList.remove('strip-multi-selected');
+                            } else {
+                                // On first multi-select, hide yellow single-select highlight
+                                if (multiSelectViews.size === 0) {
+                                    document.querySelectorAll('.view-strip-item.strip-selected').forEach(function (el) {
+                                        el.classList.remove('strip-selected');
+                                    });
+                                }
+                                multiSelectViews.add(view.name);
+                                item.classList.add('strip-multi-selected');
+                            }
+                            return;
+                        }
+                        // Plain click — clear multi-select and do normal panel focus
+                        clearMultiSelect();
                         var count = paneManager.dockedViews.get(view.name) || 0;
                         if (count > 0 && paneManager.api) {
                             // Find and activate the first panel for this view
@@ -13866,9 +14118,9 @@
                     tdActions.appendChild(delBtn);
                 }
 
-                (function(idx) {
-                    tr.addEventListener('click', function() { switchSession(idx); });
-                    tr.addEventListener('dblclick', function(e) {
+                (function(idx, row) {
+                    row.addEventListener('click', function() { switchSession(idx); });
+                    row.addEventListener('dblclick', function(e) {
                         e.stopPropagation();
                         var newName = prompt('Rename session:', state.sessions[idx].name);
                         if (newName && newName.trim()) {
@@ -13877,7 +14129,32 @@
                             populateSessionStrip();
                         }
                     });
-                })(si);
+                    // Drop zone for video-to-session drag
+                    row.addEventListener('dragenter', function(e) {
+                        if (idx !== state.activeSessionIdx) {
+                            e.preventDefault();
+                        }
+                    });
+                    row.addEventListener('dragover', function(e) {
+                        if (idx !== state.activeSessionIdx) {
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'move';
+                            row.style.outline = '2px solid var(--accent,#4a9eff)';
+                        }
+                    });
+                    row.addEventListener('dragleave', function() {
+                        row.style.outline = '';
+                    });
+                    row.addEventListener('drop', function(e) {
+                        e.preventDefault();
+                        row.style.outline = '';
+                        var raw = e.dataTransfer.getData('text/plain');
+                        if (raw && idx !== state.activeSessionIdx) {
+                            var viewNames = parseDroppedViewNames(raw);
+                            showMoveVideoModal(viewNames, state.activeSessionIdx, idx);
+                        }
+                    });
+                })(si, tr);
 
                 tr.appendChild(tdName);
                 tr.appendChild(tdCams);
@@ -13918,11 +14195,11 @@
                 label.textContent = session.name;
                 item.appendChild(label);
 
-                (function(idx) {
-                    item.addEventListener('click', function() {
+                (function(idx, el) {
+                    el.addEventListener('click', function() {
                         switchSession(idx);
                     });
-                    item.addEventListener('dblclick', function(e) {
+                    el.addEventListener('dblclick', function(e) {
                         e.stopPropagation();
                         var newName = prompt('Rename session:', state.sessions[idx].name);
                         if (newName && newName.trim()) {
@@ -13931,41 +14208,72 @@
                         }
                     });
                     // Drop zone for video-to-session drag
-                    item.addEventListener('dragover', function(e) {
+                    el.addEventListener('dragenter', function(e) {
+                        if (idx !== state.activeSessionIdx) {
+                            e.preventDefault();
+                        }
+                    });
+                    el.addEventListener('dragover', function(e) {
                         if (idx !== state.activeSessionIdx) {
                             e.preventDefault();
                             e.dataTransfer.dropEffect = 'move';
-                            item.style.outline = '2px solid var(--accent,#4a9eff)';
+                            el.style.outline = '2px solid var(--accent,#4a9eff)';
                         }
                     });
-                    item.addEventListener('dragleave', function() {
-                        item.style.outline = '';
+                    el.addEventListener('dragleave', function() {
+                        el.style.outline = '';
                     });
-                    item.addEventListener('drop', function(e) {
+                    el.addEventListener('drop', function(e) {
                         e.preventDefault();
-                        item.style.outline = '';
-                        var viewName = e.dataTransfer.getData('text/plain');
-                        if (viewName && idx !== state.activeSessionIdx) {
-                            showMoveVideoModal(viewName, state.activeSessionIdx, idx);
+                        el.style.outline = '';
+                        var raw = e.dataTransfer.getData('text/plain');
+                        if (raw && idx !== state.activeSessionIdx) {
+                            var viewNames = parseDroppedViewNames(raw);
+                            showMoveVideoModal(viewNames, state.activeSessionIdx, idx);
                         }
                     });
-                })(si);
+                })(si, item);
 
                 list.appendChild(item);
             }
         }
 
-        function showMoveVideoModal(viewName, fromIdx, toIdx) {
+        // Parse dropped view names — handles both JSON array and plain string (legacy)
+        function parseDroppedViewNames(raw) {
+            try {
+                var parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) return parsed;
+            } catch (e) { /* not JSON */ }
+            return [raw];
+        }
+
+        var skipMoveConfirmation = false;
+
+        function showMoveVideoModal(viewNames, fromIdx, toIdx) {
             var fromSession = state.sessions[fromIdx];
             var toSession = state.sessions[toIdx];
-            // Find video file info
-            var vfInfo = null;
-            for (var i = 0; i < state.videoFiles.length; i++) {
-                if (state.videoFiles[i].assignedCamera === viewName && state.videoFiles[i].sessionIdx === fromIdx) {
-                    vfInfo = state.videoFiles[i]; break;
+
+            // Resolve file info for each view (only search within origin session's indices)
+            var videoInfos = [];
+            for (var vi = 0; vi < viewNames.length; vi++) {
+                var vn = viewNames[vi];
+                var vfInfo = null;
+                for (var fii = 0; fii < fromSession.videoFileIndices.length; fii++) {
+                    var vf = state.videoFiles[fromSession.videoFileIndices[fii]];
+                    if (vf && (vf.assignedCamera === vn || vf.name === vn)) {
+                        vfInfo = vf; break;
+                    }
                 }
+                var fileName = vfInfo ? (vfInfo.file ? vfInfo.file.name : vfInfo.name) : vn;
+                videoInfos.push({ viewName: vn, fileName: fileName, checked: true });
             }
-            var fileName = vfInfo ? (vfInfo.file ? vfInfo.file.name : vfInfo.name) : viewName;
+
+            // Skip modal if user opted out
+            if (skipMoveConfirmation) {
+                var checkedNames = viewNames.slice();
+                moveVideosToSession(checkedNames, fromIdx, toIdx);
+                return Promise.resolve();
+            }
 
             return new Promise(function (resolve) {
                 var overlay = document.createElement('div');
@@ -13974,26 +14282,98 @@
                 var card = document.createElement('div');
                 card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:500px;width:90%;';
 
+                // Title
                 var title = document.createElement('div');
-                title.style.cssText = 'color:#fff;font-size:16px;font-weight:600;margin-bottom:12px;';
-                title.textContent = 'Move Video to Another Session';
+                title.style.cssText = 'color:#fff;font-size:16px;font-weight:600;margin-bottom:14px;';
+                title.textContent = 'Move Videos to Another Session';
                 card.appendChild(title);
 
-                var info = document.createElement('div');
-                info.style.cssText = 'color:#ccc;font-size:13px;margin-bottom:8px;line-height:1.6;';
-                info.innerHTML =
-                    '<b>Video:</b> ' + fileName + ' (<b>' + viewName + '</b>)<br>' +
+                // Header: From / To
+                var header = document.createElement('div');
+                header.style.cssText = 'color:#ccc;font-size:15px;margin-bottom:12px;line-height:1.7;';
+                header.innerHTML =
                     '<b>From:</b> ' + fromSession.name + '<br>' +
                     '<b>To:</b> ' + toSession.name;
-                card.appendChild(info);
+                card.appendChild(header);
 
+                // Video table
+                var tableContainer = document.createElement('div');
+                tableContainer.className = 'slp-export-table-container';
+                tableContainer.style.maxHeight = '200px';
+
+                var table = document.createElement('table');
+                table.className = 'data-table slp-export-table';
+                table.style.width = '100%';
+
+                var thead = document.createElement('thead');
+                var headRow = document.createElement('tr');
+                var thCheck = document.createElement('th');
+                thCheck.style.width = '28px';
+                thCheck.textContent = '';
+                var thFile = document.createElement('th');
+                thFile.textContent = 'Video';
+                var thCam = document.createElement('th');
+                thCam.textContent = 'Camera';
+                headRow.appendChild(thCheck);
+                headRow.appendChild(thFile);
+                headRow.appendChild(thCam);
+                thead.appendChild(headRow);
+                table.appendChild(thead);
+
+                var tbody = document.createElement('tbody');
+                var checkboxes = [];
+                for (var ri = 0; ri < videoInfos.length; ri++) {
+                    (function (info, idx) {
+                        var tr = document.createElement('tr');
+                        var tdCheck = document.createElement('td');
+                        tdCheck.style.textAlign = 'center';
+                        var cb = document.createElement('input');
+                        cb.type = 'checkbox';
+                        cb.checked = true;
+                        cb.addEventListener('change', function () {
+                            info.checked = cb.checked;
+                            updateContinueBtn();
+                        });
+                        checkboxes.push(cb);
+                        tdCheck.appendChild(cb);
+
+                        var tdFile = document.createElement('td');
+                        tdFile.textContent = info.fileName;
+                        var tdCam = document.createElement('td');
+                        tdCam.textContent = info.viewName !== info.fileName ? info.viewName : '';
+                        tdCam.style.color = 'var(--text-muted,#888)';
+
+                        tr.appendChild(tdCheck);
+                        tr.appendChild(tdFile);
+                        tr.appendChild(tdCam);
+                        tbody.appendChild(tr);
+                    })(videoInfos[ri], ri);
+                }
+                table.appendChild(tbody);
+                tableContainer.appendChild(table);
+                card.appendChild(tableContainer);
+
+                // Warning banner
                 var warning = document.createElement('div');
-                warning.style.cssText = 'color:#f0ad4e;font-size:12px;margin:12px 0;padding:8px 10px;background:rgba(240,173,78,0.1);border-radius:4px;line-height:1.5;';
-                warning.textContent = 'All UserInstances, ReprojectedInstances, and track data will be transferred. Grouped and triangulated information, including reprojections involving this view, will be lost.';
+                warning.style.cssText = 'font-size:12px;margin:12px 0;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:4px;line-height:1.7;';
+                warning.innerHTML =
+                    '<span style="color:#5cb85c;">\u2705 Transferred:</span> <span style="color:#ccc;">UserInstances, track data</span><br>' +
+                    '<span style="color:#d9534f;">\u274C Lost:</span> <span style="color:#ccc;">Group assignments, triangulation, reprojections involving ' +
+                    (viewNames.length > 1 ? 'these views' : 'this view') + '</span>';
                 card.appendChild(warning);
 
+                // Don't show again checkbox
+                var hideRow = document.createElement('label');
+                hideRow.style.cssText = 'display:flex;align-items:center;gap:6px;color:var(--text-muted,#888);font-size:12px;margin:8px 0 4px;cursor:pointer;';
+                var hideCb = document.createElement('input');
+                hideCb.type = 'checkbox';
+                hideRow.appendChild(hideCb);
+                hideRow.appendChild(document.createTextNode("Don't show this message again"));
+                card.appendChild(hideRow);
+
+                // Buttons
                 var btnRow = document.createElement('div');
-                btnRow.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:16px;';
+                btnRow.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:14px;';
 
                 var cancelBtn = document.createElement('button');
                 cancelBtn.style.cssText = 'padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:6px;';
@@ -14003,11 +14383,24 @@
                 continueBtn.style.cssText = 'padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
                 continueBtn.textContent = 'Continue';
 
+                function updateContinueBtn() {
+                    var anyChecked = videoInfos.some(function (v) { return v.checked; });
+                    continueBtn.disabled = !anyChecked;
+                    continueBtn.style.opacity = anyChecked ? '1' : '0.4';
+                }
+
                 function dismiss(proceed) {
                     overlay.remove();
                     document.removeEventListener('keydown', onKey);
                     if (proceed) {
-                        moveVideoToSession(viewName, fromIdx, toIdx);
+                        if (hideCb.checked) skipMoveConfirmation = true;
+                        var checkedNames = [];
+                        for (var ci = 0; ci < videoInfos.length; ci++) {
+                            if (videoInfos[ci].checked) checkedNames.push(videoInfos[ci].viewName);
+                        }
+                        if (checkedNames.length > 0) {
+                            moveVideosToSession(checkedNames, fromIdx, toIdx);
+                        }
                     }
                     resolve();
                 }
@@ -14027,52 +14420,52 @@
             });
         }
 
-        function moveVideoToSession(viewName, fromIdx, toIdx) {
+        function moveVideosToSession(viewNames, fromIdx, toIdx) {
             var fromSession = state.sessions[fromIdx];
             var toSession = state.sessions[toIdx];
+            var totalRetriangulated = 0;
 
-            // 1. Collect all UserInstances and unlinked instances for this view from origin session
-            var transferredFrames = 0;
-            for (var [frameIdx, fg] of fromSession.frameGroups) {
-                // Move grouped instances for this view to destination
-                var camInstances = fg.instances.get(viewName) || [];
-                var ulInstances = fg.getUnlinkedInstances(viewName) || [];
+            var originHasCalib = fromSession.cameras.some(function (c) {
+                var r = c.rotation || c.rvec;
+                var t = c.translation || c.tvec;
+                return (r && (r[0] !== 0 || r[1] !== 0 || r[2] !== 0)) ||
+                       (t && (t[0] !== 0 || t[1] !== 0 || t[2] !== 0));
+            });
 
-                if (camInstances.length > 0 || ulInstances.length > 0) {
-                    // Ensure destination has a FrameGroup
-                    if (!toSession.frameGroups.has(frameIdx)) {
-                        toSession.addFrameGroup(new FrameGroup(frameIdx));
+            for (var vni = 0; vni < viewNames.length; vni++) {
+                var viewName = viewNames[vni];
+
+                // 1. Transfer instances for this view
+                for (var [frameIdx, fg] of fromSession.frameGroups) {
+                    var camInstances = fg.instances.get(viewName) || [];
+                    var ulInstances = fg.getUnlinkedInstances(viewName) || [];
+
+                    if (camInstances.length > 0 || ulInstances.length > 0) {
+                        if (!toSession.frameGroups.has(frameIdx)) {
+                            toSession.addFrameGroup(new FrameGroup(frameIdx));
+                        }
+                        var destFg = toSession.getFrameGroup(frameIdx);
+
+                        for (var ci = 0; ci < camInstances.length; ci++) {
+                            destFg.addUnlinkedInstance(viewName, new UnlinkedInstance(camInstances[ci], viewName));
+                        }
+                        for (var ui = 0; ui < ulInstances.length; ui++) {
+                            destFg.addUnlinkedInstance(viewName, ulInstances[ui]);
+                        }
                     }
-                    var destFg = toSession.getFrameGroup(frameIdx);
 
-                    // Transfer grouped instances as unlinked (no group context in destination)
-                    for (var ci = 0; ci < camInstances.length; ci++) {
-                        destFg.addUnlinkedInstance(viewName, new UnlinkedInstance(camInstances[ci], viewName));
-                    }
-
-                    // Transfer existing unlinked instances
-                    for (var ui = 0; ui < ulInstances.length; ui++) {
-                        destFg.addUnlinkedInstance(viewName, ulInstances[ui]);
-                    }
-
-                    transferredFrames++;
+                    fg.instances.delete(viewName);
+                    if (fg.unlinkedInstances) fg.unlinkedInstances.delete(viewName);
                 }
 
-                // Clear from origin
-                fg.instances.delete(viewName);
-                if (fg.unlinkedInstances) fg.unlinkedInstances.delete(viewName);
-            }
-
-            // 2. Remove view from all InstanceGroups in origin and re-triangulate
-            var retriangulated = 0;
-            for (var [frameIdx2, groups] of fromSession.instanceGroups) {
+                // 2. Remove view from InstanceGroups and re-triangulate
+                for (var [frameIdx2, groups] of fromSession.instanceGroups) {
                     for (var gi = 0; gi < groups.length; gi++) {
                         var group = groups[gi];
                         if (group.instances.has(viewName) || group.reprojectedInstances.has(viewName)) {
                             group.instances.delete(viewName);
                             group.reprojectedInstances.delete(viewName);
 
-                            // Re-triangulate if still has 2+ cameras
                             if (group.cameraNames.length >= 2) {
                                 var groupCameras = fromSession.cameras.filter(function (c) {
                                     return group.cameraNames.indexOf(c.name) >= 0;
@@ -14086,65 +14479,57 @@
                                         storeReprojectedInstances(group, result, fromSession.cameras);
                                     }
                                     group.markClean();
-                                    retriangulated++;
+                                    totalRetriangulated++;
                                 }
                             } else if (group.cameraNames.length < 2) {
-                                // Not enough cameras — clear triangulation data
                                 group.points3d = null;
                                 group.reprojections = null;
                                 group.reprojectedInstances.clear();
                             }
                         }
                     }
-            }
-
-            // 3. Move video file reference
-            for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
-                var vf = state.videoFiles[vfi];
-                if (vf.assignedCamera === viewName && vf.sessionIdx === fromIdx) {
-                    vf.sessionIdx = toIdx;
-                    // Remove from origin's videoFileIndices
-                    var oi = fromSession.videoFileIndices.indexOf(vfi);
-                    if (oi >= 0) fromSession.videoFileIndices.splice(oi, 1);
-                    // Add to destination's videoFileIndices
-                    if (toSession.videoFileIndices.indexOf(vfi) < 0) {
-                        toSession.videoFileIndices.push(vfi);
-                    }
-                    break;
                 }
-            }
 
-            // 3b. If origin has no calibration, remove the camera entry entirely
-            var originHasCalib = fromSession.cameras.some(function (c) {
-                var r = c.rotation || c.rvec;
-                var t = c.translation || c.tvec;
-                return (r && (r[0] !== 0 || r[1] !== 0 || r[2] !== 0)) ||
-                       (t && (t[0] !== 0 || t[1] !== 0 || t[2] !== 0));
-            });
-            if (!originHasCalib) {
-                fromSession.cameras = fromSession.cameras.filter(function (c) { return c.name !== viewName; });
-            }
-
-            // 3c. Ensure destination session has a camera entry for this view
-            if (!toSession.cameras.some(function (c) { return c.name === viewName; })) {
-                // Copy from origin if it had calibration, otherwise create dummy
-                var origCam = null;
-                if (originHasCalib) {
-                    // Find from original cameras (before potential removal — use the full list)
-                    for (var cci = 0; cci < state.session.cameras.length; cci++) {
-                        if (state.session.cameras[cci].name === viewName) { origCam = state.session.cameras[cci]; break; }
+                // 3. Move video file reference (only search within origin session's indices)
+                for (var fii = 0; fii < fromSession.videoFileIndices.length; fii++) {
+                    var vfi = fromSession.videoFileIndices[fii];
+                    var vf = state.videoFiles[vfi];
+                    if (vf && (vf.assignedCamera === viewName || vf.name === viewName)) {
+                        vf.sessionIdx = toIdx;
+                        fromSession.videoFileIndices.splice(fii, 1);
+                        if (toSession.videoFileIndices.indexOf(vfi) < 0) {
+                            toSession.videoFileIndices.push(vfi);
+                        }
+                        break;
                     }
                 }
-                if (origCam) {
-                    toSession.cameras.push(origCam);
-                } else {
-                    toSession.cameras.push(new Camera(viewName, [[1,0,0],[0,1,0],[0,0,1]],
-                        [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
+
+                // 3b. Remove camera if uncalibrated
+                if (!originHasCalib) {
+                    fromSession.cameras = fromSession.cameras.filter(function (c) { return c.name !== viewName; });
+                }
+
+                // 3c. Ensure destination has a camera entry
+                if (!toSession.cameras.some(function (c) { return c.name === viewName; })) {
+                    var origCam = null;
+                    if (originHasCalib) {
+                        for (var cci = 0; cci < state.session.cameras.length; cci++) {
+                            if (state.session.cameras[cci].name === viewName) { origCam = state.session.cameras[cci]; break; }
+                        }
+                    }
+                    if (origCam) {
+                        toSession.cameras.push(origCam);
+                    } else {
+                        toSession.cameras.push(new Camera(viewName, [[1,0,0],[0,1,0],[0,0,1]],
+                            [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]));
+                    }
                 }
             }
 
-            // 4. Remove view from current views and rebuild UI
-            state.views = state.views.filter(function (v) { return v.name !== viewName; });
+            // 4. Remove moved views and rebuild UI
+            var movedSet = {};
+            for (var ms = 0; ms < viewNames.length; ms++) movedSet[viewNames[ms]] = true;
+            state.views = state.views.filter(function (v) { return !movedSet[v.name]; });
             paneManager.clearAll();
             if (state.views.length > 0) {
                 paneManager._suppressActiveHighlight = true;
@@ -14160,7 +14545,7 @@
                 if (state.views.length > 0) interactionManager.attach(state.views);
             }
 
-            // 5. Update 3D viewport to reflect removed camera
+            // 5. Update 3D viewport
             if (viewport3d && sessionHasCalibration()) {
                 var noVideoCams = [];
                 var activeViewNames = state.views.map(function (v) { return v.name; });
@@ -14175,12 +14560,17 @@
             // Clear destination's cached views so they rebuild on switch
             toSession._views = null;
 
+            // Clear multi-selection
+            clearMultiSelect();
+
             drawAllOverlays(state.currentFrame);
             updateInfoPanel();
             if (timeline) timeline.refreshTracks(fromSession);
 
-            setStatus('Moved ' + viewName + ' to ' + toSession.name +
-                (retriangulated > 0 ? '. Re-triangulated ' + retriangulated + ' group(s).' : '.'), 'success');
+            var label = viewNames.length > 1
+                ? 'Moved ' + viewNames.length + ' videos to ' + toSession.name
+                : 'Moved ' + viewNames[0] + ' to ' + toSession.name;
+            setStatus(label + (totalRetriangulated > 0 ? '. Re-triangulated ' + totalRetriangulated + ' group(s).' : '.'), 'success');
         }
 
         function removeSession(idx) {
