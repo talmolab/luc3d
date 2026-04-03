@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head><title>SLP Frame Debug</title></head>
+<body>
+<h2>SLP Frame Index Diagnostic</h2>
+<pre id="log" style="background:#111;color:#0f0;padding:20px;font-size:14px;max-height:80vh;overflow:auto;">
+</pre>
+
+<input type="file" id="fileInput" accept=".slp">
+<button onclick="runDiag()">Run Diagnostic</button>
+
+<script src="https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/dist/iife/h5wasm.js"></script>
+<script src="pose-data.js"></script>
+<script src="file-io.js?v=3"></script>
+
+<script>
+var logEl = document.getElementById('log');
+function log(msg) {
+    logEl.textContent += new Date().toISOString().slice(11,23) + ' ' + msg + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function runDiag() {
+    var file = document.getElementById('fileInput').files[0];
+    if (!file) { log('No file selected'); return; }
+
+    log('=== SLP Frame Index Diagnostic ===');
+    log('File: ' + file.name + ' (' + (file.size/1024/1024).toFixed(1) + ' MB)');
+
+    var slpData;
+    try {
+        slpData = await parseSlpH5(file, function(msg) { log('  ' + msg); });
+    } catch(err) {
+        log('PARSE FAILED: ' + err.message);
+        return;
+    }
+
+    log('');
+    log('=== Results ===');
+    log('Skeleton: ' + slpData.skeleton.nodes.length + ' nodes');
+    log('Tracks: ' + JSON.stringify(slpData.tracks));
+    log('Total frames: ' + slpData.frames.length);
+    log('Videos: ' + slpData.videos.length);
+
+    // Show frame index range
+    var frameIndices = slpData.frames.map(function(f) { return f.frameIdx; });
+    var minFrame = Math.min.apply(null, frameIndices);
+    var maxFrame = Math.max.apply(null, frameIndices);
+    log('');
+    log('Frame index range: ' + minFrame + ' to ' + maxFrame);
+    log('Unique frame indices: ' + new Set(frameIndices).size);
+
+    // Show first 10 frames
+    log('');
+    log('First 10 frames:');
+    for (var i = 0; i < Math.min(10, slpData.frames.length); i++) {
+        var f = slpData.frames[i];
+        var pts = f.instances[0] ? f.instances[0].points.filter(function(p){return p!==null;}).length : 0;
+        log('  [' + i + '] frameIdx=' + f.frameIdx + ' videoIdx=' + f.videoIdx +
+            ' instances=' + f.instances.length + ' pts=' + pts);
+    }
+
+    // Show frames around 100, 1000
+    for (var target of [100, 1000, 5000]) {
+        var found = slpData.frames.find(function(f) { return f.frameIdx === target; });
+        if (found) {
+            var pts2 = found.instances[0] ? found.instances[0].points.filter(function(p){return p!==null;}).length : 0;
+            log('  frame_idx=' + target + ': instances=' + found.instances.length + ' pts=' + pts2 +
+                ' firstPt=' + JSON.stringify(found.instances[0].points[0]));
+        } else {
+            log('  frame_idx=' + target + ': NOT FOUND');
+        }
+    }
+
+    // Show video info
+    log('');
+    log('Video metadata:');
+    for (var v of slpData.videos) {
+        log('  video[' + v.index + ']: ' + v.filename);
+        log('    embedded=' + v.embedded + ' backendType=' + v.backendType);
+    }
+
+    // Check for frame_idx == frame_id confusion
+    log('');
+    log('Checking if frame indices are sequential (0,1,2,...):');
+    var sequential = true;
+    for (var j = 0; j < Math.min(100, slpData.frames.length); j++) {
+        if (slpData.frames[j].frameIdx !== j) {
+            log('  MISMATCH at index ' + j + ': frameIdx=' + slpData.frames[j].frameIdx + ' (expected ' + j + ')');
+            sequential = false;
+            break;
+        }
+    }
+    if (sequential) log('  First 100 frames are sequential (0-99)');
+
+    log('');
+    log('=== Done ===');
+}
+</script>
+</body>
+</html>
