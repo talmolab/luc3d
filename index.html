@@ -54,6 +54,7 @@
                     <div class="menu-dropdown-item" id="menuSaveProject">Save Project (.slp)</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
                     <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuSessionFolderWizard">Session Folder Wizard...</div>
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
                     <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Session Folder...</div>
@@ -4050,6 +4051,16 @@
             document.getElementById('menuLoadProject').addEventListener('click', function () {
                 closeMenus();
                 handleLoadProject();
+            });
+
+            document.getElementById('menuSessionFolderWizard').addEventListener('click', function () {
+                closeMenus();
+                localStorage.removeItem('sessionModePreference');
+                showSessionModeModal(true).then(function (mode) {
+                    if (!mode) {
+                        localStorage.removeItem('sessionModePreference');
+                    }
+                });
             });
 
             document.getElementById('menuLoadVideos').addEventListener('click', function () {
@@ -10627,6 +10638,10 @@
                     showLoading('Loading session ' + (si + 1) + '/' + sessionDirs.length + ': ' + sess.name + '...');
                     console.log('[multi-session] Enumerating session:', sess.name);
 
+                    // Reset frame count so each session computes its own video length
+                    state.totalFrames = 0;
+                    state.fps = 0;
+
                     var sessionFiles = await enumerateDirectoryHandle(sess.handle, sess.name, null);
                     console.log('[multi-session] Session', sess.name, '— files:', sessionFiles.length);
                     await handleLoadSessionFolderPerCamera(sessionFiles, si > 0);
@@ -10753,6 +10768,8 @@
         }
 
         function showSessionModeModal(showAllOptions) {
+            var saved = localStorage.getItem('sessionModePreference');
+            if (saved) return Promise.resolve(saved);
             return new Promise(function (resolve) {
                 var overlay = document.createElement('div');
                 overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;';
@@ -10767,6 +10784,7 @@
 
                 function makeOption(name, desc, iconLines, mode) {
                     var opt = document.createElement('div');
+                    opt.dataset.mode = mode;
                     opt.style.cssText = 'padding:14px 16px;border:2px solid var(--border-color,#333);border-radius:8px;cursor:pointer;transition:border-color 0.15s,background 0.15s;white-space:nowrap;';
                     opt.addEventListener('mouseenter', function () {
                         opt.style.borderColor = 'var(--accent,#4a9eff)';
@@ -10793,8 +10811,11 @@
                     opt.appendChild(iconBlock);
 
                     opt.addEventListener('click', function () {
+                        if (rememberCb && rememberCb.checked) {
+                            localStorage.setItem('sessionModePreference', mode);
+                        }
                         overlay.remove();
-                        document.removeEventListener('keydown', onEsc);
+                        document.removeEventListener('keydown', onKeyNav);
                         resolve(mode);
                     });
                     return opt;
@@ -10828,11 +10849,35 @@
                     ));
                 }
 
-                leftOptions.appendChild(makeOption(
+                var perCameraOpt = makeOption(
                     'Per-Camera SLP',
                     'One SLP + one video per camera.',
                     '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} video.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} video.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
                     'per-camera'
+                );
+                // Recommended highlight
+                perCameraOpt.style.borderColor = 'rgba(255,200,50,0.6)';
+                perCameraOpt.style.background = 'rgba(255,200,50,0.05)';
+                var recLabel = document.createElement('div');
+                recLabel.style.cssText = 'color:rgba(255,200,50,0.85);font-size:9px;font-weight:600;margin-bottom:4px;';
+                recLabel.textContent = '\u2605 Recommended';
+                perCameraOpt.insertBefore(recLabel, perCameraOpt.firstChild);
+                // Update hover to preserve yellow theme
+                perCameraOpt.addEventListener('mouseenter', function () {
+                    perCameraOpt.style.borderColor = 'rgba(255,200,50,0.9)';
+                    perCameraOpt.style.background = 'rgba(255,200,50,0.1)';
+                });
+                perCameraOpt.addEventListener('mouseleave', function () {
+                    perCameraOpt.style.borderColor = 'rgba(255,200,50,0.6)';
+                    perCameraOpt.style.background = 'rgba(255,200,50,0.05)';
+                });
+                leftOptions.appendChild(perCameraOpt);
+
+                leftOptions.appendChild(makeOption(
+                    'Single SLP',
+                    'One SLP in root. Videos in videos/ folder.',
+                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
+                    'single-slp'
                 ));
 
                 leftBubble.appendChild(leftOptions);
@@ -10852,23 +10897,9 @@
 
                 rightOptions.appendChild(makeOption(
                     'Parent Folder',
-                    'Parent dir with session subdirs.',
+                    'Parent directory with Per-Camera SLP subdirectories.',
                     '\u{1F4C1} parent/\n\u251C\u2500\u2500 \u{1F4C1} sess1/\n\u2502   \u251C\u2500\u2500 \u{1F4C4} calib.toml\n\u2502   \u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u2514\u2500\u2500 \u{1F4C1} cam2/\n\u2514\u2500\u2500 \u{1F4C1} sess2/\n    \u251C\u2500\u2500 \u{1F4C4} calib.toml\n    \u251C\u2500\u2500 \u{1F4C1} cam1/\n    \u2514\u2500\u2500 \u{1F4C1} cam2/',
                     'multi-session'
-                ));
-
-                rightOptions.appendChild(makeOption(
-                    'Single Folder',
-                    'One SLP + multiple videos per camera.',
-                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} v_sess1.mp4\n\u2502   \u251C\u2500\u2500 \u{1F3AC} v_sess2.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} v_sess1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} v_sess2.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
-                    'per-camera'
-                ));
-
-                rightOptions.appendChild(makeOption(
-                    'Single SLP',
-                    'One SLP in root. Videos in videos/ folder.',
-                    '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
-                    'single-slp'
                 ));
 
                 rightBubble.appendChild(rightOptions);
@@ -10876,29 +10907,63 @@
 
                 card.appendChild(columns);
 
+                // Keyboard navigation
+                var allOpts = Array.from(card.querySelectorAll('[data-mode]'));
+                var focusIdx = allOpts.findIndex(function (o) { return o.dataset.mode === 'per-camera'; });
+                if (focusIdx < 0) focusIdx = 0;
+
+                function setFocus(idx) {
+                    allOpts.forEach(function (o) { o.style.outline = 'none'; });
+                    focusIdx = idx;
+                    var el = allOpts[focusIdx];
+                    el.style.outline = '2px solid var(--accent,#4a9eff)';
+                    el.style.outlineOffset = '2px';
+                    el.scrollIntoView({ block: 'nearest' });
+                }
+                setFocus(focusIdx);
+
+                // "Don't ask again" checkbox
+                var checkRow = document.createElement('label');
+                checkRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:14px;cursor:pointer;color:var(--text-muted,#888);font-size:11px;';
+                var rememberCb = document.createElement('input');
+                rememberCb.type = 'checkbox';
+                rememberCb.style.cssText = 'cursor:pointer;';
+                checkRow.appendChild(rememberCb);
+                checkRow.appendChild(document.createTextNode('Save selection and do not ask again'));
+                card.appendChild(checkRow);
+
                 // Cancel button
                 var btnRow = document.createElement('div');
-                btnRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:16px;';
+                btnRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:10px;';
                 var cancelBtn = document.createElement('button');
                 cancelBtn.style.cssText = 'padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:6px;';
                 cancelBtn.textContent = 'Cancel';
                 cancelBtn.addEventListener('click', function () {
                     overlay.remove();
-                    document.removeEventListener('keydown', onEsc);
+                    document.removeEventListener('keydown', onKeyNav);
                     resolve(null);
                 });
                 btnRow.appendChild(cancelBtn);
                 card.appendChild(btnRow);
 
-                function onEsc(e) {
+                function onKeyNav(e) {
                     if (e.key === 'Escape') {
                         e.preventDefault();
                         overlay.remove();
-                        document.removeEventListener('keydown', onEsc);
+                        document.removeEventListener('keydown', onKeyNav);
                         resolve(null);
+                    } else if (e.key === 'ArrowRight') {
+                        e.preventDefault();
+                        setFocus((focusIdx + 1) % allOpts.length);
+                    } else if (e.key === 'ArrowLeft') {
+                        e.preventDefault();
+                        setFocus((focusIdx - 1 + allOpts.length) % allOpts.length);
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        allOpts[focusIdx].click();
                     }
                 }
-                document.addEventListener('keydown', onEsc);
+                document.addEventListener('keydown', onKeyNav);
 
                 overlay.appendChild(card);
                 document.body.appendChild(overlay);
@@ -11886,6 +11951,8 @@
 
                 // Save this session's UI state for switching
                 if (state.session) {
+                    state.session.totalFrames = state.totalFrames;
+                    state.session.fps = state.fps;
                     state.session._views = state.views;
                     state.session._videoController = videoController;
                     // Store env file references for "Set Env" loading
