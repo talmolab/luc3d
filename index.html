@@ -51,7 +51,8 @@
                 File
                 <div class="menu-dropdown" id="menuFile">
                     <div class="menu-dropdown-item" id="menuNewProject">New Project</div>
-                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project (.slp)</div>
+                    <div class="menu-dropdown-item" id="menuSaveProject">Save<span style="float:right;opacity:0.5;font-size:11px;">Ctrl+S</span></div>
+                    <div class="menu-dropdown-item" id="menuSaveAs">Save As...</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSessionFolderWizard">Session Folder Wizard...</div>
@@ -4058,7 +4059,12 @@
 
             document.getElementById('menuSaveProject').addEventListener('click', function () {
                 closeMenus();
-                saveProjectSlp();
+                quickSave();
+            });
+
+            document.getElementById('menuSaveAs').addEventListener('click', function () {
+                closeMenus();
+                saveAs();
             });
 
             document.getElementById('menuLoadProject').addEventListener('click', function () {
@@ -4470,6 +4476,12 @@
 
             // --- New keyboard shortcuts (Prompt 36) ---
             document.addEventListener('keydown', function (e) {
+                // Ctrl+S / Cmd+S = Quick Save
+                if (e.key === 's' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+                    e.preventDefault();
+                    quickSave();
+                    return;
+                }
                 // --- Ctrl+Shift+T = Track All ---
                 if (e.key === 'T' && e.shiftKey && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
