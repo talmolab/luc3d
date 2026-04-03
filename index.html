@@ -1147,6 +1147,7 @@
          * Re-triangulates from whatever views have labels and updates reprojections.
          */
         function triangulateCurrentFrame() {
+            markDirty();
             if (!state.session) return;
 
             if (!sessionHasCalibration()) {
@@ -1316,6 +1317,7 @@
          * Uses the same logic as triangulateCurrentFrame but batched across all frames.
          */
         async function triangulateAllFrames() {
+            markDirty();
             if (!state.session) {
                 setStatus('No session loaded', 'warning');
                 return;
@@ -2466,6 +2468,7 @@
         }
 
         function addNewInstanceSmart() {
+            markDirty();
             if (!interactionManager || !state.session) return;
             var viewName = interactionManager.lastInteractedView || (state.views.length > 0 ? state.views[0].name : null);
             if (!viewName) return;
@@ -2817,6 +2820,7 @@
                 },
 
                 onNodeMoved: function (viewName, instanceGroup, nodeIdx, newPos) {
+                    markDirty();
                     // Mark instance as modified
                     const inst = instanceGroup.getInstance(viewName);
                     if (inst) {
@@ -2837,6 +2841,7 @@
                 },
 
                 onUnlinkedNodeMoved: function (viewName, instance) {
+                    markDirty();
                     if (instance && instance.points) {
                         recordUserPoints(viewName, instance.points);
                     }
@@ -3391,6 +3396,7 @@
          * a duplicate. Then propagate the swap forward.
          */
         function swapAssignTrack(frameIdx, camName, instance, newTrack, session) {
+            markDirty();
             var oldTrack = instance.trackIdx;
             if (oldTrack === newTrack) return 0;
 
@@ -3438,6 +3444,7 @@
         }
 
         function assignTrackToSelected(trackIdx) {
+            markDirty();
             if (!state.session) return;
             var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
             var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
@@ -3490,6 +3497,7 @@
                 }
             } else if (selUl) {
                 session.assignTrackToIdentity(selUl.instance.trackIdx, identityId, selUl.cameraName);
+                markDirty();
                 propagated = propagateIdentityForward(selUl.instance.trackIdx, identityId, selUl.cameraName);
             }
 
@@ -4820,6 +4828,7 @@
                         interactionManager.clearSelection();
                     }
                     state.session.removeInstanceGroup(state.currentFrame, group);
+                    markDirty();
                     setStatus('Deleted group', 'success');
                     updateTimelineForFrame(state.currentFrame);
                     if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
@@ -5154,6 +5163,7 @@
             // If group has 0 instances, remove it entirely
             if (group.instances.size === 0) {
                 state.session.removeInstanceGroup(frameIdx, group);
+                markDirty();
                 if (interactionManager) interactionManager.clearSelection();
             }
 
@@ -8349,9 +8359,11 @@
                                 var newIdVal = parseInt(sel.value);
                                 if (newIdVal >= 0) {
                                     state.session.assignTrackToIdentity(inst.trackIdx, newIdVal, camNameForId);
+                                    markDirty();
                                     propagateIdentityForward(inst.trackIdx, newIdVal, camNameForId);
                                 } else {
                                     state.session.trackIdentityMap.delete(camNameForId + ':' + inst.trackIdx);
+                                    markDirty();
                                 }
                                 drawAllOverlays(state.currentFrame);
                                 updateInfoPanel();
