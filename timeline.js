@@ -378,6 +378,11 @@ class Timeline {
         // Find max track index across all data (not just session.tracks.length,
         // which may be stale if tracks were added dynamically)
         var maxTrackIdx = session.tracks ? session.tracks.length - 1 : -1;
+        if (session.trackOccupancy) {
+            for (var [, occ] of session.trackOccupancy) {
+                if (occ.nTracks - 1 > maxTrackIdx) maxTrackIdx = occ.nTracks - 1;
+            }
+        }
         if (session.instanceGroups) {
             for (var [_fi, grps] of session.instanceGroups) {
                 for (var _gi = 0; _gi < grps.length; _gi++) {
@@ -405,7 +410,45 @@ class Timeline {
         // Collect camera names
         var cameraNames = session.cameras ? session.cameras.map(function (c) { return c.name; }) : [];
 
-        // Build per-track-per-camera frame sets
+        // --- Build segments from track occupancy (lazy H5 sessions) ---
+        // Direct linear scan: O(nFrames * nTracks) per camera, no intermediate Sets
+        var handledByOccupancy = new Set();
+        if (session.trackOccupancy) {
+            for (var oci = 0; oci < cameraNames.length; oci++) {
+                var occCam = cameraNames[oci];
+                var occ = session.trackOccupancy.get(occCam);
+                if (!occ) continue;
+                for (var occTr = 0; occTr < occ.nTracks; occTr++) {
+                    var occSegments = [];
+                    var occStart = -1;
+                    for (var occFi = 0; occFi < occ.nFrames; occFi++) {
+                        if (occ.data[occFi * occ.nTracks + occTr]) {
+                            if (occStart < 0) occStart = occFi;
+                        } else {
+                            if (occStart >= 0) {
+                                occSegments.push({ start: occStart, end: occFi - 1 });
+                                occStart = -1;
+                            }
+                        }
+                    }
+                    if (occStart >= 0) occSegments.push({ start: occStart, end: occ.nFrames - 1 });
+                    if (occSegments.length === 0) continue;
+
+                    var occTrackName = session.tracks[occTr] || ('track_' + occTr);
+                    var occColor = typeof getTrackColor === 'function' ? getTrackColor(occTr) : '#667eea';
+                    this._trackSegments.push({
+                        trackIdx: occTr,
+                        cameraName: occCam,
+                        color: occColor,
+                        segments: occSegments,
+                    });
+                    this._trackNames.push(occCam + ' / ' + occTrackName);
+                    handledByOccupancy.add(occTr + ':' + occCam);
+                }
+            }
+        }
+
+        // --- Build per-track-per-camera frame sets from frameGroups/instanceGroups ---
         // key: "trackIdx:camName" → Set<frameIdx>
         var trackCamFrames = {};
 
@@ -416,6 +459,7 @@ class Timeline {
                     var grpTrack = groups[gi].identityId >= 0 ? groups[gi].identityId : 0;
                     for (var [camName] of groups[gi].instances) {
                         var key = grpTrack + ':' + camName;
+                        if (handledByOccupancy.has(key)) continue;
                         if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
                         trackCamFrames[key].add(frameIdx);
                     }
@@ -431,6 +475,7 @@ class Timeline {
                     var t = instances[i].trackIdx;
                     if (t >= 0) {
                         var key2 = t + ':' + camName2;
+                        if (handledByOccupancy.has(key2)) continue;
                         if (!trackCamFrames[key2]) trackCamFrames[key2] = new Set();
                         trackCamFrames[key2].add(frameIdx2);
                     }
@@ -442,6 +487,7 @@ class Timeline {
                     var t2 = ulList[u].instance.trackIdx;
                     if (t2 >= 0) {
                         var key3 = t2 + ':' + camName3;
+                        if (handledByOccupancy.has(key3)) continue;
                         if (!trackCamFrames[key3]) trackCamFrames[key3] = new Set();
                         trackCamFrames[key3].add(frameIdx2);
                     }
@@ -449,7 +495,7 @@ class Timeline {
             }
         }
 
-        // Collect all track indices that actually have data
+        // Collect all track indices that actually have data (from non-occupancy sources)
         var allTrackIndices = new Set();
         for (var tcfKey in trackCamFrames) {
             var colonPos = tcfKey.indexOf(':');
