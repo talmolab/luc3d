@@ -51,7 +51,8 @@
                 File
                 <div class="menu-dropdown" id="menuFile">
                     <div class="menu-dropdown-item" id="menuNewProject">New Project</div>
-                    <div class="menu-dropdown-item" id="menuSaveProject">Save Project (.slp)</div>
+                    <div class="menu-dropdown-item" id="menuSaveProject">Save<span style="float:right;opacity:0.5;font-size:11px;">Ctrl+S</span></div>
+                    <div class="menu-dropdown-item" id="menuSaveAs">Save As...</div>
                     <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSessionFolderWizard">Session Folder Wizard...</div>
@@ -663,6 +664,7 @@
                 <span class="status-item">
                     <span class="status-dot" id="statusDot"></span>
                     <span id="statusText">Ready</span>
+                    <span id="saveDirtyDot" style="display:none;width:8px;height:8px;border-radius:50%;background:var(--warning-color);margin-left:6px;vertical-align:middle;" title="Unsaved changes"></span>
                 </span>
             </div>
             <div class="status-right">
@@ -747,6 +749,9 @@
             cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
             colorByIdentity: false,     // false = color by track, true = color by identity
             decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
+            slpFileHandle: null,      // FileSystemFileHandle for quick save
+            isDirty: false,           // true when unsaved annotation changes exist
+            isSaving: false,          // true while save is in progress
         };
 
         let videoController = null;
@@ -1160,6 +1165,7 @@
                 return;
             }
 
+            markDirty();
             console.log('[triangulate] Frame', frameIdx, '| cameras:', cameras.map(c => c.name),
                 '| views:', state.views.map(v => v.name));
 
@@ -1336,6 +1342,7 @@
                 return;
             }
 
+            markDirty();
             showLoading('Triangulating ' + frameIndices.length + ' frames...');
             var totalTriangulated = 0;
             var totalGroups = 0;
@@ -2463,6 +2470,7 @@
 
         function addNewInstanceSmart() {
             if (!interactionManager || !state.session) return;
+            markDirty();
             var viewName = interactionManager.lastInteractedView || (state.views.length > 0 ? state.views[0].name : null);
             if (!viewName) return;
             var frameIdx = state.currentFrame;
@@ -2813,6 +2821,7 @@
                 },
 
                 onNodeMoved: function (viewName, instanceGroup, nodeIdx, newPos) {
+                    markDirty();
                     // Mark instance as modified
                     const inst = instanceGroup.getInstance(viewName);
                     if (inst) {
@@ -2833,6 +2842,7 @@
                 },
 
                 onUnlinkedNodeMoved: function (viewName, instance) {
+                    markDirty();
                     if (instance && instance.points) {
                         recordUserPoints(viewName, instance.points);
                     }
@@ -3387,6 +3397,7 @@
          * a duplicate. Then propagate the swap forward.
          */
         function swapAssignTrack(frameIdx, camName, instance, newTrack, session) {
+            markDirty();
             var oldTrack = instance.trackIdx;
             if (oldTrack === newTrack) return 0;
 
@@ -3434,6 +3445,7 @@
         }
 
         function assignTrackToSelected(trackIdx) {
+            markDirty();
             if (!state.session) return;
             var sel = interactionManager ? interactionManager.selectedInstanceGroup : null;
             var selUl = interactionManager ? interactionManager.selectedUnlinked : null;
@@ -3486,6 +3498,7 @@
                 }
             } else if (selUl) {
                 session.assignTrackToIdentity(selUl.instance.trackIdx, identityId, selUl.cameraName);
+                markDirty();
                 propagated = propagateIdentityForward(selUl.instance.trackIdx, identityId, selUl.cameraName);
             }
 
@@ -4046,12 +4059,40 @@
 
             document.getElementById('menuSaveProject').addEventListener('click', function () {
                 closeMenus();
-                saveProjectSlp();
+                quickSave();
             });
 
-            document.getElementById('menuLoadProject').addEventListener('click', function () {
+            document.getElementById('menuSaveAs').addEventListener('click', function () {
                 closeMenus();
-                handleLoadProject();
+                saveAs();
+            });
+
+            document.getElementById('menuLoadProject').addEventListener('click', async function () {
+                closeMenus();
+                if (window.showOpenFilePicker) {
+                    try {
+                        var handles = await window.showOpenFilePicker({
+                            types: [{
+                                description: 'Project Files',
+                                accept: {
+                                    'application/x-hdf5': ['.slp', '.h5'],
+                                    'application/json': ['.json']
+                                }
+                            }]
+                        });
+                        if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                        var file = await handles[0].getFile();
+                        if (file.name.endsWith('.slp')) {
+                            state.slpFileHandle = handles[0];
+                        }
+                        handleLoadProject(file);
+                    } catch (e) {
+                        if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
+                        handleLoadProject();
+                    }
+                } else {
+                    handleLoadProject();
+                }
             });
 
             document.getElementById('menuSessionFolderWizard').addEventListener('click', function () {
@@ -4089,9 +4130,31 @@
                     handleAddSlp();
                 } else {
                     setStatus('Pick SLP file...', 'warning');
-                    var slpFiles = await pickFiles({ accept: '.slp,.h5' });
-                    if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
-                    handleLoadSlpFile(slpFiles[0]);
+                    // Use File System Access API if available to get a handle for save-back
+                    if (window.showOpenFilePicker) {
+                        try {
+                            var handles = await window.showOpenFilePicker({
+                                types: [{
+                                    description: 'SLEAP Labels',
+                                    accept: { 'application/x-hdf5': ['.slp', '.h5'] }
+                                }]
+                            });
+                            if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                            state.slpFileHandle = handles[0];
+                            var file = await handles[0].getFile();
+                            handleLoadSlpFile(file);
+                        } catch (e) {
+                            if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
+                            // Fallback to input picker
+                            var slpFiles = await pickFiles({ accept: '.slp,.h5' });
+                            if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                            handleLoadSlpFile(slpFiles[0]);
+                        }
+                    } else {
+                        var slpFiles = await pickFiles({ accept: '.slp,.h5' });
+                        if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                        handleLoadSlpFile(slpFiles[0]);
+                    }
                 }
             });
 
@@ -4458,6 +4521,12 @@
 
             // --- New keyboard shortcuts (Prompt 36) ---
             document.addEventListener('keydown', function (e) {
+                // Ctrl+S / Cmd+S = Quick Save
+                if (e.key === 's' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+                    e.preventDefault();
+                    quickSave();
+                    return;
+                }
                 // --- Ctrl+Shift+T = Track All ---
                 if (e.key === 'T' && e.shiftKey && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
@@ -4816,6 +4885,7 @@
                         interactionManager.clearSelection();
                     }
                     state.session.removeInstanceGroup(state.currentFrame, group);
+                    markDirty();
                     setStatus('Deleted group', 'success');
                     updateTimelineForFrame(state.currentFrame);
                     if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
@@ -4836,6 +4906,13 @@
             // Frame counter and FPS
             document.getElementById('totalFrames').textContent = state.totalFrames;
             document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
+
+            window.addEventListener('beforeunload', function(e) {
+                if (state.isDirty) {
+                    e.preventDefault();
+                    e.returnValue = '';
+                }
+            });
         }
 
         // ============================================
@@ -5143,6 +5220,7 @@
             // If group has 0 instances, remove it entirely
             if (group.instances.size === 0) {
                 state.session.removeInstanceGroup(frameIdx, group);
+                markDirty();
                 if (interactionManager) interactionManager.clearSelection();
             }
 
@@ -8338,9 +8416,11 @@
                                 var newIdVal = parseInt(sel.value);
                                 if (newIdVal >= 0) {
                                     state.session.assignTrackToIdentity(inst.trackIdx, newIdVal, camNameForId);
+                                    markDirty();
                                     propagateIdentityForward(inst.trackIdx, newIdVal, camNameForId);
                                 } else {
                                     state.session.trackIdentityMap.delete(camNameForId + ':' + inst.trackIdx);
+                                    markDirty();
                                 }
                                 drawAllOverlays(state.currentFrame);
                                 updateInfoPanel();
@@ -8677,84 +8757,169 @@
             return mod;
         }
 
+        function markDirty() {
+            if (state.isDirty) return;
+            state.isDirty = true;
+            document.title = '\u2022 Lucid';
+            var saveDot = document.getElementById('saveDirtyDot');
+            if (saveDot) saveDot.style.display = 'inline-block';
+        }
+
+        function clearDirty() {
+            state.isDirty = false;
+            document.title = 'Lucid';
+            var saveDot = document.getElementById('saveDirtyDot');
+            if (saveDot) saveDot.style.display = 'none';
+        }
+
+        async function buildSlpBytes() {
+            await ensureSleapIO();
+            var SIO = window.SleapIO;
+
+            var allLabeledFrames = [];
+            var allVideos = [];
+            var allSessions = [];
+            var allSkeletons = [];
+            var allTracks = [];
+            var allIdentities = [];
+            var seenSkeletonNames = new Set();
+            var seenTrackNames = new Set();
+
+            var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
+            for (var si = 0; si < sessionsToExport.length; si++) {
+                var sess = sessionsToExport[si];
+
+                // Debug: count 3D data in this session
+                var dbgGroupCount = 0, dbgWith3d = 0;
+                for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
+                    for (var _dbgG of _dbgGroups) {
+                        dbgGroupCount++;
+                        if (_dbgG.points3d && _dbgG.points3d.some(function(p) { return p != null; })) dbgWith3d++;
+                    }
+                }
+                console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
+                    dbgGroupCount, 'instance groups,', dbgWith3d, 'with 3D points,',
+                    sess.cameras.length, 'cameras:', sess.cameras.map(function(c){return c.name;}).join(', '));
+
+                // Find views and videoFiles for this session
+                var sessViews = state.views.filter(function (v) {
+                    return sess.cameras.some(function (c) { return c.name === v.name; });
+                });
+                var sessVideoFiles = state.videoFiles.filter(function (vf) {
+                    return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
+                });
+
+                var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
+
+                // Merge into combined Labels
+                allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
+                allVideos = allVideos.concat(sessLabels.videos || []);
+                for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
+                    var skel = sessLabels.skeletons[sk];
+                    if (!seenSkeletonNames.has(skel.name)) {
+                        allSkeletons.push(skel);
+                        seenSkeletonNames.add(skel.name);
+                    }
+                }
+                for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
+                    var trk = sessLabels.tracks[ti];
+                    if (!seenTrackNames.has(trk.name)) {
+                        allTracks.push(trk);
+                        seenTrackNames.add(trk.name);
+                    }
+                }
+                allIdentities = allIdentities.concat(sessLabels.identities || []);
+                allSessions = allSessions.concat(sessLabels.sessions || []);
+            }
+
+            var labels = new SIO.Labels({
+                labeledFrames: allLabeledFrames,
+                videos: allVideos,
+                skeletons: allSkeletons,
+                tracks: allTracks,
+                identities: allIdentities,
+                sessions: allSessions,
+                provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+            });
+
+            return await SIO.saveSlpToBytes(labels);
+        }
+
+        async function quickSave() {
+            if (!state.session) {
+                setStatus('No session to save', 'error');
+                return;
+            }
+            if (state.isSaving) {
+                setStatus('Save already in progress...', 'warning');
+                return;
+            }
+
+            try {
+                // If no file handle yet, prompt for one
+                if (!state.slpFileHandle) {
+                    if (!window.showSaveFilePicker) {
+                        // Fallback: use old download-based save
+                        saveProjectSlp();
+                        return;
+                    }
+                    var filename = 'project.slp';
+                    if (state.sessions.length === 1 && state.session.name) {
+                        filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
+                    }
+                    try {
+                        state.slpFileHandle = await window.showSaveFilePicker({
+                            suggestedName: filename,
+                            types: [{
+                                description: 'SLEAP Labels',
+                                accept: { 'application/x-hdf5': ['.slp'] }
+                            }]
+                        });
+                    } catch (pickErr) {
+                        if (pickErr.name === 'AbortError') {
+                            setStatus('Save cancelled', 'warning');
+                            return;
+                        }
+                        throw pickErr;
+                    }
+                }
+
+                state.isSaving = true;
+                setStatus('Saving...', 'warning');
+
+                var bytes = await buildSlpBytes();
+
+                // Write to file handle
+                var writable = await state.slpFileHandle.createWritable();
+                await writable.write(bytes);
+                await writable.close();
+
+                state.isSaving = false;
+                clearDirty();
+                var sizeMB = (bytes.byteLength / 1024 / 1024).toFixed(1);
+                setStatus('Saved (' + sizeMB + ' MB)', 'success');
+            } catch (err) {
+                state.isSaving = false;
+                console.error('Quick save failed:', err);
+                setStatus('Save failed: ' + err.message, 'error');
+            }
+        }
+
+        async function saveAs() {
+            // Force a new file picker regardless of existing handle
+            state.slpFileHandle = null;
+            await quickSave();
+        }
+
         async function saveProjectSlp() {
             if (!state.session) {
                 setStatus('No session to save', 'error');
                 return;
             }
             try {
-                await ensureSleapIO();
-                var SIO = window.SleapIO;
                 setStatus('Building SLP...', 'warning');
 
-                // Build Labels with all sessions
-                var allLabeledFrames = [];
-                var allVideos = [];
-                var allSessions = [];
-                var allSkeletons = [];
-                var allTracks = [];
-                var allIdentities = [];
-                var seenSkeletonNames = new Set();
-                var seenTrackNames = new Set();
-
-                var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
-                for (var si = 0; si < sessionsToExport.length; si++) {
-                    var sess = sessionsToExport[si];
-
-                    // Debug: count 3D data in this session
-                    var dbgGroupCount = 0, dbgWith3d = 0;
-                    for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
-                        for (var _dbgG of _dbgGroups) {
-                            dbgGroupCount++;
-                            if (_dbgG.points3d && _dbgG.points3d.some(function(p) { return p != null; })) dbgWith3d++;
-                        }
-                    }
-                    console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
-                        dbgGroupCount, 'instance groups,', dbgWith3d, 'with 3D points,',
-                        sess.cameras.length, 'cameras:', sess.cameras.map(function(c){return c.name;}).join(', '));
-
-                    // Find views and videoFiles for this session
-                    var sessViews = state.views.filter(function (v) {
-                        return sess.cameras.some(function (c) { return c.name === v.name; });
-                    });
-                    var sessVideoFiles = state.videoFiles.filter(function (vf) {
-                        return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
-                    });
-
-                    var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
-
-                    // Merge into combined Labels
-                    allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
-                    allVideos = allVideos.concat(sessLabels.videos || []);
-                    for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
-                        var skel = sessLabels.skeletons[sk];
-                        if (!seenSkeletonNames.has(skel.name)) {
-                            allSkeletons.push(skel);
-                            seenSkeletonNames.add(skel.name);
-                        }
-                    }
-                    for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
-                        var trk = sessLabels.tracks[ti];
-                        if (!seenTrackNames.has(trk.name)) {
-                            allTracks.push(trk);
-                            seenTrackNames.add(trk.name);
-                        }
-                    }
-                    allIdentities = allIdentities.concat(sessLabels.identities || []);
-                    allSessions = allSessions.concat(sessLabels.sessions || []);
-                }
-
-                var labels = new SIO.Labels({
-                    labeledFrames: allLabeledFrames,
-                    videos: allVideos,
-                    skeletons: allSkeletons,
-                    tracks: allTracks,
-                    identities: allIdentities,
-                    sessions: allSessions,
-                    provenance: { source: 'lucid', exported_at: new Date().toISOString() },
-                });
-
-                var bytes = await SIO.saveSlpToBytes(labels);
+                var bytes = await buildSlpBytes();
                 var blob = new Blob([bytes], { type: 'application/x-hdf5' });
 
                 var filename = 'project.slp';
@@ -8961,16 +9126,20 @@
             }
         }
 
-        async function handleLoadProject() {
+        async function handleLoadProject(prePickedFile) {
             try {
-                setStatus('Picking project file...', 'warning');
-                const files = await pickFiles({ accept: '.slp,.json,.h5' });
-                if (files.length === 0) {
-                    setStatus('No file selected', 'warning');
-                    return;
+                var file;
+                if (prePickedFile) {
+                    file = prePickedFile;
+                } else {
+                    setStatus('Picking project file...', 'warning');
+                    const files = await pickFiles({ accept: '.slp,.json,.h5' });
+                    if (files.length === 0) {
+                        setStatus('No file selected', 'warning');
+                        return;
+                    }
+                    file = files[0];
                 }
-
-                var file = files[0];
 
                 // Route SLP/H5 files to the SLP loader
                 var ext = file.name.split('.').pop().toLowerCase();
@@ -12387,6 +12556,38 @@
                     }
                 }
 
+                // Move non-grouped instances into unlinkedInstances so they are
+                // interactive (clickable/draggable). Instances in fg.instances that
+                // are NOT referenced by any InstanceGroup are "orphan" predictions —
+                // they need to be in fg.unlinkedInstances for hit testing to find them.
+                var movedToUnlinked = 0;
+                for (var [ulFrameIdx, ulFg] of session.frameGroups) {
+                    var frameGroups = session.instanceGroups.get(ulFrameIdx) || [];
+                    // Collect all instances that belong to a group
+                    var groupedInstances = new Set();
+                    for (var ulGi = 0; ulGi < frameGroups.length; ulGi++) {
+                        for (var [, gInst] of frameGroups[ulGi].instances) {
+                            groupedInstances.add(gInst);
+                        }
+                    }
+                    // Move ungrouped instances to unlinked
+                    for (var [ulCam, ulInsts] of ulFg.instances) {
+                        var remaining = [];
+                        for (var ulI = 0; ulI < ulInsts.length; ulI++) {
+                            if (!groupedInstances.has(ulInsts[ulI])) {
+                                ulFg.addUnlinkedInstance(ulCam, new UnlinkedInstance(ulInsts[ulI], ulCam));
+                                movedToUnlinked++;
+                            } else {
+                                remaining.push(ulInsts[ulI]);
+                            }
+                        }
+                        ulFg.instances.set(ulCam, remaining);
+                    }
+                }
+                if (movedToUnlinked > 0) {
+                    console.log('[load-slp] Moved', movedToUnlinked, 'ungrouped instances to unlinked pool');
+                }
+
                 // Recompute reprojections from stored 3D points + calibration
                 if (session.cameras.length >= 2) {
                     var hasAny3d = false;
@@ -12697,6 +12898,7 @@
                     interactionManager.attach(state.views);
                 }
 
+                clearDirty();
                 hideLoading();
                 var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
                 if (state.session) statusParts.push(state.session.numFrames + ' labeled frames');
