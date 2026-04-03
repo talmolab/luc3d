@@ -12556,6 +12556,38 @@
                     }
                 }
 
+                // Move non-grouped instances into unlinkedInstances so they are
+                // interactive (clickable/draggable). Instances in fg.instances that
+                // are NOT referenced by any InstanceGroup are "orphan" predictions —
+                // they need to be in fg.unlinkedInstances for hit testing to find them.
+                var movedToUnlinked = 0;
+                for (var [ulFrameIdx, ulFg] of session.frameGroups) {
+                    var frameGroups = session.instanceGroups.get(ulFrameIdx) || [];
+                    // Collect all instances that belong to a group
+                    var groupedInstances = new Set();
+                    for (var ulGi = 0; ulGi < frameGroups.length; ulGi++) {
+                        for (var [, gInst] of frameGroups[ulGi].instances) {
+                            groupedInstances.add(gInst);
+                        }
+                    }
+                    // Move ungrouped instances to unlinked
+                    for (var [ulCam, ulInsts] of ulFg.instances) {
+                        var remaining = [];
+                        for (var ulI = 0; ulI < ulInsts.length; ulI++) {
+                            if (!groupedInstances.has(ulInsts[ulI])) {
+                                ulFg.addUnlinkedInstance(ulCam, new UnlinkedInstance(ulInsts[ulI], ulCam));
+                                movedToUnlinked++;
+                            } else {
+                                remaining.push(ulInsts[ulI]);
+                            }
+                        }
+                        ulFg.instances.set(ulCam, remaining);
+                    }
+                }
+                if (movedToUnlinked > 0) {
+                    console.log('[load-slp] Moved', movedToUnlinked, 'ungrouped instances to unlinked pool');
+                }
+
                 // Recompute reprojections from stored 3D points + calibration
                 if (session.cameras.length >= 2) {
                     var hasAny3d = false;
