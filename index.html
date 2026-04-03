@@ -8715,6 +8715,127 @@
             if (saveDot) saveDot.style.display = 'none';
         }
 
+        async function quickSave() {
+            if (!state.session) {
+                setStatus('No session to save', 'error');
+                return;
+            }
+            if (state.isSaving) {
+                setStatus('Save already in progress...', 'warning');
+                return;
+            }
+
+            try {
+                // If no file handle yet, prompt for one
+                if (!state.slpFileHandle) {
+                    if (!window.showSaveFilePicker) {
+                        // Fallback: use old download-based save
+                        saveProjectSlp();
+                        return;
+                    }
+                    var filename = 'project.slp';
+                    if (state.sessions.length === 1 && state.session.name) {
+                        filename = state.session.name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.slp';
+                    }
+                    try {
+                        state.slpFileHandle = await window.showSaveFilePicker({
+                            suggestedName: filename,
+                            types: [{
+                                description: 'SLEAP Labels',
+                                accept: { 'application/x-hdf5': ['.slp'] }
+                            }]
+                        });
+                    } catch (pickErr) {
+                        if (pickErr.name === 'AbortError') {
+                            setStatus('Save cancelled', 'warning');
+                            return;
+                        }
+                        throw pickErr;
+                    }
+                }
+
+                state.isSaving = true;
+                setStatus('Saving...', 'warning');
+
+                // Serialize SLP (same as saveProjectSlp)
+                await ensureSleapIO();
+                var SIO = window.SleapIO;
+
+                var allLabeledFrames = [];
+                var allVideos = [];
+                var allSessions = [];
+                var allSkeletons = [];
+                var allTracks = [];
+                var allIdentities = [];
+                var seenSkeletonNames = new Set();
+                var seenTrackNames = new Set();
+
+                var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
+                for (var si = 0; si < sessionsToExport.length; si++) {
+                    var sess = sessionsToExport[si];
+                    var sessViews = state.views.filter(function (v) {
+                        return sess.cameras.some(function (c) { return c.name === v.name; });
+                    });
+                    var sessVideoFiles = state.videoFiles.filter(function (vf) {
+                        return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
+                    });
+
+                    var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
+
+                    allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
+                    allVideos = allVideos.concat(sessLabels.videos || []);
+                    for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
+                        var skel = sessLabels.skeletons[sk];
+                        if (!seenSkeletonNames.has(skel.name)) {
+                            allSkeletons.push(skel);
+                            seenSkeletonNames.add(skel.name);
+                        }
+                    }
+                    for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
+                        var trk = sessLabels.tracks[ti];
+                        if (!seenTrackNames.has(trk.name)) {
+                            allTracks.push(trk);
+                            seenTrackNames.add(trk.name);
+                        }
+                    }
+                    allIdentities = allIdentities.concat(sessLabels.identities || []);
+                    allSessions = allSessions.concat(sessLabels.sessions || []);
+                }
+
+                var labels = new SIO.Labels({
+                    labeledFrames: allLabeledFrames,
+                    videos: allVideos,
+                    skeletons: allSkeletons,
+                    tracks: allTracks,
+                    identities: allIdentities,
+                    sessions: allSessions,
+                    provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+                });
+
+                var bytes = await SIO.saveSlpToBytes(labels);
+
+                // Write to file handle
+                var writable = await state.slpFileHandle.createWritable();
+                await writable.write(bytes);
+                await writable.close();
+
+                state.isSaving = false;
+                clearDirty();
+                var sizeMB = (bytes.byteLength / 1024 / 1024).toFixed(1);
+                setStatus('Saved (' + sizeMB + ' MB)', 'success');
+            } catch (err) {
+                state.isSaving = false;
+                console.error('Quick save failed:', err);
+                setStatus('Save failed: ' + err.message, 'error');
+            }
+        }
+
+        async function saveAs() {
+            // Force a new file picker regardless of existing handle
+            state.slpFileHandle = null;
+            await quickSave();
+        }
+
         async function saveProjectSlp() {
             if (!state.session) {
                 setStatus('No session to save', 'error');
