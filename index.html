@@ -663,6 +663,7 @@
                 <span class="status-item">
                     <span class="status-dot" id="statusDot"></span>
                     <span id="statusText">Ready</span>
+                    <span id="saveDirtyDot" style="display:none;width:8px;height:8px;border-radius:50%;background:var(--warning-color);margin-left:6px;vertical-align:middle;" title="Unsaved changes"></span>
                 </span>
             </div>
             <div class="status-right">
@@ -747,6 +748,9 @@
             cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
             colorByIdentity: false,     // false = color by track, true = color by identity
             decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
+            slpFileHandle: null,      // FileSystemFileHandle for quick save
+            isDirty: false,           // true when unsaved annotation changes exist
+            isSaving: false,          // true while save is in progress
         };
 
         let videoController = null;
@@ -4836,6 +4840,13 @@
             // Frame counter and FPS
             document.getElementById('totalFrames').textContent = state.totalFrames;
             document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
+
+            window.addEventListener('beforeunload', function(e) {
+                if (state.isDirty) {
+                    e.preventDefault();
+                    e.returnValue = '';
+                }
+            });
         }
 
         // ============================================
@@ -8675,6 +8686,21 @@
             var mod = await import('./lib/sleap-io/index.browser.js?v=2');
             window.SleapIO = mod;
             return mod;
+        }
+
+        function markDirty() {
+            if (state.isDirty) return;
+            state.isDirty = true;
+            document.title = '\u2022 Lucid';
+            var saveDot = document.getElementById('saveDirtyDot');
+            if (saveDot) saveDot.style.display = 'inline-block';
+        }
+
+        function clearDirty() {
+            state.isDirty = false;
+            document.title = 'Lucid';
+            var saveDot = document.getElementById('saveDirtyDot');
+            if (saveDot) saveDot.style.display = 'none';
         }
 
         async function saveProjectSlp() {
