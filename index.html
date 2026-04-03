@@ -4067,9 +4067,32 @@
                 saveAs();
             });
 
-            document.getElementById('menuLoadProject').addEventListener('click', function () {
+            document.getElementById('menuLoadProject').addEventListener('click', async function () {
                 closeMenus();
-                handleLoadProject();
+                if (window.showOpenFilePicker) {
+                    try {
+                        var handles = await window.showOpenFilePicker({
+                            types: [{
+                                description: 'Project Files',
+                                accept: {
+                                    'application/x-hdf5': ['.slp', '.h5'],
+                                    'application/json': ['.json']
+                                }
+                            }]
+                        });
+                        if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                        var file = await handles[0].getFile();
+                        if (file.name.endsWith('.slp')) {
+                            state.slpFileHandle = handles[0];
+                        }
+                        handleLoadProject(file);
+                    } catch (e) {
+                        if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
+                        handleLoadProject();
+                    }
+                } else {
+                    handleLoadProject();
+                }
             });
 
             document.getElementById('menuSessionFolderWizard').addEventListener('click', function () {
@@ -4107,9 +4130,31 @@
                     handleAddSlp();
                 } else {
                     setStatus('Pick SLP file...', 'warning');
-                    var slpFiles = await pickFiles({ accept: '.slp,.h5' });
-                    if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
-                    handleLoadSlpFile(slpFiles[0]);
+                    // Use File System Access API if available to get a handle for save-back
+                    if (window.showOpenFilePicker) {
+                        try {
+                            var handles = await window.showOpenFilePicker({
+                                types: [{
+                                    description: 'SLEAP Labels',
+                                    accept: { 'application/x-hdf5': ['.slp', '.h5'] }
+                                }]
+                            });
+                            if (handles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                            state.slpFileHandle = handles[0];
+                            var file = await handles[0].getFile();
+                            handleLoadSlpFile(file);
+                        } catch (e) {
+                            if (e.name === 'AbortError') { setStatus('Cancelled', 'warning'); return; }
+                            // Fallback to input picker
+                            var slpFiles = await pickFiles({ accept: '.slp,.h5' });
+                            if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                            handleLoadSlpFile(slpFiles[0]);
+                        }
+                    } else {
+                        var slpFiles = await pickFiles({ accept: '.slp,.h5' });
+                        if (slpFiles.length === 0) { setStatus('No file selected', 'warning'); return; }
+                        handleLoadSlpFile(slpFiles[0]);
+                    }
                 }
             });
 
@@ -9132,16 +9177,20 @@
             }
         }
 
-        async function handleLoadProject() {
+        async function handleLoadProject(prePickedFile) {
             try {
-                setStatus('Picking project file...', 'warning');
-                const files = await pickFiles({ accept: '.slp,.json,.h5' });
-                if (files.length === 0) {
-                    setStatus('No file selected', 'warning');
-                    return;
+                var file;
+                if (prePickedFile) {
+                    file = prePickedFile;
+                } else {
+                    setStatus('Picking project file...', 'warning');
+                    const files = await pickFiles({ accept: '.slp,.json,.h5' });
+                    if (files.length === 0) {
+                        setStatus('No file selected', 'warning');
+                        return;
+                    }
+                    file = files[0];
                 }
-
-                var file = files[0];
 
                 // Route SLP/H5 files to the SLP loader
                 var ext = file.name.split('.').pop().toLowerCase();
@@ -12868,6 +12917,7 @@
                     interactionManager.attach(state.views);
                 }
 
+                clearDirty();
                 hideLoading();
                 var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
                 if (state.session) statusParts.push(state.session.numFrames + ' labeled frames');
