@@ -315,7 +315,7 @@ body {
     flex-direction: column;
     align-items: center;
     padding: 4px;
-    margin: 2px 4px;
+    margin: 4px 4px;
     cursor: pointer;
     border-radius: 4px;
     border: 2px solid var(--border-color);
@@ -443,6 +443,11 @@ body {
 .view-strip-item.strip-selected {
   outline: 2px solid rgba(255, 221, 68, 0.5);
   background: rgba(255, 221, 68, 0.1);
+}
+
+.view-strip-item.strip-multi-selected {
+  outline: 2px solid rgba(100, 180, 255, 0.7);
+  background: rgba(100, 180, 255, 0.15);
 }
 
 .view-strip-item.dragging {
@@ -798,6 +803,12 @@ body {
 .toolbar-btn.active {
   background: var(--accent-dim);
   color: var(--accent);
+}
+
+#tbSessions {
+  width: 64px;
+  padding: 0;
+  margin-left: -16px;
 }
 
 /* Toolbar dropdown menu (for Assign button) */

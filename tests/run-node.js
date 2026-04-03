@@ -168,7 +168,7 @@ var sandbox = {
     FileReader: function() { this.readAsArrayBuffer = function(){}; this.readAsText = function(){}; },
     fetch: function() { return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } }); },
     THREE: {
-        Scene: function() { this.add = function(){}; this.remove = function(){}; this.children = []; },
+        Scene: function() { var self = this; this.children = []; this.add = function(c){self.children.push(c)}; this.remove = function(c){var i=self.children.indexOf(c);if(i>=0)self.children.splice(i,1)}; this.traverse = function(fn){fn(self);for(var i=0;i<self.children.length;i++){if(self.children[i].traverse)self.children[i].traverse(fn);else fn(self.children[i])}}; },
         PerspectiveCamera: function() { this.position = {set:function(){return this},copy:function(){return this},clone:function(){return this},x:0,y:0,z:0,distanceTo:function(){return 10}}; this.up = {set:function(){return this},copy:function(){return this}}; this.lookAt = function(){}; this.updateProjectionMatrix = function(){}; this.aspect = 1; this.fov = 75; this.near = 0.1; this.far = 1000; },
         WebGLRenderer: function() { this.setSize = function(){}; this.render = function(){}; this.domElement = sandbox.document.createElement('canvas'); this.dispose = function(){}; this.setPixelRatio = function(){}; },
         Vector3: function(x,y,z) { this.x=x||0; this.y=y||0; this.z=z||0; this.set=function(a,b,c){this.x=a;this.y=b;this.z=c;return this}; this.copy=function(v){this.x=v.x;this.y=v.y;this.z=v.z;return this}; this.clone=function(){return new sandbox.THREE.Vector3(this.x,this.y,this.z)}; this.normalize=function(){return this}; this.cross=function(){return this}; this.sub=function(){return this}; this.add=function(){return this}; this.multiplyScalar=function(){return this}; this.length=function(){return 0}; this.distanceTo=function(){return 10}; this.applyMatrix4=function(){return this}; },
@@ -180,11 +180,11 @@ var sandbox = {
         LineBasicMaterial: function(o) { this.dispose = function(){}; if(o) Object.assign(this,o); },
         LineDashedMaterial: function(o) { this.dispose = function(){}; if(o) Object.assign(this,o); },
         PointsMaterial: function(o) { this.dispose = function(){}; if(o) Object.assign(this,o); },
-        Mesh: function() { this.position = {set:function(){return this},copy:function(){return this}}; this.scale = {set:function(){return this}}; this.visible = true; },
+        Mesh: function() { this.position = {x:0,y:0,z:0,set:function(a,b,c){this.x=a;this.y=b;this.z=c;return this},copy:function(v){this.x=v.x;this.y=v.y;this.z=v.z;return this}}; this.scale = {set:function(){return this}}; this.visible = true; this.material = {color:{set:function(){return this}},dispose:function(){}}; this.geometry = {dispose:function(){}}; this.quaternion = {copy:function(){return this},setFromUnitVectors:function(){return this}}; this.name = ''; this.isMesh = true; },
         Line: function() { this.computeLineDistances = function(){}; this.geometry = new sandbox.THREE.BufferGeometry(); },
         LineSegments: function() { this.computeLineDistances = function(){}; this.geometry = new sandbox.THREE.BufferGeometry(); },
         Points: function() {},
-        Group: function() { this.add = function(){}; this.remove = function(){}; this.children = []; },
+        Group: function() { var self = this; this.children = []; this.add = function(c){self.children.push(c)}; this.remove = function(c){var i=self.children.indexOf(c);if(i>=0)self.children.splice(i,1)}; this.traverse = function(fn){fn(self);for(var i=0;i<self.children.length;i++){if(self.children[i].traverse)self.children[i].traverse(fn);else fn(self.children[i])}}; },
         SphereGeometry: function() { this.dispose = function(){}; },
         BoxGeometry: function() { this.dispose = function(){}; },
         ConeGeometry: function() { this.dispose = function(){}; },
@@ -194,13 +194,18 @@ var sandbox = {
         Matrix4: function() { this.set = function(){return this}; this.elements = new Array(16).fill(0); },
         AmbientLight: function() {},
         DirectionalLight: function() { this.position = {set:function(){return this}}; },
-        GridHelper: function() {},
-        AxesHelper: function() {},
-        Sprite: function() { this.position = {set:function(){return this},copy:function(){return this}}; this.scale = {set:function(){return this}}; },
+        GridHelper: function() { this.rotation = {x:0,y:0,z:0}; },
+        AxesHelper: function() { this.scale = {set:function(){return this},setScalar:function(){return this}}; },
+        Sprite: function() { this.position = {x:0,y:0,z:0,set:function(a,b,c){this.x=a;this.y=b;this.z=c;return this},copy:function(v){this.x=v.x;this.y=v.y;this.z=v.z;return this}}; this.scale = {x:1,y:1,z:1,set:function(a,b,c){this.x=a;this.y=b;this.z=c;return this},multiplyScalar:function(s){this.x*=s;this.y*=s;this.z*=s;return this}}; },
         SpriteMaterial: function() { this.dispose = function(){}; this.map = null; },
-        CanvasTexture: function() { this.dispose = function(){}; },
+        CanvasTexture: function() { this.dispose = function(){}; this.minFilter = 0; },
+        MeshPhongMaterial: function(o) { this.dispose = function(){}; this.color = new sandbox.THREE.Color(); if(o) Object.assign(this,o); },
+        Object3D: function() { var self = this; this.children = []; this.add = function(c){self.children.push(c)}; this.remove = function(c){var i=self.children.indexOf(c);if(i>=0)self.children.splice(i,1)}; this.position = {x:0,y:0,z:0,set:function(a,b,c){this.x=a;this.y=b;this.z=c;return this}}; this.traverse = function(fn){fn(self);for(var i=0;i<self.children.length;i++){if(self.children[i].traverse)self.children[i].traverse(fn);else fn(self.children[i])}}; },
+        Quaternion: function() { this.setFromEuler = function(){return this}; this.setFromAxisAngle = function(){return this}; this.setFromUnitVectors = function(){return this}; },
+        DoubleSide: 2,
+        LinearFilter: 1006,
     },
-    process: { exit: function(code) { process.exit(code); } }
+    process: { exit: function(code) { process.exit(code); }, versions: { node: process.versions.node } }
 };
 
 // Also support OrbitControls
@@ -271,6 +276,9 @@ var testFiles = [
     'test-reprojection-lifecycle.js',
     'test-identity.js',
     'test-session-switching.js',
+    'test-predicted-conversion.js',
+    'test-save-load-json.js',
+    'test-tracker.js',
 ];
 
 for (var i = 0; i < testFiles.length; i++) {
