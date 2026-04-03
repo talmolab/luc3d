@@ -1148,7 +1148,6 @@
          * Re-triangulates from whatever views have labels and updates reprojections.
          */
         function triangulateCurrentFrame() {
-            markDirty();
             if (!state.session) return;
 
             if (!sessionHasCalibration()) {
@@ -1166,6 +1165,7 @@
                 return;
             }
 
+            markDirty();
             console.log('[triangulate] Frame', frameIdx, '| cameras:', cameras.map(c => c.name),
                 '| views:', state.views.map(v => v.name));
 
@@ -1318,7 +1318,6 @@
          * Uses the same logic as triangulateCurrentFrame but batched across all frames.
          */
         async function triangulateAllFrames() {
-            markDirty();
             if (!state.session) {
                 setStatus('No session loaded', 'warning');
                 return;
@@ -1343,6 +1342,7 @@
                 return;
             }
 
+            markDirty();
             showLoading('Triangulating ' + frameIndices.length + ' frames...');
             var totalTriangulated = 0;
             var totalGroups = 0;
@@ -2469,8 +2469,8 @@
         }
 
         function addNewInstanceSmart() {
-            markDirty();
             if (!interactionManager || !state.session) return;
+            markDirty();
             var viewName = interactionManager.lastInteractedView || (state.views.length > 0 ? state.views[0].name : null);
             if (!viewName) return;
             var frameIdx = state.currentFrame;
@@ -8772,6 +8772,79 @@
             if (saveDot) saveDot.style.display = 'none';
         }
 
+        async function buildSlpBytes() {
+            await ensureSleapIO();
+            var SIO = window.SleapIO;
+
+            var allLabeledFrames = [];
+            var allVideos = [];
+            var allSessions = [];
+            var allSkeletons = [];
+            var allTracks = [];
+            var allIdentities = [];
+            var seenSkeletonNames = new Set();
+            var seenTrackNames = new Set();
+
+            var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
+            for (var si = 0; si < sessionsToExport.length; si++) {
+                var sess = sessionsToExport[si];
+
+                // Debug: count 3D data in this session
+                var dbgGroupCount = 0, dbgWith3d = 0;
+                for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
+                    for (var _dbgG of _dbgGroups) {
+                        dbgGroupCount++;
+                        if (_dbgG.points3d && _dbgG.points3d.some(function(p) { return p != null; })) dbgWith3d++;
+                    }
+                }
+                console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
+                    dbgGroupCount, 'instance groups,', dbgWith3d, 'with 3D points,',
+                    sess.cameras.length, 'cameras:', sess.cameras.map(function(c){return c.name;}).join(', '));
+
+                // Find views and videoFiles for this session
+                var sessViews = state.views.filter(function (v) {
+                    return sess.cameras.some(function (c) { return c.name === v.name; });
+                });
+                var sessVideoFiles = state.videoFiles.filter(function (vf) {
+                    return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
+                });
+
+                var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
+
+                // Merge into combined Labels
+                allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
+                allVideos = allVideos.concat(sessLabels.videos || []);
+                for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
+                    var skel = sessLabels.skeletons[sk];
+                    if (!seenSkeletonNames.has(skel.name)) {
+                        allSkeletons.push(skel);
+                        seenSkeletonNames.add(skel.name);
+                    }
+                }
+                for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
+                    var trk = sessLabels.tracks[ti];
+                    if (!seenTrackNames.has(trk.name)) {
+                        allTracks.push(trk);
+                        seenTrackNames.add(trk.name);
+                    }
+                }
+                allIdentities = allIdentities.concat(sessLabels.identities || []);
+                allSessions = allSessions.concat(sessLabels.sessions || []);
+            }
+
+            var labels = new SIO.Labels({
+                labeledFrames: allLabeledFrames,
+                videos: allVideos,
+                skeletons: allSkeletons,
+                tracks: allTracks,
+                identities: allIdentities,
+                sessions: allSessions,
+                provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+            });
+
+            return await SIO.saveSlpToBytes(labels);
+        }
+
         async function quickSave() {
             if (!state.session) {
                 setStatus('No session to save', 'error');
@@ -8814,62 +8887,7 @@
                 state.isSaving = true;
                 setStatus('Saving...', 'warning');
 
-                // Serialize SLP (same as saveProjectSlp)
-                await ensureSleapIO();
-                var SIO = window.SleapIO;
-
-                var allLabeledFrames = [];
-                var allVideos = [];
-                var allSessions = [];
-                var allSkeletons = [];
-                var allTracks = [];
-                var allIdentities = [];
-                var seenSkeletonNames = new Set();
-                var seenTrackNames = new Set();
-
-                var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
-                for (var si = 0; si < sessionsToExport.length; si++) {
-                    var sess = sessionsToExport[si];
-                    var sessViews = state.views.filter(function (v) {
-                        return sess.cameras.some(function (c) { return c.name === v.name; });
-                    });
-                    var sessVideoFiles = state.videoFiles.filter(function (vf) {
-                        return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
-                    });
-
-                    var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
-
-                    allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
-                    allVideos = allVideos.concat(sessLabels.videos || []);
-                    for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
-                        var skel = sessLabels.skeletons[sk];
-                        if (!seenSkeletonNames.has(skel.name)) {
-                            allSkeletons.push(skel);
-                            seenSkeletonNames.add(skel.name);
-                        }
-                    }
-                    for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
-                        var trk = sessLabels.tracks[ti];
-                        if (!seenTrackNames.has(trk.name)) {
-                            allTracks.push(trk);
-                            seenTrackNames.add(trk.name);
-                        }
-                    }
-                    allIdentities = allIdentities.concat(sessLabels.identities || []);
-                    allSessions = allSessions.concat(sessLabels.sessions || []);
-                }
-
-                var labels = new SIO.Labels({
-                    labeledFrames: allLabeledFrames,
-                    videos: allVideos,
-                    skeletons: allSkeletons,
-                    tracks: allTracks,
-                    identities: allIdentities,
-                    sessions: allSessions,
-                    provenance: { source: 'lucid', exported_at: new Date().toISOString() },
-                });
-
-                var bytes = await SIO.saveSlpToBytes(labels);
+                var bytes = await buildSlpBytes();
 
                 // Write to file handle
                 var writable = await state.slpFileHandle.createWritable();
@@ -8899,78 +8917,9 @@
                 return;
             }
             try {
-                await ensureSleapIO();
-                var SIO = window.SleapIO;
                 setStatus('Building SLP...', 'warning');
 
-                // Build Labels with all sessions
-                var allLabeledFrames = [];
-                var allVideos = [];
-                var allSessions = [];
-                var allSkeletons = [];
-                var allTracks = [];
-                var allIdentities = [];
-                var seenSkeletonNames = new Set();
-                var seenTrackNames = new Set();
-
-                var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
-                for (var si = 0; si < sessionsToExport.length; si++) {
-                    var sess = sessionsToExport[si];
-
-                    // Debug: count 3D data in this session
-                    var dbgGroupCount = 0, dbgWith3d = 0;
-                    for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
-                        for (var _dbgG of _dbgGroups) {
-                            dbgGroupCount++;
-                            if (_dbgG.points3d && _dbgG.points3d.some(function(p) { return p != null; })) dbgWith3d++;
-                        }
-                    }
-                    console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
-                        dbgGroupCount, 'instance groups,', dbgWith3d, 'with 3D points,',
-                        sess.cameras.length, 'cameras:', sess.cameras.map(function(c){return c.name;}).join(', '));
-
-                    // Find views and videoFiles for this session
-                    var sessViews = state.views.filter(function (v) {
-                        return sess.cameras.some(function (c) { return c.name === v.name; });
-                    });
-                    var sessVideoFiles = state.videoFiles.filter(function (vf) {
-                        return sess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
-                    });
-
-                    var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
-
-                    // Merge into combined Labels
-                    allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
-                    allVideos = allVideos.concat(sessLabels.videos || []);
-                    for (var sk = 0; sk < (sessLabels.skeletons || []).length; sk++) {
-                        var skel = sessLabels.skeletons[sk];
-                        if (!seenSkeletonNames.has(skel.name)) {
-                            allSkeletons.push(skel);
-                            seenSkeletonNames.add(skel.name);
-                        }
-                    }
-                    for (var ti = 0; ti < (sessLabels.tracks || []).length; ti++) {
-                        var trk = sessLabels.tracks[ti];
-                        if (!seenTrackNames.has(trk.name)) {
-                            allTracks.push(trk);
-                            seenTrackNames.add(trk.name);
-                        }
-                    }
-                    allIdentities = allIdentities.concat(sessLabels.identities || []);
-                    allSessions = allSessions.concat(sessLabels.sessions || []);
-                }
-
-                var labels = new SIO.Labels({
-                    labeledFrames: allLabeledFrames,
-                    videos: allVideos,
-                    skeletons: allSkeletons,
-                    tracks: allTracks,
-                    identities: allIdentities,
-                    sessions: allSessions,
-                    provenance: { source: 'lucid', exported_at: new Date().toISOString() },
-                });
-
-                var bytes = await SIO.saveSlpToBytes(labels);
+                var bytes = await buildSlpBytes();
                 var blob = new Blob([bytes], { type: 'application/x-hdf5' });
 
                 var filename = 'project.slp';
