@@ -464,6 +464,25 @@
                 <!-- ==================== Skeleton Tab ==================== -->
                 <div class="panel-tab-content" id="tabSkeleton">
                     <div class="info-section">
+                        <h3>Nodes</h3>
+                        <table class="data-table" id="skeletonNodesTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Name</th>
+                                    <th style="width:30px"></th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="panel-button-row" style="margin-top:6px">
+                            <input type="text" id="nodeNameInput" placeholder="Node name"
+                                style="flex:1;padding:3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:3px;" />
+                            <button class="panel-btn" id="btnAddNode" title="Add skeleton node">+ Node</button>
+                        </div>
+                    </div>
+
+                    <div class="info-section">
                         <h3>Edges</h3>
                         <table class="data-table" id="skeletonEdgesTable">
                             <thead>
@@ -482,19 +501,6 @@
                                 style="flex:1;padding:3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:3px;"></select>
                             <button class="panel-btn" id="btnAddEdge" title="Add skeleton edge">+ Edge</button>
                         </div>
-                    </div>
-
-                    <div class="info-section">
-                        <h3>Nodes</h3>
-                        <table class="data-table" id="skeletonNodesTable">
-                            <thead>
-                                <tr>
-                                    <th>#</th>
-                                    <th>Name</th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
                     </div>
 
                     <div style="margin-top:10px;display:flex;gap:6px">
@@ -7249,7 +7255,7 @@
             if (!state.session) return;
             const sk = state.session.skeleton;
 
-            // Nodes (read-only — defined by SLP or loaded skeleton file)
+            // Nodes
             const nodesTbody = document.querySelector('#skeletonNodesTable tbody');
             nodesTbody.textContent = '';
             sk.nodes.forEach(function (name, i) {
@@ -7259,10 +7265,35 @@
                 tdIdx.textContent = i;
 
                 const tdName = document.createElement('td');
-                tdName.textContent = name;
+                const nameInput = document.createElement('input');
+                nameInput.type = 'text';
+                nameInput.value = name;
+                nameInput.style.cssText = 'width:100%;padding:1px 3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:2px;box-sizing:border-box;';
+                nameInput.addEventListener('change', function () {
+                    const newName = nameInput.value.trim();
+                    if (!newName) { nameInput.value = sk.nodes[i]; return; }
+                    sk.nodes[i] = newName;
+                    populateSkeletonTable();
+                    drawAllOverlays(state.currentFrame);
+                });
+                tdName.appendChild(nameInput);
+
+                const tdDel = document.createElement('td');
+                const delBtn = document.createElement('button');
+                delBtn.textContent = '\u00d7';
+                delBtn.className = 'panel-btn';
+                delBtn.style.cssText = 'padding:0 5px;font-size:14px;line-height:1;min-width:0;color:var(--error);';
+                delBtn.title = 'Remove node';
+                delBtn.addEventListener('click', function () {
+                    sk.removeNode(i);
+                    populateSkeletonTable();
+                    drawAllOverlays(state.currentFrame);
+                });
+                tdDel.appendChild(delBtn);
 
                 tr.appendChild(tdIdx);
                 tr.appendChild(tdName);
+                tr.appendChild(tdDel);
                 nodesTbody.appendChild(tr);
             });
 
@@ -7328,6 +7359,31 @@
         }
 
         function setupSkeletonEditing() {
+            // Add Node button
+            document.getElementById('btnAddNode').addEventListener('click', function () {
+                ensureSession();
+                const input = document.getElementById('nodeNameInput');
+                const name = input.value.trim();
+                if (!name) { setStatus('Enter a node name', 'warning'); return; }
+                // Check for duplicate
+                if (state.session.skeleton.nodes.indexOf(name) >= 0) {
+                    setStatus('Node "' + name + '" already exists', 'warning');
+                    return;
+                }
+                state.session.skeleton.addNode(name);
+                input.value = '';
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
+
+            // Allow Enter key in the node name input
+            document.getElementById('nodeNameInput').addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    document.getElementById('btnAddNode').click();
+                }
+            });
+
             // Add Edge button
             document.getElementById('btnAddEdge').addEventListener('click', function () {
                 ensureSession();
