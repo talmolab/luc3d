@@ -3073,6 +3073,42 @@
                         }
                     }
 
+                    // Clean up reprojection/triangulation data
+                    if (group) {
+                        var activeGroups = getInstanceGroupsForFrame(frameIdx);
+                        var groupStillExists = activeGroups.indexOf(group) >= 0;
+
+                        if (groupStillExists && group.points3d) {
+                            // Group still has cameras — re-triangulate if enough remain
+                            if (group.cameraNames.length >= 2) {
+                                reTriangulateGroup(group);
+                            } else {
+                                // < 2 cameras: clear reprojection data
+                                group.points3d = null;
+                                group.reprojections = null;
+                                group.observedPoints = null;
+                                if (group.reprojectedInstances) group.reprojectedInstances.clear();
+                                // Remove from triangulationResults
+                                var frameResults = state.triangulationResults.get(frameIdx);
+                                if (frameResults) {
+                                    state.triangulationResults.set(frameIdx,
+                                        frameResults.filter(function (r) { return r.group !== group; }));
+                                }
+                            }
+                        } else if (!groupStillExists) {
+                            // Group was fully deleted — remove from triangulationResults
+                            var frameResults2 = state.triangulationResults.get(frameIdx);
+                            if (frameResults2) {
+                                var filtered = frameResults2.filter(function (r) { return r.group !== group; });
+                                if (filtered.length > 0) {
+                                    state.triangulationResults.set(frameIdx, filtered);
+                                } else {
+                                    state.triangulationResults.delete(frameIdx);
+                                }
+                            }
+                        }
+                    }
+
                     // Update timeline: clear tick if no grouped users remain, update track bars
                     updateTimelineForFrame(frameIdx);
 
@@ -4891,6 +4927,16 @@
                         interactionManager.clearSelection();
                     }
                     state.session.removeInstanceGroup(state.currentFrame, group);
+                    // Clean up triangulation results for deleted group
+                    var frameResults = state.triangulationResults.get(state.currentFrame);
+                    if (frameResults) {
+                        var filtered = frameResults.filter(function (r) { return r.group !== group; });
+                        if (filtered.length > 0) {
+                            state.triangulationResults.set(state.currentFrame, filtered);
+                        } else {
+                            state.triangulationResults.delete(state.currentFrame);
+                        }
+                    }
                     markDirty();
                     setStatus('Deleted group', 'success');
                     updateTimelineForFrame(state.currentFrame);
