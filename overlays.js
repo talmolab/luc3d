@@ -1524,7 +1524,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
     const showReprojected = options.showReprojected !== false;
     const reprojNodeColor = options.reprojNodeColor || 'white';
     const showErrors      = options.showErrors !== false;
-    const showLegend      = options.showLegend !== false;
+    const showLegend      = options.showLegend === true;
     const colorByIdentity = !!options.colorByIdentity;
 
     // Per-type rendering options (fall back to flat options for backward compat)
