@@ -12659,7 +12659,9 @@
                     if (hasAny3d) {
                         showLoading('Recomputing reprojections from 3D data...');
                         await new Promise(function (r) { setTimeout(r, 0); });
+                        var sessTriResults = new Map();
                         for (var [frameIdx3, groups3] of session.instanceGroups) {
+                            var frameTriResults = [];
                             for (var grp of groups3) {
                                 if (!grp.points3d || !grp.points3d.some(function (p) { return p != null; })) continue;
                                 // Build reprojections from 3D points for each camera
@@ -12672,10 +12674,47 @@
                                 }
                                 grp.reprojections = reprojResult.reprojections;
                                 storeReprojectedInstances(grp, reprojResult, session.cameras);
+
+                                // Build observedPoints from group's 2D instances
+                                grp.observedPoints = {};
+                                for (var ci3 = 0; ci3 < session.cameras.length; ci3++) {
+                                    var obsInst = grp.getInstance(session.cameras[ci3].name);
+                                    if (obsInst) grp.observedPoints[session.cameras[ci3].name] = obsInst.points;
+                                }
+
+                                // Compute per-camera reprojection errors
+                                var trErrors = {};
+                                var trTotalErr = 0, trTotalCount = 0;
+                                for (var trCamName in grp.reprojections) {
+                                    var trObs = grp.observedPoints[trCamName];
+                                    var trRep = grp.reprojections[trCamName];
+                                    if (trObs && trRep) {
+                                        trErrors[trCamName] = computeReprojectionErrors(trObs, trRep);
+                                        for (var ei = 0; ei < trErrors[trCamName].length; ei++) {
+                                            if (trErrors[trCamName][ei] != null) {
+                                                trTotalErr += trErrors[trCamName][ei];
+                                                trTotalCount++;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                frameTriResults.push({
+                                    group: grp,
+                                    points3d: grp.points3d,
+                                    reprojections: grp.reprojections,
+                                    errors: trErrors,
+                                    meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null
+                                });
+
                                 grp.markClean();
                             }
+                            if (frameTriResults.length > 0) {
+                                sessTriResults.set(frameIdx3, frameTriResults);
+                            }
                         }
-                        console.log('[load-slp] Recomputed reprojections from 3D data');
+                        session.triangulationResults = sessTriResults;
+                        console.log('[load-slp] Recomputed reprojections from 3D data (' + sessTriResults.size + ' frames with results)');
                     }
                 }
 
@@ -12944,7 +12983,13 @@
                     }
                 }
 
-                // 4. Draw overlays and update UI
+                // 4. Restore triangulation results for the active session
+                state.triangulationResults = (state.session && state.session.triangulationResults) || new Map();
+                if (state.triangulationResults.size > 0) {
+                    setReprojErrorVisible(true);
+                }
+
+                // 5. Draw overlays and update UI
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
                 if (timeline) timeline.setData(state.session);
