@@ -12665,7 +12665,7 @@
                             for (var grp of groups3) {
                                 if (!grp.points3d || !grp.points3d.some(function (p) { return p != null; })) continue;
                                 // Build reprojections from 3D points for each camera
-                                var reprojResult = { reprojections: {} };
+                                var reprojResult = { reprojections: {}, points3d: grp.points3d };
                                 for (var ci2 = 0; ci2 < session.cameras.length; ci2++) {
                                     var cam2 = session.cameras[ci2];
                                     if (cam2.projectionMatrix) {
