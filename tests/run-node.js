@@ -279,6 +279,7 @@ var testFiles = [
     'test-predicted-conversion.js',
     'test-save-load-json.js',
     'test-tracker.js',
+    'test-rotation.js',
 ];
 
 for (var i = 0; i < testFiles.length; i++) {

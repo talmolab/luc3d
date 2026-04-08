@@ -290,8 +290,7 @@
 
                 <!-- ==================== Visibility Tab ==================== -->
                 <div class="panel-tab-content" id="tabVisibility">
-                    <h3>Rendering</h3>
-                    <div class="vis-section-header">User</div>
+                    <h3>User</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
                         <input type="range" id="visUserNodeSize" min="1" max="50" value="11" step="1">
@@ -304,13 +303,18 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Transparency</span>
-                        <input type="range" id="visUserEdgeTrans" min="0" max="100" value="100" step="5">
+                        <input type="range" id="visUserEdgeTrans" min="0" max="100" value="100" step="1">
                         <span class="vis-val" id="visUserEdgeTransVal">1.0</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Label Size</span>
                         <input type="range" id="visUserLabelSize" min="0" max="24" value="12" step="1">
                         <span class="vis-val" id="visUserLabelSizeVal">12</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Transparency</span>
+                        <input type="range" id="visUserLabelAlpha" min="0" max="1" value="1" step="0.01">
+                        <span class="vis-val" id="visUserLabelAlphaVal">1.00</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Pre-ID Edge</span>
@@ -328,7 +332,7 @@
                             <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
-                    <div class="vis-section-header">Predicted</div>
+                    <h3>Predicted</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
                         <input type="range" id="visPredNodeSize" min="1" max="50" value="20" step="1">
@@ -341,7 +345,7 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Transparency</span>
-                        <input type="range" id="visPredEdgeTrans" min="0" max="100" value="60" step="5">
+                        <input type="range" id="visPredEdgeTrans" min="0" max="100" value="60" step="1">
                         <span class="vis-val" id="visPredEdgeTransVal">0.6</span>
                     </div>
                     <div class="vis-line-style-row">
@@ -360,7 +364,7 @@
                             <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
-                    <div class="vis-section-header">Reprojections</div>
+                    <h3>Reprojections</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
                         <input type="range" id="visReprojNodeSize" min="1" max="50" value="16" step="1">
@@ -373,13 +377,23 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Transparency</span>
-                        <input type="range" id="visReprojEdgeTrans" min="0" max="100" value="100" step="5">
+                        <input type="range" id="visReprojEdgeTrans" min="0" max="100" value="100" step="1">
                         <span class="vis-val" id="visReprojEdgeTransVal">1.0</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Brightness</span>
+                        <input type="range" id="visReprojBrightness" min="0" max="100" value="100" step="1">
+                        <span class="vis-val" id="visReprojBrightnessVal">100%</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Label Size</span>
                         <input type="range" id="visReprojLabelSize" min="0" max="24" value="0" step="1">
                         <span class="vis-val" id="visReprojLabelSizeVal">0</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Transparency</span>
+                        <input type="range" id="visReprojLabelAlpha" min="0" max="1" value="1" step="0.01">
+                        <span class="vis-val" id="visReprojLabelAlphaVal">1.00</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Edge Style</span>
@@ -397,6 +411,17 @@
                             <button class="line-style-btn" data-style="track" title="Track Color">Track</button>
                         </div>
                     </div>
+                    <h3>Video Brightness</h3>
+                    <div class="vis-slider-row">
+                        <span>Select All Videos</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visVideoBrightnessLink" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div id="visVideoBrightnessTable" style="max-height:200px;overflow-y:auto;"></div>
+                    <h3>Video Rotation</h3>
+                    <div id="visVideoRotationTable" style="max-height:200px;overflow-y:auto;"></div>
                 </div>
 
                 <!-- ==================== Videos Tab ==================== -->
@@ -691,13 +716,13 @@
     </div>
 
     <!-- Module scripts (order matters: dependencies first) -->
-    <script src="video.js?v=4"></script>
+    <script src="video.js?v=5"></script>
     <script src="pose-data.js?v=6"></script>
     <script src="triangulation.js?v=5"></script>
     <script src="tracker.js"></script>
     <script src="demo-data.js"></script>
-    <script src="overlays.js?v=8"></script>
-    <script src="interaction.js?v=6"></script>
+    <script src="overlays.js?v=9"></script>
+    <script src="interaction.js?v=7"></script>
     <script src="viewport3d.js"></script>
     <script src="timeline.js"></script>
     <script src="file-io.js?v=5"></script>
@@ -2589,6 +2614,7 @@
                     lineWidth: parseInt(document.getElementById('visUserEdgeWeight').value) || 2,
                     alpha: parseInt(document.getElementById('visUserEdgeTrans').value) / 100,
                     labelSize: parseInt(document.getElementById('visUserLabelSize').value) || 11,
+                    labelAlpha: parseFloat(document.getElementById('visUserLabelAlpha').value),
                     showLabels: parseInt(document.getElementById('visUserLabelSize').value) > 0,
                     preLineStyle: document.getElementById('visUserPreLineStyle').getAttribute('data-value') || 'dashed',
                     postLineStyle: document.getElementById('visUserPostLineStyle').getAttribute('data-value') || 'solid',
@@ -2605,7 +2631,9 @@
                     nodeSize: parseInt(document.getElementById('visReprojNodeSize').value) || 4,
                     lineWidth: parseInt(document.getElementById('visReprojEdgeWeight').value) || 2,
                     alpha: parseInt(document.getElementById('visReprojEdgeTrans').value) / 100,
+                    brightness: parseInt(document.getElementById('visReprojBrightness').value) / 100,
                     labelSize: parseInt(document.getElementById('visReprojLabelSize').value) || 11,
+                    labelAlpha: parseFloat(document.getElementById('visReprojLabelAlpha').value),
                     showLabels: parseInt(document.getElementById('visReprojLabelSize').value) > 0,
                     lineStyle: document.getElementById('visReprojLineStyle').getAttribute('data-value') || 'dotted',
                 },
@@ -4211,6 +4239,7 @@
                     '<tr><td><b>View</b></td><td></td></tr>' +
                     '<tr><td><code>\\</code></td><td>Toggle 3D viewport</td></tr>' +
                     '<tr><td><code>I</code></td><td>Toggle info panel</td></tr>' +
+                    '<tr><td><code>Option+\u2192</code> / <code>Option+\u2190</code></td><td>Rotate video CW / CCW (hold for continuous)</td></tr>' +
                     '<tr><td><code>?</code></td><td>Show this help</td></tr>' +
                     '</tbody></table></div>' +
                     '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
@@ -4403,9 +4432,70 @@
                 }
             });
 
+            // --- Video Rotation (Alt/Option + Arrow) ---
+            var _rotState = { active: false, direction: 0, lastTime: 0, rafId: 0 };
+
+            function getActiveView() {
+                if (!paneManager || !paneManager.api) return null;
+                var ap = paneManager.api.activePanel;
+                if (!ap) return null;
+                var r = panelRenderers.get(ap.id);
+                if (!r) return null;
+                var vn = r.getViewName();
+                for (var i = 0; i < state.views.length; i++) {
+                    if (state.views[i].name === vn) return state.views[i];
+                }
+                return null;
+            }
+
+            function rotationLoop(now) {
+                if (!_rotState.active) return;
+                var view = getActiveView();
+                if (!view) { _rotState.active = false; return; }
+                var dt = (now - _rotState.lastTime) / 1000;
+                var degrees = 60 * dt * _rotState.direction;
+                view.rotation = clampRotation((view.rotation || 0) + degrees);
+                _rotState.lastTime = now;
+                // Only update the CSS transform — don't redraw overlays during animation
+                if (videoController) videoController.applyZoom(view);
+                syncRotationUI(view);
+                _rotState.rafId = requestAnimationFrame(rotationLoop);
+            }
+
+            document.addEventListener('keydown', function (e) {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+                    (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+                    e.preventDefault();
+                    var view = getActiveView();
+                    if (!view) return;
+                    var dir = e.key === 'ArrowRight' ? 1 : -1;
+                    if (!_rotState.active) {
+                        view.rotation = clampRotation((view.rotation || 0) + dir);
+                        if (videoController) videoController.applyZoom(view);
+                        syncRotationUI(view);
+                        _rotState.active = true;
+                        _rotState.direction = dir;
+                        _rotState.lastTime = performance.now();
+                        _rotState.rafId = requestAnimationFrame(rotationLoop);
+                    }
+                    return;
+                }
+            });
+
+            document.addEventListener('keyup', function (e) {
+                if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Alt') && _rotState.active) {
+                    _rotState.active = false;
+                    if (_rotState.rafId) { cancelAnimationFrame(_rotState.rafId); _rotState.rafId = 0; }
+                    // Redraw overlays once at the final rotation angle
+                    drawAllOverlays(state.currentFrame);
+                }
+            });
+
             document.addEventListener('keydown', function (e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
                 if (!videoController) return;
+                if (e.altKey) return; // Alt+Arrow handled by rotation above
 
                 switch (e.key) {
                     case 'ArrowRight':
@@ -4681,32 +4771,59 @@
             // Visibility Tab
             // ============================================
 
-            // Slider value display + redraw
-            function setupVisSlider(sliderId, valId, isTransparency) {
+            // Slider value display + redraw (throttled to ~10fps during drag)
+            function setupVisSlider(sliderId, valId, format) {
                 var slider = document.getElementById(sliderId);
                 var val = document.getElementById(valId);
                 if (!slider || !val) return;
-                slider.addEventListener('input', function() {
-                    if (isTransparency) {
+                var lastRender = 0;
+                var throttleTimer = null;
+                function updateLabel() {
+                    if (format === 'alpha') {
                         val.textContent = (parseInt(slider.value) / 100).toFixed(1);
+                    } else if (format === 'pct') {
+                        val.textContent = slider.value + '%';
+                    } else if (format === 'float') {
+                        val.textContent = parseFloat(slider.value).toFixed(2);
                     } else {
                         val.textContent = slider.value;
                     }
+                }
+                slider.addEventListener('input', function() {
+                    updateLabel();
+                    var now = performance.now();
+                    if (now - lastRender >= 100) {
+                        lastRender = now;
+                        drawAllOverlays(state.currentFrame);
+                    } else if (!throttleTimer) {
+                        throttleTimer = setTimeout(function() {
+                            throttleTimer = null;
+                            lastRender = performance.now();
+                            drawAllOverlays(state.currentFrame);
+                        }, 100 - (now - lastRender));
+                    }
+                });
+                slider.addEventListener('change', function() {
+                    updateLabel();
+                    if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
                     drawAllOverlays(state.currentFrame);
                 });
             }
 
             setupVisSlider('visUserNodeSize', 'visUserNodeSizeVal');
             setupVisSlider('visUserEdgeWeight', 'visUserEdgeWeightVal');
-            setupVisSlider('visUserEdgeTrans', 'visUserEdgeTransVal', true);
+            setupVisSlider('visUserEdgeTrans', 'visUserEdgeTransVal', 'alpha');
             setupVisSlider('visUserLabelSize', 'visUserLabelSizeVal');
+            setupVisSlider('visUserLabelAlpha', 'visUserLabelAlphaVal', 'float');
             setupVisSlider('visPredNodeSize', 'visPredNodeSizeVal');
             setupVisSlider('visPredEdgeWeight', 'visPredEdgeWeightVal');
-            setupVisSlider('visPredEdgeTrans', 'visPredEdgeTransVal', true);
+            setupVisSlider('visPredEdgeTrans', 'visPredEdgeTransVal', 'alpha');
             setupVisSlider('visReprojNodeSize', 'visReprojNodeSizeVal');
             setupVisSlider('visReprojEdgeWeight', 'visReprojEdgeWeightVal');
-            setupVisSlider('visReprojEdgeTrans', 'visReprojEdgeTransVal', true);
+            setupVisSlider('visReprojEdgeTrans', 'visReprojEdgeTransVal', 'alpha');
+            setupVisSlider('visReprojBrightness', 'visReprojBrightnessVal', 'pct');
             setupVisSlider('visReprojLabelSize', 'visReprojLabelSizeVal');
+            setupVisSlider('visReprojLabelAlpha', 'visReprojLabelAlphaVal', 'float');
 
             // Checkbox toggles
             ['visUser', 'visPredicted', 'visReprojections', 'visErrors'].forEach(function(id) {
@@ -4742,8 +4859,106 @@
                     container.querySelectorAll('.line-style-btn').forEach(function(b) { b.classList.remove('active'); });
                     btn.classList.add('active');
                     container.setAttribute('data-value', btn.getAttribute('data-style'));
+                    // Brightness slider only enabled when reprojections use track color
+                    if (container.id === 'visReprojNodeColor') {
+                        updateReprojBrightnessEnabled();
+                    }
                     drawAllOverlays(state.currentFrame);
                 });
+            });
+
+            function updateReprojBrightnessEnabled() {
+                var nodeColor = document.getElementById('visReprojNodeColor').getAttribute('data-value') || 'white';
+                var slider = document.getElementById('visReprojBrightness');
+                var val = document.getElementById('visReprojBrightnessVal');
+                if (slider) {
+                    var enabled = nodeColor === 'track';
+                    slider.disabled = !enabled;
+                    slider.style.opacity = enabled ? '1' : '0.35';
+                    if (val) val.style.opacity = enabled ? '1' : '0.35';
+                }
+            }
+            updateReprojBrightnessEnabled();
+
+            // --- Visibility settings cache (localStorage) ---
+            var VIS_CACHE_KEY = 'visibilitySettings';
+            var visSliderIds = [
+                'visUserNodeSize', 'visUserEdgeWeight', 'visUserEdgeTrans',
+                'visUserLabelSize', 'visUserLabelAlpha',
+                'visPredNodeSize', 'visPredEdgeWeight', 'visPredEdgeTrans',
+                'visReprojNodeSize', 'visReprojEdgeWeight', 'visReprojEdgeTrans',
+                'visReprojBrightness', 'visReprojLabelSize', 'visReprojLabelAlpha',
+            ];
+            var visCheckIds = ['visUser', 'visPredicted', 'visReprojections', 'visErrors'];
+            var visStyleIds = [
+                'visUserPreLineStyle', 'visUserPostLineStyle',
+                'visPredPreLineStyle', 'visPredPostLineStyle',
+                'visReprojLineStyle', 'visReprojNodeColor',
+            ];
+
+            function saveVisSettings() {
+                var data = {};
+                visSliderIds.forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) data[id] = el.value;
+                });
+                visCheckIds.forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) data[id] = el.checked;
+                });
+                visStyleIds.forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) data[id] = el.getAttribute('data-value');
+                });
+                localStorage.setItem(VIS_CACHE_KEY, JSON.stringify(data));
+            }
+
+            function restoreVisSettings() {
+                var raw = localStorage.getItem(VIS_CACHE_KEY);
+                if (!raw) return;
+                try { var data = JSON.parse(raw); } catch(e) { return; }
+                visSliderIds.forEach(function(id) {
+                    if (data[id] == null) return;
+                    var el = document.getElementById(id);
+                    if (el) {
+                        el.value = data[id];
+                        // Update paired display label
+                        var valEl = document.getElementById(id + 'Val');
+                        if (valEl) {
+                            if (id.indexOf('LabelAlpha') >= 0) valEl.textContent = parseFloat(data[id]).toFixed(2);
+                            else if (id.indexOf('Trans') >= 0) valEl.textContent = (parseInt(data[id]) / 100).toFixed(1);
+                            else if (id.indexOf('Brightness') >= 0) valEl.textContent = data[id] + '%';
+                            else valEl.textContent = data[id];
+                        }
+                    }
+                });
+                visCheckIds.forEach(function(id) {
+                    if (data[id] == null) return;
+                    var el = document.getElementById(id);
+                    if (el) el.checked = data[id];
+                });
+                visStyleIds.forEach(function(id) {
+                    if (!data[id]) return;
+                    var container = document.getElementById(id);
+                    if (!container) return;
+                    container.setAttribute('data-value', data[id]);
+                    container.querySelectorAll('.line-style-btn').forEach(function(b) {
+                        b.classList.toggle('active', b.getAttribute('data-style') === data[id]);
+                    });
+                });
+                updateReprojBrightnessEnabled();
+            }
+
+            restoreVisSettings();
+
+            // Hook save into all vis controls
+            var visTab = document.getElementById('tabVisibility');
+            if (visTab) {
+                visTab.addEventListener('change', saveVisSettings);
+                visTab.addEventListener('input', saveVisSettings);
+            }
+            document.querySelectorAll('.line-style-btn').forEach(function(btn) {
+                btn.addEventListener('click', saveVisSettings);
             });
 
             // Sessions sidebar toggle
@@ -14028,6 +14243,163 @@
             });
         }
 
+        function populateVideoBrightnessTable() {
+            var container = document.getElementById('visVideoBrightnessTable');
+            if (!container) return;
+            container.innerHTML = '';
+            for (var vi = 0; vi < state.views.length; vi++) {
+                var view = state.views[vi];
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px;';
+
+                var slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = '0';
+                slider.max = '200';
+                slider.value = view._brightness != null ? view._brightness : 100;
+                slider.step = '1';
+                slider.style.cssText = 'width:120px;flex-shrink:0;';
+                slider.dataset.viewIdx = vi;
+
+                var valLabel = document.createElement('span');
+                valLabel.className = 'vis-val';
+                valLabel.style.cssText = 'min-width:32px;text-align:right;flex-shrink:0;';
+                valLabel.textContent = slider.value + '%';
+
+                var camLabel = document.createElement('span');
+                camLabel.style.cssText = 'color:var(--text-primary,#e0e0e0);white-space:nowrap;flex-shrink:0;';
+                camLabel.textContent = view.name;
+
+                // Video file name from videoFiles
+                var videoName = '';
+                for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
+                    if (state.videoFiles[vfi].name === view.name) {
+                        videoName = state.videoFiles[vfi].file ? state.videoFiles[vfi].file.name : '';
+                        break;
+                    }
+                }
+                var vidLabel = document.createElement('span');
+                vidLabel.style.cssText = 'color:var(--text-muted,#888);font-size:10px;overflow-x:auto;white-space:nowrap;max-width:120px;';
+                vidLabel.textContent = videoName;
+
+                slider.addEventListener('input', (function(idx, vl) {
+                    return function(e) {
+                        var val = parseInt(e.target.value);
+                        vl.textContent = val + '%';
+                        var linked = document.getElementById('visVideoBrightnessLink');
+                        if (linked && linked.checked) {
+                            for (var i = 0; i < state.views.length; i++) {
+                                state.views[i]._brightness = val;
+                                applyVideoBrightness(state.views[i]);
+                            }
+                            var sliders = container.querySelectorAll('input[type=range]');
+                            var vals = container.querySelectorAll('.vis-val');
+                            sliders.forEach(function(s) { s.value = val; });
+                            vals.forEach(function(v) { v.textContent = val + '%'; });
+                        } else {
+                            state.views[idx]._brightness = val;
+                            applyVideoBrightness(state.views[idx]);
+                        }
+                    };
+                })(vi, valLabel));
+
+                row.appendChild(slider);
+                row.appendChild(valLabel);
+                row.appendChild(camLabel);
+                row.appendChild(vidLabel);
+                container.appendChild(row);
+            }
+        }
+
+        function applyVideoBrightness(view) {
+            if (!view.canvas) return;
+            var brightness = view._brightness != null ? view._brightness : 100;
+            view.canvas.style.filter = brightness === 100 ? '' : 'brightness(' + (brightness / 100) + ')';
+        }
+
+        function clampRotation(deg) {
+            deg = deg % 360;
+            if (deg > 180) deg -= 360;
+            if (deg < -179) deg += 360;
+            return deg;
+        }
+
+        function populateVideoRotationTable() {
+            var container = document.getElementById('visVideoRotationTable');
+            if (!container) return;
+            container.innerHTML = '';
+            for (var vi = 0; vi < state.views.length; vi++) {
+                var view = state.views[vi];
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px;';
+
+                var slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = '-179';
+                slider.max = '180';
+                slider.value = Math.round(view.rotation || 0);
+                slider.step = '1';
+                slider.style.cssText = 'width:120px;flex-shrink:0;';
+                slider.dataset.viewIdx = vi;
+
+                var numInput = document.createElement('input');
+                numInput.type = 'number';
+                numInput.min = '-179';
+                numInput.max = '180';
+                numInput.step = '1';
+                numInput.value = Math.round(view.rotation || 0);
+                numInput.style.cssText = 'width:48px;flex-shrink:0;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:right;padding:2px 4px;-moz-appearance:textfield;';
+                numInput.classList.add('no-spinner');
+                numInput.dataset.viewIdx = vi;
+
+                var camLabel = document.createElement('span');
+                camLabel.style.cssText = 'color:var(--text-primary,#e0e0e0);white-space:nowrap;flex-shrink:0;';
+                camLabel.textContent = view.name;
+
+                var videoName = '';
+                for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
+                    if (state.videoFiles[vfi].name === view.name) {
+                        videoName = state.videoFiles[vfi].file ? state.videoFiles[vfi].file.name : '';
+                        break;
+                    }
+                }
+                var vidLabel = document.createElement('span');
+                vidLabel.style.cssText = 'color:var(--text-muted,#888);font-size:10px;overflow-x:auto;white-space:nowrap;max-width:120px;';
+                vidLabel.textContent = videoName;
+
+                (function(idx, sl, ni) {
+                    function applyRotation(val) {
+                        val = clampRotation(parseInt(val) || 0);
+                        state.views[idx].rotation = val;
+                        sl.value = val;
+                        ni.value = val;
+                        if (videoController) videoController.applyZoom(state.views[idx]);
+                        drawAllOverlays(state.currentFrame);
+                    }
+                    sl.addEventListener('input', function() { applyRotation(sl.value); });
+                    ni.addEventListener('change', function() { applyRotation(ni.value); });
+                })(vi, slider, numInput);
+
+                row.appendChild(slider);
+                row.appendChild(numInput);
+                row.appendChild(camLabel);
+                row.appendChild(vidLabel);
+                container.appendChild(row);
+            }
+        }
+
+        function syncRotationUI(view) {
+            var container = document.getElementById('visVideoRotationTable');
+            if (!container) return;
+            var idx = state.views.indexOf(view);
+            if (idx < 0) return;
+            var val = Math.round(view.rotation || 0);
+            var sliders = container.querySelectorAll('input[type=range]');
+            var nums = container.querySelectorAll('input[type=number]');
+            if (sliders[idx]) sliders[idx].value = val;
+            if (nums[idx]) nums[idx].value = val;
+        }
+
         function populateViewStrip() {
             var list = document.getElementById('viewStripList');
             list.textContent = '';
@@ -14156,6 +14528,8 @@
                     }
                 })(state.views[idx]);
             }
+            populateVideoBrightnessTable();
+            populateVideoRotationTable();
         }
 
         // ============================================

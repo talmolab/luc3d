@@ -1342,7 +1342,16 @@ class VideoController {
         if (!view.zoom) return;
 
         var z = view.zoom;
-        var transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) scale(" + z.scale + ")";
+        var rot = view.rotation || 0;
+        var transform;
+        if (rot === 0) {
+            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) scale(" + z.scale + ")";
+        } else {
+            // Rotate around wrapper center using cached CSS dimensions (avoids reflow)
+            var cX = view.canvas ? parseFloat(view.canvas.style.width) / 2 || 0 : 0;
+            var cY = view.canvas ? parseFloat(view.canvas.style.height) / 2 || 0 : 0;
+            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) translate(" + cX + "px, " + cY + "px) rotate(" + rot + "deg) translate(" + (-cX) + "px, " + (-cY) + "px) scale(" + z.scale + ")";
+        }
 
         var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
         if (wrapper && wrapper.classList.contains('canvas-wrapper')) {
@@ -1413,12 +1422,10 @@ class VideoController {
         var scaledW = wW * z.scale;
         var scaledH = wH * z.scale;
         if (scaledW >= cW) {
-            // Width covers container — clamp so edges don't leave gaps
             var maxOx = -flexOffX;
             var minOx = cW - flexOffX - scaledW;
             z.offsetX = Math.max(minOx, Math.min(maxOx, z.offsetX));
         } else {
-            // Width doesn't cover — center horizontally
             z.offsetX = (cW - scaledW) / 2 - flexOffX;
         }
         if (scaledH >= cH) {
@@ -1426,7 +1433,6 @@ class VideoController {
             var minOy = cH - flexOffY - scaledH;
             z.offsetY = Math.max(minOy, Math.min(maxOy, z.offsetY));
         } else {
-            // Height doesn't cover — center vertically
             z.offsetY = (cH - scaledH) / 2 - flexOffY;
         }
     }

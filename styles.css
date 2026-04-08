@@ -2509,3 +2509,10 @@ kbd {
     color: #fff;
     border-color: #667eea;
 }
+
+/* Hide number input spinner buttons */
+.no-spinner::-webkit-outer-spin-button,
+.no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}

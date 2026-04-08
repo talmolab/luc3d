@@ -41,6 +41,22 @@ function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
 
+/**
+ * Adjust the brightness (V in HSV) of a hex color.
+ * @param {string} hex - e.g. '#ff8800'
+ * @param {number} factor - 0..1, where 1 = original brightness
+ * @returns {string} adjusted hex color
+ */
+function adjustColorBrightness(hex, factor) {
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    r = Math.round(Math.min(255, r * factor));
+    g = Math.round(Math.min(255, g * factor));
+    b = Math.round(Math.min(255, b * factor));
+    return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+}
+
 function getGroupColor(group, session, useIdentity, frameIdx, cameraName) {
     if (useIdentity && session) {
         // Try group's direct identity first
@@ -332,6 +348,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
     const alpha = options.alpha != null ? options.alpha : 1.0;
+    const labelAlpha = options.labelAlpha != null ? options.labelAlpha : 1.0;
     const showLabels = !!options.showLabels;
     const lineStyle = options.lineStyle || (options.dashed ? 'dashed' : 'solid');
     const dashPattern = getLineDashPattern(lineStyle);
@@ -469,7 +486,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     // --- 3. Optional labels (SLEAP-style with dark outline) ---
     if (showLabels) {
         var savedAlpha = ctx.globalAlpha;
-        ctx.globalAlpha = 1.0;
+        ctx.globalAlpha = labelAlpha;
         // Use independent label size (scaled to canvas coordinates)
         var fontSize = adjustedLabelSize;
         if (fontSize <= 0) { ctx.globalAlpha = savedAlpha; ctx.restore(); return; }
@@ -487,11 +504,11 @@ function drawSkeleton(ctx, instance, skeleton, options) {
             var tx = lp.x + labelOff.dx;
             var ty = lp.y + labelOff.dy;
             if (isNulled) {
-                ctx.globalAlpha = 0.4;
+                ctx.globalAlpha = 0.4 * labelAlpha;
                 ctx.fillStyle = '#888888';
                 ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
             } else {
-                ctx.globalAlpha = 1.0;
+                ctx.globalAlpha = labelAlpha;
                 ctx.fillStyle = '#ffffff';
                 ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
             }
@@ -1598,7 +1615,10 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
 
             // Draw reprojected instances — same color as group/3D viewer
             var trackBaseColor = getGroupColor(group, session, colorByIdentity, _frameIdx, viewName);
-            var reprojTrackColor = trackBaseColor;
+            var reprojBrightness = reprojOpts.brightness != null ? reprojOpts.brightness : 1.0;
+            var reprojTrackColor = reprojBrightness < 1.0
+                ? adjustColorBrightness(trackBaseColor, reprojBrightness)
+                : trackBaseColor;
 
             // Always draw reprojections — one per group per view
             if (showReprojected) {
