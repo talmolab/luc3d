@@ -1130,10 +1130,17 @@ class VideoController {
         var self = this;
 
         // Start native playback on all decoders
+        // Compute effective playback rate: (desired FPS / native FPS) * speed multiplier
+        var speedMult = this.state.speedMultiplier || 1.0;
         var views = this.state.views.filter(function (v) { return v.decoder; });
+        var nativeFps = (views.length > 0 && views[0].decoder.videoTrack && views[0].decoder.videoTrack.duration > 0)
+            ? views[0].decoder.samples.length / (views[0].decoder.videoTrack.duration / views[0].decoder.videoTrack.timescale)
+            : (this.state.fps || 30);
+        var rate = ((this.state.fps || 30) / nativeFps) * speedMult;
         for (var i = 0; i < views.length; i++) {
             var d = views[i].decoder;
             if (d.seekNative) {
+                if (d._videoEl) d._videoEl.playbackRate = rate;
                 d.seekNative(this.state.currentFrame);
                 d.playNative();
             }

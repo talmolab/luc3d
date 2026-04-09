@@ -46,6 +46,9 @@ class Timeline {
         /** @type {Function|null} */
         this._onRangeSelect = options.onRangeSelect || null;
 
+        /** @type {Function|null} */
+        this._onDragEnd = options.onDragEnd || null;
+
         // --- State -----------------------------------------------------------
 
         /** Current frame index (0-based) */
@@ -121,6 +124,12 @@ class Timeline {
         this.RANGE_COLOR = 'rgba(99,102,241,0.25)';   // indigo translucent
         this.SEPARATOR_COLOR = 'rgba(255,255,255,0.12)';
 
+        /** @const {number} Height of the horizontal scrollbar (px) */
+        this.SCROLLBAR_HEIGHT = 10;
+
+        /** @const {number} Min thumb width (px) */
+        this.SCROLLBAR_THUMB_MIN = 20;
+
         // --- Create canvas ---------------------------------------------------
 
         /** @type {HTMLCanvasElement} */
@@ -148,6 +157,56 @@ class Timeline {
         }
         this._container.appendChild(this._tooltipEl);
 
+        // --- Scrollbar element -----------------------------------------------
+
+        /** @type {HTMLDivElement} */
+        this._scrollbarTrack = document.createElement('div');
+        this._scrollbarTrack.style.cssText =
+            'position:absolute;bottom:0;left:' + this.LEFT_MARGIN + 'px;' +
+            'right:' + this.RIGHT_PADDING + 'px;height:' + this.SCROLLBAR_HEIGHT + 'px;' +
+            'background:rgba(255,255,255,0.05);display:none;z-index:5;border-radius:5px;';
+
+        /** @type {HTMLDivElement} */
+        this._scrollbarThumb = document.createElement('div');
+        this._scrollbarThumb.style.cssText =
+            'position:absolute;top:1px;height:' + (this.SCROLLBAR_HEIGHT - 2) + 'px;' +
+            'background:rgba(255,255,255,0.3);border-radius:4px;cursor:grab;min-width:' +
+            this.SCROLLBAR_THUMB_MIN + 'px;';
+        this._scrollbarTrack.appendChild(this._scrollbarThumb);
+        this._container.appendChild(this._scrollbarTrack);
+
+        /** Scrollbar drag state */
+        this._isScrollbarDragging = false;
+        this._scrollbarDragStartX = 0;
+        this._scrollbarDragStartScroll = 0;
+
+        // Scrollbar events
+        this._scrollbarThumb.addEventListener('mousedown', (function (e) {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._isScrollbarDragging = true;
+            this._scrollbarDragStartX = e.clientX;
+            this._scrollbarDragStartScroll = this._scrollFrame;
+            this._scrollbarThumb.style.cursor = 'grabbing';
+        }).bind(this));
+
+        this._scrollbarTrack.addEventListener('mousedown', (function (e) {
+            if (e.button !== 0 || this._isScrollbarDragging) return;
+            e.preventDefault();
+            e.stopPropagation();
+            // Click on track — jump scroll position
+            var trackRect = this._scrollbarTrack.getBoundingClientRect();
+            var clickX = e.clientX - trackRect.left;
+            var trackW = trackRect.width;
+            var fraction = clickX / trackW;
+            var maxScroll = Math.max(0, this._totalFrames - this._visibleFrames());
+            this._scrollFrame = fraction * maxScroll;
+            this._clampScroll();
+            this._updateScrollbar();
+            this.redraw();
+        }).bind(this));
+
         // --- Mouse / touch interaction state ---------------------------------
 
         this._isDragging = false;
@@ -166,10 +225,12 @@ class Timeline {
         this._onTouchMove = this._handleTouchMove.bind(this);
         this._onTouchEnd = this._handleTouchEnd.bind(this);
         this._onContextMenu = function (e) { e.preventDefault(); };
+        this._onWindowMouseMove = this._handleWindowMouseMove.bind(this);
 
         this._canvas.addEventListener('mousedown', this._onMouseDown);
         this._canvas.addEventListener('mousemove', this._onMouseMove);
         window.addEventListener('mouseup', this._onMouseUp);
+        window.addEventListener('mousemove', this._onWindowMouseMove);
         this._canvas.addEventListener('wheel', this._onWheel, { passive: false });
         this._canvas.addEventListener('touchstart', this._onTouchStart, { passive: false });
         this._canvas.addEventListener('touchmove', this._onTouchMove, { passive: false });
@@ -279,6 +340,8 @@ class Timeline {
         this._cssWidth = w;
         this._cssHeight = h;
         this._clampScroll();
+        this._scrollbarTrack.style.left = this.LEFT_MARGIN + 'px';
+        this._scrollbarTrack.style.right = this.RIGHT_PADDING + 'px';
         this.redraw();
     }
 
@@ -340,6 +403,9 @@ class Timeline {
 
         // --- Current frame playhead ---
         this._drawPlayhead(ctx, H);
+
+        // --- Scrollbar ---
+        this._updateScrollbar();
     }
 
     /**
@@ -349,6 +415,7 @@ class Timeline {
         this._canvas.removeEventListener('mousedown', this._onMouseDown);
         this._canvas.removeEventListener('mousemove', this._onMouseMove);
         window.removeEventListener('mouseup', this._onMouseUp);
+        window.removeEventListener('mousemove', this._onWindowMouseMove);
         this._canvas.removeEventListener('wheel', this._onWheel);
         this._canvas.removeEventListener('touchstart', this._onTouchStart);
         this._canvas.removeEventListener('touchmove', this._onTouchMove);
@@ -357,6 +424,7 @@ class Timeline {
         this._resizeObserver.disconnect();
         this._container.removeChild(this._canvas);
         this._container.removeChild(this._tooltipEl);
+        this._container.removeChild(this._scrollbarTrack);
     }
 
     // -----------------------------------------------------------------------
@@ -1048,6 +1116,27 @@ class Timeline {
     }
 
     /**
+     * Update the scrollbar thumb position and visibility.
+     * @private
+     */
+    _updateScrollbar() {
+        if (this._zoom <= 1) {
+            this._scrollbarTrack.style.display = 'none';
+            return;
+        }
+        this._scrollbarTrack.style.display = 'block';
+        var trackW = this._scrollbarTrack.offsetWidth;
+        if (trackW <= 0) return;
+        var visibleFrac = Math.min(1, this._visibleFrames() / this._totalFrames);
+        var thumbW = Math.max(this.SCROLLBAR_THUMB_MIN, visibleFrac * trackW);
+        var maxScroll = Math.max(0, this._totalFrames - this._visibleFrames());
+        var scrollFrac = maxScroll > 0 ? this._scrollFrame / maxScroll : 0;
+        var thumbTravel = trackW - thumbW;
+        this._scrollbarThumb.style.width = thumbW + 'px';
+        this._scrollbarThumb.style.left = (scrollFrac * thumbTravel) + 'px';
+    }
+
+    /**
      * Maximum useful zoom level.
      * @returns {number}
      * @private
@@ -1101,8 +1190,8 @@ class Timeline {
         var x = e.offsetX;
         var y = e.offsetY;
 
-        // Middle button -> pan
-        if (e.button === 1) {
+        // Middle button or right button -> pan
+        if (e.button === 1 || e.button === 2) {
             e.preventDefault();
             this._isPanning = true;
             this._panStartX = e.clientX;
@@ -1190,10 +1279,36 @@ class Timeline {
     }
 
     /**
+     * Window-level mousemove for scrollbar dragging.
+     * @param {MouseEvent} e
+     * @private
+     */
+    _handleWindowMouseMove(e) {
+        if (!this._isScrollbarDragging) return;
+        var trackRect = this._scrollbarTrack.getBoundingClientRect();
+        var trackW = trackRect.width;
+        if (trackW <= 0) return;
+        var dx = e.clientX - this._scrollbarDragStartX;
+        var maxScroll = Math.max(0, this._totalFrames - this._visibleFrames());
+        var thumbTravel = trackW - this._scrollbarThumb.offsetWidth;
+        if (thumbTravel <= 0) return;
+        this._scrollFrame = this._scrollbarDragStartScroll + (dx / thumbTravel) * maxScroll;
+        this._clampScroll();
+        this._updateScrollbar();
+        this.redraw();
+    }
+
+    /**
      * @param {MouseEvent} e
      * @private
      */
     _handleMouseUp(e) {
+        if (this._isScrollbarDragging) {
+            this._isScrollbarDragging = false;
+            this._scrollbarThumb.style.cursor = 'grab';
+            return;
+        }
+
         if (this._isPanning) {
             this._isPanning = false;
             this._canvas.style.cursor = 'pointer';
@@ -1211,6 +1326,7 @@ class Timeline {
         }
 
         this._isDragging = false;
+        if (this._onDragEnd) this._onDragEnd(this._currentFrame);
     }
 
     /**

@@ -109,6 +109,36 @@ class Viewport3D {
         /** @type {number} Scene scale factor based on camera baseline */
         this._sceneScale = 1;
 
+        /** @type {number} Camera label font size (default 28) */
+        this.cameraLabelSize = options.cameraLabelSize || 28;
+
+        /** @type {number} Camera sphere radius multiplier (default 3) */
+        this.cameraSphereSize = options.cameraSphereSize || 3;
+
+        /** @type {number} Pyramid depth multiplier (default 40) */
+        this.pyramidLength = options.pyramidLength || 40;
+
+        /** @type {number} 3D skeleton node radius multiplier (default 2) */
+        this.skeletonNodeSize = options.skeletonNodeSize !== undefined ? options.skeletonNodeSize : 2;
+
+        /** @type {number} 3D skeleton edge radius multiplier (default 0.8) */
+        this.skeletonEdgeWeight = options.skeletonEdgeWeight !== undefined ? options.skeletonEdgeWeight : 0.8;
+
+        /** @type {boolean} Whether to show camera labels */
+        this.showCameraLabels = options.showCameraLabels !== undefined ? options.showCameraLabels : true;
+
+        /** @type {boolean} Whether to show camera spheres */
+        this.showCameraSpheres = options.showCameraSpheres !== undefined ? options.showCameraSpheres : true;
+
+        /** @type {boolean} Whether to show camera pyramids */
+        this.showCameraPyramids = options.showCameraPyramids !== undefined ? options.showCameraPyramids : true;
+
+        /** @type {boolean} Whether to show skeleton nodes */
+        this.showSkeletonNodes = options.showSkeletonNodes !== undefined ? options.showSkeletonNodes : true;
+
+        /** @type {boolean} Whether to show skeleton edges */
+        this.showSkeletonEdges = options.showSkeletonEdges !== undefined ? options.showSkeletonEdges : true;
+
         // Resize observer for container dimension changes
         /** @type {ResizeObserver|null} */
         this._resizeObserver = null;
@@ -262,7 +292,7 @@ class Viewport3D {
 
         this._sceneScale = sceneScale;
 
-        const pyramidDepth = 40 * sceneScale;
+        const pyramidDepth = this.pyramidLength * sceneScale;
 
         for (let i = 0; i < this.cameras.length; i++) {
             const cam = this.cameras[i];
@@ -318,123 +348,126 @@ class Viewport3D {
                     this._scaleVec3(camDown, halfH)),
             ];
 
-            // --- Build wireframe geometry ---
-            // Apex edges: 4 lines from camera center to each corner
-            const apexPositions = [];
-            for (let c = 0; c < 4; c++) {
-                apexPositions.push(camPos[0], camPos[1], camPos[2]);
-                apexPositions.push(corners[c][0], corners[c][1], corners[c][2]);
-            }
+            // --- Build wireframe geometry (pyramid) ---
+            if (this.showCameraPyramids && this.pyramidLength > 0) {
+                // Apex edges: 4 lines from camera center to each corner
+                const apexPositions = [];
+                for (let c = 0; c < 4; c++) {
+                    apexPositions.push(camPos[0], camPos[1], camPos[2]);
+                    apexPositions.push(corners[c][0], corners[c][1], corners[c][2]);
+                }
 
-            const apexGeo = new THREE.BufferGeometry();
-            apexGeo.setAttribute('position',
-                new THREE.Float32BufferAttribute(apexPositions, 3));
-            const apexMat = new THREE.LineBasicMaterial({
-                color: 0xffdd44,
-                transparent: true,
-                opacity: 0.7,
-            });
-            const apexLines = new THREE.LineSegments(apexGeo, apexMat);
-            apexLines.name = 'camera_' + cam.name;
-            this._cameraGroup.add(apexLines);
+                const apexGeo = new THREE.BufferGeometry();
+                apexGeo.setAttribute('position',
+                    new THREE.Float32BufferAttribute(apexPositions, 3));
+                const apexMat = new THREE.LineBasicMaterial({
+                    color: 0xffdd44,
+                    transparent: true,
+                    opacity: 0.7,
+                });
+                const apexLines = new THREE.LineSegments(apexGeo, apexMat);
+                apexLines.name = 'camera_' + cam.name;
+                this._cameraGroup.add(apexLines);
 
-            // Base edges: 4 lines around the rectangle
-            const basePositions = [];
-            for (let c = 0; c < 4; c++) {
-                const next = (c + 1) % 4;
-                basePositions.push(corners[c][0], corners[c][1], corners[c][2]);
-                basePositions.push(corners[next][0], corners[next][1], corners[next][2]);
-            }
+                // Base edges: 4 lines around the rectangle
+                const basePositions = [];
+                for (let c = 0; c < 4; c++) {
+                    const next = (c + 1) % 4;
+                    basePositions.push(corners[c][0], corners[c][1], corners[c][2]);
+                    basePositions.push(corners[next][0], corners[next][1], corners[next][2]);
+                }
 
-            const baseGeo = new THREE.BufferGeometry();
-            baseGeo.setAttribute('position',
-                new THREE.Float32BufferAttribute(basePositions, 3));
-            const baseMat = new THREE.LineBasicMaterial({
-                color: 0xffdd44,
-                transparent: true,
-                opacity: 0.7,
-            });
-            const baseLines = new THREE.LineSegments(baseGeo, baseMat);
-            baseLines.name = 'cameraBase_' + cam.name;
-            this._cameraGroup.add(baseLines);
+                const baseGeo = new THREE.BufferGeometry();
+                baseGeo.setAttribute('position',
+                    new THREE.Float32BufferAttribute(basePositions, 3));
+                const baseMat = new THREE.LineBasicMaterial({
+                    color: 0xffdd44,
+                    transparent: true,
+                    opacity: 0.7,
+                });
+                const baseLines = new THREE.LineSegments(baseGeo, baseMat);
+                baseLines.name = 'cameraBase_' + cam.name;
+                this._cameraGroup.add(baseLines);
 
-            // --- Invisible hitbox mesh for click detection ---
-            // 4 triangular side faces + 2 triangles for the base
-            const hitPositions = [];
-            // Side faces (apex to each base edge)
-            for (let c = 0; c < 4; c++) {
-                const next = (c + 1) % 4;
+                // --- Invisible hitbox mesh for click detection ---
+                const hitPositions = [];
+                for (let c = 0; c < 4; c++) {
+                    const next = (c + 1) % 4;
+                    hitPositions.push(
+                        camPos[0], camPos[1], camPos[2],
+                        corners[c][0], corners[c][1], corners[c][2],
+                        corners[next][0], corners[next][1], corners[next][2]
+                    );
+                }
                 hitPositions.push(
-                    camPos[0], camPos[1], camPos[2],
-                    corners[c][0], corners[c][1], corners[c][2],
-                    corners[next][0], corners[next][1], corners[next][2]
+                    corners[0][0], corners[0][1], corners[0][2],
+                    corners[1][0], corners[1][1], corners[1][2],
+                    corners[2][0], corners[2][1], corners[2][2],
+                    corners[0][0], corners[0][1], corners[0][2],
+                    corners[2][0], corners[2][1], corners[2][2],
+                    corners[3][0], corners[3][1], corners[3][2]
                 );
+
+                const hitGeo = new THREE.BufferGeometry();
+                hitGeo.setAttribute('position',
+                    new THREE.Float32BufferAttribute(hitPositions, 3));
+                const hitMat = new THREE.MeshBasicMaterial({
+                    visible: false,
+                    side: THREE.DoubleSide,
+                });
+                const hitbox = new THREE.Mesh(hitGeo, hitMat);
+                hitbox.name = 'camHitbox_' + cam.name;
+                this._cameraGroup.add(hitbox);
+
+                // --- Blue "up" direction line ---
+                const topMid = [
+                    (corners[0][0] + corners[1][0]) / 2,
+                    (corners[0][1] + corners[1][1]) / 2,
+                    (corners[0][2] + corners[1][2]) / 2,
+                ];
+                const upLineGeo = new THREE.BufferGeometry();
+                upLineGeo.setAttribute('position',
+                    new THREE.Float32BufferAttribute([
+                        camPos[0], camPos[1], camPos[2],
+                        topMid[0], topMid[1], topMid[2],
+                    ], 3));
+                const upLineMat = new THREE.LineBasicMaterial({
+                    color: 0x4488ff,
+                    transparent: true,
+                    opacity: 0.9,
+                });
+                const upLine = new THREE.LineSegments(upLineGeo, upLineMat);
+                upLine.name = 'camUp_' + cam.name;
+                this._cameraGroup.add(upLine);
             }
-            // Base face (two triangles)
-            hitPositions.push(
-                corners[0][0], corners[0][1], corners[0][2],
-                corners[1][0], corners[1][1], corners[1][2],
-                corners[2][0], corners[2][1], corners[2][2],
-                corners[0][0], corners[0][1], corners[0][2],
-                corners[2][0], corners[2][1], corners[2][2],
-                corners[3][0], corners[3][1], corners[3][2]
-            );
-
-            const hitGeo = new THREE.BufferGeometry();
-            hitGeo.setAttribute('position',
-                new THREE.Float32BufferAttribute(hitPositions, 3));
-            const hitMat = new THREE.MeshBasicMaterial({
-                visible: false,
-                side: THREE.DoubleSide,
-            });
-            const hitbox = new THREE.Mesh(hitGeo, hitMat);
-            hitbox.name = 'camHitbox_' + cam.name;
-            this._cameraGroup.add(hitbox);
-
-            // --- Blue "up" direction line: camera center to top edge midpoint ---
-            const topMid = [
-                (corners[0][0] + corners[1][0]) / 2,
-                (corners[0][1] + corners[1][1]) / 2,
-                (corners[0][2] + corners[1][2]) / 2,
-            ];
-            const upLineGeo = new THREE.BufferGeometry();
-            upLineGeo.setAttribute('position',
-                new THREE.Float32BufferAttribute([
-                    camPos[0], camPos[1], camPos[2],
-                    topMid[0], topMid[1], topMid[2],
-                ], 3));
-            const upLineMat = new THREE.LineBasicMaterial({
-                color: 0x4488ff,
-                transparent: true,
-                opacity: 0.9,
-            });
-            const upLine = new THREE.LineSegments(upLineGeo, upLineMat);
-            upLine.name = 'camUp_' + cam.name;
-            this._cameraGroup.add(upLine);
 
             // --- Camera label sprite ---
-            const label = this._createTextSprite(cam.name, {
-                fontSize: 28,
-                color: '#ffdd44',
-                backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            });
-            // Position label slightly above the camera center
-            label.position.set(camPos[0], camPos[1], camPos[2] + 15 * sceneScale);
-            label.scale.multiplyScalar(sceneScale);
-            label.name = 'label_' + cam.name;
-            this._cameraGroup.add(label);
+            if (this.showCameraLabels && this.cameraLabelSize > 0) {
+                const label = this._createTextSprite(cam.name, {
+                    fontSize: this.cameraLabelSize,
+                    color: '#ffdd44',
+                    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                });
+                var labelOffset = (this.cameraSphereSize + (this.cameraLabelSize / 28) * 12) * sceneScale;
+                label.position.set(camPos[0], camPos[1], camPos[2] + labelOffset);
+                label.scale.multiplyScalar(sceneScale);
+                label.name = 'label_' + cam.name;
+                this._cameraGroup.add(label);
+            }
 
-            // --- Small sphere at camera center for visibility ---
-            const sphereGeo = new THREE.SphereGeometry(3 * sceneScale, 8, 8);
-            const sphereMat = new THREE.MeshPhongMaterial({
-                color: 0xffdd44,
-                transparent: true,
-                opacity: 0.8,
-            });
-            const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-            sphere.position.set(camPos[0], camPos[1], camPos[2]);
-            sphere.name = 'camSphere_' + cam.name;
-            this._cameraGroup.add(sphere);
+            // --- Small sphere at camera center ---
+            if (this.showCameraSpheres && this.cameraSphereSize > 0) {
+                const sphereGeo = new THREE.SphereGeometry(this.cameraSphereSize * sceneScale, 8, 8);
+                const sphereMat = new THREE.MeshPhongMaterial({
+                    color: 0xffdd44,
+                    transparent: true,
+                    opacity: 0.8,
+                });
+                const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+                sphere.position.set(camPos[0], camPos[1], camPos[2]);
+                sphere.name = 'camSphere_' + cam.name;
+                this._cameraGroup.add(sphere);
+            }
         }
     }
 
@@ -781,8 +814,8 @@ class Viewport3D {
         console.log('[3D] updateSkeleton:', instanceGroups.length, 'groups,', groupsWithPts.length, 'with points3d, sceneScale:', this._sceneScale);
 
         const ss = this._sceneScale || 1;
-        const nodeRadius = 2 * ss;        // mm, scaled
-        const edgeRadius = 0.8 * ss;      // mm, scaled
+        const nodeRadius = this.skeletonNodeSize * ss;
+        const edgeRadius = this.skeletonEdgeWeight * ss;
         const highlightScale = 1.5;  // scale factor for selected instance
         const sphereSegments = 12;
         const cylinderSegments = 6;
@@ -825,20 +858,23 @@ class Viewport3D {
             instanceGroup3D.name = 'instance_' + g;
 
             // --- Draw keypoint spheres ---
-            for (let n = 0; n < pts.length; n++) {
-                const pt = pts[n];
-                if (pt == null) continue;
+            if (this.showSkeletonNodes && nodeRadius > 0) {
+                for (let n = 0; n < pts.length; n++) {
+                    const pt = pts[n];
+                    if (pt == null) continue;
 
-                const mesh = new THREE.Mesh(sphereGeo, nodeMaterial);
-                mesh.position.set(pt[0], pt[1], pt[2]);
-                if (scale !== 1.0) {
-                    mesh.scale.setScalar(scale);
+                    const mesh = new THREE.Mesh(sphereGeo, nodeMaterial);
+                    mesh.position.set(pt[0], pt[1], pt[2]);
+                    if (scale !== 1.0) {
+                        mesh.scale.setScalar(scale);
+                    }
+                    mesh.name = 'node_' + (nodes[n] || n);
+                    instanceGroup3D.add(mesh);
                 }
-                mesh.name = 'node_' + (nodes[n] || n);
-                instanceGroup3D.add(mesh);
             }
 
             // --- Draw skeleton edges as cylinders ---
+            if (this.showSkeletonEdges && edgeRadius > 0) {
             for (let e = 0; e < edges.length; e++) {
                 const srcIdx = edges[e][0];
                 const dstIdx = edges[e][1];
@@ -856,6 +892,7 @@ class Viewport3D {
                 );
                 cylinder.name = 'edge_' + srcIdx + '_' + dstIdx;
                 instanceGroup3D.add(cylinder);
+            }
             }
 
             this._skeletonGroup.add(instanceGroup3D);
@@ -880,8 +917,8 @@ class Viewport3D {
         }
 
         const ss = this._sceneScale || 1;
-        const nodeRadius = 1.5 * ss;
-        const edgeRadius = 0.6 * ss;
+        const nodeRadius = this.skeletonNodeSize * 0.75 * ss;
+        const edgeRadius = this.skeletonEdgeWeight * 0.75 * ss;
         const sphereSegments = 10;
         const cylinderSegments = 6;
         const sphereGeo = new THREE.SphereGeometry(nodeRadius, sphereSegments, sphereSegments);
@@ -1359,24 +1396,26 @@ class Viewport3D {
         const color = options.color || '#ffffff';
         const bgColor = options.backgroundColor || 'rgba(0, 0, 0, 0.5)';
 
+        // Render at high resolution for crisp text, then scale sprite by fontSize
+        const renderFontSize = 64;
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
 
         // Measure text to size the canvas
-        ctx.font = 'bold ' + fontSize + 'px sans-serif';
+        ctx.font = 'bold ' + renderFontSize + 'px sans-serif';
         const metrics = ctx.measureText(text);
         const textWidth = metrics.width;
 
-        const padding = 8;
+        const padding = Math.round(renderFontSize * 0.3);
         canvas.width = textWidth + padding * 2;
-        canvas.height = fontSize + padding * 2;
+        canvas.height = renderFontSize + padding * 2;
 
         // Draw background
         ctx.fillStyle = bgColor;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         // Draw text
-        ctx.font = 'bold ' + fontSize + 'px sans-serif';
+        ctx.font = 'bold ' + renderFontSize + 'px sans-serif';
         ctx.fillStyle = color;
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'center';
@@ -1395,9 +1434,9 @@ class Viewport3D {
 
         const sprite = new THREE.Sprite(spriteMaterial);
 
-        // Scale sprite so it appears at a reasonable world-space size
-        // We want the label to be roughly 30mm wide
-        const spriteScale = 30;
+        // Scale sprite proportionally to fontSize (28 = baseline)
+        const sizeRatio = fontSize / 28;
+        const spriteScale = 30 * sizeRatio;
         const aspect = canvas.width / canvas.height;
         sprite.scale.set(spriteScale * aspect, spriteScale, 1);
 
