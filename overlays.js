@@ -1846,84 +1846,87 @@ function drawLegend(ctx, options) {
     }
     if (items.length === 0) return;
 
-    const fontSize = 12;
-    const itemHeight = 18;
-    const padding = 8;
-    const iconWidth = 16;
-    const iconGap = 6;
-    const boxWidth = 140;
+    const fontSize = 28;
+    const itemHeight = 40;
+    const padding = 18;
+    const iconWidth = 32;
+    const iconGap = 14;
+    const boxWidth = 310;
     const boxHeight = padding * 2 + items.length * itemHeight;
 
-    const x = ctx.canvas.width - boxWidth - 10;
-    const y = 10;
-
-    ctx.save();
+    // Render legend at 2x resolution on an offscreen canvas for crisp text
+    const scale = 2;
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = boxWidth * scale;
+    offCanvas.height = boxHeight * scale;
+    const oc = offCanvas.getContext('2d');
+    oc.scale(scale, scale);
 
     // Background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.beginPath();
-    if (ctx.roundRect) {
-        ctx.roundRect(x, y, boxWidth, boxHeight, 4);
+    oc.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    oc.beginPath();
+    if (oc.roundRect) {
+        oc.roundRect(0, 0, boxWidth, boxHeight, 4);
     } else {
-        ctx.rect(x, y, boxWidth, boxHeight);
+        oc.rect(0, 0, boxWidth, boxHeight);
     }
-    ctx.fill();
+    oc.fill();
 
-    ctx.font = fontSize + 'px sans-serif';
-    ctx.textBaseline = 'middle';
+    oc.font = fontSize + 'px sans-serif';
+    oc.textBaseline = 'middle';
 
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        const iy = y + padding + i * itemHeight + itemHeight / 2;
-        const ix = x + padding;
+        const iy = padding + i * itemHeight + itemHeight / 2;
+        const ix = padding;
 
         if (item.type === 'detected') {
-            // Filled circle in first track color
-            ctx.fillStyle = TRACK_COLORS[0];
-            ctx.beginPath();
-            ctx.arc(ix + iconWidth / 2, iy, 4, 0, Math.PI * 2);
-            ctx.fill();
+            oc.fillStyle = TRACK_COLORS[0];
+            oc.beginPath();
+            oc.arc(ix + iconWidth / 2, iy, 8, 0, Math.PI * 2);
+            oc.fill();
         } else if (item.type === 'reprojected') {
-            // X marker in reprojection red
             const cx = ix + iconWidth / 2;
-            ctx.strokeStyle = REPROJECTION_COLOR;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(cx - 4, iy - 4);
-            ctx.lineTo(cx + 4, iy + 4);
-            ctx.moveTo(cx + 4, iy - 4);
-            ctx.lineTo(cx - 4, iy + 4);
-            ctx.stroke();
+            oc.strokeStyle = REPROJECTION_COLOR;
+            oc.lineWidth = 4;
+            oc.beginPath();
+            oc.moveTo(cx - 8, iy - 8);
+            oc.lineTo(cx + 8, iy + 8);
+            oc.moveTo(cx + 8, iy - 8);
+            oc.lineTo(cx - 8, iy + 8);
+            oc.stroke();
         } else if (item.type === 'error') {
-            // Short gradient-colored line
             const lx = ix + 2;
-            ctx.lineWidth = 2;
-            ctx.lineCap = 'round';
-            // green segment
-            ctx.strokeStyle = '#4ade80';
-            ctx.beginPath();
-            ctx.moveTo(lx, iy);
-            ctx.lineTo(lx + 4, iy);
-            ctx.stroke();
-            // yellow segment
-            ctx.strokeStyle = '#fbbf24';
-            ctx.beginPath();
-            ctx.moveTo(lx + 4, iy);
-            ctx.lineTo(lx + 8, iy);
-            ctx.stroke();
-            // red segment
-            ctx.strokeStyle = '#ef4444';
-            ctx.beginPath();
-            ctx.moveTo(lx + 8, iy);
-            ctx.lineTo(lx + 12, iy);
-            ctx.stroke();
+            oc.lineWidth = 4;
+            oc.lineCap = 'round';
+            oc.strokeStyle = '#4ade80';
+            oc.beginPath();
+            oc.moveTo(lx, iy);
+            oc.lineTo(lx + 8, iy);
+            oc.stroke();
+            oc.strokeStyle = '#fbbf24';
+            oc.beginPath();
+            oc.moveTo(lx + 8, iy);
+            oc.lineTo(lx + 16, iy);
+            oc.stroke();
+            oc.strokeStyle = '#ef4444';
+            oc.beginPath();
+            oc.moveTo(lx + 16, iy);
+            oc.lineTo(lx + 24, iy);
+            oc.stroke();
         }
 
-        // Label text
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(item.label, ix + iconWidth + iconGap, iy);
+        oc.fillStyle = '#ffffff';
+        oc.fillText(item.label, ix + iconWidth + iconGap, iy);
     }
 
+    // Draw the hi-res offscreen canvas onto the main canvas at 1x size
+    const destX = ctx.canvas.width - boxWidth - 16;
+    const destY = 16;
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(offCanvas, destX, destY, boxWidth, boxHeight);
     ctx.restore();
 }
 
