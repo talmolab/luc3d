@@ -290,6 +290,9 @@
 
                 <!-- ==================== Visibility Tab ==================== -->
                 <div class="panel-tab-content" id="tabVisibility">
+                    <div class="vis-slider-row" style="margin-bottom:10px;">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text-secondary);"><input type="checkbox" id="visLegend"> Display Legend</label>
+                    </div>
                     <h3>User</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
@@ -2647,6 +2650,7 @@
 
         function getVisibilitySettings() {
             return {
+                showLegend: document.getElementById('visLegend').checked,
                 showUser: document.getElementById('visUser').checked,
                 showPredicted: document.getElementById('visPredicted').checked,
                 showReprojected: document.getElementById('visReprojections').checked,
@@ -2819,6 +2823,7 @@
 
                 drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
                     colorByIdentity: state.colorByIdentity,
+                    showLegend: vis.showLegend,
                     showUser: vis.showUser,
                     showPredicted: vis.showPredicted,
                     showReprojected: vis.showReprojected,
@@ -4925,7 +4930,7 @@
             setupVisSlider('visReprojLabelAlpha', 'visReprojLabelAlphaVal', 'float');
 
             // Checkbox toggles
-            ['visUser', 'visPredicted', 'visReprojections', 'visErrors'].forEach(function(id) {
+            ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors'].forEach(function(id) {
                 var el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', function() {
@@ -4990,7 +4995,7 @@
                 'vis3dLabelSize', 'vis3dSphereSize', 'vis3dPyramidLength',
                 'vis3dNodeSize', 'vis3dEdgeWeight',
             ];
-            var visCheckIds = ['visUser', 'visPredicted', 'visReprojections', 'visErrors',
+            var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
                 'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
                 'vis3dNodeShow', 'vis3dEdgeShow'];
             var visStyleIds = [
