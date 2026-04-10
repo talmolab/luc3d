@@ -262,6 +262,7 @@ var testFiles = [
     'test-phase6.js',
     'test-phase7.js',
     'test-timeline.js',
+    'test-timeline-bugs.js',
     'test-video-controller.js',
     'test-multi-video.js',
     'test-drag-freeze.js',

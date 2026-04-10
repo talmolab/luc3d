@@ -127,6 +127,19 @@ class Timeline {
         /** @const {number} Height of the horizontal scrollbar (px) */
         this.SCROLLBAR_HEIGHT = 10;
 
+        /** @const {number} Absolute minimum draw width for a track segment (px) */
+        this.MIN_SEGMENT_WIDTH_PX = 2;
+
+        /**
+         * @const {number} Minimum draw width for a track segment as a fraction
+         * of the canvas width. The effective minimum is
+         * max(MIN_SEGMENT_WIDTH_PX, canvasWidth * MIN_SEGMENT_WIDTH_FRACTION),
+         * so wider windows show wider minimum bars. This ensures short/single
+         * frame segments remain visible in long videos where pxPerFrame is
+         * smaller than 1.
+         */
+        this.MIN_SEGMENT_WIDTH_FRACTION = 0.0025;
+
         /** @const {number} Min thumb width (px) */
         this.SCROLLBAR_THUMB_MIN = 20;
 
@@ -479,8 +492,11 @@ class Timeline {
         var cameraNames = session.cameras ? session.cameras.map(function (c) { return c.name; }) : [];
 
         // --- Build segments from track occupancy (lazy H5 sessions) ---
-        // Direct linear scan: O(nFrames * nTracks) per camera, no intermediate Sets
-        var handledByOccupancy = new Set();
+        // Direct linear scan: O(nFrames * nTracks) per camera, no intermediate Sets.
+        // Segments are collected in a per-(track, camera) map so they can be merged
+        // with user-instance frames below — otherwise any user instance on a track
+        // that also has predicted occupancy would be silently dropped.
+        var occSegmentMap = {};  // "trackIdx:camName" -> [{start, end}, ...]
         if (session.trackOccupancy) {
             for (var oci = 0; oci < cameraNames.length; oci++) {
                 var occCam = cameraNames[oci];
@@ -500,18 +516,9 @@ class Timeline {
                         }
                     }
                     if (occStart >= 0) occSegments.push({ start: occStart, end: occ.nFrames - 1 });
-                    if (occSegments.length === 0) continue;
-
-                    var occTrackName = session.tracks[occTr] || ('track_' + occTr);
-                    var occColor = typeof getTrackColor === 'function' ? getTrackColor(occTr) : '#667eea';
-                    this._trackSegments.push({
-                        trackIdx: occTr,
-                        cameraName: occCam,
-                        color: occColor,
-                        segments: occSegments,
-                    });
-                    this._trackNames.push(occCam + ' / ' + occTrackName);
-                    handledByOccupancy.add(occTr + ':' + occCam);
+                    if (occSegments.length > 0) {
+                        occSegmentMap[occTr + ':' + occCam] = occSegments;
+                    }
                 }
             }
         }
@@ -527,7 +534,6 @@ class Timeline {
                     var grpTrack = groups[gi].identityId >= 0 ? groups[gi].identityId : 0;
                     for (var [camName] of groups[gi].instances) {
                         var key = grpTrack + ':' + camName;
-                        if (handledByOccupancy.has(key)) continue;
                         if (!trackCamFrames[key]) trackCamFrames[key] = new Set();
                         trackCamFrames[key].add(frameIdx);
                     }
@@ -535,27 +541,25 @@ class Timeline {
             }
         }
 
-        // Scan unlinked instances in frameGroups
+        // Scan linked and unlinked instances in frameGroups
         for (var [frameIdx2, fg] of session.frameGroups) {
-            // Grouped instances
+            // Linked instances (fg.instances)
             for (var [camName2, instances] of fg.instances) {
                 for (var i = 0; i < instances.length; i++) {
                     var t = instances[i].trackIdx;
                     if (t >= 0) {
                         var key2 = t + ':' + camName2;
-                        if (handledByOccupancy.has(key2)) continue;
                         if (!trackCamFrames[key2]) trackCamFrames[key2] = new Set();
                         trackCamFrames[key2].add(frameIdx2);
                     }
                 }
             }
-            // Unlinked instances
+            // Unlinked instances (fg.unlinkedInstances)
             for (var [camName3, ulList] of fg.unlinkedInstances) {
                 for (var u = 0; u < ulList.length; u++) {
                     var t2 = ulList[u].instance.trackIdx;
                     if (t2 >= 0) {
                         var key3 = t2 + ':' + camName3;
-                        if (handledByOccupancy.has(key3)) continue;
                         if (!trackCamFrames[key3]) trackCamFrames[key3] = new Set();
                         trackCamFrames[key3].add(frameIdx2);
                     }
@@ -563,11 +567,15 @@ class Timeline {
             }
         }
 
-        // Collect all track indices that actually have data (from non-occupancy sources)
+        // Collect all track indices from any source (occupancy or frameGroups)
         var allTrackIndices = new Set();
         for (var tcfKey in trackCamFrames) {
             var colonPos = tcfKey.indexOf(':');
             if (colonPos > 0) allTrackIndices.add(parseInt(tcfKey.substring(0, colonPos)));
+        }
+        for (var occMapKey in occSegmentMap) {
+            var oColon = occMapKey.indexOf(':');
+            if (oColon > 0) allTrackIndices.add(parseInt(occMapKey.substring(0, oColon)));
         }
         var sortedTrackIndices = Array.from(allTrackIndices).sort(function(a, b) { return a - b; });
 
@@ -577,18 +585,24 @@ class Timeline {
                 var t3 = sortedTrackIndices[ti];
                 var camKey = t3 + ':' + cameraNames[ci];
                 var frameSet = trackCamFrames[camKey];
-                if (!frameSet || frameSet.size === 0) continue;
+                var occSegs = occSegmentMap[camKey];
 
-                var sorted = Array.from(frameSet).sort(function (a, b) { return a - b; });
-                var segments = [];
-                var segStart = -1, segEnd = -1;
-                for (var si = 0; si < sorted.length; si++) {
-                    var f = sorted[si];
-                    if (segStart < 0) { segStart = f; segEnd = f; }
-                    else if (f === segEnd + 1) { segEnd = f; }
-                    else { segments.push({ start: segStart, end: segEnd }); segStart = f; segEnd = f; }
+                var segments;
+                if (occSegs && (!frameSet || frameSet.size === 0)) {
+                    // Only occupancy data — fast path, use segments directly
+                    segments = occSegs;
+                } else if (!occSegs && frameSet && frameSet.size > 0) {
+                    // Only frameGroup/instanceGroup frames
+                    segments = this._framesToSegments(frameSet);
+                } else if (occSegs && frameSet && frameSet.size > 0) {
+                    // Both — merge occupancy segments with fg frames without
+                    // expanding occupancy into a full frame set (memory-efficient).
+                    segments = this._mergeSegmentsWithFrames(occSegs, frameSet);
+                } else {
+                    continue;
                 }
-                if (segStart >= 0) segments.push({ start: segStart, end: segEnd });
+
+                if (!segments || segments.length === 0) continue;
 
                 var trackName = session.tracks[t3] || ('track_' + t3);
                 var color = typeof getTrackColor === 'function' ? getTrackColor(t3) : '#667eea';
@@ -602,6 +616,71 @@ class Timeline {
                 this._trackNames.push(cameraNames[ci] + ' / ' + trackName);
             }
         }
+    }
+
+    /**
+     * Convert a frame Set into sorted non-overlapping segments.
+     * @param {Set<number>} frameSet
+     * @returns {Array<{start:number,end:number}>}
+     * @private
+     */
+    _framesToSegments(frameSet) {
+        var sorted = Array.from(frameSet).sort(function (a, b) { return a - b; });
+        var segments = [];
+        var segStart = -1, segEnd = -1;
+        for (var si = 0; si < sorted.length; si++) {
+            var f = sorted[si];
+            if (segStart < 0) { segStart = f; segEnd = f; }
+            else if (f === segEnd + 1) { segEnd = f; }
+            else { segments.push({ start: segStart, end: segEnd }); segStart = f; segEnd = f; }
+        }
+        if (segStart >= 0) segments.push({ start: segStart, end: segEnd });
+        return segments;
+    }
+
+    /**
+     * Merge an existing sorted non-overlapping segment list with a set of extra
+     * frames, returning a new sorted non-overlapping segment list. Does NOT
+     * expand the input segments into a full frame Set, so the memory cost is
+     * O(|segments| + |extraFrames|) rather than O(total frames covered).
+     *
+     * @param {Array<{start:number,end:number}>} segments - sorted, non-overlapping
+     * @param {Set<number>} extraFrameSet
+     * @returns {Array<{start:number,end:number}>}
+     * @private
+     */
+    _mergeSegmentsWithFrames(segments, extraFrameSet) {
+        var extras = Array.from(extraFrameSet).sort(function (a, b) { return a - b; });
+        var extraSegs = [];
+        for (var i = 0; i < extras.length; i++) {
+            extraSegs.push({ start: extras[i], end: extras[i] });
+        }
+
+        // Merge two sorted segment lists by start
+        var all = [];
+        var ai = 0, bi = 0;
+        while (ai < segments.length && bi < extraSegs.length) {
+            if (segments[ai].start <= extraSegs[bi].start) {
+                all.push(segments[ai++]);
+            } else {
+                all.push(extraSegs[bi++]);
+            }
+        }
+        while (ai < segments.length) all.push(segments[ai++]);
+        while (bi < extraSegs.length) all.push(extraSegs[bi++]);
+
+        // Coalesce adjacent/overlapping segments
+        if (all.length === 0) return [];
+        var merged = [{ start: all[0].start, end: all[0].end }];
+        for (var k = 1; k < all.length; k++) {
+            var last = merged[merged.length - 1];
+            if (all[k].start <= last.end + 1) {
+                if (all[k].end > last.end) last.end = all[k].end;
+            } else {
+                merged.push({ start: all[k].start, end: all[k].end });
+            }
+        }
+        return merged;
     }
 
     /**
@@ -817,20 +896,133 @@ class Timeline {
             // Draw segments
             ctx.fillStyle = track.color;
             for (let s = 0; s < track.segments.length; s++) {
-                const seg = track.segments[s];
-                const x0 = Math.max(this._frameToX(seg.start), this.LEFT_MARGIN);
-                // +1 so the bar covers the full frame width for the end frame
-                const x1 = Math.min(this._frameToX(seg.end + 1), W - this.RIGHT_PADDING);
-                if (x1 <= x0) continue;
+                const rect = this._computeSegmentDrawRect(track.segments[s]);
+                if (!rect) continue;
 
                 ctx.globalAlpha = 0.7;
-                ctx.fillRect(x0, rowY, x1 - x0, this.TRACK_ROW_HEIGHT);
+                ctx.fillRect(rect.x, rowY, rect.width, this.TRACK_ROW_HEIGHT);
                 ctx.globalAlpha = 1.0;
             }
         }
 
         // Reset text alignment
         ctx.textAlign = 'left';
+    }
+
+    /**
+     * Compute the pixel rectangle for drawing a single track segment.
+     * Enforces a minimum visible width of
+     * max(MIN_SEGMENT_WIDTH_PX, canvasWidth * MIN_SEGMENT_WIDTH_FRACTION)
+     * so short/single-frame segments remain visible in long videos where
+     * pxPerFrame < 1. When the minimum-width floor kicks in, the bar is
+     * centered on the segment's midpoint — matching the playhead, which
+     * uses `_frameToX(currentFrame + 0.5)` — so it never drifts right of
+     * the current-frame indicator.
+     *
+     * Clamps the result to stay inside the content area; if the centered
+     * bar would overflow either edge, it is shifted back inside.
+     *
+     * Uses the timeline's internal CSS width (`this._cssWidth`), matching
+     * the coordinate system of `_frameToX`.
+     *
+     * @param {{start:number, end:number}} seg - Segment frame range (inclusive)
+     * @returns {{x:number, width:number}|null} Draw rectangle, or null if the
+     *     segment is entirely outside the visible content area.
+     * @private
+     */
+    _computeSegmentDrawRect(seg) {
+        const W = this._cssWidth;
+        const contentLeft = this.LEFT_MARGIN;
+        const contentRight = W - this.RIGHT_PADDING;
+        if (contentRight <= contentLeft) return null;
+
+        // +1 so the bar spans the full frame width for the end frame
+        const x0raw = this._frameToX(seg.start);
+        const x1raw = this._frameToX(seg.end + 1);
+
+        // Skip segments entirely outside the visible content area
+        if (x1raw < contentLeft || x0raw > contentRight) return null;
+
+        const minSegW = Math.min(
+            contentRight - contentLeft,
+            Math.max(this.MIN_SEGMENT_WIDTH_PX, W * this.MIN_SEGMENT_WIDTH_FRACTION)
+        );
+
+        // Center the bar on the segment's midpoint. For wide segments
+        // (rawWidth >= minSegW), this matches the natural [x0raw, x1raw]
+        // extents; for narrow segments, it ensures the bar is drawn
+        // symmetrically around the same pixel the playhead would occupy.
+        const midX = (x0raw + x1raw) / 2;
+        const rawWidth = x1raw - x0raw;
+        const width = Math.max(rawWidth, minSegW);
+        let x = midX - width / 2;
+
+        // Clamp inside the content area. If either edge would overflow,
+        // shift the bar (preserving width) so it stays flush with the edge.
+        if (x < contentLeft) {
+            x = contentLeft;
+        }
+        if (x + width > contentRight) {
+            x = contentRight - width;
+            if (x < contentLeft) x = contentLeft;
+        }
+
+        const drawWidth = Math.min(width, contentRight - x);
+        if (drawWidth <= 0) return null;
+        return { x: x, width: drawWidth };
+    }
+
+    /**
+     * Given a click x-coordinate (CSS pixels), find the nearest labeled
+     * frame in any track segment within snap tolerance. Returns null if
+     * no segment is within range. If multiple labeled frames are in range
+     * (e.g., a cluster of adjacent frames or multiple nearby segments),
+     * returns the frame whose center pixel is closest to the click.
+     *
+     * Snap tolerance matches the minimum segment draw width:
+     * max(MIN_SEGMENT_WIDTH_PX, canvasWidth * MIN_SEGMENT_WIDTH_FRACTION).
+     *
+     * @param {number} clickX - Click x coordinate in CSS pixels
+     * @returns {number|null} Snapped frame index, or null for no snap
+     * @private
+     */
+    _findSnapFrame(clickX) {
+        if (!this._trackSegments || this._trackSegments.length === 0) return null;
+
+        const W = this._cssWidth;
+        const tolerance = Math.max(
+            this.MIN_SEGMENT_WIDTH_PX,
+            W * this.MIN_SEGMENT_WIDTH_FRACTION
+        );
+
+        const clickFrameF = this._xToFrame(clickX);
+        let bestFrame = null;
+        let bestDist = Infinity;
+
+        for (let t = 0; t < this._trackSegments.length; t++) {
+            const track = this._trackSegments[t];
+            for (let s = 0; s < track.segments.length; s++) {
+                const seg = track.segments[s];
+
+                // Candidate = the frame in [seg.start, seg.end] whose center
+                // pixel is closest to clickX. Frame N's center lives at
+                // _frameToX(N + 0.5), so we want N ≈ clickFrameF - 0.5 clamped
+                // to [seg.start, seg.end].
+                let cand = Math.round(clickFrameF - 0.5);
+                if (cand < seg.start) cand = seg.start;
+                else if (cand > seg.end) cand = seg.end;
+
+                const candX = this._frameToX(cand + 0.5);
+                const dist = Math.abs(candX - clickX);
+
+                if (dist <= tolerance && dist < bestDist) {
+                    bestFrame = cand;
+                    bestDist = dist;
+                }
+            }
+        }
+
+        return bestFrame;
     }
 
     /**
@@ -1215,9 +1407,13 @@ class Timeline {
             return;
         }
 
-        // Normal click -> seek
+        // Normal click -> seek. Snap to the nearest labeled frame if the click
+        // is within tolerance of a track bar; otherwise use the raw click frame.
         this._isDragging = true;
-        const frame = this._clampFrame(this._xToFrame(x));
+        const snapFrame = this._findSnapFrame(x);
+        const frame = snapFrame != null
+            ? this._clampFrame(snapFrame)
+            : this._clampFrame(this._xToFrame(x));
         this._currentFrame = frame;
         this._emitFrameChange(frame);
         this.redraw();

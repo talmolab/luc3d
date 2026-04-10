@@ -3029,6 +3029,9 @@
 
                 onUserInstanceCreated: function (viewName, points) {
                     recordUserPoints(viewName, points);
+                    // Refresh timeline track bars so the new user instance is
+                    // visible immediately (Prompt 66: update bars in real time).
+                    updateTimelineForFrame(state.currentFrame);
                 },
 
                 onDoubleClickReprojected: function (group, viewName) {
