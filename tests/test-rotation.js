@@ -441,4 +441,84 @@
         });
     });
 
+    // ---- Rotated bounding box for zoom/pan clamping ----
+    //
+    // Regression: when a view was rotated 90° or 270° and the user
+    // zoomed in, the edges of the rotated image were clipped because
+    // the pan-clamp logic used `wrapperWidth * scale` / `wrapperHeight
+    // * scale`, not accounting for the rotation swapping effective
+    // width and height. Fix: `VideoController._rotatedBBox` returns
+    // the true axis-aligned bounding box of the rotated+scaled
+    // wrapper, which `_constrainOffsets` and `_getMinScale` then use
+    // to clamp pan limits correctly.
+    describe('Rotation - _rotatedBBox covers the full rotated image', function () {
+        function bbox(wW, wH, scale, rot) {
+            // Minimal stub: only _rotatedBBox is exercised, so we don't
+            // need a full VideoController.
+            return VideoController.prototype._rotatedBBox.call(
+                {}, wW, wH, scale, rot);
+        }
+
+        it('rot=0 matches the unrotated width/height at any scale', function () {
+            var a = bbox(160, 90, 2, 0);
+            assertEqual(a.width, 320);
+            assertEqual(a.height, 180);
+            assertEqual(a.left, 0);
+            assertEqual(a.top, 0);
+        });
+
+        it('rot=90 swaps width and height, shifting to keep rotation around wrapper center', function () {
+            // Square wrapper at scale 1: bbox is identical to unrotated.
+            var s1 = bbox(100, 100, 1, 90);
+            assertEqual(s1.width, 100);
+            assertEqual(s1.height, 100);
+            assertEqual(s1.left, 0);
+            assertEqual(s1.top, 0);
+            // Non-square wrapper at scale 1: bbox width becomes original
+            // height and vice versa, shifted by (wW - wH)/2 horizontally
+            // and (wH - wW)/2 vertically so the rotation center stays
+            // put.
+            var asym = bbox(160, 90, 1, 90);
+            assertEqual(asym.width, 90);
+            assertEqual(asym.height, 160);
+            assertEqual(asym.left, 35);   // 160/2 + 90/2 - 90 = 80+45-90 = 35
+            assertEqual(asym.top, -35);   // 90/2 - 160/2 = -35
+            // Scaled 2× at 90°: effective width = wH*s = 180, height = wW*s = 320.
+            var sq2 = bbox(100, 100, 2, 90);
+            assertEqual(sq2.width, 200, '90° bbox width = wH*s at s=2 (square)');
+            assertEqual(sq2.height, 200);
+        });
+
+        it('rot=270 also swaps width and height', function () {
+            var a = bbox(160, 90, 1, 270);
+            assertEqual(a.width, 90);
+            assertEqual(a.height, 160);
+            // Mirror shift of the 90° case.
+            assertEqual(a.left, 35);
+            assertEqual(a.top, -35);
+        });
+
+        it('rot=180 keeps dimensions but flips the bbox offset at scale != 1', function () {
+            var s1 = bbox(100, 100, 1, 180);
+            assertEqual(s1.width, 100);
+            assertEqual(s1.height, 100);
+            assertEqual(s1.left, 0);
+            assertEqual(s1.top, 0);
+            // At s=2, the wrapper's pre-rotation TL moves off-screen to
+            // the right/bottom, so bbox.left becomes negative.
+            var s2 = bbox(100, 100, 2, 180);
+            assertEqual(s2.width, 200);
+            assertEqual(s2.height, 200);
+            assertEqual(s2.left, 100 - 200);   // 2*cX - wW*s = 100 - 200
+            assertEqual(s2.top, 100 - 200);
+        });
+
+        it('arbitrary angle returns the axis-aligned rotated rectangle extent', function () {
+            // 45° on a 100x100 square at scale 1: bbox sides = 100√2.
+            var a = bbox(100, 100, 1, 45);
+            assertApprox(a.width, 100 * Math.sqrt(2), 1e-6);
+            assertApprox(a.height, 100 * Math.sqrt(2), 1e-6);
+        });
+    });
+
 })();

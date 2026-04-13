@@ -2010,3 +2010,34 @@ class InteractionManager {
         this._requestRedraw();
     }
 }
+
+/**
+ * isInteractiveClickTarget(target)
+ *
+ * Returns true when the given event target is (or is a descendant of)
+ * a form control the user is actively interacting with — SELECT, OPTION,
+ * INPUT, BUTTON, TEXTAREA, or LABEL. The Grouped/Ungrouped Instances
+ * tables use this to guard their <tr> click handlers so a mousedown /
+ * mouseup / click inside a dropdown doesn't rebuild the DOM out from
+ * under the user, which was the root cause of the "Track/Identity
+ * pulldown hides on mouseup" bug.
+ *
+ * The walk stops after a few ancestors — dropdowns are shallow in the
+ * info panel, and a bounded walk keeps us safe from freshly-built fake
+ * targets that might have cyclic parentNode pointers in tests.
+ */
+function isInteractiveClickTarget(target) {
+    if (!target) return false;
+    var INTERACTIVE = { SELECT: 1, OPTION: 1, INPUT: 1, BUTTON: 1, TEXTAREA: 1, LABEL: 1 };
+    var node = target;
+    for (var hops = 0; node && hops < 6; hops++) {
+        var tag = node.tagName;
+        if (tag && INTERACTIVE[String(tag).toUpperCase()]) return true;
+        node = node.parentNode;
+    }
+    return false;
+}
+
+if (typeof window !== 'undefined') {
+    window.isInteractiveClickTarget = isInteractiveClickTarget;
+}

@@ -263,6 +263,8 @@ var testFiles = [
     'test-phase7.js',
     'test-timeline.js',
     'test-timeline-bugs.js',
+    'test-timeline-prompt95.js',
+    'test-grouped-track-dropdown.js',
     'test-video-controller.js',
     'test-multi-video.js',
     'test-drag-freeze.js',
