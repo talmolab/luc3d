@@ -58,28 +58,53 @@ function adjustColorBrightness(hex, factor) {
 }
 
 function getGroupColor(group, session, useIdentity, frameIdx, cameraName) {
+    // --- Identity-color path (only when coloring by identity) ------------
+    // A group may have been explicitly assigned an Identity via
+    // assignIdentityToGroup — that's the strongest signal. Otherwise fall
+    // back to the per-track identity lookup keyed by the instance's live
+    // `trackIdx` so the color reflects what's actually drawn on this view.
     if (useIdentity && session) {
-        // Try group's direct identity first
-        if (group.identityId >= 0) {
-            var identity = session.getIdentity(group.identityId);
-            if (identity && identity.color) return identity.color;
+        if (group.identityId != null && group.identityId >= 0 && session.getIdentity) {
+            var gIdentity = session.getIdentity(group.identityId);
+            if (gIdentity && gIdentity.color) return gIdentity.color;
         }
-        // Fallback: color by identityId index
-        if (group.identityId >= 0) {
-            return getTrackColor(group.identityId);
+        if (session.getIdentityForTrack) {
+            var probeIdx = null;
+            if (cameraName && group.instances.has(cameraName)) {
+                var pInst = group.instances.get(cameraName);
+                if (pInst && pInst.trackIdx != null) probeIdx = pInst.trackIdx;
+            }
+            if (probeIdx == null) {
+                for (var [, pI] of group.instances) {
+                    if (pI && pI.trackIdx != null) { probeIdx = pI.trackIdx; break; }
+                }
+            }
+            if (probeIdx != null) {
+                var tIdentity = session.getIdentityForTrack(probeIdx, cameraName, frameIdx);
+                if (tIdentity && tIdentity.color) return tIdentity.color;
+            }
         }
     }
-    // Color by track: use the instance from the current camera so color
-    // matches the prediction the user sees on that view
+
+    // --- Track-color path ------------------------------------------------
+    // Source of truth is the per-instance `trackIdx` on the current view.
+    // `group.identityId` is only updated at the frame where the dropdown
+    // fires, so consulting it here would show stale colors for any group
+    // whose past-frame instances still carry the old trackIdx.
+    var effectiveTrackIdx = null;
     if (cameraName && group.instances.has(cameraName)) {
         var camInst = group.instances.get(cameraName);
-        if (camInst.trackIdx != null) return getTrackColor(camInst.trackIdx);
+        if (camInst && camInst.trackIdx != null) effectiveTrackIdx = camInst.trackIdx;
     }
-    // Fallback: first instance
-    for (var [, inst] of group.instances) {
-        if (inst.trackIdx != null) return getTrackColor(inst.trackIdx);
+    if (effectiveTrackIdx == null) {
+        for (var [, inst] of group.instances) {
+            if (inst && inst.trackIdx != null) { effectiveTrackIdx = inst.trackIdx; break; }
+        }
     }
-    return getTrackColor(0);
+    if (effectiveTrackIdx == null) {
+        effectiveTrackIdx = group.identityId != null && group.identityId >= 0 ? group.identityId : 0;
+    }
+    return getTrackColor(effectiveTrackIdx);
 }
 
 /**
@@ -535,7 +560,13 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
     options = options || {};
     if (!reprojectedPoints || reprojectedPoints.length === 0) return;
 
+    // `color` is the X-marker (node) color — defaults to the designated
+    // reprojection node color the caller picks. `edgeColor` is the line
+    // color connecting the X marks; it defaults to `color` for
+    // backwards-compatible callers but should be set to the track color
+    // so reprojections stay visually distinct from user nodes.
     const color = options.color || '#ff6b6b';
+    const edgeColor = options.edgeColor || color;
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
     const alpha = options.alpha != null ? options.alpha : 0.85;
@@ -571,12 +602,12 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
 
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
     ctx.lineCap = 'round';
 
-    // --- 1. Draw edges as dashed lines ---
+    // --- 1. Draw edges as dashed lines (track-colored) ---
     if (skeleton.edges) {
+        ctx.strokeStyle = edgeColor;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
         for (let i = 0; i < skeleton.edges.length; i++) {
@@ -592,7 +623,8 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
         ctx.setLineDash([]);
     }
 
-    // --- 2. Draw X markers ---
+    // --- 2. Draw X markers (designated reprojection color) ---
+    ctx.strokeStyle = color;
     const arm = markerSize;  // length from center to tip of each arm
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
@@ -1647,11 +1679,19 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                         }));
                     }
                 } else {
-                    // Fall back to raw reprojection data
+                    // Fall back to raw reprojection data. Match the
+                    // primary path's color split: X marks (nodes) use the
+                    // designated reprojection color; connecting edges use
+                    // the track color. SLP-loaded groups populate
+                    // `group.reprojections` without ever materializing
+                    // `reprojectedInstances`, so this branch rendered
+                    // every reprojection in track-color before — making
+                    // it look like "reprojections use the node color."
                     var reprojPts = group.reprojections ? group.reprojections[viewName] : null;
                     if (reprojPts) {
                         drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
-                            color: reprojTrackColor,
+                            color: reprojXColor,
+                            edgeColor: reprojTrackColor,
                         }));
                     }
                 }
