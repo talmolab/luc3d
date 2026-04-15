@@ -379,7 +379,10 @@ class Timeline {
             + numViewGaps * this.VIEW_GROUP_GAP
             + 6 /* small gap below lowest track row */
             + this.MARKER_AREA_HEIGHT
-            + this.LABEL_AREA_HEIGHT;
+            + this.LABEL_AREA_HEIGHT
+            + 8 /* bottom breathing room; also absorbs the 1px border-top
+                   and sub-pixel rounding so _computeLayout never has to
+                   collapse tracks at the preferred height */;
     }
 
     /**
