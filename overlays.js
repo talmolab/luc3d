@@ -41,29 +41,70 @@ function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
 
+/**
+ * Adjust the brightness (V in HSV) of a hex color.
+ * @param {string} hex - e.g. '#ff8800'
+ * @param {number} factor - 0..1, where 1 = original brightness
+ * @returns {string} adjusted hex color
+ */
+function adjustColorBrightness(hex, factor) {
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    r = Math.round(Math.min(255, r * factor));
+    g = Math.round(Math.min(255, g * factor));
+    b = Math.round(Math.min(255, b * factor));
+    return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+}
+
 function getGroupColor(group, session, useIdentity, frameIdx, cameraName) {
+    // --- Identity-color path (only when coloring by identity) ------------
+    // A group may have been explicitly assigned an Identity via
+    // assignIdentityToGroup — that's the strongest signal. Otherwise fall
+    // back to the per-track identity lookup keyed by the instance's live
+    // `trackIdx` so the color reflects what's actually drawn on this view.
     if (useIdentity && session) {
-        // Try group's direct identity first
-        if (group.identityId >= 0) {
-            var identity = session.getIdentity(group.identityId);
-            if (identity && identity.color) return identity.color;
+        if (group.identityId != null && group.identityId >= 0 && session.getIdentity) {
+            var gIdentity = session.getIdentity(group.identityId);
+            if (gIdentity && gIdentity.color) return gIdentity.color;
         }
-        // Fallback: color by identityId index
-        if (group.identityId >= 0) {
-            return getTrackColor(group.identityId);
+        if (session.getIdentityForTrack) {
+            var probeIdx = null;
+            if (cameraName && group.instances.has(cameraName)) {
+                var pInst = group.instances.get(cameraName);
+                if (pInst && pInst.trackIdx != null) probeIdx = pInst.trackIdx;
+            }
+            if (probeIdx == null) {
+                for (var [, pI] of group.instances) {
+                    if (pI && pI.trackIdx != null) { probeIdx = pI.trackIdx; break; }
+                }
+            }
+            if (probeIdx != null) {
+                var tIdentity = session.getIdentityForTrack(probeIdx, cameraName, frameIdx);
+                if (tIdentity && tIdentity.color) return tIdentity.color;
+            }
         }
     }
-    // Color by track: use the instance from the current camera so color
-    // matches the prediction the user sees on that view
+
+    // --- Track-color path ------------------------------------------------
+    // Source of truth is the per-instance `trackIdx` on the current view.
+    // `group.identityId` is only updated at the frame where the dropdown
+    // fires, so consulting it here would show stale colors for any group
+    // whose past-frame instances still carry the old trackIdx.
+    var effectiveTrackIdx = null;
     if (cameraName && group.instances.has(cameraName)) {
         var camInst = group.instances.get(cameraName);
-        if (camInst.trackIdx != null) return getTrackColor(camInst.trackIdx);
+        if (camInst && camInst.trackIdx != null) effectiveTrackIdx = camInst.trackIdx;
     }
-    // Fallback: first instance
-    for (var [, inst] of group.instances) {
-        if (inst.trackIdx != null) return getTrackColor(inst.trackIdx);
+    if (effectiveTrackIdx == null) {
+        for (var [, inst] of group.instances) {
+            if (inst && inst.trackIdx != null) { effectiveTrackIdx = inst.trackIdx; break; }
+        }
     }
-    return getTrackColor(0);
+    if (effectiveTrackIdx == null) {
+        effectiveTrackIdx = group.identityId != null && group.identityId >= 0 ? group.identityId : 0;
+    }
+    return getTrackColor(effectiveTrackIdx);
 }
 
 /**
@@ -332,6 +373,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
     const alpha = options.alpha != null ? options.alpha : 1.0;
+    const labelAlpha = options.labelAlpha != null ? options.labelAlpha : 1.0;
     const showLabels = !!options.showLabels;
     const lineStyle = options.lineStyle || (options.dashed ? 'dashed' : 'solid');
     const dashPattern = getLineDashPattern(lineStyle);
@@ -469,7 +511,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     // --- 3. Optional labels (SLEAP-style with dark outline) ---
     if (showLabels) {
         var savedAlpha = ctx.globalAlpha;
-        ctx.globalAlpha = 1.0;
+        ctx.globalAlpha = labelAlpha;
         // Use independent label size (scaled to canvas coordinates)
         var fontSize = adjustedLabelSize;
         if (fontSize <= 0) { ctx.globalAlpha = savedAlpha; ctx.restore(); return; }
@@ -487,11 +529,11 @@ function drawSkeleton(ctx, instance, skeleton, options) {
             var tx = lp.x + labelOff.dx;
             var ty = lp.y + labelOff.dy;
             if (isNulled) {
-                ctx.globalAlpha = 0.4;
+                ctx.globalAlpha = 0.4 * labelAlpha;
                 ctx.fillStyle = '#888888';
                 ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
             } else {
-                ctx.globalAlpha = 1.0;
+                ctx.globalAlpha = labelAlpha;
                 ctx.fillStyle = '#ffffff';
                 ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
             }
@@ -518,7 +560,13 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
     options = options || {};
     if (!reprojectedPoints || reprojectedPoints.length === 0) return;
 
+    // `color` is the X-marker (node) color — defaults to the designated
+    // reprojection node color the caller picks. `edgeColor` is the line
+    // color connecting the X marks; it defaults to `color` for
+    // backwards-compatible callers but should be set to the track color
+    // so reprojections stay visually distinct from user nodes.
     const color = options.color || '#ff6b6b';
+    const edgeColor = options.edgeColor || color;
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
     const baseLineWidth = options.lineWidth != null ? options.lineWidth : 2;
     const alpha = options.alpha != null ? options.alpha : 0.85;
@@ -554,12 +602,12 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
 
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
     ctx.lineCap = 'round';
 
-    // --- 1. Draw edges as dashed lines ---
+    // --- 1. Draw edges as dashed lines (track-colored) ---
     if (skeleton.edges) {
+        ctx.strokeStyle = edgeColor;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
         for (let i = 0; i < skeleton.edges.length; i++) {
@@ -575,7 +623,8 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
         ctx.setLineDash([]);
     }
 
-    // --- 2. Draw X markers ---
+    // --- 2. Draw X markers (designated reprojection color) ---
+    ctx.strokeStyle = color;
     const arm = markerSize;  // length from center to tip of each arm
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
@@ -1598,7 +1647,10 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
 
             // Draw reprojected instances — same color as group/3D viewer
             var trackBaseColor = getGroupColor(group, session, colorByIdentity, _frameIdx, viewName);
-            var reprojTrackColor = trackBaseColor;
+            var reprojBrightness = reprojOpts.brightness != null ? reprojOpts.brightness : 1.0;
+            var reprojTrackColor = reprojBrightness < 1.0
+                ? adjustColorBrightness(trackBaseColor, reprojBrightness)
+                : trackBaseColor;
 
             // Always draw reprojections — one per group per view
             if (showReprojected) {
@@ -1627,11 +1679,19 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
                         }));
                     }
                 } else {
-                    // Fall back to raw reprojection data
+                    // Fall back to raw reprojection data. Match the
+                    // primary path's color split: X marks (nodes) use the
+                    // designated reprojection color; connecting edges use
+                    // the track color. SLP-loaded groups populate
+                    // `group.reprojections` without ever materializing
+                    // `reprojectedInstances`, so this branch rendered
+                    // every reprojection in track-color before — making
+                    // it look like "reprojections use the node color."
                     var reprojPts = group.reprojections ? group.reprojections[viewName] : null;
                     if (reprojPts) {
                         drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
-                            color: reprojTrackColor,
+                            color: reprojXColor,
+                            edgeColor: reprojTrackColor,
                         }));
                     }
                 }
@@ -1826,84 +1886,87 @@ function drawLegend(ctx, options) {
     }
     if (items.length === 0) return;
 
-    const fontSize = 12;
-    const itemHeight = 18;
-    const padding = 8;
-    const iconWidth = 16;
-    const iconGap = 6;
-    const boxWidth = 140;
+    const fontSize = 28;
+    const itemHeight = 40;
+    const padding = 18;
+    const iconWidth = 32;
+    const iconGap = 14;
+    const boxWidth = 310;
     const boxHeight = padding * 2 + items.length * itemHeight;
 
-    const x = ctx.canvas.width - boxWidth - 10;
-    const y = 10;
-
-    ctx.save();
+    // Render legend at 2x resolution on an offscreen canvas for crisp text
+    const scale = 2;
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = boxWidth * scale;
+    offCanvas.height = boxHeight * scale;
+    const oc = offCanvas.getContext('2d');
+    oc.scale(scale, scale);
 
     // Background
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-    ctx.beginPath();
-    if (ctx.roundRect) {
-        ctx.roundRect(x, y, boxWidth, boxHeight, 4);
+    oc.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    oc.beginPath();
+    if (oc.roundRect) {
+        oc.roundRect(0, 0, boxWidth, boxHeight, 4);
     } else {
-        ctx.rect(x, y, boxWidth, boxHeight);
+        oc.rect(0, 0, boxWidth, boxHeight);
     }
-    ctx.fill();
+    oc.fill();
 
-    ctx.font = fontSize + 'px sans-serif';
-    ctx.textBaseline = 'middle';
+    oc.font = fontSize + 'px sans-serif';
+    oc.textBaseline = 'middle';
 
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        const iy = y + padding + i * itemHeight + itemHeight / 2;
-        const ix = x + padding;
+        const iy = padding + i * itemHeight + itemHeight / 2;
+        const ix = padding;
 
         if (item.type === 'detected') {
-            // Filled circle in first track color
-            ctx.fillStyle = TRACK_COLORS[0];
-            ctx.beginPath();
-            ctx.arc(ix + iconWidth / 2, iy, 4, 0, Math.PI * 2);
-            ctx.fill();
+            oc.fillStyle = TRACK_COLORS[0];
+            oc.beginPath();
+            oc.arc(ix + iconWidth / 2, iy, 8, 0, Math.PI * 2);
+            oc.fill();
         } else if (item.type === 'reprojected') {
-            // X marker in reprojection red
             const cx = ix + iconWidth / 2;
-            ctx.strokeStyle = REPROJECTION_COLOR;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(cx - 4, iy - 4);
-            ctx.lineTo(cx + 4, iy + 4);
-            ctx.moveTo(cx + 4, iy - 4);
-            ctx.lineTo(cx - 4, iy + 4);
-            ctx.stroke();
+            oc.strokeStyle = REPROJECTION_COLOR;
+            oc.lineWidth = 4;
+            oc.beginPath();
+            oc.moveTo(cx - 8, iy - 8);
+            oc.lineTo(cx + 8, iy + 8);
+            oc.moveTo(cx + 8, iy - 8);
+            oc.lineTo(cx - 8, iy + 8);
+            oc.stroke();
         } else if (item.type === 'error') {
-            // Short gradient-colored line
             const lx = ix + 2;
-            ctx.lineWidth = 2;
-            ctx.lineCap = 'round';
-            // green segment
-            ctx.strokeStyle = '#4ade80';
-            ctx.beginPath();
-            ctx.moveTo(lx, iy);
-            ctx.lineTo(lx + 4, iy);
-            ctx.stroke();
-            // yellow segment
-            ctx.strokeStyle = '#fbbf24';
-            ctx.beginPath();
-            ctx.moveTo(lx + 4, iy);
-            ctx.lineTo(lx + 8, iy);
-            ctx.stroke();
-            // red segment
-            ctx.strokeStyle = '#ef4444';
-            ctx.beginPath();
-            ctx.moveTo(lx + 8, iy);
-            ctx.lineTo(lx + 12, iy);
-            ctx.stroke();
+            oc.lineWidth = 4;
+            oc.lineCap = 'round';
+            oc.strokeStyle = '#4ade80';
+            oc.beginPath();
+            oc.moveTo(lx, iy);
+            oc.lineTo(lx + 8, iy);
+            oc.stroke();
+            oc.strokeStyle = '#fbbf24';
+            oc.beginPath();
+            oc.moveTo(lx + 8, iy);
+            oc.lineTo(lx + 16, iy);
+            oc.stroke();
+            oc.strokeStyle = '#ef4444';
+            oc.beginPath();
+            oc.moveTo(lx + 16, iy);
+            oc.lineTo(lx + 24, iy);
+            oc.stroke();
         }
 
-        // Label text
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(item.label, ix + iconWidth + iconGap, iy);
+        oc.fillStyle = '#ffffff';
+        oc.fillText(item.label, ix + iconWidth + iconGap, iy);
     }
 
+    // Draw the hi-res offscreen canvas onto the main canvas at 1x size
+    const destX = ctx.canvas.width - boxWidth - 16;
+    const destY = 16;
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(offCanvas, destX, destY, boxWidth, boxHeight);
     ctx.restore();
 }
 
