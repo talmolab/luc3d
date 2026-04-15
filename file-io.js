@@ -1960,3 +1960,45 @@ async function parsePoints3dH5(arrayBuffer) {
         throw err;
     }
 }
+
+/**
+ * Approximate points-array comparison used during SLP load to detect
+ * pass-1 / pass-2 duplicate Instance objects. The loader first creates
+ * raw Instance objects from `slpData.frames[*].instances` (pass 1) and
+ * later, when lucid session metadata is present, creates a second
+ * Instance for each grouped entry. Before adding the metadata-driven
+ * one to `fg.instances`, the caller uses this helper to find and drop
+ * the pass-1 duplicate — otherwise the pass-1 instance keeps its
+ * original `trackIdx` (raw SLP value) and ends up drawn in the old
+ * track's color AND contributing a phantom track bar on the timeline.
+ *
+ * Two instances match if their points arrays have the same length and
+ * the first non-null point pair agrees within 0.5 pixels. That's tight
+ * enough to avoid collisions between different instances and loose
+ * enough to tolerate round-trip float noise.
+ *
+ * @param {Array<number[]|null>} ptsA
+ * @param {Array<number[]|null>} ptsB
+ * @returns {boolean}
+ */
+function instancePointsMatch(ptsA, ptsB) {
+    if (!ptsA || !ptsB) return false;
+    if (ptsA.length !== ptsB.length) return false;
+    // Compare every node position where both sides are non-null. Any
+    // disagreement beyond the tolerance rules out a match. If at least
+    // one node pair lines up (and no pair mismatches), the two arrays
+    // are considered the same instance — this tolerates pass-1 /
+    // pass-2 divergence on which nodes happen to be nulled.
+    var haveMatch = false;
+    for (var i = 0; i < ptsA.length; i++) {
+        var a = ptsA[i], b = ptsB[i];
+        if (a == null || b == null) continue;
+        if (Math.abs(a[0] - b[0]) > 0.5 || Math.abs(a[1] - b[1]) > 0.5) return false;
+        haveMatch = true;
+    }
+    return haveMatch;
+}
+
+if (typeof window !== 'undefined') {
+    window.instancePointsMatch = instancePointsMatch;
+}

@@ -290,8 +290,10 @@
 
                 <!-- ==================== Visibility Tab ==================== -->
                 <div class="panel-tab-content" id="tabVisibility">
-                    <h3>Rendering</h3>
-                    <div class="vis-section-header">User</div>
+                    <div class="vis-slider-row" style="margin-bottom:10px;">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text-secondary);"><input type="checkbox" id="visLegend"> Display Legend</label>
+                    </div>
+                    <h3>User</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
                         <input type="range" id="visUserNodeSize" min="1" max="50" value="11" step="1">
@@ -304,13 +306,18 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Transparency</span>
-                        <input type="range" id="visUserEdgeTrans" min="0" max="100" value="100" step="5">
+                        <input type="range" id="visUserEdgeTrans" min="0" max="100" value="100" step="1">
                         <span class="vis-val" id="visUserEdgeTransVal">1.0</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Label Size</span>
                         <input type="range" id="visUserLabelSize" min="0" max="24" value="12" step="1">
                         <span class="vis-val" id="visUserLabelSizeVal">12</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Transparency</span>
+                        <input type="range" id="visUserLabelAlpha" min="0" max="1" value="1" step="0.01">
+                        <span class="vis-val" id="visUserLabelAlphaVal">1.00</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Pre-ID Edge</span>
@@ -328,7 +335,7 @@
                             <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
-                    <div class="vis-section-header">Predicted</div>
+                    <h3>Predicted</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
                         <input type="range" id="visPredNodeSize" min="1" max="50" value="20" step="1">
@@ -341,7 +348,7 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Transparency</span>
-                        <input type="range" id="visPredEdgeTrans" min="0" max="100" value="60" step="5">
+                        <input type="range" id="visPredEdgeTrans" min="0" max="100" value="60" step="1">
                         <span class="vis-val" id="visPredEdgeTransVal">0.6</span>
                     </div>
                     <div class="vis-line-style-row">
@@ -360,7 +367,7 @@
                             <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
-                    <div class="vis-section-header">Reprojections</div>
+                    <h3>Reprojections</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
                         <input type="range" id="visReprojNodeSize" min="1" max="50" value="16" step="1">
@@ -373,13 +380,23 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Edge Transparency</span>
-                        <input type="range" id="visReprojEdgeTrans" min="0" max="100" value="100" step="5">
+                        <input type="range" id="visReprojEdgeTrans" min="0" max="100" value="100" step="1">
                         <span class="vis-val" id="visReprojEdgeTransVal">1.0</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Brightness</span>
+                        <input type="range" id="visReprojBrightness" min="0" max="100" value="100" step="1">
+                        <span class="vis-val" id="visReprojBrightnessVal">100%</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Label Size</span>
                         <input type="range" id="visReprojLabelSize" min="0" max="24" value="0" step="1">
                         <span class="vis-val" id="visReprojLabelSizeVal">0</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Transparency</span>
+                        <input type="range" id="visReprojLabelAlpha" min="0" max="1" value="1" step="0.01">
+                        <span class="vis-val" id="visReprojLabelAlphaVal">1.00</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Edge Style</span>
@@ -397,6 +414,55 @@
                             <button class="line-style-btn" data-style="track" title="Track Color">Track</button>
                         </div>
                     </div>
+                    <h3>Video Brightness</h3>
+                    <div class="vis-slider-row">
+                        <span>Select All Videos</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visVideoBrightnessLink" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div id="visVideoBrightnessTable" style="max-height:200px;overflow-y:auto;"></div>
+                    <h3>Video Rotation</h3>
+                    <div id="visVideoRotationTable" style="max-height:200px;overflow-y:auto;"></div>
+                    <hr style="border:none;border-top:1px solid var(--border-subtle);margin:10px 0;">
+                    <h3>3D Viewer</h3>
+                    <table style="width:100%;border-collapse:collapse;font-size:11px;color:var(--text-secondary);">
+                        <thead>
+                            <tr style="border-bottom:1px solid var(--border-subtle);">
+                                <th style="text-align:left;padding:2px 4px;font-weight:700;">Widget</th>
+                                <th style="text-align:center;padding:2px 4px;font-weight:700;">Size</th>
+                                <th style="text-align:center;padding:2px 4px;font-weight:700;">Display</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td style="padding:3px 4px;">Camera Label</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dLabelSize" value="28" min="1" max="200" step="1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dLabelShow" checked></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;">Camera Sphere</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dSphereSize" value="3" min="0.5" max="50" step="0.5" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dSphereShow" checked></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;">Pyramid</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dPyramidLength" value="40" min="1" max="200" step="1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dPyramidShow" checked></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;">Node Size</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dNodeSize" value="2" min="0" max="50" step="0.1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dNodeShow" checked></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;">Edge Weight</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dEdgeWeight" value="0.8" min="0" max="20" step="0.1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dEdgeShow" checked></td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
 
                 <!-- ==================== Videos Tab ==================== -->
@@ -661,6 +727,11 @@
                 <span class="fps-display" id="fpsDisplay"></span>
             </div>
 
+            <div style="position:relative;display:inline-block;">
+                <button class="toolbar-btn" id="speedBtn" title="Playback speed" style="font-size:11px;padding:2px 8px;line-height:1.2;white-space:normal;height:auto;display:inline-block;text-align:center;">Speed<br><span id="speedBtnValue">1.00x</span></button>
+                <div id="speedPopover" class="speed-popover" style="display:none;"></div>
+            </div>
+
             <button class="toolbar-btn" id="timelineToggleBtn" title="Toggle timeline" style="font-size:11px;padding:2px 8px;">Timeline</button>
         </div>
 
@@ -691,15 +762,15 @@
     </div>
 
     <!-- Module scripts (order matters: dependencies first) -->
-    <script src="video.js?v=4"></script>
+    <script src="video.js?v=5"></script>
     <script src="pose-data.js?v=6"></script>
     <script src="triangulation.js?v=5"></script>
     <script src="tracker.js"></script>
     <script src="demo-data.js"></script>
-    <script src="overlays.js?v=8"></script>
-    <script src="interaction.js?v=6"></script>
-    <script src="viewport3d.js"></script>
-    <script src="timeline.js"></script>
+    <script src="overlays.js?v=9"></script>
+    <script src="interaction.js?v=7"></script>
+    <script src="viewport3d.js?v=2"></script>
+    <script src="timeline.js?v=3"></script>
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
 
@@ -1163,7 +1234,79 @@
 
             const frameIdx = state.currentFrame;
             const cameras = state.session.cameras;
-            const frameGroupsList = state.session.instanceGroups.get(frameIdx);
+            var session = state.session;
+            var frameGroupsList = session.instanceGroups.get(frameIdx);
+
+            // If no InstanceGroups exist but identities are assigned, create groups from identity buckets
+            if ((!frameGroupsList || frameGroupsList.length === 0) && session.identities.length > 0) {
+                var fg = session.getFrameGroup(frameIdx);
+                if (fg) {
+                    var idBuckets = {};
+                    var allInstancesByCam = {};
+
+                    // Collect from grouped instances
+                    for (var [_cn, _insts] of fg.instances) {
+                        for (var _i = 0; _i < _insts.length; _i++) {
+                            var _inst = _insts[_i];
+                            if (!allInstancesByCam[_cn]) allInstancesByCam[_cn] = [];
+                            allInstancesByCam[_cn].push(_inst);
+                            var _idId = session.getIdentityIdForTrack
+                                ? session.getIdentityIdForTrack(_cn, _inst.trackIdx, frameIdx)
+                                : session.trackIdentityMap.get(_cn + ':' + _inst.trackIdx);
+                            if (_idId == null) continue;
+                            if (!idBuckets[_idId]) idBuckets[_idId] = {};
+                            if (!idBuckets[_idId][_cn]) idBuckets[_idId][_cn] = _inst;
+                        }
+                    }
+                    // Collect from unlinked instances
+                    for (var [_cn2, _ulList] of fg.unlinkedInstances) {
+                        for (var _u = 0; _u < _ulList.length; _u++) {
+                            var _ulInst = _ulList[_u].instance;
+                            if (!allInstancesByCam[_cn2]) allInstancesByCam[_cn2] = [];
+                            allInstancesByCam[_cn2].push(_ulInst);
+                            var _idId2 = session.getIdentityIdForTrack
+                                ? session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx)
+                                : session.trackIdentityMap.get(_cn2 + ':' + _ulInst.trackIdx);
+                            if (_idId2 == null) continue;
+                            if (!idBuckets[_idId2]) idBuckets[_idId2] = {};
+                            if (!idBuckets[_idId2][_cn2]) idBuckets[_idId2][_cn2] = _ulInst;
+                        }
+                    }
+
+                    // Clear and re-add instances as linked
+                    session.instanceGroups.delete(frameIdx);
+                    for (var _cn3 in allInstancesByCam) fg.instances.set(_cn3, []);
+                    for (var _cn4 of fg.unlinkedInstances.keys()) fg.unlinkedInstances.set(_cn4, []);
+                    for (var _cn5 in allInstancesByCam) {
+                        for (var _ai = 0; _ai < allInstancesByCam[_cn5].length; _ai++) {
+                            fg.addInstance(_cn5, allInstancesByCam[_cn5][_ai]);
+                        }
+                    }
+
+                    // Create InstanceGroups from identity buckets
+                    for (var _idStr in idBuckets) {
+                        var _identityId = parseInt(_idStr);
+                        var _bucket = idBuckets[_idStr];
+                        var _camNames = Object.keys(_bucket);
+                        if (_camNames.length < 2) continue;
+                        var _group = new InstanceGroup(Date.now() + _identityId, _identityId);
+                        for (var _ci = 0; _ci < _camNames.length; _ci++) {
+                            _group.addInstance(_camNames[_ci], _bucket[_camNames[_ci]]);
+                        }
+                        _group.observedPoints = {};
+                        for (var _ci2 = 0; _ci2 < _camNames.length; _ci2++) {
+                            _group.observedPoints[_camNames[_ci2]] = _bucket[_camNames[_ci2]].points;
+                        }
+                        if (!session.instanceGroups.has(frameIdx)) {
+                            session.instanceGroups.set(frameIdx, []);
+                        }
+                        session.instanceGroups.get(frameIdx).push(_group);
+                    }
+                    frameGroupsList = session.instanceGroups.get(frameIdx);
+                    console.log('[triangulate] Auto-created', (frameGroupsList ? frameGroupsList.length : 0), 'groups from identity assignments');
+                }
+            }
+
             if (!frameGroupsList || frameGroupsList.length === 0) {
                 console.warn('[triangulate] No instanceGroups for frame', frameIdx);
                 setStatus('No instance groups on frame ' + (frameIdx + 1) + ' - assign instances to groups first (A key)', 'warning');
@@ -1783,6 +1926,10 @@
                     // Reprojections are computed on-the-fly when drawing.
                     var triResult = triangulateAndReproject(group, cameras, { triangulateOnly: true });
                     group.points3d = triResult.points3d;
+                    group.observedPoints = {};
+                    for (var _oci = 0; _oci < camNames.length; _oci++) {
+                        group.observedPoints[camNames[_oci]] = bucket[camNames[_oci]].points;
+                    }
                     group.markClean();
 
                     totalGrouped++;
@@ -1798,6 +1945,7 @@
             }
 
             hideLoading();
+            setReprojErrorVisible(true);
             drawAllOverlays(state.currentFrame);
             updateInfoPanel();
             setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
@@ -2579,6 +2727,7 @@
 
         function getVisibilitySettings() {
             return {
+                showLegend: document.getElementById('visLegend').checked,
                 showUser: document.getElementById('visUser').checked,
                 showPredicted: document.getElementById('visPredicted').checked,
                 showReprojected: document.getElementById('visReprojections').checked,
@@ -2589,6 +2738,7 @@
                     lineWidth: parseInt(document.getElementById('visUserEdgeWeight').value) || 2,
                     alpha: parseInt(document.getElementById('visUserEdgeTrans').value) / 100,
                     labelSize: parseInt(document.getElementById('visUserLabelSize').value) || 11,
+                    labelAlpha: parseFloat(document.getElementById('visUserLabelAlpha').value),
                     showLabels: parseInt(document.getElementById('visUserLabelSize').value) > 0,
                     preLineStyle: document.getElementById('visUserPreLineStyle').getAttribute('data-value') || 'dashed',
                     postLineStyle: document.getElementById('visUserPostLineStyle').getAttribute('data-value') || 'solid',
@@ -2605,7 +2755,9 @@
                     nodeSize: parseInt(document.getElementById('visReprojNodeSize').value) || 4,
                     lineWidth: parseInt(document.getElementById('visReprojEdgeWeight').value) || 2,
                     alpha: parseInt(document.getElementById('visReprojEdgeTrans').value) / 100,
+                    brightness: parseInt(document.getElementById('visReprojBrightness').value) / 100,
                     labelSize: parseInt(document.getElementById('visReprojLabelSize').value) || 11,
+                    labelAlpha: parseFloat(document.getElementById('visReprojLabelAlpha').value),
                     showLabels: parseInt(document.getElementById('visReprojLabelSize').value) > 0,
                     lineStyle: document.getElementById('visReprojLineStyle').getAttribute('data-value') || 'dotted',
                 },
@@ -2640,7 +2792,7 @@
                     var _grp = instanceGroups[_rg];
                     if (_grp.points3d && _grp.points3d.length > 0 &&
                         (!_grp.reprojectedInstances || _grp.reprojectedInstances.size === 0) &&
-                        !_grp.reprojections) {
+                        (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
                         var _triRes = triangulateAndReproject(_grp, state.session.cameras);
                         _grp.reprojections = _triRes.reprojections;
                         storeReprojectedInstances(_grp, _triRes, state.session.cameras);
@@ -2748,6 +2900,7 @@
 
                 drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
                     colorByIdentity: state.colorByIdentity,
+                    showLegend: vis.showLegend,
                     showUser: vis.showUser,
                     showPredicted: vis.showPredicted,
                     showReprojected: vis.showReprojected,
@@ -2876,6 +3029,9 @@
 
                 onUserInstanceCreated: function (viewName, points) {
                     recordUserPoints(viewName, points);
+                    // Refresh timeline track bars so the new user instance is
+                    // visible immediately (Prompt 66: update bars in real time).
+                    updateTimelineForFrame(state.currentFrame);
                 },
 
                 onDoubleClickReprojected: function (group, viewName) {
@@ -3232,6 +3388,12 @@
                 console.log('[3D] Creating Viewport3D with', state.session.cameras.length, 'cameras,',
                     'skeleton:', state.session.skeleton.nodes.length, 'nodes');
 
+                var _3dLabel = document.getElementById('vis3dLabelSize');
+                var _3dSphere = document.getElementById('vis3dSphereSize');
+                var _3dPyramid = document.getElementById('vis3dPyramidLength');
+                var _3dLabelShow = document.getElementById('vis3dLabelShow');
+                var _3dSphereShow = document.getElementById('vis3dSphereShow');
+                var _3dPyramidShow = document.getElementById('vis3dPyramidShow');
                 viewport3d = new Viewport3D(container, {
                     cameras: state.session.cameras,
                     skeleton: state.session.skeleton,
@@ -3241,6 +3403,16 @@
                         return getGroupColor(group, state.session, useIdentity, state.currentFrame);
                     },
                     onCameraClicked: highlightVideoCell,
+                    cameraLabelSize: _3dLabel ? parseInt(_3dLabel.value) || 28 : 28,
+                    cameraSphereSize: _3dSphere ? parseFloat(_3dSphere.value) || 3 : 3,
+                    pyramidLength: _3dPyramid ? parseFloat(_3dPyramid.value) || 40 : 40,
+                    showCameraLabels: _3dLabelShow ? _3dLabelShow.checked : true,
+                    showCameraSpheres: _3dSphereShow ? _3dSphereShow.checked : true,
+                    showCameraPyramids: _3dPyramidShow ? _3dPyramidShow.checked : true,
+                    skeletonNodeSize: (function() { var e = document.getElementById('vis3dNodeSize'); return e ? parseFloat(e.value) || 2 : 2; })(),
+                    skeletonEdgeWeight: (function() { var e = document.getElementById('vis3dEdgeWeight'); return e ? parseFloat(e.value) || 0.8 : 0.8; })(),
+                    showSkeletonNodes: (function() { var e = document.getElementById('vis3dNodeShow'); return e ? e.checked : true; })(),
+                    showSkeletonEdges: (function() { var e = document.getElementById('vis3dEdgeShow'); return e ? e.checked : true; })(),
                 });
 
                 // Wire up "Show Camera View" button
@@ -3360,24 +3532,50 @@
             const container = document.getElementById('timelineContainer');
             if (!container) return;
 
+            // If no session yet, use a compact initial height that does
+            // not allocate space for non-existent track rows. Session load
+            // will later grow this to fit actual tracks.
+            if (!state.session && !container.style.height) {
+                container.style.height = '96px';
+            }
+
             timeline = new Timeline(container, {
                 totalFrames: state.totalFrames,
-                onFrameChange: function (frameIdx) {
-                    if (videoController) {
-                        if (state.isPlaying) {
-                            videoController.stopPlayback();
+                onFrameChange: (function () {
+                    var lastRender = 0, timer = null, pending = null;
+                    return function (frameIdx) {
+                        if (!videoController) return;
+                        if (state.isPlaying) videoController.stopPlayback();
+                        pending = frameIdx;
+                        var now = performance.now();
+                        if (now - lastRender >= 100) {
+                            lastRender = now;
+                            if (timer) { clearTimeout(timer); timer = null; }
+                            videoController.seekToFrame(frameIdx);
+                        } else if (!timer) {
+                            timer = setTimeout(function () {
+                                timer = null;
+                                lastRender = performance.now();
+                                if (videoController && pending !== null) videoController.seekToFrame(pending);
+                            }, 100 - (now - lastRender));
                         }
-                        videoController.seekToFrame(frameIdx);
-                    }
+                    };
+                })(),
+                onDragEnd: function (frameIdx) {
+                    if (videoController) videoController.seekToFrame(frameIdx);
                 },
                 onRangeSelect: function (startFrame, endFrame) {
                     setStatus('Selected range: ' + startFrame + '-' + endFrame);
                 },
             });
 
-            // Populate with session data
+            // Populate with session data. When tracks are loaded, resize
+            // the container to the preferred height so every track row is
+            // visible without clipping, with a small gap below the lowest
+            // row before the frame numbers.
             if (state.session) {
                 timeline.setData(state.session);
+                fitTimelineToData();
             }
 
             // Timeline display mode toggles
@@ -4211,6 +4409,7 @@
                     '<tr><td><b>View</b></td><td></td></tr>' +
                     '<tr><td><code>\\</code></td><td>Toggle 3D viewport</td></tr>' +
                     '<tr><td><code>I</code></td><td>Toggle info panel</td></tr>' +
+                    '<tr><td><code>Option+\u2192</code> / <code>Option+\u2190</code></td><td>Rotate video CW / CCW (hold for continuous)</td></tr>' +
                     '<tr><td><code>?</code></td><td>Show this help</td></tr>' +
                     '</tbody></table></div>' +
                     '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
@@ -4351,12 +4550,9 @@
             document.getElementById('btnNext').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame + 1); });
             document.getElementById('btnLast').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.totalFrames - 1); });
 
-            // Timeline toggle button
+            // Timeline toggle button — fully collapse / expand the timeline.
             document.getElementById('timelineToggleBtn').addEventListener('click', function () {
                 toggleTimeline();
-                var container = document.getElementById('timelineContainer');
-                this.textContent = container.classList.contains('collapsed') ? 'Timeline' : 'Timeline';
-                this.classList.toggle('active', !container.classList.contains('collapsed'));
             });
 
             // Seekbar scrubbing (delegates to current videoController)
@@ -4370,10 +4566,13 @@
                     return Math.round(fraction * (state.totalFrames - 1));
                 };
 
+                var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
+
                 seekbar.addEventListener('mousedown', function (e) {
                     isDragging = true;
                     var frame = getFrameFromEvent(e);
                     updateSeekbarVisual(frame);
+                    _seekThrottle.lastRender = performance.now();
                     if (videoController) videoController.scrubToFrame(frame);
                     e.preventDefault();
                 });
@@ -4382,12 +4581,34 @@
                     if (!isDragging) return;
                     var frame = getFrameFromEvent(e);
                     updateSeekbarVisual(frame);
-                    if (videoController) videoController.scrubToFrame(frame);
+                    _seekThrottle.pendingFrame = frame;
+                    var now = performance.now();
+                    if (now - _seekThrottle.lastRender >= 100) {
+                        _seekThrottle.lastRender = now;
+                        if (_seekThrottle.timer) { clearTimeout(_seekThrottle.timer); _seekThrottle.timer = null; }
+                        if (videoController) videoController.scrubToFrame(frame);
+                    } else if (!_seekThrottle.timer) {
+                        _seekThrottle.timer = setTimeout(function () {
+                            _seekThrottle.timer = null;
+                            _seekThrottle.lastRender = performance.now();
+                            if (videoController && _seekThrottle.pendingFrame !== null) {
+                                videoController.scrubToFrame(_seekThrottle.pendingFrame);
+                            }
+                        }, 100 - (now - _seekThrottle.lastRender));
+                    }
                     e.preventDefault();
                 });
 
                 document.addEventListener('mouseup', function () {
-                    if (isDragging) isDragging = false;
+                    if (isDragging) {
+                        isDragging = false;
+                        // Cancel any pending throttled render and immediately render final frame
+                        if (_seekThrottle.timer) { clearTimeout(_seekThrottle.timer); _seekThrottle.timer = null; }
+                        if (_seekThrottle.pendingFrame !== null && videoController) {
+                            videoController.scrubToFrame(_seekThrottle.pendingFrame);
+                            _seekThrottle.pendingFrame = null;
+                        }
+                    }
                 });
             })();
 
@@ -4403,9 +4624,70 @@
                 }
             });
 
+            // --- Video Rotation (Alt/Option + Arrow) ---
+            var _rotState = { active: false, direction: 0, lastTime: 0, rafId: 0 };
+
+            function getActiveView() {
+                if (!paneManager || !paneManager.api) return null;
+                var ap = paneManager.api.activePanel;
+                if (!ap) return null;
+                var r = panelRenderers.get(ap.id);
+                if (!r) return null;
+                var vn = r.getViewName();
+                for (var i = 0; i < state.views.length; i++) {
+                    if (state.views[i].name === vn) return state.views[i];
+                }
+                return null;
+            }
+
+            function rotationLoop(now) {
+                if (!_rotState.active) return;
+                var view = getActiveView();
+                if (!view) { _rotState.active = false; return; }
+                var dt = (now - _rotState.lastTime) / 1000;
+                var degrees = 60 * dt * _rotState.direction;
+                view.rotation = clampRotation((view.rotation || 0) + degrees);
+                _rotState.lastTime = now;
+                // Only update the CSS transform — don't redraw overlays during animation
+                if (videoController) videoController.applyZoom(view);
+                syncRotationUI(view);
+                _rotState.rafId = requestAnimationFrame(rotationLoop);
+            }
+
+            document.addEventListener('keydown', function (e) {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+                    (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+                    e.preventDefault();
+                    var view = getActiveView();
+                    if (!view) return;
+                    var dir = e.key === 'ArrowRight' ? 1 : -1;
+                    if (!_rotState.active) {
+                        view.rotation = clampRotation((view.rotation || 0) + dir);
+                        if (videoController) videoController.applyZoom(view);
+                        syncRotationUI(view);
+                        _rotState.active = true;
+                        _rotState.direction = dir;
+                        _rotState.lastTime = performance.now();
+                        _rotState.rafId = requestAnimationFrame(rotationLoop);
+                    }
+                    return;
+                }
+            });
+
+            document.addEventListener('keyup', function (e) {
+                if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Alt') && _rotState.active) {
+                    _rotState.active = false;
+                    if (_rotState.rafId) { cancelAnimationFrame(_rotState.rafId); _rotState.rafId = 0; }
+                    // Redraw overlays once at the final rotation angle
+                    drawAllOverlays(state.currentFrame);
+                }
+            });
+
             document.addEventListener('keydown', function (e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
                 if (!videoController) return;
+                if (e.altKey) return; // Alt+Arrow handled by rotation above
 
                 switch (e.key) {
                     case 'ArrowRight':
@@ -4681,35 +4963,62 @@
             // Visibility Tab
             // ============================================
 
-            // Slider value display + redraw
-            function setupVisSlider(sliderId, valId, isTransparency) {
+            // Slider value display + redraw (throttled to ~10fps during drag)
+            function setupVisSlider(sliderId, valId, format) {
                 var slider = document.getElementById(sliderId);
                 var val = document.getElementById(valId);
                 if (!slider || !val) return;
-                slider.addEventListener('input', function() {
-                    if (isTransparency) {
+                var lastRender = 0;
+                var throttleTimer = null;
+                function updateLabel() {
+                    if (format === 'alpha') {
                         val.textContent = (parseInt(slider.value) / 100).toFixed(1);
+                    } else if (format === 'pct') {
+                        val.textContent = slider.value + '%';
+                    } else if (format === 'float') {
+                        val.textContent = parseFloat(slider.value).toFixed(2);
                     } else {
                         val.textContent = slider.value;
                     }
+                }
+                slider.addEventListener('input', function() {
+                    updateLabel();
+                    var now = performance.now();
+                    if (now - lastRender >= 100) {
+                        lastRender = now;
+                        drawAllOverlays(state.currentFrame);
+                    } else if (!throttleTimer) {
+                        throttleTimer = setTimeout(function() {
+                            throttleTimer = null;
+                            lastRender = performance.now();
+                            drawAllOverlays(state.currentFrame);
+                        }, 100 - (now - lastRender));
+                    }
+                });
+                slider.addEventListener('change', function() {
+                    updateLabel();
+                    if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
                     drawAllOverlays(state.currentFrame);
                 });
             }
 
             setupVisSlider('visUserNodeSize', 'visUserNodeSizeVal');
             setupVisSlider('visUserEdgeWeight', 'visUserEdgeWeightVal');
-            setupVisSlider('visUserEdgeTrans', 'visUserEdgeTransVal', true);
+            setupVisSlider('visUserEdgeTrans', 'visUserEdgeTransVal', 'alpha');
             setupVisSlider('visUserLabelSize', 'visUserLabelSizeVal');
+            setupVisSlider('visUserLabelAlpha', 'visUserLabelAlphaVal', 'float');
             setupVisSlider('visPredNodeSize', 'visPredNodeSizeVal');
             setupVisSlider('visPredEdgeWeight', 'visPredEdgeWeightVal');
-            setupVisSlider('visPredEdgeTrans', 'visPredEdgeTransVal', true);
+            setupVisSlider('visPredEdgeTrans', 'visPredEdgeTransVal', 'alpha');
             setupVisSlider('visReprojNodeSize', 'visReprojNodeSizeVal');
             setupVisSlider('visReprojEdgeWeight', 'visReprojEdgeWeightVal');
-            setupVisSlider('visReprojEdgeTrans', 'visReprojEdgeTransVal', true);
+            setupVisSlider('visReprojEdgeTrans', 'visReprojEdgeTransVal', 'alpha');
+            setupVisSlider('visReprojBrightness', 'visReprojBrightnessVal', 'pct');
             setupVisSlider('visReprojLabelSize', 'visReprojLabelSizeVal');
+            setupVisSlider('visReprojLabelAlpha', 'visReprojLabelAlphaVal', 'float');
 
             // Checkbox toggles
-            ['visUser', 'visPredicted', 'visReprojections', 'visErrors'].forEach(function(id) {
+            ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors'].forEach(function(id) {
                 var el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', function() {
@@ -4742,8 +5051,205 @@
                     container.querySelectorAll('.line-style-btn').forEach(function(b) { b.classList.remove('active'); });
                     btn.classList.add('active');
                     container.setAttribute('data-value', btn.getAttribute('data-style'));
+                    // Brightness slider only enabled when reprojections use track color
+                    if (container.id === 'visReprojNodeColor') {
+                        updateReprojBrightnessEnabled();
+                    }
                     drawAllOverlays(state.currentFrame);
                 });
+            });
+
+            function updateReprojBrightnessEnabled() {
+                var nodeColor = document.getElementById('visReprojNodeColor').getAttribute('data-value') || 'white';
+                var slider = document.getElementById('visReprojBrightness');
+                var val = document.getElementById('visReprojBrightnessVal');
+                if (slider) {
+                    var enabled = nodeColor === 'track';
+                    slider.disabled = !enabled;
+                    slider.style.opacity = enabled ? '1' : '0.35';
+                    if (val) val.style.opacity = enabled ? '1' : '0.35';
+                }
+            }
+            updateReprojBrightnessEnabled();
+
+            // --- Visibility settings cache (localStorage) ---
+            var VIS_CACHE_KEY = 'visibilitySettings';
+            var visSliderIds = [
+                'visUserNodeSize', 'visUserEdgeWeight', 'visUserEdgeTrans',
+                'visUserLabelSize', 'visUserLabelAlpha',
+                'visPredNodeSize', 'visPredEdgeWeight', 'visPredEdgeTrans',
+                'visReprojNodeSize', 'visReprojEdgeWeight', 'visReprojEdgeTrans',
+                'visReprojBrightness', 'visReprojLabelSize', 'visReprojLabelAlpha',
+                'vis3dLabelSize', 'vis3dSphereSize', 'vis3dPyramidLength',
+                'vis3dNodeSize', 'vis3dEdgeWeight',
+            ];
+            var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
+                'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
+                'vis3dNodeShow', 'vis3dEdgeShow'];
+            var visStyleIds = [
+                'visUserPreLineStyle', 'visUserPostLineStyle',
+                'visPredPreLineStyle', 'visPredPostLineStyle',
+                'visReprojLineStyle', 'visReprojNodeColor',
+            ];
+
+            function saveVisSettings() {
+                var data = {};
+                visSliderIds.forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) data[id] = el.value;
+                });
+                visCheckIds.forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) data[id] = el.checked;
+                });
+                visStyleIds.forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) data[id] = el.getAttribute('data-value');
+                });
+                localStorage.setItem(VIS_CACHE_KEY, JSON.stringify(data));
+            }
+
+            function restoreVisSettings() {
+                var raw = localStorage.getItem(VIS_CACHE_KEY);
+                if (!raw) return;
+                try { var data = JSON.parse(raw); } catch(e) { return; }
+                visSliderIds.forEach(function(id) {
+                    if (data[id] == null) return;
+                    var el = document.getElementById(id);
+                    if (el) {
+                        el.value = data[id];
+                        // Update paired display label
+                        var valEl = document.getElementById(id + 'Val');
+                        if (valEl) {
+                            if (id.indexOf('LabelAlpha') >= 0) valEl.textContent = parseFloat(data[id]).toFixed(2);
+                            else if (id.indexOf('Trans') >= 0) valEl.textContent = (parseInt(data[id]) / 100).toFixed(1);
+                            else if (id.indexOf('Brightness') >= 0) valEl.textContent = data[id] + '%';
+                            else valEl.textContent = data[id];
+                        }
+                    }
+                });
+                visCheckIds.forEach(function(id) {
+                    if (data[id] == null) return;
+                    var el = document.getElementById(id);
+                    if (el) el.checked = data[id];
+                });
+                visStyleIds.forEach(function(id) {
+                    if (!data[id]) return;
+                    var container = document.getElementById(id);
+                    if (!container) return;
+                    container.setAttribute('data-value', data[id]);
+                    container.querySelectorAll('.line-style-btn').forEach(function(b) {
+                        b.classList.toggle('active', b.getAttribute('data-style') === data[id]);
+                    });
+                });
+                updateReprojBrightnessEnabled();
+            }
+
+            restoreVisSettings();
+
+            // --- 3D Viewer visibility controls ---
+            (function() {
+                var camSizeIds = {
+                    'vis3dLabelSize': { prop: 'cameraLabelSize', parse: parseInt },
+                    'vis3dSphereSize': { prop: 'cameraSphereSize', parse: parseFloat },
+                    'vis3dPyramidLength': { prop: 'pyramidLength', parse: parseFloat },
+                };
+                var skelSizeIds = {
+                    'vis3dNodeSize': { prop: 'skeletonNodeSize', parse: parseFloat },
+                    'vis3dEdgeWeight': { prop: 'skeletonEdgeWeight', parse: parseFloat },
+                };
+                var showIds = {
+                    'vis3dLabelShow': { prop: 'showCameraLabels' },
+                    'vis3dSphereShow': { prop: 'showCameraSpheres' },
+                    'vis3dPyramidShow': { prop: 'showCameraPyramids' },
+                    'vis3dNodeShow': { prop: 'showSkeletonNodes' },
+                    'vis3dEdgeShow': { prop: 'showSkeletonEdges' },
+                };
+                function rebuildCams() {
+                    if (viewport3d) viewport3d.addCameraPyramids();
+                }
+                function rebuildSkel() {
+                    if (!viewport3d) return;
+                    var groups = typeof getInstanceGroupsForFrame === 'function'
+                        ? getInstanceGroupsForFrame(state.currentFrame) : [];
+                    viewport3d.setFrame(groups);
+                }
+                function parseVal(el, parseFn) {
+                    var v = el.value.trim() === '' ? 0 : parseFn(el.value);
+                    if (isNaN(v) || v < 0) v = 0;
+                    var step = parseFloat(el.step) || 1;
+                    v = Math.round(v / step) * step;
+                    // Fix floating-point noise
+                    var decimals = (step.toString().split('.')[1] || '').length;
+                    v = parseFloat(v.toFixed(decimals));
+                    el.value = v;
+                    return v;
+                }
+                // Enter to blur + stepper arrows on all 3D number inputs
+                document.querySelectorAll('#tabVisibility table input[type="number"]').forEach(function(el) {
+                    if (!el.id.startsWith('vis3d')) return;
+                    el.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+                    });
+                });
+                document.querySelectorAll('.vis3d-stepper button').forEach(function(btn) {
+                    btn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        var input = btn.closest('span').parentElement.querySelector('input[type="number"]');
+                        if (!input) return;
+                        var step = parseFloat(input.step) || 1;
+                        var min = input.min !== '' ? parseFloat(input.min) : -Infinity;
+                        var max = input.max !== '' ? parseFloat(input.max) : Infinity;
+                        var cur = parseFloat(input.value) || 0;
+                        var val = btn.dataset.dir === 'up' ? cur + step : cur - step;
+                        if (val < min) val = min;
+                        if (val > max) val = max;
+                        if (val < 0) val = 0;
+                        var decimals = (step.toString().split('.')[1] || '').length;
+                        input.value = parseFloat(val.toFixed(decimals));
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                    });
+                });
+                Object.keys(camSizeIds).forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (!el) return;
+                    el.addEventListener('input', function() {
+                        var val = parseVal(el, camSizeIds[id].parse);
+                        if (viewport3d) viewport3d[camSizeIds[id].prop] = val;
+                        rebuildCams();
+                        saveVisSettings();
+                    });
+                });
+                Object.keys(skelSizeIds).forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (!el) return;
+                    el.addEventListener('input', function() {
+                        var val = parseVal(el, skelSizeIds[id].parse);
+                        if (viewport3d) viewport3d[skelSizeIds[id].prop] = val;
+                        rebuildSkel();
+                        saveVisSettings();
+                    });
+                });
+                Object.keys(showIds).forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (!el) return;
+                    el.addEventListener('change', function() {
+                        if (viewport3d) viewport3d[showIds[id].prop] = el.checked;
+                        if (id.indexOf('Node') >= 0 || id.indexOf('Edge') >= 0) rebuildSkel();
+                        else rebuildCams();
+                        saveVisSettings();
+                    });
+                });
+            })();
+
+            // Hook save into all vis controls
+            var visTab = document.getElementById('tabVisibility');
+            if (visTab) {
+                visTab.addEventListener('change', saveVisSettings);
+                visTab.addEventListener('input', saveVisSettings);
+            }
+            document.querySelectorAll('.line-style-btn').forEach(function(btn) {
+                btn.addEventListener('click', saveVisSettings);
             });
 
             // Sessions sidebar toggle
@@ -5043,10 +5549,39 @@
 
         function toggleTimeline() {
             const container = document.getElementById('timelineContainer');
+            const willCollapse = !container.classList.contains('collapsed');
             container.classList.toggle('collapsed');
-            if (timeline && !container.classList.contains('collapsed')) {
+            if (!willCollapse && timeline) {
+                // Expanding: if container has no explicit inline height
+                // (e.g., first expand, or after a prior full hide), size
+                // it to fit loaded tracks so the user can see them.
+                if (!container.style.height) {
+                    var preferred = timeline.getPreferredHeight();
+                    container.style.height = preferred + 'px';
+                }
                 setTimeout(function () { timeline.resize(); }, 300);
             }
+            syncTimelineToggleButton();
+        }
+
+        function syncTimelineToggleButton() {
+            var btn = document.getElementById('timelineToggleBtn');
+            if (!btn) return;
+            var container = document.getElementById('timelineContainer');
+            btn.classList.toggle('active', !container.classList.contains('collapsed'));
+        }
+
+        // Resize the timeline container to fit the currently loaded tracks
+        // (called after a session is imported or switched). Skips when the
+        // user has explicitly collapsed the timeline via the toolbar button.
+        function fitTimelineToData() {
+            if (!timeline) return;
+            var container = document.getElementById('timelineContainer');
+            if (!container) return;
+            if (container.classList.contains('collapsed')) return;
+            var preferred = timeline.getPreferredHeight();
+            container.style.height = preferred + 'px';
+            timeline.resize();
         }
 
         // ============================================
@@ -8142,12 +8677,21 @@
                         tOpt.textContent = state.session.tracks[tsi];
                         trackSelect.appendChild(tOpt);
                     }
-                    trackSelect.value = group.identityId != null ? group.identityId : 0;
-                    (function (g, sel) {
+                    // Source the current track from the first instance's
+                    // trackIdx, NOT group.identityId. identityId is an
+                    // identity index and is -1 for groups whose identity
+                    // export was dropped (SLP re-import path), which would
+                    // otherwise leave the dropdown showing no selection.
+                    var firstGroupInst = group.instances.values().next().value;
+                    var groupDisplayTrackIdx = (firstGroupInst && firstGroupInst.trackIdx != null && firstGroupInst.trackIdx >= 0)
+                        ? firstGroupInst.trackIdx
+                        : 0;
+                    trackSelect.value = groupDisplayTrackIdx;
+                    (function (g, sel, curTrack) {
                         sel.addEventListener('change', function (ev) {
                             ev.stopPropagation();
                             var newTrack = parseInt(sel.value);
-                            if (newTrack === g.identityId) return;
+                            if (newTrack === curTrack) return;
                             var totalProp = 0;
                             for (var [cn, ginst] of g.instances) {
                                 totalProp += swapAssignTrack(state.currentFrame, cn, ginst, newTrack, state.session);
@@ -8160,7 +8704,9 @@
                             if (timeline) timeline.refreshTracks(state.session);
                         });
                         sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
-                    })(group, trackSelect);
+                        sel.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
+                        sel.addEventListener('mouseup', function (ev) { ev.stopPropagation(); });
+                    })(group, trackSelect, groupDisplayTrackIdx);
                     tdTrack.appendChild(trackSelect);
                     if (group.dirty) {
                         const dirtyDot = document.createElement('span');
@@ -8202,6 +8748,8 @@
                             if (timeline) timeline.refreshTracks(state.session);
                         });
                         sel.addEventListener('click', function (e) { e.stopPropagation(); });
+                        sel.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+                        sel.addEventListener('mouseup', function (e) { e.stopPropagation(); });
                     })(group, idSelect);
                     tdIdentity.appendChild(idSelect);
 
@@ -8260,9 +8808,14 @@
                     tr.appendChild(tdUnlink);
                     tdUnlink.appendChild(unlinkBtn);
 
-                    // Click to toggle selection of this group
+                    // Click to toggle selection of this group. Skip when the
+                    // click originates inside a form control (track/identity
+                    // dropdown) — otherwise the DOM rebuild triggered here
+                    // would destroy the open <select> mid-interaction and
+                    // the user could never pick a new option.
                     (function (g) {
-                        tr.addEventListener('click', function () {
+                        tr.addEventListener('click', function (ev) {
+                            if (isInteractiveClickTarget(ev && ev.target)) return;
                             if (interactionManager) {
                                 if (interactionManager.selectedInstanceGroup === g && !interactionManager.selectedReprojected) {
                                     interactionManager.clearSelection();
@@ -8444,6 +8997,8 @@
                                 if (timeline) timeline.refreshTracks(state.session);
                             });
                             sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                            sel.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
+                            sel.addEventListener('mouseup', function (ev) { ev.stopPropagation(); });
                         })(ul, ul.instance, trackSelect, cam.name);
                         tdTrackUl.appendChild(trackSelect);
 
@@ -8483,6 +9038,8 @@
                                 if (timeline) timeline.refreshTracks(state.session);
                             });
                             sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
+                            sel.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
+                            sel.addEventListener('mouseup', function (ev) { ev.stopPropagation(); });
                         })(ul.instance, idSelectUl, cam.name);
                         tdIdUl.appendChild(idSelectUl);
 
@@ -8508,9 +9065,12 @@
                         tr.appendChild(tdPoints);
                         tr.appendChild(tdScore);
 
-                        // Click to toggle assignment selection for this unlinked instance
+                        // Click to toggle assignment selection for this unlinked instance.
+                        // Skip form-control clicks so the track/identity dropdowns
+                        // stay open until the user makes a selection.
                         (function (unlinked) {
-                            tr.addEventListener('click', function () {
+                            tr.addEventListener('click', function (ev) {
+                                if (isInteractiveClickTarget(ev && ev.target)) return;
                                 if (interactionManager) {
                                     interactionManager.select(null, -1);
                                     interactionManager.selectedUnlinked = unlinked;
@@ -12186,6 +12746,7 @@
                 } else if (timeline) {
                     timeline.setData(state.session);
                     timeline.setTotalFrames(state.totalFrames);
+                    fitTimelineToData();
                 }
 
                 // Triangulation is NOT run automatically — user triggers it
@@ -12558,6 +13119,29 @@
                                     inst.occluded = instMeta.occluded;
                                 }
 
+                                // Pass 1 (above) already added a raw-SLP instance
+                                // for this frame/cam to `fg3.instances`. Leaving
+                                // it there would leave two Instance objects at
+                                // the same position — the group references the
+                                // new one (metadata-driven) while the pass-1 one
+                                // lingers in fg.instances with whatever trackIdx
+                                // the raw SLP had. After a dropdown track swap,
+                                // swapAssignTrack only touches the group's ref,
+                                // so the pass-1 duplicate keeps its old trackIdx
+                                // and (a) contributes a phantom timeline bar and
+                                // (b) draws an extra skeleton in the old track
+                                // color. Remove the matching pass-1 duplicate
+                                // before adding the metadata-driven replacement.
+                                var _dupCamInsts = fg3.instances.get(igCamName);
+                                if (_dupCamInsts && _dupCamInsts.length > 0) {
+                                    for (var _dpi = 0; _dpi < _dupCamInsts.length; _dpi++) {
+                                        if (instancePointsMatch(_dupCamInsts[_dpi].points, points)) {
+                                            _dupCamInsts.splice(_dpi, 1);
+                                            break;
+                                        }
+                                    }
+                                }
+
                                 // Add to both the group and the FrameGroup
                                 group.addInstance(igCamName, inst);
                                 fg3.addInstance(igCamName, inst);
@@ -12642,6 +13226,49 @@
                 }
                 if (movedToUnlinked > 0) {
                     console.log('[load-slp] Moved', movedToUnlinked, 'ungrouped instances to unlinked pool');
+                }
+
+                // Belt-and-suspenders: drop any unlinked instance whose
+                // points align with a grouped instance on the same frame
+                // and camera. Pass-2 dedup in the metadata-driven loader
+                // catches the common case, but in some SLP files the
+                // pass-1 raw points and pass-2 metadata points diverge
+                // enough (e.g. null-node distribution, micro precision)
+                // to slip past the match — those leftovers render as a
+                // second skeleton in the pre-proofreading track color
+                // and contribute a phantom track bar on the timeline.
+                var extraDedup = 0;
+                for (var [ddFrameIdx, ddFg] of session.frameGroups) {
+                    var ddGroups = session.instanceGroups.get(ddFrameIdx) || [];
+                    if (ddGroups.length === 0) continue;
+                    // Build camera → list-of-grouped-points for fast dup detection.
+                    var groupedByCam = {};
+                    for (var ddGi = 0; ddGi < ddGroups.length; ddGi++) {
+                        for (var [ddCam, ddInst] of ddGroups[ddGi].instances) {
+                            if (!groupedByCam[ddCam]) groupedByCam[ddCam] = [];
+                            groupedByCam[ddCam].push(ddInst.points);
+                        }
+                    }
+                    for (var [ddUlCam, ddUls] of ddFg.unlinkedInstances) {
+                        var camGrouped = groupedByCam[ddUlCam];
+                        if (!camGrouped || camGrouped.length === 0) continue;
+                        var keptUls = [];
+                        for (var ddUi = 0; ddUi < ddUls.length; ddUi++) {
+                            var dup = false;
+                            for (var ddGp = 0; ddGp < camGrouped.length; ddGp++) {
+                                if (instancePointsMatch(ddUls[ddUi].instance.points, camGrouped[ddGp])) {
+                                    dup = true;
+                                    break;
+                                }
+                            }
+                            if (dup) { extraDedup++; continue; }
+                            keptUls.push(ddUls[ddUi]);
+                        }
+                        ddFg.unlinkedInstances.set(ddUlCam, keptUls);
+                    }
+                }
+                if (extraDedup > 0) {
+                    console.log('[load-slp] Dropped', extraDedup, 'unlinked duplicates that matched grouped instances by position');
                 }
 
                 // Recompute reprojections from stored 3D points + calibration
@@ -12992,7 +13619,15 @@
                 // 5. Draw overlays and update UI
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
-                if (timeline) timeline.setData(state.session);
+                if (timeline) {
+                    timeline.setData(state.session);
+                    // Grow the container to fit every track row — otherwise
+                    // the collapse-priority layout in _computeLayout hides
+                    // all tracks (showTracks=false) when the natural track
+                    // block exceeds the default container height. Without
+                    // this the timeline looks "empty" after an SLP load.
+                    fitTimelineToData();
+                }
 
                 if (interactionManager && state.views.length > 0) {
                     interactionManager.detach();
@@ -14028,6 +14663,163 @@
             });
         }
 
+        function populateVideoBrightnessTable() {
+            var container = document.getElementById('visVideoBrightnessTable');
+            if (!container) return;
+            container.innerHTML = '';
+            for (var vi = 0; vi < state.views.length; vi++) {
+                var view = state.views[vi];
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px;';
+
+                var slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = '0';
+                slider.max = '200';
+                slider.value = view._brightness != null ? view._brightness : 100;
+                slider.step = '1';
+                slider.style.cssText = 'width:120px;flex-shrink:0;';
+                slider.dataset.viewIdx = vi;
+
+                var valLabel = document.createElement('span');
+                valLabel.className = 'vis-val';
+                valLabel.style.cssText = 'min-width:32px;text-align:right;flex-shrink:0;';
+                valLabel.textContent = slider.value + '%';
+
+                var camLabel = document.createElement('span');
+                camLabel.style.cssText = 'color:var(--text-primary,#e0e0e0);white-space:nowrap;flex-shrink:0;';
+                camLabel.textContent = view.name;
+
+                // Video file name from videoFiles
+                var videoName = '';
+                for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
+                    if (state.videoFiles[vfi].name === view.name) {
+                        videoName = state.videoFiles[vfi].file ? state.videoFiles[vfi].file.name : '';
+                        break;
+                    }
+                }
+                var vidLabel = document.createElement('span');
+                vidLabel.style.cssText = 'color:var(--text-muted,#888);font-size:10px;overflow-x:auto;white-space:nowrap;max-width:120px;';
+                vidLabel.textContent = videoName;
+
+                slider.addEventListener('input', (function(idx, vl) {
+                    return function(e) {
+                        var val = parseInt(e.target.value);
+                        vl.textContent = val + '%';
+                        var linked = document.getElementById('visVideoBrightnessLink');
+                        if (linked && linked.checked) {
+                            for (var i = 0; i < state.views.length; i++) {
+                                state.views[i]._brightness = val;
+                                applyVideoBrightness(state.views[i]);
+                            }
+                            var sliders = container.querySelectorAll('input[type=range]');
+                            var vals = container.querySelectorAll('.vis-val');
+                            sliders.forEach(function(s) { s.value = val; });
+                            vals.forEach(function(v) { v.textContent = val + '%'; });
+                        } else {
+                            state.views[idx]._brightness = val;
+                            applyVideoBrightness(state.views[idx]);
+                        }
+                    };
+                })(vi, valLabel));
+
+                row.appendChild(slider);
+                row.appendChild(valLabel);
+                row.appendChild(camLabel);
+                row.appendChild(vidLabel);
+                container.appendChild(row);
+            }
+        }
+
+        function applyVideoBrightness(view) {
+            if (!view.canvas) return;
+            var brightness = view._brightness != null ? view._brightness : 100;
+            view.canvas.style.filter = brightness === 100 ? '' : 'brightness(' + (brightness / 100) + ')';
+        }
+
+        function clampRotation(deg) {
+            deg = deg % 360;
+            if (deg > 180) deg -= 360;
+            if (deg < -179) deg += 360;
+            return deg;
+        }
+
+        function populateVideoRotationTable() {
+            var container = document.getElementById('visVideoRotationTable');
+            if (!container) return;
+            container.innerHTML = '';
+            for (var vi = 0; vi < state.views.length; vi++) {
+                var view = state.views[vi];
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px;';
+
+                var slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = '-179';
+                slider.max = '180';
+                slider.value = Math.round(view.rotation || 0);
+                slider.step = '1';
+                slider.style.cssText = 'width:120px;flex-shrink:0;';
+                slider.dataset.viewIdx = vi;
+
+                var numInput = document.createElement('input');
+                numInput.type = 'number';
+                numInput.min = '-179';
+                numInput.max = '180';
+                numInput.step = '1';
+                numInput.value = Math.round(view.rotation || 0);
+                numInput.style.cssText = 'width:48px;flex-shrink:0;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:right;padding:2px 4px;-moz-appearance:textfield;';
+                numInput.classList.add('no-spinner');
+                numInput.dataset.viewIdx = vi;
+
+                var camLabel = document.createElement('span');
+                camLabel.style.cssText = 'color:var(--text-primary,#e0e0e0);white-space:nowrap;flex-shrink:0;';
+                camLabel.textContent = view.name;
+
+                var videoName = '';
+                for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
+                    if (state.videoFiles[vfi].name === view.name) {
+                        videoName = state.videoFiles[vfi].file ? state.videoFiles[vfi].file.name : '';
+                        break;
+                    }
+                }
+                var vidLabel = document.createElement('span');
+                vidLabel.style.cssText = 'color:var(--text-muted,#888);font-size:10px;overflow-x:auto;white-space:nowrap;max-width:120px;';
+                vidLabel.textContent = videoName;
+
+                (function(idx, sl, ni) {
+                    function applyRotation(val) {
+                        val = clampRotation(parseInt(val) || 0);
+                        state.views[idx].rotation = val;
+                        sl.value = val;
+                        ni.value = val;
+                        if (videoController) videoController.applyZoom(state.views[idx]);
+                        drawAllOverlays(state.currentFrame);
+                    }
+                    sl.addEventListener('input', function() { applyRotation(sl.value); });
+                    ni.addEventListener('change', function() { applyRotation(ni.value); });
+                })(vi, slider, numInput);
+
+                row.appendChild(slider);
+                row.appendChild(numInput);
+                row.appendChild(camLabel);
+                row.appendChild(vidLabel);
+                container.appendChild(row);
+            }
+        }
+
+        function syncRotationUI(view) {
+            var container = document.getElementById('visVideoRotationTable');
+            if (!container) return;
+            var idx = state.views.indexOf(view);
+            if (idx < 0) return;
+            var val = Math.round(view.rotation || 0);
+            var sliders = container.querySelectorAll('input[type=range]');
+            var nums = container.querySelectorAll('input[type=number]');
+            if (sliders[idx]) sliders[idx].value = val;
+            if (nums[idx]) nums[idx].value = val;
+        }
+
         function populateViewStrip() {
             var list = document.getElementById('viewStripList');
             list.textContent = '';
@@ -14156,6 +14948,8 @@
                     }
                 })(state.views[idx]);
             }
+            populateVideoBrightnessTable();
+            populateVideoRotationTable();
         }
 
         // ============================================
@@ -15090,21 +15884,40 @@
                 panelEl.style.minWidth = newWidth + 'px';
             });
 
-            // Timeline resize handle (vertical drag)
+            // Timeline resize handle (vertical drag).
+            // Dragging the top edge resizes the timeline. Dragging it below
+            // a small snap threshold fully hides the timeline (equivalent
+            // to clicking the Timeline toolbar button).
             var timelineHandle = document.getElementById('timelineResizeHandle');
             var timelineEl = document.getElementById('timelineContainer');
             if (timelineHandle && timelineEl) {
                 timelineHandle.addEventListener('mousedown', function (e) {
                     e.preventDefault();
                     var startY = e.clientY;
-                    var startH = timelineEl.offsetHeight;
+                    var wasCollapsed = timelineEl.classList.contains('collapsed');
+                    // When starting from collapsed, treat current height as 0
+                    // so pulling the handle up immediately grows the timeline.
+                    var startH = wasCollapsed ? 0 : timelineEl.offsetHeight;
                     timelineHandle.classList.add('dragging');
+
+                    var COLLAPSE_SNAP = 20;
+                    var MIN_H = 40;
+                    var MAX_H = 600;
 
                     function onMove(ev) {
                         var delta = startY - ev.clientY;
-                        var newH = Math.max(40, Math.min(600, startH + delta));
-                        timelineEl.style.height = newH + 'px';
+                        var target = startH + delta;
+                        if (target < COLLAPSE_SNAP) {
+                            // Snap to fully hidden.
+                            timelineEl.classList.add('collapsed');
+                            timelineEl.style.height = '';
+                        } else {
+                            timelineEl.classList.remove('collapsed');
+                            var newH = Math.max(MIN_H, Math.min(MAX_H, target));
+                            timelineEl.style.height = newH + 'px';
+                        }
                         if (timeline) timeline.resize();
+                        syncTimelineToggleButton();
                     }
                     function onUp() {
                         timelineHandle.classList.remove('dragging');
@@ -15210,6 +16023,7 @@
                     var num = parseFloat(raw);
                     if (raw !== '' && !isNaN(num) && num > 0 && num <= 1000) {
                         state.fps = num;
+                        applyPlaybackRate();
                         if (videoController && state.isPlaying) {
                             videoController.stopPlayback();
                             videoController.startPlayback();
@@ -15229,6 +16043,117 @@
                 input.addEventListener('blur', commit);
             });
         })();
+
+        // ============================================
+        // Speed Control
+        // ============================================
+
+        state.speedMultiplier = 1.0;
+
+        (function () {
+            var speedBtn = document.getElementById('speedBtn');
+            var popover = document.getElementById('speedPopover');
+            if (!speedBtn || !popover) return;
+
+            function buildPopover() {
+                popover.innerHTML = '';
+
+                var label = document.createElement('div');
+                label.className = 'speed-label';
+                label.textContent = state.speedMultiplier.toFixed(2) + 'x';
+                popover.appendChild(label);
+
+                var sliderRow = document.createElement('div');
+                sliderRow.className = 'speed-slider-row';
+
+                var minusBtn = document.createElement('button');
+                minusBtn.textContent = '\u2212';
+                var plusBtn = document.createElement('button');
+                plusBtn.textContent = '+';
+
+                var slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = '0.25';
+                slider.max = '4.0';
+                slider.step = '0.05';
+                slider.value = state.speedMultiplier;
+
+                minusBtn.addEventListener('click', function () {
+                    var v = Math.max(0.25, parseFloat(slider.value) - 0.05);
+                    slider.value = v;
+                    applySpeed(v);
+                });
+                plusBtn.addEventListener('click', function () {
+                    var v = Math.min(4.0, parseFloat(slider.value) + 0.05);
+                    slider.value = v;
+                    applySpeed(v);
+                });
+                slider.addEventListener('input', function () {
+                    applySpeed(parseFloat(slider.value));
+                });
+
+                sliderRow.appendChild(minusBtn);
+                sliderRow.appendChild(slider);
+                sliderRow.appendChild(plusBtn);
+                popover.appendChild(sliderRow);
+
+                var presets = document.createElement('div');
+                presets.className = 'speed-presets';
+                [1.0, 1.25, 1.5, 2.0, 3.0].forEach(function (val) {
+                    var btn = document.createElement('button');
+                    btn.textContent = val.toFixed(val % 1 === 0 ? 1 : 2);
+                    if (Math.abs(state.speedMultiplier - val) < 0.01) btn.classList.add('active');
+                    btn.addEventListener('click', function () {
+                        slider.value = val;
+                        applySpeed(val);
+                    });
+                    presets.appendChild(btn);
+                });
+                popover.appendChild(presets);
+
+                function applySpeed(v) {
+                    state.speedMultiplier = Math.round(v * 100) / 100;
+                    label.textContent = state.speedMultiplier.toFixed(2) + 'x';
+                    var btnVal = document.getElementById('speedBtnValue');
+                    if (btnVal) btnVal.textContent = state.speedMultiplier.toFixed(2) + 'x';
+                    presets.querySelectorAll('button').forEach(function (b) {
+                        b.classList.toggle('active', Math.abs(parseFloat(b.textContent) - state.speedMultiplier) < 0.01);
+                    });
+                    applyPlaybackRate();
+                }
+            }
+
+            speedBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (popover.style.display === 'none') {
+                    buildPopover();
+                    popover.style.display = '';
+                } else {
+                    popover.style.display = 'none';
+                }
+            });
+
+            document.addEventListener('click', function (e) {
+                if (popover.style.display !== 'none' && !popover.contains(e.target) && e.target !== speedBtn) {
+                    popover.style.display = 'none';
+                }
+            });
+        })();
+
+        function applyPlaybackRate() {
+            var speedMult = state.speedMultiplier || 1.0;
+            var views = state.views.filter(function (v) { return v.decoder; });
+            var nativeFps = (views.length > 0 && views[0].decoder.videoTrack && views[0].decoder.videoTrack.duration > 0)
+                ? views[0].decoder.samples.length / (views[0].decoder.videoTrack.duration / views[0].decoder.videoTrack.timescale)
+                : (state.fps || 30);
+            var rate = ((state.fps || 30) / nativeFps) * speedMult;
+            for (var i = 0; i < views.length; i++) {
+                var d = views[i].decoder;
+                if (d._videoEl) {
+                    d._videoEl.playbackRate = rate;
+                }
+            }
+        }
 
         // ============================================
         // Cross-View Tracker Integration

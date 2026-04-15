@@ -262,6 +262,9 @@ var testFiles = [
     'test-phase6.js',
     'test-phase7.js',
     'test-timeline.js',
+    'test-timeline-bugs.js',
+    'test-timeline-height.js',
+    'test-grouped-track-dropdown.js',
     'test-video-controller.js',
     'test-multi-video.js',
     'test-drag-freeze.js',
@@ -279,6 +282,7 @@ var testFiles = [
     'test-predicted-conversion.js',
     'test-save-load-json.js',
     'test-tracker.js',
+    'test-rotation.js',
 ];
 
 for (var i = 0; i < testFiles.length; i++) {

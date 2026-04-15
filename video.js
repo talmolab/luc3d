@@ -1130,10 +1130,17 @@ class VideoController {
         var self = this;
 
         // Start native playback on all decoders
+        // Compute effective playback rate: (desired FPS / native FPS) * speed multiplier
+        var speedMult = this.state.speedMultiplier || 1.0;
         var views = this.state.views.filter(function (v) { return v.decoder; });
+        var nativeFps = (views.length > 0 && views[0].decoder.videoTrack && views[0].decoder.videoTrack.duration > 0)
+            ? views[0].decoder.samples.length / (views[0].decoder.videoTrack.duration / views[0].decoder.videoTrack.timescale)
+            : (this.state.fps || 30);
+        var rate = ((this.state.fps || 30) / nativeFps) * speedMult;
         for (var i = 0; i < views.length; i++) {
             var d = views[i].decoder;
             if (d.seekNative) {
+                if (d._videoEl) d._videoEl.playbackRate = rate;
                 d.seekNative(this.state.currentFrame);
                 d.playNative();
             }
@@ -1342,7 +1349,16 @@ class VideoController {
         if (!view.zoom) return;
 
         var z = view.zoom;
-        var transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) scale(" + z.scale + ")";
+        var rot = view.rotation || 0;
+        var transform;
+        if (rot === 0) {
+            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) scale(" + z.scale + ")";
+        } else {
+            // Rotate around wrapper center using cached CSS dimensions (avoids reflow)
+            var cX = view.canvas ? parseFloat(view.canvas.style.width) / 2 || 0 : 0;
+            var cY = view.canvas ? parseFloat(view.canvas.style.height) / 2 || 0 : 0;
+            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) translate(" + cX + "px, " + cY + "px) rotate(" + rot + "deg) translate(" + (-cX) + "px, " + (-cY) + "px) scale(" + z.scale + ")";
+        }
 
         var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
         if (wrapper && wrapper.classList.contains('canvas-wrapper')) {
@@ -1369,25 +1385,100 @@ class VideoController {
     }
 
     /**
-     * Compute the minimum zoom scale for a view.
-     * Allows zooming out until BOTH wrapper dimensions are smaller than the cell.
-     * As long as one dimension still fills the container, zooming out is permitted.
+     * Compute the axis-aligned bounding box of the wrapper after the
+     * `translate(cX,cY) rotate(rot) translate(-cX,-cY) scale(s)` CSS
+     * transform used by `applyZoom` (without the outer pan translation).
+     *
+     * Returns {width, height, left, top} where `left`/`top` are offsets
+     * from the wrapper's pre-transform top-left corner — i.e., add
+     * `flexOff{X,Y} + offsetX/Y` to get the on-screen bbox edges.
+     *
+     * For 90° / 270° rotations the effective width and height are
+     * swapped (and the bbox shifts when scale != 1), which is why
+     * clamping offsetX/Y against `wW * scale` / `wH * scale` used to
+     * cut off the rotated edges at high zoom.
+     *
+     * @param {number} wW - wrapper CSS width (px)
+     * @param {number} wH - wrapper CSS height (px)
+     * @param {number} scale - zoom scale
+     * @param {number} rot - rotation in degrees
+     * @returns {{width:number, height:number, left:number, top:number}}
+     */
+    _rotatedBBox(wW, wH, scale, rot) {
+        var r = ((rot || 0) % 360 + 360) % 360;
+        var s = scale;
+        var cX = wW / 2, cY = wH / 2;
+
+        // Fast paths for the four cardinal rotations (the only ones the
+        // UI exposes today). Formulas derived from applying the CSS
+        // transform to the wrapper's four corners and taking min/max.
+        if (r === 0) {
+            return { width: wW * s, height: wH * s, left: 0, top: 0 };
+        }
+        if (r === 90) {
+            return {
+                width: wH * s, height: wW * s,
+                left: cX + cY - wH * s,
+                top: cY - cX,
+            };
+        }
+        if (r === 180) {
+            return {
+                width: wW * s, height: wH * s,
+                left: 2 * cX - wW * s,
+                top: 2 * cY - wH * s,
+            };
+        }
+        if (r === 270) {
+            return {
+                width: wH * s, height: wW * s,
+                left: cX - cY,
+                top: cX + cY - wW * s,
+            };
+        }
+        // Arbitrary angle — general bbox via the 4 corners.
+        var a = r * Math.PI / 180;
+        var ca = Math.cos(a), sa = Math.sin(a);
+        var corners = [[-cX, -cY], [wW * s - cX, -cY],
+                       [wW * s - cX, wH * s - cY], [-cX, wH * s - cY]];
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (var i = 0; i < 4; i++) {
+            var rx = ca * corners[i][0] - sa * corners[i][1];
+            var ry = sa * corners[i][0] + ca * corners[i][1];
+            if (rx < minX) minX = rx;
+            if (rx > maxX) maxX = rx;
+            if (ry < minY) minY = ry;
+            if (ry > maxY) maxY = ry;
+        }
+        return {
+            width: maxX - minX,
+            height: maxY - minY,
+            left: cX + minX,
+            top: cY + minY,
+        };
+    }
+
+    /**
+     * Compute the minimum zoom scale for a view. Allows zooming out
+     * until BOTH dimensions of the rotated bounding box are smaller than
+     * the cell — for 90°/270° rotations the effective dimensions are
+     * swapped, so a pre-rotation portrait that fits the cell vertically
+     * may still overflow horizontally post-rotation (or vice versa).
      */
     _getMinScale(view) {
         var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
         var container = view.canvas ? view.canvas.closest('.video-cell') : null;
         if (!wrapper || !container) return 1.0;
-        // offsetWidth/Height give the untransformed CSS layout size
         var wW = wrapper.offsetWidth;
         var wH = wrapper.offsetHeight;
         var cW = container.clientWidth;
         var cH = container.clientHeight;
         if (wW <= 0 || wH <= 0) return 1.0;
-        // Scale where width fills, and scale where height fills
-        var scaleW = cW / wW;
-        var scaleH = cH / wH;
-        // Allow zooming out until BOTH are smaller → stop at min of the two
-        // (the smaller ratio is where the last-filling dimension stops filling)
+        // Effective dims at scale=1 under the current rotation. Use the
+        // rotated bbox so 90°/270° and off-axis rotations all work.
+        var bboxAtOne = this._rotatedBBox(wW, wH, 1.0, view.rotation || 0);
+        var scaleW = cW / bboxAtOne.width;
+        var scaleH = cH / bboxAtOne.height;
         return Math.max(0.25, Math.min(scaleW, scaleH));
     }
 
@@ -1395,6 +1486,11 @@ class VideoController {
      * Constrain offsets so the video content stays reasonably positioned.
      * When scaled content covers a dimension: allow panning within it.
      * When it doesn't cover: center in that dimension.
+     *
+     * Uses the rotated bounding box so 90°/270° rotations can be panned
+     * far enough to reveal the rotated edges — the previous version
+     * clamped against `wW*scale` / `wH*scale`, which is wrong whenever
+     * rotation swaps the effective width and height.
      */
     _constrainOffsets(z, view) {
         var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
@@ -1408,26 +1504,28 @@ class VideoController {
         // The wrapper is flex-centered. Its CSS top-left is at:
         var flexOffX = (cW - wW) / 2;
         var flexOffY = (cH - wH) / 2;
-        // After transform: visual top-left = (flexOffX + ox, flexOffY + oy)
-        // Visual size = (wW * s, wH * s)
-        var scaledW = wW * z.scale;
-        var scaledH = wH * z.scale;
-        if (scaledW >= cW) {
-            // Width covers container — clamp so edges don't leave gaps
-            var maxOx = -flexOffX;
-            var minOx = cW - flexOffX - scaledW;
+        // On-screen bbox (excluding the outer offset translation):
+        //   bbox_left = flexOffX + bbox.left + z.offsetX
+        //   bbox_top  = flexOffY + bbox.top  + z.offsetY
+        var bbox = this._rotatedBBox(wW, wH, z.scale, view.rotation || 0);
+        var bboxLeft0 = flexOffX + bbox.left;
+        var bboxTop0 = flexOffY + bbox.top;
+
+        if (bbox.width >= cW) {
+            // Allow panning so bbox edges can reach container edges.
+            var maxOx = -bboxLeft0;
+            var minOx = cW - bboxLeft0 - bbox.width;
             z.offsetX = Math.max(minOx, Math.min(maxOx, z.offsetX));
         } else {
-            // Width doesn't cover — center horizontally
-            z.offsetX = (cW - scaledW) / 2 - flexOffX;
+            // Bbox fits — center it within the container.
+            z.offsetX = (cW - bbox.width) / 2 - bboxLeft0;
         }
-        if (scaledH >= cH) {
-            var maxOy = -flexOffY;
-            var minOy = cH - flexOffY - scaledH;
+        if (bbox.height >= cH) {
+            var maxOy = -bboxTop0;
+            var minOy = cH - bboxTop0 - bbox.height;
             z.offsetY = Math.max(minOy, Math.min(maxOy, z.offsetY));
         } else {
-            // Height doesn't cover — center vertically
-            z.offsetY = (cH - scaledH) / 2 - flexOffY;
+            z.offsetY = (cH - bbox.height) / 2 - bboxTop0;
         }
     }
 

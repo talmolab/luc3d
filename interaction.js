@@ -170,21 +170,52 @@ class InteractionManager {
         const canvas = view.overlayCanvas;
         if (!canvas) return [clientX, clientY];
 
-        // getBoundingClientRect() includes CSS transforms (zoom/pan),
+        // getBoundingClientRect() includes CSS transforms (zoom/pan/rotation),
         // so the position and size reflect what's actually on screen.
         const rect = canvas.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return [clientX, clientY];
 
-        // Position within the displayed (transformed) canvas
-        const displayX = clientX - rect.left;
-        const displayY = clientY - rect.top;
+        const rot = (view.rotation || 0) * Math.PI / 180;
 
-        // Convert from display pixels to video pixels.
-        // Use view.videoWidth rather than canvas.width so that the mapping
-        // is correct even when the overlay canvas internal resolution differs
-        // from the video resolution (e.g. when scaled up for zoom).
-        const videoX = displayX * ((view.videoWidth || canvas.width) / rect.width);
-        const videoY = displayY * ((view.videoHeight || canvas.height) / rect.height);
+        if (Math.abs(rot) < 0.0001) {
+            // No rotation — fast path
+            const displayX = clientX - rect.left;
+            const displayY = clientY - rect.top;
+            const videoX = displayX * ((view.videoWidth || canvas.width) / rect.width);
+            const videoY = displayY * ((view.videoHeight || canvas.height) / rect.height);
+            return [videoX, videoY];
+        }
+
+        // With rotation, getBoundingClientRect() returns the AABB of the rotated
+        // canvas, so we can't map directly. Instead, compute the screen-space
+        // center of the canvas, then inverse-rotate the mouse offset from center
+        // to get the un-rotated canvas-relative position.
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const dx = clientX - centerX;
+        const dy = clientY - centerY;
+
+        // Inverse-rotate around center
+        const cosR = Math.cos(-rot);
+        const sinR = Math.sin(-rot);
+        const unrotX = dx * cosR - dy * sinR;
+        const unrotY = dx * sinR + dy * cosR;
+
+        // The un-rotated canvas display size (CSS size * zoom scale)
+        const wrapper = canvas.closest('.canvas-wrapper');
+        const zoom = view.zoom ? view.zoom.scale : 1;
+        const cssW = parseFloat(canvas.style.width) || canvas.offsetWidth;
+        const cssH = parseFloat(canvas.style.height) || canvas.offsetHeight;
+        const displayW = cssW * zoom;
+        const displayH = cssH * zoom;
+
+        // Position relative to the un-rotated canvas top-left
+        const canvasX = unrotX + displayW / 2;
+        const canvasY = unrotY + displayH / 2;
+
+        // Convert from display pixels to video pixels
+        const videoX = canvasX * ((view.videoWidth || canvas.width) / displayW);
+        const videoY = canvasY * ((view.videoHeight || canvas.height) / displayH);
         return [videoX, videoY];
     }
 
@@ -242,9 +273,11 @@ class InteractionManager {
         if (state) {
             const view = this._findView(state, viewName);
             if (view && view.overlayCanvas) {
-                const rect = view.overlayCanvas.getBoundingClientRect();
-                if (rect.width > 0) {
-                    displayToVideo = (view.videoWidth || view.overlayCanvas.width) / rect.width;
+                const cssW = parseFloat(view.overlayCanvas.style.width) || view.overlayCanvas.offsetWidth;
+                const zoom = view.zoom ? view.zoom.scale : 1;
+                const displayW = cssW * zoom;
+                if (displayW > 0) {
+                    displayToVideo = (view.videoWidth || view.overlayCanvas.width) / displayW;
                 }
             }
         }
@@ -387,9 +420,11 @@ class InteractionManager {
         let displayToVideo = 1;
         const view = this._findView(state, viewName);
         if (view && view.overlayCanvas) {
-            const rect = view.overlayCanvas.getBoundingClientRect();
-            if (rect.width > 0) {
-                displayToVideo = (view.videoWidth || view.overlayCanvas.width) / rect.width;
+            const cssW = parseFloat(view.overlayCanvas.style.width) || view.overlayCanvas.offsetWidth;
+            const zoom = view.zoom ? view.zoom.scale : 1;
+            const displayW = cssW * zoom;
+            if (displayW > 0) {
+                displayToVideo = (view.videoWidth || view.overlayCanvas.width) / displayW;
             }
         }
 
@@ -1974,4 +2009,35 @@ class InteractionManager {
         }
         this._requestRedraw();
     }
+}
+
+/**
+ * isInteractiveClickTarget(target)
+ *
+ * Returns true when the given event target is (or is a descendant of)
+ * a form control the user is actively interacting with — SELECT, OPTION,
+ * INPUT, BUTTON, TEXTAREA, or LABEL. The Grouped/Ungrouped Instances
+ * tables use this to guard their <tr> click handlers so a mousedown /
+ * mouseup / click inside a dropdown doesn't rebuild the DOM out from
+ * under the user, which was the root cause of the "Track/Identity
+ * pulldown hides on mouseup" bug.
+ *
+ * The walk stops after a few ancestors — dropdowns are shallow in the
+ * info panel, and a bounded walk keeps us safe from freshly-built fake
+ * targets that might have cyclic parentNode pointers in tests.
+ */
+function isInteractiveClickTarget(target) {
+    if (!target) return false;
+    var INTERACTIVE = { SELECT: 1, OPTION: 1, INPUT: 1, BUTTON: 1, TEXTAREA: 1, LABEL: 1 };
+    var node = target;
+    for (var hops = 0; node && hops < 6; hops++) {
+        var tag = node.tagName;
+        if (tag && INTERACTIVE[String(tag).toUpperCase()]) return true;
+        node = node.parentNode;
+    }
+    return false;
+}
+
+if (typeof window !== 'undefined') {
+    window.isInteractiveClickTarget = isInteractiveClickTarget;
 }

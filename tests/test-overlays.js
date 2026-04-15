@@ -116,6 +116,51 @@
         });
     });
 
+    // ---- Reprojection draw + getGroupColor track-follows-instance ----
+    describe('Overlays - reprojection color split and per-instance trackIdx', function () {
+        it('drawReprojectedSkeleton uses color for X marks and edgeColor for edges', function () {
+            if (typeof drawReprojectedSkeleton !== 'function') return;
+            var strokeEvents = [];
+            var currentStroke = null;
+            var mockCtx = {
+                canvas: { width: 100, height: 100, getBoundingClientRect: function () { return { width: 100 }; } },
+                save: function () {},
+                restore: function () {},
+                set strokeStyle(v) { currentStroke = v; },
+                get strokeStyle() { return currentStroke; },
+                globalAlpha: 1, lineWidth: 1, lineCap: 'butt',
+                setLineDash: function () {}, beginPath: function () {},
+                moveTo: function () {}, lineTo: function () {},
+                arc: function () {}, fill: function () {},
+                stroke: function () { strokeEvents.push(currentStroke); },
+            };
+            drawReprojectedSkeleton(mockCtx, [[10, 10], [20, 20]],
+                { nodes: ['a', 'b'], edges: [[0, 1]] },
+                { color: '#ffffff', edgeColor: '#aa0000', nodeSize: 4, lineWidth: 2 });
+            assertEqual(strokeEvents[0], '#aa0000', 'edges render in edgeColor');
+            assertEqual(strokeEvents[strokeEvents.length - 1], '#ffffff',
+                'X-mark nodes render in color');
+        });
+
+        it('getGroupColor follows the current-camera instance trackIdx after a swap', function () {
+            if (typeof getGroupColor !== 'function' || typeof getTrackColor !== 'function') return;
+            // Group has per-cam instances on different tracks to also
+            // cover the "other cams lag behind" case.
+            var a = new Instance([[0, 0]], 0, 'user', 1);
+            var b = new Instance([[1, 1]], 1, 'user', 1);
+            var group = new InstanceGroup(1, 0);
+            group.addInstance('cam1', a);
+            group.addInstance('cam2', b);
+            assertEqual(getGroupColor(group, null, false, 0, 'cam1'), getTrackColor(0));
+            assertEqual(getGroupColor(group, null, false, 0, 'cam2'), getTrackColor(1));
+            // Simulate swapAssignTrack on cam1's instance WITHOUT
+            // touching group.identityId: color must follow the instance.
+            a.trackIdx = 2;
+            assertEqual(getGroupColor(group, null, false, 0, 'cam1'), getTrackColor(2),
+                'color reflects per-instance trackIdx, not stale group.identityId');
+        });
+    });
+
     // ---- errorColor ----
 
     describe('Overlays - errorColor', function () {
