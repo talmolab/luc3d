@@ -17,6 +17,7 @@ tempdata/
 sample_session/
 prompts/
 .claude/
+*.md
 
 # Editor
 *.swp

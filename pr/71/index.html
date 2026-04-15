@@ -8677,12 +8677,21 @@
                         tOpt.textContent = state.session.tracks[tsi];
                         trackSelect.appendChild(tOpt);
                     }
-                    trackSelect.value = group.identityId != null ? group.identityId : 0;
-                    (function (g, sel) {
+                    // Source the current track from the first instance's
+                    // trackIdx, NOT group.identityId. identityId is an
+                    // identity index and is -1 for groups whose identity
+                    // export was dropped (SLP re-import path), which would
+                    // otherwise leave the dropdown showing no selection.
+                    var firstGroupInst = group.instances.values().next().value;
+                    var groupDisplayTrackIdx = (firstGroupInst && firstGroupInst.trackIdx != null && firstGroupInst.trackIdx >= 0)
+                        ? firstGroupInst.trackIdx
+                        : 0;
+                    trackSelect.value = groupDisplayTrackIdx;
+                    (function (g, sel, curTrack) {
                         sel.addEventListener('change', function (ev) {
                             ev.stopPropagation();
                             var newTrack = parseInt(sel.value);
-                            if (newTrack === g.identityId) return;
+                            if (newTrack === curTrack) return;
                             var totalProp = 0;
                             for (var [cn, ginst] of g.instances) {
                                 totalProp += swapAssignTrack(state.currentFrame, cn, ginst, newTrack, state.session);
@@ -8697,7 +8706,7 @@
                         sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                         sel.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
                         sel.addEventListener('mouseup', function (ev) { ev.stopPropagation(); });
-                    })(group, trackSelect);
+                    })(group, trackSelect, groupDisplayTrackIdx);
                     tdTrack.appendChild(trackSelect);
                     if (group.dirty) {
                         const dirtyDot = document.createElement('span');

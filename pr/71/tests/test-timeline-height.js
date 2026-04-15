@@ -92,7 +92,8 @@
                 + numViewGaps * tl.VIEW_GROUP_GAP
                 + 6
                 + tl.MARKER_AREA_HEIGHT
-                + tl.LABEL_AREA_HEIGHT;
+                + tl.LABEL_AREA_HEIGHT
+                + 8;
             assertEqual(tl.getPreferredHeight(), expected);
             cleanup(tl, container); tl = null;
         });
