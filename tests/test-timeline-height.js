@@ -1,5 +1,5 @@
 /**
- * test-timeline-prompt95.js
+ * test-timeline-height.js
  *
  * Regression tests for the Timeline changes introduced across Prompts
  * 95–97 and the SLP-load fixes:
@@ -157,6 +157,72 @@
             assertEqual(parseFloat(big.style.height), 400,
                 'container stays at its user-set height when already tall enough');
             tl2.destroy();
+        });
+
+        it('setData also grows a too-small container (callers without fitTimelineToData)', function () {
+            // Several SLP-load call sites invoke timeline.setData without a
+            // matching fitTimelineToData. Without grow-on-setData, the 96 px
+            // default container collapse-hides every track row via
+            // _computeLayout. setData must match refreshTracks's grow-only
+            // behavior.
+            var small = sized(96);
+            var tl = new Timeline(small, { totalFrames: 50 });
+            tl.setData(buildSessionWithTracks(6, ['cam1']));
+            assertEqual(parseFloat(small.style.height), tl.getPreferredHeight(),
+                'setData grows the container to preferred height');
+            var layout = tl._computeLayout(tl._cssHeight);
+            assertTrue(layout.showTracks,
+                '_computeLayout shows tracks after setData-driven grow');
+            tl.destroy();
+        });
+
+        it('setData is track-order independent (track_1 in earlier frame works the same as track_0)', function () {
+            // Regression for the reported "track_1 first fails" symptom —
+            // _buildTrackSegments sorts numerically, so Map insertion order
+            // of frameGroups cannot affect _trackSegments or preferred height.
+            function sessionWithOrder(earlyTrack, lateTrack) {
+                var skel = new Skeleton('s', ['a'], []);
+                var cams = [
+                    new Camera('c1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0],
+                        [[1,0,0],[0,1,0],[0,0,1]], [0,0,0], [512,512]),
+                    new Camera('c2', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0],
+                        [[1,0,0],[0,1,0],[0,0,1]], [0,0,0], [512,512]),
+                    new Camera('c3', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0],
+                        [[1,0,0],[0,1,0],[0,0,1]], [0,0,0], [512,512]),
+                ];
+                var session = new Session(cams, skel, ['track_0', 'track_1', 'track_2']);
+                // Insert earliest frame first (order matters for frameGroups Map).
+                var early = new FrameGroup(9);
+                for (var c = 0; c < cams.length; c++) {
+                    var i1 = new Instance([[1,1]], 9, 'user', 1); i1.trackIdx = earlyTrack;
+                    early.addInstance(cams[c].name, i1);
+                }
+                session.addFrameGroup(early);
+                var late = new FrameGroup(22);
+                for (var c2 = 0; c2 < cams.length; c2++) {
+                    var i2 = new Instance([[1,1]], 22, 'user', 1); i2.trackIdx = lateTrack;
+                    late.addInstance(cams[c2].name, i2);
+                }
+                session.addFrameGroup(late);
+                return session;
+            }
+            var cA = sized(96);
+            var tlA = new Timeline(cA, { totalFrames: 50 });
+            tlA.setData(sessionWithOrder(0, 1));
+            var rowsA = tlA._trackSegments.length;
+            var prefA = tlA.getPreferredHeight();
+            tlA.destroy();
+
+            var cB = sized(96);
+            var tlB = new Timeline(cB, { totalFrames: 50 });
+            tlB.setData(sessionWithOrder(1, 0));
+            var rowsB = tlB._trackSegments.length;
+            var prefB = tlB.getPreferredHeight();
+            tlB.destroy();
+
+            assertEqual(rowsA, rowsB, '_trackSegments row count identical regardless of first-frame track');
+            assertEqual(prefA, prefB, 'getPreferredHeight identical regardless of first-frame track');
+            assertEqual(rowsA, 6, 'three cameras × two tracks = 6 rows');
         });
     });
 

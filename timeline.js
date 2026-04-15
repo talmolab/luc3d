@@ -293,7 +293,12 @@ class Timeline {
 
         this._rebuildSegments(session);
         this._buildFrameMarkers(session);
-        this.redraw();
+        // Grow-only container resize: some SLP-load call sites invoke
+        // setData without a matching fitTimelineToData, leaving a 96 px
+        // default container that _computeLayout collapses below the
+        // tracks-visible threshold. Mirrors refreshTracks.
+        this._growContainerToFit();
+        this.resize();
     }
 
     /**
