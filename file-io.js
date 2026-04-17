@@ -1176,7 +1176,9 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
         // 1. Grouped UserInstances first (retain their track)
         for (var ii = 0; ii < groupedInstances.length; ii++) {
             var inst = groupedInstances[ii];
-            var pts = _buildSioPoints(inst, numNodes);
+            var instIsPred = inst.type === 'predicted';
+            var instScore = inst.score != null ? inst.score : 1.0;
+            var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
             var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
 
             if (inst.type === 'user') {
@@ -1190,7 +1192,7 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
                     points: pts,
                     skeleton: skeleton,
                     track: track,
-                    score: inst.score || 0,
+                    score: instScore,
                 }));
             }
         }
@@ -1198,7 +1200,9 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
         // 2. Ungrouped UserInstances next (no track assigned)
         for (var ugi = 0; ugi < ungroupedInstances.length; ugi++) {
             var ugInst = ungroupedInstances[ugi];
-            var ugPts = _buildSioPoints(ugInst, numNodes);
+            var ugIsPred = ugInst.type === 'predicted';
+            var ugScore = ugInst.score != null ? ugInst.score : 1.0;
+            var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
 
             if (ugInst.type === 'user') {
                 frameInstances.push(new SIO.Instance({
@@ -1211,7 +1215,7 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
                     points: ugPts,
                     skeleton: skeleton,
                     track: null,
-                    score: ugInst.score || 0,
+                    score: ugScore,
                 }));
             }
         }
@@ -1220,7 +1224,8 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
         if (reprojAsUser !== null) {
             for (var ri = 0; ri < reprojInstances.length; ri++) {
                 var rInst = reprojInstances[ri];
-                var rPts = _buildSioPoints(rInst, numNodes);
+                var rScore = rInst.score != null ? rInst.score : 1.0;
+                var rPts = _buildSioPoints(rInst, numNodes, reprojAsUser ? undefined : rScore);
                 var rTrackIdx = rInst._groupTrackIdx;
                 var rTrack = (rTrackIdx >= 0 && rTrackIdx < tracks.length) ? tracks[rTrackIdx] : null;
 
@@ -1235,7 +1240,7 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
                         points: rPts,
                         skeleton: skeleton,
                         track: rTrack,
-                        score: rInst.score || 1.0,
+                        score: rScore,
                     }));
                 }
             }
@@ -1248,22 +1253,17 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
         }));
     }
 
-    // 5. Build sleap-io Identity objects
-    var sioIdentities = [];
-    if (session.identities && session.identities.length > 0) {
-        for (var iid = 0; iid < session.identities.length; iid++) {
-            var lucidId = session.identities[iid];
-            sioIdentities.push(new SIO.Identity({ name: lucidId.name, color: lucidId.color }));
-        }
-    }
-
-    // 6. Create Labels
+    // 5. Create Labels. Do NOT pass identities — the sleap-io.js
+    // serializer bumps format_id to 1.9 when labels.identities is
+    // non-empty, and sleap-io Python <=0.6.x cannot read format 1.9.
+    // Identities are a lucid-internal concept; losing the color/name
+    // metadata in the Export output is acceptable (Export is a flat
+    // per-camera dump, not a lucid-project round-trip).
     return new SIO.Labels({
         labeledFrames: labeledFrames,
         videos: [video],
         skeletons: [skeleton],
         tracks: tracks,
-        identities: sioIdentities,
         provenance: { source: 'lucid', exported_at: new Date().toISOString() },
     });
 }
@@ -1274,18 +1274,29 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
  * @param {number} numNodes
  * @returns {Array} Point array
  */
-function _buildSioPoints(inst, numNodes) {
+function _buildSioPoints(inst, numNodes, perPointScore) {
+    // perPointScore: optional. When set, each Point carries `score` so
+    // sleap-io.js writes a non-zero `pred_points.score` for predicted
+    // instances. SLEAP GUI hides predicted points below a small score
+    // threshold — a lucid reprojection exported as a PredictedInstance
+    // without a per-point score would render as `score=0.0` in the SLP
+    // file and disappear in the GUI even though the xy is valid.
+    // sleap-io.js ignores the `score` field when serializing a plain
+    // Instance (non-predicted), so attaching it unconditionally is safe.
     var pts = [];
     var nulledNodes = inst.nulledNodes || null;
     for (var n = 0; n < numNodes; n++) {
         var pt = inst.points[n];
         var isNulled = nulledNodes && nulledNodes.has(n);
+        var entry;
         if (pt == null || isNulled) {
-            pts.push({ xy: [NaN, NaN], visible: false, complete: false });
+            entry = { xy: [NaN, NaN], visible: false, complete: false };
         } else {
             var occ = inst.occluded && inst.occluded[n];
-            pts.push({ xy: [pt[0], pt[1]], visible: !occ, complete: true });
+            entry = { xy: [pt[0], pt[1]], visible: !occ, complete: true };
         }
+        if (perPointScore != null) entry.score = perPointScore;
+        pts.push(entry);
     }
     return pts;
 }
@@ -1306,7 +1317,279 @@ async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileI
 
     var labels = buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter);
     var bytes = await SIO.saveSlpToBytes(labels);
-    return new Blob([bytes], { type: 'application/x-hdf5' });
+    var compatBytes = await _convertSlpToV06Compatible(bytes);
+    return new Blob([compatBytes], { type: 'application/x-hdf5' });
+}
+
+// ==========================================================================
+// v0.6.x SLP compatibility pass for lucid Export
+//
+// sleap-io.js 0.2.x writes the per-record datasets (`instances`, `frames`,
+// `points`, `pred_points`) as plain 2-D matrices with `field_names` stored
+// as a string attribute. sleap-io Python <=0.6.5 — the last pre-format-1.9
+// release and the newest version a SLEAP GUI install will pull today —
+// expects HDF5 compound (structured) datatypes and crashes at
+// `skeletons[skeleton_id]` in `read_instances` because the unpacked field
+// lands as a `numpy.float32` rather than an int. This post-pass reopens the
+// freshly-written bytes, copies every dataset into a clean output file with
+// the four record datasets rewritten as compound dtypes matching sleap-io
+// Python's `instance_dtype` / `frame_dtype` / `point_dtype` schema, strips
+// the format-1.9-only `identities_json` / `sessions_json` payloads, and
+// pins `metadata.format_id = 1.4`. Ctrl+S quick-save uses a separate path
+// (`buildSlpLabelsAllViews` / `buildSlpBytes`) and is intentionally left
+// at format 1.9 so lucid projects round-trip their rich multi-view state.
+// ==========================================================================
+
+var _SLP_INSTANCE_FIELDS = [
+    { name: 'instance_id',     type: 0, size: 8, signed: 1 }, // i8
+    { name: 'instance_type',   type: 0, size: 1, signed: 0 }, // u1
+    { name: 'frame_id',        type: 0, size: 8, signed: 0 }, // u8
+    { name: 'skeleton',        type: 0, size: 4, signed: 0 }, // u4
+    { name: 'track',           type: 0, size: 4, signed: 1 }, // i4
+    { name: 'from_predicted',  type: 0, size: 8, signed: 1 }, // i8
+    { name: 'score',           type: 1, size: 4, signed: 1 }, // f4
+    { name: 'point_id_start',  type: 0, size: 8, signed: 0 }, // u8
+    { name: 'point_id_end',    type: 0, size: 8, signed: 0 }, // u8
+    { name: 'tracking_score',  type: 1, size: 4, signed: 1 }, // f4
+];
+var _SLP_FRAME_FIELDS = [
+    { name: 'frame_id',          type: 0, size: 8, signed: 0 },
+    { name: 'video',             type: 0, size: 4, signed: 0 },
+    { name: 'frame_idx',         type: 0, size: 8, signed: 0 },
+    { name: 'instance_id_start', type: 0, size: 8, signed: 0 },
+    { name: 'instance_id_end',   type: 0, size: 8, signed: 0 },
+];
+var _SLP_POINT_FIELDS = [
+    { name: 'x',        type: 1, size: 8, signed: 1 }, // f8
+    { name: 'y',        type: 1, size: 8, signed: 1 }, // f8
+    { name: 'visible',  type: 0, size: 1, signed: 0 }, // u1 (stores bool 0/1)
+    { name: 'complete', type: 0, size: 1, signed: 0 }, // u1
+];
+var _SLP_PRED_POINT_FIELDS = _SLP_POINT_FIELDS.concat([
+    { name: 'score', type: 1, size: 8, signed: 1 }, // f8
+]);
+
+// The CDN-loaded h5wasm@0.8.8 (global `h5wasm`) predates
+// `create_compound_dataset`. The *local* bundle under
+// `lib/h5wasm/hdf5_hl.js` (shipped with sleap-io.js) is newer and exposes
+// the method we need. The import map in `index.html` resolves
+// `import('h5wasm')` to that local bundle; we memoize the ESM instance
+// here. This intentionally uses a separate h5wasm runtime from
+// `initH5wasm()` — they share no state and each owns its own virtual
+// filesystem, which is fine for this post-pass.
+var _localH5wasmReady = null;
+async function _initLocalH5wasm() {
+    if (!_localH5wasmReady) {
+        _localH5wasmReady = import('h5wasm').then(async function (mod) {
+            await mod.ready;
+            return { File: mod.File, FS: mod.FS };
+        });
+    }
+    return _localH5wasmReady;
+}
+
+async function _convertSlpToV06Compatible(rawBytes) {
+    var h5 = await _initLocalH5wasm();
+    var stamp = Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 10);
+    var srcPath = '/lucid-export-src-' + stamp + '.h5';
+    var dstPath = '/lucid-export-dst-' + stamp + '.h5';
+    h5.FS.writeFile(srcPath, new Uint8Array(rawBytes));
+    var outBytes;
+    try {
+        var src = new h5.File(srcPath, 'r');
+        var dst = new h5.File(dstPath, 'w');
+        try {
+            _copyMetadataGroupAs14(src, dst);
+            var names = src.keys();
+            for (var i = 0; i < names.length; i++) {
+                var name = names[i];
+                if (name === 'metadata') continue;
+                if (name === 'identities_json') continue; // format 1.9 payload, drop
+                if (name === 'sessions_json') continue;   // v0.6.5 KeyErrors on lucid's shape
+                if (name === 'instances') {
+                    _writeCompoundFromMatrix(src, dst, 'instances', _SLP_INSTANCE_FIELDS);
+                } else if (name === 'frames') {
+                    _writeCompoundFromMatrix(src, dst, 'frames', _SLP_FRAME_FIELDS);
+                } else if (name === 'points') {
+                    _writeCompoundFromMatrix(src, dst, 'points', _SLP_POINT_FIELDS);
+                } else if (name === 'pred_points') {
+                    _writeCompoundFromMatrix(src, dst, 'pred_points', _SLP_PRED_POINT_FIELDS);
+                } else {
+                    _copyDatasetAsIs(src, dst, name);
+                }
+            }
+        } finally {
+            try { src.close(); } catch (e) {}
+            try { dst.close(); } catch (e) {}
+        }
+        outBytes = h5.FS.readFile(dstPath);
+    } finally {
+        try { h5.FS.unlink(srcPath); } catch (e) {}
+        try { h5.FS.unlink(dstPath); } catch (e) {}
+    }
+    return outBytes;
+}
+
+function _copyMetadataGroupAs14(src, dst) {
+    var srcMeta = src.get('metadata');
+    var dstMeta = dst.create_group('metadata');
+    // Copy every attribute except format_id (which we override to 1.4).
+    var attrNames = Object.keys(srcMeta.attrs || {});
+    for (var i = 0; i < attrNames.length; i++) {
+        var aname = attrNames[i];
+        if (aname === 'format_id') continue;
+        var aval = srcMeta.get_attribute(aname);
+        _cloneAttribute(dstMeta, aname, aval);
+    }
+    // Pin format_id to 1.4 explicitly as float32 to match sleap-io Python's writer.
+    dstMeta.create_attribute('format_id', new Float32Array([1.4]), [], '<f4');
+}
+
+function _cloneAttribute(target, name, value) {
+    if (typeof value === 'string') {
+        // Fixed-length string (S<byteLen>) — sleap-io Python v0.6.5's
+        // read_metadata calls `.decode()` on the attr payload, which
+        // only works if h5py returns it as bytes. Vlen-string ('S')
+        // round-trips as Python `str` and breaks `.decode()`.
+        var byteLen = new TextEncoder().encode(value).length;
+        target.create_attribute(name, value, null, 'S' + byteLen);
+    } else if (typeof value === 'number') {
+        target.create_attribute(name, new Float64Array([value]), [], '<f8');
+    } else if (value && value.buffer instanceof ArrayBuffer) {
+        target.create_attribute(name, value);
+    } else if (Array.isArray(value)) {
+        target.create_attribute(name, value);
+    } else {
+        // Fallback: serialize as JSON fixed-length string.
+        var s = JSON.stringify(value);
+        var sLen = new TextEncoder().encode(s).length;
+        target.create_attribute(name, s, null, 'S' + sLen);
+    }
+}
+
+function _writeCompoundFromMatrix(src, dst, name, fields) {
+    var ds = src.get(name);
+    if (!ds) return;
+    var shape = ds.shape;
+    var nrows = (shape && shape[0]) ? Number(shape[0]) : 0;
+    var ncols = fields.length;
+    var rowSize = fields.reduce(function (a, f) { return a + f.size; }, 0);
+    if (nrows === 0) {
+        // Empty dataset — sleap-io.js writes shape [0, ncols]. Create a
+        // zero-length compound dataset so the reader sees the same shape.
+        var empty = new ArrayBuffer(0);
+        dst.create_compound_dataset({
+            name: name,
+            data: empty,
+            fieldNames: fields.map(function (f) { return f.name; }),
+            fieldTypes: fields.map(function (f) { return f.type; }),
+            fieldSizes: fields.map(function (f) { return f.size; }),
+            fieldSigns: fields.map(function (f) { return f.signed; }),
+            nrows: 0,
+            rowSize: rowSize,
+        });
+        return;
+    }
+    // Read the plain matrix. `.value` gives a flat typed array (e.g. a
+    // Float32Array of length nrows*ncols). `.slice()` is nicer but not
+    // always present — .value is universal.
+    var flat = ds.value;
+    if (flat.length !== nrows * ncols) {
+        throw new Error('unexpected ' + name + ' buffer length: ' + flat.length +
+            ' (expected ' + (nrows * ncols) + ')');
+    }
+    var buf = new ArrayBuffer(nrows * rowSize);
+    var dv = new DataView(buf);
+    for (var r = 0; r < nrows; r++) {
+        var off = r * rowSize;
+        for (var c = 0; c < ncols; c++) {
+            var v = flat[r * ncols + c];
+            var field = fields[c];
+            _writeField(dv, off, field, v);
+            off += field.size;
+        }
+    }
+    dst.create_compound_dataset({
+        name: name,
+        data: buf,
+        fieldNames: fields.map(function (f) { return f.name; }),
+        fieldTypes: fields.map(function (f) { return f.type; }),
+        fieldSizes: fields.map(function (f) { return f.size; }),
+        fieldSigns: fields.map(function (f) { return f.signed; }),
+        nrows: nrows,
+        rowSize: rowSize,
+    });
+}
+
+function _writeField(dv, off, field, value) {
+    // type 0 = H5T_INTEGER, type 1 = H5T_FLOAT. signed per-field.
+    if (field.type === 1) {
+        if (field.size === 4) dv.setFloat32(off, Number(value), true);
+        else dv.setFloat64(off, Number(value), true);
+        return;
+    }
+    // Integer. NaN from source float matrix must not propagate into integers.
+    var n = Number(value);
+    if (!isFinite(n)) n = 0;
+    n = Math.trunc(n);
+    if (field.size === 1) {
+        if (field.signed) dv.setInt8(off, n);
+        else dv.setUint8(off, n & 0xff);
+    } else if (field.size === 4) {
+        if (field.signed) dv.setInt32(off, n, true);
+        else dv.setUint32(off, n >>> 0, true);
+    } else if (field.size === 8) {
+        if (field.signed) dv.setBigInt64(off, BigInt(n), true);
+        else dv.setBigUint64(off, BigInt(Math.max(0, n)), true);
+    } else {
+        throw new Error('unsupported integer size ' + field.size);
+    }
+}
+
+function _copyDatasetAsIs(src, dst, name) {
+    var ds = src.get(name);
+    if (!ds) return;
+    var meta = ds.metadata;
+    var value = ds.value;
+    // String datasets (type class 3 = H5T_STRING) carry vlen strings.
+    // `.value` returns a plain JS array of strings; forward shape + dtype.
+    if (meta && meta.type === 3) {
+        dst.create_dataset({
+            name: name,
+            data: value,
+            shape: ds.shape ? ds.shape.map(Number) : [value.length],
+            dtype: 'S',
+        });
+        return;
+    }
+    // Numeric datasets: re-emit with same shape + a compatible dtype
+    // inferred from metadata. For the flat-matrix helpers sleap-io.js
+    // emits, this preserves `tracks_json` (object), `suggestions_json`
+    // (<i4), etc. byte-for-byte.
+    var dtype = _metadataToDtypeString(meta);
+    dst.create_dataset({
+        name: name,
+        data: value,
+        shape: ds.shape.map(Number),
+        dtype: dtype,
+    });
+}
+
+function _metadataToDtypeString(meta) {
+    // Mirrors h5wasm's internal metadata_to_dtype just enough for the
+    // datasets lucid's Export actually emits.
+    if (!meta) return null;
+    if (meta.type === 1) {
+        // float
+        return meta.size === 4 ? '<f4' : '<f8';
+    }
+    if (meta.type === 0) {
+        // integer
+        var prefix = meta.signed ? '<i' : '<u';
+        return prefix + meta.size;
+    }
+    if (meta.type === 3) return 'S';
+    return '<f8';
 }
 
 /**
