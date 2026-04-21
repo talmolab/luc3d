@@ -1179,7 +1179,10 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
             var instIsPred = inst.type === 'predicted';
             var instScore = inst.score != null ? inst.score : 1.0;
             var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
-            var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+            // inst.trackIdx can be null (trackless UserInstance imported
+            // from a 2D SLP with track=null). `null >= 0` is true in JS
+            // so we need the explicit != null guard before the range check.
+            var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
 
             if (inst.type === 'user') {
                 frameInstances.push(new SIO.Instance({
@@ -1758,7 +1761,9 @@ function buildSlpLabelsAllViews(session, views, videoFiles) {
             var existing = lucidToSio.get(inst);
             if (existing) return existing;
             var pts = _buildSioPoints(inst, numNodes);
-            var track = (inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+            // `null >= 0` is true in JS; explicit guard prevents tracks[null]
+            // = undefined leaking into SIO.Instance for trackless instances.
+            var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
             var sioInst;
             if (inst.type === 'user') {
                 sioInst = new SIO.Instance({ points: pts, skeleton: skeleton, track: track });
