@@ -1220,26 +1220,35 @@ function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instan
             }
         }
 
-        // 3/4. Reprojections — same track as their associated group
+        // 3/4. Reprojections — track is ALWAYS null regardless of output type.
+        //   - As UserInstance: SLEAP data model forbids two UserInstances on
+        //     the same (view, track) pair, and step 1 above already put the
+        //     grouped user instance on the group's track in this view.
+        //   - As PredictedInstance: sharing the group's track causes two
+        //     problems on LUCID re-import — the flat 2D SLP has no 3D points
+        //     so reprojections can't be reconstructed as such, and the
+        //     "group by trackIdx" import fallback buckets the prediction with
+        //     the user instance (same cam, same track), where Map-keyed-by-
+        //     camera-name means one overwrites the other.
+        //   Dropping the track on both sides loses per-track color in SLEAP
+        //   GUI but keeps the data safe for round-tripping.
         if (reprojAsUser !== null) {
             for (var ri = 0; ri < reprojInstances.length; ri++) {
                 var rInst = reprojInstances[ri];
                 var rScore = rInst.score != null ? rInst.score : 1.0;
                 var rPts = _buildSioPoints(rInst, numNodes, reprojAsUser ? undefined : rScore);
-                var rTrackIdx = rInst._groupTrackIdx;
-                var rTrack = (rTrackIdx >= 0 && rTrackIdx < tracks.length) ? tracks[rTrackIdx] : null;
 
                 if (reprojAsUser) {
                     frameInstances.push(new SIO.Instance({
                         points: rPts,
                         skeleton: skeleton,
-                        track: rTrack,
+                        track: null,
                     }));
                 } else {
                     frameInstances.push(new SIO.PredictedInstance({
                         points: rPts,
                         skeleton: skeleton,
-                        track: rTrack,
+                        track: null,
                         score: rScore,
                     }));
                 }
@@ -1394,12 +1403,13 @@ async function _initLocalH5wasm() {
     return _localH5wasmReady;
 }
 
-async function _convertSlpToV06Compatible(rawBytes) {
+async function _convertSlpToV06Compatible(rawBytes, sessionsToEmit) {
     var h5 = await _initLocalH5wasm();
     var stamp = Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 10);
     var srcPath = '/lucid-export-src-' + stamp + '.h5';
     var dstPath = '/lucid-export-dst-' + stamp + '.h5';
     h5.FS.writeFile(srcPath, new Uint8Array(rawBytes));
+    var hasSessions = Array.isArray(sessionsToEmit) && sessionsToEmit.length > 0;
     var outBytes;
     try {
         var src = new h5.File(srcPath, 'r');
@@ -1411,7 +1421,7 @@ async function _convertSlpToV06Compatible(rawBytes) {
                 var name = names[i];
                 if (name === 'metadata') continue;
                 if (name === 'identities_json') continue; // format 1.9 payload, drop
-                if (name === 'sessions_json') continue;   // v0.6.5 KeyErrors on lucid's shape
+                if (name === 'sessions_json') continue;   // always rewritten (or dropped) below
                 if (name === 'instances') {
                     _writeCompoundFromMatrix(src, dst, 'instances', _SLP_INSTANCE_FIELDS);
                 } else if (name === 'frames') {
@@ -1423,6 +1433,19 @@ async function _convertSlpToV06Compatible(rawBytes) {
                 } else {
                     _copyDatasetAsIs(src, dst, name);
                 }
+            }
+            if (hasSessions) {
+                // Write sessions_json in the shape v0.6.5 `make_session` expects
+                // (keys: calibration, camcorder_to_video_idx_map, frame_group_dicts)
+                // so LUCID project SLPs round-trip calibration AND are parseable
+                // by SLEAP GUI's pinned sleap-io.
+                var jsonStrs = sessionsToEmit.map(function (s) { return JSON.stringify(s); });
+                dst.create_dataset({
+                    name: 'sessions_json',
+                    data: jsonStrs,
+                    shape: [jsonStrs.length],
+                    dtype: 'S',
+                });
             }
         } finally {
             try { src.close(); } catch (e) {}

@@ -1215,6 +1215,13 @@
                 }
             }
             if (target != null && videoController) {
+                // Snap timeline/seekbar synchronously so the bar moves on the
+                // same keystroke — videoController.seekToFrame is async
+                // (awaits frame decode before calling drawOverlays/timeline),
+                // which is noticeable on labeled-frame jumps that skip many
+                // frames at once.
+                if (timeline) timeline.setCurrentFrame(target);
+                updateSeekbarVisual(target);
                 videoController.seekToFrame(target);
                 setStatus('Frame ' + (target + 1), 'info');
             }
@@ -4388,7 +4395,7 @@
                     '<tbody>' +
                     '<tr><td><b>Navigation</b></td><td></td></tr>' +
                     '<tr><td><code>←</code> / <code>→</code></td><td>Previous / Next frame</td></tr>' +
-                    '<tr><td><code>Shift+←</code> / <code>Shift+→</code></td><td>Skip 10 frames</td></tr>' +
+                    '<tr><td><code>Option+←</code> / <code>Option+→</code></td><td>Previous / Next frame with user annotation</td></tr>' +
                     '<tr><td><code>Home</code> / <code>End</code></td><td>First / Last frame</td></tr>' +
                     '<tr><td><code>Space</code></td><td>Play / Pause</td></tr>' +
                     '<tr><td colspan="2" style="height:8px;"></td></tr>' +
@@ -4409,7 +4416,7 @@
                     '<tr><td><b>View</b></td><td></td></tr>' +
                     '<tr><td><code>\\</code></td><td>Toggle 3D viewport</td></tr>' +
                     '<tr><td><code>I</code></td><td>Toggle info panel</td></tr>' +
-                    '<tr><td><code>Option+\u2192</code> / <code>Option+\u2190</code></td><td>Rotate video CW / CCW (hold for continuous)</td></tr>' +
+                    '<tr><td><code>Shift+R+\u2192</code> / <code>Shift+R+\u2190</code></td><td>Rotate video CW / CCW (hold for continuous)</td></tr>' +
                     '<tr><td><code>?</code></td><td>Show this help</td></tr>' +
                     '</tbody></table></div>' +
                     '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
@@ -4624,8 +4631,17 @@
                 }
             });
 
-            // --- Video Rotation (Alt/Option + Arrow) ---
+            // --- Video Rotation (Shift + R + Arrow chord) ---
             var _rotState = { active: false, direction: 0, lastTime: 0, rafId: 0 };
+            var _rKeyDown = false; // tracks the `R` modifier for the rotation chord
+
+            document.addEventListener('keydown', function (e) {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+                if (e.code === 'KeyR') _rKeyDown = true;
+            });
+            document.addEventListener('keyup', function (e) {
+                if (e.code === 'KeyR') _rKeyDown = false;
+            });
 
             function getActiveView() {
                 if (!paneManager || !paneManager.api) return null;
@@ -4656,7 +4672,7 @@
 
             document.addEventListener('keydown', function (e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-                if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+                if (e.shiftKey && _rKeyDown && !e.ctrlKey && !e.metaKey && !e.altKey &&
                     (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
                     e.preventDefault();
                     var view = getActiveView();
@@ -4676,7 +4692,7 @@
             });
 
             document.addEventListener('keyup', function (e) {
-                if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Alt') && _rotState.active) {
+                if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Shift' || e.code === 'KeyR') && _rotState.active) {
                     _rotState.active = false;
                     if (_rotState.rafId) { cancelAnimationFrame(_rotState.rafId); _rotState.rafId = 0; }
                     // Redraw overlays once at the final rotation angle
@@ -4687,17 +4703,20 @@
             document.addEventListener('keydown', function (e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
                 if (!videoController) return;
-                if (e.altKey) return; // Alt+Arrow handled by rotation above
+                // Shift+R+Arrow is the rotation chord — don't also step frames.
+                if (e.shiftKey && _rKeyDown) return;
 
                 switch (e.key) {
                     case 'ArrowRight':
+                        if (e.shiftKey) return; // Shift+Arrow is unbound
                         e.preventDefault();
-                        if (e.shiftKey) { seekToLabeledFrame(1); }
+                        if (e.altKey) { seekToLabeledFrame(1); }
                         else { videoController.seekToFrame(state.currentFrame + 1); }
                         break;
                     case 'ArrowLeft':
+                        if (e.shiftKey) return; // Shift+Arrow is unbound
                         e.preventDefault();
-                        if (e.shiftKey) { seekToLabeledFrame(-1); }
+                        if (e.altKey) { seekToLabeledFrame(-1); }
                         else { videoController.seekToFrame(state.currentFrame - 1); }
                         break;
                     case ' ':
@@ -6944,7 +6963,7 @@
                 '<label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);display:block;margin-bottom:6px;">Include</label>' +
                 '<label style="margin-right:14px;cursor:pointer;"><input type="checkbox" id="slpAllIncUser" checked> User Labels</label>' +
                 '<label style="margin-right:14px;cursor:pointer;"><input type="checkbox" id="slpAllIncPred" checked> Predictions</label>' +
-                '<label style="margin-right:14px;cursor:pointer;"><input type="checkbox" id="slpAllIncReproj"> Reprojections</label>' +
+                '<label style="margin-right:14px;cursor:pointer;"><input type="checkbox" id="slpAllIncReproj" checked> Reprojections</label>' +
                 '</div>' +
                 '<div class="modal-actions">' +
                 '<button id="slpAllCancel">Cancel</button>' +
@@ -7026,8 +7045,18 @@
                     var exported = 0;
                     for (var si = 0; si < selected.length; si++) {
                         var entry = selected[si];
-                        // reprojAsUser: how to export reprojections if included
-                        var reprojAsUser = !instanceFilter.reprojected ? null : (entry.reprojMode === 'user');
+                        // reprojAsUser: null skips reprojections, true = UserInstance,
+                        // false = PredictedInstance. Both the global Include
+                        // toggle AND per-row "None" must skip — a prior version
+                        // dropped only on the global toggle, so rows marked None
+                        // still got their reprojections emitted as PredictedInstance
+                        // (since 'none' !== 'user' evaluates to false, not null).
+                        var reprojAsUser;
+                        if (!instanceFilter.reprojected || entry.reprojMode === 'none') {
+                            reprojAsUser = null;
+                        } else {
+                            reprojAsUser = entry.reprojMode === 'user';
+                        }
                         var slpFilename = entry.outputName;
                         if (!slpFilename.endsWith('.slp')) slpFilename += '.slp';
 
@@ -9402,6 +9431,8 @@
             var seenTrackNames = new Set();
 
             var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
+            var calibSessions = []; // main-format sessions_json entries, injected by post-pass
+            var videoOffset = 0;    // cumulative video count across prior sessions
             for (var si = 0; si < sessionsToExport.length; si++) {
                 var sess = sessionsToExport[si];
 
@@ -9426,6 +9457,123 @@
                 });
 
                 var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
+
+                // Build sessions_json payload for this session. Written into
+                // sessions_json by the v0.6 post-pass so the saved SLP
+                // round-trips calibration, InstanceGroup/points3d, and lucid
+                // session metadata through load. Camera keys are stringified
+                // integer indices ("0", "1", ...) because sleap-io v0.6.5's
+                // `make_session` calls `int(cam_idx)` on camcorder_to_*_idx_map
+                // keys — "camera_0" raises ValueError and aborts the SLEAP GUI
+                // load. LUCID's loader handles both camera names and numeric
+                // indices, so this stays round-trip-compatible.
+                var calibration = {};
+                var camcorderMap = {};
+                var camNameToKey = {};
+                for (var ci = 0; ci < sess.cameras.length; ci++) {
+                    var cam = sess.cameras[ci];
+                    var camKey = String(ci);
+                    calibration[camKey] = {
+                        name: cam.name,
+                        matrix: cam.matrix,
+                        distortions: cam.dist,
+                        rotation: cam.rvec,
+                        translation: cam.tvec,
+                        size: cam.size,
+                    };
+                    camcorderMap[camKey] = videoOffset + ci;
+                    camNameToKey[cam.name] = camKey;
+                }
+
+                // Serialize InstanceGroups + 3D points per frame. The load path
+                // at handleLoadSlpFile (~index.html:13084+) expects:
+                //   instance_groups[i] = {
+                //     identity_idx?, points: [[x,y,z]|null, ...],
+                //     instances: {camera_N: {nodeName: [x,y] | [x,y,0 if occluded]}},
+                //     metadata: {lucid: {instanceMeta: {camName: {trackIdx,type,score,modified,nulledNodes?}}}}
+                //   }
+                var sessNodeNames = sess.skeleton.nodes.map(function (n) {
+                    return typeof n === 'string' ? n : (n.name || '');
+                });
+                var sessNumNodes = sessNodeNames.length;
+                var frameGroupDicts = [];
+                for (var [fgFrameIdx, fgGroups] of sess.instanceGroups) {
+                    if (!fgGroups || fgGroups.length === 0) continue;
+                    var igDicts = [];
+                    for (var fgi = 0; fgi < fgGroups.length; fgi++) {
+                        var grp = fgGroups[fgi];
+                        var igDict = {};
+                        if (grp.identityId != null && grp.identityId >= 0) {
+                            igDict.identity_idx = grp.identityId;
+                        }
+                        if (grp.points3d && grp.points3d.length > 0) {
+                            igDict.points = grp.points3d;
+                        }
+                        var igInstances = {};
+                        var igInstanceMeta = {};
+                        // Stub required by sleap-io v0.6.5 make_instance_group —
+                        // the loader pops this key unconditionally and int-casts
+                        // both the outer key and lf_idx/inst_idx. LUCID itself
+                        // does not use this map (it reads `instances` + metadata
+                        // below instead), so pointing all cameras at
+                        // labeled_frames[0].instances[0] is a safe no-op; the
+                        // file is guaranteed to have at least one labeled frame
+                        // with one instance whenever it has InstanceGroups.
+                        var lfAndInstMap = {};
+                        for (var [grpCamName, grpInst] of grp.instances) {
+                            var grpCamKey = camNameToKey[grpCamName];
+                            if (!grpCamKey) continue;
+                            var pointDict = {};
+                            var pts = grpInst.points || [];
+                            for (var ni = 0; ni < sessNumNodes && ni < pts.length; ni++) {
+                                var pt = pts[ni];
+                                if (!pt || pt[0] == null || pt[1] == null || !isFinite(pt[0])) continue;
+                                var isOcc = Array.isArray(grpInst.occluded) && grpInst.occluded[ni];
+                                pointDict[sessNodeNames[ni]] = isOcc ? [pt[0], pt[1], 0] : [pt[0], pt[1]];
+                            }
+                            igInstances[grpCamKey] = pointDict;
+                            lfAndInstMap[grpCamKey] = [0, 0];
+                            var meta = {
+                                trackIdx: grpInst.trackIdx,
+                                type: grpInst.type || 'user',
+                                score: grpInst.score || 0,
+                                modified: grpInst.modified || false,
+                            };
+                            if (grpInst.nulledNodes && grpInst.nulledNodes.size > 0) {
+                                meta.nulledNodes = Array.from(grpInst.nulledNodes);
+                            }
+                            igInstanceMeta[grpCamName] = meta;
+                        }
+                        igDict.instances = igInstances;
+                        igDict.camcorder_to_lf_and_inst_idx_map = lfAndInstMap;
+                        igDict.metadata = { lucid: { instanceMeta: igInstanceMeta } };
+                        igDicts.push(igDict);
+                    }
+                    if (igDicts.length > 0) {
+                        frameGroupDicts.push({ frame_idx: fgFrameIdx, instance_groups: igDicts });
+                    }
+                }
+
+                calibSessions.push({
+                    calibration: calibration,
+                    camcorder_to_video_idx_map: camcorderMap,
+                    frame_group_dicts: frameGroupDicts,
+                    metadata: {
+                        lucid: {
+                            sessionName: sess.name || null,
+                            trustTracks: sess.trustTracks || false,
+                            trackIdentityMap: sess.trackIdentityMap ? Array.from(sess.trackIdentityMap.entries()) : [],
+                            frameIdentityMap: sess.frameIdentityMap ? Array.from(sess.frameIdentityMap.entries()) : [],
+                            skeleton: {
+                                name: sess.skeleton.name || 'skeleton',
+                                nodes: sess.skeleton.nodes,
+                                edges: sess.skeleton.edges,
+                            },
+                            tracks: sess.tracks,
+                        },
+                    },
+                });
+                videoOffset += (sessLabels.videos || []).length;
 
                 // Merge into combined Labels
                 allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
@@ -9459,7 +9607,7 @@
             });
 
             var rawBytes = await SIO.saveSlpToBytes(labels);
-            return await _convertSlpToV06Compatible(rawBytes);
+            return await _convertSlpToV06Compatible(rawBytes, calibSessions);
         }
 
         async function quickSave() {
@@ -13168,30 +13316,28 @@
                     console.log('[load-slp] Rebuilt', restoredGroups, 'instance groups from session data,', restoredWith3d, 'with 3D points');
 
                 } else {
-                    // === Fallback: group by trackIdx (no session data) ===
-                    showLoading('Building instance groups...');
+                    // === Fallback: no session_json → treat as a flat 2D SLP
+                    // and move every loaded instance into the unlinked pool,
+                    // matching handleLoadSessionFolderPerCamera (line ~12810).
+                    // Previous behavior grouped by trackIdx unconditionally,
+                    // which wrapped every single-camera 2D-SLP instance in a
+                    // trivial one-view InstanceGroup — inconsistent with the
+                    // session-folder path where the same file loads as
+                    // ungrouped. Users run the Assign menu when they want
+                    // cross-view grouping from track/identity data.
+                    showLoading('Preparing unlinked instances...');
                     await new Promise(function (r) { setTimeout(r, 0); });
-                    var fgCount = 0;
+                    var ulFgCount = 0;
                     for (var [frameIdx2, fg2] of session.frameGroups) {
-                        var trackInstances = new Map();
                         for (var [cn, instances] of fg2.instances) {
-                            for (var inst3 of instances) {
-                                var tIdx = inst3.trackIdx >= 0 ? inst3.trackIdx : 0;
-                                if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
-                                trackInstances.get(tIdx).push({ camName: cn, instance: inst3 });
+                            for (var ulItem of instances) {
+                                fg2.addUnlinkedInstance(cn, new UnlinkedInstance(ulItem, cn));
                             }
+                            fg2.instances.set(cn, []);
                         }
-                        if (trackInstances.size > 0) {
-                            session.instanceGroups.set(frameIdx2, []);
-                            for (var [trackIdx, entries] of trackInstances) {
-                                var group2 = new InstanceGroup(Date.now() + Math.random() * 1000 + trackIdx, trackIdx);
-                                for (var e of entries) group2.addInstance(e.camName, e.instance);
-                                session.instanceGroups.get(frameIdx2).push(group2);
-                            }
-                        }
-                        fgCount++;
-                        if (fgCount % BATCH === 0) {
-                            showLoading('Building instance groups (' + fgCount + '/' + session.frameGroups.size + ')...');
+                        ulFgCount++;
+                        if (ulFgCount % BATCH === 0) {
+                            showLoading('Preparing unlinked instances (' + ulFgCount + '/' + session.frameGroups.size + ')...');
                             await new Promise(function (r) { setTimeout(r, 0); });
                         }
                     }
@@ -13436,7 +13582,13 @@
                             videoWidth: evWidth, videoHeight: evHeight,
                             frameCount: decoder.samples.length,
                             assignedCamera: evCamName,
-                            slpFilename: slpFile.name,
+                            // slpFilename intentionally null — the loaded
+                            // LUCID project SLP is not a per-camera SLP, so
+                            // the 2D export modal should fall back to
+                            // video/camera name (there's no directory to
+                            // scan for real per-camera SLPs in the embedded
+                            // case).
+                            slpFilename: null,
                             videoPath: evVideoPath || (evCamName + '.mp4'),
                         });
                     }
@@ -13537,12 +13689,56 @@
                                     videoHeight: vdec.videoTrack.video.height,
                                     frameCount: vdec.samples.length,
                                     assignedCamera: assignedCam,
-                                    slpFilename: slpFile.name,
+                                    // slpFilename resolved below after scanning
+                                    // the picked directory for per-camera SLPs.
+                                    slpFilename: null,
                                     videoPath: vFile.webkitRelativePath || vFile.name,
                                     sessionIdx: slpSessIdx,
                                 });
                             } catch (videoErr) {
                                 console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);
+                            }
+                        }
+
+                        // Scan the picked directory for per-camera .slp files
+                        // (sibling to each camera's video), picking the
+                        // highest-version one per camera. This drives the 2D
+                        // export modal's default filename (modal reads
+                        // vf.slpFilename and increments the _vNN suffix) so
+                        // LUCID-project-loaded sessions match the behavior of
+                        // session-folder-loaded sessions.
+                        var camSlpMap = {};
+                        for (var dfi = 0; dfi < videoFiles.length; dfi++) {
+                            var df = videoFiles[dfi];
+                            if (!df || !df.name) continue;
+                            if (!/\.slp$/i.test(df.name)) continue;
+                            var drel = df.webkitRelativePath || df.name;
+                            var dparts = drel.split('/');
+                            var dparent = dparts.length >= 2 ? dparts[dparts.length - 2] : null;
+                            if (!dparent || cameraNames.indexOf(dparent) < 0) continue;
+                            if (!camSlpMap[dparent]) camSlpMap[dparent] = [];
+                            camSlpMap[dparent].push(df.name);
+                        }
+                        function _highestVersionSlp(names) {
+                            var best = null, bestVer = -1;
+                            for (var ni = 0; ni < names.length; ni++) {
+                                var nm = names[ni];
+                                var nstem = nm.replace(/\.[^.]+$/, '');
+                                var vm = nstem.match(/_(?:3D_)?v(\d+)$/);
+                                var ver = vm ? parseInt(vm[1]) : 0;
+                                if (ver > bestVer) { bestVer = ver; best = nm; }
+                                else if (best === null) { best = nm; }
+                            }
+                            return best;
+                        }
+                        for (var ufi = 0; ufi < state.videoFiles.length; ufi++) {
+                            var uvf = state.videoFiles[ufi];
+                            if (uvf.sessionIdx !== slpSessIdx) continue;
+                            var ucam = uvf.assignedCamera;
+                            if (!ucam) continue;
+                            var names = camSlpMap[ucam];
+                            if (names && names.length > 0) {
+                                uvf.slpFilename = _highestVersionSlp(names);
                             }
                         }
 
