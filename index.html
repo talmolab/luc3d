@@ -9458,7 +9458,8 @@
                 provenance: { source: 'lucid', exported_at: new Date().toISOString() },
             });
 
-            return await SIO.saveSlpToBytes(labels);
+            var rawBytes = await SIO.saveSlpToBytes(labels);
+            return await _convertSlpToV06Compatible(rawBytes);
         }
 
         async function quickSave() {

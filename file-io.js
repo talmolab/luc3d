@@ -1322,7 +1322,7 @@ async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileI
 }
 
 // ==========================================================================
-// v0.6.x SLP compatibility pass for lucid Export
+// v0.6.x SLP compatibility pass for lucid SLP writes
 //
 // sleap-io.js 0.2.x writes the per-record datasets (`instances`, `frames`,
 // `points`, `pred_points`) as plain 2-D matrices with `field_names` stored
@@ -1335,9 +1335,15 @@ async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileI
 // the four record datasets rewritten as compound dtypes matching sleap-io
 // Python's `instance_dtype` / `frame_dtype` / `point_dtype` schema, strips
 // the format-1.9-only `identities_json` / `sessions_json` payloads, and
-// pins `metadata.format_id = 1.4`. Ctrl+S quick-save uses a separate path
-// (`buildSlpLabelsAllViews` / `buildSlpBytes`) and is intentionally left
-// at format 1.9 so lucid projects round-trip their rich multi-view state.
+// pins `metadata.format_id = 1.4`.
+//
+// Applied to both paths: `exportSlpClientSide` (File → Export 2D SLP) and
+// `buildSlpBytes` (Ctrl+S / Save / Save As). Stripping `sessions_json` means
+// lucid projects lose their rich multi-view state (RecordingSession,
+// FrameGroup, InstanceGroup, Instance3D) on save — the trade-off is
+// SLEAP-GUI compatibility. Per-view LabeledFrames + tracks survive; lucid
+// re-import reconstructs multi-view structure from track indices, the same
+// way it handles external SLEAP SLPs.
 // ==========================================================================
 
 var _SLP_INSTANCE_FIELDS = [
