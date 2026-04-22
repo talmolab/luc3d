@@ -66,7 +66,7 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
                     <div class="menu-dropdown-item" id="menuExportLabels">Export Labels (JSON)</div>
-                    <div class="menu-dropdown-item" id="menuExportSlpPerCam">Export 2D SLP (Per Camera)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlpPerCam">Export 2D SLP File</div>
                     <div class="menu-dropdown-item" id="menuExportSlp">Export 2D SLP (All Views)</div>
                     <div class="menu-dropdown-item" id="menuExportPoints3dH5">Export 3D Points (H5)</div>
                     <div class="menu-dropdown-item" id="menuExportReprojH5">Export Reprojections (H5)</div>
@@ -4475,7 +4475,7 @@
 
             document.getElementById('menuExportSlpPerCam').addEventListener('click', function () {
                 closeMenus();
-                if (!state.session) { setStatus('No session to export', 'error'); return; }
+                if (!state.sessions || state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
                 showSlpExportModal();
             });
 
@@ -6661,122 +6661,154 @@
         // SLP Per-Camera Export Modal
         // ============================================
 
+        /**
+         * Compute per-camera stats (labeled frames, instances, triangulated frames)
+         * for a given session + camera name.
+         */
+        function _computeCameraStats(sess, camName) {
+            var labeledFrames = 0, instanceCount = 0, triangulatedFrames = 0;
+            var hasEdits = false;
+            for (var [sfIdx, sfg] of sess.frameGroups) {
+                var sfHasLabeled = false;
+                var sfCamInsts = sfg.instances.get(camName) || [];
+                for (var sci = 0; sci < sfCamInsts.length; sci++) {
+                    var sft = sfCamInsts[sci].type || 'user';
+                    if (sft === 'user') { sfHasLabeled = true; instanceCount++; }
+                    else if (sft === 'predicted') { sfHasLabeled = true; }
+                    if (sfCamInsts[sci].modified === true) hasEdits = true;
+                }
+                var sfUl = sfg.getUnlinkedInstances(camName);
+                for (var sui = 0; sui < sfUl.length; sui++) {
+                    if ((sfUl[sui].instance.type || 'user') === 'user') {
+                        sfHasLabeled = true; instanceCount++;
+                    }
+                    if (sfUl[sui].instance.modified === true) hasEdits = true;
+                }
+                if (sfHasLabeled) labeledFrames++;
+                var sfGroups = sess.instanceGroups.get(sfIdx) || [];
+                for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
+                    if (sfGroups[sfgi].points3d) { triangulatedFrames++; break; }
+                }
+            }
+            return {
+                labeledFrames: labeledFrames,
+                instanceCount: instanceCount,
+                triangulatedFrames: triangulatedFrames,
+                hasEdits: hasEdits,
+            };
+        }
+
+        /**
+         * Build the list of camera-view entries for a given session index.
+         * One row per camera; falls back to session.cameras when the session's
+         * videos haven't been loaded into state.videoFiles yet (lazy sessions).
+         */
+        function _buildCameraEntriesForSession(sessIdx) {
+            var sess = state.sessions[sessIdx];
+            if (!sess) return [];
+            var entries = [];
+            var seenCams = {};
+
+            for (var i = 0; i < state.videoFiles.length; i++) {
+                var vf = state.videoFiles[i];
+                var vfSessIdx = (typeof vf.sessionIdx === 'number') ? vf.sessionIdx : 0;
+                if (vfSessIdx !== sessIdx) continue;
+                var camName = vf.assignedCamera || vf.name;
+                if (!camName) continue;
+                seenCams[camName] = true;
+
+                var sourceLabel;
+                if (vf.slpFilename) {
+                    sourceLabel = vf.slpFilename;
+                } else {
+                    sourceLabel = (vf.file && vf.file.name) ? vf.file.name : (vf.name || camName);
+                }
+
+                var stats = _computeCameraStats(sess, camName);
+                entries.push({
+                    camName: camName,
+                    sourceLabel: sourceLabel,
+                    videoFile: vf,
+                    labeledFrames: stats.labeledFrames,
+                    instanceCount: stats.instanceCount,
+                    triangulatedFrames: stats.triangulatedFrames,
+                    hasEdits: stats.hasEdits,
+                });
+            }
+
+            // Lazy fallback — sessions whose videos aren't loaded still have
+            // session.cameras. Build a stub videoFileInfo so the export path
+            // has the camera name; width/height/frameCount default to 0.
+            var sessCams = sess.cameras || [];
+            for (var ci = 0; ci < sessCams.length; ci++) {
+                var cn = sessCams[ci].name;
+                if (seenCams[cn]) continue;
+                var stats2 = _computeCameraStats(sess, cn);
+                entries.push({
+                    camName: cn,
+                    sourceLabel: cn,
+                    videoFile: { name: cn, videoWidth: 0, videoHeight: 0, frameCount: 0 },
+                    labeledFrames: stats2.labeledFrames,
+                    instanceCount: stats2.instanceCount,
+                    triangulatedFrames: stats2.triangulatedFrames,
+                    hasEdits: stats2.hasEdits,
+                });
+            }
+
+            return entries;
+        }
+
         function showSlpExportModal() {
+            if (!state.sessions || state.sessions.length === 0) {
+                setStatus('No sessions to export', 'warning');
+                return;
+            }
+
             var overlay = document.createElement('div');
             overlay.className = 'multi-frame-modal-overlay';
 
             var modal = document.createElement('div');
-            modal.className = 'multi-frame-modal slp-export-modal';
+            modal.className = 'multi-frame-modal slp-export-modal slp-export-multi';
 
-            // Build table rows from active session's videoFiles only
-            var slpEntries = [];
-            for (var i = 0; i < state.videoFiles.length; i++) {
-                var vf = state.videoFiles[i];
-                if (!vf.assignedCamera) continue;
-                if (vf.sessionIdx !== state.activeSessionIdx) continue;
-                var camName = vf.assignedCamera || vf.name;
-                var sourceLabel;
-                var outputName;
+            // selectedBySession: Map<sessionIdx, { camName, videoFile, entry }>
+            var selectedBySession = new Map();
+            var activeSessIdx = (typeof state.activeSessionIdx === 'number' && state.activeSessionIdx >= 0)
+                ? state.activeSessionIdx : 0;
+            var currentSessIdx = activeSessIdx;
 
-                if (vf.slpFilename) {
-                    sourceLabel = vf.slpFilename;
-                    var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
-                    var versionMatch = stem.match(/_(?:3D_)?v(\d+)$/);
-                    var nextVersion = versionMatch ? parseInt(versionMatch[1]) + 1 : 1;
-                    var baseStem = versionMatch ? stem.replace(/_(?:3D_)?v\d+$/, '') : stem;
-                    outputName = baseStem + '_v' + nextVersion + '.slp';
-                } else {
-                    // Video-only entry: derive from video/camera name
-                    var videoName = (vf.file && vf.file.name) ? vf.file.name : (vf.name || 'video');
-                    sourceLabel = videoName;
-                    var videoStem = videoName.replace(/\.[^.]+$/, '');
-                    outputName = videoStem + '_v1.slp';
-                }
-
-                // Check if this camera has edits (UserInstances or ReprojectedInstances)
-                var hasEdits = false;
-                for (var [frameIdx, fg] of state.session.frameGroups) {
-                    var camInstances = fg.instances.get(camName);
-                    if (camInstances) {
-                        for (var ci = 0; ci < camInstances.length; ci++) {
-                            if (camInstances[ci].type === 'user') { hasEdits = true; break; }
-                        }
-                    }
-                    if (hasEdits) break;
-                    // Check reprojected instances
-                    var frameGroupsList = state.session.instanceGroups.get(frameIdx) || [];
-                    for (var gi = 0; gi < frameGroupsList.length; gi++) {
-                        if (frameGroupsList[gi].getReprojectedInstance(camName)) {
-                            hasEdits = true; break;
-                        }
-                    }
-                    if (hasEdits) break;
-                }
-
-                // Compute per-camera stats (matching bottom status bar logic)
-                var labeledFrames = 0;
-                var instanceCount = 0;
-                var triangulatedFrames = 0;
-                for (var [sfIdx, sfg] of state.session.frameGroups) {
-                    var sfHasLabeled = false;
-                    var sfCamInsts = sfg.instances.get(camName) || [];
-                    for (var sci = 0; sci < sfCamInsts.length; sci++) {
-                        var sft = sfCamInsts[sci].type || 'user';
-                        if (sft === 'user') { sfHasLabeled = true; instanceCount++; }
-                        else if (sft === 'predicted') { sfHasLabeled = true; }
-                    }
-                    var sfUl = sfg.getUnlinkedInstances(camName);
-                    for (var sui = 0; sui < sfUl.length; sui++) {
-                        if ((sfUl[sui].instance.type || 'user') === 'user') {
-                            sfHasLabeled = true; instanceCount++;
-                        }
-                    }
-                    if (sfHasLabeled) labeledFrames++;
-                    var sfGroups = state.session.instanceGroups.get(sfIdx) || [];
-                    for (var sfgi = 0; sfgi < sfGroups.length; sfgi++) {
-                        if (sfGroups[sfgi].points3d) { triangulatedFrames++; break; }
-                    }
-                }
-
-                slpEntries.push({
-                    camName: camName,
-                    sourceLabel: sourceLabel,
-                    outputName: outputName,
-                    hasEdits: hasEdits,
-                    videoFile: vf,
-                    labeledFrames: labeledFrames,
-                    instanceCount: instanceCount,
-                    triangulatedFrames: triangulatedFrames,
-                });
-            }
-
-            if (slpEntries.length === 0) {
-                setStatus('No video files loaded', 'warning');
-                return;
-            }
-
-            // Build table HTML
-            var tableRows = '';
-            for (var ei = 0; ei < slpEntries.length; ei++) {
-                var entry = slpEntries[ei];
-                var rowClass = entry.hasEdits ? 'slp-export-row slp-has-edits' : 'slp-export-row';
-                tableRows +=
-                    '<tr class="' + rowClass + '" data-idx="' + ei + '">' +
-                    '<td>' + entry.sourceLabel + '</td>' +
-                    '<td>' + entry.outputName + '</td>' +
-                    '<td>' + entry.labeledFrames + '</td>' +
-                    '<td>' + entry.instanceCount + '</td>' +
-                    '<td>' + entry.triangulatedFrames + '</td>' +
+            // Build left-panel session rows
+            var sessionRowsHtml = '';
+            for (var si = 0; si < state.sessions.length; si++) {
+                var sname = state.sessions[si].name || ('Session ' + (si + 1));
+                var rowCls = 'slp-session-row' + (si === activeSessIdx ? ' slp-session-active' : '');
+                sessionRowsHtml +=
+                    '<tr class="' + rowCls + '" data-sess-idx="' + si + '">' +
+                    '<td class="slp-session-name">' + sname + '</td>' +
+                    '<td class="slp-session-selcam" data-sess-idx="' + si + '">—</td>' +
                     '</tr>';
             }
 
             modal.innerHTML =
-                '<h3>Export SLP File' + (state.session && state.session.name ? ' — ' + state.session.name : '') + '</h3>' +
+                '<h3>Export 2D SLP File</h3>' +
+                '<div class="slp-export-multi-body">' +
+                '<div class="slp-export-multi-left">' +
+                '<div class="slp-export-panel-label">Sessions</div>' +
                 '<div class="slp-export-table-container">' +
-                '<table class="data-table slp-export-table">' +
-                '<thead><tr><th>Source</th><th>Output Filename</th><th>Labeled</th><th>Instances</th><th>Triangulated</th></tr></thead>' +
-                '<tbody>' + tableRows + '</tbody>' +
+                '<table class="data-table slp-export-table slp-session-table">' +
+                '<thead><tr><th>Name</th><th>Selected Camera</th></tr></thead>' +
+                '<tbody id="slpSessionTbody">' + sessionRowsHtml + '</tbody>' +
                 '</table>' +
+                '</div>' +
+                '</div>' +
+                '<div class="slp-export-multi-right">' +
+                '<div class="slp-export-panel-label" id="slpCamPanelLabel">Camera Views</div>' +
+                '<div class="slp-export-table-container slp-cam-table-container" id="slpCamTableContainer">' +
+                '<table class="data-table slp-export-table slp-cam-table">' +
+                '<thead><tr><th>Source</th><th>Labeled</th><th>Instances</th><th>Triangulated</th></tr></thead>' +
+                '<tbody id="slpCamTbody"></tbody>' +
+                '</table>' +
+                '</div>' +
+                '</div>' +
                 '</div>' +
                 '<div class="slp-export-options">' +
                 '<label><input type="checkbox" id="slpExportReproj"> Save Reprojections</label>' +
@@ -6787,8 +6819,9 @@
                 '</div>' +
                 '<div class="slp-export-filename-row">' +
                 '<label>Output Filename</label>' +
-                '<input type="text" id="slpExportFilename" value="" placeholder="Select a source above">' +
+                '<input type="text" id="slpExportFilename" value="view.slp">' +
                 '</div>' +
+                '<div class="slp-export-error" id="slpExportError"></div>' +
                 '<div class="modal-actions">' +
                 '<button id="slpExportCancel">Cancel</button>' +
                 '<button class="primary" id="slpExportBtn" disabled>Export</button>' +
@@ -6797,11 +6830,136 @@
             overlay.appendChild(modal);
             document.body.appendChild(overlay);
 
-            // State
-            var selectedIdx = -1;
+            var camTbody = document.getElementById('slpCamTbody');
+            var camPanelLabel = document.getElementById('slpCamPanelLabel');
+            var camTableContainer = document.getElementById('slpCamTableContainer');
             var filenameInput = document.getElementById('slpExportFilename');
+            var exportBtn = document.getElementById('slpExportBtn');
+            var errorDiv = document.getElementById('slpExportError');
 
-            // Reprojection toggle switch
+            function clearError() { errorDiv.textContent = ''; }
+            function showError(msg) { errorDiv.textContent = msg; }
+
+            // Pin right-panel height to the maximum camera count across all
+            // sessions so switching sessions in the left panel doesn't make
+            // the right panel resize. Cap at MAX_VISIBLE_ROWS and enable
+            // vertical scroll above that.
+            var MAX_VISIBLE_ROWS = 10;
+            var ROW_HEIGHT = 24;
+            var HEADER_HEIGHT = 24;
+            function _countCamerasForSession(sessIdx) {
+                var sess = state.sessions[sessIdx];
+                if (!sess) return 0;
+                var seen = {};
+                for (var vi = 0; vi < state.videoFiles.length; vi++) {
+                    var vf = state.videoFiles[vi];
+                    var vsi = (typeof vf.sessionIdx === 'number') ? vf.sessionIdx : 0;
+                    if (vsi !== sessIdx) continue;
+                    var cn = vf.assignedCamera || vf.name;
+                    if (cn) seen[cn] = true;
+                }
+                var sessCams = sess.cameras || [];
+                for (var ci = 0; ci < sessCams.length; ci++) seen[sessCams[ci].name] = true;
+                return Object.keys(seen).length;
+            }
+            var maxCams = 0;
+            for (var mi = 0; mi < state.sessions.length; mi++) {
+                var n = _countCamerasForSession(mi);
+                if (n > maxCams) maxCams = n;
+            }
+            var visibleRows = Math.min(Math.max(maxCams, 1), MAX_VISIBLE_ROWS);
+            var panelHeight = HEADER_HEIGHT + visibleRows * ROW_HEIGHT;
+            camTableContainer.style.minHeight = panelHeight + 'px';
+            camTableContainer.style.maxHeight = panelHeight + 'px';
+
+            // Cache per-session entries so we don't recompute on each click
+            var sessionEntriesCache = new Map();
+            function getSessionEntries(idx) {
+                if (!sessionEntriesCache.has(idx)) {
+                    sessionEntriesCache.set(idx, _buildCameraEntriesForSession(idx));
+                }
+                return sessionEntriesCache.get(idx);
+            }
+
+            function refreshExportBtnState() {
+                exportBtn.disabled = selectedBySession.size === 0;
+            }
+
+            function refreshSelCamCell(sessIdx) {
+                var cell = modal.querySelector('.slp-session-selcam[data-sess-idx="' + sessIdx + '"]');
+                if (!cell) return;
+                var sel = selectedBySession.get(sessIdx);
+                cell.textContent = sel ? sel.camName : '—';
+            }
+
+            function renderCamTableFor(sessIdx) {
+                var sess = state.sessions[sessIdx];
+                camPanelLabel.textContent = 'Camera Views: ' + (sess.name || ('Session ' + (sessIdx + 1)));
+
+                var entries = getSessionEntries(sessIdx);
+                if (entries.length === 0) {
+                    camTbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-muted);padding:12px;text-align:center;">No cameras in this session</td></tr>';
+                    return;
+                }
+
+                var html = '';
+                var sel = selectedBySession.get(sessIdx);
+                for (var ei = 0; ei < entries.length; ei++) {
+                    var e = entries[ei];
+                    var isSel = sel && sel.camName === e.camName;
+                    var rowCls = 'slp-export-row slp-cam-row';
+                    if (e.hasEdits) rowCls += ' slp-has-edits';
+                    if (isSel) rowCls += ' slp-export-selected';
+                    html +=
+                        '<tr class="' + rowCls + '" data-idx="' + ei + '">' +
+                        '<td>' + e.sourceLabel + '</td>' +
+                        '<td>' + e.labeledFrames + '</td>' +
+                        '<td>' + e.instanceCount + '</td>' +
+                        '<td>' + e.triangulatedFrames + '</td>' +
+                        '</tr>';
+                }
+                camTbody.innerHTML = html;
+
+                var camRows = camTbody.querySelectorAll('.slp-cam-row');
+                camRows.forEach(function (row) {
+                    row.addEventListener('click', function () {
+                        var ci = parseInt(row.getAttribute('data-idx'));
+                        var entry = entries[ci];
+                        var existing = selectedBySession.get(sessIdx);
+                        if (existing && existing.camName === entry.camName) {
+                            selectedBySession.delete(sessIdx);
+                        } else {
+                            selectedBySession.set(sessIdx, {
+                                camName: entry.camName,
+                                videoFile: entry.videoFile,
+                                entry: entry,
+                            });
+                        }
+                        // Toggle row visuals
+                        camRows.forEach(function (r) { r.classList.remove('slp-export-selected'); });
+                        if (selectedBySession.has(sessIdx)) row.classList.add('slp-export-selected');
+                        refreshSelCamCell(sessIdx);
+                        refreshExportBtnState();
+                        clearError();
+                    });
+                });
+            }
+
+            // Session row click
+            var sessionRows = modal.querySelectorAll('.slp-session-row');
+            sessionRows.forEach(function (row) {
+                row.addEventListener('click', function () {
+                    sessionRows.forEach(function (r) { r.classList.remove('slp-session-active'); });
+                    row.classList.add('slp-session-active');
+                    currentSessIdx = parseInt(row.getAttribute('data-sess-idx'));
+                    renderCamTableFor(currentSessIdx);
+                });
+            });
+
+            // Initial render: active session's cameras
+            renderCamTableFor(currentSessIdx);
+
+            // Reprojection toggle
             var reprojCheckbox = document.getElementById('slpExportReproj');
             var reprojToggle = document.getElementById('slpReprojToggle');
             var toggleOptions = reprojToggle.querySelectorAll('.slp-toggle-option');
@@ -6825,52 +6983,49 @@
                 });
             });
 
-            // Row click selection
-            var rows = modal.querySelectorAll('.slp-export-row');
-            rows.forEach(function (row) {
-                row.addEventListener('click', function () {
-                    rows.forEach(function (r) { r.classList.remove('slp-export-selected'); });
-                    row.classList.add('slp-export-selected');
-                    selectedIdx = parseInt(row.getAttribute('data-idx'));
-                    filenameInput.value = slpEntries[selectedIdx].outputName;
-                    document.getElementById('slpExportBtn').disabled = false;
-                });
-            });
-
             // Cancel
             document.getElementById('slpExportCancel').addEventListener('click', function () {
                 overlay.remove();
             });
 
             // Export
-            document.getElementById('slpExportBtn').addEventListener('click', async function () {
-                if (selectedIdx < 0) return;
-                var entry = slpEntries[selectedIdx];
-                var outputFilename = filenameInput.value.trim() || entry.outputName;
-                var saveReproj = document.getElementById('slpExportReproj').checked;
-                var reprojToggle = document.querySelector('#slpReprojToggle .slp-toggle-active');
-                // null = don't save reprojections, true = save as UserInstance, false = save as PredictedInstance
-                var reprojAsUser = saveReproj ? (reprojToggle && reprojToggle.getAttribute('data-value') === 'user') : null;
+            exportBtn.addEventListener('click', async function () {
+                if (selectedBySession.size === 0) return;
 
-                document.getElementById('slpExportBtn').disabled = true;
-                document.getElementById('slpExportBtn').textContent = 'Exporting...';
+                var saveReproj = reprojCheckbox.checked;
+                var activeToggle = document.querySelector('#slpReprojToggle .slp-toggle-active');
+                var reprojAsUser = saveReproj ? (activeToggle && activeToggle.getAttribute('data-value') === 'user') : null;
+
+                var outputFilename = filenameInput.value.trim() || 'view.slp';
+                if (!outputFilename.endsWith('.slp')) outputFilename += '.slp';
+
+                // Build selections array in session order
+                var selections = [];
+                var sortedKeys = Array.from(selectedBySession.keys()).sort(function (a, b) { return a - b; });
+                for (var k = 0; k < sortedKeys.length; k++) {
+                    var sIdx = sortedKeys[k];
+                    var sel = selectedBySession.get(sIdx);
+                    selections.push({
+                        session: state.sessions[sIdx],
+                        cameraName: sel.camName,
+                        videoFileInfo: sel.videoFile,
+                    });
+                }
+
+                exportBtn.disabled = true;
+                exportBtn.textContent = 'Exporting...';
+                clearError();
 
                 try {
-                    var slpFilename = outputFilename.replace(/\.slp\.json$/, '.slp');
-                    if (!slpFilename.endsWith('.slp')) slpFilename += '.slp';
-
-                    // Client-side SLP export via sleap-io.js
-                    var slpBlob = await exportSlpClientSide(
-                        state.session, entry.camName, reprojAsUser, entry.videoFile, slpFilename
-                    );
-                    downloadBlob(slpBlob, slpFilename);
-                    setStatus('Exported ' + slpFilename, 'success');
+                    var slpBlob = await exportSlpMultiSession(selections, reprojAsUser);
+                    downloadBlob(slpBlob, outputFilename);
+                    setStatus('Exported ' + outputFilename, 'success');
                     overlay.remove();
                 } catch (err) {
                     console.error('[slp-export]', err);
-                    setStatus('Export failed: ' + err.message, 'error');
-                    document.getElementById('slpExportBtn').disabled = false;
-                    document.getElementById('slpExportBtn').textContent = 'Export';
+                    showError(err.message || String(err));
+                    exportBtn.disabled = false;
+                    exportBtn.textContent = 'Export';
                 }
             });
         }
