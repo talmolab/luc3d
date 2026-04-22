@@ -772,6 +772,11 @@
     <script src="trackers/registry.js?v=1"></script>
     <script src="trackers/default.js?v=1"></script>
     <script src="tracker.js?v=2"></script>
+    <script src="trackers/dart/bytetrack.js?v=1"></script>
+    <script src="trackers/dart/mincostflow.js?v=1"></script>
+    <script src="trackers/dart/kalman.js?v=1"></script>
+    <script src="trackers/dart/camera-ranking.js?v=1"></script>
+    <script src="trackers/dart/dart.js?v=1"></script>
     <script src="demo-data.js"></script>
     <script src="overlays.js?v=9"></script>
     <script src="interaction.js?v=7"></script>
@@ -16517,6 +16522,26 @@
                         twSetValue(algoId, p.key, sel2.value);
                     });
                     tdValue.appendChild(sel2);
+                    var selOpt = (p.options || []).find(function (o) { return o.value === current; });
+                    if (selOpt && selOpt.tooltip) {
+                        var info = document.createElement('span');
+                        info.className = 'tw-info-icon';
+                        info.textContent = ' (i)';
+                        info.title = selOpt.tooltip;
+                        tdValue.appendChild(info);
+                    }
+                    sel2.addEventListener('change', function () {
+                        var o2 = (p.options || []).find(function (o) { return o.value === sel2.value; });
+                        var existing = tdValue.querySelector('.tw-info-icon');
+                        if (existing) existing.remove();
+                        if (o2 && o2.tooltip) {
+                            var nf = document.createElement('span');
+                            nf.className = 'tw-info-icon';
+                            nf.textContent = ' (i)';
+                            nf.title = o2.tooltip;
+                            tdValue.appendChild(nf);
+                        }
+                    });
                 } else {
                     var txt = document.createElement('input');
                     txt.type = 'text';

@@ -1051,6 +1051,12 @@ body {
   font-size: 11px;
   padding-bottom: 10px;
 }
+.tracking-wizard-modal .tw-info-icon {
+  color: var(--text-muted);
+  cursor: help;
+  font-size: 10px;
+  margin-left: 4px;
+}
 .tracking-wizard-modal .tw-reset-btn {
   padding: 3px 10px;
   font-size: 11px;
