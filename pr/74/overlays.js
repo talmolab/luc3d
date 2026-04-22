@@ -109,14 +109,18 @@ function getGroupColor(group, session, useIdentity, frameIdx, cameraName) {
 
 /**
  * Get color for an instance using the track→identity map.
- * Used for unlinked/ungrouped predictions.
+ * Used for unlinked/ungrouped predictions. Trackless instances
+ * (trackIdx == null, e.g., reprojections imported as UserInstance with
+ * track=null from SLEAP 2D exports) render with UNGROUPED_USER_COLOR so
+ * they're visually distinct from track-0 instances.
  */
 function getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) {
     if (useIdentity && session && instance.trackIdx != null) {
         var identity = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
         if (identity && identity.color) return identity.color;
     }
-    return getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
+    if (instance.trackIdx == null) return UNGROUPED_USER_COLOR;
+    return getTrackColor(instance.trackIdx);
 }
 
 function getLineDashPattern(style) {
@@ -367,7 +371,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
     const points = instance.points;
     if (!points || points.length === 0) return;
 
-    const color = options.color || getTrackColor(instance.trackIdx != null ? instance.trackIdx : 0);
+    const color = options.color || (instance.trackIdx != null ? getTrackColor(instance.trackIdx) : UNGROUPED_USER_COLOR);
     const edgeColor = options.edgeColor || color;
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
     const baseLabelSize = options.labelSize != null ? options.labelSize : 11;

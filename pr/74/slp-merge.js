@@ -105,8 +105,20 @@ function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName, camer
 
         for (var ii = 0; ii < fd.instances.length; ii++) {
             var instData = fd.instances[ii];
-            var oldTrackIdx = instData.trackIdx >= 0 ? instData.trackIdx : 0;
-            var newTrackIdx = trackRemap.has(oldTrackIdx) ? trackRemap.get(oldTrackIdx) : oldTrackIdx;
+            // Trackless user instances (track=-1 in SLP, e.g., reprojections
+            // exported as UserInstance from LUCID 2D export) keep null trackIdx
+            // so they don't collide with existing user instances on track 0.
+            // Predicted instances keep the coerce-to-0 behavior — user+predicted
+            // on the same track is allowed.
+            var instType = instData.type || 'predicted';
+            var newTrackIdx;
+            if (instData.trackIdx != null && instData.trackIdx >= 0) {
+                newTrackIdx = trackRemap.has(instData.trackIdx) ? trackRemap.get(instData.trackIdx) : instData.trackIdx;
+            } else if (instType === 'user') {
+                newTrackIdx = null;
+            } else {
+                newTrackIdx = 0;
+            }
 
             // Reorder points if node ordering differs between incoming and existing skeleton
             var points = instData.points;
@@ -145,6 +157,10 @@ function rebuildInstanceGroupsForFrames(session, frameIndices) {
         var trackInstances = new Map();
         for (var [cn, insts] of fg.instances) {
             for (var i = 0; i < insts.length; i++) {
+                // Trackless user instances skip grouping entirely — grouping
+                // them into bucket 0 would collide with the existing user
+                // instance on track 0 in the same view.
+                if (insts[i].trackIdx == null && (insts[i].type || 'user') === 'user') continue;
                 var tIdx = insts[i].trackIdx != null ? insts[i].trackIdx : 0;
                 if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
                 trackInstances.get(tIdx).push({ camName: cn, instance: insts[i] });
