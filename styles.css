@@ -1053,6 +1053,62 @@ body {
   min-width: 680px;
 }
 
+/* Multi-session (two-panel) SLP export layout */
+.slp-export-multi {
+  min-width: 820px;
+}
+
+.slp-export-multi-body {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.slp-export-multi-left {
+  flex: 0 0 260px;
+  min-width: 0;
+}
+
+.slp-export-multi-right {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.slp-export-panel-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.slp-session-row {
+  cursor: pointer;
+}
+
+.slp-session-row:hover {
+  background: var(--accent-dim);
+}
+
+.slp-session-row.slp-session-active {
+  background: rgba(100, 150, 255, 0.18);
+  outline: 2px solid rgba(100, 150, 255, 0.55);
+}
+
+.slp-session-selcam {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Restore right-align override for cam-view stats columns */
+.slp-cam-table th:nth-child(n+2),
+.slp-cam-table td:nth-child(n+2) {
+  text-align: right;
+  width: 80px;
+  font-variant-numeric: tabular-nums;
+}
+
 .slp-export-table-container {
   max-height: 250px;
   overflow-y: auto;
@@ -1157,6 +1213,17 @@ body {
   color: var(--text-secondary);
   background: var(--bg-tertiary);
   border-radius: 4px;
+}
+
+.slp-export-error {
+  min-height: 18px;
+  margin: 4px 0 6px;
+  font-size: 12px;
+  color: #ef4444;
+}
+
+.slp-export-error:empty {
+  display: none;
 }
 
 .slp-export-note code {
