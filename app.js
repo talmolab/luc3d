@@ -3,6 +3,9 @@
         import { reprojectPoints, computeReprojectionErrors, computeInstanceDistance, triangulateAndReproject, hungarianAlgorithm } from './pose/triangulation.js?v=1';
         import { matchFrameInstances } from './pose/tracker.js?v=1';
         import { REPROJECTION_COLOR, getTrackColor, getGroupColor, drawFrameOverlays } from './ui/overlays.js?v=1';
+        import { InteractionManager, isInteractiveClickTarget } from './ui/interaction.js?v=1';
+        import { Viewport3D } from './ui/viewport3d.js?v=1';
+        import { Timeline } from './ui/timeline.js?v=1';
 
         // Quick diagnostic: verify external scripts loaded
         if (typeof parseSlpH5 !== 'function') console.error('[LOAD] file-io.js did not load! parseSlpH5 is missing.');
@@ -8279,7 +8282,7 @@
                         rdot.style.backgroundColor = REPROJECTION_COLOR;
                         rdot.style.marginRight = '4px';
                         rtdTrack.appendChild(rdot);
-                        var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + gi);
+                        var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + i);
                         rtdTrack.appendChild(document.createTextNode(reprojTrackName));
 
                         const rtdViews = document.createElement('td');

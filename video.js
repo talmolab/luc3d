@@ -1653,6 +1653,8 @@ class VideoController {
 
         container.addEventListener("mousedown", function (e) {
             // Skip ALL zoom logic if the interaction manager is handling a drag
+            // TODO(Pass 3): replace window.__mvguiDragging with explicit
+            // callback/event from InteractionManager once video.js is a module.
             if (window.__mvguiDragging || e._consumedByInteraction) return;
 
             if (e.button === 1) {

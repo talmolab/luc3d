@@ -11,15 +11,16 @@
  * overlay canvases have the same dimensions as the video, so the default
  * coordinate transform is 1:1 unless zoom/pan is applied via CSS transforms.
  *
- * No imports/exports - follows the vibes pattern of global scope scripts
- * loaded via script tags.
+ * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
+
+import { Instance } from '../pose/pose-data.js?v=1';
 
 // ============================================
 // InteractionManager
 // ============================================
 
-class InteractionManager {
+export class InteractionManager {
     /**
      * @param {Object} callbacks - Functions the interaction manager uses to
      *   communicate with the rest of the application.
@@ -1444,6 +1445,8 @@ class InteractionManager {
         }
 
         this.isDragging = true;
+        // TODO(Pass 3): promote __mvguiDragging to a real shared module export
+        // once video.js is converted. video.js currently reads window.__mvguiDragging.
         window.__mvguiDragging = true;
         this.dragInfo = {
             mode: mode,
@@ -2026,7 +2029,7 @@ class InteractionManager {
  * info panel, and a bounded walk keeps us safe from freshly-built fake
  * targets that might have cyclic parentNode pointers in tests.
  */
-function isInteractiveClickTarget(target) {
+export function isInteractiveClickTarget(target) {
     if (!target) return false;
     var INTERACTIVE = { SELECT: 1, OPTION: 1, INPUT: 1, BUTTON: 1, TEXTAREA: 1, LABEL: 1 };
     var node = target;
@@ -2036,8 +2039,4 @@ function isInteractiveClickTarget(target) {
         node = node.parentNode;
     }
     return false;
-}
-
-if (typeof window !== 'undefined') {
-    window.isInteractiveClickTarget = isInteractiveClickTarget;
 }

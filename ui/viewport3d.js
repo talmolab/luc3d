@@ -9,10 +9,9 @@
  *   - three@0.147.0/build/three.min.js          -> THREE global
  *   - three@0.147.0/examples/js/controls/OrbitControls.js -> THREE.OrbitControls
  *
- * Depends on pose-data.js for Camera, Skeleton, InstanceGroup classes.
- * Depends on overlays.js for getTrackColor().
- *
- * All functions/classes are vanilla JS globals -- no imports/exports.
+ * ES module. Exports `Viewport3D`. Caller supplies `cameras`, `skeleton`, and
+ * a `getTrackColor` callback via the options bag — no project-file imports
+ * are needed.
  */
 
 // ============================================
@@ -32,7 +31,7 @@
  *   // ...later:
  *   vp.dispose();
  */
-class Viewport3D {
+export class Viewport3D {
     /**
      * @param {HTMLElement} container - DOM element to mount the 3D canvas into
      * @param {Object} options

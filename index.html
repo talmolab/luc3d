@@ -764,16 +764,13 @@
     <!-- Module scripts (order matters: dependencies first) -->
     <script src="video.js?v=5"></script>
     <script src="demo-data.js"></script>
-    <script src="interaction.js?v=7"></script>
-    <script src="viewport3d.js?v=2"></script>
-    <script src="timeline.js?v=3"></script>
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
 
     <!-- Pass 2 transitional bridge: expose ESM-converted modules on window
-         so remaining classic scripts (demo-data.js, interaction.js,
-         viewport3d.js, timeline.js, file-io.js, slp-merge.js) keep working
-         until they are converted in subsequent steps. Removed in Pass 3. -->
+         so remaining classic scripts (demo-data.js, file-io.js, slp-merge.js)
+         keep working until they are converted in subsequent steps.
+         Removed in Pass 3. -->
     <script type="module">
         import * as __PoseData from './pose/pose-data.js?v=1';
         import * as __Triangulation from './pose/triangulation.js?v=1';
@@ -800,7 +797,7 @@
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
 
-    <script type="module" src="app.js?v=3"></script>
+    <script type="module" src="app.js?v=5"></script>
 </body>
 
 </html>

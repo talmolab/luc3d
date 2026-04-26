@@ -5,18 +5,16 @@
  * a current-frame indicator.  Supports click-to-seek, drag-to-scrub,
  * shift-drag range selection, wheel zoom, and middle-click panning.
  *
- * Depends on:
- *   - getTrackColor(trackIdx)  from overlays.js
- *   - Session / FrameGroup / Instance  from pose-data.js
- *
- * All identifiers live in the global scope (no imports/exports).
+ * ES module. Exports `Timeline`.
  */
+
+import { getTrackColor } from './overlays.js';
 
 // ============================================================================
 // Timeline class
 // ============================================================================
 
-class Timeline {
+export class Timeline {
 
     // -----------------------------------------------------------------------
     // Construction
@@ -741,7 +739,7 @@ class Timeline {
                 if (!segments || segments.length === 0) continue;
 
                 var trackName = session.tracks[t3] || ('track_' + t3);
-                var color = typeof getTrackColor === 'function' ? getTrackColor(t3) : '#667eea';
+                var color = getTrackColor(t3);
 
                 this._trackSegments.push({
                     trackIdx: t3,
