@@ -570,6 +570,50 @@ class Session {
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */
         this.trackOccupancy = null;
+        /**
+         * Tracking algorithm variables, populated at runtime by tracker
+         * algorithms (see trackers/registry.js for the writer contract).
+         * Plain-data shape — no methods attached, safe for structured
+         * clone and JSON.
+         *
+         *   schema: { [key]: { label, yMin?, yMax? } }
+         *   data:   { [camName]: { [key]: Array<number|null> } } indexed by frameIdx
+         *
+         * The Timeline's `Track Var` view reads from this to draw
+         * per-camera line graphs. If `data` is empty the view shows
+         * "No tracker variable data available for this session."
+         */
+        this.trackerVariables = { schema: {}, data: {} };
+    }
+
+    /**
+     * Declare (or merge metadata for) a tracker variable key.
+     * Called by algorithm implementations from within their fn().
+     * @param {string} key
+     * @param {{label?:string, yMin?:number, yMax?:number}} [meta]
+     */
+    declareTrackerVariable(key, meta) {
+        if (!this.trackerVariables) this.trackerVariables = { schema: {}, data: {} };
+        var schema = this.trackerVariables.schema || (this.trackerVariables.schema = {});
+        schema[key] = Object.assign(schema[key] || {}, meta || {});
+    }
+
+    /**
+     * Record a per-camera, per-frame tracker variable value.
+     * Lazy-initializes nested containers. Safe to call with
+     * non-existent camera/key.
+     * @param {string} cameraName
+     * @param {string} key
+     * @param {number} frameIdx
+     * @param {number} value
+     */
+    setTrackerVariable(cameraName, key, frameIdx, value) {
+        if (!this.trackerVariables) this.trackerVariables = { schema: {}, data: {} };
+        var data = this.trackerVariables.data || (this.trackerVariables.data = {});
+        if (!data[cameraName]) data[cameraName] = {};
+        var byKey = data[cameraName];
+        if (!byKey[key]) byKey[key] = [];
+        byKey[key][frameIdx] = value;
     }
 
     addIdentity(name, color) {

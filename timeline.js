@@ -70,8 +70,8 @@ class Timeline {
         this._trackNames = [];
 
         /**
-         * Display mode: 'tracks', 'identities', or 'both'
-         * Controls what the timeline bars represent.
+         * Display mode: 'tracks', 'identities', 'both', 'reprojs', or 'track-var'.
+         * The latter two replace track bars with a line graph.
          */
         this._displayMode = 'tracks';
 
@@ -84,6 +84,31 @@ class Timeline {
 
         /** Tooltip state */
         this._tooltip = { visible: false, x: 0, y: 0, text: '' };
+
+        // --- Graph-view state (reprojs / track-var) ---
+
+        /**
+         * Lazy reader for reprojection data. Set via setReprojDataSource(fn).
+         * fn() returns a Map<frameIdx, Array<{errors}>> (i.e. state.triangulationResults).
+         * Using a callback avoids coupling Timeline to a specific Map reference
+         * that gets swapped on session changes.
+         * @type {Function|null}
+         */
+        this._reprojDataSource = null;
+
+        /** Cached Reprojs series: Map<frameIdx, meanError>. null = dirty */
+        this._reprojSeries = null;
+        this._reprojMin = 0;
+        this._reprojMax = 0;
+
+        /** Cached Track Var series: { [camName]: Array<number|null> }. null = dirty */
+        this._trackVarSeries = null;
+        this._trackVarMin = 0;
+        this._trackVarMax = 0;
+        this._trackVarEmpty = true;
+
+        /** Currently plotted Track Var key (first declared by default). */
+        this._trackVarKey = null;
 
         // --- Layout constants ------------------------------------------------
 
@@ -142,6 +167,19 @@ class Timeline {
 
         /** @const {number} Min thumb width (px) */
         this.SCROLLBAR_THUMB_MIN = 20;
+
+        // --- Graph-view constants ---
+
+        /** @const Natural height of the graph band in graph view modes (px) */
+        this.GRAPH_AREA_HEIGHT = 140;
+        /** @const Degenerate-height threshold below which graph is skipped (px) */
+        this.MIN_GRAPH_HEIGHT = 30;
+        /** @const Warm amber — distinct from REPROJECTION_COLOR red reserved for reprojected instances */
+        this.REPROJ_LINE_COLOR = '#f5a623';
+        /** @const Fraction of y-range to pad above max and below min so the line never touches edges */
+        this.GRAPH_Y_PAD_FRAC = 0.08;
+        /** @const Alpha used for annotation-context bars when drawn in graph mode */
+        this.GRAPH_ANNOTATION_ALPHA = 0.2;
 
         // --- Create canvas ---------------------------------------------------
 
@@ -282,6 +320,11 @@ class Timeline {
      * @param {Session} session - The session (has .tracks, .frameGroups)
      */
     setData(session) {
+        // Invalidate graph caches on every setData call (including null)
+        // so stale data from a previous session never lingers.
+        this.invalidateReprojCache();
+        this.invalidateTrackVarCache();
+
         this._session = session;
         if (!session) {
             this._trackSegments = [];
@@ -365,6 +408,16 @@ class Timeline {
      * a small gap below the lowest track row.
      */
     getPreferredHeight() {
+        // Graph-view modes use a fixed natural height since track-row
+        // geometry doesn't apply.
+        if (this._isGraphMode()) {
+            return this.TOP_PADDING
+                + this.GRAPH_AREA_HEIGHT
+                + 6
+                + this.MARKER_AREA_HEIGHT
+                + this.LABEL_AREA_HEIGHT
+                + 8;
+        }
         var numRows = this._trackSegments.length;
         var numViewGaps = 0;
         var prevCam = null;
@@ -409,11 +462,14 @@ class Timeline {
             showLabels: false,
             showMarkers: false,
             showTracks: false,
+            showGraph: false,
             labelAreaTop: H,
             markerAreaTop: H,
             markerAreaBottom: H,
             trackAreaTop: this.TOP_PADDING,
             trackAreaBottom: this.TOP_PADDING,
+            graphAreaTop: this.TOP_PADDING,
+            graphAreaBottom: this.TOP_PADDING,
             numVisibleTracks: 0,
         };
         if (H <= 0) return layout;
@@ -449,7 +505,7 @@ class Timeline {
 
         // Tracks only render if the entire natural track block fits above
         // the marker area with TOP_PADDING above and a small gap below.
-        if (numTracks > 0 && layout.showMarkers) {
+        if (numTracks > 0 && layout.showMarkers && !this._isGraphMode()) {
             var trackCeiling = layout.markerAreaTop - 4; // small gap before markers
             var availableForTracks = trackCeiling - this.TOP_PADDING;
             if (availableForTracks >= naturalTrackH) {
@@ -459,7 +515,25 @@ class Timeline {
                 layout.numVisibleTracks = numTracks;
             }
         }
+
+        // Graph view branch — fills the band that tracks would occupy,
+        // using whatever vertical space is available (not a fixed 140 px),
+        // so tall containers aren't wasted.
+        if (this._isGraphMode() && layout.showMarkers) {
+            var graphTop = this.TOP_PADDING;
+            var graphBottom = layout.markerAreaTop - 4;
+            if ((graphBottom - graphTop) >= this.MIN_GRAPH_HEIGHT) {
+                layout.showGraph = true;
+                layout.graphAreaTop = graphTop;
+                layout.graphAreaBottom = graphBottom;
+            }
+        }
         return layout;
+    }
+
+    /** @private */
+    _isGraphMode() {
+        return this._displayMode === 'reprojs' || this._displayMode === 'track-var';
     }
 
     /**
@@ -505,6 +579,30 @@ class Timeline {
                 ctx.beginPath();
                 ctx.moveTo(this.LEFT_MARGIN, separatorY);
                 ctx.lineTo(W - this.RIGHT_PADDING, separatorY);
+                ctx.stroke();
+            }
+        }
+
+        // --- Graph view (reprojs / track-var) ---
+        if (layout.showGraph) {
+            // Preserve annotation context (user-frame + modified-frame bars)
+            // at reduced alpha so users can still see which frames were
+            // edited while viewing the graph.
+            var prevAlpha = ctx.globalAlpha;
+            ctx.globalAlpha = this.GRAPH_ANNOTATION_ALPHA;
+            this._drawGroupedUserFrameBars(ctx, 0, layout.graphAreaBottom, W);
+            this._drawModifiedFrameLines(ctx, 0, layout.graphAreaBottom, W);
+            ctx.globalAlpha = prevAlpha;
+
+            this._drawGraphView(ctx, layout, W);
+
+            if (layout.showMarkers) {
+                const sepY = layout.graphAreaBottom + 4;
+                ctx.strokeStyle = this.SEPARATOR_COLOR;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(this.LEFT_MARGIN, sepY);
+                ctx.lineTo(W - this.RIGHT_PADDING, sepY);
                 ctx.stroke();
             }
         }
@@ -825,6 +923,11 @@ class Timeline {
      * @private
      */
     _rebuildSegments(session) {
+        // Graph view modes (reprojs, track-var) don't use track segments.
+        // Leaving _trackSegments untouched is intentional — it survives
+        // across a graph-mode interlude so returning to tracks/ids/both
+        // restores the previous view without a redundant rebuild.
+        if (this._isGraphMode()) return;
         if (this._displayMode === 'identities') {
             this._buildIdentitySegments(session);
         } else if (this._displayMode === 'both') {
@@ -928,14 +1031,70 @@ class Timeline {
 
     /**
      * Set the timeline display mode and refresh.
-     * @param {'tracks'|'identities'|'both'} mode
+     * Valid values: 'tracks' | 'identities' | 'both' | 'reprojs' | 'track-var'.
+     * The last two replace track rows with a line graph.
      */
     setDisplayMode(mode) {
+        var wasGraph = this._isGraphMode();
         this._displayMode = mode;
+        var isGraph = this._isGraphMode();
+
         if (this._session) {
-            this._rebuildSegments(this._session);
-            this.resize();  // resize recalculates canvas height for new row count + redraws
+            if (isGraph) {
+                // Build the correct graph-view series. This handles both
+                // tracks→graph and graph→graph (reprojs ↔ track-var) entries.
+                this._buildGraphData(this._session);
+            } else if (wasGraph) {
+                // Leaving graph mode — restore the track-based view.
+                this._rebuildSegments(this._session);
+            } else {
+                this._rebuildSegments(this._session);
+            }
+            // Ensure the container has enough vertical room for whichever
+            // mode we just entered (grow-only; user can shrink via resize
+            // handle if desired).
+            this._growContainerToFit();
+            this.resize();
         }
+    }
+
+    /**
+     * Set (or replace) the Reprojs data-source callback.
+     * The callback returns the current Map<frameIdx, Array<frameResults>>
+     * — typically state.triangulationResults from the host page.
+     * Invalidates the cache so the next redraw rebuilds the series.
+     * @param {Function|null} fn
+     */
+    setReprojDataSource(fn) {
+        this._reprojDataSource = (typeof fn === 'function') ? fn : null;
+        this.invalidateReprojCache();
+        if (this._displayMode === 'reprojs') {
+            this._buildGraphData(this._session);
+            this.redraw();
+        }
+    }
+
+    /**
+     * Pick which tracker-variable key to plot in 'track-var' mode.
+     * @param {string|null} key
+     */
+    setTrackVarKey(key) {
+        this._trackVarKey = key || null;
+        this.invalidateTrackVarCache();
+        if (this._displayMode === 'track-var') {
+            this._buildGraphData(this._session);
+            this.redraw();
+        }
+    }
+
+    /** Invalidate the Reprojs cache. O(1) — rebuild happens lazily on next redraw. */
+    invalidateReprojCache() {
+        this._reprojSeries = null;
+    }
+
+    /** Invalidate the Track Var cache. O(1) — rebuild happens lazily on next redraw. */
+    invalidateTrackVarCache() {
+        this._trackVarSeries = null;
     }
 
     /**
@@ -1123,6 +1282,7 @@ class Timeline {
      * @private
      */
     _findSnapFrame(clickX) {
+        if (this._isGraphMode()) return null;  // clicks seek to exact frame in graph views
         if (!this._trackSegments || this._trackSegments.length === 0) return null;
 
         const W = this._cssWidth;
@@ -1870,9 +2030,486 @@ class Timeline {
     refreshTracks(session) {
         if (!session) return;
         this._session = session;
+        // Belt-and-suspenders: any mutation that warrants a track refresh
+        // may also affect graph data. Explicit invalidation sites still
+        // fire independently; this is a safety net.
+        this.invalidateReprojCache();
+        this.invalidateTrackVarCache();
         this._rebuildSegments(session);
         this._growContainerToFit();
         this.resize();
+    }
+
+    // -----------------------------------------------------------------------
+    // Graph view (reprojs / track-var)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Build the series cache for whichever graph mode is currently active.
+     * Safe to call at any time — individual builders are no-ops if their
+     * cache is fresh or their data source is missing.
+     * @private
+     */
+    _buildGraphData(session) {
+        if (this._displayMode === 'reprojs') {
+            this._buildReprojSeries(session);
+        } else if (this._displayMode === 'track-var') {
+            this._buildTrackVarSeries(session);
+        }
+    }
+
+    /**
+     * Compute mean reprojection error per frame. Reads from the authoritative
+     * source — session.instanceGroups, where group.reprojections is populated
+     * by every triangulation path (the same data the overlay renders). If
+     * available, group.observedPoints supplies the paired 2D observations;
+     * otherwise we fall back to the instance's own .points.
+     *
+     * A secondary source (state.triangulationResults) is consulted via
+     * _reprojDataSource if instanceGroups yields nothing, to cover any
+     * future pipeline that records errors without touching the groups.
+     *
+     * Frames with no valid errors are omitted — gaps, not zeros.
+     * @private
+     */
+    _buildReprojSeries(session) {
+        var series = new Map();
+        var yMin = Infinity, yMax = -Infinity;
+
+        function addFrame(frameIdx, total, count) {
+            if (count <= 0) return;
+            var mean = total / count;
+            series.set(frameIdx, mean);
+            if (mean < yMin) yMin = mean;
+            if (mean > yMax) yMax = mean;
+        }
+
+        // Given a group + cam name, return the reprojected 2D points array
+        // ([[x,y]|null, ...]), consulting both representations the overlay
+        // code also supports: group.reprojections[cam] (dict of arrays) and
+        // group.reprojectedInstances.get(cam).points (Instance wrapper).
+        function getReprojPoints(grp, cam) {
+            if (grp.reprojections && grp.reprojections[cam]) return grp.reprojections[cam];
+            var rInsts = grp.reprojectedInstances;
+            if (rInsts && typeof rInsts.get === 'function') {
+                var rInst = rInsts.get(cam);
+                if (rInst && rInst.points) return rInst.points;
+            }
+            return null;
+        }
+
+        // List of camera names for this group — union across both
+        // reprojection representations.
+        function getReprojCamNames(grp) {
+            var names = {};
+            if (grp.reprojections) {
+                for (var cn in grp.reprojections) {
+                    if (Object.prototype.hasOwnProperty.call(grp.reprojections, cn)) names[cn] = true;
+                }
+            }
+            if (grp.reprojectedInstances && typeof grp.reprojectedInstances.forEach === 'function') {
+                grp.reprojectedInstances.forEach(function (_v, cn) { names[cn] = true; });
+            }
+            return Object.keys(names);
+        }
+
+        // Primary source: session.instanceGroups. Walk every group, union
+        // camera names across both reprojection representations, compute
+        // mean per-keypoint Euclidean error vs. the instance's observed
+        // points. Frames with no errors are omitted.
+        if (session && session.instanceGroups && session.instanceGroups.forEach) {
+            session.instanceGroups.forEach(function (groups, frameIdx) {
+                if (!groups || groups.length === 0) return;
+                var total = 0, count = 0;
+                for (var g = 0; g < groups.length; g++) {
+                    var grp = groups[g];
+                    if (!grp) continue;
+                    var camNames = getReprojCamNames(grp);
+                    if (camNames.length === 0) continue;
+                    for (var ci = 0; ci < camNames.length; ci++) {
+                        var camName = camNames[ci];
+                        var rep = getReprojPoints(grp, camName);
+                        if (!rep) continue;
+                        // Prefer stored observed points; fall back to the
+                        // instance's own .points.
+                        var obs = (grp.observedPoints && grp.observedPoints[camName]) || null;
+                        if (!obs) {
+                            var inst = (typeof grp.getInstance === 'function')
+                                ? grp.getInstance(camName)
+                                : (grp.instances && grp.instances.get ? grp.instances.get(camName) : null);
+                            obs = inst && inst.points;
+                        }
+                        if (!obs) continue;
+                        var n = Math.min(rep.length, obs.length);
+                        for (var k = 0; k < n; k++) {
+                            var rp = rep[k], op = obs[k];
+                            if (!rp || !op) continue;
+                            var dx = rp[0] - op[0];
+                            var dy = rp[1] - op[1];
+                            var e = Math.sqrt(dx * dx + dy * dy);
+                            if (isFinite(e)) { total += e; count++; }
+                        }
+                    }
+                }
+                addFrame(frameIdx, total, count);
+            });
+        }
+
+        // Secondary source: state.triangulationResults via callback. Only
+        // consulted when instanceGroups gave us nothing (e.g. a future
+        // pipeline records errors separately from group.reprojections).
+        if (series.size === 0) {
+            var map = (typeof this._reprojDataSource === 'function') ? this._reprojDataSource() : null;
+            if (map && map.forEach) {
+                map.forEach(function (frameResults, frameIdx) {
+                    if (!frameResults || frameResults.length === 0) return;
+                    var total = 0, count = 0;
+                    for (var r = 0; r < frameResults.length; r++) {
+                        var errs = frameResults[r] && frameResults[r].errors;
+                        if (!errs) continue;
+                        for (var cn in errs) {
+                            if (!Object.prototype.hasOwnProperty.call(errs, cn)) continue;
+                            var arr = errs[cn];
+                            if (!arr) continue;
+                            for (var k2 = 0; k2 < arr.length; k2++) {
+                                var e2 = arr[k2];
+                                if (e2 != null && isFinite(e2)) { total += e2; count++; }
+                            }
+                        }
+                    }
+                    addFrame(frameIdx, total, count);
+                });
+            }
+        }
+
+        if (series.size === 0) {
+            this._reprojSeries = series;
+            this._reprojMin = 0;
+            this._reprojMax = 1;
+            return;
+        }
+        this._reprojSeries = series;
+        this._reprojMin = yMin;
+        this._reprojMax = yMax;
+    }
+
+    /**
+     * Read session.trackerVariables and produce the per-camera arrays for
+     * the currently-selected _trackVarKey. Sets _trackVarEmpty = true if
+     * no key has any data.
+     * @private
+     */
+    _buildTrackVarSeries(session) {
+        this._trackVarEmpty = true;
+        this._trackVarSeries = {};
+        this._trackVarMin = 0;
+        this._trackVarMax = 1;
+
+        var tv = session && session.trackerVariables;
+        if (!tv || !tv.data) return;
+
+        // Enumerate all (camName, key) pairs that actually have any data.
+        var keysWithData = {};
+        var cams = Object.keys(tv.data);
+        for (var ci = 0; ci < cams.length; ci++) {
+            var byKey = tv.data[cams[ci]] || {};
+            var keys = Object.keys(byKey);
+            for (var ki = 0; ki < keys.length; ki++) {
+                var arr = byKey[keys[ki]];
+                if (arr && arr.length > 0) keysWithData[keys[ki]] = true;
+            }
+        }
+        var availableKeys = Object.keys(keysWithData);
+        if (availableKeys.length === 0) return;
+
+        // Pick the active key. Prefer schema declaration order, then
+        // previously-set _trackVarKey, then first available.
+        var schemaKeys = tv.schema ? Object.keys(tv.schema) : [];
+        var key = null;
+        if (this._trackVarKey && keysWithData[this._trackVarKey]) {
+            key = this._trackVarKey;
+        } else {
+            for (var si = 0; si < schemaKeys.length; si++) {
+                if (keysWithData[schemaKeys[si]]) { key = schemaKeys[si]; break; }
+            }
+            if (!key) key = availableKeys[0];
+        }
+        this._trackVarKey = key;
+
+        if (availableKeys.length > 1) {
+            console.info('[Timeline] Multiple tracker variables declared (' +
+                availableKeys.join(', ') + '); showing "' + key +
+                '". Multi-key picker coming in a later release.');
+        }
+
+        // Collect per-camera arrays and compute y-range.
+        var yMin = Infinity, yMax = -Infinity;
+        var anyData = false;
+        for (var ci2 = 0; ci2 < cams.length; ci2++) {
+            var camName = cams[ci2];
+            var arr2 = tv.data[camName] && tv.data[camName][key];
+            if (!arr2 || arr2.length === 0) continue;
+            this._trackVarSeries[camName] = arr2;
+            for (var fi = 0; fi < arr2.length; fi++) {
+                var v = arr2[fi];
+                if (v != null && isFinite(v)) {
+                    anyData = true;
+                    if (v < yMin) yMin = v;
+                    if (v > yMax) yMax = v;
+                }
+            }
+        }
+        if (!anyData) return;
+
+        // Override with schema-declared range if provided.
+        var meta = tv.schema && tv.schema[key];
+        if (meta && typeof meta.yMin === 'number') yMin = meta.yMin;
+        if (meta && typeof meta.yMax === 'number') yMax = meta.yMax;
+
+        this._trackVarMin = yMin;
+        this._trackVarMax = yMax;
+        this._trackVarEmpty = false;
+    }
+
+    /**
+     * Dispatch graph drawing to the active mode's renderer.
+     * @private
+     */
+    _drawGraphView(ctx, layout, W) {
+        // Lazy-build if cache is dirty.
+        if (this._displayMode === 'reprojs' && this._reprojSeries == null) {
+            this._buildReprojSeries(this._session);
+        } else if (this._displayMode === 'track-var' && this._trackVarSeries == null) {
+            this._buildTrackVarSeries(this._session);
+        }
+
+        var top = layout.graphAreaTop;
+        var bot = layout.graphAreaBottom;
+
+        if (this._displayMode === 'reprojs') {
+            var hasData = this._reprojSeries && this._reprojSeries.size > 0;
+            this._drawYAxis(ctx, top, bot, this._reprojMin, this._reprojMax);
+            if (hasData) {
+                this._drawLineGraph(ctx, top, bot, W,
+                    this._reprojSeries, this._reprojMin, this._reprojMax,
+                    this.REPROJ_LINE_COLOR);
+            } else {
+                this._drawEmptyMessage(ctx, top, bot, W,
+                    'No reprojection data yet.',
+                    'Run Track Frame or Track All to populate.');
+            }
+            return;
+        }
+
+        if (this._displayMode === 'track-var') {
+            if (this._trackVarEmpty) {
+                this._drawEmptyMessage(ctx, top, bot, W,
+                    'No tracker variable data available for this session.',
+                    'Run Track All to compute tracker metrics.');
+                return;
+            }
+            this._drawYAxis(ctx, top, bot, this._trackVarMin, this._trackVarMax);
+
+            // One line per camera using TRACK_COLORS, skipping index 0
+            // (red) since that's reserved for reprojection visuals.
+            var cams = this._session && this._session.cameras
+                ? this._session.cameras.map(function (c) { return c.name; })
+                : Object.keys(this._trackVarSeries);
+            var legendEntries = [];
+            for (var i = 0; i < cams.length; i++) {
+                var camName = cams[i];
+                var arr = this._trackVarSeries[camName];
+                if (!arr || arr.length === 0) continue;
+                var color = (typeof getTrackColor === 'function')
+                    ? getTrackColor(i + 1)
+                    : '#7fb6ff';
+                // Array-backed series adapts to same line-graph interface.
+                this._drawLineGraph(ctx, top, bot, W, arr,
+                    this._trackVarMin, this._trackVarMax, color);
+                legendEntries.push({ label: camName, color: color });
+            }
+            if (legendEntries.length > 0) {
+                this._drawLegend(ctx, top + 4, W - this.RIGHT_PADDING - 6, legendEntries);
+            }
+        }
+    }
+
+    /**
+     * Generic line-graph renderer. `series` can be either a
+     * Map<frameIdx, number> or a dense Array<number|null> indexed by frame.
+     * Breaks the path at null/undefined cells so gaps are not bridged.
+     * Clips to the graph rect to avoid pathological off-screen strokes.
+     * @private
+     */
+    _drawLineGraph(ctx, top, bot, W, series, yMin, yMax, color) {
+        if (!series) return;
+        var range = yMax - yMin;
+        var pad = Math.max(range * this.GRAPH_Y_PAD_FRAC, 1e-9);
+        var yLo = yMin - pad;
+        var yHi = yMax + pad;
+        if (yHi - yLo < 1e-9) { yLo -= 1; yHi += 1; }
+        var usable = bot - top;
+        var self = this;
+        function yFor(v) {
+            var norm = (v - yLo) / (yHi - yLo);
+            return bot - norm * usable;
+        }
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(this.LEFT_MARGIN, top, W - this.LEFT_MARGIN - this.RIGHT_PADDING, bot - top);
+        ctx.clip();
+
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.9;
+        ctx.beginPath();
+
+        // Collect visible (x,y) in order so we can (a) stroke the line and
+        // (b) paint a small dot at every point — so single isolated frames
+        // render as a visible dot even without any neighbor to form a line.
+        var pts = [];
+        var startFrame = Math.max(0, Math.floor(this._scrollFrame));
+        var endFrame = Math.min(this._totalFrames - 1,
+            Math.ceil(this._scrollFrame + this._visibleFrames()));
+
+        if (series instanceof Map) {
+            for (var f = startFrame; f <= endFrame; f++) {
+                var v = series.get(f);
+                if (v == null || !isFinite(v)) { pts.push(null); continue; }
+                pts.push({ x: self._frameToX(f + 0.5), y: yFor(v) });
+            }
+        } else {
+            var len = series.length;
+            var hi = Math.min(endFrame, len - 1);
+            for (var f2 = startFrame; f2 <= hi; f2++) {
+                var v2 = series[f2];
+                if (v2 == null || !isFinite(v2)) { pts.push(null); continue; }
+                pts.push({ x: self._frameToX(f2 + 0.5), y: yFor(v2) });
+            }
+        }
+
+        // Stroke the line (break on gaps).
+        var started = false;
+        for (var i = 0; i < pts.length; i++) {
+            var p = pts[i];
+            if (!p) { started = false; continue; }
+            if (!started) { ctx.moveTo(p.x, p.y); started = true; }
+            else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+
+        // Paint dots on top. Radius 2px.
+        for (var j = 0; j < pts.length; j++) {
+            var q = pts[j];
+            if (!q) continue;
+            ctx.beginPath();
+            ctx.arc(q.x, q.y, 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    /**
+     * Draw y-axis labels (min/mid/max) plus faint horizontal gridlines.
+     * Labels appear in the space currently used by track names.
+     * @private
+     */
+    _drawYAxis(ctx, top, bot, yMin, yMax) {
+        var range = yMax - yMin;
+        var pad = Math.max(range * this.GRAPH_Y_PAD_FRAC, 1e-9);
+        var yLo = yMin - pad;
+        var yHi = yMax + pad;
+        if (yHi - yLo < 1e-9) { yLo -= 1; yHi += 1; }
+
+        ctx.save();
+        ctx.strokeStyle = this.GRID_COLOR_MINOR;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        var xs = this.LEFT_MARGIN;
+        var xe = (this._cssWidth || 0) - this.RIGHT_PADDING;
+        // Top / middle / bottom gridlines.
+        ctx.moveTo(xs, top); ctx.lineTo(xe, top);
+        ctx.moveTo(xs, (top + bot) / 2); ctx.lineTo(xe, (top + bot) / 2);
+        ctx.moveTo(xs, bot); ctx.lineTo(xe, bot);
+        ctx.stroke();
+
+        ctx.fillStyle = this.LABEL_COLOR;
+        ctx.font = '10px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        var lx = this.LEFT_MARGIN - 6;
+        // Format: scientific when very small/large, else 2-decimal.
+        function fmt(v) {
+            var absV = Math.abs(v);
+            if (absV > 0 && (absV < 0.01 || absV >= 10000)) return v.toExponential(1);
+            return v.toFixed(2);
+        }
+        ctx.fillText(fmt(yHi), lx, top + 2);
+        ctx.fillText(fmt((yLo + yHi) / 2), lx, (top + bot) / 2);
+        ctx.fillText(fmt(yLo), lx, bot - 2);
+        ctx.restore();
+    }
+
+    /**
+     * Draw a compact top-right legend for Track Var camera colors.
+     * @private
+     */
+    _drawLegend(ctx, top, rightX, entries) {
+        if (!entries || entries.length === 0) return;
+        ctx.save();
+        ctx.font = '10px system-ui, sans-serif';
+        ctx.textBaseline = 'middle';
+        // Measure widest label first.
+        var maxW = 0;
+        for (var i = 0; i < entries.length; i++) {
+            var w = ctx.measureText(entries[i].label).width;
+            if (w > maxW) maxW = w;
+        }
+        var rowH = 14;
+        var boxW = 10 + 6 + maxW + 8;
+        var boxH = rowH * entries.length + 6;
+        var boxX = rightX - boxW;
+        var boxY = top;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1);
+
+        ctx.textAlign = 'left';
+        for (var j = 0; j < entries.length; j++) {
+            var cy = boxY + 3 + j * rowH + rowH / 2;
+            ctx.fillStyle = entries[j].color;
+            ctx.fillRect(boxX + 6, cy - 4, 8, 8);
+            ctx.fillStyle = this.LABEL_COLOR;
+            ctx.fillText(entries[j].label, boxX + 6 + 10 + 4, cy);
+        }
+        ctx.restore();
+    }
+
+    /**
+     * Centered empty-state text (plus optional italic sub-line) inside the
+     * graph band. Drawn between range-highlight and playhead layers in the
+     * main redraw sequence so the wash doesn't obscure it.
+     * @private
+     */
+    _drawEmptyMessage(ctx, top, bot, W, msg, hint) {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        var cx = this.LEFT_MARGIN + (W - this.LEFT_MARGIN - this.RIGHT_PADDING) / 2;
+        var cy = (top + bot) / 2;
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = '12px system-ui, sans-serif';
+        ctx.fillText(msg, cx, hint ? cy - 10 : cy);
+        if (hint) {
+            ctx.fillStyle = 'rgba(255,255,255,0.4)';
+            ctx.font = 'italic 11px system-ui, sans-serif';
+            ctx.fillText(hint, cx, cy + 10);
+        }
+        ctx.restore();
     }
 
     /**

@@ -122,6 +122,8 @@
                     <div class="menu-dropdown-item" id="menuColorById">
                         <span id="menuColorByIdCheck">☐</span> Color by Identity
                     </div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuTrackingWizard">Tracking Wizard...</div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -696,6 +698,8 @@
                 <button class="timeline-mode-btn active" data-mode="tracks" title="Show tracks">Tracks</button>
                 <button class="timeline-mode-btn" data-mode="identities" title="Show identities">IDs</button>
                 <button class="timeline-mode-btn" data-mode="both" title="Show both">Both</button>
+                <button class="timeline-mode-btn" data-mode="reprojs" title="Reprojection error graph">Reprojs</button>
+                <button class="timeline-mode-btn" data-mode="track-var" title="Tracker variable graph (per camera)">Track Var</button>
             </div>
         </div>
 
@@ -765,12 +769,19 @@
     <script src="video.js?v=5"></script>
     <script src="pose-data.js?v=6"></script>
     <script src="triangulation.js?v=5"></script>
-    <script src="tracker.js"></script>
+    <script src="trackers/registry.js?v=1"></script>
+    <script src="trackers/default.js?v=1"></script>
+    <script src="tracker.js?v=2"></script>
+    <script src="trackers/dart/bytetrack.js?v=1"></script>
+    <script src="trackers/dart/mincostflow.js?v=1"></script>
+    <script src="trackers/dart/kalman.js?v=1"></script>
+    <script src="trackers/dart/camera-ranking.js?v=1"></script>
+    <script src="trackers/dart/dart.js?v=1"></script>
     <script src="demo-data.js"></script>
     <script src="overlays.js?v=9"></script>
     <script src="interaction.js?v=7"></script>
     <script src="viewport3d.js?v=2"></script>
-    <script src="timeline.js?v=3"></script>
+    <script src="timeline.js?v=5"></script>
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
 
@@ -835,6 +846,18 @@
         let interactionManager = null;
         let viewport3d = null;
         let timeline = null;
+
+        /**
+         * Single chokepoint for writing into state.triangulationResults.
+         * Performs the .set and notifies the Timeline so the Reprojs view
+         * can invalidate its cache. Replaces all direct .set(...) calls on
+         * state.triangulationResults so we don't have to track individual
+         * invalidation wire-ups.
+         */
+        function onTriangulationChanged(frameIdx, frameResults) {
+            state.triangulationResults.set(frameIdx, frameResults);
+            if (timeline) timeline.invalidateReprojCache();
+        }
 
         // ============================================
         // Session Accessors
@@ -957,6 +980,7 @@
                 state.session = null;
                 state.sessions = [];
                 state.triangulationResults = new Map();
+                if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
                 paneManager.clearAll();
 
                 // Load videos and create view objects (no grid cells needed - dockview creates them)
@@ -1123,7 +1147,7 @@
                     });
                 }
 
-                state.triangulationResults.set(frameIdx, frameResults);
+                onTriangulationChanged(frameIdx, frameResults);
             }
         }
 
@@ -1186,7 +1210,7 @@
                 }
             }
             if (!replaced) frameResults.push(newEntry);
-            state.triangulationResults.set(frameIdx, frameResults);
+            onTriangulationChanged(frameIdx, frameResults);
 
             // Update 3D viewport
             if (viewport3d) {
@@ -1425,7 +1449,7 @@
                     });
                 }
 
-            state.triangulationResults.set(frameIdx, frameResults);
+            onTriangulationChanged(frameIdx, frameResults);
 
             console.log('[triangulate] viewport3d exists:', !!viewport3d,
                 '| frameResults:', frameResults.length,
@@ -1584,7 +1608,7 @@
                     }
 
                 if (frameResults.length > 0) {
-                    state.triangulationResults.set(frameIdx, frameResults);
+                    onTriangulationChanged(frameIdx, frameResults);
                     totalTriangulated++;
                 }
 
@@ -2149,7 +2173,7 @@
                 }
 
                 if (frameResults.length > 0) {
-                    state.triangulationResults.set(frameIdx, frameResults);
+                    onTriangulationChanged(frameIdx, frameResults);
                     totalTriangulated++;
                 }
 
@@ -2853,7 +2877,7 @@
                 }
                 if (_lazyFrameResults) {
                     var _existing = state.triangulationResults.get(frameIdx) || [];
-                    state.triangulationResults.set(frameIdx, _existing.concat(_lazyFrameResults));
+                    onTriangulationChanged(frameIdx, _existing.concat(_lazyFrameResults));
                 }
             }
 
@@ -3169,7 +3193,7 @@
                         // Remove old predicted group's triangulation results
                         var oldFrameResults = state.triangulationResults.get(frameIdx);
                         if (oldFrameResults) {
-                            state.triangulationResults.set(frameIdx,
+                            onTriangulationChanged(frameIdx,
                                 oldFrameResults.filter(function(r) { return r.group !== predGroup; }));
                         }
 
@@ -3616,16 +3640,34 @@
                 fitTimelineToData();
             }
 
-            // Timeline display mode toggles
+            // Wire the Reprojs graph to the live triangulation-results Map.
+            // A callback is used so Timeline never has to track Map swaps
+            // at session-change time.
+            timeline.setReprojDataSource(function () { return state.triangulationResults; });
+
+            // Timeline display mode toggles + localStorage persistence.
             var modeToggle = document.getElementById('timelineModeToggle');
+            var TL_MODE_KEY = 'lucid.timelineViewMode';
+            var VALID_MODES = { 'tracks': 1, 'identities': 1, 'both': 1, 'reprojs': 1, 'track-var': 1 };
             if (modeToggle) {
                 modeToggle.querySelectorAll('.timeline-mode-btn').forEach(function (btn) {
                     btn.addEventListener('click', function () {
                         modeToggle.querySelectorAll('.timeline-mode-btn').forEach(function (b) { b.classList.remove('active'); });
                         btn.classList.add('active');
-                        if (timeline) timeline.setDisplayMode(btn.getAttribute('data-mode'));
+                        var mode = btn.getAttribute('data-mode');
+                        if (timeline) timeline.setDisplayMode(mode);
+                        try { localStorage.setItem(TL_MODE_KEY, mode); } catch (e) { /* ignore */ }
                     });
                 });
+                // Restore persisted mode on init.
+                var savedMode = null;
+                try { savedMode = localStorage.getItem(TL_MODE_KEY); } catch (e) { /* ignore */ }
+                if (savedMode && VALID_MODES[savedMode] && savedMode !== 'tracks') {
+                    modeToggle.querySelectorAll('.timeline-mode-btn').forEach(function (b) {
+                        b.classList.toggle('active', b.getAttribute('data-mode') === savedMode);
+                    });
+                    if (timeline) timeline.setDisplayMode(savedMode);
+                }
             }
         }
 
@@ -4110,6 +4152,11 @@
                     if (timeline) timeline.refreshTracks(state.session);
                 });
                 sub.appendChild(newItem);
+            });
+
+            document.getElementById('menuTrackingWizard').addEventListener('click', function () {
+                closeMenus();
+                openTrackingWizard();
             });
 
             // Set Env / Clear Env buttons on 3D viewport
@@ -7573,7 +7620,7 @@
                         }
 
                     if (frameResults.length > 0) {
-                        state.triangulationResults.set(f, frameResults);
+                        onTriangulationChanged(f, frameResults);
                         triangulated++;
                     }
                 }
@@ -9437,6 +9484,7 @@
             state.fps = 30;
             state.keypoints3d = null;
             state.triangulationResults = new Map();
+            if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
             state.lastUserPoints = new Map();
             state.viewMode = 'grid';
             state.singleViewIndex = 0;
@@ -10440,6 +10488,7 @@
         function _restoreProjectV3(data) {
             state.sessions = [];
             state.triangulationResults = new Map();
+            if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
             var allCameras = null;
 
             for (var si = 0; si < data.sessions.length; si++) {
@@ -10453,6 +10502,7 @@
                 // Store triangulation results on session object
                 state.session.triangulationResults = state.triangulationResults;
                 state.triangulationResults = new Map();
+                if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
 
                 if (si === 0) allCameras = cameras;
             }
@@ -10605,6 +10655,7 @@
                 state.activeSessionIdx = state.sessions.length - 1;
             }
             state.triangulationResults = new Map();
+            if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
 
             // Rebuild triangulationResults from saved reprojection/error data
             for (var [trFrameIdx, trGroups] of session.instanceGroups) {
@@ -10645,7 +10696,7 @@
                         }
                     }
                 if (trFrameResults.length > 0) {
-                    state.triangulationResults.set(trFrameIdx, trFrameResults);
+                    onTriangulationChanged(trFrameIdx, trFrameResults);
                 }
             }
 
@@ -10808,6 +10859,7 @@
                 state.activeSessionIdx = state.sessions.length - 1;
             }
             state.triangulationResults = new Map();
+            if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
 
             // Fix camera name mismatches
             _resolveInstanceCameraNames(session, cameras, data.videoManifest || []);
@@ -12168,6 +12220,7 @@
             state.activeSessionIdx = state.sessions.length - 1;
             state.session = session;
             state.triangulationResults = new Map();
+            if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
             state.views = [];
 
             if (videoController && state.isPlaying) videoController.stopPlayback();
@@ -12373,6 +12426,7 @@
                 state.activeSessionIdx = state.sessions.length - 1;
                 state.session = session;
                 state.triangulationResults = new Map();
+                if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
 
                 // Load videos — match to cameras by filename
                 showLoading('Loading videos...');
@@ -12508,6 +12562,7 @@
                 state.session = null;
                 state.views = [];
                 state.triangulationResults = new Map();
+                if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
                 if (videoController && state.isPlaying) videoController.stopPlayback();
                 videoController = null;
 
@@ -15903,6 +15958,7 @@
                 state.session = null;
                 state.activeSessionIdx = 0;
                 state.triangulationResults = new Map();
+                if (typeof timeline !== 'undefined' && timeline) timeline.invalidateReprojCache();
                 state.views = [];
                 state.videoFiles = [];
                 state.keypoints3d = null;
@@ -16561,6 +16617,365 @@
         }
 
         // ============================================
+        // Tracking Wizard (algorithm picker + hyperparameter editor)
+        // ============================================
+
+        const TW_SEL_KEY = 'trackerWizardSelectedAlgorithm';
+        const TW_OVR_KEY = 'trackerWizardAlgorithmParams';
+
+        // In-memory overrides: { [algoId]: { [paramKey]: value } } — sparse, overrides-only.
+        let trackerParamOverrides = {};
+        let trackerSelectedAlgoId = null;
+
+        function twHydrate() {
+            if (typeof LucidTrackers === 'undefined') {
+                console.warn('[TrackingWizard] LucidTrackers not loaded; wizard disabled');
+                return;
+            }
+            var storedSel = localStorage.getItem(TW_SEL_KEY);
+            trackerSelectedAlgoId = LucidTrackers.has(storedSel) ? storedSel : LucidTrackers.defaultId();
+
+            try {
+                var raw = localStorage.getItem(TW_OVR_KEY);
+                trackerParamOverrides = raw ? (JSON.parse(raw) || {}) : {};
+                if (typeof trackerParamOverrides !== 'object' || !trackerParamOverrides) {
+                    trackerParamOverrides = {};
+                }
+            } catch (e) {
+                console.warn('[TrackingWizard] corrupt overrides JSON, resetting');
+                localStorage.removeItem(TW_OVR_KEY);
+                trackerParamOverrides = {};
+            }
+
+            // Drop stale algorithm ids and stale keys within each algorithm.
+            Object.keys(trackerParamOverrides).forEach(function (aid) {
+                var desc = LucidTrackers.get(aid);
+                if (!desc) { delete trackerParamOverrides[aid]; return; }
+                var liveKeys = new Set(desc.hyperparameters.map(function (h) { return h.key; }));
+                Object.keys(trackerParamOverrides[aid]).forEach(function (k) {
+                    if (!liveKeys.has(k)) delete trackerParamOverrides[aid][k];
+                });
+                if (Object.keys(trackerParamOverrides[aid]).length === 0) delete trackerParamOverrides[aid];
+            });
+            twSave();
+        }
+
+        function twSave() {
+            try {
+                localStorage.setItem(TW_SEL_KEY, trackerSelectedAlgoId || '');
+                localStorage.setItem(TW_OVR_KEY, JSON.stringify(trackerParamOverrides));
+            } catch (e) {
+                console.warn('[TrackingWizard] persist failed', e);
+            }
+        }
+
+        function twBuildValuesFor(algoId, skipKey) {
+            var desc = LucidTrackers.get(algoId);
+            var out = {};
+            if (!desc) return out;
+            desc.hyperparameters.forEach(function (p) {
+                if (p.key === skipKey || typeof p.computed === 'function') return;
+                var ov = trackerParamOverrides[algoId];
+                out[p.key] = (ov && p.key in ov) ? ov[p.key] : p.default;
+            });
+            return out;
+        }
+
+        function twGetValue(algoId, key) {
+            var desc = LucidTrackers.get(algoId);
+            if (!desc) return undefined;
+            var p = desc.hyperparameters.find(function (h) { return h.key === key; });
+            if (!p) return undefined;
+            if (typeof p.computed === 'function') {
+                try { return p.computed(twBuildValuesFor(algoId, key)); }
+                catch (e) { return p.default; }
+            }
+            var ov = trackerParamOverrides[algoId];
+            return (ov && key in ov) ? ov[key] : p.default;
+        }
+
+        function twSetValue(algoId, key, value) {
+            var desc = LucidTrackers.get(algoId);
+            var p = desc && desc.hyperparameters.find(function (h) { return h.key === key; });
+            if (!p || p.readOnly || typeof p.computed === 'function') return;
+            if (!trackerParamOverrides[algoId]) trackerParamOverrides[algoId] = {};
+            trackerParamOverrides[algoId][key] = value;
+            twSave();
+            window.dispatchEvent(new CustomEvent('tracker-algorithm-change', {
+                detail: window.getSelectedTrackingAlgorithm()
+            }));
+        }
+
+        function twResetAlgo(algoId) {
+            delete trackerParamOverrides[algoId];
+            twSave();
+            window.dispatchEvent(new CustomEvent('tracker-algorithm-change', {
+                detail: window.getSelectedTrackingAlgorithm()
+            }));
+        }
+
+        function twSelectAlgo(algoId) {
+            if (!LucidTrackers.has(algoId)) return;
+            trackerSelectedAlgoId = algoId;
+            twSave();
+            window.dispatchEvent(new CustomEvent('tracker-algorithm-change', {
+                detail: window.getSelectedTrackingAlgorithm()
+            }));
+        }
+
+        // Public hand-off API consumed by resolveSelectedTracker().
+        window.getSelectedTrackingAlgorithm = function () {
+            if (typeof LucidTrackers === 'undefined') return null;
+            var desc = LucidTrackers.get(trackerSelectedAlgoId) || LucidTrackers.get(LucidTrackers.defaultId());
+            if (!desc) return null;
+            var hp = {};
+            desc.hyperparameters.forEach(function (p) {
+                hp[p.key] = twGetValue(desc.id, p.key);
+            });
+            return { id: desc.id, name: desc.name, hyperparameters: hp };
+        };
+
+        twHydrate();
+
+        // --- Modal UI ---
+        var _twOverlay = null;
+        var _twKeyHandler = null;
+        var _twChangeHandler = null;
+
+        function openTrackingWizard() {
+            if (_twOverlay) return;
+            if (typeof LucidTrackers === 'undefined') {
+                setStatus('Tracking Wizard unavailable (registry not loaded)', 'error');
+                return;
+            }
+
+            var overlay = document.createElement('div');
+            overlay.className = 'multi-frame-modal-overlay tracking-wizard-overlay';
+            overlay.innerHTML =
+                '<div class="tracking-wizard-modal" role="dialog" aria-modal="true" aria-labelledby="twTitle">' +
+                  '<h3 id="twTitle">Tracking Wizard</h3>' +
+                  '<p class="tw-subtitle">Select the tracking algorithm used by Track Frame and Track All. Edit hyperparameters on the right. Changes save automatically.</p>' +
+                  '<div class="tw-inflight-notice" id="twInflightNotice" style="display:none;">Tracking run in progress \u2014 edits apply to the next run.</div>' +
+                  '<div class="tw-body">' +
+                    '<div class="tw-list-pane">' +
+                      '<div class="tw-pane-header">Algorithms</div>' +
+                      '<ul class="tw-list" id="twAlgoList" role="listbox" aria-label="Tracking algorithms"></ul>' +
+                    '</div>' +
+                    '<div class="tw-detail-pane">' +
+                      '<div class="tw-pane-header">' +
+                        '<span id="twDetailTitle">\u2014</span>' +
+                        '<button class="tw-reset-btn" id="twResetBtn" title="Reset to registered defaults">Reset</button>' +
+                      '</div>' +
+                      '<div class="tw-detail-desc" id="twDetailDesc"></div>' +
+                      '<div class="tw-detail-table-wrap">' +
+                        '<table class="data-table tw-detail-table">' +
+                          '<thead><tr><th>Parameter</th><th>Value</th><th>Default</th></tr></thead>' +
+                          '<tbody id="twDetailBody"></tbody>' +
+                        '</table>' +
+                      '</div>' +
+                    '</div>' +
+                  '</div>' +
+                  '<div class="modal-actions"><button id="twClose" class="primary">Close</button></div>' +
+                '</div>';
+            document.body.appendChild(overlay);
+            _twOverlay = overlay;
+
+            renderAlgorithmList();
+            renderAlgorithmDetails(trackerSelectedAlgoId);
+
+            if (window.__trackAllInFlight) {
+                document.getElementById('twInflightNotice').style.display = 'block';
+            }
+
+            overlay.addEventListener('click', function (e) {
+                if (e.target === overlay) closeTrackingWizard();
+            });
+            document.getElementById('twClose').addEventListener('click', closeTrackingWizard);
+            document.getElementById('twResetBtn').addEventListener('click', function () {
+                var desc = LucidTrackers.get(trackerSelectedAlgoId);
+                if (!desc) return;
+                if (!confirm('Reset "' + desc.name + '" hyperparameters to defaults?')) return;
+                twResetAlgo(trackerSelectedAlgoId);
+                renderAlgorithmDetails(trackerSelectedAlgoId);
+                setStatus('Reset ' + desc.name + ' hyperparameters', 'success');
+            });
+
+            _twKeyHandler = function (e) {
+                if (e.key === 'Escape') { e.preventDefault(); closeTrackingWizard(); }
+            };
+            document.addEventListener('keydown', _twKeyHandler);
+
+            _twChangeHandler = function () {
+                var n = document.getElementById('twInflightNotice');
+                if (n) n.style.display = window.__trackAllInFlight ? 'block' : 'none';
+            };
+            window.addEventListener('track-all-status', _twChangeHandler);
+
+            var sel = overlay.querySelector('.tw-list-item.tw-row-selected');
+            if (sel) sel.focus();
+        }
+
+        function closeTrackingWizard() {
+            if (!_twOverlay) return;
+            _twOverlay.remove();
+            _twOverlay = null;
+            if (_twKeyHandler) document.removeEventListener('keydown', _twKeyHandler);
+            if (_twChangeHandler) window.removeEventListener('track-all-status', _twChangeHandler);
+            _twKeyHandler = null;
+            _twChangeHandler = null;
+        }
+
+        function renderAlgorithmList() {
+            var ul = document.getElementById('twAlgoList');
+            if (!ul) return;
+            ul.innerHTML = '';
+            LucidTrackers.list().forEach(function (desc) {
+                var li = document.createElement('li');
+                var isSel = (desc.id === trackerSelectedAlgoId);
+                li.className = 'tw-list-item' + (isSel ? ' tw-row-selected' : '');
+                li.setAttribute('data-algo-id', desc.id);
+                li.setAttribute('role', 'option');
+                li.setAttribute('tabindex', '0');
+                li.setAttribute('aria-selected', isSel ? 'true' : 'false');
+                li.textContent = desc.name;
+                li.addEventListener('click', function () {
+                    twSelectAlgo(desc.id);
+                    renderAlgorithmList();
+                    renderAlgorithmDetails(desc.id);
+                });
+                li.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        twSelectAlgo(desc.id);
+                        renderAlgorithmList();
+                        renderAlgorithmDetails(desc.id);
+                    }
+                });
+                ul.appendChild(li);
+            });
+        }
+
+        function renderAlgorithmDetails(algoId) {
+            var desc = LucidTrackers.get(algoId);
+            if (!desc) return;
+            var titleEl = document.getElementById('twDetailTitle');
+            var descEl = document.getElementById('twDetailDesc');
+            var body = document.getElementById('twDetailBody');
+            if (!titleEl || !body) return;
+
+            titleEl.textContent = desc.name;
+            descEl.textContent = desc.description || '';
+            body.innerHTML = '';
+
+            desc.hyperparameters.forEach(function (p) {
+                var tr = document.createElement('tr');
+                var tdLabel = document.createElement('td');
+                tdLabel.textContent = p.label || p.key;
+
+                var tdValue = document.createElement('td');
+                var tdDefault = document.createElement('td');
+                tdDefault.className = 'tw-default-col';
+                tdDefault.textContent = String(p.default);
+
+                var current = twGetValue(algoId, p.key);
+                var inferredType = p.type
+                    || (typeof p.default === 'boolean' ? 'boolean'
+                        : typeof p.default === 'number' ? 'number'
+                        : 'string');
+                var readOnly = !!p.readOnly || typeof p.computed === 'function';
+
+                if (readOnly) {
+                    tdValue.className = 'mono';
+                    tdValue.textContent = String(current);
+                } else if (inferredType === 'number') {
+                    var inp = document.createElement('input');
+                    inp.type = 'number';
+                    inp.className = 'tw-num-input';
+                    if (p.min != null) inp.min = p.min;
+                    if (p.max != null) inp.max = p.max;
+                    if (p.step != null) inp.step = p.step;
+                    inp.value = current;
+                    if (p.help) inp.title = p.help;
+                    (function (inputEl, captureP, captureCurrent) {
+                        inputEl.addEventListener('change', function () {
+                            var v = parseFloat(inputEl.value);
+                            if (isNaN(v)) { inputEl.value = captureCurrent; return; }
+                            twSetValue(algoId, captureP.key, v);
+                            renderAlgorithmDetails(algoId);
+                        });
+                    })(inp, p, current);
+                    tdValue.appendChild(inp);
+                } else if (inferredType === 'boolean') {
+                    var cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.checked = !!current;
+                    if (p.help) cb.title = p.help;
+                    cb.addEventListener('change', function () {
+                        twSetValue(algoId, p.key, cb.checked);
+                    });
+                    tdValue.appendChild(cb);
+                } else if (inferredType === 'enum') {
+                    var sel2 = document.createElement('select');
+                    (p.options || []).forEach(function (opt) {
+                        var o = document.createElement('option');
+                        o.value = opt.value;
+                        o.textContent = opt.label || opt.value;
+                        if (opt.value === current) o.selected = true;
+                        sel2.appendChild(o);
+                    });
+                    sel2.addEventListener('change', function () {
+                        twSetValue(algoId, p.key, sel2.value);
+                    });
+                    tdValue.appendChild(sel2);
+                    var selOpt = (p.options || []).find(function (o) { return o.value === current; });
+                    if (selOpt && selOpt.tooltip) {
+                        var info = document.createElement('span');
+                        info.className = 'tw-info-icon';
+                        info.textContent = ' (i)';
+                        info.title = selOpt.tooltip;
+                        tdValue.appendChild(info);
+                    }
+                    sel2.addEventListener('change', function () {
+                        var o2 = (p.options || []).find(function (o) { return o.value === sel2.value; });
+                        var existing = tdValue.querySelector('.tw-info-icon');
+                        if (existing) existing.remove();
+                        if (o2 && o2.tooltip) {
+                            var nf = document.createElement('span');
+                            nf.className = 'tw-info-icon';
+                            nf.textContent = ' (i)';
+                            nf.title = o2.tooltip;
+                            tdValue.appendChild(nf);
+                        }
+                    });
+                } else {
+                    var txt = document.createElement('input');
+                    txt.type = 'text';
+                    txt.value = current != null ? String(current) : '';
+                    if (p.help) txt.title = p.help;
+                    txt.addEventListener('change', function () {
+                        twSetValue(algoId, p.key, txt.value);
+                    });
+                    tdValue.appendChild(txt);
+                }
+
+                tr.appendChild(tdLabel);
+                tr.appendChild(tdValue);
+                tr.appendChild(tdDefault);
+                body.appendChild(tr);
+
+                if (p.help && !readOnly) {
+                    var htr = document.createElement('tr');
+                    var htd = document.createElement('td');
+                    htd.className = 'tw-help-cell';
+                    htd.colSpan = 3;
+                    htd.textContent = p.help;
+                    htr.appendChild(htd);
+                    body.appendChild(htr);
+                }
+            });
+        }
+
+        // ============================================
         // Cross-View Tracker Integration
         // ============================================
 
@@ -16568,6 +16983,8 @@
         var trackerWorker = null;
 
         function getTrackerHyperparams() {
+            // DEPRECATED: superseded by window.getSelectedTrackingAlgorithm().
+            // Retained for the legacy findMatchForSelected() code path.
             var el2d = document.getElementById('trackerWeight2d');
             return {
                 correspondenceWeight2d: el2d ? parseFloat(el2d.value) : 1.0,
@@ -16576,6 +16993,27 @@
                 distanceThreshold: document.getElementById('trackerDistance') ? parseFloat(document.getElementById('trackerDistance').value) : 1.0,
                 timePenalty: document.getElementById('trackerTimePenalty') ? parseFloat(document.getElementById('trackerTimePenalty').value) : 1.0
             };
+        }
+
+        // Resolves the user's current Tracking Wizard selection and returns an
+        // object ready to dispatch: { id, name, fn, hyperparameters }.
+        // Falls back to the registered default if the stored id is stale or the
+        // GUI hand-off is unavailable.
+        function resolveSelectedTracker() {
+            if (typeof LucidTrackers === 'undefined') {
+                throw new Error('[Tracker] trackers/registry.js not loaded');
+            }
+            var sel = (typeof window.getSelectedTrackingAlgorithm === 'function')
+                ? window.getSelectedTrackingAlgorithm() : null;
+            var id = sel && sel.id;
+            if (!id || !LucidTrackers.has(id)) {
+                if (id) console.warn('[Tracker] selection "' + id + '" not in registry; using default');
+                id = LucidTrackers.defaultId();
+            }
+            var desc = LucidTrackers.get(id);
+            if (!desc) throw new Error('[Tracker] no algorithms registered');
+            var hp = (sel && sel.hyperparameters) || {};
+            return { id: id, name: desc.name, fn: desc.fn, hyperparameters: hp };
         }
 
         // Tracker state: number of animals (null = unconstrained)
@@ -16616,17 +17054,26 @@
             }
 
             try {
-                var result = matchFrameInstances(fg, session.cameras, session, {
-                    numAnimals: trackerNumAnimals
+                var tracker = resolveSelectedTracker();
+                var result = tracker.fn(fg, session.cameras, session, {
+                    numAnimals: trackerNumAnimals,
+                    hyperparameters: tracker.hyperparameters,
+                    algorithmId: tracker.id
                 });
+                if (!result || !Array.isArray(result.groups) || !(result.assignments instanceof Map)) {
+                    throw new Error('algorithm "' + tracker.id + '" returned invalid shape');
+                }
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
-                if (timeline) timeline.refreshTracks(state.session);
+                if (timeline) {
+                    timeline.invalidateTrackVarCache();
+                    timeline.refreshTracks(state.session);
+                }
                 if (result.numIdentities > 0) {
-                    setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
+                    setStatus(tracker.name + ': frame ' + state.currentFrame + ' \u2014 ' + result.numIdentities + ' identities' +
                         (trackerNumAnimals ? ' (constrained to ' + trackerNumAnimals + ')' : ''), 'success');
                 } else {
-                    setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
+                    setStatus(tracker.name + ': no cross-view matches found (need instances in 2+ views)', 'warning');
                 }
             } catch (e) {
                 console.error('[Tracker] error:', e, e.stack);
@@ -16707,7 +17154,16 @@
             if (trackerNumAnimals == null) {
                 if (!promptNumAnimals()) return;
             }
-            console.log('[TrackAll] numAnimals:', trackerNumAnimals, 'frames:', frameIndices.length);
+
+            // Snapshot algorithm selection once — tracking runs should use a consistent
+            // algorithm + hyperparameter set; edits during the run apply to the next run.
+            var tracker;
+            try { tracker = resolveSelectedTracker(); }
+            catch (e) {
+                setStatus('Tracker error: ' + e.message, 'error');
+                return;
+            }
+            console.log('[TrackAll] algorithm:', tracker.id, 'numAnimals:', trackerNumAnimals, 'frames:', frameIndices.length);
             console.time('[TrackAll] total');
 
             // Clear old identities for fresh run
@@ -16719,6 +17175,9 @@
 
             var YIELD_EVERY = 50;
 
+            window.__trackAllInFlight = true;
+            window.dispatchEvent(new CustomEvent('track-all-status'));
+
             var prevAssignments = null;
             var prevTargets3d = null;
             try {
@@ -16727,12 +17186,17 @@
                     var fg = session.getFrameGroup(fi);
                     if (fg) {
                         try {
-                            var result = matchFrameInstances(fg, cameras, session, {
+                            var result = tracker.fn(fg, cameras, session, {
                                 numAnimals: trackerNumAnimals,
                                 perFrame: true,
                                 prevAssignments: prevAssignments,
-                                prevTargets3d: prevTargets3d
+                                prevTargets3d: prevTargets3d,
+                                hyperparameters: tracker.hyperparameters,
+                                algorithmId: tracker.id
                             });
+                            if (!result || !Array.isArray(result.groups) || !(result.assignments instanceof Map)) {
+                                throw new Error('algorithm "' + tracker.id + '" returned invalid shape');
+                            }
                             if (result.assignments && result.assignments.size > 0) {
                                 prevAssignments = result.assignments;
                             }
@@ -16748,6 +17212,13 @@
                     if (f % YIELD_EVERY === 0) {
                         document.getElementById('loadingStatus').textContent =
                             'Assigning identities: ' + (f + 1) + '/' + frameIndices.length + ' frames...';
+                        // Give the Track Var / Reprojs graphs a live refresh while
+                        // we yield. invalidate + redraw — the caches lazily rebuild.
+                        if (timeline) {
+                            timeline.invalidateTrackVarCache();
+                            timeline.invalidateReprojCache();
+                            timeline.redraw();
+                        }
                         await new Promise(function (r) { setTimeout(r, 0); });
                     }
                 }
@@ -16757,12 +17228,15 @@
                 console.timeEnd('[TrackAll] total');
                 updateInfoPanel();
                 if (timeline) timeline.refreshTracks(state.session);
-                setStatus('Tracked ' + frameIndices.length + ' frames, ' +
+                setStatus(tracker.name + ': tracked ' + frameIndices.length + ' frames, ' +
                     session.identities.length + ' identities', 'success');
             } catch (e) {
                 hideLoading();
                 console.error('[TrackAll] error:', e, e.stack);
                 setStatus('Track All error: ' + e.message + ' | ' + (e.stack ? e.stack.split('\n')[1] : ''), 'error');
+            } finally {
+                window.__trackAllInFlight = false;
+                window.dispatchEvent(new CustomEvent('track-all-status'));
             }
         }
 
