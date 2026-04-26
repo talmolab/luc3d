@@ -3,9 +3,9 @@
  *
  * Implements DLT (Direct Linear Transform) triangulation in pure JavaScript.
  * Uses the Jacobi eigenvalue algorithm for solving the 4x4 symmetric eigenproblem.
- *
- * All functions are vanilla JS globals -- no imports/exports.
  */
+
+import { mat3x3Multiply } from './pose-data.js';
 
 // ============================================
 // Matrix utilities (minimal linear algebra)
@@ -244,7 +244,7 @@ function svd3x4(A) {
  *   One per camera, same ordering as observations.
  * @returns {number[]|null} [X, Y, Z] triangulated point, or null if < 2 valid observations
  */
-function triangulatePointDLT(observations, projectionMatrices) {
+export function triangulatePointDLT(observations, projectionMatrices) {
     // Collect valid observation indices
     const validIndices = [];
     for (let i = 0; i < observations.length; i++) {
@@ -306,7 +306,7 @@ function triangulatePointDLT(observations, projectionMatrices) {
  * @param {number[][][]} projectionMatrices - [P1, P2, ...] one per camera
  * @returns {(number[]|null)[]} Array of [X,Y,Z] or null for each keypoint
  */
-function triangulatePoints(allObservations, projectionMatrices) {
+export function triangulatePoints(allObservations, projectionMatrices) {
     const results = [];
     for (let k = 0; k < allObservations.length; k++) {
         results.push(triangulatePointDLT(allObservations[k], projectionMatrices));
@@ -328,7 +328,7 @@ function triangulatePoints(allObservations, projectionMatrices) {
  * @param {number[][]} projectionMatrix - 3x4 projection matrix
  * @returns {number[]} [x, y] projected 2D point
  */
-function reprojectPoint(point3d, projectionMatrix) {
+export function reprojectPoint(point3d, projectionMatrix) {
     const P = projectionMatrix;
     const X = point3d[0];
     const Y = point3d[1];
@@ -348,7 +348,7 @@ function reprojectPoint(point3d, projectionMatrix) {
  * @param {number[][]} projectionMatrix - 3x4 projection matrix
  * @returns {(number[]|null)[]} Array of [x,y] or null (if input point is null)
  */
-function reprojectPoints(points3d, projectionMatrix) {
+export function reprojectPoints(points3d, projectionMatrix) {
     const results = [];
     for (let i = 0; i < points3d.length; i++) {
         if (points3d[i] == null) {
@@ -367,7 +367,7 @@ function reprojectPoints(points3d, projectionMatrix) {
  * @param {number[]|null} reprojected2d - [x, y] reprojected point, or null
  * @returns {number|null} Pixel error (float), or null if either input is null
  */
-function computeReprojectionError(observed2d, reprojected2d) {
+export function computeReprojectionError(observed2d, reprojected2d) {
     if (observed2d == null || reprojected2d == null) {
         return null;
     }
@@ -383,7 +383,7 @@ function computeReprojectionError(observed2d, reprojected2d) {
  * @param {(number[]|null)[]} reprojected2d - Array of [x,y] or null
  * @returns {(number|null)[]} Array of errors (float or null)
  */
-function computeReprojectionErrors(observed2d, reprojected2d) {
+export function computeReprojectionErrors(observed2d, reprojected2d) {
     const errors = [];
     const len = Math.max(observed2d.length, reprojected2d.length);
     for (let i = 0; i < len; i++) {
@@ -401,7 +401,7 @@ function computeReprojectionErrors(observed2d, reprojected2d) {
  * @param {(number[]|null)[]} reprojected2d - Array of [x,y] or null
  * @returns {number|null} Mean error in pixels, or null if no valid point pairs
  */
-function computeMeanReprojectionError(observed2d, reprojected2d) {
+export function computeMeanReprojectionError(observed2d, reprojected2d) {
     const errors = computeReprojectionErrors(observed2d, reprojected2d);
     let sum = 0;
     let count = 0;
@@ -424,7 +424,7 @@ function computeMeanReprojectionError(observed2d, reprojected2d) {
  * @param {(number[]|null)[]} pointsB - Array of [x,y] or null
  * @returns {number} Mean pixel distance, or Infinity if no valid pairs
  */
-function computeInstanceDistance(pointsA, pointsB) {
+export function computeInstanceDistance(pointsA, pointsB) {
     var totalDist = 0, count = 0;
     var len = Math.min(pointsA.length, pointsB.length);
     for (var i = 0; i < len; i++) {
@@ -469,7 +469,7 @@ function computeInstanceDistance(pointsA, pointsB) {
  *   errors: { cameraName: [error, ...] } per-keypoint reprojection errors per camera
  *   meanError: scalar mean error across all cameras and keypoints
  */
-function triangulateAndReproject(instanceGroup, cameras, options) {
+export function triangulateAndReproject(instanceGroup, cameras, options) {
     // Build ordered list of camera names and their projection matrices
     const cameraNames = [];
     const projMatrices = [];
@@ -589,7 +589,7 @@ function triangulateAndReproject(instanceGroup, cameras, options) {
  * @param {number[][]} costMatrix - n x m cost matrix (n <= m)
  * @returns {number[]} assignment - assignment[i] = column assigned to row i (-1 if unassigned)
  */
-function hungarianAlgorithm(costMatrix) {
+export function hungarianAlgorithm(costMatrix) {
     var n = costMatrix.length;
     if (n === 0) return [];
     var m = costMatrix[0].length;
@@ -713,7 +713,7 @@ function hungarianAlgorithm(costMatrix) {
  * @param {number[][]} P - 3x4 projection matrix
  * @returns {number[]} [X, Y, Z] camera center in world coordinates
  */
-function cameraCenter(P) {
+export function cameraCenter(P) {
     var PT = matTranspose(P);      // 4x3
     var PTP = matMul(PT, P);       // 4x4 symmetric
     var v = solveSmallestEigenvector4x4(PTP);
@@ -727,7 +727,7 @@ function cameraCenter(P) {
  * @param {number[][]} M - 3x3 matrix
  * @returns {number[][]} 3x3 inverse matrix
  */
-function invert3x3(M) {
+export function invert3x3(M) {
     var a = M[0][0], b = M[0][1], c = M[0][2];
     var d = M[1][0], e = M[1][1], f = M[1][2];
     var g = M[2][0], h = M[2][1], k = M[2][2];
@@ -752,7 +752,7 @@ function invert3x3(M) {
  * @param {number[][]} P - 3x4 projection matrix
  * @returns {{origin: number[], direction: number[]}} Ray origin and unit direction
  */
-function backProjectToRay(point2d, P) {
+export function backProjectToRay(point2d, P) {
     var origin = cameraCenter(P);
 
     // Compute pseudo-inverse: pinv(P) = P^T * inv(P * P^T)
@@ -793,7 +793,7 @@ function backProjectToRay(point2d, P) {
  * @param {number[][]} P - 3x4 projection matrix
  * @returns {{origin: number[], directions: (number[]|null)[]}} Ray origin and directions
  */
-function backProjectToRays(points2d, P) {
+export function backProjectToRays(points2d, P) {
     var origin = cameraCenter(P);
 
     // Compute pseudo-inverse once
@@ -840,7 +840,7 @@ function backProjectToRays(points2d, P) {
  * @param {number[]} rayDir - [dx, dy, dz] unit direction
  * @returns {number} perpendicular distance
  */
-function pointToRayDistance(point, rayOrigin, rayDir) {
+export function pointToRayDistance(point, rayOrigin, rayDir) {
     // Vector from ray origin to point
     var vx = point[0] - rayOrigin[0];
     var vy = point[1] - rayOrigin[1];
@@ -870,7 +870,7 @@ function pointToRayDistance(point, rayOrigin, rayDir) {
  * @param {(number[]|null)[]} rayDirs - Array of [dx,dy,dz] or null
  * @returns {(number|null)[]} distances, null where either input is null
  */
-function pointsToRayDistances(points, rayOrigin, rayDirs) {
+export function pointsToRayDistances(points, rayOrigin, rayDirs) {
     var results = [];
     var len = Math.min(points.length, rayDirs.length);
     for (var i = 0; i < len; i++) {
@@ -898,7 +898,7 @@ function pointsToRayDistances(points, rayOrigin, rayDirs) {
  * @param {Camera} cam2 - Second camera
  * @returns {number[][]} 3x3 fundamental matrix
  */
-function computeFundamentalMatrix(cam1, cam2) {
+export function computeFundamentalMatrix(cam1, cam2) {
     var R1 = cam1.rotationMatrix;
     var R2 = cam2.rotationMatrix;
     var t1 = cam1.tvec;
@@ -947,7 +947,7 @@ function computeFundamentalMatrix(cam1, cam2) {
  * @param {number[][]} F - 3x3 fundamental matrix (cam1 -> cam2)
  * @returns {number} Mean epipolar distance, or Infinity if no valid pairs
  */
-function epipolarError(points1, points2, F) {
+export function epipolarError(points1, points2, F) {
     var totalError = 0;
     var count = 0;
     var len = Math.min(points1.length, points2.length);
@@ -984,7 +984,7 @@ function epipolarError(points1, points2, F) {
  * @param {number[][]} F - 3x3 fundamental matrix (cam1 -> cam2)
  * @returns {number[][]} n x m cost matrix
  */
-function epipolarErrorMatrix(detections1, detections2, F) {
+export function epipolarErrorMatrix(detections1, detections2, F) {
     var n = detections1.length;
     var m = detections2.length;
     var matrix = [];

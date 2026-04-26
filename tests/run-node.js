@@ -222,6 +222,13 @@ var ctx = vm.createContext(sandbox);
 
 function loadScript(filePath) {
     var code = fs.readFileSync(filePath, 'utf-8');
+    // Strip ESM `import { … } from '…';` statements. The vm sandbox loads
+    // each source file in dependency order and exposes its declarations as
+    // sandbox globals, so the imported symbols are already in scope.
+    code = code.replace(/^import\s+(\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+['"][^'"]+['"]\s*;?\s*$/gm, '');
+    // Strip leading `export ` keywords so ESM-converted modules load as classic
+    // scripts. Agents only ever prepend `export ` to top-level declarations.
+    code = code.replace(/^export\s+(class|function|const|let|var|async)\s+/gm, '$1 ');
     // Replace const/let with var so declarations become context properties
     code = code.replace(/^(const|let)\s+/gm, 'var ');
     var script = new vm.Script(code, { filename: filePath });
@@ -241,7 +248,7 @@ for (var h = 0; h < helperNames.length; h++) {
 
 // Load source files
 var srcDir = path.join(__dirname, '..');
-var srcFiles = ['pose-data.js', 'triangulation.js', 'viewport3d.js', 'file-io.js', 'slp-merge.js', 'interaction.js', 'overlays.js', 'timeline.js', 'video.js'];
+var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'viewport3d.js', 'file-io.js', 'slp-merge.js', 'interaction.js', 'ui/overlays.js', 'timeline.js', 'video.js'];
 for (var i = 0; i < srcFiles.length; i++) {
     try { loadScript(path.join(srcDir, srcFiles[i])); }
     catch(e) { console.log(srcFiles[i] + ': ' + e.message.substring(0, 120)); }

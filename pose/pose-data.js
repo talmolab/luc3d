@@ -1,7 +1,7 @@
 // pose-data.js - Data model for multi-view pose data
 // All vanilla JS classes, no imports/exports.
 
-class Skeleton {
+export class Skeleton {
     /**
      * @param {string} name
      * @param {string[]} nodes - Node names (e.g. ['nose', 'head', ...])
@@ -94,7 +94,7 @@ class Skeleton {
 }
 
 
-class Camera {
+export class Camera {
     /**
      * @param {string} name
      * @param {number[][]} matrix - 3x3 intrinsic matrix K
@@ -277,7 +277,7 @@ class Camera {
 }
 
 
-class Instance {
+export class Instance {
     /**
      * @param {(number[]|null)[]} points - Array of [u, v] 2D keypoints (null if not visible)
      * @param {number} trackIdx - Track index
@@ -355,7 +355,7 @@ class Instance {
 /** Auto-incrementing ID counter for UnlinkedInstance */
 let _unlinkedIdCounter = 0;
 
-class UnlinkedInstance {
+export class UnlinkedInstance {
     /**
      * A 2D prediction in a single camera view that has not yet been assigned
      * to a cross-view InstanceGroup.
@@ -372,7 +372,7 @@ class UnlinkedInstance {
 }
 
 
-class FrameGroup {
+export class FrameGroup {
     /**
      * @param {number} frameIdx
      */
@@ -446,14 +446,14 @@ class FrameGroup {
 
 var _identityIdCounter = 0;
 
-var IDENTITY_COLORS = [
+export var IDENTITY_COLORS = [
     '#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff8800',
     '#0088ff', '#ff0088', '#88ff00', '#8800ff', '#00ff88',
     '#ff0000', '#0000ff', '#00ff44', '#ff4400', '#4400ff',
     '#44ff00', '#ff0044', '#0044ff', '#ffaa00', '#aa00ff',
 ];
 
-class Identity {
+export class Identity {
     constructor(id, name, color) {
         this.id = id != null ? id : _identityIdCounter++;
         this.name = name || ('id_' + this.id);
@@ -461,7 +461,7 @@ class Identity {
     }
 }
 
-class InstanceGroup {
+export class InstanceGroup {
     /**
      * @param {number} id
      * @param {number} identityId
@@ -541,7 +541,7 @@ class InstanceGroup {
 }
 
 
-class Session {
+export class Session {
     /**
      * @param {Camera[]} cameras
      * @param {Skeleton} skeleton
@@ -1119,7 +1119,7 @@ class Session {
  * @param {(number[]|null)[]} points
  * @returns {(number[]|null)[]}
  */
-function clonePoints(points) {
+export function clonePoints(points) {
     if (!points) return null;
     const cloned = new Array(points.length);
     for (let i = 0; i < points.length; i++) {
@@ -1140,7 +1140,7 @@ function clonePoints(points) {
  * @param {number[][]} B - 3x3
  * @returns {number[][]} 3x3 result
  */
-function mat3x3Multiply(A, B) {
+export function mat3x3Multiply(A, B) {
     const C = [
         [0, 0, 0],
         [0, 0, 0],
@@ -1162,7 +1162,7 @@ function mat3x3Multiply(A, B) {
  * @param {number[][]} B - 3x4
  * @returns {number[][]} 3x4 result
  */
-function mat3x3Multiply3x4(A, B) {
+export function mat3x3Multiply3x4(A, B) {
     const C = [
         [0, 0, 0, 0],
         [0, 0, 0, 0],

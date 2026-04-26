@@ -80,15 +80,11 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 
-    <!-- Source files under test -->
-    <script src="../pose-data.js"></script>
-    <script src="../triangulation.js"></script>
-    <script src="../tracker.js"></script>
+    <!-- Source files under test (still-classic scripts) -->
     <script src="../viewport3d.js"></script>
     <script src="../file-io.js"></script>
     <script src="../slp-merge.js"></script>
     <script src="../interaction.js"></script>
-    <script src="../overlays.js"></script>
     <script src="../timeline.js"></script>
     <script src="../video.js"></script>
 
@@ -169,30 +165,39 @@
     <!-- Rotation tests -->
     <script src="test-rotation.js"></script>
 
-    <!-- Run all tests -->
-    <script>
-        (async function () {
-            try {
-                const results = await TestFramework.runAll();
-                TestFramework.renderResults(results, document.getElementById('results'));
+    <!-- Pass 2 transitional bridge + test runner.
+         Loads ESM-converted modules (pose/, ui/) and exposes their exports on
+         window so the test files (loaded as classic scripts above) can find
+         Skeleton, Camera, Instance, getTrackColor, triangulatePointDLT, etc.
+         as globals when their describe/it callbacks run. The bridge MUST run
+         before TestFramework.runAll() is invoked — using a single module here
+         (deferred) guarantees that ordering. -->
+    <script type="module">
+        import * as __PoseData from '../pose/pose-data.js?v=1';
+        import * as __Triangulation from '../pose/triangulation.js?v=1';
+        import * as __Overlays from '../ui/overlays.js?v=1';
+        Object.assign(window, __PoseData, __Triangulation, __Overlays);
 
-                // Also log to console for headless/CI use
-                console.log('Test results:', results.passed + '/' + results.total + ' passed');
-                if (results.failed > 0) {
-                    console.error(results.failed + ' test(s) failed:');
-                    for (const suite of results.suites) {
-                        for (const test of suite.tests) {
-                            if (test.status === 'failed') {
-                                console.error('  FAIL: ' + suite.name + ' > ' + test.name + ': ' + test.error);
-                            }
+        try {
+            const results = await TestFramework.runAll();
+            TestFramework.renderResults(results, document.getElementById('results'));
+
+            // Also log to console for headless/CI use
+            console.log('Test results:', results.passed + '/' + results.total + ' passed');
+            if (results.failed > 0) {
+                console.error(results.failed + ' test(s) failed:');
+                for (const suite of results.suites) {
+                    for (const test of suite.tests) {
+                        if (test.status === 'failed') {
+                            console.error('  FAIL: ' + suite.name + ' > ' + test.name + ': ' + test.error);
                         }
                     }
                 }
-            } catch (err) {
-                document.getElementById('results').textContent = 'Error running tests: ' + err.message;
-                console.error('Test runner error:', err);
             }
-        })();
+        } catch (err) {
+            document.getElementById('results').textContent = 'Error running tests: ' + err.message;
+            console.error('Test runner error:', err);
+        }
     </script>
 </body>
 </html>

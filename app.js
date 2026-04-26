@@ -1,4 +1,8 @@
         import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core/+esm';
+        import { Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity, InstanceGroup, Session } from './pose/pose-data.js?v=1';
+        import { reprojectPoints, computeReprojectionErrors, computeInstanceDistance, triangulateAndReproject, hungarianAlgorithm } from './pose/triangulation.js?v=1';
+        import { matchFrameInstances } from './pose/tracker.js?v=1';
+        import { REPROJECTION_COLOR, getTrackColor, getGroupColor, drawFrameOverlays } from './ui/overlays.js?v=1';
 
         // Quick diagnostic: verify external scripts loaded
         if (typeof parseSlpH5 !== 'function') console.error('[LOAD] file-io.js did not load! parseSlpH5 is missing.');

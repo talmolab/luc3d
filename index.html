@@ -763,16 +763,23 @@
 
     <!-- Module scripts (order matters: dependencies first) -->
     <script src="video.js?v=5"></script>
-    <script src="pose-data.js?v=6"></script>
-    <script src="triangulation.js?v=5"></script>
-    <script src="tracker.js"></script>
     <script src="demo-data.js"></script>
-    <script src="overlays.js?v=9"></script>
     <script src="interaction.js?v=7"></script>
     <script src="viewport3d.js?v=2"></script>
     <script src="timeline.js?v=3"></script>
     <script src="file-io.js?v=5"></script>
     <script src="slp-merge.js"></script>
+
+    <!-- Pass 2 transitional bridge: expose ESM-converted modules on window
+         so remaining classic scripts (demo-data.js, interaction.js,
+         viewport3d.js, timeline.js, file-io.js, slp-merge.js) keep working
+         until they are converted in subsequent steps. Removed in Pass 3. -->
+    <script type="module">
+        import * as __PoseData from './pose/pose-data.js?v=1';
+        import * as __Triangulation from './pose/triangulation.js?v=1';
+        import * as __Overlays from './ui/overlays.js?v=1';
+        Object.assign(window, __PoseData, __Triangulation, __Overlays);
+    </script>
 
     <!-- sleap-io.js bridge: expose saveSlpToBytes and data model to window -->
     <script type="module">
@@ -793,7 +800,7 @@
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
 
-    <script type="module" src="app.js?v=1"></script>
+    <script type="module" src="app.js?v=3"></script>
 </body>
 
 </html>

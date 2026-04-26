@@ -8,6 +8,16 @@
  * Depends on: pose-data.js, triangulation.js
  */
 
+import {
+    computeFundamentalMatrix,
+    triangulatePointDLT,
+    triangulatePoints,
+    reprojectPoint,
+    reprojectPoints,
+    computeInstanceDistance,
+    hungarianAlgorithm
+} from './triangulation.js';
+
 // ============================================
 // Caches (cleared per-frame)
 // ============================================
@@ -143,7 +153,7 @@ function collectInstances(frameGroup, cameras) {
 /**
  * Match instances across views for one frame.
  */
-function matchFrameInstances(frameGroup, cameras, session, opts) {
+export function matchFrameInstances(frameGroup, cameras, session, opts) {
     opts = opts || {};
     var numAnimals = opts.numAnimals || null;
     var prevAssignments = opts.prevAssignments || null;
