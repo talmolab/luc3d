@@ -19,75 +19,13 @@
         } from './import-export/file-io.js?v=1';
         import { OnDemandVideoDecoder, EmbeddedVideoDecoder, VideoController, videoLog } from './loading/video.js?v=1';
         import { createDemoCalibration, createDemoSkeleton, generateDemoKeypoints3D, createDemoSession } from './demo-data.js?v=1';
-
-        // ============================================
-        // Application State
-        // ============================================
-
-        const state = {
-            views: [],          // { name, decoder, canvas, ctx, overlayCanvas, overlayCtx, videoWidth, videoHeight }
-            videoFiles: [],     // { file, name, decoder, videoWidth, videoHeight, frameCount, assignedCamera }
-            viewMode: 'grid',   // 'grid' or 'single'
-            singleViewIndex: 0, // index into state.views for single-view mode
-            currentFrame: 0,
-            totalFrames: 0,
-            fps: 30,
-            isPlaying: false,
-            playInterval: null,
-            session: null,      // Session object from pose-data.js
-            sessions: [],              // Array of Session objects
-            activeSessionIdx: 0,       // Index of currently active session
-            keypoints3d: null,  // Raw 3D keypoints from demo-data.js
-            triangulationResults: new Map(), // frameIdx -> [{ group, points3d, reprojections, errors, meanError }]
-            lastAutoAssignViews: null,  // Array of view names used for last auto-assignment
-            lastAutoAssignFrame: null,  // Frame index where last auto-assignment was run
-            lastUserPoints: new Map(),  // viewName -> {frameIdx, points} — cache of most recent UserInstance per view
-            exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
-            cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
-            colorByIdentity: false,     // false = color by track, true = color by identity
-            decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
-            slpFileHandle: null,      // FileSystemFileHandle for quick save
-            isDirty: false,           // true when unsaved annotation changes exist
-            isSaving: false,          // true while save is in progress
-        };
-
-        let videoController = null;
-        let interactionManager = null;
-        let viewport3d = null;
-        let timeline = null;
-
-        // Debug accessor — DevTools console can inspect via `__lucid.state` etc.
-        // Module-scoped bindings aren't reachable from console after the Pass 2 ESM split.
-        if (typeof window !== 'undefined') {
-            window.__lucid = {
-                get state() { return state; },
-                get videoController() { return videoController; },
-                get interactionManager() { return interactionManager; },
-                get viewport3d() { return viewport3d; },
-                get timeline() { return timeline; },
-            };
-        }
-
-        // ============================================
-        // Session Accessors
-        // ============================================
-
-        function getActiveSession() {
-            if (state.sessions.length === 0) return state.session;
-            return state.sessions[state.activeSessionIdx] || null;
-        }
-
-        function setActiveSession(session) {
-            if (state.sessions.length === 0) {
-                state.session = session;
-                return;
-            }
-            state.sessions[state.activeSessionIdx] = session;
-            state.session = session;
-        }
-
-        // View names matching sample_session video files
-        const VIEW_NAMES = ['back', 'mid', 'side', 'top'];
+        import {
+            state,
+            videoController, interactionManager, viewport3d, timeline, paneManager,
+            setVideoController, setInteractionManager, setViewport3D, setTimeline, setPaneManager,
+            getActiveSession, setActiveSession,
+            VIEW_NAMES,
+        } from './ui/app-state.js?v=1';
 
         // ============================================
         // Logging
@@ -135,7 +73,7 @@
          */
         var _zoomRedrawTimer = null;
         function setupEmptyVideoController() {
-            videoController = new VideoController(state, {
+            setVideoController(new VideoController(state, {
                 updateSeekbar: updateSeekbar,
                 drawOverlays: drawAllOverlays,
                 onPlaybackStateChange: onPlaybackStateChange,
@@ -146,7 +84,7 @@
                         drawAllOverlays(state.currentFrame);
                     }, 200);
                 },
-            });
+            }));
         }
 
         /**
@@ -183,7 +121,7 @@
             try {
                 // Clear existing state
                 if (videoController && state.isPlaying) videoController.stopPlayback();
-                videoController = null;
+                setVideoController(null);
                 state.views = [];
                 state.videoFiles = [];
                 state.session = null;
@@ -2210,7 +2148,7 @@
         // ============================================
 
         function setupInteraction() {
-            interactionManager = new InteractionManager({
+            setInteractionManager(new InteractionManager({
                 getState: function () { return state; },
 
                 getInstanceGroups: function (frameIdx) {
@@ -2622,7 +2560,7 @@
                         videoController.resetZoom(view);
                     }
                 },
-            });
+            }));
 
             // Attach to all overlay canvases
             interactionManager.attach(state.views);
@@ -2651,7 +2589,7 @@
             // Dispose old viewport to avoid orphaned renderers in the DOM
             if (viewport3d) {
                 try { viewport3d.dispose(); } catch (e) { console.warn('[3D] dispose error:', e); }
-                viewport3d = null;
+                setViewport3D(null);
             }
 
             try {
@@ -2664,7 +2602,7 @@
                 var _3dLabelShow = document.getElementById('vis3dLabelShow');
                 var _3dSphereShow = document.getElementById('vis3dSphereShow');
                 var _3dPyramidShow = document.getElementById('vis3dPyramidShow');
-                viewport3d = new Viewport3D(container, {
+                setViewport3D(new Viewport3D(container, {
                     cameras: state.session.cameras,
                     skeleton: state.session.skeleton,
                     getTrackColor: getTrackColor,
@@ -2683,7 +2621,7 @@
                     skeletonEdgeWeight: (function() { var e = document.getElementById('vis3dEdgeWeight'); return e ? parseFloat(e.value) || 0.8 : 0.8; })(),
                     showSkeletonNodes: (function() { var e = document.getElementById('vis3dNodeShow'); return e ? e.checked : true; })(),
                     showSkeletonEdges: (function() { var e = document.getElementById('vis3dEdgeShow'); return e ? e.checked : true; })(),
-                });
+                }));
 
                 // Wire up "Show Camera View" button
                 document.getElementById('btnShowCameraView').addEventListener('click', function (e) {
@@ -2809,7 +2747,7 @@
                 container.style.height = '96px';
             }
 
-            timeline = new Timeline(container, {
+            setTimeline(new Timeline(container, {
                 totalFrames: state.totalFrames,
                 onFrameChange: (function () {
                     var lastRender = 0, timer = null, pending = null;
@@ -2837,7 +2775,7 @@
                 onRangeSelect: function (startFrame, endFrame) {
                     setStatus('Selected range: ' + startFrame + '-' + endFrame);
                 },
-            });
+            }));
 
             // Populate with session data. When tracks are loaded, resize
             // the container to the preferred height so every track row is
@@ -8647,7 +8585,7 @@
             // Detach interaction handlers from old canvases
             if (interactionManager) {
                 interactionManager.detach();
-                interactionManager = null;
+                setInteractionManager(null);
             }
 
             // Stop playback
@@ -8655,7 +8593,7 @@
                 videoController.pause();
             }
             state.isPlaying = false;
-            videoController = null;
+            setVideoController(null);
 
             // Close lazy loader if active
             if (state.session && state.session.lazyLoader) {
@@ -9413,7 +9351,7 @@
                 // Clear stale views
                 if (videoController) {
                     if (state.isPlaying) videoController.pause();
-                    videoController = null;
+                    setVideoController(null);
                 }
                 state.views = [];
                 paneManager.clearAll();
@@ -10872,7 +10810,7 @@
             }
 
             // Recreate video controller
-            videoController = new VideoController(state, {
+            setVideoController(new VideoController(state, {
                 updateSeekbar: updateSeekbar,
                 drawOverlays: drawAllOverlays,
                 onPlaybackStateChange: onPlaybackStateChange,
@@ -10883,7 +10821,7 @@
                         drawAllOverlays(state.currentFrame);
                     }, 200);
                 },
-            });
+            }));
 
             // Set up zoom handlers for views that have been docked (have canvases)
             for (const view of state.views) {
@@ -11413,7 +11351,7 @@
             state.views = [];
 
             if (videoController && state.isPlaying) videoController.stopPlayback();
-            videoController = null;
+            setVideoController(null);
             paneManager.clearAll();
             populateViewStrip();
             populateSessionStrip();
@@ -11620,7 +11558,7 @@
                 showLoading('Loading videos...');
                 state.views = [];
                 if (videoController && state.isPlaying) videoController.stopPlayback();
-                videoController = null;
+                setVideoController(null);
                 paneManager.clearAll();
 
                 var failedVideos = [];
@@ -11751,7 +11689,7 @@
                 state.views = [];
                 state.triangulationResults = new Map();
                 if (videoController && state.isPlaying) videoController.stopPlayback();
-                videoController = null;
+                setVideoController(null);
 
                 // Derive folder name from first file's relative path
                 var folderName = null;
@@ -11975,7 +11913,7 @@
                 // 3. Load each camera directory
                 // Reset views/UI for new session but keep global videoFiles (other sessions need them)
                 if (videoController && state.isPlaying) videoController.pause();
-                videoController = null;
+                setVideoController(null);
                 state.views = [];
                 paneManager.clearAll();
                 var stripList = document.getElementById('viewStripList');
@@ -12380,7 +12318,7 @@
                     state.session = previousSession;
                     if (previousSession._views) {
                         state.views = previousSession._views;
-                        videoController = previousSession._videoController;
+                        setVideoController(previousSession._videoController);
                     }
                     state.triangulationResults = previousSession.triangulationResults || new Map();
                 }
@@ -12455,7 +12393,7 @@
                 // Clear previous state
                 if (videoController) {
                     if (state.isPlaying) videoController.pause();
-                    videoController = null;
+                    setVideoController(null);
                 }
                 state.views = [];
                 state.videoFiles = [];
@@ -13989,7 +13927,7 @@
             });
         }
 
-        const paneManager = {
+        const _paneManagerImpl = {
             dockview: null,
             api: null,
             panelCounter: 0,
@@ -14234,6 +14172,7 @@
                 if (emptyMsg) emptyMsg.classList.remove('hidden');
             },
         };
+        setPaneManager(_paneManagerImpl);
 
         function refreshPaneInteractions() {
             // Re-attach interaction manager to current views after panel changes
@@ -15153,7 +15092,7 @@
                 state.totalFrames = 0;
                 if (videoController) {
                     if (state.isPlaying) videoController.stopPlayback();
-                    videoController = null;
+                    setVideoController(null);
                 }
                 paneManager.clearAll();
                 if (interactionManager) interactionManager.detach();
@@ -15222,7 +15161,7 @@
             // Restore views for the new active session
             if (state.session._views && state.session._views.length > 0) {
                 state.views = state.session._views;
-                videoController = state.session._videoController || null;
+                setVideoController(state.session._videoController || null);
                 paneManager.clearAll();
                 paneManager.addAllViewsAsGrid();
                 setTimeout(function () {
@@ -15234,7 +15173,7 @@
                 }, 50);
             } else {
                 // Build views using pool decoders
-                videoController = null;
+                setVideoController(null);
                 state.views = [];
                 paneManager.clearAll();
                 var rmVi = 0;
@@ -15330,7 +15269,7 @@
             if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
 
             // Rebuild views — reuse pool decoders via switchSource
-            videoController = null;
+            setVideoController(null);
             state.views = [];
             paneManager.clearAll();
 
