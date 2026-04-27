@@ -6,10 +6,16 @@
         import { InteractionManager, isInteractiveClickTarget } from './ui/interaction.js?v=1';
         import { Viewport3D } from './ui/viewport3d.js?v=1';
         import { Timeline } from './ui/timeline.js?v=1';
-
-        // Quick diagnostic: verify external scripts loaded
-        if (typeof parseSlpH5 !== 'function') console.error('[LOAD] file-io.js did not load! parseSlpH5 is missing.');
-        if (typeof Skeleton !== 'function') console.error('[LOAD] pose-data.js did not load!');
+        import { validateSkeletonCompatibility, mergeTracksIntoSession, mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames } from './import-export/slp-merge.js?v=1';
+        import {
+            pickFiles, pickFolder, parseCalibrationTOML, parseCalibrationJSON,
+            matchVideosToCameras, buildVideoGrid, exportCalibrationTOML,
+            serializeSkeleton, buildSlpExportData, buildPoints3dExportData,
+            downloadJSON, downloadTOML, h5FileToBlob, buildPerCameraSlpJson,
+            buildSlpLabels, buildSlpLabelsMultiSession, buildSlpLabelsAllViews,
+            parseSlpH5, instancePointsMatch
+        } from './import-export/file-io.js?v=1';
+        import { OnDemandVideoDecoder, EmbeddedVideoDecoder, VideoController, videoLog } from './loading/video.js?v=1';
 
         // ============================================
         // Application State
@@ -10903,6 +10909,16 @@
                 if (timeline) {
                     timeline.setTotalFrames(maxFrames);
                 }
+            } else {
+                // No decoders — empty session. Reset so previous session's
+                // frame count cannot leak into this one.
+                state.totalFrames = 0;
+                state.fps = 30;
+                document.getElementById('totalFrames').textContent = '0';
+                document.getElementById('fpsDisplay').textContent = '30.0 fps';
+                if (timeline) {
+                    timeline.setTotalFrames(1);
+                }
             }
         }
 
@@ -15262,6 +15278,12 @@
             oldSession._views = null;
             oldSession._videoController = null;
 
+            // Save timeline view state so switching back restores zoom/scroll
+            if (timeline) {
+                oldSession._timelineZoom = timeline._zoom;
+                oldSession._timelineScroll = timeline._scrollFrame;
+            }
+
             // Save 3D viewport state
             if (viewport3d && viewport3d.threeCamera && viewport3d.controls) {
                 oldSession._viewport3dState = {
@@ -15392,17 +15414,25 @@
             }
             updateInfoPanel();
             // Restore per-session frame count — updateTotalFrames() may not
-            // find decoders if they haven't been rebuilt yet, so use saved value
-            if (newSession.totalFrames) {
-                state.totalFrames = newSession.totalFrames;
-                state.fps = newSession.fps || 30;
-                document.getElementById('totalFrames').textContent = state.totalFrames;
-                document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
-            }
+            // find decoders if they haven't been rebuilt yet, so use saved value.
+            // Always assign so an empty session resets to 0 instead of inheriting.
+            state.totalFrames = newSession.totalFrames || 0;
+            state.fps = newSession.fps || 30;
+            document.getElementById('totalFrames').textContent = state.totalFrames;
+            document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
 
             if (timeline) {
                 timeline.setData(newSession);
                 timeline.setTotalFrames(state.totalFrames);
+                if (newSession._timelineZoom !== undefined) {
+                    timeline._zoom = Math.max(1, Math.min(newSession._timelineZoom, timeline._maxZoom()));
+                    timeline._scrollFrame = Math.max(0, newSession._timelineScroll || 0);
+                } else {
+                    timeline._zoom = 1;
+                    timeline._scrollFrame = 0;
+                }
+                timeline._clampScroll();
+                timeline.redraw();
             }
 
             setStatus('Switched to ' + newSession.name, 'info');

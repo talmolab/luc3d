@@ -9,8 +9,9 @@
  *   - pickVideoFiles(): Pick multiple .mp4 files
  *
  * Depends on pose-data.js (Camera class).
- * All functions are vanilla JS globals -- no imports/exports.
  */
+
+import { Camera, Skeleton, Instance, Identity } from '../pose/pose-data.js?v=1';
 
 // ============================================
 // Generic file picker
@@ -24,7 +25,7 @@
  * @param {boolean} [options.multiple] - Allow multiple file selection
  * @returns {Promise<File[]>} Array of selected files (empty if cancelled)
  */
-function pickFiles(options) {
+export function pickFiles(options) {
     options = options || {};
     return new Promise(function (resolve) {
         var resolved = false;
@@ -70,7 +71,7 @@ function pickFiles(options) {
  * Pick a folder using webkitdirectory. Returns an array of File objects
  * with webkitRelativePath set (e.g., "folder/videos/back.mp4").
  */
-function pickFolder() {
+export function pickFolder() {
     return new Promise(function (resolve) {
         var resolved = false;
         var input = document.createElement('input');
@@ -122,7 +123,7 @@ function pickFolder() {
  * @param {string} text - TOML file content
  * @returns {Camera[]} Array of Camera objects
  */
-function parseCalibrationTOML(text) {
+export function parseCalibrationTOML(text) {
     const cameras = [];
 
     // Split into sections by [section_name] headers
@@ -225,7 +226,7 @@ function parseTOMLSection(body) {
  * @param {string} text - JSON file content
  * @returns {Camera[]} Array of Camera objects
  */
-function parseCalibrationJSON(text) {
+export function parseCalibrationJSON(text) {
     const data = JSON.parse(text);
     const cameras = [];
 
@@ -293,7 +294,7 @@ async function pickVideoFiles() {
  * @param {Camera[]} cameras - Camera objects with .name
  * @returns {Map<string, File>} camera name -> File
  */
-function matchVideosToCameras(files, cameras) {
+export function matchVideosToCameras(files, cameras) {
     const result = new Map();
     const cameraNames = cameras.map(function (c) { return c.name; });
 
@@ -329,7 +330,7 @@ function matchVideosToCameras(files, cameras) {
  * @param {string[]} cameraNames - Array of camera names
  * @returns {Object[]} Array of { name, canvas, overlayCanvas, cell } for each camera
  */
-function buildVideoGrid(gridElement, cameraNames) {
+export function buildVideoGrid(gridElement, cameraNames) {
     // Clear existing cells
     gridElement.innerHTML = '';
 
@@ -399,7 +400,7 @@ function buildVideoGrid(gridElement, cameraNames) {
  * @param {Camera[]} cameras
  * @returns {string} TOML content
  */
-function exportCalibrationTOML(cameras) {
+export function exportCalibrationTOML(cameras) {
     let toml = '';
     for (let i = 0; i < cameras.length; i++) {
         const c = cameras[i];
@@ -426,7 +427,7 @@ function exportCalibrationTOML(cameras) {
  * @param {Skeleton} skeleton
  * @returns {{ skeletons: Object[], nodes: Object[] }}
  */
-function serializeSkeleton(skeleton) {
+export function serializeSkeleton(skeleton) {
     // Global node list with names (matches SLEAP-io nodes_dicts format)
     const nodes = skeleton.nodes.map(function (name) {
         return { name: name, weight: 1.0 };
@@ -490,7 +491,7 @@ function serializeSkeleton(skeleton) {
  * @param {Object[]} views - View objects with name, videoWidth, videoHeight
  * @returns {Object} The full export data object
  */
-function buildSlpExportData(session, views, videoFiles) {
+export function buildSlpExportData(session, views, videoFiles) {
     const skelData = serializeSkeleton(session.skeleton);
 
     // Metadata
@@ -734,7 +735,7 @@ function buildSlpExportData(session, views, videoFiles) {
  * @param {Session} session
  * @returns {Object} { points_3d, frame_indices, track_names, node_names, reprojection_errors }
  */
-function buildPoints3dExportData(session) {
+export function buildPoints3dExportData(session) {
     const nodeNames = session.skeleton.nodes.slice();
     const trackNames = (session.identities && session.identities.length > 0)
         ? session.identities.map(function (id) { return id.name; })
@@ -804,7 +805,7 @@ function buildPoints3dExportData(session) {
  * @param {Object} data - Data to serialize
  * @param {string} filename - Download filename
  */
-function downloadJSON(data, filename) {
+export function downloadJSON(data, filename) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -819,7 +820,7 @@ function downloadJSON(data, filename) {
  * @param {string} tomlContent - TOML string
  * @param {string} filename - Download filename
  */
-function downloadTOML(tomlContent, filename) {
+export function downloadTOML(tomlContent, filename) {
     const blob = new Blob([tomlContent], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -862,7 +863,7 @@ async function initH5wasm() {
  * @param {string} filename
  * @returns {Blob}
  */
-function h5FileToBlob(filename) {
+export function h5FileToBlob(filename) {
     var bytes = h5wasm.FS.readFile(filename);
     return new Blob([bytes], { type: 'application/x-hdf5' });
 }
@@ -876,7 +877,7 @@ function h5FileToBlob(filename) {
  * @param {Object} videoFileInfo - Entry from state.videoFiles with videoWidth/videoHeight
  * @returns {Object} SLP export data object
  */
-function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo) {
+export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo) {
     // Skeleton metadata
     var skelData = serializeSkeleton(session.skeleton);
     var metadata = {
@@ -1072,7 +1073,7 @@ function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFileInfo)
  * @param {Object} videoFileInfo - { videoWidth, videoHeight, frameCount, videoPath, file }
  * @returns {Object} sleap-io.js Labels instance
  */
-function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter) {
+export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -1343,7 +1344,7 @@ async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileI
  * @param {object} [instanceFilter]
  * @returns {SIO.Labels}
  */
-function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFilter) {
+export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
     if (!selections || selections.length === 0) throw new Error('No selections provided');
@@ -1838,7 +1839,7 @@ function _metadataToDtypeString(meta) {
  * @param {Array} videoFiles - Array of videoFile objects
  * @returns {Object} sleap-io.js Labels instance
  */
-function buildSlpLabelsAllViews(session, views, videoFiles) {
+export function buildSlpLabelsAllViews(session, views, videoFiles) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -2367,9 +2368,9 @@ function _readColumnar(obj, fieldNames) {
  * @param {Function} [onProgress] - Optional progress callback
  * @returns {Promise<Object>} Raw parsed data from worker
  */
-function parseSlpH5(file, onProgress) {
+export function parseSlpH5(file, onProgress) {
     return new Promise(function (resolve, reject) {
-        var worker = new Worker('slp-import-worker.js?v=' + Date.now());
+        var worker = new Worker('/slp-import-worker.js?v=' + Date.now());
 
         worker.onmessage = function (e) {
             var msg = e.data;
@@ -2504,7 +2505,7 @@ async function parsePoints3dH5(arrayBuffer) {
  * @param {Array<number[]|null>} ptsB
  * @returns {boolean}
  */
-function instancePointsMatch(ptsA, ptsB) {
+export function instancePointsMatch(ptsA, ptsB) {
     if (!ptsA || !ptsB) return false;
     if (ptsA.length !== ptsB.length) return false;
     // Compare every node position where both sides are non-null. Any

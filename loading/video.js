@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 // Logging helper
 // ---------------------------------------------------------------------------
-function videoLog(msg, level) {
+export function videoLog(msg, level) {
     level = level || "log";
     if (typeof window !== "undefined" && window.logMessage) {
         window.logMessage("[video] " + msg, level);
@@ -29,7 +29,7 @@ function videoLog(msg, level) {
 // ---------------------------------------------------------------------------
 // OnDemandVideoDecoder
 // ---------------------------------------------------------------------------
-class OnDemandVideoDecoder {
+export class OnDemandVideoDecoder {
     constructor(options = {}) {
         this.cacheSize = options.cacheSize || 30;
         this.lookahead = options.lookahead || 5;
@@ -833,7 +833,7 @@ class OnDemandVideoDecoder {
 // ---------------------------------------------------------------------------
 // EmbeddedVideoDecoder - On-demand frame extraction from SLP via frame-worker
 // ---------------------------------------------------------------------------
-class EmbeddedVideoDecoder {
+export class EmbeddedVideoDecoder {
     /**
      * Decoder for embedded video frames in SLP files.
      * Uses a frame-worker.js Web Worker with SLPPackageReader for on-demand
@@ -996,7 +996,7 @@ class EmbeddedVideoDecoder {
 // ---------------------------------------------------------------------------
 // VideoController - Synchronized multi-view playback with overlay support
 // ---------------------------------------------------------------------------
-class VideoController {
+export class VideoController {
     /**
      * @param {Object} state - Shared application state
      *   state.views: Array of { name, decoder, canvas, ctx, overlayCanvas, overlayCtx }

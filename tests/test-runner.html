@@ -80,11 +80,6 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 
-    <!-- Source files under test (still-classic scripts) -->
-    <script src="../file-io.js"></script>
-    <script src="../slp-merge.js"></script>
-    <script src="../video.js"></script>
-
     <!-- Test files -->
     <script src="test-pose-data.js"></script>
     <script src="test-triangulation.js"></script>
@@ -176,8 +171,12 @@
         import * as __Viewport3D from '../ui/viewport3d.js?v=1';
         import * as __Timeline from '../ui/timeline.js?v=1';
         import * as __Interaction from '../ui/interaction.js?v=1';
+        import * as __SlpMerge from '../import-export/slp-merge.js?v=1';
+        import * as __FileIO from '../import-export/file-io.js?v=1';
+        import * as __Video from '../loading/video.js?v=1';
         Object.assign(window, __PoseData, __Triangulation, __Overlays,
-                              __Viewport3D, __Timeline, __Interaction);
+                              __Viewport3D, __Timeline, __Interaction,
+                              __SlpMerge, __FileIO, __Video);
 
         try {
             const results = await TestFramework.runAll();

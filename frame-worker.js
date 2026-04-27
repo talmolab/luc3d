@@ -6,7 +6,7 @@
  */
 
 importScripts('https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/dist/iife/h5wasm.js');
-importScripts('slp-package-reader.js');
+importScripts('./loading/slp-package-reader.js');
 
 let h5wasmReady = false;
 let reader = null;

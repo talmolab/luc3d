@@ -18,6 +18,12 @@
  *   reader.close();
  *
  * @module slp-package-reader
+ *
+ * NOTE: Pass 2 Step 12 moved this file under loading/ but kept its body
+ * classic (no `export`/`import`) because frame-worker.js loads it via
+ * `importScripts(...)`, which can't parse ESM keywords. Step 13 will
+ * convert this to real ESM together with frame-worker.js becoming a
+ * module worker.
  */
 
 /**
