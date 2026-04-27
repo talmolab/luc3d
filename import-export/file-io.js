@@ -1330,7 +1330,7 @@ async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileI
 
     var labels = buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter);
     var bytes = await SIO.saveSlpToBytes(labels);
-    var compatBytes = await _convertSlpToV06Compatible(bytes);
+    var compatBytes = await convertSlpToV06Compatible(bytes);
     return new Blob([compatBytes], { type: 'application/x-hdf5' });
 }
 
@@ -1536,7 +1536,7 @@ async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter) {
 
     var labels = buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFilter);
     var bytes = await SIO.saveSlpToBytes(labels);
-    var compatBytes = await _convertSlpToV06Compatible(bytes);
+    var compatBytes = await convertSlpToV06Compatible(bytes);
     return new Blob([compatBytes], { type: 'application/x-hdf5' });
 }
 
@@ -1613,7 +1613,7 @@ async function _initLocalH5wasm() {
     return _localH5wasmReady;
 }
 
-async function _convertSlpToV06Compatible(rawBytes, sessionsToEmit) {
+export async function convertSlpToV06Compatible(rawBytes, sessionsToEmit) {
     var h5 = await _initLocalH5wasm();
     var stamp = Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 10);
     var srcPath = '/lucid-export-src-' + stamp + '.h5';
@@ -2370,7 +2370,7 @@ function _readColumnar(obj, fieldNames) {
  */
 export function parseSlpH5(file, onProgress) {
     return new Promise(function (resolve, reject) {
-        var worker = new Worker('/slp-import-worker.js?v=' + Date.now());
+        var worker = new Worker('/loading/slp-import-worker.js?v=' + Date.now(), { type: 'module' });
 
         worker.onmessage = function (e) {
             var msg = e.data;

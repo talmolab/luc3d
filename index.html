@@ -761,19 +761,6 @@
         <div class="context-menu-item danger" id="ctxDeleteGroup">Delete Group</div>
     </div>
 
-    <!-- Module scripts (order matters: dependencies first) -->
-    <script src="demo-data.js"></script>
-
-    <!-- Pass 2 transitional bridge: expose ESM-converted modules on window
-         so remaining classic scripts (demo-data.js) keep working until
-         they are converted in subsequent steps. Removed in Pass 3. -->
-    <script type="module">
-        import * as __PoseData from './pose/pose-data.js?v=1';
-        import * as __Triangulation from './pose/triangulation.js?v=1';
-        import * as __Overlays from './ui/overlays.js?v=1';
-        Object.assign(window, __PoseData, __Triangulation, __Overlays);
-    </script>
-
     <!-- sleap-io.js bridge: expose saveSlpToBytes and data model to window -->
     <script type="module">
         import {
@@ -793,7 +780,7 @@
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
 
-    <script type="module" src="app.js?v=7"></script>
+    <script type="module" src="app.js?v=9"></script>
 </body>
 
 </html>

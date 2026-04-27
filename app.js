@@ -13,9 +13,10 @@
             serializeSkeleton, buildSlpExportData, buildPoints3dExportData,
             downloadJSON, downloadTOML, h5FileToBlob, buildPerCameraSlpJson,
             buildSlpLabels, buildSlpLabelsMultiSession, buildSlpLabelsAllViews,
-            parseSlpH5, instancePointsMatch
+            parseSlpH5, instancePointsMatch, convertSlpToV06Compatible
         } from './import-export/file-io.js?v=1';
         import { OnDemandVideoDecoder, EmbeddedVideoDecoder, VideoController, videoLog } from './loading/video.js?v=1';
+        import { createDemoCalibration, createDemoSkeleton, generateDemoKeypoints3D, createDemoSession } from './demo-data.js?v=1';
 
         // ============================================
         // Application State
@@ -1426,7 +1427,7 @@
             open(cameraName, file, onProgress) {
                 var self = this;
                 return new Promise(function (resolve, reject) {
-                    var worker = new Worker('slp-import-worker.js?v=' + Date.now());
+                    var worker = new Worker(new URL('./loading/slp-import-worker.js', import.meta.url), { type: 'module' });
                     worker.onmessage = function (e) {
                         var msg = e.data;
                         if (msg.type === 'metadata') {
@@ -9029,7 +9030,7 @@
             });
 
             var rawBytes = await SIO.saveSlpToBytes(labels);
-            return await _convertSlpToV06Compatible(rawBytes, calibSessions);
+            return await convertSlpToV06Compatible(rawBytes, calibSessions);
         }
 
         async function quickSave() {
@@ -12944,7 +12945,7 @@
                     // --- Embedded videos: use frame-worker for on-demand extraction ---
                     showLoading('Loading embedded video frames...');
 
-                    var frameWorker = new Worker('frame-worker.js');
+                    var frameWorker = new Worker(new URL('./loading/frame-worker.js', import.meta.url), { type: 'module' });
                     var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                         frameWorker.onmessage = function (e) {
                             var msg = e.data;
@@ -13451,7 +13452,7 @@
                 if (hasEmbedded) {
                     showLoading('Loading embedded video frames...');
 
-                    var frameWorker = new Worker('frame-worker.js');
+                    var frameWorker = new Worker(new URL('./loading/frame-worker.js', import.meta.url), { type: 'module' });
                     var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                         frameWorker.onmessage = function (e) {
                             var msg = e.data;
