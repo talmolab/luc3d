@@ -13,7 +13,9 @@
             serializeSkeleton, buildSlpExportData, buildPoints3dExportData,
             downloadJSON, downloadTOML, h5FileToBlob, buildPerCameraSlpJson,
             buildSlpLabels, buildSlpLabelsMultiSession, buildSlpLabelsAllViews,
-            parseSlpH5, instancePointsMatch, convertSlpToV06Compatible
+            parseSlpH5, instancePointsMatch, convertSlpToV06Compatible,
+            loadCalibrationFile, pickVideoFiles, exportSlpClientSide, exportSlpMultiSession,
+            buildPoints3dH5, buildReprojH5, parsePoints3dH5
         } from './import-export/file-io.js?v=1';
         import { OnDemandVideoDecoder, EmbeddedVideoDecoder, VideoController, videoLog } from './loading/video.js?v=1';
         import { createDemoCalibration, createDemoSkeleton, generateDemoKeypoints3D, createDemoSession } from './demo-data.js?v=1';
@@ -53,6 +55,18 @@
         let interactionManager = null;
         let viewport3d = null;
         let timeline = null;
+
+        // Debug accessor — DevTools console can inspect via `__lucid.state` etc.
+        // Module-scoped bindings aren't reachable from console after the Pass 2 ESM split.
+        if (typeof window !== 'undefined') {
+            window.__lucid = {
+                get state() { return state; },
+                get videoController() { return videoController; },
+                get interactionManager() { return interactionManager; },
+                get viewport3d() { return viewport3d; },
+                get timeline() { return timeline; },
+            };
+        }
 
         // ============================================
         // Session Accessors
@@ -15414,13 +15428,20 @@
                 setReprojErrorVisible(true);
             }
             updateInfoPanel();
-            // Restore per-session frame count — updateTotalFrames() may not
-            // find decoders if they haven't been rebuilt yet, so use saved value.
-            // Always assign so an empty session resets to 0 instead of inheriting.
-            state.totalFrames = newSession.totalFrames || 0;
-            state.fps = newSession.fps || 30;
-            document.getElementById('totalFrames').textContent = state.totalFrames;
-            document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
+            // updateTotalFrames() already wrote state.totalFrames from the current
+            // decoders. Cache it onto the session so future no-decoder paths can
+            // restore. If updateTotalFrames found no decoders, fall back to the
+            // session's previously cached value (covers lazy-load paths where the
+            // decoder isn't ready yet but the count is known).
+            if (state.totalFrames > 0) {
+                newSession.totalFrames = state.totalFrames;
+                newSession.fps = state.fps;
+            } else if (newSession.totalFrames > 0) {
+                state.totalFrames = newSession.totalFrames;
+                state.fps = newSession.fps || 30;
+                document.getElementById('totalFrames').textContent = state.totalFrames;
+                document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
+            }
 
             if (timeline) {
                 timeline.setData(newSession);

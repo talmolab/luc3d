@@ -259,7 +259,7 @@ export function parseCalibrationJSON(text) {
  *
  * @returns {Promise<Camera[]|null>} Array of cameras, or null if cancelled/error
  */
-async function loadCalibrationFile() {
+export async function loadCalibrationFile() {
     const files = await pickFiles({ accept: '.toml,.json' });
     if (files.length === 0) return null;
 
@@ -282,7 +282,7 @@ async function loadCalibrationFile() {
  *
  * @returns {Promise<File[]>} Array of video files (empty if cancelled)
  */
-async function pickVideoFiles() {
+export async function pickVideoFiles() {
     return pickFiles({ accept: '.mp4,.avi,.webm,.mov', multiple: true });
 }
 
@@ -1324,7 +1324,7 @@ function _buildSioPoints(inst, numNodes, perPointScore) {
  * @param {string} outputFilename
  * @returns {Promise<Blob>} SLP file as a Blob
  */
-async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename, instanceFilter) {
+export async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -1530,7 +1530,7 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
  * @param {object} [instanceFilter]
  * @returns {Promise<Blob>}
  */
-async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter) {
+export async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
 
@@ -2115,7 +2115,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
  * @param {Session} session
  * @returns {Promise<Blob>} The .h5 file as a Blob
  */
-async function buildPoints3dH5(session) {
+export async function buildPoints3dH5(session) {
     const mod = await initH5wasm();
     const fname = 'export_points3d.h5';
 
@@ -2195,7 +2195,7 @@ async function buildPoints3dH5(session) {
  * @param {Session} session
  * @returns {Promise<Blob>} The .h5 file as a Blob
  */
-async function buildReprojH5(session) {
+export async function buildReprojH5(session) {
     const mod = await initH5wasm();
     const fname = 'export_reprojections.h5';
 
@@ -2406,7 +2406,7 @@ export function parseSlpH5(file, onProgress) {
  * @returns {Promise<Object>} { nodeNames, trackNames, frameIndices, points3d }
  *   points3d: Map<frameIdx, Map<trackIdx, number[][]>>
  */
-async function parsePoints3dH5(arrayBuffer) {
+export async function parsePoints3dH5(arrayBuffer) {
     var mod = await initH5wasm();
     var fname = '_import_pts3d_' + Date.now() + '.h5';
 
