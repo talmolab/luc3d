@@ -5,7 +5,8 @@
  * Uses the Jacobi eigenvalue algorithm for solving the 4x4 symmetric eigenproblem.
  */
 
-import { mat3x3Multiply } from './pose-data.js';
+import { mat3x3Multiply, FrameGroup, Instance, UnlinkedInstance } from './pose-data.js';
+import { state, timeline } from '../ui/app-state.js?v=1';
 
 // ============================================
 // Matrix utilities (minimal linear algebra)
@@ -995,4 +996,564 @@ export function epipolarErrorMatrix(detections1, detections2, F) {
         }
     }
     return matrix;
+}
+
+// ============================================
+// Reprojection storage utility
+// ============================================
+
+/**
+ * Persist reprojected 2D instances onto an InstanceGroup. Reprojects against
+ * every camera that has calibration data (not just those used for triangulation).
+ */
+export function storeReprojectedInstances(group, triangulationResult, allCameras) {
+    if (!triangulationResult || !triangulationResult.points3d) return;
+    for (var ci = 0; ci < allCameras.length; ci++) {
+        var cam = allCameras[ci];
+        var reprojPts = triangulationResult.reprojections[cam.name];
+        if (!reprojPts && cam.projectionMatrix) {
+            reprojPts = reprojectPoints(triangulationResult.points3d, cam.projectionMatrix);
+        }
+        if (reprojPts) {
+            var existing = group.getReprojectedInstance
+                ? group.getReprojectedInstance(cam.name) : null;
+            if (existing) {
+                existing.points = reprojPts;
+            } else {
+                var reprojInstance = new Instance(reprojPts, group.identityId, 'reprojected', 1.0);
+                group.addReprojectedInstance(cam.name, reprojInstance);
+            }
+        }
+    }
+}
+
+// ============================================
+// Lazy H5 Frame Loader
+// ============================================
+
+/**
+ * Per-camera worker-backed lazy loader for analysis H5 files. Spawns one
+ * `loading/slp-import-worker.js` per camera, holds metadata, and serves
+ * frame requests with prefetch + LRU caching.
+ */
+export class LazyFrameLoader {
+    constructor() {
+        this.workers = new Map();
+        this.metadata = new Map();
+        this.cache = new Map();
+        this.cacheOrder = [];
+        this.maxCacheSize = 100;
+        this.prefetchAhead = 20;
+        this.nFrames = 0;
+        this.skeleton = null;
+        this.trackNames = [];
+        this.videos = new Map();
+        this.trackOccupancy = new Map();
+        this._requestId = 0;
+        this._pending = new Map();
+    }
+
+    open(cameraName, file, onProgress) {
+        var self = this;
+        return new Promise(function (resolve, reject) {
+            // Root-anchored URL (not new URL(..., import.meta.url)) so this module
+            // remains loadable inside the node test sandbox (vm.Script). See ISSUES.md I-8.
+            var worker = new Worker('/loading/slp-import-worker.js?v=' + Date.now(), { type: 'module' });
+            worker.onmessage = function (e) {
+                var msg = e.data;
+                if (msg.type === 'metadata') {
+                    self.workers.set(cameraName, worker);
+                    self.metadata.set(cameraName, msg.data);
+                    if (!self.skeleton) {
+                        self.skeleton = msg.data.skeleton;
+                        self.trackNames = msg.data.trackNames;
+                    }
+                    if (msg.data.nFrames > self.nFrames) self.nFrames = msg.data.nFrames;
+                    self.videos.set(cameraName, msg.data.videos ? msg.data.videos[0] : null);
+                    if (msg.data.trackOccupancy) {
+                        self.trackOccupancy.set(cameraName, {
+                            data: msg.data.trackOccupancy,
+                            nTracks: msg.data.nTracks,
+                            nFrames: msg.data.nFrames,
+                        });
+                    }
+                    resolve(msg.data);
+                } else if (msg.type === 'frameData') {
+                    var cb = self._pending.get(msg.requestId);
+                    if (cb) { self._pending.delete(msg.requestId); cb.resolve({ frameIdx: msg.frameIdx, instances: msg.instances }); }
+                } else if (msg.type === 'framesData') {
+                    var cb2 = self._pending.get(msg.requestId);
+                    if (cb2) { self._pending.delete(msg.requestId); cb2.resolve(msg.frames); }
+                } else if (msg.type === 'error') {
+                    if (msg.requestId !== undefined) {
+                        var cb3 = self._pending.get(msg.requestId);
+                        if (cb3) { self._pending.delete(msg.requestId); cb3.reject(new Error(msg.message)); return; }
+                    }
+                    reject(new Error(msg.message));
+                } else if (msg.type === 'progress' && onProgress) {
+                    onProgress(msg.message);
+                }
+            };
+            worker.onerror = function (e) { reject(new Error('Worker error: ' + e.message)); };
+            worker.postMessage({ type: 'open', file: file });
+        });
+    }
+
+    async getFrame(frameIdx) {
+        if (this.cache.has(frameIdx)) { this._touchCache(frameIdx); return this.cache.get(frameIdx); }
+        var self = this;
+        var cameraNames = Array.from(this.workers.keys());
+        var promises = cameraNames.map(function (camName) {
+            var reqId = ++self._requestId;
+            var worker = self.workers.get(camName);
+            return new Promise(function (resolve, reject) {
+                self._pending.set(reqId, { resolve: resolve, reject: reject });
+                worker.postMessage({ type: 'getFrame', frameIdx: frameIdx, requestId: reqId });
+            });
+        });
+        var results = await Promise.all(promises);
+        var frameMap = new Map();
+        for (var i = 0; i < cameraNames.length; i++) { frameMap.set(cameraNames[i], results[i].instances); }
+        this._putCache(frameIdx, frameMap);
+        return frameMap;
+    }
+
+    prefetch(frameIdx, direction) {
+        var self = this;
+        var start = direction > 0 ? frameIdx + 1 : Math.max(0, frameIdx - this.prefetchAhead);
+        var end = direction > 0 ? Math.min(this.nFrames, frameIdx + this.prefetchAhead + 1) : frameIdx;
+        var uncachedStart = -1, uncachedEnd = -1;
+        for (var fi = start; fi < end; fi++) {
+            if (!this.cache.has(fi)) { if (uncachedStart < 0) uncachedStart = fi; uncachedEnd = fi + 1; }
+        }
+        if (uncachedStart < 0) return;
+        var cameraNames = Array.from(this.workers.keys());
+        for (var ci = 0; ci < cameraNames.length; ci++) {
+            (function (cn, rid, w) {
+                self._pending.set(rid, {
+                    resolve: function (frames) {
+                        for (var fi2 = 0; fi2 < frames.length; fi2++) {
+                            var fData = frames[fi2];
+                            var entry = self.cache.get(fData.frameIdx) || new Map();
+                            entry.set(cn, fData.instances);
+                            if (!self.cache.has(fData.frameIdx)) self._putCache(fData.frameIdx, entry);
+                        }
+                    },
+                    reject: function () { }
+                });
+                w.postMessage({ type: 'getFrames', startIdx: uncachedStart, endIdx: uncachedEnd, requestId: rid });
+            })(cameraNames[ci], ++this._requestId, this.workers.get(cameraNames[ci]));
+        }
+    }
+
+    _touchCache(frameIdx) {
+        var idx = this.cacheOrder.indexOf(frameIdx);
+        if (idx >= 0) this.cacheOrder.splice(idx, 1);
+        this.cacheOrder.push(frameIdx);
+    }
+
+    _putCache(frameIdx, data) {
+        if (this.cache.has(frameIdx)) { this._touchCache(frameIdx); return; }
+        this.cache.set(frameIdx, data);
+        this.cacheOrder.push(frameIdx);
+        while (this.cacheOrder.length > this.maxCacheSize) { this.cache.delete(this.cacheOrder.shift()); }
+    }
+
+    /** Return cached frame data synchronously, or null if not cached. */
+    getFrameSync(frameIdx) {
+        if (this.cache.has(frameIdx)) {
+            this._touchCache(frameIdx);
+            return this.cache.get(frameIdx);
+        }
+        return null;
+    }
+
+    close() {
+        for (var entry of this.workers) {
+            try { entry[1].postMessage({ type: 'close' }); entry[1].terminate(); } catch (e) { }
+        }
+        this.workers.clear(); this.metadata.clear(); this.cache.clear();
+        this.cacheOrder = []; this._pending.clear();
+    }
+}
+
+// ============================================
+// Helpers — file detection + frame group access
+// ============================================
+
+/**
+ * Check if a file is an analysis H5 that should use lazy loading.
+ * Returns true for .h5 files over 20MB.
+ */
+export function shouldUseLazyH5(file) {
+    var name = file.name.toLowerCase();
+    var isH5 = name.endsWith('.h5') || name.endsWith('.hdf5');
+    return isH5 && file.size > 20 * 1024 * 1024;
+}
+
+export function getInstanceGroupsForFrame(frameIdx) {
+    return state.session ? (state.session.instanceGroups.get(frameIdx) || []) : [];
+}
+
+/**
+ * Check whether a frame has any grouped UserInstances.
+ */
+export function frameHasGroupedUserInstances(frameIdx) {
+    var groups = getInstanceGroupsForFrame(frameIdx);
+    for (var i = 0; i < groups.length; i++) {
+        for (var [, inst] of groups[i].instances) {
+            if (inst.type === 'user') return true;
+        }
+    }
+    return false;
+}
+
+// ============================================
+// Lazy frame loading helpers
+// ============================================
+
+/**
+ * Ensure frame data is loaded for lazy sessions.
+ * For eager sessions, returns immediately. For lazy sessions,
+ * fetches the frame data from workers and populates a temporary FrameGroup.
+ */
+export async function ensureLazyFrameData(frameIdx) {
+    var session = state.session;
+    if (!session || !session.lazyLoader) return;
+
+    if (session.frameGroups.has(frameIdx)) return;
+
+    var cameraData = await session.lazyLoader.getFrame(frameIdx);
+
+    if (session.frameGroups.has(frameIdx)) return;
+
+    var fg = new FrameGroup(frameIdx);
+    for (var [camName, instances] of cameraData) {
+        for (var ii = 0; ii < instances.length; ii++) {
+            var instData = instances[ii];
+            var inst = new Instance(
+                instData.points || [],
+                instData.trackIdx,
+                instData.type || 'predicted',
+                instData.score || 0
+            );
+            fg.addInstance(camName, inst);
+        }
+    }
+    session.addFrameGroup(fg);
+
+    for (var [cn, camInsts] of fg.instances) {
+        for (var instItem of camInsts) {
+            fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
+        }
+        fg.instances.set(cn, []);
+    }
+
+    var direction = frameIdx >= (state._lastLazyFrame || 0) ? 1 : -1;
+    state._lastLazyFrame = frameIdx;
+    session.lazyLoader.prefetch(frameIdx, direction);
+
+    var ahead = direction > 0 ? 1 : -1;
+    for (var pfi = 1; pfi <= 30; pfi++) {
+        var pfIdx = frameIdx + pfi * ahead;
+        if (pfIdx < 0 || pfIdx >= session.lazyLoader.nFrames) break;
+        if (session.frameGroups.has(pfIdx)) continue;
+        buildLazyFrameGroupSync(pfIdx);
+    }
+}
+
+/**
+ * Build a FrameGroup from cached lazy data (synchronous).
+ * Returns true if data was available and FrameGroup was created.
+ */
+export function buildLazyFrameGroupSync(frameIdx) {
+    var session = state.session;
+    if (!session || !session.lazyLoader) return false;
+    if (session.frameGroups.has(frameIdx)) return true;
+
+    var cached = session.lazyLoader.getFrameSync(frameIdx);
+    if (!cached) return false;
+
+    var fg = new FrameGroup(frameIdx);
+    for (var [camName, instances] of cached) {
+        for (var ii = 0; ii < instances.length; ii++) {
+            var instData = instances[ii];
+            var inst = new Instance(
+                instData.points || [],
+                instData.trackIdx,
+                instData.type || 'predicted',
+                instData.score || 0
+            );
+            fg.addInstance(camName, inst);
+        }
+    }
+    session.addFrameGroup(fg);
+    for (var [cn, camInsts] of fg.instances) {
+        for (var instItem of camInsts) {
+            fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
+        }
+        fg.instances.set(cn, []);
+    }
+    return true;
+}
+
+/**
+ * Batch-load a range of frames from lazy loader into session.frameGroups.
+ * Uses the getFrames batch endpoint for efficiency (~100ms per 500 frames).
+ */
+export async function batchLoadLazyFrames(startIdx, count, onProgress) {
+    var session = state.session;
+    if (!session || !session.lazyLoader) return 0;
+    var loader = session.lazyLoader;
+    var endIdx = Math.min(startIdx + count, loader.nFrames);
+
+    var needStart = -1, needEnd = -1;
+    for (var fi = startIdx; fi < endIdx; fi++) {
+        if (!session.frameGroups.has(fi)) {
+            if (needStart < 0) needStart = fi;
+            needEnd = fi + 1;
+        }
+    }
+    if (needStart < 0) return 0;
+
+    var cameraNames = Array.from(loader.workers.keys());
+    var batchPromises = cameraNames.map(function (camName) {
+        var reqId = ++loader._requestId;
+        var worker = loader.workers.get(camName);
+        return new Promise(function (resolve, reject) {
+            loader._pending.set(reqId, { resolve: resolve, reject: reject });
+            worker.postMessage({ type: 'getFrames', startIdx: needStart, endIdx: needEnd, requestId: reqId });
+        });
+    });
+
+    var batchResults = await Promise.all(batchPromises);
+
+    var loaded = 0;
+    for (var bi = 0; bi < batchResults[0].length; bi++) {
+        var frameIdx = batchResults[0][bi].frameIdx;
+        if (session.frameGroups.has(frameIdx)) continue;
+
+        var fg = new FrameGroup(frameIdx);
+        for (var ci = 0; ci < cameraNames.length; ci++) {
+            var camData = batchResults[ci][bi];
+            if (!camData || !camData.instances) continue;
+            for (var ii = 0; ii < camData.instances.length; ii++) {
+                var instData = camData.instances[ii];
+                var inst = new Instance(
+                    instData.points || [], instData.trackIdx,
+                    instData.type || 'predicted', instData.score || 0
+                );
+                fg.addInstance(cameraNames[ci], inst);
+            }
+        }
+        session.addFrameGroup(fg);
+        for (var [cn, camInsts] of fg.instances) {
+            for (var instItem of camInsts) {
+                fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
+            }
+            fg.instances.set(cn, []);
+        }
+        loaded++;
+        if (onProgress && loaded % 100 === 0) onProgress(loaded, needEnd - needStart);
+    }
+    return loaded;
+}
+
+/**
+ * Load ALL lazy frames in batches with progress UI.
+ * Used before bulk operations (triangulate all, etc.) that need every frame.
+ *
+ * `onStatus` is an optional callback the caller wires to its loading-toast/status
+ * function — kept as a parameter to avoid a circular import back into app.js.
+ */
+export async function loadAllLazyFrames(onStatus) {
+    var session = state.session;
+    if (!session || !session.lazyLoader) return;
+    var loader = session.lazyLoader;
+    var BATCH = 5000;
+    var totalLoaded = 0;
+    for (var start = 0; start < loader.nFrames; start += BATCH) {
+        if (onStatus) onStatus('Loading frames ' + start + '/' + loader.nFrames + '...');
+        var loaded = await batchLoadLazyFrames(start, BATCH);
+        totalLoaded += loaded;
+    }
+    return totalLoaded;
+}
+
+/**
+ * Evict old lazy-loaded frames to keep memory bounded.
+ */
+export function evictLazyFrames(currentFrame) {
+    var session = state.session;
+    if (!session || !session.lazyLoader) return;
+
+    var maxKeep = 500;
+    var keys = Array.from(session.frameGroups.keys());
+    if (keys.length <= maxKeep) return;
+
+    if (!evictLazyFrames._counter) evictLazyFrames._counter = 0;
+    if (++evictLazyFrames._counter % 50 !== 0) return;
+
+    keys.sort(function (a, b) {
+        return Math.abs(a - currentFrame) - Math.abs(b - currentFrame);
+    });
+
+    var evicted = 0;
+    for (var i = maxKeep; i < keys.length; i++) {
+        var fIdx = keys[i];
+        if (fIdx === currentFrame) continue;
+
+        var fgEvict = session.frameGroups.get(fIdx);
+        if (!fgEvict) continue;
+
+        var hasUserData = false;
+        for (var [, insts] of fgEvict.instances) {
+            for (var instCheck of insts) {
+                if (instCheck.type === 'user') { hasUserData = true; break; }
+            }
+            if (hasUserData) break;
+        }
+        if (!hasUserData) {
+            for (var [, uInsts] of fgEvict.unlinkedInstances) {
+                for (var uInst of uInsts) {
+                    if (uInst.instance && uInst.instance.type === 'user') { hasUserData = true; break; }
+                }
+                if (hasUserData) break;
+            }
+        }
+        if (!hasUserData && session.instanceGroups.has(fIdx)) {
+            hasUserData = true;
+        }
+
+        if (!hasUserData) {
+            session.frameGroups.delete(fIdx);
+            evicted++;
+        }
+    }
+}
+
+/**
+ * Update timeline markers and track bars for a frame after group changes.
+ * Sets the white modified tick only if grouped UserInstances remain,
+ * and rebuilds track bars so removed groups disappear.
+ */
+export function updateTimelineForFrame(frameIdx) {
+    if (!timeline) return;
+    timeline.setFrameModified(frameIdx, frameHasGroupedUserInstances(frameIdx));
+    timeline.refreshTracks(state.session);
+}
+
+// ============================================
+// Multi-frame triangulation orchestration (BACKEND only)
+// ============================================
+
+/**
+ * Backend orchestration for multi-frame triangulation. Runs through
+ * `[startFrame, endFrame]` and triangulates every InstanceGroup that has
+ * ≥2 views with labels. Yields to UI every 50 frames so a progress bar
+ * can repaint. The modal UI wrapper lives in app.js (`runMultiFrameTriangulation`)
+ * and is responsible for DOM updates, post-loop redraws, and timeline syncs.
+ *
+ * `onProgress(completed, total)` is invoked per frame; pass it to drive a
+ * progress bar.
+ *
+ * Returns `{triangulated, totalGroups, totalErrors}`.
+ */
+export async function triangulateMultiFrameInstances(startFrame, endFrame, onProgress) {
+    var totalFrames = endFrame - startFrame + 1;
+    var session = state.session;
+    var cameras = session.cameras;
+    var completed = 0;
+    var triangulated = 0;
+    var totalGroups = 0;
+    var totalErrors = [];
+
+    for (var f = startFrame; f <= endFrame; f++) {
+        var frameGroupsList2 = session.instanceGroups.get(f);
+        if (frameGroupsList2) {
+            var frameResults = [];
+
+            for (var gi = 0; gi < frameGroupsList2.length; gi++) {
+                var group = frameGroupsList2[gi];
+
+                // Resolve camera name mismatches
+                var groupKeys = group.cameraNames;
+                for (var ki = 0; ki < groupKeys.length; ki++) {
+                    var gk = groupKeys[ki];
+                    if (!cameras.some(function (c) { return c.name === gk; })) {
+                        var gkLower = gk.toLowerCase();
+                        for (var ci = 0; ci < cameras.length; ci++) {
+                            var camLower = cameras[ci].name.toLowerCase();
+                            if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
+                                if (!group.getInstance(cameras[ci].name)) {
+                                    var inst = group.getInstance(gk);
+                                    group.instances.delete(gk);
+                                    group.instances.set(cameras[ci].name, inst);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Count views with labels
+                var viewsWithLabels = 0;
+                for (var cj = 0; cj < cameras.length; cj++) {
+                    var inst2 = group.getInstance(cameras[cj].name);
+                    if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
+                        viewsWithLabels++;
+                    }
+                }
+                if (viewsWithLabels < 2) continue;
+
+                var groupCamNames = group.cameraNames;
+                var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
+                var result = triangulateAndReproject(group, groupCameras);
+
+                group.reprojections = result.reprojections;
+                group.points3d = result.points3d;
+                storeReprojectedInstances(group, result, cameras);
+                group.observedPoints = {};
+                group.usedCameras = new Set();
+                for (var ck = 0; ck < groupCameras.length; ck++) {
+                    var camInst = group.getInstance(groupCameras[ck].name);
+                    if (camInst) {
+                        group.observedPoints[groupCameras[ck].name] = camInst.points;
+                        if (camInst.points.some(function (p) { return p != null; })) {
+                            group.usedCameras.add(groupCameras[ck].name);
+                        }
+                    }
+                }
+                group.markClean();
+                totalGroups++;
+
+                frameResults.push({
+                    group: group,
+                    points3d: result.points3d,
+                    reprojections: result.reprojections,
+                    errors: result.errors,
+                    meanError: result.meanError,
+                });
+
+                if (result.meanError != null) {
+                    totalErrors.push(result.meanError);
+                }
+            }
+
+            if (frameResults.length > 0) {
+                state.triangulationResults.set(f, frameResults);
+                triangulated++;
+            }
+        }
+
+        completed++;
+        if (onProgress) onProgress(completed, totalFrames);
+
+        // Yield to UI for progress bar updates every 50 frames
+        if (completed % 50 === 0) {
+            await new Promise(function (r) { setTimeout(r, 0); });
+        }
+    }
+
+    return { triangulated: triangulated, totalGroups: totalGroups, totalErrors: totalErrors };
 }
