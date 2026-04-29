@@ -441,14 +441,18 @@
         it('_createGroupFromAssignment directly creates group', function () {
             var env = makeTestEnv();
 
+            // A group needs ≥2 instances (different cameras) by definition.
             var inst1 = new Instance([[100, 100], [200, 200]], 0, 'user', 1.0);
+            var inst2 = new Instance([[150, 150], [250, 250]], 0, 'user', 1.0);
             env.session.addUnlinkedInstance(0, 'cam1', inst1);
+            env.session.addUnlinkedInstance(0, 'cam2', inst2);
 
             var fg = env.session.getFrameGroup(0);
             var ul1 = fg.getUnlinkedInstances('cam1');
+            var ul2 = fg.getUnlinkedInstances('cam2');
 
             env.mgr.assignmentMode = true;
-            env.mgr.assignmentSelection = [ul1[0]];
+            env.mgr.assignmentSelection = [ul1[0], ul2[0]];
 
             // Enter key is now handled in index.html, call method directly
             env.mgr._createGroupFromAssignment();

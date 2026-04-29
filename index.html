@@ -2882,9 +2882,15 @@
                 if (hasGroupedSelection && !assignmentMode) {
                     tbGroup.textContent = 'Ungroup';
                     tbGroup.classList.add('active');
+                    tbGroup.disabled = false;
                 } else {
                     tbGroup.textContent = 'Group';
-                    tbGroup.classList.toggle('active', assignmentMode);
+                    // A group needs ≥2 instances. Disable + de-highlight
+                    // the button when exactly one is selected so the user
+                    // can't form a degenerate single-instance group.
+                    var oneAssignmentSelected = assignmentMode && assignmentSelectedIds.length === 1;
+                    tbGroup.classList.toggle('active', assignmentMode && !oneAssignmentSelected);
+                    tbGroup.disabled = oneAssignmentSelected;
                 }
             }
             var tbEditGroup = document.getElementById('tbEditGroup');
@@ -3334,6 +3340,12 @@
                     // Remove from group
                     group.instances.delete(viewName);
 
+                    // Keep observedPoints in sync so the reprojection error
+                    // vector for this view stops drawing immediately.
+                    if (group.observedPoints) {
+                        delete group.observedPoints[viewName];
+                    }
+
                     // Remove from FrameGroup linked instances
                     if (fg) {
                         var camInstances = fg.instances.get(viewName);
@@ -3359,6 +3371,12 @@
 
                     // Add to group (keep instance's original trackIdx for color consistency)
                     group.addInstance(viewName, inst);
+
+                    // Record the new instance's points as observed so the
+                    // reprojection error vector connecting this view to its
+                    // (existing) reprojected projection draws immediately.
+                    group.observedPoints = group.observedPoints || {};
+                    group.observedPoints[viewName] = inst.points;
 
                     // Remove from unlinked list in FrameGroup
                     if (fg) {
@@ -3819,7 +3837,9 @@
 
             document.getElementById('menuUnlinkGroup').addEventListener('click', function () {
                 closeMenus();
-                if (interactionManager) interactionManager._unlinkSelectedGroup();
+                if (interactionManager && interactionManager.selectedInstanceGroup) {
+                    unlinkGroup(interactionManager.selectedInstanceGroup);
+                }
             });
 
             document.getElementById('menuTriangulate').addEventListener('click', function () {
@@ -4514,6 +4534,28 @@
          * Unlink a given group (or the selected group) — returns its instances
          * to the unlinked pool and refreshes all UI.
          */
+        // Detach all reprojection state tied to a group on a given frame.
+        // Used after unlinking/removing a group so the info panel and
+        // overlays don't keep showing orphaned reprojection data.
+        function purgeTriangulationDataForGroup(frameIdx, group) {
+            if (!group) return;
+            if (group.reprojectedInstances && typeof group.reprojectedInstances.clear === 'function') {
+                group.reprojectedInstances.clear();
+            }
+            group.reprojections = null;
+            group.observedPoints = null;
+            group.points3d = null;
+            var existing = state.triangulationResults.get(frameIdx);
+            if (existing) {
+                var filtered = existing.filter(function (r) { return r.group !== group; });
+                if (filtered.length === 0) {
+                    state.triangulationResults.delete(frameIdx);
+                } else {
+                    state.triangulationResults.set(frameIdx, filtered);
+                }
+            }
+        }
+
         function unlinkGroup(group) {
             if (!state.session) return;
             var frameIdx = state.currentFrame;
@@ -4533,6 +4575,7 @@
 
             var trackName = state.session.tracks[group.identityId] || 'Track ' + group.identityId;
             state.session.unlinkGroup(frameIdx, group);
+            purgeTriangulationDataForGroup(frameIdx, group);
             setStatus('Unlinked ' + trackName, 'success');
 
             // Refresh everything
@@ -4541,7 +4584,6 @@
                 var groups = getInstanceGroupsForFrame(frameIdx);
                 viewport3d.setFrame(groups);
             }
-            triangulateCurrentFrame();
             drawAllOverlays(state.currentFrame);
             updateInfoPanel();
         }
@@ -5387,7 +5429,7 @@
                     unlinkGroup(interactionManager.selectedInstanceGroup);
                     return;
                 }
-                if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 1) {
+                if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 2) {
                     interactionManager._createGroupFromAssignment();
                 } else if (interactionManager.assignmentMode) {
                     interactionManager.setAssignmentMode(false);
@@ -5703,8 +5745,8 @@
             });
 
             toast.querySelector('#manualAssignGroup').addEventListener('click', function () {
-                if (!interactionManager || interactionManager.assignmentSelection.length < 1) {
-                    setStatus('Select at least one instance first', 'warning');
+                if (!interactionManager || interactionManager.assignmentSelection.length < 2) {
+                    setStatus('Select at least two instances first', 'warning');
                     return;
                 }
                 interactionManager._createGroupFromAssignment();
@@ -5808,9 +5850,18 @@
             var group = editGroupState.group;
             var frameIdx = state.currentFrame;
 
-            // If group has 0 instances, remove it entirely
             if (group.instances.size === 0) {
+                // Empty group → remove entirely
                 state.session.removeInstanceGroup(frameIdx, group);
+                purgeTriangulationDataForGroup(frameIdx, group);
+                markDirty();
+                if (interactionManager) interactionManager.clearSelection();
+            } else if (group.instances.size === 1) {
+                // A group must contain ≥2 instances by definition. Demote
+                // the lone remaining instance back to the unlinked pool and
+                // destroy the group.
+                state.session.unlinkGroup(frameIdx, group);
+                purgeTriangulationDataForGroup(frameIdx, group);
                 markDirty();
                 if (interactionManager) interactionManager.clearSelection();
             }
@@ -9071,7 +9122,7 @@
                         rdot.style.backgroundColor = REPROJECTION_COLOR;
                         rdot.style.marginRight = '4px';
                         rtdTrack.appendChild(rdot);
-                        var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + gi);
+                        var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + i);
                         rtdTrack.appendChild(document.createTextNode(reprojTrackName));
 
                         const rtdViews = document.createElement('td');
@@ -14022,6 +14073,20 @@
                 }
 
                 // 5. Draw overlays and update UI
+
+                // Visibility checkboxes are persisted via localStorage
+                // (restoreVisSettings, ~line 5240). If the user previously
+                // turned off `visPredicted`, predicted instances loaded
+                // from this SLP would silently fail to render even though
+                // they appear in the info panel. Force the toggle on
+                // whenever loaded data contains predicted instances.
+                if (slpPredCount > 0) {
+                    var visPredEl = document.getElementById('visPredicted');
+                    if (visPredEl && !visPredEl.checked) {
+                        visPredEl.checked = true;
+                    }
+                }
+
                 drawAllOverlays(state.currentFrame);
                 updateInfoPanel();
                 if (timeline) {

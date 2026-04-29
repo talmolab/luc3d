@@ -548,6 +548,16 @@ class InteractionManager {
      * @param {UnlinkedInstance} unlinked
      */
     addToAssignmentSelection(unlinked) {
+        // Mutually exclusive with a grouped selection: clear any selected
+        // InstanceGroup before building an unlinked multi-selection.
+        if (this.selectedInstanceGroup) {
+            this.selectedInstanceGroup = null;
+            this.selectedNodeIdx = -1;
+            this.selectedReprojected = false;
+            if (this.callbacks.onSelectionChanged) {
+                this.callbacks.onSelectionChanged(null, -1);
+            }
+        }
         // Check if we already have one from this camera — reject duplicates
         for (let i = 0; i < this.assignmentSelection.length; i++) {
             if (this.assignmentSelection[i].cameraName === unlinked.cameraName) {
@@ -610,6 +620,19 @@ class InteractionManager {
         // When clearing linked selection (null), also clear unlinked selection
         if (!instanceGroup) {
             this.selectedUnlinked = null;
+        } else {
+            // A grouped selection is mutually exclusive with unlinked
+            // multi-selection. Selecting an InstanceGroup must clear any
+            // pending assignment selection so the user can't form a new
+            // group that mixes a GroupedInstance with UnlinkedInstances.
+            this.selectedUnlinked = null;
+            if (this.assignmentMode || this.assignmentSelection.length > 0) {
+                this.assignmentSelection = [];
+                this.assignmentMode = false;
+                if (this.callbacks.onAssignmentSelectionChanged) {
+                    this.callbacks.onAssignmentSelectionChanged(0);
+                }
+            }
         }
 
         if (changed && this.callbacks.onSelectionChanged) {
@@ -1243,7 +1266,7 @@ class InteractionManager {
             case 'c':
             case 'C': {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-                    if (this.assignmentMode && this.assignmentSelection.length >= 1) {
+                    if (this.assignmentMode && this.assignmentSelection.length >= 2) {
                         e.preventDefault();
                         this._createGroupFromAssignment();
                     }
@@ -1808,6 +1831,14 @@ class InteractionManager {
             if (instance) {
                 group.instances.delete(viewName);
 
+                // Drop the reprojection-error connector lines for this
+                // view immediately. overlays.js draws them from
+                // group.observedPoints[viewName] → group.reprojections[viewName],
+                // so clearing observedPoints stops the draw on next refresh.
+                if (group.observedPoints) {
+                    delete group.observedPoints[viewName];
+                }
+
                 // Remove from FrameGroup too
                 const fg = state.session.getFrameGroup(frameIdx);
                 if (fg) {
@@ -1841,7 +1872,8 @@ class InteractionManager {
     _createGroupFromAssignment() {
         const state = this._getState();
         if (!state || !state.session) return;
-        if (this.assignmentSelection.length < 1) return;
+        // A group must contain ≥2 instances by definition.
+        if (this.assignmentSelection.length < 2) return;
 
         const frameIdx = state.currentFrame;
         const group = state.session.createGroupFromUnlinked(frameIdx, this.assignmentSelection);
