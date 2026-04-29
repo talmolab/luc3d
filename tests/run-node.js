@@ -273,7 +273,7 @@ var testFiles = [
     'test-project-triangulation.js',
     'test-slp-merge.js',
     'test-tempdata-triangulation.js',
-    'test-prompt61.js',
+    'test-2026-03-09-changes.js',
     'test-bottom-bar.js',
     'test-multi-session-export.js',
     'test-reprojection-lifecycle.js',

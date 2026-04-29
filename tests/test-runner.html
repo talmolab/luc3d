@@ -135,6 +135,9 @@
     <!-- Assignment mode tests -->
     <script src="test-assignment.js"></script>
 
+    <!-- Predicted double-click → user instance: selection transfer + multi-select preservation -->
+    <script src="test-predicted-dblclick.js"></script>
+
     <!-- Ungroup / unlink-group regression tests (Bug A) -->
     <script src="test-ungroup-fix.js"></script>
 
@@ -162,6 +165,15 @@
     <!-- Edit-group / per-view-delete fix regression tests -->
     <script src="test-edit-group-fixes.js"></script>
 
+    <!-- Mixed-group predicted→user promotion (Session.unlinkGroup, createGroupFromUnlinked, Edit Group remove) -->
+    <script src="test-mixed-group-promotion.js"></script>
+
+    <!-- Per-view delete: size===1 auto-ungroup, full-group removal, mixed-group survivor promotion -->
+    <script src="test-delete-auto-ungroup.js"></script>
+
+    <!-- Cross-cutting integration: predicted dblclick + mixed group + per-view delete + Edit Group wasMixed snapshot -->
+    <script src="test-mixed-group-integration.js"></script>
+
     <!-- Identity tests -->
     <script src="test-identity.js"></script>
     <script src="test-identity-none-label.js"></script>
@@ -172,9 +184,11 @@
     <!-- Tracker geometry tests -->
     <script src="test-tracker.js"></script>
 
-    <!-- Bottom bar and prompt tests -->
+    <!-- Bottom bar tests -->
     <script src="test-bottom-bar.js"></script>
-    <script src="test-prompt61.js"></script>
+
+    <!-- 2026-03-09 feature set: null-node graying, ungroup, reprojected null nodes, visibility deselect, per-view skeleton cache -->
+    <script src="test-2026-03-09-changes.js"></script>
 
     <!-- Quick save tests -->
     <script src="test-quick-save.js"></script>

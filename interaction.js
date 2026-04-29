@@ -951,7 +951,19 @@ class InteractionManager {
             newInst.modified = true;
             var newUl = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
             this.select(null, -1);
+            // Match the regular unlinked-click flow: enter assignment mode
+            // (if not already on) and add the new user via
+            // `addToAssignmentSelection`. The latter handles same-camera
+            // replacement automatically — the original predicted's entry
+            // for this camera gets swapped out for the new user, so its
+            // selection highlight goes away. Crucially, OTHER cameras'
+            // entries in `assignmentSelection` are preserved so any
+            // multi-select in progress survives the double-click.
+            if (!this.assignmentMode) {
+                this.assignmentMode = true;
+            }
             this.selectedUnlinked = newUl;
+            this.addToAssignmentSelection(newUl);
             if (this.callbacks.onUserInstanceCreated) {
                 this.callbacks.onUserInstanceCreated(viewName, clonedPoints);
             }
@@ -1826,7 +1838,18 @@ class InteractionManager {
             // Full group removal (existing behavior)
             state.session.removeInstanceGroup(frameIdx, group);
         } else {
-            // Per-camera removal: remove only this view's instance
+            // Per-camera removal: remove only this view's instance.
+            // Capture pre-deletion mixed-group state so an auto-ungroup
+            // of a previously-mixed group (which is no longer mixed once
+            // the deleted member is gone) still promotes the survivor to
+            // user — matching the Issue 2 contract.
+            let _hasUser = false, _hasPred = false;
+            for (const [, _gInst] of group.instances) {
+                if (_gInst.type === 'user') _hasUser = true;
+                else if (_gInst.type === 'predicted') _hasPred = true;
+            }
+            const wasMixed = _hasUser && _hasPred;
+
             const instance = group.getInstance(viewName);
             if (instance) {
                 group.instances.delete(viewName);
@@ -1851,9 +1874,15 @@ class InteractionManager {
                 }
             }
 
-            // If group is now empty, remove the whole group
             if (group.instances.size === 0) {
+                // Group is now empty — remove the whole group.
                 state.session.removeInstanceGroup(frameIdx, group);
+            } else if (group.instances.size === 1) {
+                // A group must have ≥2 instances — auto-ungroup the lone
+                // survivor back to the unlinked pool. `wasMixed` forces
+                // promotion when the deleted partner was a user but the
+                // remaining instance is predicted.
+                state.session.unlinkGroup(frameIdx, group, wasMixed);
             }
         }
 

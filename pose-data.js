@@ -869,6 +869,14 @@ class Session {
             fg.removeUnlinkedById(ul.id);
         }
 
+        // Mixed groups (user + predicted) are treated as user. Promote
+        // every predicted member to user immediately so the group is
+        // uniformly user from the moment it's formed — independent of
+        // unlinked insertion order. Without this, building a group from
+        // {pred, user} vs {user, pred} would yield different `firstInst`
+        // types and the info-panel badge would flip-flop.
+        this._promoteIfMixed(group);
+
         // Store in instanceGroups (flat list per frame)
         if (!this.instanceGroups.has(frameIdx)) {
             this.instanceGroups.set(frameIdx, []);
@@ -876,6 +884,31 @@ class Session {
         this.instanceGroups.get(frameIdx).push(group);
 
         return group;
+    }
+
+    /**
+     * If a group contains both user and predicted instances, promote every
+     * predicted member to user (`type='user'`, `modified=true`). No-op for
+     * uniform groups. Used at group-creation and on Edit-Group-add so the
+     * "mixed = user-typed" semantic is enforced eagerly rather than only
+     * at separation time.
+     *
+     * @returns {boolean} true if the group was mixed and promotion fired
+     */
+    _promoteIfMixed(group) {
+        let hasUser = false, hasPred = false;
+        for (const [, inst] of group.instances) {
+            if (inst.type === 'user') hasUser = true;
+            else if (inst.type === 'predicted') hasPred = true;
+        }
+        if (!(hasUser && hasPred)) return false;
+        for (const [, inst] of group.instances) {
+            if (inst.type === 'predicted') {
+                inst.type = 'user';
+                inst.modified = true;
+            }
+        }
+        return true;
     }
 
     /**
@@ -1054,9 +1087,25 @@ class Session {
      * @param {InstanceGroup} group - The group to unlink
      * @returns {UnlinkedInstance[]} The newly created unlinked instances
      */
-    unlinkGroup(frameIdx, group) {
+    unlinkGroup(frameIdx, group, forcePromoteToUser) {
         const fg = this.frameGroups.get(frameIdx);
         const newUnlinked = [];
+
+        // Mixed groups (containing at least one UserInstance) are treated
+        // as user-typed: any predicted member detached from the group is
+        // promoted to user. `forcePromoteToUser` covers the case where the
+        // caller knows the source was mixed before a member was removed —
+        // e.g., per-view delete that drops the group to a single
+        // (formerly mixed) survivor.
+        let promote = !!forcePromoteToUser;
+        if (!promote) {
+            let hasUser = false, hasPred = false;
+            for (const [, _inst] of group.instances) {
+                if (_inst.type === 'user') hasUser = true;
+                else if (_inst.type === 'predicted') hasPred = true;
+            }
+            promote = hasUser && hasPred;
+        }
 
         const groups = this.instanceGroups.get(frameIdx);
         if (groups) {
@@ -1080,6 +1129,10 @@ class Session {
                     if (camInstances.length === 0) {
                         fg.instances.delete(camName);
                     }
+                }
+                if (promote && instance.type === 'predicted') {
+                    instance.type = 'user';
+                    instance.modified = true;
                 }
                 const ul = new UnlinkedInstance(instance, camName);
                 fg.addUnlinkedInstance(camName, ul);
