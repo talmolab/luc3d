@@ -28,10 +28,12 @@ import {
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
     rebuildVideoController, fitCanvasesToCells,
 } from '../loading/session-loader.js?v=1';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=1';
+import { updateInfoPanel } from '../ui/info-panel.js?v=1';
 import {
-    drawAllOverlays, updateInfoPanel, populateViewStrip, populateSessionStrip,
-    setupInteraction, setup3DViewport, hideWelcomeOverlay, setReprojErrorVisible,
-} from '../app.js?v=16';
+    populateViewStrip, populateSessionStrip,
+    setupInteraction, setup3DViewport, hideWelcomeOverlay,
+} from '../app.js?v=17';
 import { handleLoadSlpFile } from './slp-import.js?v=1';
 
 export function newProject() {

@@ -39,18 +39,23 @@ import {
     LazyFrameLoader, shouldUseLazyH5, getInstanceGroupsForFrame,
 } from '../pose/triangulation.js?v=2';
 
+// Status UI moved to import-export/save-load.js in Pass 3c-1.
+import {
+    setStatus, showLoading, hideLoading,
+} from '../import-export/save-load.js?v=1';
+
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
+import { drawAllOverlays } from '../ui/rendering.js?v=1';
+import { updateInfoPanel, parseSkeletonJSON } from '../ui/info-panel.js?v=1';
 import {
-    setStatus, showLoading, hideLoading,
-    drawAllOverlays,
     setupInteraction, setup3DViewport, setupTimeline,
-    updateInfoPanel, populateViewStrip, populateSessionStrip,
+    populateViewStrip, populateSessionStrip,
     updateSeekbar, updateFpsDisplay,
     fitTimelineToData, onPlaybackStateChange,
-    hideWelcomeOverlay, parseSkeletonJSON, switchSession,
-} from '../app.js?v=15';
+    hideWelcomeOverlay, switchSession,
+} from '../app.js?v=17';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own

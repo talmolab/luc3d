@@ -38,10 +38,12 @@ import {
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=1';
+import { updateInfoPanel } from '../ui/info-panel.js?v=1';
 import {
-    drawAllOverlays, updateInfoPanel, populateViewStrip, populateSessionStrip,
-    fitTimelineToData, setup3DViewport, setReprojErrorVisible,
-} from '../app.js?v=16';
+    populateViewStrip, populateSessionStrip,
+    fitTimelineToData, setup3DViewport,
+} from '../app.js?v=17';
 
 export async function handleLoadSlpFile(slpFile) {
     try {
