@@ -204,6 +204,11 @@
         Object.assign(window, __PoseData, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video);
+        // Note: ui/ui-wiring.js is intentionally NOT bridged here.
+        // It transitively imports app.js (circular, awaiting later passes),
+        // and app.js requires the full DOM + main page environment to load.
+        // Tests that need ui-wiring symbols should drive them through app.js
+        // in a browser context.
 
         try {
             const results = await TestFramework.runAll();

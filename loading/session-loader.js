@@ -52,10 +52,11 @@ import { updateInfoPanel, parseSkeletonJSON } from '../ui/info-panel.js';
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     populateViewStrip, populateSessionStrip,
-    updateSeekbar, updateFpsDisplay,
-    fitTimelineToData, onPlaybackStateChange,
+    updateFpsDisplay,
     hideWelcomeOverlay, switchSession,
 } from '../app.js';
+// Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
+import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own

@@ -25,9 +25,11 @@ import {
 // - populateSessionsPanel, populateViewStrip, populateSessionStrip
 //   → ui/sessions-panes.js (Pass 3h)
 import {
-    swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu,
+    swapAssignTrack, propagateIdentityForward,
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
 } from '../app.js';
+// Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js';
 
 // ============================================
 // Panel tab switching

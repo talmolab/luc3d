@@ -42,8 +42,10 @@ import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 import {
     populateViewStrip, populateSessionStrip,
-    fitTimelineToData, setup3DViewport,
+    setup3DViewport,
 } from '../app.js';
+// Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
+import { fitTimelineToData } from '../ui/ui-wiring.js';
 
 export async function handleLoadSlpFile(slpFile) {
     try {
