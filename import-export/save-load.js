@@ -769,6 +769,7 @@ export async function handleLoadProject(prePickedFile) {
             cameras = _restoreLegacySession(data);
         }
 
+
         // 2. Load videos — check if already loaded, only prompt for missing ones
         hideLoading();
 

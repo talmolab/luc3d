@@ -594,6 +594,23 @@ export function hungarianAlgorithm(costMatrix) {
     var n = costMatrix.length;
     if (n === 0) return [];
     var m = costMatrix[0].length;
+    if (m === 0) return new Array(n).fill(-1);
+
+    // Clamp non-finite (Infinity / NaN) entries to a large finite sentinel.
+    // An all-Infinity cost matrix would otherwise leave delta/j1 unchanged
+    // inside the augmenting-path search (Infinity < Infinity === false),
+    // sending j0 to -1 and dereferencing cost[NaN] on the next iteration.
+    // Callers gate matches by a threshold (e.g., cost < 100) so spurious
+    // assignments at the sentinel value are naturally filtered out.
+    var SENTINEL = 1e15;
+    var hasFinite = false;
+    for (var ri = 0; ri < n; ri++) {
+        for (var ci = 0; ci < m; ci++) {
+            if (Number.isFinite(costMatrix[ri][ci])) { hasFinite = true; break; }
+        }
+        if (hasFinite) break;
+    }
+    if (!hasFinite) return new Array(n).fill(-1);
 
     // Ensure n <= m (more columns than rows)
     var transposed = false;
@@ -604,14 +621,19 @@ export function hungarianAlgorithm(costMatrix) {
         for (var j = 0; j < m; j++) {
             C[j] = [];
             for (var i = 0; i < n; i++) {
-                C[j][i] = costMatrix[i][j];
+                var v0 = costMatrix[i][j];
+                C[j][i] = Number.isFinite(v0) ? v0 : SENTINEL;
             }
         }
         var tmp = n; n = m; m = tmp;
     } else {
         C = [];
         for (var i2 = 0; i2 < n; i2++) {
-            C[i2] = costMatrix[i2].slice();
+            C[i2] = new Array(m);
+            for (var c2 = 0; c2 < m; c2++) {
+                var v1 = costMatrix[i2][c2];
+                C[i2][c2] = Number.isFinite(v1) ? v1 : SENTINEL;
+            }
         }
     }
 
@@ -1451,7 +1473,7 @@ export function updateTimelineForFrame(frameIdx) {
  * Backend orchestration for multi-frame triangulation. Runs through
  * `[startFrame, endFrame]` and triangulates every InstanceGroup that has
  * ≥2 views with labels. Yields to UI every 50 frames so a progress bar
- * can repaint. The modal UI wrapper lives in app.js (`runMultiFrameTriangulation`)
+ * can repaint. The modal UI wrapper lives in `ui/export-modals.js` (`runMultiFrameTriangulation`)
  * and is responsible for DOM updates, post-loop redraws, and timeline syncs.
  *
  * `onProgress(completed, total)` is invoked per frame; pass it to drive a

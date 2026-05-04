@@ -204,11 +204,14 @@
         Object.assign(window, __PoseData, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video);
-        // Note: ui/ui-wiring.js is intentionally NOT bridged here.
-        // It transitively imports app.js (circular, awaiting later passes),
-        // and app.js requires the full DOM + main page environment to load.
-        // Tests that need ui-wiring symbols should drive them through app.js
-        // in a browser context.
+        // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
+        // are intentionally NOT bridged here. All three transitively import app.js
+        // (circular, awaiting later passes), and app.js requires the full DOM +
+        // main page environment to load. The ui-fixes tests that exercise
+        // edit-group / mixed-group / track-assign behavior mirror the production
+        // logic in local test fixtures (e.g., finishEditGroupBranch,
+        // editGroupRemoveBranch) rather than calling the production functions,
+        // so no bridge is needed.
 
         try {
             const results = await TestFramework.runAll();

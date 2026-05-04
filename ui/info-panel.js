@@ -25,11 +25,12 @@ import {
 // - populateSessionsPanel, populateViewStrip, populateSessionStrip
 //   → ui/sessions-panes.js (Pass 3h)
 import {
-    swapAssignTrack, propagateIdentityForward,
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
 } from '../app.js';
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
 import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js';
+// Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
+import { swapAssignTrack, propagateIdentityForward } from './identity-assignment.js';
 
 // ============================================
 // Panel tab switching
@@ -1130,7 +1131,10 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     for (var [cn, ginst] of g.instances) {
                         totalProp += swapAssignTrack(state.currentFrame, cn, ginst, newTrack, state.session);
                     }
-                    g.identityId = newTrack;
+                    // Route through swap-aware setter so a sibling group in
+                    // this frame that already held this identityId gets
+                    // demoted (rather than silently doubling up the color).
+                    state.session.assignIdentityToGroup(g, newTrack);
                     setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) +
                         (totalProp > 0 ? ' (propagated ' + totalProp + ')' : ''), 'success');
                     drawAllOverlays(state.currentFrame);
@@ -1172,9 +1176,12 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     e.stopPropagation();
                     var newIdentityId = parseInt(sel.value);
                     state.session.assignIdentityToGroup(g, newIdentityId);
-                    // Propagate forward for all cameras in the group
+                    // Propagate forward for all cameras in the group.
+                    // Use assignTrackToIdentity (swap-aware) for the global
+                    // map so two distinct trackIdx values can't both end up
+                    // mapped to newIdentityId on the same camera.
                     for (var [cn, inst] of g.instances) {
-                        state.session.trackIdentityMap.set(cn + ':' + inst.trackIdx, newIdentityId);
+                        state.session.assignTrackToIdentity(inst.trackIdx, newIdentityId, cn);
                         propagateIdentityForward(inst.trackIdx, newIdentityId, cn);
                     }
                     drawAllOverlays(state.currentFrame);

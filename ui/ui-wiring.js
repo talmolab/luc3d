@@ -27,7 +27,7 @@ import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
 import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 
 // Circular imports back to app.js for symbols destined for later passes.
-// These will be retargeted as Passes 3f / 3g / 3h / 3i land.
+// These will be retargeted as Passes 3h / 3i land.
 //   - assign* / startEditGroup / finishEditGroup / startManualAssignment /
 //     runSingleFrameTriangulation / showMultiFrameModal / propagateIdentityForward /
 //     swapAssignTrack / purgeTriangulationDataForGroup → ui/identity-assignment.js (Pass 3f)
@@ -45,21 +45,27 @@ import {
     triangulateCurrentFrame, triangulateAllFrames,
     update3DViewport,
     syncRotationUI, clearMultiSelect, refreshPaneInteractions,
-    exportLabels, exportPoints3dH5, exportReprojH5,
-    assignTrackToSelected, assignIdentityToSelected, propagateIdentityForward, swapAssignTrack,
-    startEditGroup, finishEditGroup,
-    showSlpExportModal, showSlpExportAllModal, showTriangulateMultiFrameModal,
-    showGroupByTrackModal, groupByIdentityAndTriangulateAll,
     trackCurrentFrame, trackAll, findMatchForSelected,
-    startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
     removeSession, showMoveVideoModal,
-    purgeTriangulationDataForGroup,
     switchSession,
     populateViewStrip, populateSessionStrip, populateSessionsPanel,
     // Symbols caught by Subagent B that ui-wiring needs but app.js hadn't exported:
     swapTracks, clampRotation, seekToLabeledFrame,
     panelRenderers, multiSelectViews,
 } from '../app.js';
+// Pass 3f: identity-assignment workflow symbols moved out of app.js.
+import {
+    assignTrackToSelected, assignIdentityToSelected, propagateIdentityForward, swapAssignTrack,
+    startEditGroup, finishEditGroup,
+    startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
+    purgeTriangulationDataForGroup,
+} from './identity-assignment.js';
+// Pass 3g: export-modals workflow symbols moved out of app.js.
+import {
+    exportLabels, exportPoints3dH5, exportReprojH5,
+    showSlpExportModal, showSlpExportAllModal, showTriangulateMultiFrameModal,
+    showGroupByTrackModal, groupByIdentityAndTriangulateAll,
+} from './export-modals.js';
 
 // ============================================
 // Menu Setup
@@ -1147,7 +1153,7 @@ export function setupUI() {
                 for (var [camName, inst] of selectedGroup.instances) {
                     totalProp += swapAssignTrack(state.currentFrame, camName, inst, newTrackIdx, state.session);
                 }
-                selectedGroup.identityId = newTrackIdx;
+                state.session.assignIdentityToGroup(selectedGroup, newTrackIdx);
                 setStatus('Set track to ' + trackName + (totalProp > 0 ? ' (swapped ' + totalProp + ')' : ''), 'success');
             } else if (selectedUl) {
                 // Swap-assign with propagation (same as assignTrackToSelected)

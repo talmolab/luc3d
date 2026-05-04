@@ -12,9 +12,8 @@ import {
 } from '../pose/triangulation.js';
 import { drawFrameOverlays } from './overlays.js';
 
-// Circular import — these are still defined in app.js for now. They will be
-// retargeted to ui/identity-assignment.js when Pass 3f lands.
-import { editGroupState, finishEditGroup } from '../app.js';
+// Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
+import { editGroupState, finishEditGroup } from './identity-assignment.js';
 import { updateFrameInfo } from './info-panel.js';
 
 // ============================================
