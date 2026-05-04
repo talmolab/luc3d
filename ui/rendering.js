@@ -5,17 +5,17 @@
 // - setReprojErrorVisible: toggles reprojection-error column visibility in info panels.
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances).
 
-import { state, interactionManager, timeline } from './app-state.js?v=1';
+import { state, interactionManager, timeline } from './app-state.js';
 import {
     ensureLazyFrameData, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=2';
-import { drawFrameOverlays } from './overlays.js?v=1';
+} from '../pose/triangulation.js';
+import { drawFrameOverlays } from './overlays.js';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted to ui/identity-assignment.js when Pass 3f lands.
-import { editGroupState, finishEditGroup } from '../app.js?v=17';
-import { updateFrameInfo } from './info-panel.js?v=1';
+import { editGroupState, finishEditGroup } from '../app.js';
+import { updateFrameInfo } from './info-panel.js';
 
 // ============================================
 // Reproj/Error visibility
@@ -162,9 +162,15 @@ export function drawAllOverlays(frameIdx) {
         if (hasGroupedSelection && !assignmentMode) {
             tbGroup.textContent = 'Ungroup';
             tbGroup.classList.add('active');
+            tbGroup.disabled = false;
         } else {
             tbGroup.textContent = 'Group';
-            tbGroup.classList.toggle('active', assignmentMode);
+            // A group needs ≥2 instances. Disable + de-highlight
+            // the button when exactly one is selected so the user
+            // can't form a degenerate single-instance group.
+            var oneAssignmentSelected = assignmentMode && assignmentSelectedIds.length === 1;
+            tbGroup.classList.toggle('active', assignmentMode && !oneAssignmentSelected);
+            tbGroup.disabled = oneAssignmentSelected;
         }
     }
     var tbEditGroup = document.getElementById('tbEditGroup');

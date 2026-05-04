@@ -6,7 +6,7 @@
  */
 
 import { mat3x3Multiply, FrameGroup, Instance, UnlinkedInstance } from './pose-data.js';
-import { state, timeline } from '../ui/app-state.js?v=1';
+import { state, timeline } from '../ui/app-state.js';
 
 // ============================================
 // Matrix utilities (minimal linear algebra)

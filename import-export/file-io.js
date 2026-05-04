@@ -11,7 +11,7 @@
  * Depends on pose-data.js (Camera class).
  */
 
-import { Camera, Skeleton, Instance, Identity } from '../pose/pose-data.js?v=1';
+import { Camera, Skeleton, Instance, Identity } from '../pose/pose-data.js';
 
 // ============================================
 // Generic file picker

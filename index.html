@@ -769,7 +769,7 @@
             Camera as SioCamera, CameraGroup, RecordingSession,
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D
-        } from './lib/sleap-io/index.browser.js?v=2';
+        } from './lib/sleap-io/index.browser.js';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
@@ -780,7 +780,7 @@
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
 
-    <script type="module" src="app.js?v=17"></script>
+    <script type="module" src="app.js"></script>
 </body>
 
 </html>

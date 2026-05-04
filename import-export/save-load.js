@@ -8,33 +8,33 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-} from '../pose/pose-data.js?v=1';
+} from '../pose/pose-data.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=2';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=1';
-import { createDemoSkeleton } from '../demo-data.js?v=1';
+} from '../pose/triangulation.js';
+import { OnDemandVideoDecoder } from '../loading/video.js';
+import { createDemoSkeleton } from '../demo-data.js';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
     convertSlpToV06Compatible,
-} from './file-io.js?v=1';
+} from './file-io.js';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=1';
+} from '../ui/app-state.js';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
     rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=1';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=1';
-import { updateInfoPanel } from '../ui/info-panel.js?v=1';
+} from '../loading/session-loader.js';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
+import { updateInfoPanel } from '../ui/info-panel.js';
 import {
     populateViewStrip, populateSessionStrip,
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../app.js?v=17';
-import { handleLoadSlpFile } from './slp-import.js?v=1';
+} from '../app.js';
+import { handleLoadSlpFile } from './slp-import.js';
 
 export function newProject() {
     if (state.session || state.views.length > 0) {
@@ -231,7 +231,7 @@ function serializeSessionFrames(session) {
 
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
-    var mod = await import('./lib/sleap-io/index.browser.js?v=2');
+    var mod = await import('./lib/sleap-io/index.browser.js');
     window.SleapIO = mod;
     return mod;
 }

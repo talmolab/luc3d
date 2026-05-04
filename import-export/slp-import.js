@@ -7,43 +7,43 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-} from '../pose/pose-data.js?v=1';
+} from '../pose/pose-data.js';
 import {
     reprojectPoints, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=2';
+} from '../pose/triangulation.js';
 import {
     parseSlpH5, instancePointsMatch, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=1';
+} from './file-io.js';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=1';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=1';
+} from './slp-merge.js';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=1';
+} from '../ui/app-state.js';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx,
-} from '../loading/session-loader.js?v=1';
+} from '../loading/session-loader.js';
 import {
     showLoading, hideLoading, setStatus, clearDirty,
-} from './save-load.js?v=1';
+} from './save-load.js';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=1';
-import { updateInfoPanel } from '../ui/info-panel.js?v=1';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
+import { updateInfoPanel } from '../ui/info-panel.js';
 import {
     populateViewStrip, populateSessionStrip,
     fitTimelineToData, setup3DViewport,
-} from '../app.js?v=17';
+} from '../app.js';
 
 export async function handleLoadSlpFile(slpFile) {
     try {
@@ -916,6 +916,20 @@ export async function handleLoadSlpFile(slpFile) {
         }
 
         // 5. Draw overlays and update UI
+
+        // Visibility checkboxes are persisted via localStorage
+        // (restoreVisSettings, ~line 5240). If the user previously
+        // turned off `visPredicted`, predicted instances loaded
+        // from this SLP would silently fail to render even though
+        // they appear in the info panel. Force the toggle on
+        // whenever loaded data contains predicted instances.
+        if (slpPredCount > 0) {
+            var visPredEl = document.getElementById('visPredicted');
+            if (visPredEl && !visPredEl.checked) {
+                visPredEl.checked = true;
+            }
+        }
+
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) {

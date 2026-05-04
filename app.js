@@ -1,5 +1,5 @@
         import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core/+esm';
-        import { Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity, InstanceGroup, Session } from './pose/pose-data.js?v=1';
+        import { Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity, InstanceGroup, Session } from './pose/pose-data.js';
         import {
             reprojectPoints, computeReprojectionErrors, computeInstanceDistance,
             triangulateAndReproject, hungarianAlgorithm,
@@ -8,13 +8,13 @@
             ensureLazyFrameData, buildLazyFrameGroupSync, batchLoadLazyFrames,
             loadAllLazyFrames, evictLazyFrames, updateTimelineForFrame,
             triangulateMultiFrameInstances,
-        } from './pose/triangulation.js?v=2';
-        import { matchFrameInstances } from './pose/tracker.js?v=1';
-        import { REPROJECTION_COLOR, getTrackColor, getGroupColor, drawFrameOverlays } from './ui/overlays.js?v=1';
-        import { InteractionManager, isInteractiveClickTarget } from './ui/interaction.js?v=1';
-        import { Viewport3D } from './ui/viewport3d.js?v=1';
-        import { Timeline } from './ui/timeline.js?v=1';
-        import { validateSkeletonCompatibility, mergeTracksIntoSession, mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames } from './import-export/slp-merge.js?v=1';
+        } from './pose/triangulation.js';
+        import { matchFrameInstances } from './pose/tracker.js';
+        import { REPROJECTION_COLOR, getTrackColor, getGroupColor, drawFrameOverlays } from './ui/overlays.js';
+        import { InteractionManager, isInteractiveClickTarget } from './ui/interaction.js';
+        import { Viewport3D } from './ui/viewport3d.js';
+        import { Timeline } from './ui/timeline.js';
+        import { validateSkeletonCompatibility, mergeTracksIntoSession, mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames } from './import-export/slp-merge.js';
         import {
             pickFiles, pickFolder, parseCalibrationTOML, parseCalibrationJSON,
             matchVideosToCameras, buildVideoGrid, exportCalibrationTOML,
@@ -24,16 +24,16 @@
             parseSlpH5, instancePointsMatch, convertSlpToV06Compatible,
             loadCalibrationFile, pickVideoFiles, exportSlpClientSide, exportSlpMultiSession,
             buildPoints3dH5, buildReprojH5, parsePoints3dH5
-        } from './import-export/file-io.js?v=1';
-        import { OnDemandVideoDecoder, EmbeddedVideoDecoder, VideoController, videoLog } from './loading/video.js?v=1';
-        import { createDemoCalibration, createDemoSkeleton, generateDemoKeypoints3D, createDemoSession } from './demo-data.js?v=1';
+        } from './import-export/file-io.js';
+        import { OnDemandVideoDecoder, EmbeddedVideoDecoder, VideoController, videoLog } from './loading/video.js';
+        import { createDemoCalibration, createDemoSkeleton, generateDemoKeypoints3D, createDemoSession } from './demo-data.js';
         import {
             state,
             videoController, interactionManager, viewport3d, timeline, paneManager,
             setVideoController, setInteractionManager, setViewport3D, setTimeline, setPaneManager,
             getActiveSession, setActiveSession,
             VIEW_NAMES,
-        } from './ui/app-state.js?v=1';
+        } from './ui/app-state.js';
         import {
             handleLoadCalibration, handleLoadVideos, autoAssignVideosToCameras,
             forceVideoSelection, showParentDirMatchSummary, forceVideoSelectionWithFolder,
@@ -42,25 +42,25 @@
             handleLoadMultiSession, showSessionModeModal, loadSingleSessionFromCache,
             handleLoadSessionFolderPerCamera,
             resolveImportTrackIdx, cellResizeObserver,
-        } from './loading/session-loader.js?v=1';
+        } from './loading/session-loader.js';
         import {
             newProject, markDirty, clearDirty,
             quickSave, saveAs, saveProjectSlp, saveProject,
             handleLoadProject,
             showLoading, hideLoading, setStatus,
-        } from './import-export/save-load.js?v=1';
+        } from './import-export/save-load.js';
         import {
             handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5,
-        } from './import-export/slp-import.js?v=1';
+        } from './import-export/slp-import.js';
         import {
             setReprojErrorVisible, getVisibilitySettings,
             drawAllOverlays, updateFrameCounters,
-        } from './ui/rendering.js?v=1';
+        } from './ui/rendering.js';
         import {
             setupPanelTabs, populateVideosTable, populateCamerasTable,
             populateSkeletonTable, setupSkeletonEditing, parseSkeletonJSON,
             updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
-        } from './ui/info-panel.js?v=1';
+        } from './ui/info-panel.js';
 
         // ============================================
         // Logging
@@ -1750,6 +1750,18 @@
                         }
                     }
 
+                    // If the group was removed entirely (full delete or
+                    // size===1 auto-ungroup), purge its reprojection state
+                    // so the info panel and overlays don't keep showing
+                    // orphaned data. Idempotent: safe when group is null
+                    // or still in instanceGroups.
+                    if (group) {
+                        var stillThere = (state.session.instanceGroups.get(frameIdx) || []).indexOf(group) >= 0;
+                        if (!stillThere) {
+                            purgeTriangulationDataForGroup(frameIdx, group);
+                        }
+                    }
+
                     // Update timeline: clear tick if no grouped users remain, update track bars
                     updateTimelineForFrame(frameIdx);
 
@@ -1814,8 +1826,32 @@
                     var inst = group.getInstance(viewName);
                     if (!inst) return;
 
+                    // Mixed group → promote a removed predicted to user.
+                    // Detection happens BEFORE the removal so the removed
+                    // instance still counts toward the mixed check, AND
+                    // honors the edit-start mixed snapshot so the "mixed
+                    // = user" rule survives intermediate removals that
+                    // leave the group all-predicted.
+                    var hasUser = false, hasPred = false;
+                    for (var [, _gInst] of group.instances) {
+                        if (_gInst.type === 'user') hasUser = true;
+                        else if (_gInst.type === 'predicted') hasPred = true;
+                    }
+                    var srcMixed = (hasUser && hasPred) ||
+                        !!(editGroupState && editGroupState.wasMixed);
+                    if (srcMixed && inst.type === 'predicted') {
+                        inst.type = 'user';
+                        inst.modified = true;
+                    }
+
                     // Remove from group
                     group.instances.delete(viewName);
+
+                    // Keep observedPoints in sync so the reprojection error
+                    // vector for this view stops drawing immediately.
+                    if (group.observedPoints) {
+                        delete group.observedPoints[viewName];
+                    }
 
                     // Remove from FrameGroup linked instances
                     if (fg) {
@@ -1842,6 +1878,22 @@
 
                     // Add to group (keep instance's original trackIdx for color consistency)
                     group.addInstance(viewName, inst);
+
+                    // Record the new instance's points as observed so the
+                    // reprojection error vector connecting this view to its
+                    // (existing) reprojected projection draws immediately.
+                    group.observedPoints = group.observedPoints || {};
+                    group.observedPoints[viewName] = inst.points;
+
+                    // If the add introduces mixed state (e.g., a user added
+                    // to an all-predicted group, or a predicted added to a
+                    // group that already had a user), promote every
+                    // predicted member to user so the group becomes
+                    // uniformly user. Once mixed = user-typed.
+                    if (typeof state.session._promoteIfMixed === 'function') {
+                        var didPromote = state.session._promoteIfMixed(group);
+                        if (didPromote && editGroupState) editGroupState.wasMixed = true;
+                    }
 
                     // Remove from unlinked list in FrameGroup
                     if (fg) {
@@ -2302,7 +2354,9 @@
 
             document.getElementById('menuUnlinkGroup').addEventListener('click', function () {
                 closeMenus();
-                if (interactionManager) interactionManager._unlinkSelectedGroup();
+                if (interactionManager && interactionManager.selectedInstanceGroup) {
+                    unlinkGroup(interactionManager.selectedInstanceGroup);
+                }
             });
 
             document.getElementById('menuTriangulate').addEventListener('click', function () {
@@ -2997,6 +3051,28 @@
          * Unlink a given group (or the selected group) — returns its instances
          * to the unlinked pool and refreshes all UI.
          */
+        // Detach all reprojection state tied to a group on a given frame.
+        // Used after unlinking/removing a group so the info panel and
+        // overlays don't keep showing orphaned reprojection data.
+        export function purgeTriangulationDataForGroup(frameIdx, group) {
+            if (!group) return;
+            if (group.reprojectedInstances && typeof group.reprojectedInstances.clear === 'function') {
+                group.reprojectedInstances.clear();
+            }
+            group.reprojections = null;
+            group.observedPoints = null;
+            group.points3d = null;
+            var existing = state.triangulationResults.get(frameIdx);
+            if (existing) {
+                var filtered = existing.filter(function (r) { return r.group !== group; });
+                if (filtered.length === 0) {
+                    state.triangulationResults.delete(frameIdx);
+                } else {
+                    state.triangulationResults.set(frameIdx, filtered);
+                }
+            }
+        }
+
         export function unlinkGroup(group) {
             if (!state.session) return;
             var frameIdx = state.currentFrame;
@@ -3016,6 +3092,7 @@
 
             var trackName = state.session.tracks[group.identityId] || 'Track ' + group.identityId;
             state.session.unlinkGroup(frameIdx, group);
+            purgeTriangulationDataForGroup(frameIdx, group);
             setStatus('Unlinked ' + trackName, 'success');
 
             // Refresh everything
@@ -3024,7 +3101,6 @@
                 var groups = getInstanceGroupsForFrame(frameIdx);
                 viewport3d.setFrame(groups);
             }
-            triangulateCurrentFrame();
             drawAllOverlays(state.currentFrame);
             updateInfoPanel();
         }
@@ -3870,7 +3946,7 @@
                     unlinkGroup(interactionManager.selectedInstanceGroup);
                     return;
                 }
-                if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 1) {
+                if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 2) {
                     interactionManager._createGroupFromAssignment();
                 } else if (interactionManager.assignmentMode) {
                     interactionManager.setAssignmentMode(false);
@@ -4186,8 +4262,8 @@
             });
 
             toast.querySelector('#manualAssignGroup').addEventListener('click', function () {
-                if (!interactionManager || interactionManager.assignmentSelection.length < 1) {
-                    setStatus('Select at least one instance first', 'warning');
+                if (!interactionManager || interactionManager.assignmentSelection.length < 2) {
+                    setStatus('Select at least two instances first', 'warning');
                     return;
                 }
                 interactionManager._createGroupFromAssignment();
@@ -4208,11 +4284,19 @@
                 interactionManager.setAssignmentMode(false);
             }
 
-            // Snapshot group.instances (clone Map with cloned instance refs)
+            // Snapshot group.instances (clone Map with cloned instance refs).
+            // Also capture whether the group was mixed at edit-start so the
+            // "treat mixed groups as user" rule can survive removals that
+            // would otherwise leave the group all-predicted (or down to a
+            // lone predicted) and lose the mixed signal.
             var originalInstances = new Map();
+            var _hasUserOrig = false, _hasPredOrig = false;
             for (var [camName, inst] of group.instances) {
                 originalInstances.set(camName, inst);
+                if (inst.type === 'user') _hasUserOrig = true;
+                else if (inst.type === 'predicted') _hasPredOrig = true;
             }
+            var wasMixed = _hasUserOrig && _hasPredOrig;
 
             interactionManager.setEditGroupMode(true, group);
 
@@ -4225,7 +4309,7 @@
                 '<button id="editGroupContinue" class="primary">Continue</button>';
             document.getElementById('menuBar').appendChild(toast);
 
-            editGroupState = { toast: toast, group: group, originalInstances: originalInstances };
+            editGroupState = { toast: toast, group: group, originalInstances: originalInstances, wasMixed: wasMixed };
 
             toast.querySelector('#editGroupCancel').addEventListener('click', function () {
                 cancelEditGroup();
@@ -4291,9 +4375,20 @@
             var group = editGroupState.group;
             var frameIdx = state.currentFrame;
 
-            // If group has 0 instances, remove it entirely
             if (group.instances.size === 0) {
+                // Empty group → remove entirely
                 state.session.removeInstanceGroup(frameIdx, group);
+                purgeTriangulationDataForGroup(frameIdx, group);
+                markDirty();
+                if (interactionManager) interactionManager.clearSelection();
+            } else if (group.instances.size === 1) {
+                // A group must contain ≥2 instances by definition. Demote
+                // the lone remaining instance back to the unlinked pool and
+                // destroy the group. If the group was mixed at edit-start,
+                // promote a now-lone predicted survivor to user — the
+                // "mixed = user" rule must survive intermediate removals.
+                state.session.unlinkGroup(frameIdx, group, !!(editGroupState && editGroupState.wasMixed));
+                purgeTriangulationDataForGroup(frameIdx, group);
                 markDirty();
                 if (interactionManager) interactionManager.clearSelection();
             }

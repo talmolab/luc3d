@@ -21,41 +21,41 @@
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES,
-} from '../ui/app-state.js?v=1';
+} from '../ui/app-state.js';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=1';
+} from '../pose/pose-data.js';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=1';
+import { OnDemandVideoDecoder, VideoController } from './video.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=1';
+} from '../import-export/file-io.js';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=2';
+} from '../pose/triangulation.js';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading,
-} from '../import-export/save-load.js?v=1';
+} from '../import-export/save-load.js';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays } from '../ui/rendering.js?v=1';
-import { updateInfoPanel, parseSkeletonJSON } from '../ui/info-panel.js?v=1';
+import { drawAllOverlays } from '../ui/rendering.js';
+import { updateInfoPanel, parseSkeletonJSON } from '../ui/info-panel.js';
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     populateViewStrip, populateSessionStrip,
     updateSeekbar, updateFpsDisplay,
     fitTimelineToData, onPlaybackStateChange,
     hideWelcomeOverlay, switchSession,
-} from '../app.js?v=17';
+} from '../app.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own

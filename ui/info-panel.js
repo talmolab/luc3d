@@ -5,18 +5,18 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=1';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=2';
-import { REPROJECTION_COLOR } from './overlays.js?v=1';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=1';
-import { isInteractiveClickTarget } from './interaction.js?v=1';
-import { state, timeline, interactionManager } from './app-state.js?v=1';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=1';
+} from '../pose/pose-data.js';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
+import { REPROJECTION_COLOR } from './overlays.js';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js';
+import { isInteractiveClickTarget } from './interaction.js';
+import { state, timeline, interactionManager } from './app-state.js';
+import { setStatus, markDirty } from '../import-export/save-load.js';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache,
-} from '../loading/session-loader.js?v=1';
+} from '../loading/session-loader.js';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
@@ -27,7 +27,7 @@ import {
 import {
     swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu,
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from '../app.js?v=17';
+} from '../app.js';
 
 // ============================================
 // Panel tab switching
