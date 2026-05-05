@@ -22,15 +22,14 @@ import {
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
-// - populateSessionsPanel, populateViewStrip, populateSessionStrip
-//   → ui/sessions-panes.js (Pass 3h)
-import {
-    populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from '../app.js';
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
 import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 import { swapAssignTrack, propagateIdentityForward } from './identity-assignment.js';
+// Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
+import {
+    populateSessionsPanel, populateViewStrip, populateSessionStrip,
+} from './sessions-panes.js';
 
 // ============================================
 // Panel tab switching

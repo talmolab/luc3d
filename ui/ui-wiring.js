@@ -26,39 +26,20 @@ import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
          loadSingleSessionFromCache, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
 import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 
-// Circular imports back to app.js for symbols destined for later passes.
-// These will be retargeted as Passes 3h / 3i land.
-//   - assign* / startEditGroup / finishEditGroup / startManualAssignment /
-//     runSingleFrameTriangulation / showMultiFrameModal / propagateIdentityForward /
-//     swapAssignTrack / purgeTriangulationDataForGroup → ui/identity-assignment.js (Pass 3f)
-//   - showSlp* / showTriangulateMultiFrameModal / exportLabels / exportPoints3dH5 /
-//     exportReprojH5 / showGroupByTrackModal / groupByIdentityAndTriangulateAll
-//     → ui/export-modals.js (Pass 3g)
-//   - removeSession / showMoveVideoModal / switchSession / populateViewStrip /
-//     populateSessionStrip / populateSessionsPanel / clearMultiSelect /
-//     refreshPaneInteractions / syncRotationUI → ui/sessions-panes.js (Pass 3h)
-//   - trackCurrentFrame / trackAll / findMatchForSelected → pose/tracker.js (Pass 3i)
-//   - addNewInstanceSmart / triangulateCurrentFrame / triangulateAllFrames /
-//     update3DViewport → may end up in pose/initialization.js (3i) or stay in app.js
-import {
-    addNewInstanceSmart,
-    triangulateCurrentFrame, triangulateAllFrames,
-    update3DViewport,
-    syncRotationUI, clearMultiSelect, refreshPaneInteractions,
-    trackCurrentFrame, trackAll, findMatchForSelected,
-    removeSession, showMoveVideoModal,
-    switchSession,
-    populateViewStrip, populateSessionStrip, populateSessionsPanel,
-    // Symbols caught by Subagent B that ui-wiring needs but app.js hadn't exported:
-    swapTracks, clampRotation, seekToLabeledFrame,
-    panelRenderers, multiSelectViews,
-} from '../app.js';
-// Pass 3f: identity-assignment workflow symbols moved out of app.js.
+// Pass 3i-1: tracker functions moved out of app.js.
+import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
+// Pass 3i-2: triangulation orchestration moved out of app.js.
+import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
+// Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
+import { addNewInstanceSmart, update3DViewport } from '../pose/initialization.js';
+// Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
+// (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
     assignTrackToSelected, assignIdentityToSelected, propagateIdentityForward, swapAssignTrack,
     startEditGroup, finishEditGroup,
     startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
     purgeTriangulationDataForGroup,
+    swapTracks,
 } from './identity-assignment.js';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
@@ -66,6 +47,13 @@ import {
     showSlpExportModal, showSlpExportAllModal, showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll,
 } from './export-modals.js';
+// Pass 3h: sessions-panes workflow symbols moved out of app.js.
+import {
+    panelRenderers, multiSelectViews,
+    refreshPaneInteractions, clearMultiSelect, clampRotation, syncRotationUI,
+    populateViewStrip, populateSessionsPanel, populateSessionStrip,
+    showMoveVideoModal, removeSession, switchSession,
+} from './sessions-panes.js';
 
 // ============================================
 // Menu Setup
@@ -2090,3 +2078,232 @@ export function applyPlaybackRate() {
         }
     }
 }
+
+// ============================================
+// seekToLabeledFrame (Pass 3i-4: moved from app.js)
+// ============================================
+
+/**
+ * Navigate to the next or previous frame that has labeled data.
+ * direction > 0: next labeled frame; direction < 0: previous labeled frame.
+ */
+export function seekToLabeledFrame(direction) {
+    if (!state.session) return;
+    var indices = state.session.frameIndices;
+    if (!indices || indices.length === 0) return;
+    var cur = state.currentFrame;
+    var target = null;
+    if (direction > 0) {
+        for (var i = 0; i < indices.length; i++) {
+            if (indices[i] > cur) { target = indices[i]; break; }
+        }
+    } else {
+        for (var i = indices.length - 1; i >= 0; i--) {
+            if (indices[i] < cur) { target = indices[i]; break; }
+        }
+    }
+    if (target != null && videoController) {
+        // Snap timeline/seekbar synchronously so the bar moves on the
+        // same keystroke — videoController.seekToFrame is async
+        // (awaits frame decode before calling drawOverlays/timeline),
+        // which is noticeable on labeled-frame jumps that skip many
+        // frames at once.
+        if (timeline) timeline.setCurrentFrame(target);
+        updateSeekbarVisual(target);
+        videoController.seekToFrame(target);
+        setStatus('Frame ' + (target + 1), 'info');
+    }
+}
+
+// ============================================
+// Editable Frame Number / FPS Pill / Speed Control IIFEs
+// (Pass 3i-4: moved from app.js)
+// ============================================
+
+// ============================================
+// Editable Frame Number
+// ============================================
+
+(function () {
+    var frameEl = document.getElementById('currentFrame');
+    if (!frameEl) return;
+    frameEl.addEventListener('dblclick', function (e) {
+        e.stopPropagation();
+        var currentVal = state.currentFrame + 1;
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentVal;
+        input.style.cssText = 'width:60px;font-family:inherit;font-size:inherit;' +
+            'color:var(--text-primary);background:var(--bg-tertiary);border:1px solid var(--accent);' +
+            'border-radius:3px;padding:0 4px;text-align:center;outline:none;';
+
+        frameEl.textContent = '';
+        frameEl.appendChild(input);
+        input.focus();
+        input.select();
+
+        function commit() {
+            var raw = input.value.trim();
+            var num = parseInt(raw, 10);
+            if (!isNaN(num) && num >= 1 && num <= state.totalFrames) {
+                if (videoController) videoController.seekToFrame(num - 1);
+            }
+            frameEl.textContent = state.currentFrame + 1;
+        }
+
+        function cancel() {
+            frameEl.textContent = state.currentFrame + 1;
+        }
+
+        input.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+            if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+        });
+        input.addEventListener('blur', commit);
+    });
+})();
+
+// ============================================
+// Editable FPS Pill
+// ============================================
+
+
+(function () {
+    var fpsEl = document.getElementById('fpsDisplay');
+    if (!fpsEl) return;
+    fpsEl.addEventListener('dblclick', function (e) {
+        e.stopPropagation();
+        var currentFps = state.fps || 30;
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentFps.toFixed(1);
+        input.style.cssText = 'width:50px;font-family:inherit;font-size:inherit;' +
+            'color:var(--text-primary);background:var(--bg-tertiary);border:1px solid var(--accent);' +
+            'border-radius:3px;padding:0 4px;text-align:center;outline:none;';
+
+        fpsEl.textContent = '';
+        fpsEl.appendChild(input);
+        input.focus();
+        input.select();
+
+        function commit() {
+            var raw = input.value.trim();
+            var num = parseFloat(raw);
+            if (raw !== '' && !isNaN(num) && num > 0 && num <= 1000) {
+                state.fps = num;
+                applyPlaybackRate();
+                if (videoController && state.isPlaying) {
+                    videoController.stopPlayback();
+                    videoController.startPlayback();
+                }
+            }
+            fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
+        }
+
+        function cancel() {
+            fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
+        }
+
+        input.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+            if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+        });
+        input.addEventListener('blur', commit);
+    });
+})();
+
+// ============================================
+// Speed Control
+// ============================================
+
+state.speedMultiplier = 1.0;
+
+(function () {
+    var speedBtn = document.getElementById('speedBtn');
+    var popover = document.getElementById('speedPopover');
+    if (!speedBtn || !popover) return;
+
+    function buildPopover() {
+        popover.innerHTML = '';
+
+        var label = document.createElement('div');
+        label.className = 'speed-label';
+        label.textContent = state.speedMultiplier.toFixed(2) + 'x';
+        popover.appendChild(label);
+
+        var sliderRow = document.createElement('div');
+        sliderRow.className = 'speed-slider-row';
+
+        var minusBtn = document.createElement('button');
+        minusBtn.textContent = '\u2212';
+        var plusBtn = document.createElement('button');
+        plusBtn.textContent = '+';
+
+        var slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = '0.25';
+        slider.max = '4.0';
+        slider.step = '0.05';
+        slider.value = state.speedMultiplier;
+
+        minusBtn.addEventListener('click', function () {
+            var v = Math.max(0.25, parseFloat(slider.value) - 0.05);
+            slider.value = v;
+            applySpeed(v);
+        });
+        plusBtn.addEventListener('click', function () {
+            var v = Math.min(4.0, parseFloat(slider.value) + 0.05);
+            slider.value = v;
+            applySpeed(v);
+        });
+        slider.addEventListener('input', function () {
+            applySpeed(parseFloat(slider.value));
+        });
+
+        sliderRow.appendChild(minusBtn);
+        sliderRow.appendChild(slider);
+        sliderRow.appendChild(plusBtn);
+        popover.appendChild(sliderRow);
+
+        var presets = document.createElement('div');
+        presets.className = 'speed-presets';
+        [1.0, 1.25, 1.5, 2.0, 3.0].forEach(function (val) {
+            var btn = document.createElement('button');
+            btn.textContent = val.toFixed(val % 1 === 0 ? 1 : 2);
+            if (Math.abs(state.speedMultiplier - val) < 0.01) btn.classList.add('active');
+            btn.addEventListener('click', function () {
+                slider.value = val;
+                applySpeed(val);
+            });
+            presets.appendChild(btn);
+        });
+        popover.appendChild(presets);
+
+        function applySpeed(v) {
+            state.speedMultiplier = Math.round(v * 100) / 100;
+            label.textContent = state.speedMultiplier.toFixed(2) + 'x';
+            var btnVal = document.getElementById('speedBtnValue');
+            if (btnVal) btnVal.textContent = state.speedMultiplier.toFixed(2) + 'x';
+            presets.querySelectorAll('button').forEach(function (b) {
+                b.classList.toggle('active', Math.abs(parseFloat(b.textContent) - state.speedMultiplier) < 0.01);
+            });
+            applyPlaybackRate();
+        }
+    }
+
+    speedBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (popover.style.display === 'none') {
+            buildPopover();
+            popover.style.display = '';
+        } else {
+            popover.style.display = 'none';
+        }
+    });
+
+    document.addEventListener('click', function (e) {
+        if (popover.style.display !== 'none' && !popover.contains(e.target) && e.target !== speedBtn) {
+            popover.style.display = 'none';
+        }
+    });
+})();

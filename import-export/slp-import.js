@@ -40,12 +40,12 @@ import {
 // lookup keeps them functional.
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
-import {
-    populateViewStrip, populateSessionStrip,
-    setup3DViewport,
-} from '../app.js';
+// Pass 3i-3: setup3DViewport moved to pose/initialization.js.
+import { setup3DViewport } from '../pose/initialization.js';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
 import { fitTimelineToData } from '../ui/ui-wiring.js';
+// Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 
 export async function handleLoadSlpFile(slpFile) {
     try {

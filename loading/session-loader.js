@@ -49,12 +49,15 @@ import {
 // module-init time, so live-binding lookup keeps them functional.
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel, parseSkeletonJSON } from '../ui/info-panel.js';
+// Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
+// hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
-    populateViewStrip, populateSessionStrip,
     updateFpsDisplay,
-    hideWelcomeOverlay, switchSession,
-} from '../app.js';
+    hideWelcomeOverlay,
+} from '../pose/initialization.js';
+// Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
+import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/sessions-panes.js';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
 

@@ -16,6 +16,8 @@ import {
     frameHasGroupedUserInstances,
     loadAllLazyFrames,
     triangulateMultiFrameInstances,
+    sessionHasCalibration,
+    showCalibrationRequiredPopup,
 } from '../pose/triangulation.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
@@ -27,12 +29,8 @@ import {
     buildReprojH5,
 } from '../import-export/file-io.js';
 
-// Circular: still in app.js, slated for Pass 3i (orchestration + initialization).
-import {
-    update3DViewport,
-    sessionHasCalibration,
-    showCalibrationRequiredPopup,
-} from '../app.js';
+// Pass 3i-3: update3DViewport moved to pose/initialization.js.
+import { update3DViewport } from '../pose/initialization.js';
 
 // ============================================
 // Group by Track & Triangulate All

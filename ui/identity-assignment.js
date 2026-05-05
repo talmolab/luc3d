@@ -13,15 +13,16 @@ import {
     triangulateAndReproject, storeReprojectedInstances,
     reprojectPoints, computeInstanceDistance, hungarianAlgorithm,
     updateTimelineForFrame,
+    triangulateCurrentFrame,
 } from '../pose/triangulation.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { markDirty, setStatus } from '../import-export/save-load.js';
 
-// Circular back to app.js for symbols destined for later passes (3i):
-//   - update3DViewport, triangulateCurrentFrame
-//   - panelRenderers (Map exported from app.js for 3e-1; dockview panel registry)
-import { update3DViewport, triangulateCurrentFrame, panelRenderers } from '../app.js';
+// Pass 3i-3: update3DViewport moved to pose/initialization.js.
+import { update3DViewport } from '../pose/initialization.js';
+// Pass 3h: dockview panel registry now lives in sessions-panes.js.
+import { panelRenderers } from './sessions-panes.js';
 
 // ============================================
 // Track/Identity helpers (top-level so all code can access)
@@ -1217,4 +1218,30 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
         }
         timeline.refreshTracks(state.session);
     }
+}
+
+// ============================================
+// Track Swap (Pass 3i-4: moved from app.js)
+// ============================================
+
+export function swapTracks(trackA, trackB, frameStart, frameEnd) {
+    if (!state.session) return 0;
+    var swapped = 0;
+    for (var [frameIdx, fg] of state.session.frameGroups) {
+        if (frameIdx < frameStart || frameIdx > frameEnd) continue;
+        for (var [camName, instances] of fg.instances) {
+            for (var i = 0; i < instances.length; i++) {
+                if (instances[i].trackIdx === trackA) { instances[i].trackIdx = trackB; swapped++; }
+                else if (instances[i].trackIdx === trackB) { instances[i].trackIdx = trackA; swapped++; }
+            }
+        }
+        for (var [camName2, ulList] of fg.unlinkedInstances) {
+            for (var u = 0; u < ulList.length; u++) {
+                var inst = ulList[u].instance;
+                if (inst.trackIdx === trackA) { inst.trackIdx = trackB; swapped++; }
+                else if (inst.trackIdx === trackB) { inst.trackIdx = trackA; swapped++; }
+            }
+        }
+    }
+    return swapped;
 }

@@ -30,10 +30,12 @@ import {
 } from '../loading/session-loader.js';
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
+// Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
-    populateViewStrip, populateSessionStrip,
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../app.js';
+} from '../pose/initialization.js';
+// Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { handleLoadSlpFile } from './slp-import.js';
 
 export function newProject() {
