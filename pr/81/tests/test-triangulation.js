@@ -195,4 +195,71 @@
             assertEqual(T[1][0], 2);
         });
     });
+
+    describe('hungarianAlgorithm degenerate inputs', function () {
+        // Regression: an all-Infinity cost matrix used to throw
+        // "Cannot read properties of undefined (reading '<col>')" inside the
+        // augmenting-path loop. Hit during Track All on frames where every
+        // group failed to triangulate against the camera being matched.
+
+        it('returns all -1 for an all-Infinity cost matrix (no valid assignments)', function () {
+            if (typeof hungarianAlgorithm !== 'function') return;
+            const cost = [
+                [Infinity, Infinity, Infinity, Infinity],
+                [Infinity, Infinity, Infinity, Infinity],
+                [Infinity, Infinity, Infinity, Infinity],
+            ];
+            const result = hungarianAlgorithm(cost);
+            assertEqual(result.length, 3);
+            for (let i = 0; i < result.length; i++) {
+                assertEqual(result[i], -1);
+            }
+        });
+
+        it('handles a row of Infinity mixed with finite rows', function () {
+            if (typeof hungarianAlgorithm !== 'function') return;
+            const cost = [
+                [1, 5, 9],
+                [Infinity, Infinity, Infinity],
+                [3, 1, 8],
+            ];
+            const result = hungarianAlgorithm(cost);
+            assertEqual(result.length, 3);
+            // Row 0 and Row 2 should get assigned to finite-cost columns;
+            // Row 1 gets whatever's left (the algorithm doesn't reject the
+            // sentinel entry, but its real cost would be filtered by the
+            // caller's threshold check). The key assertion is no crash.
+            assertTrue(result[0] >= 0 && result[0] < 3);
+            assertTrue(result[2] >= 0 && result[2] < 3);
+        });
+
+        it('returns all -1 when m === 0 (zero-column matrix)', function () {
+            if (typeof hungarianAlgorithm !== 'function') return;
+            const cost = [[], [], []];
+            const result = hungarianAlgorithm(cost);
+            assertEqual(result.length, 3);
+            for (let i = 0; i < result.length; i++) {
+                assertEqual(result[i], -1);
+            }
+        });
+
+        it('returns [] when n === 0 (zero-row matrix)', function () {
+            if (typeof hungarianAlgorithm !== 'function') return;
+            const result = hungarianAlgorithm([]);
+            assertEqual(result.length, 0);
+        });
+
+        it('handles NaN entries (treated as Infinity)', function () {
+            if (typeof hungarianAlgorithm !== 'function') return;
+            const cost = [
+                [1, NaN, 9],
+                [NaN, 2, NaN],
+            ];
+            const result = hungarianAlgorithm(cost);
+            assertEqual(result.length, 2);
+            // Should not crash; should prefer finite entries when possible.
+            assertTrue(result[0] >= 0);
+            assertTrue(result[1] >= 0);
+        });
+    });
 })();

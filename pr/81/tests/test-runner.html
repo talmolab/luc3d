@@ -123,6 +123,15 @@
     <!-- Assignment mode tests -->
     <script src="test-assignment.js"></script>
 
+    <!-- Predicted double-click → user instance: selection transfer + multi-select preservation -->
+    <script src="test-predicted-dblclick.js"></script>
+
+    <!-- Ungroup / unlink-group regression tests (Bug A) -->
+    <script src="test-ungroup-fix.js"></script>
+
+    <!-- Group selection rules (Bug C + D) regression tests -->
+    <script src="test-group-selection-rules.js"></script>
+
     <!-- Project loading and triangulation tests -->
     <script src="test-project-triangulation.js"></script>
 
@@ -138,8 +147,24 @@
     <!-- Reprojection lifecycle tests -->
     <script src="test-reprojection-lifecycle.js"></script>
 
+    <!-- Predicted-visibility-on-load tests -->
+    <script src="test-predicted-visibility-on-load.js"></script>
+
+    <!-- Edit-group / per-view-delete fix regression tests -->
+    <script src="test-edit-group-fixes.js"></script>
+
+    <!-- Mixed-group predicted→user promotion (Session.unlinkGroup, createGroupFromUnlinked, Edit Group remove) -->
+    <script src="test-mixed-group-promotion.js"></script>
+
+    <!-- Per-view delete: size===1 auto-ungroup, full-group removal, mixed-group survivor promotion -->
+    <script src="test-delete-auto-ungroup.js"></script>
+
+    <!-- Cross-cutting integration: predicted dblclick + mixed group + per-view delete + Edit Group wasMixed snapshot -->
+    <script src="test-mixed-group-integration.js"></script>
+
     <!-- Identity tests -->
     <script src="test-identity.js"></script>
+    <script src="test-identity-none-label.js"></script>
 
     <!-- Session switching tests -->
     <script src="test-session-switching.js"></script>
@@ -147,9 +172,11 @@
     <!-- Tracker geometry tests -->
     <script src="test-tracker.js"></script>
 
-    <!-- Bottom bar and prompt tests -->
+    <!-- Bottom bar tests -->
     <script src="test-bottom-bar.js"></script>
-    <script src="test-prompt61.js"></script>
+
+    <!-- 2026-03-09 feature set: null-node graying, ungroup, reprojected null nodes, visibility deselect, per-view skeleton cache -->
+    <script src="test-2026-03-09-changes.js"></script>
 
     <!-- Quick save tests -->
     <script src="test-quick-save.js"></script>
@@ -165,18 +192,26 @@
          before TestFramework.runAll() is invoked — using a single module here
          (deferred) guarantees that ordering. -->
     <script type="module">
-        import * as __PoseData from '../pose/pose-data.js?v=1';
-        import * as __Triangulation from '../pose/triangulation.js?v=1';
-        import * as __Overlays from '../ui/overlays.js?v=1';
-        import * as __Viewport3D from '../ui/viewport3d.js?v=1';
-        import * as __Timeline from '../ui/timeline.js?v=1';
-        import * as __Interaction from '../ui/interaction.js?v=1';
-        import * as __SlpMerge from '../import-export/slp-merge.js?v=1';
-        import * as __FileIO from '../import-export/file-io.js?v=1';
-        import * as __Video from '../loading/video.js?v=1';
+        import * as __PoseData from '../pose/pose-data.js';
+        import * as __Triangulation from '../pose/triangulation.js';
+        import * as __Overlays from '../ui/overlays.js';
+        import * as __Viewport3D from '../ui/viewport3d.js';
+        import * as __Timeline from '../ui/timeline.js';
+        import * as __Interaction from '../ui/interaction.js';
+        import * as __SlpMerge from '../import-export/slp-merge.js';
+        import * as __FileIO from '../import-export/file-io.js';
+        import * as __Video from '../loading/video.js';
         Object.assign(window, __PoseData, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video);
+        // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
+        // are intentionally NOT bridged here. All three transitively import app.js
+        // (circular, awaiting later passes), and app.js requires the full DOM +
+        // main page environment to load. The ui-fixes tests that exercise
+        // edit-group / mixed-group / track-assign behavior mirror the production
+        // logic in local test fixtures (e.g., finishEditGroupBranch,
+        // editGroupRemoveBranch) rather than calling the production functions,
+        // so no bridge is needed.
 
         try {
             const results = await TestFramework.runAll();

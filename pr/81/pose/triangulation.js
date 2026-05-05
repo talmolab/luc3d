@@ -5,8 +5,14 @@
  * Uses the Jacobi eigenvalue algorithm for solving the 4x4 symmetric eigenproblem.
  */
 
-import { mat3x3Multiply, FrameGroup, Instance, UnlinkedInstance } from './pose-data.js';
-import { state, timeline } from '../ui/app-state.js?v=1';
+import { mat3x3Multiply, FrameGroup, Instance, UnlinkedInstance, InstanceGroup } from './pose-data.js';
+import { state, timeline, viewport3d } from '../ui/app-state.js';
+// Pass 3i-2: triangulation orchestration moved out of app.js
+import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
+import { updateTriangulationBadge } from '../ui/info-panel.js';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
+// Pass 3i-3: update3DViewport moved to pose/initialization.js.
+import { update3DViewport } from './initialization.js';
 
 // ============================================
 // Matrix utilities (minimal linear algebra)
@@ -594,6 +600,23 @@ export function hungarianAlgorithm(costMatrix) {
     var n = costMatrix.length;
     if (n === 0) return [];
     var m = costMatrix[0].length;
+    if (m === 0) return new Array(n).fill(-1);
+
+    // Clamp non-finite (Infinity / NaN) entries to a large finite sentinel.
+    // An all-Infinity cost matrix would otherwise leave delta/j1 unchanged
+    // inside the augmenting-path search (Infinity < Infinity === false),
+    // sending j0 to -1 and dereferencing cost[NaN] on the next iteration.
+    // Callers gate matches by a threshold (e.g., cost < 100) so spurious
+    // assignments at the sentinel value are naturally filtered out.
+    var SENTINEL = 1e15;
+    var hasFinite = false;
+    for (var ri = 0; ri < n; ri++) {
+        for (var ci = 0; ci < m; ci++) {
+            if (Number.isFinite(costMatrix[ri][ci])) { hasFinite = true; break; }
+        }
+        if (hasFinite) break;
+    }
+    if (!hasFinite) return new Array(n).fill(-1);
 
     // Ensure n <= m (more columns than rows)
     var transposed = false;
@@ -604,14 +627,19 @@ export function hungarianAlgorithm(costMatrix) {
         for (var j = 0; j < m; j++) {
             C[j] = [];
             for (var i = 0; i < n; i++) {
-                C[j][i] = costMatrix[i][j];
+                var v0 = costMatrix[i][j];
+                C[j][i] = Number.isFinite(v0) ? v0 : SENTINEL;
             }
         }
         var tmp = n; n = m; m = tmp;
     } else {
         C = [];
         for (var i2 = 0; i2 < n; i2++) {
-            C[i2] = costMatrix[i2].slice();
+            C[i2] = new Array(m);
+            for (var c2 = 0; c2 < m; c2++) {
+                var v1 = costMatrix[i2][c2];
+                C[i2][c2] = Number.isFinite(v1) ? v1 : SENTINEL;
+            }
         }
     }
 
@@ -1451,7 +1479,7 @@ export function updateTimelineForFrame(frameIdx) {
  * Backend orchestration for multi-frame triangulation. Runs through
  * `[startFrame, endFrame]` and triangulates every InstanceGroup that has
  * ≥2 views with labels. Yields to UI every 50 frames so a progress bar
- * can repaint. The modal UI wrapper lives in app.js (`runMultiFrameTriangulation`)
+ * can repaint. The modal UI wrapper lives in `ui/export-modals.js` (`runMultiFrameTriangulation`)
  * and is responsible for DOM updates, post-loop redraws, and timeline syncs.
  *
  * `onProgress(completed, total)` is invoked per frame; pass it to drive a
@@ -1556,4 +1584,517 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     }
 
     return { triangulated: triangulated, totalGroups: totalGroups, totalErrors: totalErrors };
+}
+
+/**
+ * Re-triangulate a single instance group if it was previously triangulated.
+ * Called automatically when a node is moved or nulled to keep reprojections in sync.
+ */
+export function reTriangulateGroup(instanceGroup) {
+    if (!instanceGroup) return;
+    if (!state.session || state.session.cameras.length < 2) return;
+
+    var cameras = state.session.cameras;
+    var groupCamNames = instanceGroup.cameraNames;
+    var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
+    if (groupCameras.length < 2) return;
+
+    // Save old reprojections in case re-triangulation fails
+    var oldReprojInstances = instanceGroup.reprojectedInstances
+        ? new Map(instanceGroup.reprojectedInstances) : null;
+    var oldReprojections = instanceGroup.reprojections;
+    var oldPoints3d = instanceGroup.points3d;
+
+    var result = triangulateAndReproject(instanceGroup, groupCameras);
+
+    // Only update if we got valid results
+    var validPts = result.points3d && result.points3d.some(function (p) { return p != null; });
+    if (validPts) {
+        instanceGroup.points3d = result.points3d;
+        instanceGroup.reprojections = result.reprojections;
+        storeReprojectedInstances(instanceGroup, result, cameras);
+    } else {
+        // Restore old data
+        console.warn('[reTriangulate] Failed — keeping old reprojections');
+        instanceGroup.points3d = oldPoints3d;
+        instanceGroup.reprojections = oldReprojections;
+        if (oldReprojInstances) instanceGroup.reprojectedInstances = oldReprojInstances;
+    }
+    instanceGroup.observedPoints = {};
+    for (var ci = 0; ci < groupCameras.length; ci++) {
+        var cam = groupCameras[ci];
+        var inst = instanceGroup.getInstance(cam.name);
+        if (inst) {
+            instanceGroup.observedPoints[cam.name] = inst.points;
+        }
+    }
+    instanceGroup.markClean();
+
+    // Update triangulation results for error display
+    var frameIdx = state.currentFrame;
+    var frameResults = state.triangulationResults.get(frameIdx) || [];
+    var newEntry = { group: instanceGroup, points3d: result.points3d,
+        reprojections: result.reprojections, errors: result.errors,
+        meanError: result.meanError };
+    var replaced = false;
+    for (var ri = 0; ri < frameResults.length; ri++) {
+        if (frameResults[ri].group === instanceGroup) {
+            frameResults[ri] = newEntry;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) frameResults.push(newEntry);
+    state.triangulationResults.set(frameIdx, frameResults);
+
+    // Update 3D viewport
+    if (viewport3d) {
+        var groups = getInstanceGroupsForFrame(state.currentFrame);
+        viewport3d.setFrame(groups);
+    }
+}
+
+/**
+ * On-demand triangulation for the current frame's selected instance group.
+ * Re-triangulates from whatever views have labels and updates reprojections.
+ */
+export function triangulateCurrentFrame() {
+    if (!state.session) return;
+
+    if (!sessionHasCalibration()) {
+        showCalibrationRequiredPopup();
+        return;
+    }
+
+    const frameIdx = state.currentFrame;
+    const cameras = state.session.cameras;
+    var session = state.session;
+    var frameGroupsList = session.instanceGroups.get(frameIdx);
+
+    // If no InstanceGroups exist but identities are assigned, create groups from identity buckets
+    if ((!frameGroupsList || frameGroupsList.length === 0) && session.identities.length > 0) {
+        var fg = session.getFrameGroup(frameIdx);
+        if (fg) {
+            var idBuckets = {};
+            var allInstancesByCam = {};
+
+            // Collect from grouped instances
+            for (var [_cn, _insts] of fg.instances) {
+                for (var _i = 0; _i < _insts.length; _i++) {
+                    var _inst = _insts[_i];
+                    if (!allInstancesByCam[_cn]) allInstancesByCam[_cn] = [];
+                    allInstancesByCam[_cn].push(_inst);
+                    var _idId = session.getIdentityIdForTrack
+                        ? session.getIdentityIdForTrack(_cn, _inst.trackIdx, frameIdx)
+                        : session.trackIdentityMap.get(_cn + ':' + _inst.trackIdx);
+                    if (_idId == null) continue;
+                    if (!idBuckets[_idId]) idBuckets[_idId] = {};
+                    if (!idBuckets[_idId][_cn]) idBuckets[_idId][_cn] = _inst;
+                }
+            }
+            // Collect from unlinked instances
+            for (var [_cn2, _ulList] of fg.unlinkedInstances) {
+                for (var _u = 0; _u < _ulList.length; _u++) {
+                    var _ulInst = _ulList[_u].instance;
+                    if (!allInstancesByCam[_cn2]) allInstancesByCam[_cn2] = [];
+                    allInstancesByCam[_cn2].push(_ulInst);
+                    var _idId2 = session.getIdentityIdForTrack
+                        ? session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx)
+                        : session.trackIdentityMap.get(_cn2 + ':' + _ulInst.trackIdx);
+                    if (_idId2 == null) continue;
+                    if (!idBuckets[_idId2]) idBuckets[_idId2] = {};
+                    if (!idBuckets[_idId2][_cn2]) idBuckets[_idId2][_cn2] = _ulInst;
+                }
+            }
+
+            // Clear and re-add instances as linked
+            session.instanceGroups.delete(frameIdx);
+            for (var _cn3 in allInstancesByCam) fg.instances.set(_cn3, []);
+            for (var _cn4 of fg.unlinkedInstances.keys()) fg.unlinkedInstances.set(_cn4, []);
+            for (var _cn5 in allInstancesByCam) {
+                for (var _ai = 0; _ai < allInstancesByCam[_cn5].length; _ai++) {
+                    fg.addInstance(_cn5, allInstancesByCam[_cn5][_ai]);
+                }
+            }
+
+            // Create InstanceGroups from identity buckets
+            for (var _idStr in idBuckets) {
+                var _identityId = parseInt(_idStr);
+                var _bucket = idBuckets[_idStr];
+                var _camNames = Object.keys(_bucket);
+                if (_camNames.length < 2) continue;
+                var _group = new InstanceGroup(Date.now() + _identityId, _identityId);
+                for (var _ci = 0; _ci < _camNames.length; _ci++) {
+                    _group.addInstance(_camNames[_ci], _bucket[_camNames[_ci]]);
+                }
+                _group.observedPoints = {};
+                for (var _ci2 = 0; _ci2 < _camNames.length; _ci2++) {
+                    _group.observedPoints[_camNames[_ci2]] = _bucket[_camNames[_ci2]].points;
+                }
+                if (!session.instanceGroups.has(frameIdx)) {
+                    session.instanceGroups.set(frameIdx, []);
+                }
+                session.instanceGroups.get(frameIdx).push(_group);
+            }
+            frameGroupsList = session.instanceGroups.get(frameIdx);
+            console.log('[triangulate] Auto-created', (frameGroupsList ? frameGroupsList.length : 0), 'groups from identity assignments');
+        }
+    }
+
+    if (!frameGroupsList || frameGroupsList.length === 0) {
+        console.warn('[triangulate] No instanceGroups for frame', frameIdx);
+        setStatus('No instance groups on frame ' + (frameIdx + 1) + ' - assign instances to groups first (A key)', 'warning');
+        updateTriangulationBadge('needs-triangulation', 'No groups');
+        return;
+    }
+
+    markDirty();
+    console.log('[triangulate] Frame', frameIdx, '| cameras:', cameras.map(c => c.name),
+        '| views:', state.views.map(v => v.name));
+
+    const frameResults = [];
+
+    for (const group of frameGroupsList) {
+            // Resolve any camera name mismatches in this group
+            // (e.g., instances keyed by video name "CamA" but camera named "A")
+            const groupKeys = group.cameraNames;
+            for (const gk of groupKeys) {
+                if (!cameras.some(c => c.name === gk)) {
+                    // This key doesn't match any camera - try to resolve
+                    const gkLower = gk.toLowerCase();
+                    for (const cam of cameras) {
+                        const camLower = cam.name.toLowerCase();
+                        if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
+                            if (!group.getInstance(cam.name)) {
+                                const inst = group.getInstance(gk);
+                                group.instances.delete(gk);
+                                group.instances.set(cam.name, inst);
+                                console.log('[triangulate] Resolved instance key "' + gk + '" -> "' + cam.name + '"');
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Count how many views have at least one non-null point
+            let viewsWithLabels = 0;
+            const camStatus = {};
+            for (const cam of cameras) {
+                const inst = group.getInstance(cam.name);
+                if (inst && inst.points) {
+                    const hasAny = inst.points.some((p, idx) => p != null && !(inst.nulledNodes && inst.nulledNodes.has(idx)));
+                    if (hasAny) viewsWithLabels++;
+                    camStatus[cam.name] = hasAny ? 'labeled' : 'empty';
+                } else {
+                    camStatus[cam.name] = inst ? 'no-points' : 'missing';
+                }
+            }
+            console.log('[triangulate] Identity', group.identityId, '| views with labels:', viewsWithLabels,
+                '| cam status:', camStatus);
+
+            if (viewsWithLabels < 2) {
+                // Not enough views for triangulation
+                updateTriangulationBadge('needs-triangulation', viewsWithLabels + '/2+ views needed');
+                continue;
+            }
+
+            // Only use cameras that have instances in this group (assigned views)
+            const groupCamNames = group.cameraNames;
+            const groupCameras = cameras.filter(c => groupCamNames.indexOf(c.name) >= 0);
+
+            const result = triangulateAndReproject(group, groupCameras);
+
+            // Check for NaN in points3d
+            const hasNaN = result.points3d.some(p => p && (isNaN(p[0]) || isNaN(p[1]) || isNaN(p[2])));
+            const validPts = result.points3d.filter(p => p != null).length;
+            console.log('[triangulate] points3d:', validPts, 'valid /', result.points3d.length,
+                '| hasNaN:', hasNaN, '| meanError:', result.meanError,
+                '| cameras used:', groupCamNames,
+                '| sample:', result.points3d.find(p => p != null));
+            if (hasNaN) {
+                console.error('[triangulate] WARNING: NaN in 3D points! Check calibration matrices.');
+                for (const cam of groupCameras) {
+                    console.log('[triangulate] Camera', cam.name, 'P=', cam.projectionMatrix);
+                }
+            }
+
+            // Log reprojections per camera
+            for (const cam of groupCameras) {
+                const reproj = result.reprojections[cam.name];
+                const validReproj = reproj ? reproj.filter(p => p != null).length : 0;
+                console.log('[triangulate] Reprojection', cam.name, ':', validReproj, 'pts',
+                    '| sample:', reproj ? reproj.find(p => p != null) : null);
+            }
+
+            group.reprojections = result.reprojections;
+            group.points3d = result.points3d;
+            storeReprojectedInstances(group, result, cameras);
+            group.observedPoints = {};
+            group.usedCameras = new Set();
+            for (const cam of groupCameras) {
+                const inst = group.getInstance(cam.name);
+                if (inst) {
+                    group.observedPoints[cam.name] = inst.points;
+                    const hasAny = inst.points.some(function (p) { return p != null; });
+                    if (hasAny) group.usedCameras.add(cam.name);
+                }
+            }
+
+            group.markClean();
+
+            frameResults.push({
+                group: group,
+                points3d: result.points3d,
+                reprojections: result.reprojections,
+                errors: result.errors,
+                meanError: result.meanError,
+            });
+        }
+
+    state.triangulationResults.set(frameIdx, frameResults);
+
+    console.log('[triangulate] viewport3d exists:', !!viewport3d,
+        '| frameResults:', frameResults.length,
+        '| views:', state.views.map(v => v.name));
+
+    // Log what each group has after triangulation
+    for (const fr of frameResults) {
+        console.log('[triangulate] Group result:',
+            '| cameras in group:', fr.group.cameraNames,
+            '| has reprojections:', Object.keys(fr.group.reprojections || {}),
+            '| points3d valid:', (fr.points3d || []).filter(p => p != null).length);
+    }
+
+    // Show reproj/error UI elements now that triangulation has been run
+    setReprojErrorVisible(true);
+
+    // Update displays
+    drawAllOverlays(frameIdx);
+    update3DViewport(frameIdx);
+
+    // Re-fit the 3D camera so the new skeleton points are visible
+    if (viewport3d && frameResults.length > 0) {
+        viewport3d.fitToScene();
+    }
+
+    if (frameResults.length > 0 && frameResults[0].meanError != null) {
+        updateTriangulationBadge('triangulated',
+            'Error: ' + frameResults[0].meanError.toFixed(2) + 'px');
+        setStatus('Triangulated frame ' + (frameIdx + 1) + ' (' + frameResults.length + ' group(s), error: ' +
+            frameResults[0].meanError.toFixed(2) + 'px)', 'success');
+    } else if (frameResults.length > 0) {
+        updateTriangulationBadge('triangulated', 'Triangulated');
+        setStatus('Triangulated frame ' + (frameIdx + 1) + ' (' + frameResults.length + ' group(s))', 'success');
+    } else {
+        updateTriangulationBadge('needs-triangulation', 'No groups triangulated');
+        setStatus('No groups could be triangulated on frame ' + (frameIdx + 1) +
+            ' - check that instance groups have labels in 2+ camera views', 'warning');
+    }
+
+    // Update timeline: mark frame only if it has grouped UserInstances
+    updateTimelineForFrame(frameIdx);
+}
+
+/**
+ * Triangulate all frames in the session.
+ * Uses the same logic as triangulateCurrentFrame but batched across all frames.
+ */
+export async function triangulateAllFrames() {
+    if (!state.session) {
+        setStatus('No session loaded', 'warning');
+        return;
+    }
+    if (!sessionHasCalibration()) {
+        showCalibrationRequiredPopup();
+        return;
+    }
+
+    var cameras = state.session.cameras;
+    if (cameras.length < 2) {
+        setStatus('Need at least 2 cameras for triangulation', 'warning');
+        return;
+    }
+
+    var frameIndices = [];
+    for (var [fIdx] of state.session.instanceGroups) {
+        frameIndices.push(fIdx);
+    }
+    if (frameIndices.length === 0) {
+        setStatus('No instance groups to triangulate', 'warning');
+        return;
+    }
+
+    markDirty();
+    showLoading('Triangulating ' + frameIndices.length + ' frames...');
+    var totalTriangulated = 0;
+    var totalGroups = 0;
+    var totalErrors = [];
+    var YIELD_EVERY = 100;
+
+    for (var fi = 0; fi < frameIndices.length; fi++) {
+        var frameIdx = frameIndices[fi];
+        var frameGroupsList = state.session.instanceGroups.get(frameIdx);
+        if (!frameGroupsList || frameGroupsList.length === 0) continue;
+
+        var frameResults = [];
+
+        for (var gi = 0; gi < frameGroupsList.length; gi++) {
+                var group = frameGroupsList[gi];
+
+                // Resolve camera name mismatches
+                var groupKeys = group.cameraNames;
+                for (var ki = 0; ki < groupKeys.length; ki++) {
+                    var gk = groupKeys[ki];
+                    if (!cameras.some(function (c) { return c.name === gk; })) {
+                        var gkLower = gk.toLowerCase();
+                        for (var ci = 0; ci < cameras.length; ci++) {
+                            var camLower = cameras[ci].name.toLowerCase();
+                            if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
+                                if (!group.getInstance(cameras[ci].name)) {
+                                    var inst = group.getInstance(gk);
+                                    group.instances.delete(gk);
+                                    group.instances.set(cameras[ci].name, inst);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Count views with labels
+                var viewsWithLabels = 0;
+                for (var cj = 0; cj < cameras.length; cj++) {
+                    var inst2 = group.getInstance(cameras[cj].name);
+                    if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
+                        viewsWithLabels++;
+                    }
+                }
+
+                if (viewsWithLabels < 2) continue;
+
+                // Only use cameras that have instances in this group (assigned views)
+                var groupCamNames2 = group.cameraNames;
+                var groupCameras2 = cameras.filter(function (c) { return groupCamNames2.indexOf(c.name) >= 0; });
+
+                var result = triangulateAndReproject(group, groupCameras2);
+
+                group.reprojections = result.reprojections;
+                group.points3d = result.points3d;
+                storeReprojectedInstances(group, result, cameras);
+                group.observedPoints = {};
+                group.usedCameras = new Set();
+                for (var ck = 0; ck < groupCameras2.length; ck++) {
+                    var camInst = group.getInstance(groupCameras2[ck].name);
+                    if (camInst) {
+                        group.observedPoints[groupCameras2[ck].name] = camInst.points;
+                        if (camInst.points.some(function (p) { return p != null; })) {
+                            group.usedCameras.add(groupCameras2[ck].name);
+                        }
+                    }
+                }
+
+                group.markClean();
+                totalGroups++;
+
+                frameResults.push({
+                    group: group,
+                    points3d: result.points3d,
+                    reprojections: result.reprojections,
+                    errors: result.errors,
+                    meanError: result.meanError,
+                });
+
+                if (result.meanError != null) {
+                    totalErrors.push(result.meanError);
+                }
+            }
+
+        if (frameResults.length > 0) {
+            state.triangulationResults.set(frameIdx, frameResults);
+            totalTriangulated++;
+        }
+
+        // Yield to UI periodically
+        if (fi > 0 && fi % YIELD_EVERY === 0) {
+            showLoading('Triangulating... ' + fi + '/' + frameIndices.length + ' frames');
+            await new Promise(function (r) { setTimeout(r, 0); });
+        }
+    }
+
+    // Show reproj/error UI elements
+    setReprojErrorVisible(true);
+
+    // Update display for current frame
+    drawAllOverlays(state.currentFrame);
+    update3DViewport(state.currentFrame);
+    if (viewport3d) viewport3d.fitToScene();
+
+    hideLoading();
+    var avgError = totalErrors.length > 0
+        ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
+        : 'N/A';
+    setStatus('Triangulated ' + totalTriangulated + ' frames (' + totalGroups + ' groups, avg error: ' + avgError + 'px)', 'success');
+    console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
+
+    // Update timeline: mark frames with grouped UserInstances, refresh track bars
+    if (timeline) {
+        for (var [fIdx] of state.triangulationResults) {
+            timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
+        }
+        timeline.refreshTracks(state.session);
+    }
+}
+
+export function sessionHasCalibration() {
+    if (!state.session || state.session.cameras.length === 0) return false;
+    // Check if any camera has non-zero rotation or translation (real calibration)
+    for (var ci = 0; ci < state.session.cameras.length; ci++) {
+        var cam = state.session.cameras[ci];
+        var r = cam.rotation || cam.rvec;
+        var t = cam.translation || cam.tvec;
+        if (r && (r[0] !== 0 || r[1] !== 0 || r[2] !== 0)) return true;
+        if (t && (t[0] !== 0 || t[1] !== 0 || t[2] !== 0)) return true;
+    }
+    return false;
+}
+
+export function showCalibrationRequiredPopup() {
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;';
+
+    var card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:420px;width:90%;text-align:center;';
+
+    var icon = document.createElement('div');
+    icon.style.cssText = 'font-size:36px;margin-bottom:12px;';
+    icon.textContent = '\u26A0';
+    card.appendChild(icon);
+
+    var title = document.createElement('div');
+    title.style.cssText = 'color:#fff;font-size:16px;font-weight:600;margin-bottom:8px;';
+    title.textContent = 'Calibration Required';
+    card.appendChild(title);
+
+    var msg = document.createElement('div');
+    msg.style.cssText = 'color:#aaa;font-size:13px;margin-bottom:16px;line-height:1.5;';
+    msg.textContent = 'Triangulation, reprojection, and 3D features require a calibration file. Load a calibration.toml via File \u2192 Load Calibration or by loading a session folder that includes one.';
+    card.appendChild(msg);
+
+    var btn = document.createElement('button');
+    btn.style.cssText = 'padding:8px 24px;font-size:14px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
+    btn.textContent = 'OK';
+    function dismiss() {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+    }
+    btn.addEventListener('click', dismiss);
+    function onKey(e) {
+        if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); dismiss(); }
+    }
+    document.addEventListener('keydown', onKey);
+
+    card.appendChild(btn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
 }

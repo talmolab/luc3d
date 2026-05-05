@@ -11,7 +11,7 @@
  * Depends on pose-data.js (Camera class).
  */
 
-import { Camera, Skeleton, Instance, Identity } from '../pose/pose-data.js?v=1';
+import { Camera, Skeleton, Instance, Identity } from '../pose/pose-data.js';
 
 // ============================================
 // Generic file picker
@@ -1630,8 +1630,11 @@ export async function convertSlpToV06Compatible(rawBytes, sessionsToEmit) {
             for (var i = 0; i < names.length; i++) {
                 var name = names[i];
                 if (name === 'metadata') continue;
-                if (name === 'identities_json') continue; // format 1.9 payload, drop
                 if (name === 'sessions_json') continue;   // always rewritten (or dropped) below
+                // identities_json: format-1.9 payload. Format 1.4 doesn't forbid
+                // extra datasets — sleap-io Python <=0.6.5 ignores it, but LUCID
+                // round-trips it on reload to preserve identity assignments
+                // (I-9). Falls through to _copyDatasetAsIs below.
                 if (name === 'instances') {
                     _writeCompoundFromMatrix(src, dst, 'instances', _SLP_INSTANCE_FIELDS);
                 } else if (name === 'frames') {

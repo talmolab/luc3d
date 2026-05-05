@@ -21,36 +21,45 @@
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES,
-} from '../ui/app-state.js?v=1';
+} from '../ui/app-state.js';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=1';
+} from '../pose/pose-data.js';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=1';
+import { OnDemandVideoDecoder, VideoController } from './video.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=1';
+} from '../import-export/file-io.js';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=2';
+} from '../pose/triangulation.js';
+
+// Status UI moved to import-export/save-load.js in Pass 3c-1.
+import {
+    setStatus, showLoading, hideLoading,
+} from '../import-export/save-load.js';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
+import { drawAllOverlays } from '../ui/rendering.js';
+import { updateInfoPanel, parseSkeletonJSON } from '../ui/info-panel.js';
+// Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
+// hideWelcomeOverlay moved to pose/initialization.js.
 import {
-    setStatus, showLoading, hideLoading,
-    drawAllOverlays,
     setupInteraction, setup3DViewport, setupTimeline,
-    updateInfoPanel, populateViewStrip, populateSessionStrip,
-    updateSeekbar, updateFpsDisplay,
-    fitTimelineToData, onPlaybackStateChange,
-    hideWelcomeOverlay, parseSkeletonJSON, switchSession,
-} from '../app.js?v=15';
+    updateFpsDisplay,
+    hideWelcomeOverlay,
+} from '../pose/initialization.js';
+// Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
+import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/sessions-panes.js';
+// Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
+import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
