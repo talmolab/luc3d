@@ -783,9 +783,10 @@ export class OnDemandVideoDecoder {
         this.isDecoding = false;
         this.pendingFrame = null;
 
-        // Re-init mp4box in background (non-blocking, metadata only)
+        // Re-parse mp4 metadata so samples.length reflects the real sample
+        // table (vs the duration-times-30-fps estimate computed above).
         try {
-            this._initMp4box();
+            await this._initMp4box();
         } catch (e) {
             videoLog("MP4Box re-init failed (HTML5 fallback will be used): " + e.message, "warn");
         }

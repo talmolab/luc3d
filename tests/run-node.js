@@ -205,7 +205,13 @@ var sandbox = {
         DoubleSide: 2,
         LinearFilter: 1006,
     },
-    process: { exit: function(code) { process.exit(code); }, versions: { node: process.versions.node } }
+    process: { exit: function(code) { process.exit(code); }, versions: { node: process.versions.node } },
+    // Expose a synchronous source-file loader so individual tests can read
+    // production source files that aren't preloaded by the vm sandbox above.
+    // Path is resolved relative to the repository root.
+    __readSource: function(relPath) {
+        return fs.readFileSync(path.join(__dirname, '..', relPath), 'utf-8');
+    }
 };
 
 // Also support OrbitControls
@@ -295,6 +301,8 @@ var testFiles = [
     'test-reprojection-lifecycle.js',
     'test-identity.js',
     'test-session-switching.js',
+    'test-session-switch-frame-reset.js',
+    'test-switchsource-mp4box-await.js',
     'test-predicted-conversion.js',
     'test-save-load-json.js',
     'test-tracker.js',

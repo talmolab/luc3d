@@ -169,6 +169,12 @@
     <!-- Session switching tests -->
     <script src="test-session-switching.js"></script>
 
+    <!-- Bug B regression: frame index leaks across session switches -->
+    <script src="test-session-switch-frame-reset.js"></script>
+
+    <!-- Bug A regression: switchSource must await _initMp4box -->
+    <script src="test-switchsource-mp4box-await.js"></script>
+
     <!-- Tracker geometry tests -->
     <script src="test-tracker.js"></script>
 

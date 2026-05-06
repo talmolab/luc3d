@@ -1430,12 +1430,12 @@ export function removeSession(idx) {
         setVideoController(state.session._videoController || null);
         paneManager.clearAll();
         paneManager.addAllViewsAsGrid();
+        state.currentFrame = state.session.lastFrame || 0;
+        if (videoController) videoController.seekToFrame(state.currentFrame);
+        drawAllOverlays(state.currentFrame);
         setTimeout(function () {
             fitCanvasesToCells();
             refreshPaneInteractions();
-            state.currentFrame = state.session.lastFrame || 0;
-            if (videoController) videoController.seekToFrame(state.currentFrame);
-            drawAllOverlays(state.currentFrame);
         }, 50);
     } else {
         // Build views using pool decoders
@@ -1582,15 +1582,13 @@ export async function switchSession(newIdx) {
     rebuildVideoController();
 
     var targetFrame = newSession.lastFrame || 0;
-    setTimeout(function() {
-        fitCanvasesToCells();
-        refreshPaneInteractions();
-        state.currentFrame = targetFrame;
-        if (videoController && state.views.length > 0) {
-            videoController.seekToFrame(targetFrame);
-        }
-        drawAllOverlays(targetFrame);
-    }, 50);
+    fitCanvasesToCells();
+    refreshPaneInteractions();
+    state.currentFrame = targetFrame;
+    if (videoController && state.views.length > 0) {
+        videoController.seekToFrame(targetFrame);
+    }
+    drawAllOverlays(targetFrame);
 
     // Update sidebars and panels (immediate, no delay needed)
     populateViewStrip();
