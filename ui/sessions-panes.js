@@ -1530,6 +1530,15 @@ export async function switchSession(newIdx) {
     state.session = newSession;
     state.triangulationResults = newSession.triangulationResults || new Map();
 
+    // Update timeline session reference up front so its track segments and
+    // frame markers reflect the new session within ~1 frame of the click,
+    // instead of waiting for all decoders to finish switching. The video
+    // panes will still show their loading spinner during the parallel
+    // decoder switch below. Later calls to timeline.setData (inside
+    // rebuildVideoController and at the bottom of this function) become
+    // idempotent (timeline._session === newSession).
+    if (timeline) timeline.setData(newSession);
+
     // Sync trust track labels toggle
     var trustCheck = document.getElementById('menuTrustTracksCheck');
     if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
@@ -1547,22 +1556,37 @@ export async function switchSession(newIdx) {
         }
     }
 
-    for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
-        var vfIdx = newSession.videoFileIndices[vi];
+    // Pre-extend the decoder pool with null placeholders so every camera
+    // index `vi` has a stable slot regardless of which init() finishes
+    // first. This avoids the race where two parallel `push` calls land in
+    // non-deterministic order.
+    while (state.decoderPool.length < newSession.videoFileIndices.length) {
+        state.decoderPool.push(null);
+    }
+
+    showLoading('Loading videos…');
+
+    // Phase 4: parallel decoder-switching. For 4 cameras at ~500 ms each,
+    // sequential awaits would take ~2000 ms; Promise.all reduces this to
+    // ~max-of-all (~500 ms). On failure for any one camera, vf.decoder
+    // remains null so the second-pass createViewForVideoFile is skipped
+    // for that camera via the existing guard.
+    await Promise.all(newSession.videoFileIndices.map(async function (vfIdx, vi) {
         var vf = state.videoFiles[vfIdx];
         if (vf && vf.file) {
-            showLoading('Loading video: ' + vf.file.name + '...');
             try {
-                if (vi < state.decoderPool.length) {
+                if (state.decoderPool[vi] != null) {
                     // Reuse pool decoder — swap source without creating new video element
                     await state.decoderPool[vi].switchSource(vf.file);
                     vf.decoder = state.decoderPool[vi];
                 } else {
-                    // More cameras than pool — create new decoder and add to pool
+                    // No pool decoder for this slot — create one and assign by index.
+                    // Indexed assignment (not push) keeps slot order deterministic
+                    // when multiple inits resolve out of order.
                     var newDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
                     await newDec.init(vf.file);
                     vf.decoder = newDec;
-                    state.decoderPool.push(newDec);
+                    state.decoderPool[vi] = newDec;
                 }
                 vf.videoWidth = vf.decoder.videoTrack.video.width;
                 vf.videoHeight = vf.decoder.videoTrack.video.height;
@@ -1571,8 +1595,15 @@ export async function switchSession(newIdx) {
                 console.error('[switchSession] Video init failed:', e);
             }
         }
-        if (vf && vf.decoder) {
-            createViewForVideoFile(vf);
+    }));
+
+    // Second pass — deterministic for-loop. createViewForVideoFile has DOM
+    // side effects so we run it in source order after Promise.all resolves,
+    // not interleaved with the parallel awaits.
+    for (var vi2 = 0; vi2 < newSession.videoFileIndices.length; vi2++) {
+        var vf2 = state.videoFiles[newSession.videoFileIndices[vi2]];
+        if (vf2 && vf2.decoder) {
+            createViewForVideoFile(vf2);
         }
     }
     hideLoading();

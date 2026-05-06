@@ -303,6 +303,7 @@ var testFiles = [
     'test-session-switching.js',
     'test-session-switch-frame-reset.js',
     'test-switchsource-mp4box-await.js',
+    'test-switchsession-parallel-decoders.js',
     'test-predicted-conversion.js',
     'test-save-load-json.js',
     'test-tracker.js',
