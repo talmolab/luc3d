@@ -104,13 +104,18 @@ session graph that holds them.
   + cached `reprojectedInstances`. `markDirty`/`markClean`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
   frameGroups, instanceGroups, identity-mapping tables. Many methods:
-  identity assignment (`assignIdentityToGroup`, `propagateIdentity`,
-  `setFrameIdentity`), group editing (`createGroupFromUnlinked`,
-  `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
-  (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
-  `_promoteIfMixed`), skeleton propagation
+  identity assignment (`assignIdentityToGroup` — pass-through setter,
+  no per-frame uniqueness enforcement; `propagateIdentity` —
+  per-frame override writer; `setFrameIdentity`), group editing
+  (`createGroupFromUnlinked`, `unlinkGroup`, `removeInstanceGroup`,
+  `assignToGroup`), mixed-group repair (`_promoteIfMixed`),
+  skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
-  (`renameCameraInAllData`).
+  (`renameCameraInAllData`). NOTE: there is a known bug where two
+  groups in one frame can hold the same `identityId` (and two tracks on
+  one camera at one frame can resolve to the same identity); the
+  collision-handling logic that would prevent this is being designed
+  in a separate PR — see `prompts/refactor/revert-identity-dup-bug.md`.
 - `clonePoints(points)` — deep-clone helper for `[u,v]|null` arrays.
 - `mat3x3Multiply`, `mat3x3Multiply3x4` — matrix utilities used by
   `Camera` and `triangulation.js`.
@@ -209,7 +214,8 @@ all-frames, multi-frame range).
 - Lazy H5 loader: class `LazyFrameLoader`, `shouldUseLazyH5(file)`,
   `ensureLazyFrameData`, `buildLazyFrameGroupSync`, `batchLoadLazyFrames`,
   `loadAllLazyFrames`, `evictLazyFrames`. Spawns
-  `/loading/slp-import-worker.js` for HDF5 reads.
+  `loading/slp-import-worker.js` (resolved against `document.baseURI` so
+  sub-path deployments work — see ISSUES.md I-8) for HDF5 reads.
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress)`,
@@ -533,7 +539,14 @@ multi-video docking layout.
 - `clampRotation`, `syncRotationUI`.
 - `populateViewStrip`, `populateSessionsPanel`, `populateSessionStrip`.
 - `showMoveVideoModal`.
-- `removeSession`, `switchSession` (async).
+- `removeSession`, `switchSession` (async). Both reset
+  `state.currentFrame` to the incoming session's `lastFrame` (or 0)
+  synchronously before any downstream reads — no `setTimeout` deferral.
+  `switchSession` parallelises per-camera decoder swaps with
+  `Promise.all` and assigns into `state.decoderPool` by stable index
+  (so out-of-order resolution can't reorder the pool); it also calls
+  `timeline.setData(newSession)` up front so the timeline reflects the
+  new session before the decoder swap finishes.
 
 **Imports from project modules.**
 - `./app-state.js` — `state`, controllers + setters.
@@ -741,9 +754,12 @@ open-and-stream-frames.
 
 **Imports from project modules.** None.
 
-**Imported by.** Spawned via `new Worker('/loading/slp-import-worker.js',
-{type: 'module'})` from `import-export/file-io.js` (eager parse) and
-`pose/triangulation.js` (lazy reads).
+**Imported by.** Spawned via
+`new Worker(new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI), {type: 'module'})`
+from `import-export/file-io.js` (eager parse) and `pose/triangulation.js`
+(lazy reads). The `document.baseURI` resolution makes the URL work on
+sub-path deployments (GitHub Pages `/luc3d/`, `/luc3d/pr/N/`) — see
+ISSUES.md I-8.
 
 **User-facing features.** SLP import progress without freezing the UI;
 lazy frame loading for very large SLP files.
@@ -787,7 +803,10 @@ overlay-paired video panes.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)`, `decodeRange(start, end)`, `playNative`,
   `pauseNative`, `seekNative`, `switchSource`, `close`,
-  `drawCurrentFrame`.
+  `drawCurrentFrame`. Both `init` and `switchSource` await
+  `_initMp4box` before resolving, so `samples.length` reflects the real
+  mp4 sample table (not a `duration * 30` estimate) by the time callers
+  read it.
 - `EmbeddedVideoDecoder` — class for SLP-embedded frames. `getFrame`,
   `hasFrame`, `close`.
 - `VideoController` — class. Selected methods: `seekToFrame`,
