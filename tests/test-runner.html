@@ -178,6 +178,11 @@
     <!-- QoL: switchSession parallel decoders + slot stability + early timeline.setData -->
     <script src="test-switchsession-parallel-decoders.js"></script>
 
+    <!-- Per-decoder loading progress callback (feature: loading-progress-modal) -->
+    <script src="test-decoder-onprogress.js"></script>
+    <script src="test-switchsession-progress-wiring.js"></script>
+    <script src="test-loading-progress-modal-api.js"></script>
+
     <!-- Tracker geometry tests -->
     <script src="test-tracker.js"></script>
 
@@ -210,9 +215,11 @@
         import * as __SlpMerge from '../import-export/slp-merge.js';
         import * as __FileIO from '../import-export/file-io.js';
         import * as __Video from '../loading/video.js';
+        import * as __LoadingProgressModal from '../ui/loading-progress-modal.js';
         Object.assign(window, __PoseData, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
-                              __SlpMerge, __FileIO, __Video);
+                              __SlpMerge, __FileIO, __Video,
+                              __LoadingProgressModal);
         // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
         // are intentionally NOT bridged here. All three transitively import app.js
         // (circular, awaiting later passes), and app.js requires the full DOM +

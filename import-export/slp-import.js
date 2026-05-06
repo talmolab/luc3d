@@ -46,10 +46,14 @@ import { setup3DViewport } from '../pose/initialization.js';
 import { fitTimelineToData } from '../ui/ui-wiring.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 
 export async function handleLoadSlpFile(slpFile) {
     try {
 
+        // TODO(slp-load): wire SLP-parse phases through ui/loading-progress-modal.js
+        // once the modal API stabilizes (uses the same addTask/updateTask/completeTask
+        // contract as switchSession). See ui/loading-progress-modal.js header.
         showLoading('Reading SLP file (' + (slpFile.size / 1024 / 1024).toFixed(1) + ' MB)...');
         console.log('[load-slp] SLP:', slpFile.name);
 
@@ -749,13 +753,25 @@ export async function handleLoadSlpFile(slpFile) {
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 
+                var slpModal = getLoadingProgressModal({ title: 'Loading videos' });
+                slpModal.reset();
+                slpModal.show();
+
                 for (var mvi = 0; mvi < vidFiles.length; mvi++) {
                     var vFile = vidFiles[mvi];
                     var stem = vFile.name.replace(/\.[^.]+$/, '');
                     showLoading('Loading ' + vFile.name + ' (' + (mvi + 1) + '/' + vidFiles.length + ')...');
+                    var slpTaskId = slpModal.addTask({ label: vFile.name || ('camera ' + mvi) });
+                    var slpOnProgress = (function (tid) {
+                        return function (ev) {
+                            if (ev && ev.error) slpModal.failTask(tid, ev.error);
+                            else slpModal.updateTask(tid, ev);
+                        };
+                    })(slpTaskId);
                     try {
-                        var vdec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                        var vdec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: slpOnProgress });
                         await vdec.init(vFile);
+                        slpModal.completeTask(slpTaskId);
 
                         // Match to camera by parent directory name or filename
                         var assignedCam = null;
@@ -801,6 +817,7 @@ export async function handleLoadSlpFile(slpFile) {
                         });
                     } catch (videoErr) {
                         console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);
+                        slpModal.failTask(slpTaskId, videoErr);
                     }
                 }
 
@@ -968,6 +985,8 @@ export async function handleLoadSlpFile(slpFile) {
 
 export async function handleAddSlp() {
     try {
+        // TODO(slp-load): wire SLP-parse + per-cam decoder phases through
+        // ui/loading-progress-modal.js (out of current scope — see plan).
         setStatus('Pick SLP file to add...', 'warning');
         var slpFiles = await pickFiles({ accept: '.slp,.h5' });
         if (slpFiles.length === 0) {

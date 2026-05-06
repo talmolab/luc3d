@@ -48,6 +48,7 @@ import { autoAssignState } from './identity-assignment.js';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
+import { getLoadingProgressModal } from './loading-progress-modal.js';
 
 // ============================================
 // Dockview Pane Manager
@@ -1564,6 +1565,15 @@ export async function switchSession(newIdx) {
         state.decoderPool.push(null);
     }
 
+    var modal = getLoadingProgressModal({ title: 'Loading videos' });
+    modal.reset();
+    modal.show();
+    var taskIds = newSession.videoFileIndices.map(function (vfIdx) {
+        var vf = state.videoFiles[vfIdx];
+        var label = (vf && vf.file && vf.file.name) || ('camera ' + vfIdx);
+        return modal.addTask({ label: label });
+    });
+
     showLoading('Loading videos…');
 
     // Phase 4: parallel decoder-switching. For 4 cameras at ~500 ms each,
@@ -1574,16 +1584,23 @@ export async function switchSession(newIdx) {
     await Promise.all(newSession.videoFileIndices.map(async function (vfIdx, vi) {
         var vf = state.videoFiles[vfIdx];
         if (vf && vf.file) {
+            var taskId = taskIds[vi];
+            var onProgress = function (ev) {
+                if (ev && ev.error) modal.failTask(taskId, ev.error);
+                else modal.updateTask(taskId, ev);
+            };
             try {
                 if (state.decoderPool[vi] != null) {
                     // Reuse pool decoder — swap source without creating new video element
+                    state.decoderPool[vi]._onProgress = onProgress;
+                    state.decoderPool[vi].onProgress = onProgress;
                     await state.decoderPool[vi].switchSource(vf.file);
                     vf.decoder = state.decoderPool[vi];
                 } else {
                     // No pool decoder for this slot — create one and assign by index.
                     // Indexed assignment (not push) keeps slot order deterministic
                     // when multiple inits resolve out of order.
-                    var newDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                    var newDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: onProgress });
                     await newDec.init(vf.file);
                     vf.decoder = newDec;
                     state.decoderPool[vi] = newDec;
@@ -1591,8 +1608,14 @@ export async function switchSession(newIdx) {
                 vf.videoWidth = vf.decoder.videoTrack.video.width;
                 vf.videoHeight = vf.decoder.videoTrack.video.height;
                 vf.frameCount = vf.decoder.samples.length;
+                // Note: completeTask is intentionally deferred until after
+                // the first frame has actually painted (see seekPromise.then
+                // below) so the bar can't sit at 100% while the canvas is
+                // still empty. The task currently sits at the mp4box
+                // ratio:1 weighted display (90%).
             } catch (e) {
                 console.error('[switchSession] Video init failed:', e);
+                modal.failTask(taskId, e);
             }
         }
     }));
@@ -1606,8 +1629,6 @@ export async function switchSession(newIdx) {
             createViewForVideoFile(vf2);
         }
     }
-    hideLoading();
-
     updateTotalFrames();
     paneManager.addAllViewsAsGrid();
     rebuildVideoController();
@@ -1616,9 +1637,42 @@ export async function switchSession(newIdx) {
     fitCanvasesToCells();
     refreshPaneInteractions();
     state.currentFrame = targetFrame;
-    if (videoController && state.views.length > 0) {
-        videoController.seekToFrame(targetFrame);
-    }
+    // Keep the showLoading('Loading videos…') overlay up until the first
+    // frame has actually painted (seekToFrame resolves after each pane's
+    // decoder has decoded the target frame AND drawImage'd it). This
+    // prevents the user from scrubbing onto an empty canvas during the
+    // brief window between hideLoading and the first paint. Capped at
+    // SEEK_TIMEOUT_MS so a stuck decoder can't freeze the UI; on timeout
+    // the overlay lifts even though seekPromise is still running in the
+    // background — the frame paints whenever it's ready.
+    var SEEK_TIMEOUT_MS = 3000;
+    var seekRawPromise = (videoController && state.views.length > 0)
+        ? Promise.resolve(videoController.seekToFrame(targetFrame))
+        : Promise.resolve();
+    // When the seek actually succeeds, mark every non-failed task complete
+    // so the modal's bars finish to 100% (and the auto-dismiss schedules).
+    // This intentionally fires INDEPENDENTLY of the Promise.race below: if
+    // the seek wins the race, this then() runs immediately; if the timeout
+    // wins, this then() runs whenever the seek eventually finishes, even
+    // after hideLoading has lifted the overlay.
+    seekRawPromise.then(function () {
+        for (var ti = 0; ti < taskIds.length; ti++) {
+            var tid = taskIds[ti];
+            if (tid == null) continue;
+            var ts = modal.getTaskState(tid);
+            if (ts && ts.status !== 'error') modal.completeTask(tid);
+        }
+    }, function (e) {
+        // Seek failure: log only — leave tasks at the mp4box ratio:1
+        // display (90%) so the user can see the load got close but the
+        // first frame never landed.
+        console.error('[switchSession] first-frame seek failed:', e);
+    });
+    await Promise.race([
+        seekRawPromise.catch(function () { return null; }),
+        new Promise(function (r) { setTimeout(r, SEEK_TIMEOUT_MS); }),
+    ]);
+    hideLoading();
     drawAllOverlays(targetFrame);
 
     // Update sidebars and panels (immediate, no delay needed)

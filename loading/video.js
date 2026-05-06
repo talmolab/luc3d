@@ -33,6 +33,8 @@ export class OnDemandVideoDecoder {
     constructor(options = {}) {
         this.cacheSize = options.cacheSize || 30;
         this.lookahead = options.lookahead || 5;
+        this._onProgress = (options && typeof options.onProgress === 'function') ? options.onProgress : null;
+        this.onProgress = null; // settable field; read by _emitProgress
         this.cache = new Map();
         this.samples = [];
         this.keyframeIndices = [];
@@ -113,7 +115,9 @@ export class OnDemandVideoDecoder {
         }
 
         // Wait for video metadata (browser parses moov natively - very fast)
+        this._emitProgress({ phase: 'canplay', ratio: 0 });
         await metadataPromise;
+        this._emitProgress({ phase: 'canplay', ratio: 1 });
 
         var width = this._videoEl.videoWidth;
         var height = this._videoEl.videoHeight;
@@ -178,9 +182,20 @@ export class OnDemandVideoDecoder {
             await this._initMp4box();
         } catch (e) {
             videoLog("MP4Box init failed (HTML5 fallback will be used): " + e.message, "warn");
+            this._emitProgress({ phase: 'mp4box', error: e });
         }
 
         videoLog("Video loaded: " + width + "x" + height + " " + this.samples.length + " frames @ " + this._fps.toFixed(2) + "fps (" + (this.fileSize / 1048576).toFixed(1) + " MB)");
+    }
+
+    _emitProgress(event) {
+        var fn = this.onProgress || this._onProgress;
+        if (typeof fn !== 'function') return;
+        try {
+            fn(event);
+        } catch (e) {
+            console.warn('[OnDemandVideoDecoder onProgress callback threw]:', e);
+        }
     }
 
     /**
@@ -207,6 +222,9 @@ export class OnDemandVideoDecoder {
             var next = this.mp4boxFile.appendBuffer(buffer);
             offset = (next !== undefined) ? next : (offset + chunkSize);
             await new Promise(function (r) { setTimeout(r, 0); });
+            if (typeof self._onProgress === 'function') {
+                self._onProgress({ phase: 'mp4box', ratio: Math.min(offset / self.fileSize, 0.999) });
+            }
         }
 
         var info = await ready;
@@ -282,6 +300,9 @@ export class OnDemandVideoDecoder {
             videoLog("MP4Box ready: " + realFrameCount + " frames, fps=" + this._fps.toFixed(2) + " (using HTML5 decode with accurate FPS)");
         } else {
             videoLog("MP4Box returned no samples, keeping HTML5 mode", "warn");
+        }
+        if (typeof this._onProgress === 'function') {
+            this._onProgress({ phase: 'mp4box', ratio: 1 });
         }
         // Release mp4box resources - we only needed it for metadata
         this.mp4boxFile = null;
@@ -741,7 +762,9 @@ export class OnDemandVideoDecoder {
         });
 
         this._videoEl.src = URL.createObjectURL(source);
+        this._emitProgress({ phase: 'canplay', ratio: 0 });
         await metadataPromise;
+        this._emitProgress({ phase: 'canplay', ratio: 1 });
 
         var width = this._videoEl.videoWidth;
         var height = this._videoEl.videoHeight;
@@ -789,6 +812,7 @@ export class OnDemandVideoDecoder {
             await this._initMp4box();
         } catch (e) {
             videoLog("MP4Box re-init failed (HTML5 fallback will be used): " + e.message, "warn");
+            this._emitProgress({ phase: 'mp4box', error: e });
         }
 
         videoLog("Source switched: " + (source.name || "file") + " (" + width + "x" + height + ", ~" + totalFrames + " frames)");

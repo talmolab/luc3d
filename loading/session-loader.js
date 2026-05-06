@@ -60,6 +60,7 @@ import {
 import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/sessions-panes.js';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -181,6 +182,10 @@ export async function handleLoadVideos() {
 
         showLoading('Loading videos...');
 
+        var hlvModal = getLoadingProgressModal({ title: 'Loading videos' });
+        hlvModal.reset();
+        hlvModal.show();
+
         // Append new files to state.videoFiles (skip duplicates)
         var failedVideos = [];
         for (let i = 0; i < files.length; i++) {
@@ -195,8 +200,15 @@ export async function handleLoadVideos() {
             }
 
             showLoading('Loading ' + file.name + '...');
+            const hlvTaskId = hlvModal.addTask({ label: file.name || ('camera ' + i) });
+            const hlvOnProgress = (function (tid) {
+                return function (ev) {
+                    if (ev && ev.error) hlvModal.failTask(tid, ev.error);
+                    else hlvModal.updateTask(tid, ev);
+                };
+            })(hlvTaskId);
             try {
-                const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: hlvOnProgress });
                 await decoder.init(file);
 
                 const vw = decoder.videoTrack.video.width;
@@ -213,8 +225,10 @@ export async function handleLoadVideos() {
                     assignedCamera: null,
                     videoPath: file.webkitRelativePath || file.name,
                 });
+                hlvModal.completeTask(hlvTaskId);
             } catch (videoErr) {
                 console.error('Failed to load ' + file.name + ':', videoErr);
+                hlvModal.failTask(hlvTaskId, videoErr);
                 var errMsg = videoErr.message || String(videoErr);
                 // Detect unsupported codec errors
                 if (errMsg.indexOf('NO_SUPPORTED_STREAMS') >= 0 || errMsg.indexOf('DEMUXER_ERROR') >= 0 ||

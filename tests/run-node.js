@@ -254,7 +254,7 @@ for (var h = 0; h < helperNames.length; h++) {
 
 // Load source files
 var srcDir = path.join(__dirname, '..');
-var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'loading/video.js'];
+var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'loading/video.js', 'ui/loading-progress-modal.js'];
 for (var i = 0; i < srcFiles.length; i++) {
     try { loadScript(path.join(srcDir, srcFiles[i])); }
     catch(e) { console.log(srcFiles[i] + ': ' + e.message.substring(0, 120)); }
@@ -304,6 +304,9 @@ var testFiles = [
     'test-session-switch-frame-reset.js',
     'test-switchsource-mp4box-await.js',
     'test-switchsession-parallel-decoders.js',
+    'test-decoder-onprogress.js',
+    'test-switchsession-progress-wiring.js',
+    'test-loading-progress-modal-api.js',
     'test-predicted-conversion.js',
     'test-save-load-json.js',
     'test-tracker.js',

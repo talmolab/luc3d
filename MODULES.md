@@ -432,6 +432,33 @@ keyboard shortcuts (delete, alt-drag clone, etc.).
 
 ---
 
+### ui/loading-progress-modal.js
+
+**Purpose.** Generic per-task progress panel for long-running load
+operations. Designed to be plugged into video decoder loads (per-camera
+rows) and future SLP project parsing. Per-row weighted-monotonic bar
+(canplay × 0.1 + mp4box × 0.9) prevents reset at the phase boundary;
+phase color flips signal transitions (red → blue → green).
+
+**Key exports.**
+- `LoadingProgressModal` (class) — `addTask`, `updateTask`,
+  `completeTask`, `failTask`, `show`, `dismiss`, `reset`, `isOpen`,
+  `getTaskState`. Constructor takes `{ title, autoDismissMs, minVisibleMs }`.
+- `getLoadingProgressModal(options)` — module-level lazy singleton.
+- `resetLoadingProgressModal()` — test-only helper to drop the singleton.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/sessions-panes.js` (switchSession), `loading/session-loader.js`
+(handleLoadVideos), `import-export/save-load.js` (handleLoadProject V3 path),
+`import-export/slp-import.js` (handleLoadSlpFile per-cam loop).
+
+**User-facing features.** Bottom-right per-camera progress rows during
+session switching and initial-load workflows. Auto-dismisses ~500 ms
+after all tasks complete; stays open on error.
+
+---
+
 ### ui/layout-controls.js
 
 **Purpose.** Resizable split-handle bar between video grid, 3D viewport,
