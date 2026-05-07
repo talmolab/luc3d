@@ -1,9 +1,23 @@
 /**
  * tracker-worker.js - Web Worker for batch cross-view tracking.
  * Processes all frames sequentially, posts progress back to main thread.
+ *
+ * NOTE (Pass 2 Step 4): converted from a classic worker to a module worker.
+ * The original `importScripts('pose-data.js', 'triangulation.js', 'tracker.js')`
+ * line was removed. No project-file imports were added in its place because
+ * this worker is currently dead code (no `new Worker(...)` spawn site exists)
+ * and its body references symbols (`CrossViewTracker`, `Detection2D`) that
+ * are NOT defined in any current project file. See ISSUES.md I-3 for context.
+ *
+ * When this worker is wired in for real, it will need:
+ *   - real implementations of CrossViewTracker and Detection2D (currently
+ *     missing from `./tracker.js`); and
+ *   - explicit `import` statements here, e.g.:
+ *       import { CrossViewTracker, Detection2D } from './tracker.js';
+ *   - the spawn site (in app.js or wherever) updated to:
+ *       new Worker(new URL('./pose/tracker-worker.js', import.meta.url),
+ *                  { type: 'module' });
  */
-
-importScripts('pose-data.js', 'triangulation.js', 'tracker.js');
 
 var cancelled = false;
 

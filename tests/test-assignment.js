@@ -524,8 +524,10 @@
         it('C key creates group from assignment selection', function () {
             var env = buildEnv();
             try {
+                // A group needs ≥2 instances by definition.
                 env.mgr.setAssignmentMode(true);
                 env.mgr.addToAssignmentSelection(env.unlinked1);
+                env.mgr.addToAssignmentSelection(env.unlinked2);
 
                 env.mgr.onKeyDown(makeKeyEvent('c'));
 
@@ -541,7 +543,7 @@
             var env = buildEnv();
             try {
                 env.mgr.setAssignmentMode(true);
-                // No selection — _createGroupFromAssignment requires >= 1
+                // No selection — _createGroupFromAssignment requires >= 2
                 env.mgr._createGroupFromAssignment();
 
                 // Mode should still be on (no group created)
@@ -872,9 +874,10 @@
         it('_unlinkSelectedGroup unlinks when group is selected', function () {
             var env = buildEnv();
             try {
-                // Create a group
+                // Create a group (needs ≥2 instances)
                 env.mgr.setAssignmentMode(true);
                 env.mgr.addToAssignmentSelection(env.unlinked1);
+                env.mgr.addToAssignmentSelection(env.unlinked2);
                 env.mgr.onKeyDown(makeKeyEvent('c'));
 
                 var groups = env.session.getInstanceGroupsForFrame(0);

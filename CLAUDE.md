@@ -3,17 +3,15 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-- `index.html` — Main SPA with all app logic in inline script
-- `pose-data.js` — Data model (Skeleton, Camera, Instance, FrameGroup, InstanceGroup, Session)
-- `interaction.js` — Mouse/keyboard interaction, hit testing, drag handling
-- `overlays.js` — Canvas rendering for pose skeletons and overlays
-- `triangulation.js` — DLT triangulation + reprojection math
-- `video.js` — WebCodecs video decoding (OnDemandVideoDecoder)
-- `viewport3d.js` — Three.js 3D visualization
-- `timeline.js` — SLEAP-like timeline widget
-- `file-io.js` — File loading, calibration parsing, export (TOML/JSON/SLP)
-- `demo-data.js` — Demo skeleton and camera data
-- `styles.css` — All styling
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 26 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (5 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport (12 files)
+- `loading/` — video decoding, session loading, SLP/package readers, web workers (5 files)
+- `import-export/` — file I/O, save/load, SLP import/merge (4 files)
+- `demo-data.js` — synthetic skeleton and camera data
+- `styles.css` — all styling
+
+See `MODULES.md` at the repo root for per-module details (purpose, exports, imports/dependents).
 
 ## Local Development
 ```bash
@@ -37,3 +35,6 @@ Browser-based tests in `tests/test-runner.html`. Open in browser to run.
 - `scripts/json_to_slp.py` — Convert JSON export to SLEAP .slp format
 - `scripts/json_to_h5.py` — Convert JSON export to HDF5 format
 - Require: h5py, numpy
+
+## Maintenance
+**When modifying any module, always update the corresponding entry in `MODULES.md` to reflect the change — including exports, dependencies, and purpose.**

@@ -46,7 +46,7 @@
  * @property {number} displayFrame - Original video frame number
  */
 
-class SLPPackageReader {
+export class SLPPackageReader {
     /**
      * Create a new SLPPackageReader
      * @param {Object} [options]
@@ -443,9 +443,3 @@ class SLPPackageReader {
     }
 }
 
-// Export for different module systems
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { SLPPackageReader };
-} else if (typeof self !== 'undefined') {
-    self.SLPPackageReader = SLPPackageReader;
-}
