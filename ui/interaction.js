@@ -11,15 +11,16 @@
  * overlay canvases have the same dimensions as the video, so the default
  * coordinate transform is 1:1 unless zoom/pan is applied via CSS transforms.
  *
- * No imports/exports - follows the vibes pattern of global scope scripts
- * loaded via script tags.
+ * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
+
+import { Instance } from '../pose/pose-data.js';
 
 // ============================================
 // InteractionManager
 // ============================================
 
-class InteractionManager {
+export class InteractionManager {
     /**
      * @param {Object} callbacks - Functions the interaction manager uses to
      *   communicate with the rest of the application.
@@ -548,6 +549,16 @@ class InteractionManager {
      * @param {UnlinkedInstance} unlinked
      */
     addToAssignmentSelection(unlinked) {
+        // Mutually exclusive with a grouped selection: clear any selected
+        // InstanceGroup before building an unlinked multi-selection.
+        if (this.selectedInstanceGroup) {
+            this.selectedInstanceGroup = null;
+            this.selectedNodeIdx = -1;
+            this.selectedReprojected = false;
+            if (this.callbacks.onSelectionChanged) {
+                this.callbacks.onSelectionChanged(null, -1);
+            }
+        }
         // Check if we already have one from this camera — reject duplicates
         for (let i = 0; i < this.assignmentSelection.length; i++) {
             if (this.assignmentSelection[i].cameraName === unlinked.cameraName) {
@@ -610,6 +621,19 @@ class InteractionManager {
         // When clearing linked selection (null), also clear unlinked selection
         if (!instanceGroup) {
             this.selectedUnlinked = null;
+        } else {
+            // A grouped selection is mutually exclusive with unlinked
+            // multi-selection. Selecting an InstanceGroup must clear any
+            // pending assignment selection so the user can't form a new
+            // group that mixes a GroupedInstance with UnlinkedInstances.
+            this.selectedUnlinked = null;
+            if (this.assignmentMode || this.assignmentSelection.length > 0) {
+                this.assignmentSelection = [];
+                this.assignmentMode = false;
+                if (this.callbacks.onAssignmentSelectionChanged) {
+                    this.callbacks.onAssignmentSelectionChanged(0);
+                }
+            }
         }
 
         if (changed && this.callbacks.onSelectionChanged) {
@@ -928,7 +952,19 @@ class InteractionManager {
             newInst.modified = true;
             var newUl = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
             this.select(null, -1);
+            // Match the regular unlinked-click flow: enter assignment mode
+            // (if not already on) and add the new user via
+            // `addToAssignmentSelection`. The latter handles same-camera
+            // replacement automatically — the original predicted's entry
+            // for this camera gets swapped out for the new user, so its
+            // selection highlight goes away. Crucially, OTHER cameras'
+            // entries in `assignmentSelection` are preserved so any
+            // multi-select in progress survives the double-click.
+            if (!this.assignmentMode) {
+                this.assignmentMode = true;
+            }
             this.selectedUnlinked = newUl;
+            this.addToAssignmentSelection(newUl);
             if (this.callbacks.onUserInstanceCreated) {
                 this.callbacks.onUserInstanceCreated(viewName, clonedPoints);
             }
@@ -1243,7 +1279,7 @@ class InteractionManager {
             case 'c':
             case 'C': {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-                    if (this.assignmentMode && this.assignmentSelection.length >= 1) {
+                    if (this.assignmentMode && this.assignmentSelection.length >= 2) {
                         e.preventDefault();
                         this._createGroupFromAssignment();
                     }
@@ -1444,6 +1480,8 @@ class InteractionManager {
         }
 
         this.isDragging = true;
+        // TODO(Pass 3): promote __mvguiDragging to a real shared module export
+        // once video.js is converted. video.js currently reads window.__mvguiDragging.
         window.__mvguiDragging = true;
         this.dragInfo = {
             mode: mode,
@@ -1803,10 +1841,29 @@ class InteractionManager {
             // Full group removal (existing behavior)
             state.session.removeInstanceGroup(frameIdx, group);
         } else {
-            // Per-camera removal: remove only this view's instance
+            // Per-camera removal: remove only this view's instance.
+            // Capture pre-deletion mixed-group state so an auto-ungroup
+            // of a previously-mixed group (which is no longer mixed once
+            // the deleted member is gone) still promotes the survivor to
+            // user — matching the Issue 2 contract.
+            let _hasUser = false, _hasPred = false;
+            for (const [, _gInst] of group.instances) {
+                if (_gInst.type === 'user') _hasUser = true;
+                else if (_gInst.type === 'predicted') _hasPred = true;
+            }
+            const wasMixed = _hasUser && _hasPred;
+
             const instance = group.getInstance(viewName);
             if (instance) {
                 group.instances.delete(viewName);
+
+                // Drop the reprojection-error connector lines for this
+                // view immediately. overlays.js draws them from
+                // group.observedPoints[viewName] → group.reprojections[viewName],
+                // so clearing observedPoints stops the draw on next refresh.
+                if (group.observedPoints) {
+                    delete group.observedPoints[viewName];
+                }
 
                 // Remove from FrameGroup too
                 const fg = state.session.getFrameGroup(frameIdx);
@@ -1820,9 +1877,15 @@ class InteractionManager {
                 }
             }
 
-            // If group is now empty, remove the whole group
             if (group.instances.size === 0) {
+                // Group is now empty — remove the whole group.
                 state.session.removeInstanceGroup(frameIdx, group);
+            } else if (group.instances.size === 1) {
+                // A group must have ≥2 instances — auto-ungroup the lone
+                // survivor back to the unlinked pool. `wasMixed` forces
+                // promotion when the deleted partner was a user but the
+                // remaining instance is predicted.
+                state.session.unlinkGroup(frameIdx, group, wasMixed);
             }
         }
 
@@ -1841,7 +1904,8 @@ class InteractionManager {
     _createGroupFromAssignment() {
         const state = this._getState();
         if (!state || !state.session) return;
-        if (this.assignmentSelection.length < 1) return;
+        // A group must contain ≥2 instances by definition.
+        if (this.assignmentSelection.length < 2) return;
 
         const frameIdx = state.currentFrame;
         const group = state.session.createGroupFromUnlinked(frameIdx, this.assignmentSelection);
@@ -2026,7 +2090,7 @@ class InteractionManager {
  * info panel, and a bounded walk keeps us safe from freshly-built fake
  * targets that might have cyclic parentNode pointers in tests.
  */
-function isInteractiveClickTarget(target) {
+export function isInteractiveClickTarget(target) {
     if (!target) return false;
     var INTERACTIVE = { SELECT: 1, OPTION: 1, INPUT: 1, BUTTON: 1, TEXTAREA: 1, LABEL: 1 };
     var node = target;
@@ -2036,8 +2100,4 @@ function isInteractiveClickTarget(target) {
         node = node.parentNode;
     }
     return false;
-}
-
-if (typeof window !== 'undefined') {
-    window.isInteractiveClickTarget = isInteractiveClickTarget;
 }

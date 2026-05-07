@@ -8,7 +8,7 @@
 
 // SLEAP default "alphabet" palette — 26 visually distinct colors (Green-Armytage)
 // Red entries removed: red is reserved exclusively for ReprojectedInstances.
-const TRACK_COLORS = [
+export const TRACK_COLORS = [
     '#ff6b6b',  // red
     '#4ecdc4',  // teal
     '#ffe66d',  // yellow
@@ -32,12 +32,12 @@ const TRACK_COLORS = [
 ];
 
 // Fixed color for all ReprojectedInstances
-const REPROJECTION_COLOR = '#e53e3e';
+export const REPROJECTION_COLOR = '#e53e3e';
 
 // Fixed color for ungrouped UserInstances
-const UNGROUPED_USER_COLOR = '#F8B195';
+export const UNGROUPED_USER_COLOR = '#F8B195';
 
-function getTrackColor(trackIdx) {
+export function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
 
@@ -47,7 +47,7 @@ function getTrackColor(trackIdx) {
  * @param {number} factor - 0..1, where 1 = original brightness
  * @returns {string} adjusted hex color
  */
-function adjustColorBrightness(hex, factor) {
+export function adjustColorBrightness(hex, factor) {
     var r = parseInt(hex.slice(1, 3), 16);
     var g = parseInt(hex.slice(3, 5), 16);
     var b = parseInt(hex.slice(5, 7), 16);
@@ -57,7 +57,7 @@ function adjustColorBrightness(hex, factor) {
     return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
 }
 
-function getGroupColor(group, session, useIdentity, frameIdx, cameraName) {
+export function getGroupColor(group, session, useIdentity, frameIdx, cameraName) {
     // --- Identity-color path (only when coloring by identity) ------------
     // A group may have been explicitly assigned an Identity via
     // assignIdentityToGroup — that's the strongest signal. Otherwise fall
@@ -114,7 +114,7 @@ function getGroupColor(group, session, useIdentity, frameIdx, cameraName) {
  * track=null from SLEAP 2D exports) render with UNGROUPED_USER_COLOR so
  * they're visually distinct from track-0 instances.
  */
-function getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) {
+export function getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) {
     if (useIdentity && session && instance.trackIdx != null) {
         var identity = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
         if (identity && identity.color) return identity.color;
@@ -123,7 +123,7 @@ function getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) 
     return getTrackColor(instance.trackIdx);
 }
 
-function getLineDashPattern(style) {
+export function getLineDashPattern(style) {
     if (style === 'dotted') return [2, 3];
     if (style === 'dashed') return [6, 4];
     return []; // solid
@@ -145,7 +145,7 @@ function getLineDashPattern(style) {
  * @param {number} canvasHeight - Overlay canvas height
  * @returns {{ x: number, y: number, scale: number }}
  */
-function videoToCanvas(x, y, videoWidth, videoHeight, canvasWidth, canvasHeight) {
+export function videoToCanvas(x, y, videoWidth, videoHeight, canvasWidth, canvasHeight) {
     const scaleX = canvasWidth / videoWidth;
     const scaleY = canvasHeight / videoHeight;
     const scale = Math.min(scaleX, scaleY);
@@ -164,7 +164,7 @@ function videoToCanvas(x, y, videoWidth, videoHeight, canvasWidth, canvasHeight)
  * video/canvas size pair.  Returns a transform function that maps
  * (vx, vy) -> { x, y }.
  */
-function makeVideoToCanvasTransform(videoWidth, videoHeight, canvasWidth, canvasHeight) {
+export function makeVideoToCanvasTransform(videoWidth, videoHeight, canvasWidth, canvasHeight) {
     const scaleX = canvasWidth / videoWidth;
     const scaleY = canvasHeight / videoHeight;
     const scale = Math.min(scaleX, scaleY);
@@ -191,7 +191,7 @@ function makeVideoToCanvasTransform(videoWidth, videoHeight, canvasWidth, canvas
  *   2-5 px  -> yellow
  *   > 5 px  -> red
  */
-function errorColor(errorPx) {
+export function errorColor(errorPx) {
     if (errorPx < 2) return '#4ade80';  // green
     if (errorPx <= 5) return '#fbbf24'; // yellow
     return '#ef4444';                    // red
@@ -200,7 +200,7 @@ function errorColor(errorPx) {
 /**
  * Parse a hex color into { r, g, b } integers.
  */
-function hexToRgb(hex) {
+export function hexToRgb(hex) {
     const h = hex.replace('#', '');
     return {
         r: parseInt(h.substring(0, 2), 16),
@@ -210,7 +210,7 @@ function hexToRgb(hex) {
 }
 
 /** Lighten a hex color by a factor (0-1). factor=0.4 means 40% closer to white. */
-function brightenColor(hex, factor) {
+export function brightenColor(hex, factor) {
     const rgb = hexToRgb(hex);
     const r = Math.min(255, Math.round(rgb.r + (255 - rgb.r) * factor));
     const g = Math.min(255, Math.round(rgb.g + (255 - rgb.g) * factor));
@@ -219,7 +219,7 @@ function brightenColor(hex, factor) {
 }
 
 /** Desaturate a hex color by blending toward mid-gray. amount=0.5 means 50% gray. */
-function desaturateColor(hex, amount) {
+export function desaturateColor(hex, amount) {
     const rgb = hexToRgb(hex);
     const gray = 128;
     const r = Math.round(rgb.r + (gray - rgb.r) * amount);
@@ -234,7 +234,7 @@ function desaturateColor(hex, amount) {
  * @param {string} hex - Hex color string
  * @returns {string} Complementary hex color
  */
-function complementaryColor(hex) {
+export function complementaryColor(hex) {
     var rgb = hexToRgb(hex);
     var r = rgb.r / 255, g = rgb.g / 255, b = rgb.b / 255;
     var max = Math.max(r, g, b), min = Math.min(r, g, b);
@@ -289,7 +289,7 @@ function complementaryColor(hex) {
  * @param {CanvasRenderingContext2D} ctx - Canvas context (for text measurement)
  * @returns {{dx: number, dy: number}} Offset from node position
  */
-function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, fontSize, ctx) {
+export function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, fontSize, ctx) {
     var cp = canvasPoints[nodeIdx];
     if (!cp) return { dx: fontSize * 0.3, dy: -fontSize * 0.3 };
 
@@ -366,7 +366,7 @@ function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, fontSize
  * @param {number}  [options.canvasHeight]
  * @param {boolean} [options.showLabels]   - Draw node name labels (default: false)
  */
-function drawSkeleton(ctx, instance, skeleton, options) {
+export function drawSkeleton(ctx, instance, skeleton, options) {
     options = options || {};
     const points = instance.points;
     if (!points || points.length === 0) return;
@@ -560,7 +560,7 @@ function drawSkeleton(ctx, instance, skeleton, options) {
  * @param {Object} skeleton - Skeleton with .nodes and .edges
  * @param {Object} [options] - Same shape as drawSkeleton options
  */
-function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
+export function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
     options = options || {};
     if (!reprojectedPoints || reprojectedPoints.length === 0) return;
 
@@ -655,7 +655,7 @@ function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, options) {
  * @param {Array} reprojectedPoints - Array of [x,y] or null (video coords)
  * @param {Object} [options]
  */
-function drawReprojectionErrors(ctx, observedPoints, reprojectedPoints, options) {
+export function drawReprojectionErrors(ctx, observedPoints, reprojectedPoints, options) {
     options = options || {};
     if (!observedPoints || !reprojectedPoints) return;
 
@@ -730,7 +730,7 @@ function drawReprojectionErrors(ctx, observedPoints, reprojectedPoints, options)
  * @param {number}  [options.canvasWidth]
  * @param {number}  [options.canvasHeight]
  */
-function drawSelectionHighlight(ctx, points, skeleton, options) {
+export function drawSelectionHighlight(ctx, points, skeleton, options) {
     options = options || {};
     if (!points || points.length === 0) return;
 
@@ -897,7 +897,7 @@ function drawSelectionHighlight(ctx, points, skeleton, options) {
  * @param {number}  [options.canvasHeight]
  * @returns {string} Suggested CSS cursor type ('grab')
  */
-function drawHoverHighlight(ctx, point, nodeIdx, options) {
+export function drawHoverHighlight(ctx, point, nodeIdx, options) {
     options = options || {};
     if (!point) return 'default';
 
@@ -964,7 +964,7 @@ function drawHoverHighlight(ctx, point, nodeIdx, options) {
  * @param {number}  [options.canvasWidth]
  * @param {number}  [options.canvasHeight]
  */
-function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
+export function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
     options = options || {};
     if (!points || !dragPos || dragNodeIdx < 0 || dragNodeIdx >= points.length) return;
 
@@ -1072,7 +1072,7 @@ function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, options) {
  * @param {number}   [options.canvasWidth]
  * @param {number}   [options.canvasHeight]
  */
-function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
+export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
     options = options || {};
     if (!instances || instances.length === 0) return;
 
@@ -1220,7 +1220,7 @@ function drawInstanceLabels(ctx, instances, skeleton, viewName, options) {
  * @param {number}  [options.canvasWidth]
  * @param {number}  [options.canvasHeight]
  */
-function drawInstanceTypeIndicator(ctx, points, type, options) {
+export function drawInstanceTypeIndicator(ctx, points, type, options) {
     options = options || {};
     if (!points || points.length === 0) return;
 
@@ -1317,7 +1317,7 @@ function drawInstanceTypeIndicator(ctx, points, type, options) {
  * @param {string}   [options.assignmentColor] - Color for assignment selection highlight
  * @param {string}   [options.typeFilter] - If set, only draw instances matching this type ('user' or 'predicted')
  */
-function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
+export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     options = options || {};
     if (!unlinkedInstances || unlinkedInstances.length === 0) return;
 
@@ -1567,7 +1567,7 @@ function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
  * @param {number[]}    [options.assignmentSelectedIds]  - IDs of unlinked instances selected for assignment
  * @param {boolean}     [options.assignmentMode]         - Whether assignment mode is active
  */
-function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, options) {
+export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, options) {
     options = options || {};
     var _frameIdx = frameGroup ? frameGroup.frameIdx : null;
 
@@ -1871,7 +1871,7 @@ function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, o
  * @param {boolean} [options.showReprojected]
  * @param {boolean} [options.showErrors]
  */
-function drawLegend(ctx, options) {
+export function drawLegend(ctx, options) {
     options = options || {};
     const showDetected    = options.showDetected !== false;
     const showReprojected = options.showReprojected !== false;
@@ -1993,7 +1993,7 @@ function drawLegend(ctx, options) {
  *   perTrackErrors: Object.<number, { mean: number, max: number, count: number }>
  * }}
  */
-function getFrameStats(frameGroup, instanceGroups, cameras) {
+export function getFrameStats(frameGroup, instanceGroups, cameras) {
     const stats = {
         numInstances: 0,
         numInstanceGroups: 0,

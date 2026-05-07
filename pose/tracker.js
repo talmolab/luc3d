@@ -8,6 +8,22 @@
  * Depends on: pose-data.js, triangulation.js
  */
 
+import {
+    computeFundamentalMatrix,
+    triangulatePointDLT,
+    triangulatePoints,
+    reprojectPoint,
+    reprojectPoints,
+    computeInstanceDistance,
+    hungarianAlgorithm
+} from './triangulation.js';
+
+// Pass 3i-1: tracker UI/integration (was in app.js)
+import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
+import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
+import { drawAllOverlays } from '../ui/rendering.js';
+import { updateInfoPanel } from '../ui/info-panel.js';
+
 // ============================================
 // Caches (cleared per-frame)
 // ============================================
@@ -143,7 +159,7 @@ function collectInstances(frameGroup, cameras) {
 /**
  * Match instances across views for one frame.
  */
-function matchFrameInstances(frameGroup, cameras, session, opts) {
+export function matchFrameInstances(frameGroup, cameras, session, opts) {
     opts = opts || {};
     var numAnimals = opts.numAnimals || null;
     var prevAssignments = opts.prevAssignments || null;
@@ -520,3 +536,238 @@ function triangulateGroup(group, camMap) {
     }
     return triangulatePoints(allObs, cams.map(function(c) { return c.projectionMatrix; }));
 }
+
+// ============================================
+// Cross-View Tracker Integration
+// ============================================
+
+var globalTracker = null;
+var trackerWorker = null;
+
+function getTrackerHyperparams() {
+    var el2d = document.getElementById('trackerWeight2d');
+    return {
+        correspondenceWeight2d: el2d ? parseFloat(el2d.value) : 1.0,
+        correspondenceWeight3d: document.getElementById('trackerWeight3d') ? parseFloat(document.getElementById('trackerWeight3d').value) : 1.0,
+        velocityThreshold: document.getElementById('trackerVelocity') ? parseFloat(document.getElementById('trackerVelocity').value) : 1.0,
+        distanceThreshold: document.getElementById('trackerDistance') ? parseFloat(document.getElementById('trackerDistance').value) : 1.0,
+        timePenalty: document.getElementById('trackerTimePenalty') ? parseFloat(document.getElementById('trackerTimePenalty').value) : 1.0
+    };
+}
+
+// Tracker state: number of animals (null = unconstrained)
+var trackerNumAnimals = null;
+
+function promptNumAnimals() {
+    var input = prompt('Number of animals (leave empty for auto-detect):', trackerNumAnimals || '');
+    if (input === null) return false;  // cancelled
+    input = input.trim();
+    if (input === '') {
+        trackerNumAnimals = null;
+    } else {
+        var n = parseInt(input);
+        if (isNaN(n) || n < 1) {
+            setStatus('Invalid number', 'error');
+            return false;
+        }
+        trackerNumAnimals = n;
+    }
+    return true;
+}
+
+export function trackCurrentFrame() {
+    var session = getActiveSession();
+    if (!session || !session.cameras || session.cameras.length === 0) {
+        setStatus('No session with cameras loaded', 'error');
+        return;
+    }
+    var fg = session.getFrameGroup(state.currentFrame);
+    if (!fg) {
+        setStatus('No frame data at frame ' + state.currentFrame, 'error');
+        return;
+    }
+
+    // Prompt for number of animals on first use
+    if (trackerNumAnimals == null) {
+        if (!promptNumAnimals()) return;
+    }
+
+    try {
+        var result = matchFrameInstances(fg, session.cameras, session, {
+            numAnimals: trackerNumAnimals
+        });
+        drawAllOverlays(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session);
+        if (result.numIdentities > 0) {
+            setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
+                (trackerNumAnimals ? ' (constrained to ' + trackerNumAnimals + ')' : ''), 'success');
+        } else {
+            setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
+        }
+    } catch (e) {
+        console.error('[Tracker] error:', e, e.stack);
+        setStatus('Tracker error: ' + e.message + ' | ' + (e.stack ? e.stack.split('\n')[1] : ''), 'error');
+    }
+}
+
+export function findMatchForSelected() {
+    var session = getActiveSession();
+    if (!session || !session.cameras || session.cameras.length === 0) return;
+    if (!interactionManager) return;
+
+    // Determine the selected instance and its camera
+    var selectedInst = null;
+    var selectedCam = null;
+
+    if (interactionManager.selectedUnlinked) {
+        // Unlinked instance: single-view, has .instance and .cameraName
+        selectedInst = interactionManager.selectedUnlinked.instance;
+        selectedCam = interactionManager.selectedUnlinked.cameraName;
+    } else if (interactionManager.selectedInstanceGroup) {
+        // Grouped instance: pick the first camera's instance
+        var group = interactionManager.selectedInstanceGroup;
+        var iter = group.instances.entries();
+        var first = iter.next();
+        if (!first.done) {
+            selectedCam = first.value[0];
+            selectedInst = first.value[1];
+        }
+    }
+
+    if (!selectedInst || !selectedCam) {
+        setStatus('Select an instance first', 'warning');
+        return;
+    }
+    if (!globalTracker) {
+        // TODO: CrossViewTracker is not defined anywhere in the codebase.
+        // Pre-existing latent bug (existed in app.js before Pass 3i-1 extraction).
+        // Calling findMatchForSelected() without a pre-set globalTracker will throw ReferenceError.
+        globalTracker = new CrossViewTracker(getTrackerHyperparams());
+    }
+    var fg = session.getFrameGroup(state.currentFrame);
+    if (!fg) return;
+
+    var matches = globalTracker.findMatchesForInstance(selectedInst, selectedCam, fg, session.cameras);
+    if (matches.size === 0) {
+        setStatus('No matches found in other views', 'warning');
+        return;
+    }
+
+    // Report matches
+    var parts = [];
+    matches.forEach(function (match, camName) {
+        parts.push(camName + ' (err=' + match.score.toFixed(1) + ')');
+    });
+    setStatus('Matches: ' + parts.join(', '), 'success');
+
+    // TODO: Visual highlight of matched instances (phase 2)
+}
+
+export async function trackAll() {
+    var session = getActiveSession();
+    if (!session || !session.cameras || session.cameras.length === 0) {
+        setStatus('No session with cameras loaded', 'error');
+        return;
+    }
+
+    var cameras = session.cameras;
+    if (cameras.length < 2) {
+        setStatus('Need at least 2 cameras', 'warning');
+        return;
+    }
+
+    var frameIndices = session.frameIndices;
+    if (frameIndices.length === 0) {
+        setStatus('No frames to track', 'error');
+        return;
+    }
+
+    // Prompt for number of animals
+    if (trackerNumAnimals == null) {
+        if (!promptNumAnimals()) return;
+    }
+    console.log('[TrackAll] numAnimals:', trackerNumAnimals, 'frames:', frameIndices.length);
+    console.time('[TrackAll] total');
+
+    // Clear old identities for fresh run
+    session.identities = [];
+    session.trackIdentityMap = new Map();
+    session.frameIdentityMap = new Map();
+
+    showLoading('Assigning identities: 0/' + frameIndices.length + ' frames...');
+
+    var YIELD_EVERY = 50;
+
+    var prevAssignments = null;
+    var prevTargets3d = null;
+    try {
+        for (var f = 0; f < frameIndices.length; f++) {
+            var fi = frameIndices[f];
+            var fg = session.getFrameGroup(fi);
+            if (fg) {
+                try {
+                    var result = matchFrameInstances(fg, cameras, session, {
+                        numAnimals: trackerNumAnimals,
+                        perFrame: true,
+                        prevAssignments: prevAssignments,
+                        prevTargets3d: prevTargets3d
+                    });
+                    if (result.assignments && result.assignments.size > 0) {
+                        prevAssignments = result.assignments;
+                    }
+                    if (result.targets3d && result.targets3d.length > 0) {
+                        prevTargets3d = result.targets3d;
+                    }
+                } catch (frameErr) {
+                    console.error('[TrackAll] Error at frame ' + fi + ':', frameErr);
+                    // Continue to next frame instead of aborting
+                }
+            }
+
+            if (f % YIELD_EVERY === 0) {
+                document.getElementById('loadingStatus').textContent =
+                    'Assigning identities: ' + (f + 1) + '/' + frameIndices.length + ' frames...';
+                await new Promise(function (r) { setTimeout(r, 0); });
+            }
+        }
+
+        hideLoading();
+        drawAllOverlays(state.currentFrame);
+        console.timeEnd('[TrackAll] total');
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session);
+        setStatus('Tracked ' + frameIndices.length + ' frames, ' +
+            session.identities.length + ' identities', 'success');
+    } catch (e) {
+        hideLoading();
+        console.error('[TrackAll] error:', e, e.stack);
+        setStatus('Track All error: ' + e.message + ' | ' + (e.stack ? e.stack.split('\n')[1] : ''), 'error');
+    }
+}
+
+// Wire up tracker buttons
+(function () {
+    var btnTrackFrame = document.getElementById('tbTrackFrame');
+    var btnTrackAll = document.getElementById('tbTrackAll');
+    var btnCancel = document.getElementById('trackerCancel');
+
+    if (btnTrackFrame) btnTrackFrame.addEventListener('click', trackCurrentFrame);
+    if (btnTrackAll) btnTrackAll.addEventListener('click', trackAll);
+    if (btnCancel) btnCancel.addEventListener('click', function () {
+        if (trackerWorker) trackerWorker.postMessage({ type: 'cancel' });
+    });
+
+    // Slider value display
+    ['trackerWeight2d', 'trackerWeight3d', 'trackerVelocity', 'trackerDistance', 'trackerTimePenalty'].forEach(function (id) {
+        var slider = document.getElementById(id);
+        var valSpan = document.getElementById(id + 'Val');
+        if (slider && valSpan) {
+            slider.addEventListener('input', function () {
+                valSpan.textContent = slider.value;
+                // Reset tracker so new hyperparams take effect
+                globalTracker = null;
+            });
+        }
+    });
+})();

@@ -1,7 +1,7 @@
 // pose-data.js - Data model for multi-view pose data
 // All vanilla JS classes, no imports/exports.
 
-class Skeleton {
+export class Skeleton {
     /**
      * @param {string} name
      * @param {string[]} nodes - Node names (e.g. ['nose', 'head', ...])
@@ -94,7 +94,7 @@ class Skeleton {
 }
 
 
-class Camera {
+export class Camera {
     /**
      * @param {string} name
      * @param {number[][]} matrix - 3x3 intrinsic matrix K
@@ -277,7 +277,7 @@ class Camera {
 }
 
 
-class Instance {
+export class Instance {
     /**
      * @param {(number[]|null)[]} points - Array of [u, v] 2D keypoints (null if not visible)
      * @param {number} trackIdx - Track index
@@ -355,7 +355,7 @@ class Instance {
 /** Auto-incrementing ID counter for UnlinkedInstance */
 let _unlinkedIdCounter = 0;
 
-class UnlinkedInstance {
+export class UnlinkedInstance {
     /**
      * A 2D prediction in a single camera view that has not yet been assigned
      * to a cross-view InstanceGroup.
@@ -372,7 +372,7 @@ class UnlinkedInstance {
 }
 
 
-class FrameGroup {
+export class FrameGroup {
     /**
      * @param {number} frameIdx
      */
@@ -446,14 +446,14 @@ class FrameGroup {
 
 var _identityIdCounter = 0;
 
-var IDENTITY_COLORS = [
+export var IDENTITY_COLORS = [
     '#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff8800',
     '#0088ff', '#ff0088', '#88ff00', '#8800ff', '#00ff88',
     '#ff0000', '#0000ff', '#00ff44', '#ff4400', '#4400ff',
     '#44ff00', '#ff0044', '#0044ff', '#ffaa00', '#aa00ff',
 ];
 
-class Identity {
+export class Identity {
     constructor(id, name, color) {
         this.id = id != null ? id : _identityIdCounter++;
         this.name = name || ('id_' + this.id);
@@ -461,7 +461,7 @@ class Identity {
     }
 }
 
-class InstanceGroup {
+export class InstanceGroup {
     /**
      * @param {number} id
      * @param {number} identityId
@@ -541,7 +541,7 @@ class InstanceGroup {
 }
 
 
-class Session {
+export class Session {
     /**
      * @param {Camera[]} cameras
      * @param {Skeleton} skeleton
@@ -869,6 +869,14 @@ class Session {
             fg.removeUnlinkedById(ul.id);
         }
 
+        // Mixed groups (user + predicted) are treated as user. Promote
+        // every predicted member to user immediately so the group is
+        // uniformly user from the moment it's formed — independent of
+        // unlinked insertion order. Without this, building a group from
+        // {pred, user} vs {user, pred} would yield different `firstInst`
+        // types and the info-panel badge would flip-flop.
+        this._promoteIfMixed(group);
+
         // Store in instanceGroups (flat list per frame)
         if (!this.instanceGroups.has(frameIdx)) {
             this.instanceGroups.set(frameIdx, []);
@@ -876,6 +884,31 @@ class Session {
         this.instanceGroups.get(frameIdx).push(group);
 
         return group;
+    }
+
+    /**
+     * If a group contains both user and predicted instances, promote every
+     * predicted member to user (`type='user'`, `modified=true`). No-op for
+     * uniform groups. Used at group-creation and on Edit-Group-add so the
+     * "mixed = user-typed" semantic is enforced eagerly rather than only
+     * at separation time.
+     *
+     * @returns {boolean} true if the group was mixed and promotion fired
+     */
+    _promoteIfMixed(group) {
+        let hasUser = false, hasPred = false;
+        for (const [, inst] of group.instances) {
+            if (inst.type === 'user') hasUser = true;
+            else if (inst.type === 'predicted') hasPred = true;
+        }
+        if (!(hasUser && hasPred)) return false;
+        for (const [, inst] of group.instances) {
+            if (inst.type === 'predicted') {
+                inst.type = 'user';
+                inst.modified = true;
+            }
+        }
+        return true;
     }
 
     /**
@@ -1054,9 +1087,25 @@ class Session {
      * @param {InstanceGroup} group - The group to unlink
      * @returns {UnlinkedInstance[]} The newly created unlinked instances
      */
-    unlinkGroup(frameIdx, group) {
+    unlinkGroup(frameIdx, group, forcePromoteToUser) {
         const fg = this.frameGroups.get(frameIdx);
         const newUnlinked = [];
+
+        // Mixed groups (containing at least one UserInstance) are treated
+        // as user-typed: any predicted member detached from the group is
+        // promoted to user. `forcePromoteToUser` covers the case where the
+        // caller knows the source was mixed before a member was removed —
+        // e.g., per-view delete that drops the group to a single
+        // (formerly mixed) survivor.
+        let promote = !!forcePromoteToUser;
+        if (!promote) {
+            let hasUser = false, hasPred = false;
+            for (const [, _inst] of group.instances) {
+                if (_inst.type === 'user') hasUser = true;
+                else if (_inst.type === 'predicted') hasPred = true;
+            }
+            promote = hasUser && hasPred;
+        }
 
         const groups = this.instanceGroups.get(frameIdx);
         if (groups) {
@@ -1080,6 +1129,10 @@ class Session {
                     if (camInstances.length === 0) {
                         fg.instances.delete(camName);
                     }
+                }
+                if (promote && instance.type === 'predicted') {
+                    instance.type = 'user';
+                    instance.modified = true;
                 }
                 const ul = new UnlinkedInstance(instance, camName);
                 fg.addUnlinkedInstance(camName, ul);
@@ -1119,7 +1172,7 @@ class Session {
  * @param {(number[]|null)[]} points
  * @returns {(number[]|null)[]}
  */
-function clonePoints(points) {
+export function clonePoints(points) {
     if (!points) return null;
     const cloned = new Array(points.length);
     for (let i = 0; i < points.length; i++) {
@@ -1140,7 +1193,7 @@ function clonePoints(points) {
  * @param {number[][]} B - 3x3
  * @returns {number[][]} 3x3 result
  */
-function mat3x3Multiply(A, B) {
+export function mat3x3Multiply(A, B) {
     const C = [
         [0, 0, 0],
         [0, 0, 0],
@@ -1162,7 +1215,7 @@ function mat3x3Multiply(A, B) {
  * @param {number[][]} B - 3x4
  * @returns {number[][]} 3x4 result
  */
-function mat3x3Multiply3x4(A, B) {
+export function mat3x3Multiply3x4(A, B) {
     const C = [
         [0, 0, 0, 0],
         [0, 0, 0, 0],

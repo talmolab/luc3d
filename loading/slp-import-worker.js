@@ -20,7 +20,7 @@
  *   { type: 'error', message: string }
  */
 
-importScripts('https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/dist/iife/h5wasm.js');
+import * as h5wasm from 'https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/+esm';
 
 var h5wasmReady = false;
 var FS = null;

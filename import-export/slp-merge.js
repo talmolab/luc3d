@@ -5,6 +5,8 @@
  * Used by index.html for the additive merge path in handleAddSlp().
  */
 
+import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } from '../pose/pose-data.js';
+
 /**
  * Validate that incoming skeleton is compatible with existing session skeleton.
  * Compares node NAME SETS, not exact order. Returns a reorder map if names match
@@ -14,7 +16,7 @@
  * @returns {{ error: string|null, reorderMap: number[]|null }}
  *   reorderMap[incomingIdx] = existingIdx (for reordering incoming point data)
  */
-function validateSkeletonCompatibility(existing, incoming) {
+export function validateSkeletonCompatibility(existing, incoming) {
     if (existing.nodes.length !== incoming.nodes.length) {
         return { error: 'Node count mismatch: existing has ' + existing.nodes.length + ', incoming has ' + incoming.nodes.length, reorderMap: null };
     }
@@ -61,7 +63,7 @@ function validateSkeletonCompatibility(existing, incoming) {
  * @param {string[]} incomingTracks
  * @returns {Map<number, number>} oldTrackIdx -> newTrackIdx
  */
-function mergeTracksIntoSession(session, incomingTracks) {
+export function mergeTracksIntoSession(session, incomingTracks) {
     var remap = new Map();
     for (var i = 0; i < incomingTracks.length; i++) {
         var name = incomingTracks[i];
@@ -87,7 +89,7 @@ function mergeTracksIntoSession(session, incomingTracks) {
  * @param {number[]|null} nodeReorderMap - If non-null, reorderMap[incomingIdx] = existingIdx
  * @returns {number[]} List of affected frame indices
  */
-function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap) {
+export function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName, cameras, trackRemap, nodeReorderMap) {
     var affectedFrames = new Set();
     for (var fi = 0; fi < slpData.frames.length; fi++) {
         var fd = slpData.frames[fi];
@@ -148,7 +150,7 @@ function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName, camer
  * @param {Session} session
  * @param {number[]} frameIndices
  */
-function rebuildInstanceGroupsForFrames(session, frameIndices) {
+export function rebuildInstanceGroupsForFrames(session, frameIndices) {
     for (var f = 0; f < frameIndices.length; f++) {
         var frameIdx = frameIndices[f];
         var fg = session.frameGroups.get(frameIdx);

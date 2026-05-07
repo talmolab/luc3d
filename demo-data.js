@@ -1,6 +1,6 @@
 // demo-data.js - Generates synthetic demo data for the multi-view GUI.
-// Depends on pose-data.js being loaded first (Skeleton, Camera, Instance,
-// FrameGroup, InstanceGroup, Session classes plus mat helpers).
+
+import { Skeleton, Camera, Instance, FrameGroup, Session, UnlinkedInstance } from './pose/pose-data.js';
 
 /**
  * Create 4 calibrated cameras positioned around a central point.
@@ -16,7 +16,7 @@
  *
  * @returns {Camera[]}
  */
-function createDemoCalibration() {
+export function createDemoCalibration() {
     const W = 640;
     const H = 480;
 
@@ -143,7 +143,7 @@ function createDemoCalibration() {
  * Create the default 6-node mouse skeleton.
  * @returns {Skeleton}
  */
-function createDemoSkeleton() {
+export function createDemoSkeleton() {
     return Skeleton.defaultMouse();
 }
 
@@ -161,7 +161,7 @@ function createDemoSkeleton() {
  * @param {number} numFrames
  * @returns {number[][][]} numFrames x 6 x 3
  */
-function generateDemoKeypoints3D(numFrames) {
+export function generateDemoKeypoints3D(numFrames) {
     const frames = [];
 
     // Segment lengths (mm) along the spine
@@ -262,7 +262,7 @@ function generateDemoKeypoints3D(numFrames) {
  * @param {number} [numFrames=100]
  * @returns {{ session: Session, keypoints3d: number[][][] }}
  */
-function createDemoSession(numFrames) {
+export function createDemoSession(numFrames) {
     if (numFrames === undefined) numFrames = 100;
 
     const cameras = createDemoCalibration();
