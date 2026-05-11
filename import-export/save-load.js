@@ -817,6 +817,34 @@ export async function handleLoadProject(prePickedFile) {
             setVideoController(null);
         }
         state.views = [];
+        // Reset decoder pool + cold reserve on V3 project load. Old decoders
+        // point at the previous project's files and must be released to
+        // avoid dangling mp4box references / leaked file handles. Mirrors
+        // the equivalent reset at the top of handleLoadSlpFile.
+        if (data.version === 3) {
+            if (Array.isArray(state.decoderPool)) {
+                for (var _dpi = 0; _dpi < state.decoderPool.length; _dpi++) {
+                    var _dp = state.decoderPool[_dpi];
+                    if (_dp && typeof _dp.close === 'function') {
+                        try { _dp.close(); } catch (_e) {}
+                    }
+                }
+            }
+            state.decoderPool = [];
+            if (Array.isArray(state._decoderPoolCold)) {
+                for (var _dci = 0; _dci < state._decoderPoolCold.length; _dci++) {
+                    var _dc = state._decoderPoolCold[_dci];
+                    if (_dc && _dc._coldTimer) {
+                        clearTimeout(_dc._coldTimer);
+                        _dc._coldTimer = null;
+                    }
+                    if (_dc && typeof _dc.close === 'function') {
+                        try { _dc.close(); } catch (_e) {}
+                    }
+                }
+            }
+            state._decoderPoolCold = [];
+        }
         paneManager.clearAll();
 
         if (data.version === 3 && data.sessions && needsVideoPrompt) {

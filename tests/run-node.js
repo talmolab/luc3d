@@ -237,6 +237,10 @@ function loadScript(filePath) {
     code = code.replace(/^export\s+(class|function|const|let|var|async)\s+/gm, '$1 ');
     // Replace const/let with var so declarations become context properties
     code = code.replace(/^(const|let)\s+/gm, 'var ');
+    // vm.Script cannot parse `import.meta.*` (it's only legal inside ESM
+    // modules). Replace with a sentinel string — none of our test paths
+    // exercise the Worker construction that uses it.
+    code = code.replace(/import\.meta\.url/g, "'file://stub'");
     var script = new vm.Script(code, { filename: filePath });
     script.runInContext(ctx);
 }
@@ -254,7 +258,7 @@ for (var h = 0; h < helperNames.length; h++) {
 
 // Load source files
 var srcDir = path.join(__dirname, '..');
-var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'loading/video.js', 'ui/loading-progress-modal.js'];
+var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js'];
 for (var i = 0; i < srcFiles.length; i++) {
     try { loadScript(path.join(srcDir, srcFiles[i])); }
     catch(e) { console.log(srcFiles[i] + ': ' + e.message.substring(0, 120)); }
@@ -307,6 +311,10 @@ var testFiles = [
     'test-decoder-onprogress.js',
     'test-switchsession-progress-wiring.js',
     'test-loading-progress-modal-api.js',
+    'test-slp-import-sequential.js',
+    'test-slp-import-parallel-videos.js',
+    'test-slp-import-modal-structure.js',
+    'test-decoder-pool-repeated-swap.js',
     'test-predicted-conversion.js',
     'test-save-load-json.js',
     'test-tracker.js',

@@ -441,10 +441,23 @@ rows) and future SLP project parsing. Per-row weighted-monotonic bar
 phase color flips signal transitions (red → blue → green).
 
 **Key exports.**
-- `LoadingProgressModal` (class) — `addTask`, `updateTask`,
+- `LoadingProgressModal` (class) — flat task API: `addTask`, `updateTask`,
   `completeTask`, `failTask`, `show`, `dismiss`, `reset`, `isOpen`,
-  `getTaskState`. Constructor takes `{ title, autoDismissMs, minVisibleMs }`.
+  `getTaskState`. Two-level (session-group + child task) API:
+  `addSessionGroup({ label })` (alias: `addSession`, `addParentTask`) →
+  `groupId`; `addTaskToSession(groupId, { label })` (alias: `addChildTask`);
+  `setCurrentSession(groupId)` (alias: `setActiveSession`);
+  `completeSession(groupId)` (alias: `finishSession`);
+  `failSession(groupId, error)`; `setProjectImportHeader({ current, total })`
+  (alias: `setHeader`, `setSessionProgress`). `addTask({ sessionId })`
+  attaches a flat-API task as a child of the named group. Header format:
+  `${title} - Session ${current} of ${total}`. Constructor takes
+  `{ title, autoDismissMs, minVisibleMs }`.
 - `getLoadingProgressModal(options)` — module-level lazy singleton.
+  Refreshes `_singleton.title` and re-renders the header on each call.
+  Without this, the first caller's title sticks forever — session-swap
+  after a project import would otherwise still read "Importing project"
+  instead of "Loading videos".
 - `resetLoadingProgressModal()` — test-only helper to drop the singleton.
 
 **Imports from project modules.** None.
@@ -456,6 +469,20 @@ phase color flips signal transitions (red → blue → green).
 **User-facing features.** Bottom-right per-camera progress rows during
 session switching and initial-load workflows. Auto-dismisses ~500 ms
 after all tasks complete; stays open on error.
+
+**Notes / caveats.**
+- `_rebuildRootSnapshot` no-ops in real browsers (guarded by
+  `this.root instanceof window.HTMLElement`). It only runs in headless Node
+  test sandboxes where `appendChild` does not reflect children into
+  `root.innerHTML`. Running it in a browser would replace the real DOM
+  (including the progress-bar markup `_renderRow` appends) with a simplified
+  label-only snapshot — hiding every bar.
+- Long session names truncate with ellipsis at the modal max-width (380 px)
+  rather than forcing horizontal expansion. CSS: `.lpm-group-label` is
+  `flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;` with `.lpm-group-row { min-width: 0; overflow:
+  hidden; }` to allow label shrinkage and `.lpm-icon { flex: 0 0 auto; }`
+  to keep the status icon at fixed width.
 
 ---
 
@@ -583,6 +610,16 @@ multi-video docking layout.
 `ui/identity-assignment.js`, `ui/ui-wiring.js`,
 `loading/session-loader.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`.
+
+**Decoder pool cold reserve.** `switchSession` maintains
+`state._decoderPoolCold[]` alongside `state.decoderPool[]`. When the
+incoming session has fewer cameras than the outgoing one, surplus pool
+slots are popped into the cold reserve with a 60-second `setTimeout` that
+closes the decoder on expiry. The next switch's pre-extend block reuses
+cold-reserve decoders first (cancelling their eviction timers) before
+constructing new `OnDemandVideoDecoder` instances. This caps pool length
+at the current session's camera count without immediately destroying
+recently-used decoders.
 
 **User-facing features.** Video pane docking (drag/move/resize), view
 strip (top), session strip (bottom), per-pane brightness/rotation
@@ -913,9 +950,35 @@ workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
 
 **Key exports.**
-- `handleLoadSlpFile(slpFile)` — replace-current-state load.
+- `handleLoadSlpFile(slpFile)` — replace-current-state load. Drives the
+  two-level LoadingProgressModal: all N session groups are pre-allocated
+  up-front (from the pre-computed `slpAllSessionNames` list) BEFORE the
+  per-session for-loop so the header reads "Session n of N" (the true
+  total). Inside the loop each iteration just calls
+  `setCurrentSession(slpSessionGroupIds[slpSessIdx])`. After the non-
+  embedded folder-picker dialog resolves, re-engages
+  `showLoading('Loading session N/M videos...')` so the blocking overlay
+  stays up during the async per-video decode (without this, the rest of
+  the UI was interactable while videos loaded). Skip-and-continue on
+  per-session video-load failure (failed session is dropped from
+  `state.sessions`).
 - `handleAddSlp()` — additive merge into current session.
 - `handleLoadPoints3dH5()` — overlay 3D points from H5.
+- `importSlpProjectWithProgress({ sessions, state, decoderFactory })` —
+  testable entry point that loads a multi-session project through the
+  progress modal. Sessions load SEQUENTIALLY; videos within a session load
+  IN PARALLEL via the private `_loadSessionVideosParallel` helper. Skip-
+  and-continue at the session level. Also attached to `window` / `globalThis`.
+
+**Private helpers (not exported).**
+- `_loadSessionVideosParallel({ sessionIdx, session, state, modal, groupId, decoderFactory })`
+  — fan-out per-video decoder loads via `Promise.allSettled`. Used by
+  `importSlpProjectWithProgress` and the non-embedded path of
+  `handleLoadSlpFile`.
+
+**Project-load decoder pool reset.** At the top of `handleLoadSlpFile`,
+closes every decoder in `state.decoderPool` and `state._decoderPoolCold`,
+cancels every cold eviction timer, and re-initialises both arrays.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`, `./file-io.js`,

@@ -118,7 +118,54 @@ export async function handleLoadSlpFile(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
+        // Reset decoder pool + cold reserve on new project load. Old decoders
+        // point at the previous project's files and must be released to avoid
+        // dangling mp4box references / leaked file handles.
+        if (Array.isArray(state.decoderPool)) {
+            for (var _dpi = 0; _dpi < state.decoderPool.length; _dpi++) {
+                var _dp = state.decoderPool[_dpi];
+                if (_dp && typeof _dp.close === 'function') {
+                    try { _dp.close(); } catch (_e) {}
+                }
+            }
+        }
+        state.decoderPool = [];
+        if (Array.isArray(state._decoderPoolCold)) {
+            for (var _dci = 0; _dci < state._decoderPoolCold.length; _dci++) {
+                var _dc = state._decoderPoolCold[_dci];
+                if (_dc && _dc._coldTimer) {
+                    clearTimeout(_dc._coldTimer);
+                    _dc._coldTimer = null;
+                }
+                if (_dc && typeof _dc.close === 'function') {
+                    try { _dc.close(); } catch (_e) {}
+                }
+            }
+        }
+        state._decoderPoolCold = [];
         paneManager.clearAll();
+
+        // Reset the singleton progress modal once at the top of the load,
+        // then pre-allocate ALL N session-group rows up-front. This drives
+        // two user-visible behaviors:
+        //   (1) The header reads "Session n of N" with the correct total —
+        //       not "Session n of n", which is what we got when groups were
+        //       added one-at-a-time inside the loop (groups.size == n at
+        //       step n, so the derived total was always n).
+        //   (2) Every session in the project is visible on the modal from
+        //       the start; pending sessions render with the clock icon, the
+        //       current one shows the spinner + indented child rows, and
+        //       completed sessions get the check icon. The modal.show()
+        //       call inside the loop is idempotent and renders all groups
+        //       that have been added.
+        var topModal = getLoadingProgressModal({ title: 'Importing project' });
+        topModal.reset();
+        var slpSessionGroupIds = new Array(numSlpSessions);
+        for (var slpGI = 0; slpGI < numSlpSessions; slpGI++) {
+            slpSessionGroupIds[slpGI] = topModal.addSessionGroup({
+                label: slpAllSessionNames[slpGI] || ('Session ' + (slpGI + 1)),
+            });
+        }
 
         for (var slpSessIdx = 0; slpSessIdx < numSlpSessions; slpSessIdx++) {
         showLoading('Building session ' + (slpSessIdx + 1) + '/' + numSlpSessions + '...');
@@ -744,6 +791,13 @@ export async function handleLoadSlpFile(slpFile) {
                 }
             }
 
+            // Re-engage the blocking loading overlay now that the folder
+            // picker is done. Without this, the per-video progress modal
+            // shows but the rest of the UI is interactable while videos
+            // are still loading. The overlay stays up until the final
+            // hideLoading() at the end of handleLoadSlpFile.
+            showLoading('Loading session ' + (slpSessIdx + 1) + '/' + numSlpSessions + ' videos...');
+
             if (videoFiles && videoFiles.length > 0) {
                 // Filter to video files only
                 var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
@@ -753,72 +807,104 @@ export async function handleLoadSlpFile(slpFile) {
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 
-                var slpModal = getLoadingProgressModal({ title: 'Loading videos' });
-                slpModal.reset();
+                var slpModal = getLoadingProgressModal({ title: 'Importing project' });
                 slpModal.show();
 
-                for (var mvi = 0; mvi < vidFiles.length; mvi++) {
-                    var vFile = vidFiles[mvi];
+                // Build a transient per-video wrapper list. The helper
+                // attaches decoder/videoWidth/videoHeight/frameCount in
+                // place; we then move them onto state.videoFiles AFTER
+                // the parallel load (cross-cutting work runs outside the
+                // parallel block).
+                var slpVfList = vidFiles.map(function (vFile) {
+                    return { file: vFile };
+                });
+                // Reuse the session group that was pre-allocated at the top of
+                // the load (so the header's "of N" total is the real session
+                // count, and pending sessions are already visible).
+                var slpSessionGroupId = slpSessionGroupIds[slpSessIdx];
+                slpModal.setCurrentSession(slpSessionGroupId);
+
+                try {
+                    await _loadSessionVideosParallel({
+                        sessionIdx: slpSessIdx,
+                        session: { videoFiles: slpVfList },
+                        state: state,
+                        modal: slpModal,
+                        groupId: slpSessionGroupId,
+                        decoderFactory: null,
+                    });
+                    slpModal.completeSession(slpSessionGroupId);
+                } catch (sessVideoErr) {
+                    console.error('[load-slp] session ' + slpSessIdx + ' video load failed:', sessVideoErr);
+                    slpModal.failSession(slpSessionGroupId, sessVideoErr);
+                    // Skip-and-continue: remove the half-built session
+                    // pushed earlier in this iteration so state.sessions
+                    // only contains successfully-loaded sessions.
+                    var failedIdx = state.sessions.indexOf(session);
+                    if (failedIdx >= 0) {
+                        state.sessions.splice(failedIdx, 1);
+                        if (state.sessions.length > 0) {
+                            state.activeSessionIdx = state.sessions.length - 1;
+                            state.session = state.sessions[state.activeSessionIdx];
+                        } else {
+                            state.activeSessionIdx = 0;
+                            state.session = null;
+                        }
+                    }
+                    continue;
+                }
+
+                // Cross-cutting work — camera matching + state.videoFiles
+                // push. Skips entries whose decoder load failed (vf.decoder
+                // is still null/undefined for those).
+                for (var mvi = 0; mvi < slpVfList.length; mvi++) {
+                    var slpEntry = slpVfList[mvi];
+                    if (!slpEntry || !slpEntry.decoder) continue;
+                    var vFile = slpEntry.file;
                     var stem = vFile.name.replace(/\.[^.]+$/, '');
-                    showLoading('Loading ' + vFile.name + ' (' + (mvi + 1) + '/' + vidFiles.length + ')...');
-                    var slpTaskId = slpModal.addTask({ label: vFile.name || ('camera ' + mvi) });
-                    var slpOnProgress = (function (tid) {
-                        return function (ev) {
-                            if (ev && ev.error) slpModal.failTask(tid, ev.error);
-                            else slpModal.updateTask(tid, ev);
-                        };
-                    })(slpTaskId);
-                    try {
-                        var vdec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: slpOnProgress });
-                        await vdec.init(vFile);
-                        slpModal.completeTask(slpTaskId);
 
-                        // Match to camera by parent directory name or filename
-                        var assignedCam = null;
-                        var relPath = vFile.webkitRelativePath || vFile.name;
-                        var pathParts = relPath.split('/');
-                        var parentDir = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
+                    // Match to camera by parent directory name or filename
+                    var assignedCam = null;
+                    var relPath = vFile.webkitRelativePath || vFile.name;
+                    var pathParts = relPath.split('/');
+                    var parentDir = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
 
-                        // Try parent directory name → camera name
-                        if (parentDir && cameraNames.indexOf(parentDir) >= 0) {
-                            assignedCam = parentDir;
-                        }
-                        // Try video stem → camera name
-                        if (!assignedCam && cameraNames.indexOf(stem) >= 0) {
-                            assignedCam = stem;
-                        }
-                        // Try matching against SLP video references
-                        if (!assignedCam) {
-                            for (var cmi in videoIdxToCameraName) {
-                                var camN = videoIdxToCameraName[cmi];
-                                var vMeta = slpData.videos[cmi];
-                                if (!vMeta) continue;
-                                var refPath = vMeta.sourceFilename || vMeta.filename || '';
-                                if (refPath === '.') continue;
-                                var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
-                                if (stem.toLowerCase() === refBase || stem.toLowerCase().indexOf(refBase) >= 0) {
-                                    assignedCam = camN;
-                                    break;
-                                }
+                    // Try parent directory name → camera name
+                    if (parentDir && cameraNames.indexOf(parentDir) >= 0) {
+                        assignedCam = parentDir;
+                    }
+                    // Try video stem → camera name
+                    if (!assignedCam && cameraNames.indexOf(stem) >= 0) {
+                        assignedCam = stem;
+                    }
+                    // Try matching against SLP video references
+                    if (!assignedCam) {
+                        for (var cmi in videoIdxToCameraName) {
+                            var camN = videoIdxToCameraName[cmi];
+                            var vMeta = slpData.videos[cmi];
+                            if (!vMeta) continue;
+                            var refPath = vMeta.sourceFilename || vMeta.filename || '';
+                            if (refPath === '.') continue;
+                            var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
+                            if (stem.toLowerCase() === refBase || stem.toLowerCase().indexOf(refBase) >= 0) {
+                                assignedCam = camN;
+                                break;
                             }
                         }
-
-                        state.videoFiles.push({
-                            file: vFile, name: stem, decoder: vdec,
-                            videoWidth: vdec.videoTrack.video.width,
-                            videoHeight: vdec.videoTrack.video.height,
-                            frameCount: vdec.samples.length,
-                            assignedCamera: assignedCam,
-                            // slpFilename resolved below after scanning
-                            // the picked directory for per-camera SLPs.
-                            slpFilename: null,
-                            videoPath: vFile.webkitRelativePath || vFile.name,
-                            sessionIdx: slpSessIdx,
-                        });
-                    } catch (videoErr) {
-                        console.error('[load-slp] Failed to load ' + vFile.name + ':', videoErr);
-                        slpModal.failTask(slpTaskId, videoErr);
                     }
+
+                    state.videoFiles.push({
+                        file: vFile, name: stem, decoder: slpEntry.decoder,
+                        videoWidth: slpEntry.videoWidth,
+                        videoHeight: slpEntry.videoHeight,
+                        frameCount: slpEntry.frameCount,
+                        assignedCamera: assignedCam,
+                        // slpFilename resolved below after scanning
+                        // the picked directory for per-camera SLPs.
+                        slpFilename: null,
+                        videoPath: vFile.webkitRelativePath || vFile.name,
+                        sessionIdx: slpSessIdx,
+                    });
                 }
 
                 // Scan the picked directory for per-camera .slp files
@@ -1479,3 +1565,142 @@ export async function handleLoadPoints3dH5() {
         setStatus('3D points error: ' + err.message, 'error');
     }
 }
+
+/**
+ * Drive a multi-session SLP project import through the LoadingProgressModal's
+ * two-level (session-group + child-task) presentation. Sessions load
+ * SEQUENTIALLY; within each session, videos load IN PARALLEL.
+ *
+ * Error policy: skip-and-continue at the session level. If any video in a
+ * session fails, that session's group is marked failed and the outer loop
+ * advances to the next session. The modal stays open if ANY session errored;
+ * otherwise it auto-dismisses after all sessions complete cleanly.
+ *
+ * opts:
+ *   sessions       — array of session descriptors (each with videoFiles or videoFileIndices)
+ *   state          — state object (defaults to module's `state`)
+ *   decoderFactory — optional (sessionIdx, vfIdx) => decoder. When omitted,
+ *                    constructs OnDemandVideoDecoder (production path).
+ */
+export async function importSlpProjectWithProgress(opts) {
+    opts = opts || {};
+    var tState = opts.state || state;
+    var sessions = opts.sessions || (tState && tState.sessions) || [];
+    var decoderFactory = opts.decoderFactory || null;
+
+    var modal = getLoadingProgressModal({ title: 'Importing project' });
+    modal.reset();
+    var groupIds = sessions.map(function (s, si) {
+        return modal.addSessionGroup({ label: (s && s.name) || ('Session ' + (si + 1)) });
+    });
+    modal.show();
+
+    var anyError = false;
+    for (var si = 0; si < sessions.length; si++) {
+        modal.setCurrentSession(groupIds[si]);
+        try {
+            await _loadSessionVideosParallel({
+                sessionIdx: si,
+                session: sessions[si],
+                state: tState,
+                modal: modal,
+                groupId: groupIds[si],
+                decoderFactory: decoderFactory,
+            });
+            modal.completeSession(groupIds[si]);
+        } catch (err) {
+            anyError = true;
+            modal.failSession(groupIds[si], err);
+            // skip-and-continue: do NOT rethrow; advance to next session
+            console.error('[importSlpProjectWithProgress] session ' + si + ' failed:', err);
+        }
+    }
+    // If anyError, modal stays open (failSession set group status to error;
+    // _maybeAutoDismiss won't dismiss while any group is in error). If all
+    // clean, _maybeAutoDismiss is already scheduled by completeSession.
+    return { anyError: anyError };
+}
+
+/**
+ * Load every video in `session` in parallel via Promise.allSettled. Adds a
+ * child task row per video; updates/completes/fails the task as the decoder
+ * progresses. If ANY video fails, throws so the caller can fail the session
+ * group; otherwise resolves cleanly.
+ *
+ * decoderFactory takes precedence over OnDemandVideoDecoder construction so
+ * tests can inject recording decoders.
+ */
+async function _loadSessionVideosParallel(args) {
+    var sessionIdx = args.sessionIdx;
+    var session = args.session;
+    var aState = args.state;
+    var modal = args.modal;
+    var groupId = args.groupId;
+    var decoderFactory = args.decoderFactory;
+
+    var vfList;
+    if (session && Array.isArray(session.videoFiles)) {
+        vfList = session.videoFiles;
+    } else if (session && session.videoFileIndices && aState && Array.isArray(aState.videoFiles)) {
+        vfList = session.videoFileIndices.map(function (idx) { return aState.videoFiles[idx]; });
+    } else {
+        vfList = [];
+    }
+
+    // Add child tasks synchronously up-front so the modal shows all rows.
+    var taskIds = vfList.map(function (vf) {
+        return modal.addTaskToSession(groupId, {
+            label: (vf && vf.file && vf.file.name) || 'camera',
+        });
+    });
+
+    // Parallel fan-out. CRITICAL: no `await` between map start and decoder
+    // method call — Promise.allSettled collects per-video errors so we can
+    // surface them after all complete.
+    var results = await Promise.allSettled(vfList.map(async function (vf, vi) {
+        if (!vf || !vf.file) return;
+        var taskId = taskIds[vi];
+        var onProgress = function (ev) {
+            if (!ev) return;
+            if (ev.error) { modal.failTask(taskId, ev.error); return; }
+            modal.updateTask(taskId, ev);
+        };
+
+        var dec;
+        if (decoderFactory) {
+            dec = decoderFactory(sessionIdx, vi);
+            if (!dec) throw new Error('decoderFactory returned null for session ' + sessionIdx + ' video ' + vi);
+            dec._onProgress = onProgress;
+            dec.onProgress = onProgress;
+            if (typeof dec.switchSource === 'function') {
+                await dec.switchSource(vf.file);
+            } else if (typeof dec.init === 'function') {
+                await dec.init(vf.file);
+            }
+        } else {
+            // Production path uses real decoder.
+            dec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: onProgress });
+            await dec.init(vf.file);
+        }
+
+        vf.decoder = dec;
+        if (dec && dec.videoTrack && dec.videoTrack.video) {
+            vf.videoWidth = dec.videoTrack.video.width;
+            vf.videoHeight = dec.videoTrack.video.height;
+        }
+        if (dec && Array.isArray(dec.samples)) vf.frameCount = dec.samples.length;
+        modal.completeTask(taskId);
+    }));
+
+    // Aggregate: if any video failed, throw so the outer caller can mark
+    // the session failed and move on (skip-and-continue at the session level).
+    var failures = results.filter(function (r) { return r.status === 'rejected'; });
+    if (failures.length > 0) {
+        throw failures[0].reason || new Error('one or more videos failed to load');
+    }
+}
+
+// Expose for tests and future direct callers (some tests look up importer
+// names via globalThis/window).
+if (typeof window !== 'undefined') window.importSlpProjectWithProgress = importSlpProjectWithProgress;
+if (typeof globalThis !== 'undefined') globalThis.importSlpProjectWithProgress = importSlpProjectWithProgress;

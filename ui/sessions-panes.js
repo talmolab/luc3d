@@ -1488,6 +1488,12 @@ export async function switchSession(newIdx) {
     if (newIdx === state.activeSessionIdx) return;
     if (newIdx < 0 || newIdx >= state.sessions.length) return;
 
+    // Cold-reserve initialization — decoders trimmed off the active pool
+    // (when a smaller session follows a larger one) park here and get
+    // closed after 60s idle. Rehydrating from this reserve cancels the
+    // close timer.
+    if (!state._decoderPoolCold) state._decoderPoolCold = [];
+
     // Save current session state
     var oldSession = state.sessions[state.activeSessionIdx];
     oldSession.lastFrame = state.currentFrame;
@@ -1557,12 +1563,22 @@ export async function switchSession(newIdx) {
         }
     }
 
-    // Pre-extend the decoder pool with null placeholders so every camera
-    // index `vi` has a stable slot regardless of which init() finishes
-    // first. This avoids the race where two parallel `push` calls land in
-    // non-deterministic order.
+    // Pre-extend the decoder pool. Each new slot is filled by reviving a
+    // decoder from the cold reserve (cancelling its eviction timer) when
+    // available, or null otherwise. This avoids the race where two parallel
+    // `push` calls land in non-deterministic order, and recycles decoders
+    // from a recently-shrunk pool instead of constructing new ones.
     while (state.decoderPool.length < newSession.videoFileIndices.length) {
-        state.decoderPool.push(null);
+        var revived = null;
+        while (state._decoderPoolCold.length > 0) {
+            var cand = state._decoderPoolCold.pop();
+            if (cand && cand._coldTimer) {
+                clearTimeout(cand._coldTimer);
+                cand._coldTimer = null;
+            }
+            if (cand) { revived = cand; break; }
+        }
+        state.decoderPool.push(revived);
     }
 
     var modal = getLoadingProgressModal({ title: 'Loading videos' });
@@ -1619,6 +1635,36 @@ export async function switchSession(newIdx) {
             }
         }
     }));
+
+    // Trim the pool to the new session's camera count. Surplus decoders
+    // (from a larger previous session) move into the cold reserve with a
+    // 60s eviction timer. Rehydration on the next swap pops from this
+    // reserve and cancels the timer. Keeps the pool's active region equal
+    // to the current session's camera count without throwing away usable
+    // decoders immediately. Catches stability-review Issue #3: pool slots
+    // from earlier-larger sessions leaking through repeated swaps.
+    var activeCount = newSession.videoFileIndices.length;
+    while (state.decoderPool.length > activeCount) {
+        // IIFE captures per-iteration `coldDec` binding; without it, all
+        // setTimeout closures reference the same hoisted `var`.
+        (function (coldDec) {
+            if (!coldDec) return;
+            // Wipe stale per-load callbacks so the cold decoder doesn't
+            // accidentally drive an unrelated modal task.
+            coldDec._onProgress = null;
+            coldDec.onProgress = null;
+            // Schedule close after 60s idle; rehydrate cancels this.
+            coldDec._coldTimer = setTimeout(function () {
+                var idx = state._decoderPoolCold.indexOf(coldDec);
+                if (idx >= 0) state._decoderPoolCold.splice(idx, 1);
+                if (typeof coldDec.close === 'function') {
+                    try { coldDec.close(); } catch (_e) {}
+                }
+                coldDec._coldTimer = null;
+            }, 60000);
+            state._decoderPoolCold.push(coldDec);
+        })(state.decoderPool.pop());
+    }
 
     // Second pass — deterministic for-loop. createViewForVideoFile has DOM
     // side effects so we run it in source order after Promise.all resolves,
