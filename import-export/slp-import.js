@@ -44,6 +44,10 @@ import { updateInfoPanel } from '../ui/info-panel.js';
 import { setup3DViewport } from '../pose/initialization.js';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
 import { fitTimelineToData } from '../ui/ui-wiring.js';
+// Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
+// load so the gutter filters to the cameras that actually have video
+// assignments rather than every calibration camera.
+import { recomputeUploadedCameras } from '../loading/session-loader.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
@@ -1037,6 +1041,14 @@ export async function handleLoadSlpFile(slpFile) {
 
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
+        // Block 1: refresh the uploaded-camera marker for every
+        // session that was loaded so its timeline correctly filters
+        // out calibration-only cameras. The video assignments are
+        // already settled by this point (handleLoadSlpFile binds
+        // each session's video files before this).
+        for (var ssIdx = 0; ssIdx < state.sessions.length; ssIdx++) {
+            recomputeUploadedCameras(state.sessions[ssIdx], state);
+        }
         if (timeline) {
             timeline.setData(state.session);
             // Grow the container to fit every track row — otherwise

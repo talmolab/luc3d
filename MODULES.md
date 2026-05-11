@@ -631,14 +631,18 @@ controls, switch-session UX, move-video-between-sessions modal.
 
 **Purpose.** SLEAP-like canvas timeline showing track occupancy bars,
 frame markers, and current-frame indicator. Click-to-seek, drag-scrub,
-shift-drag range select, wheel zoom, middle-click pan.
+shift-drag range select, wheel zoom, middle-click pan. Block 1 (Prompt 4)
+adds tree-grouped per-camera labels, an inner scrollable track-area
+wrapper, and an empty-camera placeholder row per camera without tracks.
 
 **Key exports.**
 - `Timeline` — class. Selected methods: `setData(session)`,
   `setCurrentFrame(frameIdx)`, `setTotalFrames(n)`, `setZoom(level)`,
   `scrollTo(frameIdx)`, `resize`, `redraw`, `destroy`,
   `setDisplayMode(mode)`, `refreshTracks(session)`,
-  `setFrameModified(frameIdx, modified)`, `getPreferredHeight`.
+  `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
+  `getCameraGroups`, `getLabelLines`, `getRowCount`,
+  `getTrackAreaElement`.
 
 **Imports from project modules.**
 - `./overlays.js` — `getTrackColor`.
@@ -647,7 +651,38 @@ shift-drag range select, wheel zoom, middle-click pan.
 
 **User-facing features.** Bottom timeline widget — seek, scrub, zoom,
 range-select, modified-frame markers, per-track occupancy bars,
-display mode toggle.
+display mode toggle. Each camera renders as a tree-grouped block
+(`┌─` / `├─` / `└─`) in the label gutter; cameras with no tracks
+still occupy one placeholder row. When the natural row count exceeds
+the timeline container height, the track area scrolls vertically while
+the mode-toggle / playhead chrome stays fixed.
+
+---
+
+### ui/timeline-controller.js
+
+**Purpose.** Timeline toggle/fit/shortcut controller (Block 1 / Prompt
+4). Encapsulates collapse/expand with prior-height cache, fit-to-data
+sizing (capped at 40% of `window.innerHeight`), the toolbar-button
+sync helper, and the Ctrl/Cmd+J (toggle) / Ctrl/Cmd+Shift+J ("Change
+Frame Number") keyboard-shortcut installer. Has zero transitive
+`app.js` imports so it can be bridged into the test runner.
+
+**Key exports.**
+- `toggleTimeline`, `fitTimelineToData`, `syncTimelineToggleButton`,
+  `installTimelineShortcuts`, `getCachedTimelineHeight`,
+  `setCachedTimelineHeight`.
+
+**Imports from project modules.**
+- `./app-state.js` — `state` (for `state.timeline`).
+
+**Imported by.** `pose/initialization.js`, `ui/ui-wiring.js`
+(re-exports the same surface so legacy `import { toggleTimeline, … } from
+'./ui-wiring.js'` keeps working).
+
+**User-facing features.** Ctrl/Cmd+J toggles the timeline (remembering
+its prior height); Ctrl/Cmd+Shift+J fires the legacy "Change Frame
+Number" inline edit on the bottom-bar frame counter.
 
 ---
 
@@ -671,11 +706,12 @@ playback rate, and re-exports popular helpers like `unlinkGroup`,
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
 
 **Imports from project modules.** Nearly every other module — see file
-header for the full list. Notable ones: `app-state.js`, `pose-data.js`,
-`triangulation.js`, `rendering.js`, `info-panel.js`, `save-load.js`,
-`slp-import.js`, `file-io.js`, `session-loader.js`, `video.js`,
-`tracker.js`, `initialization.js`, `identity-assignment.js`,
-`export-modals.js`, `sessions-panes.js`.
+header for the full list. Notable ones: `app-state.js`,
+`timeline-controller.js`, `pose-data.js`, `triangulation.js`,
+`rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
+`file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
+`initialization.js`, `identity-assignment.js`, `export-modals.js`,
+`sessions-panes.js`.
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
 `ui/layout-controls.js`, `loading/session-loader.js`,

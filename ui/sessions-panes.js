@@ -1511,6 +1511,27 @@ export async function switchSession(newIdx) {
         oldSession._timelineScroll = timeline._scrollFrame;
     }
 
+    // Save per-session timeline height + collapsed state so the next visit
+    // to oldSession restores the user's customization. Read via
+    // `document.getElementById` (already stubbed by the brace-walked tests)
+    // rather than importing from `timeline-controller.js` — adding a new
+    // imported dep would require all session-switch tests to stub it.
+    var _tlElOut = (typeof document !== 'undefined' && document.getElementById)
+        ? document.getElementById('timelineContainer')
+        : null;
+    if (_tlElOut) {
+        var _hStr = _tlElOut.style && _tlElOut.style.height;
+        var _h = parseFloat(_hStr);
+        if (!isNaN(_h) && _h > 0) {
+            oldSession._timelineHeight = _h;
+        }
+        oldSession._timelineCollapsed = !!(
+            _tlElOut.classList &&
+            _tlElOut.classList.contains &&
+            _tlElOut.classList.contains('collapsed')
+        );
+    }
+
     // Save 3D viewport state
     if (viewport3d && viewport3d.threeCamera && viewport3d.controls) {
         oldSession._viewport3dState = {
@@ -1544,6 +1565,19 @@ export async function switchSession(newIdx) {
     // decoder switch below. Later calls to timeline.setData (inside
     // rebuildVideoController and at the bottom of this function) become
     // idempotent (timeline._session === newSession).
+    //
+    // Block 1: also refresh the new session's uploaded-camera marker now
+    // (using whatever state.views looks like at this moment — typically
+    // the previous session's views are still attached). It will be
+    // re-recomputed below after views are rebuilt. Inlined rather than
+    // imported from session-loader so the brace-walked switchSession test
+    // harness (test-session-switch-frame-reset.js, …) doesn't need an
+    // extra stub parameter.
+    if (newSession) {
+        newSession._uploadedCameras = (state.views || []).map(function (v) {
+            return v.cameraName || v.name;
+        });
+    }
     if (timeline) timeline.setData(newSession);
 
     // Sync trust track labels toggle
@@ -1777,6 +1811,15 @@ export async function switchSession(newIdx) {
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
     }
 
+    // Block 1: recompute the uploaded-camera filter for the NEW session
+    // (using the freshly-rebuilt state.views) before the timeline reads it.
+    // Inlined for test-harness compatibility — see comment near the earlier
+    // assignment at the top of switchSession.
+    if (newSession) {
+        newSession._uploadedCameras = (state.views || []).map(function (v) {
+            return v.cameraName || v.name;
+        });
+    }
     if (timeline) {
         timeline.setData(newSession);
         timeline.setTotalFrames(state.totalFrames);
@@ -1789,6 +1832,35 @@ export async function switchSession(newIdx) {
         }
         timeline._clampScroll();
         timeline.redraw();
+    }
+
+    // Restore per-session timeline height + collapsed state. First visit
+    // (no `_timelineHeight` stored) → fit to the new session's data,
+    // capped at 40% of window.innerHeight (same default the SLP-import
+    // path uses). Inlined rather than imported from `timeline-controller`
+    // so the brace-walked switchSession test harness doesn't need an
+    // additional stub parameter.
+    var _tlElIn = (typeof document !== 'undefined' && document.getElementById)
+        ? document.getElementById('timelineContainer')
+        : null;
+    if (_tlElIn) {
+        if (_tlElIn.classList && _tlElIn.classList.remove) {
+            _tlElIn.classList.remove('collapsed');
+        }
+        if (newSession._timelineHeight && newSession._timelineHeight > 0) {
+            _tlElIn.style.height = newSession._timelineHeight + 'px';
+        } else if (timeline && typeof timeline.getPreferredHeight === 'function') {
+            var _pref = timeline.getPreferredHeight();
+            var _winH = (typeof window !== 'undefined' && window.innerHeight)
+                ? window.innerHeight
+                : 1080;
+            var _target = Math.min(_pref, Math.floor(0.4 * _winH));
+            if (_target > 0) _tlElIn.style.height = _target + 'px';
+        }
+        if (newSession._timelineCollapsed && _tlElIn.classList && _tlElIn.classList.add) {
+            _tlElIn.classList.add('collapsed');
+        }
+        if (timeline && typeof timeline.resize === 'function') timeline.resize();
     }
 
     setStatus('Switched to ' + newSession.name, 'info');

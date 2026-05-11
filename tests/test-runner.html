@@ -108,6 +108,15 @@
     <script src="test-video-controller.js"></script>
     <script src="test-multi-video.js"></script>
 
+    <!-- Prompt 4 / Block 1 (Timeline visual updates):
+         tree-grouped camera/track labels, scrollable track area, and
+         Ctrl/Cmd+J toggle with prior-height cache. Pre-implementation
+         these test files all FAIL — they assert APIs and DOM structure
+         the Block 1 implementation must introduce. -->
+    <script src="test-timeline-tree-grouping.js"></script>
+    <script src="test-timeline-scroll.js"></script>
+    <script src="test-timeline-toggle-shortcut.js"></script>
+
     <!-- Drag freeze regression tests -->
     <script src="test-drag-freeze.js"></script>
 
@@ -222,10 +231,16 @@
         import * as __FileIO from '../import-export/file-io.js';
         import * as __Video from '../loading/video.js';
         import * as __LoadingProgressModal from '../ui/loading-progress-modal.js';
+        // Block 1 (Prompt 4): the timeline toggle / fit-to-data / shortcut
+        // helpers live in `ui/timeline-controller.js`. The module only
+        // imports `ui/app-state.js` (no transitive app.js dependency), so
+        // it's safe to bridge into the test runner.
+        import * as __TimelineCtrl from '../ui/timeline-controller.js';
         Object.assign(window, __PoseData, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
-                              __LoadingProgressModal);
+                              __LoadingProgressModal,
+                              __TimelineCtrl);
         // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
         // are intentionally NOT bridged here. All three transitively import app.js
         // (circular, awaiting later passes), and app.js requires the full DOM +

@@ -1346,9 +1346,21 @@ body {
   background: var(--bg-tertiary);
   border-top: 1px solid var(--border-color);
   position: relative;
-  overflow-y: scroll;
-  overflow-x: hidden;
+  /* Block 1 (Prompt 4): vertical overflow now lives on the inner
+     `.timeline-track-area` wrapper — the container itself is a flex
+     column so the wrapper can absorb the remaining vertical space. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   flex-shrink: 0;
+}
+
+.timeline-track-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
 }
 
 .timeline-container::-webkit-scrollbar {
@@ -1376,8 +1388,17 @@ body {
 }
 
 .timeline-container.collapsed {
-  height: 0;
+  /* Fully hide the timeline — `height: 0` alone is not enough because
+     `.timeline-container` declares `min-height: 40px`, which would leave a
+     ~two-row strip visible. Override `min-height` and force `height: 0`
+     with !important so any inline-style height set by toggleTimeline /
+     fitTimelineToData is also defeated. The 8px `.split-handle.horizontal`
+     above the container remains visible and provides the click-and-drag
+     affordance the user can use to expand the timeline back up. */
+  height: 0 !important;
+  min-height: 0 !important;
   border-top: none;
+  overflow: hidden;
 }
 
 /* --------------------------------------------------------------------------

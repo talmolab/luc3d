@@ -61,6 +61,34 @@ var sandbox = {
     Boolean: Boolean,
     document: {
         createElement: function(tag) {
+            // Lazy classList stub backed by `className`. Provides add /
+            // remove / toggle / contains semantics close enough for tests
+            // that flip the .collapsed class on an element.
+            function makeClassList(host) {
+                return {
+                    contains: function(cls) {
+                        var s = ' ' + (host.className || '') + ' ';
+                        return s.indexOf(' ' + cls + ' ') >= 0;
+                    },
+                    add: function(cls) {
+                        if (this.contains(cls)) return;
+                        host.className = ((host.className || '') + ' ' + cls).trim();
+                    },
+                    remove: function(cls) {
+                        var parts = (host.className || '').split(/\s+/).filter(function(p){
+                            return p && p !== cls;
+                        });
+                        host.className = parts.join(' ');
+                    },
+                    toggle: function(cls, force) {
+                        var has = this.contains(cls);
+                        if (force === true) { if (!has) this.add(cls); return true; }
+                        if (force === false) { if (has) this.remove(cls); return false; }
+                        if (has) { this.remove(cls); return false; }
+                        this.add(cls); return true;
+                    },
+                };
+            }
             var el = {
                 className: '', textContent: '', innerHTML: '', tagName: tag.toUpperCase(),
                 appendChild: function(c) {
@@ -80,30 +108,83 @@ var sandbox = {
                     return c;
                 },
                 style: {},
-                setAttribute: function() {},
-                getAttribute: function() { return null; },
-                addEventListener: function() {},
-                removeEventListener: function() {},
-                getBoundingClientRect: function() { return {left:0,top:0,width:640,height:480,right:640,bottom:480}; },
+                setAttribute: function(k, v) {
+                    if (!this._attrs) this._attrs = {};
+                    this._attrs[k] = String(v);
+                },
+                getAttribute: function(k) {
+                    if (!this._attrs) return null;
+                    return Object.prototype.hasOwnProperty.call(this._attrs, k) ? this._attrs[k] : null;
+                },
+                // Element-level event dispatch — used by the
+                // Ctrl/Cmd+Shift+J → dblclick test (T12).
+                addEventListener: function(type, fn) {
+                    if (!this._listeners) this._listeners = {};
+                    if (!this._listeners[type]) this._listeners[type] = [];
+                    this._listeners[type].push(fn);
+                },
+                removeEventListener: function(type, fn) {
+                    if (!this._listeners || !this._listeners[type]) return;
+                    var idx = this._listeners[type].indexOf(fn);
+                    if (idx >= 0) this._listeners[type].splice(idx, 1);
+                },
+                getBoundingClientRect: function() {
+                    var h = parseFloat(el.style && el.style.height);
+                    var w = parseFloat(el.style && el.style.width);
+                    if (isNaN(h)) h = 480;
+                    if (isNaN(w)) w = 640;
+                    return {left:0,top:0,width:w,height:h,right:w,bottom:h};
+                },
                 getContext: function() { return mockCtx(); },
                 children: [],
                 childNodes: [],
                 parentNode: null,
                 querySelectorAll: function(sel) {
                     var results = [];
-                    var tagMatch = sel.match(/^([a-zA-Z]+)/);
-                    var target = tagMatch ? tagMatch[1].toUpperCase() : null;
-                    for (var i = 0; i < el.children.length; i++) {
-                        var child = el.children[i];
-                        if (target && child.tagName === target) results.push(child);
+                    // Support `.className` selectors (single class). Tag
+                    // selectors (e.g., `div`) and attribute selectors
+                    // (`[data-foo="x"]`) keep their previous behavior;
+                    // unsupported selectors return [].
+                    var classMatch = sel.match(/^\.([\w-]+)$/);
+                    var tagMatch = sel.match(/^([a-zA-Z]+)$/);
+                    function visit(node) {
+                        for (var i = 0; i < node.children.length; i++) {
+                            var child = node.children[i];
+                            if (classMatch) {
+                                var cls = (child.className || '').toString();
+                                if ((' ' + cls + ' ').indexOf(' ' + classMatch[1] + ' ') >= 0) {
+                                    results.push(child);
+                                }
+                            } else if (tagMatch && child.tagName === tagMatch[1].toUpperCase()) {
+                                results.push(child);
+                            }
+                            if (child.children && child.children.length) visit(child);
+                        }
                     }
+                    visit(el);
                     return results;
                 },
                 querySelector: function(sel) {
                     var all = el.querySelectorAll(sel);
                     return all.length > 0 ? all[0] : null;
                 },
-                dispatchEvent: function() {},
+                dispatchEvent: function(ev) {
+                    if (!ev || !ev.type) return true;
+                    var arr = (this._listeners && this._listeners[ev.type]) || [];
+                    for (var i = 0; i < arr.length; i++) {
+                        try { arr[i].call(this, ev); } catch (err) { console.error(err); }
+                    }
+                    return true;
+                },
+                // `.click()` fires registered 'click' listeners. Used by
+                // tests that simulate user clicks programmatically.
+                click: function() {
+                    var arr = (this._listeners && this._listeners.click) || [];
+                    var ev = { type: 'click', target: this, preventDefault: function(){}, stopPropagation: function(){} };
+                    for (var i = 0; i < arr.length; i++) {
+                        try { arr[i].call(this, ev); } catch (err) { console.error(err); }
+                    }
+                },
                 remove: function() {
                     if (el.parentNode) el.parentNode.removeChild(el);
                 },
@@ -115,19 +196,137 @@ var sandbox = {
                 parentElement: null,
                 parentNode: null,
             };
+            el.classList = makeClassList(el);
+            // scrollHeight/clientHeight stubs for Block 1 timeline-scroll
+            // tests: scrollHeight is the max of children's natural heights
+            // (we approximate via child canvas.height / style.height);
+            // clientHeight is the element's own visible height (style.height
+            // if set, else fall back to the bounding rect height).
+            Object.defineProperty(el, 'clientHeight', {
+                configurable: true,
+                get: function () {
+                    var h = parseFloat(el.style && el.style.height);
+                    if (!isNaN(h) && h > 0) return h;
+                    var rect = el.getBoundingClientRect();
+                    return rect ? rect.height : 0;
+                }
+            });
+            Object.defineProperty(el, 'clientWidth', {
+                configurable: true,
+                get: function () {
+                    var w = parseFloat(el.style && el.style.width);
+                    if (!isNaN(w) && w > 0) return w;
+                    var rect = el.getBoundingClientRect();
+                    return rect ? rect.width : 0;
+                }
+            });
+            Object.defineProperty(el, 'scrollHeight', {
+                configurable: true,
+                get: function () {
+                    var maxH = el.clientHeight || 0;
+                    for (var i = 0; i < el.children.length; i++) {
+                        var c = el.children[i];
+                        if (!c) continue;
+                        // Canvas inside scroll wrapper: use its style.height
+                        // (set by Timeline.resize() in CSS pixels). Otherwise
+                        // recurse into child's scrollHeight.
+                        var ch = 0;
+                        if (c.style && parseFloat(c.style.height) > 0) {
+                            ch = parseFloat(c.style.height);
+                        } else if (typeof c.scrollHeight === 'number') {
+                            ch = c.scrollHeight;
+                        }
+                        if (ch > maxH) maxH = ch;
+                    }
+                    return maxH;
+                }
+            });
             return el;
         },
-        getElementById: function() { return null; },
-        addEventListener: function() {},
-        removeEventListener: function() {},
+        getElementById: function(id) {
+            // Walk the body tree (populated by tests via document.body.appendChild)
+            // looking for a child whose `id` matches. Returns the LAST match
+            // — many existing tests leak elements into document.body without
+            // calling remove(), so the most-recent element is the right one
+            // to surface to the test currently running.
+            var stack = (sandbox.document.body && sandbox.document.body.children) ? sandbox.document.body.children.slice() : [];
+            var found = null;
+            while (stack.length) {
+                var n = stack.shift();
+                if (n && n.id === id) found = n;
+                if (n && n.children && n.children.length) stack.push.apply(stack, n.children);
+            }
+            return found;
+        },
+        // Document-level event dispatch — minimal implementation used by
+        // the Block 1 timeline-toggle keyboard-shortcut test. Listeners
+        // registered via addEventListener('keydown', fn) are stored on
+        // _listeners; dispatchEvent({type:'keydown', ...}) invokes them.
+        _listeners: {},
+        addEventListener: function(type, fn) {
+            var d = sandbox.document;
+            if (!d._listeners[type]) d._listeners[type] = [];
+            d._listeners[type].push(fn);
+        },
+        removeEventListener: function(type, fn) {
+            var d = sandbox.document;
+            if (!d._listeners[type]) return;
+            var idx = d._listeners[type].indexOf(fn);
+            if (idx >= 0) d._listeners[type].splice(idx, 1);
+        },
+        dispatchEvent: function(ev) {
+            var d = sandbox.document;
+            if (!ev || !ev.type) return true;
+            var arr = (d._listeners[ev.type] || []).slice();
+            for (var i = 0; i < arr.length; i++) {
+                try { arr[i].call(d, ev); } catch (err) { console.error(err); }
+            }
+            return true;
+        },
         querySelectorAll: function() { return []; },
         querySelector: function() { return null; },
-        body: { appendChild: function(){}, removeChild: function(){}, style: {} },
+        body: { appendChild: function(c){
+            if (!sandbox.document.body.children) sandbox.document.body.children = [];
+            sandbox.document.body.children.push(c);
+            c.parentNode = sandbox.document.body;
+            c.parentElement = sandbox.document.body;
+            return c;
+        }, removeChild: function(c){
+            var arr = sandbox.document.body.children || [];
+            var i = arr.indexOf(c);
+            if (i >= 0) arr.splice(i, 1);
+            c.parentNode = null;
+            c.parentElement = null;
+            return c;
+        }, children: [], style: {} },
         createElementNS: function(ns, tag) { return sandbox.document.createElement(tag); },
         createTextNode: function(text) { return { textContent: text, nodeType: 3 }; },
     },
-    window: { addEventListener: function(){}, removeEventListener: function(){}, devicePixelRatio: 1, requestAnimationFrame: function(){}, innerWidth: 1920, innerHeight: 1080, getComputedStyle: function() { return { getPropertyValue: function() { return ''; } }; } },
-    getComputedStyle: function() { return { getPropertyValue: function() { return ''; }, width: '640px', height: '480px', fontSize: '14px' }; },
+    window: { addEventListener: function(){}, removeEventListener: function(){}, devicePixelRatio: 1, requestAnimationFrame: function(){}, innerWidth: 1920, innerHeight: 1080, getComputedStyle: function(el) {
+        // Block 1: timeline-scroll test reads `overflowY` from
+        // getComputedStyle. Bridge the inline style so tests inspecting
+        // CSS-applied overflow don't crash on a missing field.
+        var s = (el && el.style) || {};
+        return {
+            getPropertyValue: function() { return ''; },
+            overflowY: s.overflowY || '',
+            overflowX: s.overflowX || '',
+            width: s.width || '',
+            height: s.height || '',
+            fontSize: '14px',
+        };
+    } },
+    getComputedStyle: function(el) {
+        var s = (el && el.style) || {};
+        return {
+            getPropertyValue: function() { return ''; },
+            overflowY: s.overflowY || '',
+            overflowX: s.overflowX || '',
+            width: s.width || '640px',
+            height: s.height || '480px',
+            fontSize: '14px',
+        };
+    },
     HTMLCanvasElement: function() {},
     CanvasRenderingContext2D: function() {},
     OffscreenCanvas: function(w, h) { this.width = w; this.height = h; this.getContext = function() { return mockCtx(); }; },
@@ -258,10 +457,27 @@ for (var h = 0; h < helperNames.length; h++) {
 
 // Load source files
 var srcDir = path.join(__dirname, '..');
-var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js'];
+var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js', 'ui/app-state.js', 'ui/timeline-controller.js'];
 for (var i = 0; i < srcFiles.length; i++) {
     try { loadScript(path.join(srcDir, srcFiles[i])); }
     catch(e) { console.log(srcFiles[i] + ': ' + e.message.substring(0, 120)); }
+}
+
+// Block 1 (Prompt 4): the timeline-toggle-shortcut tests look up the
+// installer/toggle functions on `window`. In the node sandbox, source
+// files declare their top-level vars on the sandbox itself (the
+// vm-context global), not on `sandbox.window`. Mirror the timeline
+// controller exports onto `sandbox.window` so the tests find them.
+var __toExposeOnWindow = [
+    'toggleTimeline', 'fitTimelineToData', 'syncTimelineToggleButton',
+    'installTimelineShortcuts', 'getCachedTimelineHeight',
+    'setCachedTimelineHeight',
+];
+for (var __wi = 0; __wi < __toExposeOnWindow.length; __wi++) {
+    var __name = __toExposeOnWindow[__wi];
+    if (typeof sandbox[__name] === 'function') {
+        sandbox.window[__name] = sandbox[__name];
+    }
 }
 
 // Load all test files
@@ -319,6 +535,10 @@ var testFiles = [
     'test-save-load-json.js',
     'test-tracker.js',
     'test-rotation.js',
+    // Prompt 4 / Block 1 — pre-implementation failing tests.
+    'test-timeline-tree-grouping.js',
+    'test-timeline-scroll.js',
+    'test-timeline-toggle-shortcut.js',
 ];
 
 for (var i = 0; i < testFiles.length; i++) {

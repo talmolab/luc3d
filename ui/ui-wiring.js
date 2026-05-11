@@ -10,6 +10,18 @@
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
          getActiveSession } from './app-state.js';
+// Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
+// Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
+// Import them explicitly so the local call sites in this file (menu
+// items, toolbar button) resolve to the new implementation.
+import {
+    toggleTimeline,
+    fitTimelineToData,
+    syncTimelineToggleButton,
+    installTimelineShortcuts,
+    getCachedTimelineHeight,
+    setCachedTimelineHeight,
+} from './timeline-controller.js';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session } from '../pose/pose-data.js';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject } from '../pose/triangulation.js';
@@ -1185,16 +1197,13 @@ export function setupUI() {
             }
         }
         // --- Cmd/Ctrl shortcuts (work even in inputs) ---
+        // Block 1 (Prompt 4): plain Ctrl/Cmd+J now toggles the timeline,
+        // and Ctrl/Cmd+Shift+J fires the legacy "Change Frame Number"
+        // command. Both bindings live in `ui/timeline-controller.js` and
+        // are installed once during `setupTimeline()`. Don't return early
+        // for those — let them propagate to the timeline handler.
         if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
             switch (e.key) {
-                case 'j':
-                case 'J': {
-                    // Focus frame index input
-                    e.preventDefault();
-                    var frameEl = document.getElementById('currentFrame');
-                    if (frameEl) frameEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-                    break;
-                }
                 case 'o':
                 case 'O': {
                     // Load single session folder using cached type
@@ -1896,42 +1905,21 @@ export function toggle3DViewport() {
     }
 }
 
-export function toggleTimeline() {
-    const container = document.getElementById('timelineContainer');
-    const willCollapse = !container.classList.contains('collapsed');
-    container.classList.toggle('collapsed');
-    if (!willCollapse && timeline) {
-        // Expanding: if container has no explicit inline height
-        // (e.g., first expand, or after a prior full hide), size
-        // it to fit loaded tracks so the user can see them.
-        if (!container.style.height) {
-            var preferred = timeline.getPreferredHeight();
-            container.style.height = preferred + 'px';
-        }
-        setTimeout(function () { timeline.resize(); }, 300);
-    }
-    syncTimelineToggleButton();
-}
-
-export function syncTimelineToggleButton() {
-    var btn = document.getElementById('timelineToggleBtn');
-    if (!btn) return;
-    var container = document.getElementById('timelineContainer');
-    btn.classList.toggle('active', !container.classList.contains('collapsed'));
-}
-
-// Resize the timeline container to fit the currently loaded tracks
-// (called after a session is imported or switched). Skips when the
-// user has explicitly collapsed the timeline via the toolbar button.
-export function fitTimelineToData() {
-    if (!timeline) return;
-    var container = document.getElementById('timelineContainer');
-    if (!container) return;
-    if (container.classList.contains('collapsed')) return;
-    var preferred = timeline.getPreferredHeight();
-    container.style.height = preferred + 'px';
-    timeline.resize();
-}
+// Block 1 (Prompt 4): toggleTimeline / syncTimelineToggleButton /
+// fitTimelineToData moved into `ui/timeline-controller.js`. The
+// controller caches the prior height across collapse/expand cycles,
+// adds the Ctrl/Cmd+J (and Shift+J) shortcuts, and is bridgeable into
+// the test runner (no transitive app.js imports). We re-export the
+// public surface here so existing call sites that import from
+// `ui-wiring.js` continue to work.
+export {
+    toggleTimeline,
+    fitTimelineToData,
+    syncTimelineToggleButton,
+    installTimelineShortcuts,
+    getCachedTimelineHeight,
+    setCachedTimelineHeight,
+};
 
 
 // ============================================
