@@ -209,7 +209,8 @@ all-frames, multi-frame range).
 - Lazy H5 loader: class `LazyFrameLoader`, `shouldUseLazyH5(file)`,
   `ensureLazyFrameData`, `buildLazyFrameGroupSync`, `batchLoadLazyFrames`,
   `loadAllLazyFrames`, `evictLazyFrames`. Spawns
-  `/loading/slp-import-worker.js` for HDF5 reads.
+  `loading/slp-import-worker.js` (resolved against `document.baseURI` so
+  sub-path deployments work — see ISSUES.md I-8) for HDF5 reads.
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress)`,
@@ -428,6 +429,7 @@ Video Rotation are presented. All static checkboxes in the panel
 `vis3dNodeShow`, `vis3dEdgeShow`) were converted to the `.toggle-switch`
 markup so the panel has one consistent control style throughout.
 
+
 ---
 
 ### ui/interaction.js
@@ -511,6 +513,7 @@ after all tasks complete; stays open on error.
   to keep the status icon at fixed width.
 
 ---
+
 
 ### ui/layout-controls.js
 
@@ -676,6 +679,7 @@ Sets. Hidden-set state lives directly on each `session` object, so
 back to a prior session naturally restores its toggle state (and
 V7b-style isolation is automatic). The call is wrapped in a `try` so
 the headless test runner doesn't crash on a missing `document`.
+
 
 ---
 
@@ -950,6 +954,7 @@ toggled-off entity retains its hidden state across the rename
 (the Set entry is moved from old name to new name rather than left
 stranded).
 
+
 ---
 
 ### ui/viewport3d.js
@@ -1069,9 +1074,12 @@ open-and-stream-frames.
 
 **Imports from project modules.** None.
 
-**Imported by.** Spawned via `new Worker('/loading/slp-import-worker.js',
-{type: 'module'})` from `import-export/file-io.js` (eager parse) and
-`pose/triangulation.js` (lazy reads).
+**Imported by.** Spawned via
+`new Worker(new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI), {type: 'module'})`
+from `import-export/file-io.js` (eager parse) and `pose/triangulation.js`
+(lazy reads). The `document.baseURI` resolution makes the URL work on
+sub-path deployments (GitHub Pages `/luc3d/`, `/luc3d/pr/N/`) — see
+ISSUES.md I-8.
 
 **User-facing features.** SLP import progress without freezing the UI;
 lazy frame loading for very large SLP files.
