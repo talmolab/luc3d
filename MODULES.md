@@ -687,9 +687,22 @@ the headless test runner doesn't crash on a missing `document`.
 
 **Purpose.** SLEAP-like canvas timeline showing track occupancy bars,
 frame markers, and current-frame indicator. Click-to-seek, drag-scrub,
-shift-drag range select, wheel zoom, middle-click pan. Block 1 (Prompt 4)
+shift-drag range select, pinch / Ctrl+wheel zoom, middle-click pan. Block 1 (Prompt 4)
 adds tree-grouped per-camera labels, an inner scrollable track-area
 wrapper, and an empty-camera placeholder row per camera without tracks.
+
+**Trackpad / wheel semantics.** `_handleWheel` only intercepts events
+where `e.ctrlKey === true` — that single flag covers macOS trackpad
+pinch (browsers translate pinch into `wheel` with `ctrlKey: true`) and
+explicit Ctrl/Cmd+wheel on a regular mouse. Every other wheel event
+(plain two-finger trackpad scroll, plain mouse wheel) returns without
+`preventDefault()`, so the event bubbles to `_trackScrollEl` and its
+`overflow-y: auto` produces native vertical scrolling. macOS's overlay
+scrollbar is defeated via `-webkit-appearance: none` on the
+`.timeline-track-area::-webkit-scrollbar` rule in `styles.css` so the
+bar is always visible (not just on idle-fade) while the content
+overflows; `scrollbar-gutter: stable` keeps the canvas width steady
+when the bar appears/disappears.
 
 **Key exports.**
 - `Timeline` — class. Selected methods: `setData(session)`,

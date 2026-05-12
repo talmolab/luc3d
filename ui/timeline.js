@@ -2327,26 +2327,47 @@ export class Timeline {
     }
 
     /**
-     * Zoom with mouse wheel centered on the cursor position.
+     * Pinch-to-zoom + trackpad/wheel vertical scroll handler.
+     *
+     * Browsers translate macOS trackpad pinch gestures into `wheel` events
+     * with `ctrlKey: true` (a long-standing Chrome/Safari convention that
+     * Firefox now mirrors). Ctrl+wheel on a regular mouse produces the
+     * same event, so a single branch covers both inputs:
+     *
+     *   • `ctrlKey === true`  → zoom the time axis (pinch / Ctrl+wheel).
+     *   • `ctrlKey === false` → fall through. The wheel event bubbles to
+     *     `_trackScrollEl`, whose `overflow-y: auto` produces native
+     *     vertical scrolling. This is what two-finger trackpad scrolling
+     *     and a regular mouse wheel both land on.
+     *
+     * We deliberately do NOT call `preventDefault()` on the non-zoom path —
+     * native overflow scrolling only happens when the browser receives
+     * the wheel event uncancelled.
+     *
      * @param {WheelEvent} e
      * @private
      */
     _handleWheel(e) {
+        // Non-pinch wheel events delegate to the scroll wrapper. Returning
+        // without preventDefault lets `_trackScrollEl` scroll naturally
+        // (macOS two-finger scroll, mouse wheel, etc.).
+        if (!e.ctrlKey) return;
+
         var mouseX = e.offsetX;
         var contentRight = this._cssWidth - this.RIGHT_PADDING;
-
-        // Left label area or right edge: let container scroll vertically
-        if (mouseX < this.LEFT_MARGIN || mouseX > contentRight) {
-            // Don't preventDefault — let the container handle vertical scroll
-            return;
-        }
+        // Pinching over the label gutter or right padding still zooms,
+        // but we anchor on the nearest content edge so the math behaves.
+        if (mouseX < this.LEFT_MARGIN) mouseX = this.LEFT_MARGIN;
+        if (mouseX > contentRight) mouseX = contentRight;
 
         e.preventDefault();
 
         // Frame under cursor before zoom
         const frameUnderCursor = this._xToFrame(mouseX);
 
-        // Adjust zoom
+        // Adjust zoom. Trackpad pinch produces fractional deltaY (often <10
+        // per event), mouse-wheel-with-Ctrl produces ~±100 — same direction
+        // convention applies (negative deltaY = pinch-out / zoom in).
         const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
         const newZoom = Math.max(1, Math.min(this._zoom * zoomFactor, this._maxZoom()));
 
