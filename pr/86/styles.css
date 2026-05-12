@@ -1358,26 +1358,44 @@ body {
 .timeline-track-area {
   flex: 1 1 auto;
   min-height: 0;
+  /* Scrollbar appears only when the timeline is shortened enough that the
+     track rows overflow vertically. `scrollbar-gutter: stable` keeps the
+     canvas width steady when the bar appears/disappears so the playhead
+     doesn't jitter on resize. Combined with the explicit `::-webkit-scrollbar`
+     rules below (and `-webkit-appearance: none`), this defeats macOS's
+     overlay-scrollbar behavior so the bar is always *visible* while it
+     exists rather than fading on idle. */
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
+  scrollbar-gutter: stable;
+  /* Firefox: classic visible scrollbar at the platform's normal width. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--text-muted) var(--bg-tertiary);
 }
 
-.timeline-container::-webkit-scrollbar {
-  width: 14px;
+/* Wider, always-visible vertical scrollbar on the timeline's track area.
+   Overrides the body-level 6px `::-webkit-scrollbar` rule so this scrollbar
+   reads as a deliberate UI element, and uses `-webkit-appearance: none` to
+   defeat macOS's overlay-scrollbar behavior. */
+.timeline-track-area::-webkit-scrollbar {
+  width: 12px;
+  -webkit-appearance: none;
 }
 
-.timeline-container::-webkit-scrollbar-track {
+.timeline-track-area::-webkit-scrollbar-track {
   background: var(--bg-tertiary);
+  border-left: 1px solid var(--border-color);
 }
 
-.timeline-container::-webkit-scrollbar-thumb {
+.timeline-track-area::-webkit-scrollbar-thumb {
   background: var(--text-muted);
-  border-radius: 7px;
-  border: 3px solid var(--bg-tertiary);
+  border-radius: 6px;
+  border: 2px solid var(--bg-tertiary);
+  min-height: 24px;
 }
 
-.timeline-container::-webkit-scrollbar-thumb:hover {
+.timeline-track-area::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
 
