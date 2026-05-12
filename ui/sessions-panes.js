@@ -40,7 +40,7 @@ import {
 import { OnDemandVideoDecoder } from '../loading/video.js';
 import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
-import { updateInfoPanel } from './info-panel.js';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
@@ -1833,6 +1833,9 @@ export async function switchSession(newIdx) {
         timeline._clampScroll();
         timeline.redraw();
     }
+    // Block 2 (Prompt 4): re-render the Visibility tab's Timeline
+    // toggle lists from the new session's per-session hidden Sets.
+    try { populateTimelineVisibility(newSession); } catch (e) { /* non-fatal in tests */ }
 
     // Restore per-session timeline height + collapsed state. First visit
     // (no `_timelineHeight` stored) → fit to the new session's data,

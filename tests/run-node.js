@@ -434,6 +434,11 @@ function loadScript(filePath) {
     // Strip leading `export ` keywords so ESM-converted modules load as classic
     // scripts. Agents only ever prepend `export ` to top-level declarations.
     code = code.replace(/^export\s+(class|function|const|let|var|async)\s+/gm, '$1 ');
+    // Strip trailing `export { … };` re-export blocks (used by modules that
+    // declare their helpers with bare `function` declarations and re-export
+    // a named list at the bottom). The vm sandbox already has the bindings
+    // available as context globals, so the re-export is a no-op.
+    code = code.replace(/^export\s*\{[^}]*\}\s*;?\s*$/gm, '');
     // Replace const/let with var so declarations become context properties
     code = code.replace(/^(const|let)\s+/gm, 'var ');
     // vm.Script cannot parse `import.meta.*` (it's only legal inside ESM
@@ -457,7 +462,7 @@ for (var h = 0; h < helperNames.length; h++) {
 
 // Load source files
 var srcDir = path.join(__dirname, '..');
-var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js', 'ui/app-state.js', 'ui/timeline-controller.js'];
+var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'ui/timeline-visibility.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js', 'ui/app-state.js', 'ui/timeline-controller.js'];
 for (var i = 0; i < srcFiles.length; i++) {
     try { loadScript(path.join(srcDir, srcFiles[i])); }
     catch(e) { console.log(srcFiles[i] + ': ' + e.message.substring(0, 120)); }
@@ -472,6 +477,16 @@ var __toExposeOnWindow = [
     'toggleTimeline', 'fitTimelineToData', 'syncTimelineToggleButton',
     'installTimelineShortcuts', 'getCachedTimelineHeight',
     'setCachedTimelineHeight',
+    // Block 2 (Prompt 4): timeline-visibility toggle helpers + list
+    // sources. The VAPI test resolves these either via `window.X` or via
+    // `globalThis.TimelineVisibility.X`; mirror both forms onto the
+    // sandbox's window stub so the tests succeed regardless of which
+    // resolution path they take.
+    'toggleCameraVisibility', 'toggleTrackVisibility', 'toggleIdentityVisibility',
+    'isCameraVisible', 'isTrackVisible', 'isIdentityVisible',
+    'listCamerasForVisibility', 'listTracksForVisibility', 'listIdentitiesForVisibility',
+    'getCameraVisibilityList', 'getTrackVisibilityList', 'getIdentityVisibilityList',
+    'renameHiddenTrack', 'renameHiddenIdentity', 'ensureHiddenSets',
 ];
 for (var __wi = 0; __wi < __toExposeOnWindow.length; __wi++) {
     var __name = __toExposeOnWindow[__wi];
@@ -539,6 +554,10 @@ var testFiles = [
     'test-timeline-tree-grouping.js',
     'test-timeline-scroll.js',
     'test-timeline-toggle-shortcut.js',
+    // Prompt 4 / Block 2 — pre-implementation failing tests.
+    'test-timeline-visibility-toggles.js',
+    'test-timeline-visibility-state.js',
+    'test-timeline-visibility-list.js',
 ];
 
 for (var i = 0; i < testFiles.length; i++) {

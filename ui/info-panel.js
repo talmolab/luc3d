@@ -30,6 +30,15 @@ import { swapAssignTrack, propagateIdentityForward } from './identity-assignment
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
 } from './sessions-panes.js';
+// Block 2 (Prompt 4): per-session timeline visibility toggles.
+import {
+    toggleCameraVisibility,
+    toggleTrackVisibility,
+    toggleIdentityVisibility,
+    getCameraVisibilityList,
+    getTrackVisibilityList,
+    getIdentityVisibilityList,
+} from './timeline-visibility.js';
 
 // ============================================
 // Panel tab switching
@@ -50,6 +59,124 @@ export function setupPanelTabs() {
             if (target) target.classList.add('active');
         });
     });
+}
+
+// ============================================
+// Block 2 (Prompt 4): Timeline visibility toggles (Visibility tab)
+// ============================================
+
+/**
+ * Build a single Views / Tracks / Identities toggle row.
+ *
+ * @param {{name:string, visible:boolean, color?:string}} entry
+ * @param {function(string):void} onChange  Called with `entry.name` when
+ *     the checkbox changes; the caller is expected to flip the relevant
+ *     hidden-set, refresh the timeline, and re-render this list.
+ * @param {{ showColor?: boolean }} [opts]
+ */
+function buildVisToggleRow(entry, onChange, opts) {
+    var showColor = !!(opts && opts.showColor && entry.color);
+    // Outer wrapper is a div (not a label) so the inner toggle-switch
+    // <label> is the sole click-target. Hover styling lives in styles.css.
+    var row = document.createElement('div');
+    row.className = 'vis-toggle-row';
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:2px 4px;font-size:11px;';
+
+    if (showColor) {
+        var swatch = document.createElement('span');
+        swatch.className = 'vis-color-swatch';
+        swatch.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:2px;background:' + entry.color + ';flex-shrink:0;';
+        row.appendChild(swatch);
+    }
+
+    var lbl = document.createElement('span');
+    lbl.className = 'vis-toggle-label';
+    lbl.textContent = entry.name;
+    // Truncate long names with ellipsis so the toggle-switch stays
+    // fully visible on the right edge of narrow Info Panel widths.
+    lbl.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    row.appendChild(lbl);
+
+    // Toggle-switch on the right (matches the "Select All Videos" pattern
+    // elsewhere in the Visibility tab — cleaner than a bare checkbox).
+    var toggle = document.createElement('label');
+    toggle.className = 'toggle-switch';
+    toggle.style.cssText = 'margin-left:auto;';
+
+    var input = document.createElement('input');
+    input.type = 'checkbox';
+    input.setAttribute('data-name', entry.name);
+    if (entry.visible) input.checked = true;
+    input.addEventListener('change', function () {
+        onChange(entry.name);
+    });
+    toggle.appendChild(input);
+
+    var slider = document.createElement('span');
+    slider.className = 'slider';
+    toggle.appendChild(slider);
+
+    row.appendChild(toggle);
+
+    return row;
+}
+
+/**
+ * Populate the Visibility-tab Timeline section's three toggle lists:
+ *   - Views  (one row per camera)
+ *   - Tracks (one row per track)
+ *   - Identities (one row per identity, with a color swatch)
+ *
+ * Source-of-truth is the session itself (live read each call) so newly
+ * added entries appear immediately and deleted ones drop out. Toggling
+ * a checkbox flips the per-session hidden-set, calls the existing
+ * `timeline.refreshTracks` path to re-render the timeline, and recurses
+ * into this function so the new checked-state is reflected.
+ *
+ * @param {Session} session
+ */
+export function populateTimelineVisibility(session) {
+    var hostCams = document.getElementById('visTimelineCameras');
+    var hostTracks = document.getElementById('visTimelineTracks');
+    var hostIds = document.getElementById('visTimelineIdentities');
+    if (!hostCams || !hostTracks || !hostIds) return;
+
+    hostCams.innerHTML = '';
+    hostTracks.innerHTML = '';
+    hostIds.innerHTML = '';
+
+    if (!session) return;
+
+    var camList = getCameraVisibilityList(session);
+    var trackList = getTrackVisibilityList(session);
+    var idList = getIdentityVisibilityList(session);
+
+    function refreshAfterChange() {
+        if (timeline && typeof timeline.refreshTracks === 'function') {
+            try { timeline.refreshTracks(session); } catch (e) { /* non-fatal */ }
+        }
+        populateTimelineVisibility(session);
+    }
+
+    var i;
+    for (i = 0; i < camList.length; i++) {
+        hostCams.appendChild(buildVisToggleRow(camList[i], function (name) {
+            toggleCameraVisibility(session, name);
+            refreshAfterChange();
+        }));
+    }
+    for (i = 0; i < trackList.length; i++) {
+        hostTracks.appendChild(buildVisToggleRow(trackList[i], function (name) {
+            toggleTrackVisibility(session, name);
+            refreshAfterChange();
+        }));
+    }
+    for (i = 0; i < idList.length; i++) {
+        hostIds.appendChild(buildVisToggleRow(idList[i], function (name) {
+            toggleIdentityVisibility(session, name);
+            refreshAfterChange();
+        }, { showColor: true }));
+    }
 }
 
 // ============================================
@@ -705,6 +832,9 @@ export function updateInfoPanel() {
     populateCamerasTable();
     populateSkeletonTable();
     populateSessionsPanel();
+    // Block 2 (Prompt 4): refresh the per-session Timeline visibility
+    // toggle lists in the Visibility tab.
+    populateTimelineVisibility(state.session);
 
     // Wire Videos tab buttons
     document.getElementById('btnAddVideos').onclick = function () { handleLoadVideos(); };

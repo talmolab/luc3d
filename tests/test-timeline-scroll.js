@@ -57,6 +57,15 @@
         div.style.position = 'fixed';
         div.style.top = '-9999px';
         div.style.left = '0';
+        // Mirror production index.html: `.timeline-container` uses
+        // `display: flex; flex-direction: column;` so `_trackScrollEl`'s
+        // inline `flex: 1 1 auto; min-height: 0` actually constrains the
+        // scroll-element height. Without this, the browser test-runner
+        // (which doesn't load styles.css) lets _trackScrollEl auto-grow
+        // around its canvas, producing scrollHeight == clientHeight even
+        // when there are far more rows than the container can hold.
+        div.style.display = 'flex';
+        div.style.flexDirection = 'column';
         // Keep the visual chrome around the timeline (mode toggle + header)
         // to mirror index.html. Block 1 must mount its track-area scroll
         // container INSIDE this same wrapper so the mode toggle never

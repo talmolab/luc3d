@@ -290,9 +290,16 @@
 
                 <!-- ==================== Visibility Tab ==================== -->
                 <div class="panel-tab-content" id="tabVisibility">
-                    <div class="vis-slider-row" style="margin-bottom:10px;">
-                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text-secondary);"><input type="checkbox" id="visLegend"> Display Legend</label>
+                    <h3>Timeline</h3>
+                    <div class="vis-timeline-toggles">
+                        <h4 style="margin:6px 0 4px 0;font-size:11px;color:var(--text-secondary);">Views</h4>
+                        <div id="visTimelineCameras" class="vis-toggle-list"></div>
+                        <h4 style="margin:6px 0 4px 0;font-size:11px;color:var(--text-secondary);">Tracks</h4>
+                        <div id="visTimelineTracks" class="vis-toggle-list"></div>
+                        <h4 style="margin:6px 0 4px 0;font-size:11px;color:var(--text-secondary);">Identities</h4>
+                        <div id="visTimelineIdentities" class="vis-toggle-list"></div>
                     </div>
+                    <hr style="border:none;border-top:1px solid var(--border-subtle);margin:10px 0;">
                     <h3>User</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
@@ -414,6 +421,14 @@
                             <button class="line-style-btn" data-style="track" title="Track Color">Track</button>
                         </div>
                     </div>
+                    <h3>Display Legend</h3>
+                    <div class="vis-slider-row">
+                        <span>Show</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visLegend">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
                     <h3>Video Brightness</h3>
                     <div class="vis-slider-row">
                         <span>Select All Videos</span>
@@ -439,27 +454,27 @@
                             <tr>
                                 <td style="padding:3px 4px;">Camera Label</td>
                                 <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dLabelSize" value="28" min="1" max="200" step="1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
-                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dLabelShow" checked></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dLabelShow" checked><span class="slider"></span></label></td>
                             </tr>
                             <tr>
                                 <td style="padding:3px 4px;">Camera Sphere</td>
                                 <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dSphereSize" value="3" min="0.5" max="50" step="0.5" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
-                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dSphereShow" checked></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dSphereShow" checked><span class="slider"></span></label></td>
                             </tr>
                             <tr>
                                 <td style="padding:3px 4px;">Pyramid</td>
                                 <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dPyramidLength" value="40" min="1" max="200" step="1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
-                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dPyramidShow" checked></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dPyramidShow" checked><span class="slider"></span></label></td>
                             </tr>
                             <tr>
                                 <td style="padding:3px 4px;">Node Size</td>
                                 <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dNodeSize" value="2" min="0" max="50" step="0.1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
-                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dNodeShow" checked></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dNodeShow" checked><span class="slider"></span></label></td>
                             </tr>
                             <tr>
                                 <td style="padding:3px 4px;">Edge Weight</td>
                                 <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dEdgeWeight" value="0.8" min="0" max="20" step="0.1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
-                                <td style="text-align:center;padding:3px 4px;"><input type="checkbox" id="vis3dEdgeShow" checked></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dEdgeShow" checked><span class="slider"></span></label></td>
                             </tr>
                         </tbody>
                     </table>

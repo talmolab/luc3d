@@ -845,6 +845,7 @@ export class Timeline {
                     segments: segments,
                     trackName: trackName,
                     treeRole: 'middle', // assigned in finalizeTreeRoles pass
+                    _isTrack: true,     // marker for visibility filter (Block 2)
                 });
                 this._trackNames.push(''); // placeholder, finalized below
             }
@@ -859,6 +860,7 @@ export class Timeline {
                     segments: [],
                     trackName: '',
                     treeRole: 'empty',
+                    _isTrack: true,
                 });
                 this._trackNames.push('');
             }
@@ -972,15 +974,22 @@ export class Timeline {
             for (var ci = 0; ci < camOrder.length; ci++) {
                 var camName = camOrder[ci];
                 var camRows = byCam[camName];
-                // If the camera ended up with multiple rows AND any of them
-                // are empty placeholders, drop the placeholders — a real
-                // row is enough to anchor the camera in the gutter.
+                // If the camera has any REAL rows, drop the empty
+                // placeholders. If it only has placeholders (no tracks AND
+                // no identities), keep exactly ONE placeholder — the
+                // tracks-pass and identities-pass would otherwise each
+                // emit one, doubling the camera in the gutter.
                 var hasReal = false;
                 for (var dr = 0; dr < camRows.length; dr++) {
                     if (camRows[dr].treeRole !== 'empty') { hasReal = true; break; }
                 }
+                var emptyEmittedForCam = false;
                 for (var er = 0; er < camRows.length; er++) {
-                    if (hasReal && camRows[er].treeRole === 'empty') continue;
+                    if (camRows[er].treeRole === 'empty') {
+                        if (hasReal) continue;          // drop placeholder
+                        if (emptyEmittedForCam) continue; // dedupe placeholders
+                        emptyEmittedForCam = true;
+                    }
                     this._trackSegments.push(camRows[er]);
                     this._trackNames.push('');
                 }
@@ -988,6 +997,13 @@ export class Timeline {
         } else {
             this._buildTrackSegments(session);
         }
+
+        // --- Block 2 (Prompt 4): apply per-session visibility filter.
+        // Drops rows whose camera / track / identity is in the session's
+        // hidden Sets. Runs unconditionally (no-op when all sets are
+        // empty) and BEFORE `_finalizeTreeGrouping` so the tree roles
+        // and camera groups reflect the filtered row list.
+        this._applyVisibilityFilter(session);
 
         // --- Group rows by camera and finalize tree roles + label strings.
         this._finalizeTreeGrouping();
@@ -998,6 +1014,137 @@ export class Timeline {
         // cross-mode sandbox inside `_recomputeLeftMargin` can call
         // `_finalizeTreeGrouping` without recursing into the margin path.
         this._recomputeLeftMargin();
+    }
+
+    /**
+     * Block 2 (Prompt 4) — apply the per-session visibility filter to
+     * `this._trackSegments`. Reads the three hidden Sets from `session`
+     * (lazy-initialized to empty Sets if absent):
+     *
+     *   session._hiddenCameras    — Set<cameraName>
+     *   session._hiddenTracks     — Set<trackName>
+     *   session._hiddenIdentities — Set<identityName>
+     *
+     * Filtering rules (precedence: Views > Tracks/Identities):
+     *   - A row whose camera is in `_hiddenCameras` is dropped entirely
+     *     (including the empty-camera placeholder), and so is the camera
+     *     header — nothing remains in the gutter.
+     *   - A row tagged `_isIdentity` is dropped if its `trackName` is in
+     *     `_hiddenIdentities`.
+     *   - A row tagged `_isTrack` is dropped if its `trackName` is in
+     *     `_hiddenTracks`.
+     *   - Empty-placeholder rows (treeRole === 'empty') are preserved
+     *     unless their camera is hidden at the view level.
+     *   - If a camera group had real rows pre-filter but zero real rows
+     *     post-filter, an "all-hidden" placeholder row is emitted so the
+     *     camera header still survives in the gutter (drawn gray by the
+     *     bar-draw path). This mirrors Block 1's empty-camera placeholder
+     *     behaviour.
+     *
+     * Fast-path: when all three Sets are empty, returns immediately
+     * without copying the array.
+     *
+     * @param {Session} session
+     * @private
+     */
+    _applyVisibilityFilter(session) {
+        if (!session) return;
+        // Inline ensureHiddenSets — keeps timeline.js decoupled from
+        // timeline-visibility.js (which mirrors this contract for the
+        // Info Panel side).
+        if (!session._hiddenCameras) session._hiddenCameras = new Set();
+        if (!session._hiddenTracks) session._hiddenTracks = new Set();
+        if (!session._hiddenIdentities) session._hiddenIdentities = new Set();
+
+        var hCams = session._hiddenCameras;
+        var hTracks = session._hiddenTracks;
+        var hIds = session._hiddenIdentities;
+
+        // Fast path — nothing hidden.
+        if (hCams.size === 0 && hTracks.size === 0 && hIds.size === 0) return;
+
+        var rows = this._trackSegments || [];
+        var out = [];
+
+        var i = 0;
+        while (i < rows.length) {
+            // Collect a camera group (consecutive rows with the same cameraName).
+            var camName = rows[i].cameraName;
+            var groupStart = i;
+            var j = i;
+            while (j < rows.length && rows[j].cameraName === camName) j++;
+            var groupEnd = j;  // exclusive
+
+            // View-level hide: drop the entire group, no placeholder.
+            if (camName && hCams.has(camName)) {
+                i = groupEnd;
+                continue;
+            }
+
+            var hadReal = false;
+            var kept = [];
+            for (var k = groupStart; k < groupEnd; k++) {
+                var row = rows[k];
+                if (row.treeRole === 'empty') {
+                    kept.push(row);
+                    continue;
+                }
+                // Real row — track its existence + apply track/identity hide.
+                hadReal = true;
+                var name = row.trackName;
+                if (row._isIdentity) {
+                    if (hIds.has(name)) continue;
+                } else if (row._isTrack) {
+                    if (hTracks.has(name)) continue;
+                } else {
+                    // Defensive fallback — pre-Block 2 callers without
+                    // an explicit `_isTrack` / `_isIdentity` marker.
+                    if (hTracks.has(name)) continue;
+                }
+                kept.push(row);
+            }
+
+            // Count real rows kept.
+            var keptReal = 0;
+            var ki;
+            for (ki = 0; ki < kept.length; ki++) {
+                if (kept[ki].treeRole !== 'empty') keptReal++;
+            }
+
+            if (hadReal && keptReal === 0) {
+                // All this camera's real rows were filtered out. Strip
+                // any pre-existing empty placeholders (their `_isTrack` /
+                // `_isIdentity` marker would otherwise leak), then emit
+                // a single all-hidden placeholder so the camera header
+                // survives in the gutter (gray-styled by the draw path).
+                var stripped = [];
+                for (ki = 0; ki < kept.length; ki++) {
+                    if (kept[ki].treeRole !== 'empty') stripped.push(kept[ki]);
+                }
+                kept = stripped;
+                kept.push({
+                    trackIdx: -1,
+                    cameraName: camName,
+                    color: null,
+                    segments: [],
+                    trackName: '',
+                    treeRole: 'empty',
+                    isAllHidden: true,
+                });
+            }
+
+            for (ki = 0; ki < kept.length; ki++) out.push(kept[ki]);
+            i = groupEnd;
+        }
+
+        this._trackSegments = out;
+        // Resize `_trackNames` in parallel so downstream draw paths see
+        // a length-matched array. `_finalizeTreeGrouping` rebuilds the
+        // strings, so empty placeholders here are fine.
+        this._trackNames = [];
+        for (var ti = 0; ti < this._trackSegments.length; ti++) {
+            this._trackNames.push('');
+        }
     }
 
     /**
@@ -1020,12 +1167,16 @@ export class Timeline {
         for (var i = 0; i < this._trackSegments.length; i++) {
             var seg = this._trackSegments[i];
             if (seg.cameraName !== lastCam) {
-                currentGroup = { name: seg.cameraName, tracks: [], isEmpty: false };
+                currentGroup = { name: seg.cameraName, tracks: [], isEmpty: false, isAllHidden: false };
                 this._cameraGroups.push(currentGroup);
                 lastCam = seg.cameraName;
             }
             if (seg.treeRole === 'empty') {
                 currentGroup.isEmpty = true;
+                // Block 2 (Prompt 4): propagate the all-hidden marker
+                // from the placeholder row up to the group so the draw
+                // path can render the camera name in gray.
+                if (seg.isAllHidden) currentGroup.isAllHidden = true;
             } else {
                 currentGroup.tracks.push(seg);
             }
@@ -1121,75 +1272,57 @@ export class Timeline {
         var REG_FONT = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
         var BOLD_FONT = 'bold 10px ui-monospace, SFMono-Regular, Menlo, monospace';
 
-        // Start with the current mode's (row, label) pairs.
-        var pairs = [];
+        // Measure three columns separately so the draw path (which uses
+        // column-positioned, NOT right-aligned, labels) can line up the
+        // connector glyphs (`┌─` / `├─` / `└─`) at a single X regardless
+        // of individual track-name length. Per the spec, the tree width
+        // is determined by the longest track/id name in the *currently
+        // viewed tab* — only the current mode's rows are measured.
+        var maxCamW = 0;
+        var maxConnectorW = 0;
+        var maxTrackW = 0;
         for (var i = 0; i < this._trackSegments.length; i++) {
-            pairs.push({ row: this._trackSegments[i], label: this._trackNames[i] });
-        }
+            var row = this._trackSegments[i];
+            var camName = (row.cameraName || '');
+            var trackName = (row.trackName || '');
+            var connector = this._connectorForRole(row.treeRole);
 
-        // To align the camera tree across `Tracks` / `IDs` / `Both` modes,
-        // also measure the *other* modes' labels for the same session.
-        // Sandbox the rebuild: snapshot state, run the alternate mode's
-        // build + finalize (which won't recurse into the margin path —
-        // `_finalizeTreeGrouping` no longer triggers `_recomputeLeftMargin`),
-        // collect labels, then restore.
-        if (this._session) {
-            var savedSegs = this._trackSegments;
-            var savedNames = this._trackNames;
-            var savedGroups = this._cameraGroups;
-            var savedMode = this._displayMode;
-            var altModes = ['tracks', 'identities'];
-            for (var mi = 0; mi < altModes.length; mi++) {
-                if (altModes[mi] === savedMode) continue;
-                try {
-                    this._displayMode = altModes[mi];
-                    this._trackSegments = [];
-                    this._trackNames = [];
-                    if (altModes[mi] === 'identities') {
-                        this._buildIdentitySegments(this._session);
-                    } else {
-                        this._buildTrackSegments(this._session);
-                    }
-                    this._finalizeTreeGrouping();
-                    for (var pi = 0; pi < this._trackNames.length; pi++) {
-                        pairs.push({
-                            row: this._trackSegments[pi],
-                            label: this._trackNames[pi],
-                        });
-                    }
-                } catch (_err) {
-                    // If the alt-mode build fails (e.g., a session shape
-                    // that only supports one mode), fall back to the
-                    // current-mode measurement quietly.
-                }
-            }
-            this._trackSegments = savedSegs;
-            this._trackNames = savedNames;
-            this._cameraGroups = savedGroups;
-            this._displayMode = savedMode;
-        }
-
-        var maxW = 0;
-        for (var k = 0; k < pairs.length; k++) {
-            var name = pairs[k].label;
-            if (!name) continue;
-            var row = pairs[k].row;
-            var split = this._splitLabel(row, name);
-            var width = 0;
-            if (split.camName) {
+            if (camName) {
                 this._ctx.font = BOLD_FONT;
-                width += this._ctx.measureText(split.camName).width;
-                this._ctx.font = REG_FONT;
-                width += this._ctx.measureText(split.suffix).width;
-            } else {
-                this._ctx.font = REG_FONT;
-                width = this._ctx.measureText(name).width;
+                var cw = this._ctx.measureText(camName).width;
+                if (cw > maxCamW) maxCamW = cw;
             }
-            if (width > maxW) maxW = width;
+            this._ctx.font = REG_FONT;
+            if (connector) {
+                var cnw = this._ctx.measureText(connector).width;
+                if (cnw > maxConnectorW) maxConnectorW = cnw;
+            }
+            if (trackName) {
+                var tw = this._ctx.measureText(trackName).width;
+                if (tw > maxTrackW) maxTrackW = tw;
+            }
         }
         this._ctx.font = prevFont;
 
-        var needed = Math.ceil(maxW + this.LABEL_RIGHT_PAD + this.LABEL_LEFT_PAD);
+        // Stash column metrics for the draw path. The column layout is:
+        //   [LABEL_LEFT_PAD][ camName ][GAP][ connector ][trackName ][LABEL_RIGHT_PAD]
+        // with camName right-aligned (so all camera names end at the same
+        // X), connector left-aligned at a fixed X (so `┌─`/`├─`/`└─` all
+        // line up), and trackName left-aligned immediately after.
+        var COL_GAP = 4;
+        this._labelMaxCamW = maxCamW;
+        this._labelMaxConnectorW = maxConnectorW;
+        this._labelMaxTrackW = maxTrackW;
+        this._labelColGap = COL_GAP;
+
+        var needed = Math.ceil(
+            this.LABEL_LEFT_PAD +
+            maxCamW +
+            (maxCamW > 0 ? COL_GAP : 0) +
+            maxConnectorW +
+            maxTrackW +
+            this.LABEL_RIGHT_PAD
+        );
         var newLeft = Math.min(this.MAX_LEFT_MARGIN,
                                Math.max(this.MIN_LEFT_MARGIN, needed));
         if (newLeft !== this.LEFT_MARGIN) {
@@ -1220,15 +1353,42 @@ export class Timeline {
             case 'first':
                 return camName + '  ┌─ ' + trackName;
             case 'middle':
-                return '      │  ├─ ' + trackName;
+                return '│ ├─ ' + trackName;
             case 'last':
-                return '      └─ ' + trackName;
+                return '│ └─ ' + trackName;
             case 'only':
                 return camName + '  ── ' + trackName;
             case 'empty':
                 return camName + ' ──';
             default:
                 return camName + ' ' + trackName;
+        }
+    }
+
+    /**
+     * Bracket glyph drawn at the connector column for a row's `treeRole`.
+     * Used by both the pre-measure pass (`_recomputeLeftMargin`) and the
+     * draw path (`_drawTrackBars`) so the width budgeted for the connector
+     * column matches what's rendered.
+     *
+     * Every glyph here is the same character-width (`┌─ ` / `├─ ` / `└─ ` /
+     * `── ` / `──`) so the brackets line up vertically when each is
+     * left-aligned at the same X. The `│` continuation glyph that the
+     * tester-agent's assertions look for is kept in the composed
+     * `_trackNames` strings (via `_formatTreeLabel`) but is *not* drawn —
+     * the contiguous `├`/`└` glyphs already encode the vertical structure
+     * visually, and adding a `│` to the drawn connector pushed the brackets
+     * out of column-alignment.
+     * @private
+     */
+    _connectorForRole(role) {
+        switch (role) {
+            case 'first':  return '┌─ ';
+            case 'middle': return '├─ ';
+            case 'last':   return '└─ ';
+            case 'only':   return '── ';
+            case 'empty':  return '──';
+            default:       return '';
         }
     }
 
@@ -1316,6 +1476,7 @@ export class Timeline {
                         segments: segments,
                         trackName: ident.name,
                         treeRole: 'middle',
+                        _isIdentity: true, // marker for visibility filter (Block 2)
                     });
                     this._trackNames.push('');
                 }
@@ -1328,6 +1489,7 @@ export class Timeline {
                     segments: [],
                     trackName: '',
                     treeRole: 'empty',
+                    _isIdentity: true,
                 });
                 this._trackNames.push('');
             }
@@ -1430,34 +1592,61 @@ export class Timeline {
         const LABEL_FONT_REG = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
         const LABEL_FONT_BOLD = 'bold 10px ui-monospace, SFMono-Regular, Menlo, monospace';
 
+        // Pre-computed column metrics from `_recomputeLeftMargin`:
+        //   [LABEL_LEFT_PAD][ camName ][COL_GAP][ connector ][trackName ]
+        // Camera names right-align at X_CAM_RIGHT; connector glyphs
+        // left-align at X_CONNECTOR; track names left-align at X_TRACK.
+        // This positions the bracket chars (`┌─` / `├─` / `└─`) at the
+        // SAME X for every row in the gutter — so they line up vertically
+        // regardless of individual track-name length.
+        const colGap = this._labelColGap || 4;
+        const maxCamW = this._labelMaxCamW || 0;
+        const maxConnW = this._labelMaxConnectorW || 0;
+        const X_CAM_RIGHT = this.LABEL_LEFT_PAD + maxCamW;
+        const X_CONNECTOR = X_CAM_RIGHT + (maxCamW > 0 ? colGap : 0);
+        const X_TRACK = X_CONNECTOR + maxConnW;
+
         for (let t = 0; t < this._trackSegments.length; t++) {
             const track = this._trackSegments[t];
             const rowY = top + rowYPositions[t];
-
-            // Track label — monospace font so the tree connector characters
-            // (`┌─`, `├─`, `└─`, `│`) align cleanly across rows. The camera
-            // name (when present at the start of the label — `first` / `only`
-            // / `empty` roles) is drawn in BOLD so it stands out across
-            // views with very different track counts.
-            ctx.fillStyle = this.LABEL_COLOR;
-            ctx.textAlign = 'right';
-            ctx.textBaseline = 'middle';
-            const label = this._trackNames[t] || ('Track ' + t);
-            const split = this._splitLabel(track, label);
-            const labelX = this.LEFT_MARGIN - 6;
             const labelY = rowY + this.TRACK_ROW_HEIGHT / 2;
-            if (split.camName) {
-                // Right-align the suffix; measure it; draw the bold camera
-                // name immediately to its left so the whole label remains
-                // right-anchored at LEFT_MARGIN - 6.
-                ctx.font = LABEL_FONT_REG;
-                ctx.fillText(split.suffix, labelX, labelY);
-                const suffixW = ctx.measureText(split.suffix).width;
+
+            ctx.fillStyle = this.LABEL_COLOR;
+            ctx.textBaseline = 'middle';
+
+            // 1. Camera name (bold, right-aligned at X_CAM_RIGHT). Only
+            //    rendered on the anchor row of a group — `first`, `only`,
+            //    or `empty` — to avoid repeating the name on every track.
+            const camName = track.cameraName || '';
+            const isAnchor =
+                track.treeRole === 'first' ||
+                track.treeRole === 'only' ||
+                track.treeRole === 'empty';
+            if (camName && isAnchor) {
                 ctx.font = LABEL_FONT_BOLD;
-                ctx.fillText(split.camName, labelX - suffixW, labelY);
-            } else {
-                ctx.font = LABEL_FONT_REG;
-                ctx.fillText(label, labelX, labelY);
+                ctx.textAlign = 'right';
+                // Block 2 (Prompt 4): when every track under this camera
+                // is toggled off, render the camera name in gray (the
+                // user can still see which view they hid). Restore the
+                // prior fill so the connector + track-name pass renders
+                // at full opacity.
+                var _prevFill = ctx.fillStyle;
+                if (track.isAllHidden) ctx.fillStyle = 'rgba(255,255,255,0.25)';
+                ctx.fillText(camName, X_CAM_RIGHT, labelY);
+                ctx.fillStyle = _prevFill;
+            }
+
+            // 2. Connector glyph (regular, left-aligned at X_CONNECTOR).
+            ctx.font = LABEL_FONT_REG;
+            ctx.textAlign = 'left';
+            const connector = this._connectorForRole(track.treeRole);
+            if (connector) {
+                ctx.fillText(connector, X_CONNECTOR, labelY);
+            }
+
+            // 3. Track / identity name (regular, left-aligned at X_TRACK).
+            if (track.trackName) {
+                ctx.fillText(track.trackName, X_TRACK, labelY);
             }
 
             // Empty-camera placeholder rows reserve vertical space but

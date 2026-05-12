@@ -29,7 +29,11 @@ import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojE
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
          setupPanelTabs, setupSkeletonEditing, parseSkeletonJSON, exportSkeletonJSON,
-         ensureSession, populateSessionAssignTable, populateUnassignedVideos } from './info-panel.js';
+         ensureSession, populateSessionAssignTable, populateUnassignedVideos,
+         populateTimelineVisibility } from './info-panel.js';
+// Block 2 (Prompt 4): rename migration for the per-session hidden-track
+// / hidden-identity Sets when the user renames an entity.
+import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
@@ -229,6 +233,8 @@ export function setupMenus() {
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        // Block 2 (Prompt 4): refresh Visibility-tab toggle lists.
+        populateTimelineVisibility(state.session);
     });
 
     document.getElementById('menuRenameTrack').addEventListener('click', function () {
@@ -237,13 +243,18 @@ export function setupMenus() {
         var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
         var idx = parseInt(prompt('Which track to rename?\n\n' + trackList + '\n\nEnter number:')) - 1;
         if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
-        var newName = prompt('New name for "' + state.session.tracks[idx] + '":', state.session.tracks[idx]);
+        var oldName = state.session.tracks[idx];
+        var newName = prompt('New name for "' + oldName + '":', oldName);
         if (!newName) return;
         state.session.tracks[idx] = newName;
+        // Block 2 (Prompt 4): migrate hidden-set membership across rename
+        // so the toggle state persists. Identity rename / no-op safe.
+        renameHiddenTrack(state.session, oldName, newName);
         setStatus('Renamed track ' + (idx + 1) + ' to: ' + newName, 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        populateTimelineVisibility(state.session);
     });
 
     document.getElementById('menuDeleteTrack').addEventListener('click', function () {
@@ -270,10 +281,15 @@ export function setupMenus() {
                 }
             }
         }
+        // Block 2 (Prompt 4): drop the now-defunct entry from the
+        // hidden-tracks Set so a future track with the same name won't
+        // start out hidden.
+        if (state.session._hiddenTracks) state.session._hiddenTracks.delete(name);
         setStatus('Deleted track: ' + name, 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        populateTimelineVisibility(state.session);
     });
 
     // Track/identity helpers are now top-level functions (above setupMenus)
@@ -352,6 +368,8 @@ export function setupMenus() {
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        // Block 2 (Prompt 4): refresh Visibility-tab toggle lists.
+        populateTimelineVisibility(state.session);
     });
 
     document.getElementById('menuRenameIdentity').addEventListener('click', function () {
@@ -360,13 +378,18 @@ export function setupMenus() {
         var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
         var idx = parseInt(prompt('Which identity to rename?\n\n' + idList + '\n\nEnter number:')) - 1;
         if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
-        var newName = prompt('New name for "' + state.session.identities[idx].name + '":', state.session.identities[idx].name);
+        var oldIdName = state.session.identities[idx].name;
+        var newName = prompt('New name for "' + oldIdName + '":', oldIdName);
         if (!newName) return;
         state.session.identities[idx].name = newName;
+        // Block 2 (Prompt 4): migrate hidden-identity Set membership
+        // so the toggle state persists across rename.
+        renameHiddenIdentity(state.session, oldIdName, newName);
         setStatus('Renamed identity to: ' + newName, 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        populateTimelineVisibility(state.session);
     });
 
     document.getElementById('menuDeleteIdentity').addEventListener('click', function () {
@@ -384,10 +407,14 @@ export function setupMenus() {
             }
         }
         state.session.identities.splice(idx, 1);
+        // Block 2 (Prompt 4): drop the deleted identity name from the
+        // hidden-identity Set.
+        if (state.session._hiddenIdentities) state.session._hiddenIdentities.delete(identity.name);
         setStatus('Deleted identity: ' + identity.name, 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        populateTimelineVisibility(state.session);
     });
 
     // Populate Assign Identity submenu on hover
