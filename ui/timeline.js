@@ -2504,20 +2504,38 @@ export class Timeline {
      * Rebuild track segments from the session without clearing frame markers.
      * Call after triangulation or track assignment to update track bars in real time.
      *
-     * Also grows the container when the new set of tracks needs more
-     * vertical space than the container currently has — otherwise the
-     * collapse-priority layout in `_computeLayout` would hide every
-     * track row (since the natural track block no longer fits), which
-     * manifests as "the timeline clears the first time a new track is
-     * assigned." Never shrinks; callers that need to resize down go
-     * through `setData` + `fitTimelineToData` in index.html.
+     * Default behavior also grows the container when the new set of
+     * tracks needs more vertical space than the container currently has —
+     * otherwise the collapse-priority layout in `_computeLayout` would
+     * hide every track row (since the natural track block no longer
+     * fits), which manifests as "the timeline clears the first time a
+     * new track is assigned." Never shrinks; callers that need to resize
+     * down go through `setData` + `fitTimelineToData` in index.html.
+     *
+     * Pass `{ keepSize: true }` to skip the grow + resize step. This is
+     * the right mode for Block 2 visibility toggles: the underlying
+     * tracks haven't changed (only which rows render), so the outer
+     * timeline frame AND the inner canvas height must both stay put.
+     * Otherwise `resize()` would shrink the canvas to `availableH`
+     * (since the natural-height term in `max(natural, availableH)`
+     * drops when rows are filtered), and the playhead / marker row /
+     * frame-number labels would jump up to the new bottom — visible as
+     * "the timeline got shorter."
      *
      * @param {Session} session
+     * @param {{keepSize?: boolean}} [opts]
      */
-    refreshTracks(session) {
+    refreshTracks(session, opts) {
         if (!session) return;
         this._session = session;
         this._rebuildSegments(session);
+        if (opts && opts.keepSize) {
+            // Segments rebuilt; row positions reflowed; outer container
+            // and canvas pixel dimensions stay exactly as the user left
+            // them. Just repaint.
+            this.redraw();
+            return;
+        }
         this._growContainerToFit();
         this.resize();
     }

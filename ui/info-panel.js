@@ -7,7 +7,7 @@ import {
     Skeleton, Camera, Session,
 } from '../pose/pose-data.js';
 import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
-import { REPROJECTION_COLOR } from './overlays.js';
+import { REPROJECTION_COLOR, getTrackColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
 import { state, timeline, interactionManager } from './app-state.js';
@@ -153,7 +153,15 @@ export function populateTimelineVisibility(session) {
 
     function refreshAfterChange() {
         if (timeline && typeof timeline.refreshTracks === 'function') {
-            try { timeline.refreshTracks(session); } catch (e) { /* non-fatal */ }
+            // `keepSize: true` — visibility toggles must not resize the
+            // outer container OR the inner canvas. Without this, hiding
+            // rows would let `resize()` shrink the canvas (via the
+            // `max(natural, availableH)` term going down with fewer
+            // rows), pulling the playhead / markers / frame labels up
+            // and visibly "shortening" the timeline even though the
+            // outer frame is unchanged.
+            try { timeline.refreshTracks(session, { keepSize: true }); }
+            catch (e) { /* non-fatal */ }
         }
         populateTimelineVisibility(session);
     }
@@ -166,10 +174,16 @@ export function populateTimelineVisibility(session) {
         }));
     }
     for (i = 0; i < trackList.length; i++) {
+        // `getTrackVisibilityList` returns names in the same order as
+        // `session.tracks`, so the list index is the trackIdx that
+        // `getTrackColor` uses for its palette lookup. Mirrors what the
+        // timeline canvas itself paints next to each track row, and
+        // matches the swatch behavior already in place for identities.
+        trackList[i].color = getTrackColor(i);
         hostTracks.appendChild(buildVisToggleRow(trackList[i], function (name) {
             toggleTrackVisibility(session, name);
             refreshAfterChange();
-        }));
+        }, { showColor: true }));
     }
     for (i = 0; i < idList.length; i++) {
         hostIds.appendChild(buildVisToggleRow(idList[i], function (name) {

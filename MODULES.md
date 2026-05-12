@@ -410,14 +410,25 @@ row inside `#visTimelineCameras` / `#visTimelineTracks` /
 `#visTimelineIdentities`. Each row uses the existing `.toggle-switch`
 markup (`<label class="toggle-switch"><input type="checkbox"><span
 class="slider"></span></label>`) rather than a bare checkbox so the
-control matches the rest of the Visibility panel; identity rows also
-include a `.vis-color-swatch` set from `identity.color`. The change
-listener calls `toggle{Camera,Track,Identity}Visibility(session, name)`
-+ `timeline.refreshTracks(session)` + recursively re-renders the lists.
-`populateTimelineVisibility` is called from `updateInfoPanel(...)` (every
-in-frame mutation already triggers it) and again from `switchSession`
-after `timeline.setData(newSession)` so the lists reflect the
-freshly-active session's hidden sets.
+control matches the rest of the Visibility panel. Track AND identity
+rows both render a `.vis-color-swatch`: identity rows pull from
+`identity.color`, track rows compute their swatch via
+`getTrackColor(i)` (imported from `./overlays.js`) where `i` is the
+row's position in `session.tracks` — the same palette-index the
+timeline canvas itself uses for the bar color, so the swatch in the
+panel matches the bar the user sees on the timeline. Camera rows have
+no swatch (cameras have no intrinsic color in the data model).
+
+The change listener calls `toggle{Camera,Track,Identity}Visibility(session, name)`
+followed by `timeline.refreshTracks(session, { keepSize: true })` so
+the timeline rebuilds its segment list and repaints without resizing
+the outer container or the inner canvas (see `ui/timeline.js`'s
+`refreshTracks` size-preserving mode note), then recursively
+re-renders the toggle lists to refresh the visible-state attributes.
+`populateTimelineVisibility` is called from `updateInfoPanel(...)`
+(every in-frame mutation already triggers it) and again from
+`switchSession` after `timeline.setData(newSession)` so the lists
+reflect the freshly-active session's hidden sets.
 
 **Visibility tab — section order + Display Legend (Phase-7 refinement).**
 `index.html` reorders the tab so the **Timeline** subsection is at the
@@ -708,10 +719,24 @@ when the bar appears/disappears.
 - `Timeline` — class. Selected methods: `setData(session)`,
   `setCurrentFrame(frameIdx)`, `setTotalFrames(n)`, `setZoom(level)`,
   `scrollTo(frameIdx)`, `resize`, `redraw`, `destroy`,
-  `setDisplayMode(mode)`, `refreshTracks(session)`,
+  `setDisplayMode(mode)`, `refreshTracks(session, opts?)`,
   `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
   `getCameraGroups`, `getLabelLines`, `getRowCount`,
   `getTrackAreaElement`.
+
+**`refreshTracks` size-preserving mode.** Default `refreshTracks(session)`
+rebuilds segments, calls `_growContainerToFit` (grow-only), then
+`resize()`. Pass `{ keepSize: true }` to skip both — segments rebuild,
+canvas repaints, but the outer container height AND the canvas pixel
+dimensions stay exactly as the user left them. This is the path used
+by Block 2 visibility toggles in `ui/info-panel.js`: without it,
+`resize()` recomputes the canvas height as `max(naturalHeight,
+availableHeight)`, and hiding rows drops the natural term so the
+canvas shrinks down to `availableHeight` — visibly pulling the
+playhead / marker row / frame-number labels up to the new bottom even
+though the outer frame doesn't move. Track add / rename / delete
+paths still use the default mode so the container expands to keep
+new rows visible.
 
 **Imports from project modules.**
 - `./overlays.js` — `getTrackColor`.
@@ -883,7 +908,11 @@ so it loads cleanly in the headless node test runner without dragging in
   timeline's own filter) so calibration-only cameras don't appear in the
   toggle list.
 - `get{Camera,Track,Identity}VisibilityList(session)` — `[{ name, visible }]`
-  (identity rows also include `id` and `color` for the color swatch).
+  (identity rows also include `id` and `color`). Track-row swatch color
+  is intentionally NOT set by this module — `ui/info-panel.js` decorates
+  each track entry with `getTrackColor(i)` after the list returns so this
+  module can stay free of `./overlays.js` (and the wider import graph) and
+  load cleanly in the headless node test sandbox.
 - `renameHiddenTrack(session, oldName, newName)` /
   `renameHiddenIdentity(session, oldName, newName)` — migrate hidden-set
   membership when the user renames a track / identity, so the toggle stays
