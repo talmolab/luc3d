@@ -1346,26 +1346,56 @@ body {
   background: var(--bg-tertiary);
   border-top: 1px solid var(--border-color);
   position: relative;
-  overflow-y: scroll;
-  overflow-x: hidden;
+  /* Block 1 (Prompt 4): vertical overflow now lives on the inner
+     `.timeline-track-area` wrapper — the container itself is a flex
+     column so the wrapper can absorb the remaining vertical space. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   flex-shrink: 0;
 }
 
-.timeline-container::-webkit-scrollbar {
-  width: 14px;
+.timeline-track-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Scrollbar appears only when the timeline is shortened enough that the
+     track rows overflow vertically. `scrollbar-gutter: stable` keeps the
+     canvas width steady when the bar appears/disappears so the playhead
+     doesn't jitter on resize. Combined with the explicit `::-webkit-scrollbar`
+     rules below (and `-webkit-appearance: none`), this defeats macOS's
+     overlay-scrollbar behavior so the bar is always *visible* while it
+     exists rather than fading on idle. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  scrollbar-gutter: stable;
+  /* Firefox: classic visible scrollbar at the platform's normal width. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--text-muted) var(--bg-tertiary);
 }
 
-.timeline-container::-webkit-scrollbar-track {
+/* Wider, always-visible vertical scrollbar on the timeline's track area.
+   Overrides the body-level 6px `::-webkit-scrollbar` rule so this scrollbar
+   reads as a deliberate UI element, and uses `-webkit-appearance: none` to
+   defeat macOS's overlay-scrollbar behavior. */
+.timeline-track-area::-webkit-scrollbar {
+  width: 12px;
+  -webkit-appearance: none;
+}
+
+.timeline-track-area::-webkit-scrollbar-track {
   background: var(--bg-tertiary);
+  border-left: 1px solid var(--border-color);
 }
 
-.timeline-container::-webkit-scrollbar-thumb {
+.timeline-track-area::-webkit-scrollbar-thumb {
   background: var(--text-muted);
-  border-radius: 7px;
-  border: 3px solid var(--bg-tertiary);
+  border-radius: 6px;
+  border: 2px solid var(--bg-tertiary);
+  min-height: 24px;
 }
 
-.timeline-container::-webkit-scrollbar-thumb:hover {
+.timeline-track-area::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
 
@@ -1376,8 +1406,17 @@ body {
 }
 
 .timeline-container.collapsed {
-  height: 0;
+  /* Fully hide the timeline — `height: 0` alone is not enough because
+     `.timeline-container` declares `min-height: 40px`, which would leave a
+     ~two-row strip visible. Override `min-height` and force `height: 0`
+     with !important so any inline-style height set by toggleTimeline /
+     fitTimelineToData is also defeated. The 8px `.split-handle.horizontal`
+     above the container remains visible and provides the click-and-drag
+     affordance the user can use to expand the timeline back up. */
+  height: 0 !important;
+  min-height: 0 !important;
   border-top: none;
+  overflow: hidden;
 }
 
 /* --------------------------------------------------------------------------
@@ -2438,6 +2477,53 @@ kbd {
     margin-bottom: 8px;
     font-size: 11px;
     color: var(--text-secondary);
+}
+/* Block 2 (Prompt 4): per-session timeline visibility toggle lists. */
+.vis-timeline-toggles {
+    font-size: 11px;
+}
+.vis-toggle-list {
+    max-height: 160px;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle, #2a2a2a);
+    border-radius: 3px;
+    padding: 2px;
+    margin-bottom: 4px;
+}
+.vis-toggle-row:hover {
+    background: rgba(255,255,255,0.04);
+}
+/* Views list specifically: cameras are a small, finite count — drop the
+   scroll-clamped container and render as clean tabular rows with subtle
+   separators. Tracks and Identities keep .vis-toggle-list (scrollable). */
+#visTimelineCameras {
+    max-height: none;
+    overflow: visible;
+    border: none;
+    padding: 0;
+}
+#visTimelineCameras .vis-toggle-row {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border-subtle, #2a2a2a);
+}
+#visTimelineCameras .vis-toggle-row:last-child {
+    border-bottom: none;
+}
+/* Compact toggle-switch for the timeline visibility rows — the standard
+   40×22 size dominates the narrow Info Panel rows when many cameras /
+   tracks / identities are listed. */
+.vis-toggle-row .toggle-switch {
+    width: 28px;
+    height: 16px;
+}
+.vis-toggle-row .toggle-switch .slider::before {
+    width: 12px;
+    height: 12px;
+    left: 2px;
+    bottom: 2px;
+}
+.vis-toggle-row .toggle-switch input:checked + .slider::before {
+    transform: translateX(12px);
 }
 .vis-slider-row span:first-child {
     flex: 0 0 100px;

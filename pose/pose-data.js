@@ -600,12 +600,134 @@ export class Session {
         return identity;
     }
 
+    /**
+     * Assign an identity to a group, enforcing per-frame uniqueness.
+     * If another InstanceGroup in the same frame already has identityId,
+     * give that group the identity that `group` is moving away from
+     * ("swap"). Without this, the viewer's identity-color path would
+     * paint two skeletons in the same view with the same color.
+     *
+     * Across frames, multiple groups may legitimately hold the same
+     * identity (the same physical subject across time) — the swap is
+     * scoped to the single frame containing `group`.
+     */
     assignIdentityToGroup(group, identityId) {
+        var oldIdentityId = group.identityId;
+        if (oldIdentityId === identityId) return;
+
+        // Find the frame containing this group and check for colliders.
+        var hostFrameIdx = null;
+        for (var [frameIdx, groups] of this.instanceGroups) {
+            if (groups.indexOf(group) >= 0) { hostFrameIdx = frameIdx; break; }
+        }
+        if (hostFrameIdx != null && identityId != null && identityId >= 0) {
+            var siblings = this.instanceGroups.get(hostFrameIdx);
+            for (var si = 0; si < siblings.length; si++) {
+                var other = siblings[si];
+                if (other === group) continue;
+                if (other.identityId === identityId) {
+                    // Collision — hand the colliding group `group`'s previous identity.
+                    other.identityId = (oldIdentityId != null && oldIdentityId >= 0) ? oldIdentityId : -1;
+                }
+            }
+        }
+
         group.identityId = identityId;
     }
 
     /**
+     * Walk every frame and resolve any pre-existing per-frame identity
+     * collisions among InstanceGroup objects. Groups beyond the first
+     * holder of an identity in a given frame have their identityId
+     * cleared (-1). Useful for repairing data loaded from an SLP / project
+     * that was authored before the per-frame uniqueness invariant was
+     * enforced.
+     *
+     * @returns {number} count of groups whose identityId was cleared
+     */
+    deduplicateFrameIdentities() {
+        var cleared = 0;
+        for (var [frameIdx, groups] of this.instanceGroups) {
+            var seen = new Set();
+            for (var i = 0; i < groups.length; i++) {
+                var g = groups[i];
+                if (g.identityId == null || g.identityId < 0) continue;
+                if (seen.has(g.identityId)) {
+                    g.identityId = -1;
+                    cleared++;
+                } else {
+                    seen.add(g.identityId);
+                }
+            }
+        }
+        return cleared;
+    }
+
+    /**
+     * Walk every frame and move any "orphan" linked instances — instances
+     * in `fg.instances` that are not members of any InstanceGroup AND
+     * are not already in `fg.unlinkedInstances` — into the unlinked pool.
+     *
+     * Without this, the viewer's linked-instance pass renders these
+     * orphans (because it iterates `fg.instances` directly), but the
+     * info-panel doesn't list them in either the GROUPED or UNGROUPED
+     * tables (grouped iterates `instanceGroups`, unlinked iterates
+     * `fg.unlinkedInstances`). End-user symptom: skeleton visible in the
+     * viewer but missing from the Instances panel.
+     *
+     * Operations like Track All / Auto Assign / manual re-grouping can
+     * leave orphans behind; running this on load (and on demand) restores
+     * the invariant that every linked instance is either grouped or
+     * explicitly unlinked.
+     *
+     * @returns {number} count of instances moved to the unlinked pool
+     */
+    scrubOrphanInstances() {
+        var moved = 0;
+        for (var [frameIdx, fg] of this.frameGroups) {
+            var groups = this.instanceGroups.get(frameIdx) || [];
+            // Build the set of all instances claimed by some group.
+            var groupedInstances = new Set();
+            for (var gi = 0; gi < groups.length; gi++) {
+                for (var [, gInst] of groups[gi].instances) {
+                    groupedInstances.add(gInst);
+                }
+            }
+            // For each (camera, [instances]) in fg.instances, separate into
+            // grouped (kept) and orphan (moved to unlinked pool).
+            for (var [camName, instances] of fg.instances) {
+                var existingUl = fg.getUnlinkedInstances(camName) || [];
+                var existingUlInstances = new Set();
+                for (var ui = 0; ui < existingUl.length; ui++) {
+                    existingUlInstances.add(existingUl[ui].instance);
+                }
+                var kept = [];
+                for (var ii = 0; ii < instances.length; ii++) {
+                    var inst = instances[ii];
+                    if (groupedInstances.has(inst)) {
+                        kept.push(inst);
+                    } else if (!existingUlInstances.has(inst)) {
+                        // Orphan — move to unlinked pool.
+                        fg.addUnlinkedInstance(camName, new UnlinkedInstance(inst, camName));
+                        moved++;
+                    }
+                    // else: already in unlinked pool; drop from fg.instances
+                    // to avoid double-listing.
+                }
+                fg.instances.set(camName, kept);
+            }
+        }
+        return moved;
+    }
+
+    /**
      * Assign a tracklet (trackIdx) in a specific camera to an Identity.
+     * Multiple trackIdx values on one camera may legitimately share an
+     * identity ("tracklet stitching" — the same physical subject appears
+     * as multiple disconnected tracklets across non-overlapping frame
+     * ranges). The per-frame uniqueness invariant (at most one trackIdx
+     * per camera per FRAME → one identity) is enforced separately by
+     * propagateIdentity; this global setter does not enforce it.
      * @param {number} trackIdx
      * @param {number} identityId
      * @param {string} [cameraName] - If omitted, assigns for ALL cameras
@@ -699,26 +821,54 @@ export class Session {
         var count = 0;
         for (var [frameIdx, fg] of this.frameGroups) {
             if (frameIdx < startFrame) continue;
-            // Check if this track exists in this frame for this camera
+            // Collect all distinct trackIdx values present on this camera at
+            // this frame (linked + unlinked). Used to detect colliders.
+            var presentTracks = new Set();
             var found = false;
             var linked = fg.getInstances(cameraName);
             if (linked) {
                 for (var i = 0; i < linked.length; i++) {
-                    if (linked[i].trackIdx === trackIdx) { found = true; break; }
+                    var t1 = linked[i].trackIdx;
+                    if (t1 != null) presentTracks.add(t1);
+                    if (t1 === trackIdx) found = true;
                 }
             }
-            if (!found) {
-                var unlinked = fg.getUnlinkedInstances(cameraName);
-                if (unlinked) {
-                    for (var j = 0; j < unlinked.length; j++) {
-                        if (unlinked[j].instance.trackIdx === trackIdx) { found = true; break; }
+            var unlinked = fg.getUnlinkedInstances(cameraName);
+            if (unlinked) {
+                for (var j = 0; j < unlinked.length; j++) {
+                    var t2 = unlinked[j].instance.trackIdx;
+                    if (t2 != null) presentTracks.add(t2);
+                    if (t2 === trackIdx) found = true;
+                }
+            }
+            if (!found) continue;
+
+            // Per-frame uniqueness: at most one trackIdx on this camera at
+            // this frame may resolve to identityId. If another track that
+            // physically exists here currently resolves to identityId, hand
+            // it the identity that (cameraName, trackIdx) currently has —
+            // a per-frame swap. This stops two instances in the same view
+            // from rendering as the same identity after the propagation.
+            var oldIdentityId = this.getIdentityIdForTrack(cameraName, trackIdx, frameIdx);
+            if (oldIdentityId !== identityId) {
+                for (var ot of presentTracks) {
+                    if (ot === trackIdx) continue;
+                    if (this.getIdentityIdForTrack(cameraName, ot, frameIdx) !== identityId) continue;
+                    // Collider — swap.
+                    var oKey = frameIdx + ':' + cameraName + ':' + ot;
+                    if (oldIdentityId != null) {
+                        this.frameIdentityMap.set(oKey, oldIdentityId);
+                    } else {
+                        // No old identity to hand off; clear the per-frame
+                        // override so the collider falls back to its global
+                        // mapping rather than asserting a per-frame duplicate.
+                        this.frameIdentityMap.delete(oKey);
                     }
                 }
             }
-            if (found) {
-                this.frameIdentityMap.set(frameIdx + ':' + cameraName + ':' + trackIdx, identityId);
-                count++;
-            }
+
+            this.frameIdentityMap.set(frameIdx + ':' + cameraName + ':' + trackIdx, identityId);
+            count++;
         }
         return count;
     }

@@ -37,6 +37,7 @@ import {
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { handleLoadSlpFile } from './slp-import.js';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 
 export function newProject() {
     if (state.session || state.views.length > 0) {
@@ -816,12 +817,44 @@ export async function handleLoadProject(prePickedFile) {
             setVideoController(null);
         }
         state.views = [];
+        // Reset decoder pool + cold reserve on V3 project load. Old decoders
+        // point at the previous project's files and must be released to
+        // avoid dangling mp4box references / leaked file handles. Mirrors
+        // the equivalent reset at the top of handleLoadSlpFile.
+        if (data.version === 3) {
+            if (Array.isArray(state.decoderPool)) {
+                for (var _dpi = 0; _dpi < state.decoderPool.length; _dpi++) {
+                    var _dp = state.decoderPool[_dpi];
+                    if (_dp && typeof _dp.close === 'function') {
+                        try { _dp.close(); } catch (_e) {}
+                    }
+                }
+            }
+            state.decoderPool = [];
+            if (Array.isArray(state._decoderPoolCold)) {
+                for (var _dci = 0; _dci < state._decoderPoolCold.length; _dci++) {
+                    var _dc = state._decoderPoolCold[_dci];
+                    if (_dc && _dc._coldTimer) {
+                        clearTimeout(_dc._coldTimer);
+                        _dc._coldTimer = null;
+                    }
+                    if (_dc && typeof _dc.close === 'function') {
+                        try { _dc.close(); } catch (_e) {}
+                    }
+                }
+            }
+            state._decoderPoolCold = [];
+        }
         paneManager.clearAll();
 
         if (data.version === 3 && data.sessions && needsVideoPrompt) {
             // V3: prompt for session folders — with parent directory option
             var v3AllSessionNames = data.sessions.map(function (sd, idx) { return sd.name || ('Session ' + (idx + 1)); });
             var v3ParentFilesMap = null; // Map<sessionName, File[]> from parent dir pick
+
+            var v3Modal = getLoadingProgressModal({ title: 'Loading videos' });
+            v3Modal.reset();
+            v3Modal.show();
 
             for (var psi = 0; psi < data.sessions.length; psi++) {
                 var sessData = data.sessions[psi];
@@ -872,8 +905,15 @@ export async function handleLoadProject(prePickedFile) {
                         if (state.videoFiles.find(function (vf) { return vf.name === stem; })) continue;
 
                         showLoading('Loading ' + file.name + '...');
+                        var v3TaskId = v3Modal.addTask({ label: file.name || ('camera ' + ffi) });
+                        var v3OnProgress = (function (tid) {
+                            return function (ev) {
+                                if (ev && ev.error) v3Modal.failTask(tid, ev.error);
+                                else v3Modal.updateTask(tid, ev);
+                            };
+                        })(v3TaskId);
                         try {
-                            var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                            var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: v3OnProgress });
                             await decoder.init(file);
                             var vw = decoder.videoTrack.video.width;
                             var vh = decoder.videoTrack.video.height;
@@ -911,8 +951,10 @@ export async function handleLoadProject(prePickedFile) {
                             if (state.sessions[psi] && state.sessions[psi].videoFileIndices.indexOf(vfIdx) < 0) {
                                 state.sessions[psi].videoFileIndices.push(vfIdx);
                             }
+                            v3Modal.completeTask(v3TaskId);
                         } catch (vidErr) {
                             console.error('Failed to load ' + file.name + ':', vidErr);
+                            v3Modal.failTask(v3TaskId, vidErr);
                         }
                     }
                 }

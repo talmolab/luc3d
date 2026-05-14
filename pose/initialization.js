@@ -21,6 +21,7 @@ import { rebuildVideoController } from '../loading/session-loader.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { createDemoSession } from '../demo-data.js';
 import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
+import { installTimelineShortcuts } from '../ui/timeline-controller.js';
 import { setupPanelTabs, setupSkeletonEditing, updateInfoPanel } from '../ui/info-panel.js';
 import { setupSplitHandles } from '../ui/layout-controls.js';
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
@@ -984,6 +985,13 @@ export function setupTimeline() {
             });
         });
     }
+
+    // Install the Block 1 keyboard shortcuts (Ctrl/Cmd+J toggles the
+    // timeline, Ctrl/Cmd+Shift+J fires the legacy "Change Frame Number"
+    // command). The installer is idempotent — subsequent calls are
+    // no-ops, so repeated `setupTimeline()` calls during session reload
+    // don't stack handlers.
+    installTimelineShortcuts();
 }
 
 function highlightVideoCell(cameraName) {
