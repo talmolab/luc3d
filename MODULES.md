@@ -104,18 +104,13 @@ session graph that holds them.
   + cached `reprojectedInstances`. `markDirty`/`markClean`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
   frameGroups, instanceGroups, identity-mapping tables. Many methods:
-  identity assignment (`assignIdentityToGroup` — pass-through setter,
-  no per-frame uniqueness enforcement; `propagateIdentity` —
-  per-frame override writer; `setFrameIdentity`), group editing
-  (`createGroupFromUnlinked`, `unlinkGroup`, `removeInstanceGroup`,
-  `assignToGroup`), mixed-group repair (`_promoteIfMixed`),
-  skeleton propagation
+  identity assignment (`assignIdentityToGroup`, `propagateIdentity`,
+  `setFrameIdentity`), group editing (`createGroupFromUnlinked`,
+  `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
+  (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
+  `_promoteIfMixed`), skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
-  (`renameCameraInAllData`). NOTE: there is a known bug where two
-  groups in one frame can hold the same `identityId` (and two tracks on
-  one camera at one frame can resolve to the same identity); the
-  collision-handling logic that would prevent this is being designed
-  in a separate PR — see `prompts/refactor/revert-identity-dup-bug.md`.
+  (`renameCameraInAllData`).
 - `clonePoints(points)` — deep-clone helper for `[u,v]|null` arrays.
 - `mat3x3Multiply`, `mat3x3Multiply3x4` — matrix utilities used by
   `Camera` and `triangulation.js`.
@@ -408,6 +403,44 @@ Sessions, Frame Info), skeleton editor (add/remove nodes, edges,
 import/export JSON), per-frame instance-group context menus,
 triangulation status badge.
 
+**Visibility tab — Timeline subsection (Block 2 / Prompt 4).** Adds a
+`populateTimelineVisibility(session)` exported function plus a private
+`buildVisToggleRow(entry, onChange, opts)` helper that renders one toggle
+row inside `#visTimelineCameras` / `#visTimelineTracks` /
+`#visTimelineIdentities`. Each row uses the existing `.toggle-switch`
+markup (`<label class="toggle-switch"><input type="checkbox"><span
+class="slider"></span></label>`) rather than a bare checkbox so the
+control matches the rest of the Visibility panel. Track AND identity
+rows both render a `.vis-color-swatch`: identity rows pull from
+`identity.color`, track rows compute their swatch via
+`getTrackColor(i)` (imported from `./overlays.js`) where `i` is the
+row's position in `session.tracks` — the same palette-index the
+timeline canvas itself uses for the bar color, so the swatch in the
+panel matches the bar the user sees on the timeline. Camera rows have
+no swatch (cameras have no intrinsic color in the data model).
+
+The change listener calls `toggle{Camera,Track,Identity}Visibility(session, name)`
+followed by `timeline.refreshTracks(session, { keepSize: true })` so
+the timeline rebuilds its segment list and repaints without resizing
+the outer container or the inner canvas (see `ui/timeline.js`'s
+`refreshTracks` size-preserving mode note), then recursively
+re-renders the toggle lists to refresh the visible-state attributes.
+`populateTimelineVisibility` is called from `updateInfoPanel(...)`
+(every in-frame mutation already triggers it) and again from
+`switchSession` after `timeline.setData(newSession)` so the lists
+reflect the freshly-active session's hidden sets.
+
+**Visibility tab — section order + Display Legend (Phase-7 refinement).**
+`index.html` reorders the tab so the **Timeline** subsection is at the
+top of the Visibility panel (above User / Predicted / Reprojections).
+The **Display Legend** control is its own `<h3>` section sitting between
+Reprojections and Video Brightness, mirroring how Video Brightness and
+Video Rotation are presented. All static checkboxes in the panel
+(`visLegend`, `vis3dLabelShow`, `vis3dSphereShow`, `vis3dPyramidShow`,
+`vis3dNodeShow`, `vis3dEdgeShow`) were converted to the `.toggle-switch`
+markup so the panel has one consistent control style throughout.
+
+
 ---
 
 ### ui/interaction.js
@@ -437,6 +470,61 @@ to manual-assignment selection, right-click to null/restore nodes,
 keyboard shortcuts (delete, alt-drag clone, etc.).
 
 ---
+
+### ui/loading-progress-modal.js
+
+**Purpose.** Generic per-task progress panel for long-running load
+operations. Designed to be plugged into video decoder loads (per-camera
+rows) and future SLP project parsing. Per-row weighted-monotonic bar
+(canplay × 0.1 + mp4box × 0.9) prevents reset at the phase boundary;
+phase color flips signal transitions (red → blue → green).
+
+**Key exports.**
+- `LoadingProgressModal` (class) — flat task API: `addTask`, `updateTask`,
+  `completeTask`, `failTask`, `show`, `dismiss`, `reset`, `isOpen`,
+  `getTaskState`. Two-level (session-group + child task) API:
+  `addSessionGroup({ label })` (alias: `addSession`, `addParentTask`) →
+  `groupId`; `addTaskToSession(groupId, { label })` (alias: `addChildTask`);
+  `setCurrentSession(groupId)` (alias: `setActiveSession`);
+  `completeSession(groupId)` (alias: `finishSession`);
+  `failSession(groupId, error)`; `setProjectImportHeader({ current, total })`
+  (alias: `setHeader`, `setSessionProgress`). `addTask({ sessionId })`
+  attaches a flat-API task as a child of the named group. Header format:
+  `${title} - Session ${current} of ${total}`. Constructor takes
+  `{ title, autoDismissMs, minVisibleMs }`.
+- `getLoadingProgressModal(options)` — module-level lazy singleton.
+  Refreshes `_singleton.title` and re-renders the header on each call.
+  Without this, the first caller's title sticks forever — session-swap
+  after a project import would otherwise still read "Importing project"
+  instead of "Loading videos".
+- `resetLoadingProgressModal()` — test-only helper to drop the singleton.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/sessions-panes.js` (switchSession), `loading/session-loader.js`
+(handleLoadVideos), `import-export/save-load.js` (handleLoadProject V3 path),
+`import-export/slp-import.js` (handleLoadSlpFile per-cam loop).
+
+**User-facing features.** Bottom-right per-camera progress rows during
+session switching and initial-load workflows. Auto-dismisses ~500 ms
+after all tasks complete; stays open on error.
+
+**Notes / caveats.**
+- `_rebuildRootSnapshot` no-ops in real browsers (guarded by
+  `this.root instanceof window.HTMLElement`). It only runs in headless Node
+  test sandboxes where `appendChild` does not reflect children into
+  `root.innerHTML`. Running it in a browser would replace the real DOM
+  (including the progress-bar markup `_renderRow` appends) with a simplified
+  label-only snapshot — hiding every bar.
+- Long session names truncate with ellipsis at the modal max-width (380 px)
+  rather than forcing horizontal expansion. CSS: `.lpm-group-label` is
+  `flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;` with `.lpm-group-row { min-width: 0; overflow:
+  hidden; }` to allow label shrinkage and `.lpm-icon { flex: 0 0 auto; }`
+  to keep the status icon at fixed width.
+
+---
+
 
 ### ui/layout-controls.js
 
@@ -539,14 +627,7 @@ multi-video docking layout.
 - `clampRotation`, `syncRotationUI`.
 - `populateViewStrip`, `populateSessionsPanel`, `populateSessionStrip`.
 - `showMoveVideoModal`.
-- `removeSession`, `switchSession` (async). Both reset
-  `state.currentFrame` to the incoming session's `lastFrame` (or 0)
-  synchronously before any downstream reads — no `setTimeout` deferral.
-  `switchSession` parallelises per-camera decoder swaps with
-  `Promise.all` and assigns into `state.decoderPool` by stable index
-  (so out-of-order resolution can't reorder the pool); it also calls
-  `timeline.setData(newSession)` up front so the timeline reflects the
-  new session before the decoder swap finishes.
+- `removeSession`, `switchSession` (async).
 
 **Imports from project modules.**
 - `./app-state.js` — `state`, controllers + setters.
@@ -570,9 +651,46 @@ multi-video docking layout.
 `loading/session-loader.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`.
 
+**Decoder pool cold reserve.** `switchSession` maintains
+`state._decoderPoolCold[]` alongside `state.decoderPool[]`. When the
+incoming session has fewer cameras than the outgoing one, surplus pool
+slots are popped into the cold reserve with a 60-second `setTimeout` that
+closes the decoder on expiry. The next switch's pre-extend block reuses
+cold-reserve decoders first (cancelling their eviction timers) before
+constructing new `OnDemandVideoDecoder` instances. This caps pool length
+at the current session's camera count without immediately destroying
+recently-used decoders.
+
+**Per-session timeline height (Phase-7 refinement).** `switchSession`
+saves the user's customized timeline height on the **outgoing** session
+(`oldSession._timelineHeight`, `oldSession._timelineCollapsed`) and
+restores it on the **incoming** session. First-visit sessions (no
+saved height) get a default fit via `Math.min(timeline.getPreferredHeight(),
+0.4 * window.innerHeight)`. The save/restore is **inlined** — it uses
+`document.getElementById` rather than importing `timeline-controller.js`,
+so the brace-walked `switchSession` test harnesses
+(`test-session-switch-frame-reset.js`,
+`test-switchsession-parallel-decoders.js`) don't need an additional
+stub parameter. The same constraint shapes the inlined
+`_uploadedCameras` recompute earlier in the function.
+
 **User-facing features.** Video pane docking (drag/move/resize), view
 strip (top), session strip (bottom), per-pane brightness/rotation
 controls, switch-session UX, move-video-between-sessions modal.
+
+**Visibility-tab toggle list refresh (Block 2 / Prompt 4).** After
+`timeline.setData(newSession)`, `switchSession` calls
+`populateTimelineVisibility(newSession)` (added to the existing
+`info-panel.js` import to preserve the brace-walked test contract — no
+new top-level imports are introduced). This re-renders the Views /
+Tracks / Identities toggle lists so they reflect the newly-active
+session's `_hiddenCameras` / `_hiddenTracks` / `_hiddenIdentities`
+Sets. Hidden-set state lives directly on each `session` object, so
+**no explicit save/restore** is needed in `switchSession` — switching
+back to a prior session naturally restores its toggle state (and
+V7b-style isolation is automatic). The call is wrapped in a `try` so
+the headless test runner doesn't crash on a missing `document`.
+
 
 ---
 
@@ -580,14 +698,45 @@ controls, switch-session UX, move-video-between-sessions modal.
 
 **Purpose.** SLEAP-like canvas timeline showing track occupancy bars,
 frame markers, and current-frame indicator. Click-to-seek, drag-scrub,
-shift-drag range select, wheel zoom, middle-click pan.
+shift-drag range select, pinch / Ctrl+wheel zoom, middle-click pan. Block 1 (Prompt 4)
+adds tree-grouped per-camera labels, an inner scrollable track-area
+wrapper, and an empty-camera placeholder row per camera without tracks.
+
+**Trackpad / wheel semantics.** `_handleWheel` only intercepts events
+where `e.ctrlKey === true` — that single flag covers macOS trackpad
+pinch (browsers translate pinch into `wheel` with `ctrlKey: true`) and
+explicit Ctrl/Cmd+wheel on a regular mouse. Every other wheel event
+(plain two-finger trackpad scroll, plain mouse wheel) returns without
+`preventDefault()`, so the event bubbles to `_trackScrollEl` and its
+`overflow-y: auto` produces native vertical scrolling. macOS's overlay
+scrollbar is defeated via `-webkit-appearance: none` on the
+`.timeline-track-area::-webkit-scrollbar` rule in `styles.css` so the
+bar is always visible (not just on idle-fade) while the content
+overflows; `scrollbar-gutter: stable` keeps the canvas width steady
+when the bar appears/disappears.
 
 **Key exports.**
 - `Timeline` — class. Selected methods: `setData(session)`,
   `setCurrentFrame(frameIdx)`, `setTotalFrames(n)`, `setZoom(level)`,
   `scrollTo(frameIdx)`, `resize`, `redraw`, `destroy`,
-  `setDisplayMode(mode)`, `refreshTracks(session)`,
-  `setFrameModified(frameIdx, modified)`, `getPreferredHeight`.
+  `setDisplayMode(mode)`, `refreshTracks(session, opts?)`,
+  `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
+  `getCameraGroups`, `getLabelLines`, `getRowCount`,
+  `getTrackAreaElement`.
+
+**`refreshTracks` size-preserving mode.** Default `refreshTracks(session)`
+rebuilds segments, calls `_growContainerToFit` (grow-only), then
+`resize()`. Pass `{ keepSize: true }` to skip both — segments rebuild,
+canvas repaints, but the outer container height AND the canvas pixel
+dimensions stay exactly as the user left them. This is the path used
+by Block 2 visibility toggles in `ui/info-panel.js`: without it,
+`resize()` recomputes the canvas height as `max(naturalHeight,
+availableHeight)`, and hiding rows drops the natural term so the
+canvas shrinks down to `availableHeight` — visibly pulling the
+playhead / marker row / frame-number labels up to the new bottom even
+though the outer frame doesn't move. Track add / rename / delete
+paths still use the default mode so the container expands to keep
+new rows visible.
 
 **Imports from project modules.**
 - `./overlays.js` — `getTrackColor`.
@@ -596,7 +745,206 @@ shift-drag range select, wheel zoom, middle-click pan.
 
 **User-facing features.** Bottom timeline widget — seek, scrub, zoom,
 range-select, modified-frame markers, per-track occupancy bars,
-display mode toggle.
+display mode toggle. Each camera renders as a tree-grouped block
+(`┌─` / `├─` / `└─`) in the label gutter with the **camera name drawn
+in bold** so it pops against the regular-weight track / identity names;
+cameras with no tracks still occupy one placeholder row (`camName ──`).
+When the natural row count exceeds the timeline container height, the
+track area scrolls vertically while the mode-toggle / playhead chrome
+stays fixed.
+
+**Label gutter sizing (Block 1 + Phase-7 refinements).**
+- `LEFT_MARGIN` is **dynamic** — recomputed each `_rebuildSegments` by
+  `_recomputeLeftMargin()`. Per spec, the gutter is sized to the
+  longest name **in the currently viewed tab** (`tracks` / `identities`
+  / `both`); switching tabs may therefore resize the gutter to fit
+  that tab's data. Clamped between `MIN_LEFT_MARGIN = 100` and
+  `MAX_LEFT_MARGIN = 280`.
+- Labels are drawn as **three columns** rather than one right-aligned
+  string. `_recomputeLeftMargin()` measures the three column widths
+  separately and `_drawTrackBars` positions each piece at its own X:
+  ```
+  [LABEL_LEFT_PAD][ camName ][GAP][ connector ][trackName ]
+                    bold,         left-align    left-align
+                    right-align   at fixed X    at fixed X
+  ```
+  The connector column uses `_connectorForRole(role)` which returns
+  bracket-only glyphs of equal character-width (`┌─ ` / `├─ ` / `└─ `
+  / `── ` / `──`). Because every row's bracket starts at the same X,
+  `┌─`, `├─`, and `└─` line up vertically within each camera group —
+  regardless of how long individual track / identity names are. The
+  camera name is drawn in bold and only on the anchor row of each
+  group (`first` / `only` / `empty`); other rows show only the
+  connector glyph (the `├`/`└` vertical strokes visually carry the
+  tree's continuation line, no separate `│` glyph is rendered).
+- Recursion-safety contract: `_finalizeTreeGrouping()` does NOT call
+  `_recomputeLeftMargin()` — `_rebuildSegments()` is the sole caller
+  (after finalize). The contract is preserved for parity with any
+  future cross-mode sandbox that wants to recompute labels without
+  re-entering the margin path.
+- Composed `_trackNames` strings (returned by `getLabelLines()` and
+  used by tests) embed the camera name on `first` / `only` / `empty`
+  rows and a literal `│` continuation on `middle` / `last` rows.
+  These strings are **inspection-only**; the draw path computes
+  visual positions from `cameraName` / `trackName` / `treeRole`
+  directly.
+
+**Both-mode empty-camera dedupe.** In `'both'` display mode,
+`_rebuildSegments` runs the tracks build and the identities build
+sequentially, then merges by camera. For cameras with no tracks AND
+no identities, both passes would emit a placeholder — the merge keeps
+exactly one (`emptyEmittedForCam` flag) so the gutter doesn't show
+the same empty camera twice.
+
+**Visibility panel row sizing (Phase-7 refinements).** `styles.css`
+scopes a **compact** 28×16 `.toggle-switch` (knob 12×12, travel 12px)
+to `.vis-toggle-row .toggle-switch` so the narrower toggles fit cleanly
+in the per-camera / per-track / per-identity rows without dominating
+the row width; the standard 40×22 size is preserved everywhere else in
+the panel. `#visTimelineCameras` is additionally styled as **borderless
+tabular rows** with subtle separators (no internal scrollbar) since
+cameras are a small, finite count — Tracks and Identities retain the
+scrollable `.vis-toggle-list` container.
+
+**Test fixture — flex layout (T7 browser-runner fix).**
+`tests/test-timeline-scroll.js`'s `createContainer()` sets
+`display: flex; flex-direction: column` on the test wrapper so
+`_trackScrollEl`'s inline `flex: 1 1 auto; min-height: 0` actually
+constrains its height. The browser test runner at
+`tests/test-runner.html` does not load `styles.css`, so the production
+`.timeline-container { display: flex; ... }` rule isn't applied — the
+test must mirror it inline to exercise the same scroll behavior as
+production.
+
+**Visibility filter (Block 2 / Prompt 4).** `_buildTrackSegments` and
+`_buildIdentitySegments` tag every pushed row with `_isTrack: true` or
+`_isIdentity: true` (including empty placeholders). After the build/merge
+finishes, `_rebuildSegments` calls a new `_applyVisibilityFilter(session)`
+pass — placed AFTER the both-mode interleave and BEFORE
+`_finalizeTreeGrouping` so the filter can rewrite `_trackSegments` and
+the tree-role pass sees the final row list.
+
+The filter inlines `ensureHiddenSets` (so `timeline.js` does not import
+`timeline-visibility.js`) and fast-path returns when all three hidden
+Sets are empty — Block 1 behavior is therefore byte-for-byte preserved
+for any fresh session, which is what makes the Block 1 scroll /
+tree-grouping tests still pass unchanged.
+
+Filter algorithm (per camera group, in row order):
+1. If `cameraName ∈ session._hiddenCameras`, drop the whole group — no
+   header placeholder is emitted. View-level precedence beats per-row
+   track/identity toggles.
+2. Otherwise, walk each row: keep `treeRole === 'empty'` placeholders;
+   drop rows whose `trackName` is in the matching hidden Set (using the
+   `_isTrack` / `_isIdentity` marker to pick the Set). Defensive fallback
+   for un-flagged rows defaults to the `_hiddenTracks` check.
+3. If the camera HAD any real row pre-filter but ends up with zero kept
+   after filtering, strip remaining empty placeholders and emit a single
+   `{ treeRole: 'empty', isAllHidden: true, cameraName }` row so the
+   camera header survives in the gutter.
+
+`_finalizeTreeGrouping` propagates `isAllHidden` from the placeholder
+row onto `_cameraGroups[i].isAllHidden`. `_drawTrackBars` reads
+`track.isAllHidden` on anchor rows and substitutes a dim
+`rgba(255,255,255,0.25)` fill for the bold camera name (the prior
+`fillStyle` is restored after, so subsequent rows draw normally). The
+**all-hidden** placeholder is visually identical to Block 1's
+**calibration-only / no-data** placeholder except for that dim color.
+
+---
+
+### ui/timeline-controller.js
+
+**Purpose.** Timeline toggle/fit/shortcut controller (Block 1 / Prompt
+4). Encapsulates collapse/expand with prior-height cache, fit-to-data
+sizing (capped at 40% of `window.innerHeight`), the toolbar-button
+sync helper, and the Ctrl/Cmd+J (toggle) / Ctrl/Cmd+Shift+J ("Change
+Frame Number") keyboard-shortcut installer. Has zero transitive
+`app.js` imports so it can be bridged into the test runner.
+
+**Key exports.**
+- `toggleTimeline`, `fitTimelineToData`, `syncTimelineToggleButton`,
+  `installTimelineShortcuts`, `getCachedTimelineHeight`,
+  `setCachedTimelineHeight`.
+
+**Imports from project modules.**
+- `./app-state.js` — `state` (for `state.timeline`).
+
+**Imported by.** `pose/initialization.js`, `ui/ui-wiring.js`
+(re-exports the same surface so legacy `import { toggleTimeline, … } from
+'./ui-wiring.js'` keeps working).
+
+**User-facing features.** Ctrl/Cmd+J toggles the timeline (remembering
+its prior height); Ctrl/Cmd+Shift+J fires the legacy "Change Frame
+Number" inline edit on the bottom-bar frame counter. When collapsed,
+the timeline is **fully hidden** — the 40px `min-height` baseline of
+`.timeline-container` is overridden by the `.collapsed` CSS rule
+(`height: 0 !important; min-height: 0 !important`), so no track rows
+peek through. The 8px `.split-handle.horizontal` above the container
+stays visible and provides the click-and-drag affordance to expand
+the timeline back up without using the keyboard.
+
+---
+
+### ui/timeline-visibility.js
+
+**Purpose.** Block 2 (Prompt 4) — per-session Views / Tracks / Identities
+visibility toggles for the timeline. Owns the toggle API, the source-of-truth
+lists used by the **Info Panel → Visibility → Timeline** subsection, and the
+membership queries that `ui/timeline.js`'s `_applyVisibilityFilter` reads at
+build time. Module is stand-alone — **no imports** from other project modules,
+so it loads cleanly in the headless node test runner without dragging in
+`app.js`.
+
+**Key exports.**
+- `ensureHiddenSets(session)` — lazy-init `session._hiddenCameras`,
+  `session._hiddenTracks`, `session._hiddenIdentities` as empty `Set`s.
+  Idempotent; called at the top of every helper so callers never null-guard.
+- `toggle{Camera,Track,Identity}Visibility(session, name)` — flip Set
+  membership. Returns the new visible boolean.
+- `is{Camera,Track,Identity}Visible(session, name)` — `true` if not hidden.
+- `list{Cameras,Tracks,Identities}ForVisibility(session)` — `string[]`. The
+  camera list is filtered by `session._uploadedCameras` (matching the
+  timeline's own filter) so calibration-only cameras don't appear in the
+  toggle list.
+- `get{Camera,Track,Identity}VisibilityList(session)` — `[{ name, visible }]`
+  (identity rows also include `id` and `color`). Track-row swatch color
+  is intentionally NOT set by this module — `ui/info-panel.js` decorates
+  each track entry with `getTrackColor(i)` after the list returns so this
+  module can stay free of `./overlays.js` (and the wider import graph) and
+  load cleanly in the headless node test sandbox.
+- `renameHiddenTrack(session, oldName, newName)` /
+  `renameHiddenIdentity(session, oldName, newName)` — migrate hidden-set
+  membership when the user renames a track / identity, so the toggle stays
+  applied to the renamed entity.
+
+**Per-session state.** Lives directly on the `session` object as `Set<string>`
+fields (keyed by entity NAME, including identities). Empty by default — fresh
+sessions / new entities default to visible. Naming convention `_foo`
+mirrors Block 1's `_timelineHeight` / `_timelineCollapsed`. **In-memory only**;
+no round-trip through `save-load.js` (intentional per Block 2 spec — toggles
+don't persist across project reload).
+
+**Global mirror.** Bottom of the file exposes the same surface on
+`window.TimelineVisibility.*` and individually on `window.toggleCameraVisibility`
+etc., guarded by `typeof window !== 'undefined'`. The mirror is what the
+browser test runner and the headless node sandbox use to resolve the API
+under either lookup style.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/info-panel.js` (toggle helpers + list helpers),
+`ui/ui-wiring.js` (rename-migration helpers). `ui/timeline.js` intentionally
+does **not** import this module — it inlines its own `ensureHiddenSets`
+equivalent so the timeline core stays decoupled from the visibility-panel
+wiring.
+
+**User-facing features.** Backs the **Info Panel → Visibility → Timeline**
+subsection (Views / Tracks / Identities lists). Toggling off any entity
+hides the matching rows in the timeline. Camera (View) precedence: hiding a
+camera hides every row for it; hiding individual tracks/identities leaves
+the camera header visible (gray, "all hidden" placeholder) so the user can
+still see which camera has its content collapsed.
 
 ---
 
@@ -620,11 +968,12 @@ playback rate, and re-exports popular helpers like `unlinkGroup`,
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
 
 **Imports from project modules.** Nearly every other module — see file
-header for the full list. Notable ones: `app-state.js`, `pose-data.js`,
-`triangulation.js`, `rendering.js`, `info-panel.js`, `save-load.js`,
-`slp-import.js`, `file-io.js`, `session-loader.js`, `video.js`,
-`tracker.js`, `initialization.js`, `identity-assignment.js`,
-`export-modals.js`, `sessions-panes.js`.
+header for the full list. Notable ones: `app-state.js`,
+`timeline-controller.js`, `pose-data.js`, `triangulation.js`,
+`rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
+`file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
+`initialization.js`, `identity-assignment.js`, `export-modals.js`,
+`sessions-panes.js`.
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
 `ui/layout-controls.js`, `loading/session-loader.js`,
@@ -634,6 +983,19 @@ header for the full list. Notable ones: `app-state.js`, `pose-data.js`,
 controls (play/pause/seek/speed), keyboard shortcuts (Space, arrows,
 T, A, etc.), grid/single view toggle, info-panel/3D/timeline visibility
 toggles, "seek to next labeled frame".
+
+**Block 2 (Prompt 4) visibility wiring + rename migration.** Every
+track-add / track-rename / track-delete / identity-add / identity-rename /
+identity-delete handler that already calls `timeline.refreshTracks` now
+also calls `populateTimelineVisibility(state.session)` so the Visibility
+panel's toggle lists stay in sync with the live entity lists. The
+rename handlers additionally call `renameHiddenTrack` /
+`renameHiddenIdentity` from `ui/timeline-visibility.js` **before** the
+rename is applied to `session.tracks` / `session.identities`, so a
+toggled-off entity retains its hidden state across the rename
+(the Set entry is moved from old name to new name rather than left
+stranded).
+
 
 ---
 
@@ -803,10 +1165,7 @@ overlay-paired video panes.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)`, `decodeRange(start, end)`, `playNative`,
   `pauseNative`, `seekNative`, `switchSource`, `close`,
-  `drawCurrentFrame`. Both `init` and `switchSource` await
-  `_initMp4box` before resolving, so `samples.length` reflects the real
-  mp4 sample table (not a `duration * 30` estimate) by the time callers
-  read it.
+  `drawCurrentFrame`.
 - `EmbeddedVideoDecoder` — class for SLP-embedded frames. `getFrame`,
   `hasFrame`, `close`.
 - `VideoController` — class. Selected methods: `seekToFrame`,
@@ -905,9 +1264,35 @@ workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
 
 **Key exports.**
-- `handleLoadSlpFile(slpFile)` — replace-current-state load.
+- `handleLoadSlpFile(slpFile)` — replace-current-state load. Drives the
+  two-level LoadingProgressModal: all N session groups are pre-allocated
+  up-front (from the pre-computed `slpAllSessionNames` list) BEFORE the
+  per-session for-loop so the header reads "Session n of N" (the true
+  total). Inside the loop each iteration just calls
+  `setCurrentSession(slpSessionGroupIds[slpSessIdx])`. After the non-
+  embedded folder-picker dialog resolves, re-engages
+  `showLoading('Loading session N/M videos...')` so the blocking overlay
+  stays up during the async per-video decode (without this, the rest of
+  the UI was interactable while videos loaded). Skip-and-continue on
+  per-session video-load failure (failed session is dropped from
+  `state.sessions`).
 - `handleAddSlp()` — additive merge into current session.
 - `handleLoadPoints3dH5()` — overlay 3D points from H5.
+- `importSlpProjectWithProgress({ sessions, state, decoderFactory })` —
+  testable entry point that loads a multi-session project through the
+  progress modal. Sessions load SEQUENTIALLY; videos within a session load
+  IN PARALLEL via the private `_loadSessionVideosParallel` helper. Skip-
+  and-continue at the session level. Also attached to `window` / `globalThis`.
+
+**Private helpers (not exported).**
+- `_loadSessionVideosParallel({ sessionIdx, session, state, modal, groupId, decoderFactory })`
+  — fan-out per-video decoder loads via `Promise.allSettled`. Used by
+  `importSlpProjectWithProgress` and the non-embedded path of
+  `handleLoadSlpFile`.
+
+**Project-load decoder pool reset.** At the top of `handleLoadSlpFile`,
+closes every decoder in `state.decoderPool` and `state._decoderPoolCold`,
+cancels every cold eviction timer, and re-initialises both arrays.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`, `./file-io.js`,

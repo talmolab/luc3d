@@ -108,6 +108,15 @@
     <script src="test-video-controller.js"></script>
     <script src="test-multi-video.js"></script>
 
+    <!-- Prompt 4 / Block 1 (Timeline visual updates):
+         tree-grouped camera/track labels, scrollable track area, and
+         Ctrl/Cmd+J toggle with prior-height cache. Pre-implementation
+         these test files all FAIL — they assert APIs and DOM structure
+         the Block 1 implementation must introduce. -->
+    <script src="test-timeline-tree-grouping.js"></script>
+    <script src="test-timeline-scroll.js"></script>
+    <script src="test-timeline-toggle-shortcut.js"></script>
+
     <!-- Drag freeze regression tests -->
     <script src="test-drag-freeze.js"></script>
 
@@ -169,6 +178,26 @@
     <!-- Session switching tests -->
     <script src="test-session-switching.js"></script>
 
+    <!-- Bug B regression: frame index leaks across session switches -->
+    <script src="test-session-switch-frame-reset.js"></script>
+
+    <!-- Bug A regression: switchSource must await _initMp4box -->
+    <script src="test-switchsource-mp4box-await.js"></script>
+
+    <!-- QoL: switchSession parallel decoders + slot stability + early timeline.setData -->
+    <script src="test-switchsession-parallel-decoders.js"></script>
+
+    <!-- Per-decoder loading progress callback (feature: loading-progress-modal) -->
+    <script src="test-decoder-onprogress.js"></script>
+    <script src="test-switchsession-progress-wiring.js"></script>
+    <script src="test-loading-progress-modal-api.js"></script>
+
+    <!-- SLP project import progress modal feature (sequential sessions / parallel videos / two-level hierarchy) -->
+    <script src="test-slp-import-sequential.js"></script>
+    <script src="test-slp-import-parallel-videos.js"></script>
+    <script src="test-slp-import-modal-structure.js"></script>
+    <script src="test-decoder-pool-repeated-swap.js"></script>
+
     <!-- Tracker geometry tests -->
     <script src="test-tracker.js"></script>
 
@@ -201,9 +230,17 @@
         import * as __SlpMerge from '../import-export/slp-merge.js';
         import * as __FileIO from '../import-export/file-io.js';
         import * as __Video from '../loading/video.js';
+        import * as __LoadingProgressModal from '../ui/loading-progress-modal.js';
+        // Block 1 (Prompt 4): the timeline toggle / fit-to-data / shortcut
+        // helpers live in `ui/timeline-controller.js`. The module only
+        // imports `ui/app-state.js` (no transitive app.js dependency), so
+        // it's safe to bridge into the test runner.
+        import * as __TimelineCtrl from '../ui/timeline-controller.js';
         Object.assign(window, __PoseData, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
-                              __SlpMerge, __FileIO, __Video);
+                              __SlpMerge, __FileIO, __Video,
+                              __LoadingProgressModal,
+                              __TimelineCtrl);
         // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
         // are intentionally NOT bridged here. All three transitively import app.js
         // (circular, awaiting later passes), and app.js requires the full DOM +
@@ -215,6 +252,11 @@
 
         try {
             const results = await TestFramework.runAll();
+            // Modal-API tests construct LoadingProgressModal directly and call
+            // show() without always calling dismiss() (each test asserts state
+            // mid-lifecycle). Once the run is over, sweep any orphaned modal
+            // elements so the test page isn't visually cluttered by them.
+            document.querySelectorAll('.lucid-loading-progress-modal').forEach(el => el.remove());
             TestFramework.renderResults(results, document.getElementById('results'));
 
             // Also log to console for headless/CI use

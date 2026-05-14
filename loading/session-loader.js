@@ -60,11 +60,35 @@ import {
 import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/sessions-panes.js';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
 // _zoomRedrawTimer — they don't run concurrently, so separate timers are fine.
 var _zoomRedrawTimer = null;
+
+/**
+ * Block 1 (Prompt 4): annotate the session with the list of cameras that
+ * currently have an uploaded video assigned. The Timeline reads this via
+ * `session._uploadedCameras` to filter out calibration-only cameras from
+ * the label gutter and tree-grouping API.
+ *
+ * Called from every code path that mutates `state.views` or `state.videoFiles`:
+ * `handleLoadCalibration`, `handleLoadVideos`, `createViewForVideoFile`, and
+ * `handleEmptySession`. Each session-switch path must also call it (the
+ * timeline points at `state.session`, so the right session's annotation
+ * must be in sync at refresh time).
+ *
+ * @param {Session} session
+ * @param {Object}  appState - shape `{ views: [{name, ...}, ...], ... }`
+ */
+export function recomputeUploadedCameras(session, appState) {
+    if (!session) return;
+    var views = appState && appState.views ? appState.views : [];
+    session._uploadedCameras = views.map(function (v) {
+        return v.cameraName || v.name;
+    });
+}
 
 export async function handleLoadCalibration() {
     try {
@@ -163,6 +187,12 @@ export async function handleLoadCalibration() {
         // Re-draw overlays to reflect any camera name changes
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
+        // Block 1: refresh the per-session uploaded-camera filter so the
+        // timeline reflects the latest video-to-camera assignments. If a
+        // calibration load adds cameras with no matching video, those
+        // cameras are excluded from the timeline gutter.
+        recomputeUploadedCameras(state.session, state);
+        if (timeline) timeline.refreshTracks(state.session);
         setStatus('Loaded ' + cameras.length + ' cameras', 'success');
     } catch (err) {
         console.error('Failed to load calibration:', err);
@@ -181,6 +211,10 @@ export async function handleLoadVideos() {
 
         showLoading('Loading videos...');
 
+        var hlvModal = getLoadingProgressModal({ title: 'Loading videos' });
+        hlvModal.reset();
+        hlvModal.show();
+
         // Append new files to state.videoFiles (skip duplicates)
         var failedVideos = [];
         for (let i = 0; i < files.length; i++) {
@@ -195,8 +229,15 @@ export async function handleLoadVideos() {
             }
 
             showLoading('Loading ' + file.name + '...');
+            const hlvTaskId = hlvModal.addTask({ label: file.name || ('camera ' + i) });
+            const hlvOnProgress = (function (tid) {
+                return function (ev) {
+                    if (ev && ev.error) hlvModal.failTask(tid, ev.error);
+                    else hlvModal.updateTask(tid, ev);
+                };
+            })(hlvTaskId);
             try {
-                const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: hlvOnProgress });
                 await decoder.init(file);
 
                 const vw = decoder.videoTrack.video.width;
@@ -213,8 +254,10 @@ export async function handleLoadVideos() {
                     assignedCamera: null,
                     videoPath: file.webkitRelativePath || file.name,
                 });
+                hlvModal.completeTask(hlvTaskId);
             } catch (videoErr) {
                 console.error('Failed to load ' + file.name + ':', videoErr);
+                hlvModal.failTask(hlvTaskId, videoErr);
                 var errMsg = videoErr.message || String(videoErr);
                 // Detect unsupported codec errors
                 if (errMsg.indexOf('NO_SUPPORTED_STREAMS') >= 0 || errMsg.indexOf('DEMUXER_ERROR') >= 0 ||
@@ -289,6 +332,12 @@ export async function handleLoadVideos() {
         if (videoController && state.views.length > 0) {
             await videoController.seekToFrame(0);
         }
+
+        // Block 1: views are now settled — annotate the session with the
+        // uploaded-camera list so the timeline excludes calibration-only
+        // cameras from its gutter, and refresh the timeline to pick it up.
+        recomputeUploadedCameras(state.session, state);
+        if (timeline) timeline.refreshTracks(state.session);
 
         hideLoading();
         updateInfoPanel();
@@ -697,6 +746,9 @@ export function createViewForVideoFile(videoFile) {
         if (vfIdx >= 0 && state.session.videoFileIndices.indexOf(vfIdx) < 0) {
             state.session.videoFileIndices.push(vfIdx);
         }
+        // Block 1: refresh the uploaded-camera list so the timeline
+        // picks up the newly-added view immediately.
+        recomputeUploadedCameras(state.session, state);
     }
 
     return view;
@@ -1421,6 +1473,9 @@ export function handleEmptySession() {
     }
 
     updateInfoPanel();
+    // Block 1: empty session has no uploaded cameras yet. Set the marker
+    // to an empty array so the timeline filter applies (showing nothing).
+    recomputeUploadedCameras(session, state);
     if (timeline) timeline.setData(session);
     setStatus('Created empty session "' + sessionName + '"', 'success');
 }

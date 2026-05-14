@@ -40,7 +40,7 @@ import {
 import { OnDemandVideoDecoder } from '../loading/video.js';
 import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
-import { updateInfoPanel } from './info-panel.js';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
@@ -48,6 +48,7 @@ import { autoAssignState } from './identity-assignment.js';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
+import { getLoadingProgressModal } from './loading-progress-modal.js';
 
 // ============================================
 // Dockview Pane Manager
@@ -1430,12 +1431,12 @@ export function removeSession(idx) {
         setVideoController(state.session._videoController || null);
         paneManager.clearAll();
         paneManager.addAllViewsAsGrid();
+        state.currentFrame = state.session.lastFrame || 0;
+        if (videoController) videoController.seekToFrame(state.currentFrame);
+        drawAllOverlays(state.currentFrame);
         setTimeout(function () {
             fitCanvasesToCells();
             refreshPaneInteractions();
-            state.currentFrame = state.session.lastFrame || 0;
-            if (videoController) videoController.seekToFrame(state.currentFrame);
-            drawAllOverlays(state.currentFrame);
         }, 50);
     } else {
         // Build views using pool decoders
@@ -1487,6 +1488,12 @@ export async function switchSession(newIdx) {
     if (newIdx === state.activeSessionIdx) return;
     if (newIdx < 0 || newIdx >= state.sessions.length) return;
 
+    // Cold-reserve initialization — decoders trimmed off the active pool
+    // (when a smaller session follows a larger one) park here and get
+    // closed after 60s idle. Rehydrating from this reserve cancels the
+    // close timer.
+    if (!state._decoderPoolCold) state._decoderPoolCold = [];
+
     // Save current session state
     var oldSession = state.sessions[state.activeSessionIdx];
     oldSession.lastFrame = state.currentFrame;
@@ -1502,6 +1509,27 @@ export async function switchSession(newIdx) {
     if (timeline) {
         oldSession._timelineZoom = timeline._zoom;
         oldSession._timelineScroll = timeline._scrollFrame;
+    }
+
+    // Save per-session timeline height + collapsed state so the next visit
+    // to oldSession restores the user's customization. Read via
+    // `document.getElementById` (already stubbed by the brace-walked tests)
+    // rather than importing from `timeline-controller.js` — adding a new
+    // imported dep would require all session-switch tests to stub it.
+    var _tlElOut = (typeof document !== 'undefined' && document.getElementById)
+        ? document.getElementById('timelineContainer')
+        : null;
+    if (_tlElOut) {
+        var _hStr = _tlElOut.style && _tlElOut.style.height;
+        var _h = parseFloat(_hStr);
+        if (!isNaN(_h) && _h > 0) {
+            oldSession._timelineHeight = _h;
+        }
+        oldSession._timelineCollapsed = !!(
+            _tlElOut.classList &&
+            _tlElOut.classList.contains &&
+            _tlElOut.classList.contains('collapsed')
+        );
     }
 
     // Save 3D viewport state
@@ -1530,6 +1558,28 @@ export async function switchSession(newIdx) {
     state.session = newSession;
     state.triangulationResults = newSession.triangulationResults || new Map();
 
+    // Update timeline session reference up front so its track segments and
+    // frame markers reflect the new session within ~1 frame of the click,
+    // instead of waiting for all decoders to finish switching. The video
+    // panes will still show their loading spinner during the parallel
+    // decoder switch below. Later calls to timeline.setData (inside
+    // rebuildVideoController and at the bottom of this function) become
+    // idempotent (timeline._session === newSession).
+    //
+    // Block 1: also refresh the new session's uploaded-camera marker now
+    // (using whatever state.views looks like at this moment — typically
+    // the previous session's views are still attached). It will be
+    // re-recomputed below after views are rebuilt. Inlined rather than
+    // imported from session-loader so the brace-walked switchSession test
+    // harness (test-session-switch-frame-reset.js, …) doesn't need an
+    // extra stub parameter.
+    if (newSession) {
+        newSession._uploadedCameras = (state.views || []).map(function (v) {
+            return v.cameraName || v.name;
+        });
+    }
+    if (timeline) timeline.setData(newSession);
+
     // Sync trust track labels toggle
     var trustCheck = document.getElementById('menuTrustTracksCheck');
     if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
@@ -1547,50 +1597,163 @@ export async function switchSession(newIdx) {
         }
     }
 
-    for (var vi = 0; vi < newSession.videoFileIndices.length; vi++) {
-        var vfIdx = newSession.videoFileIndices[vi];
+    // Pre-extend the decoder pool. Each new slot is filled by reviving a
+    // decoder from the cold reserve (cancelling its eviction timer) when
+    // available, or null otherwise. This avoids the race where two parallel
+    // `push` calls land in non-deterministic order, and recycles decoders
+    // from a recently-shrunk pool instead of constructing new ones.
+    while (state.decoderPool.length < newSession.videoFileIndices.length) {
+        var revived = null;
+        while (state._decoderPoolCold.length > 0) {
+            var cand = state._decoderPoolCold.pop();
+            if (cand && cand._coldTimer) {
+                clearTimeout(cand._coldTimer);
+                cand._coldTimer = null;
+            }
+            if (cand) { revived = cand; break; }
+        }
+        state.decoderPool.push(revived);
+    }
+
+    var modal = getLoadingProgressModal({ title: 'Loading videos' });
+    modal.reset();
+    modal.show();
+    var taskIds = newSession.videoFileIndices.map(function (vfIdx) {
+        var vf = state.videoFiles[vfIdx];
+        var label = (vf && vf.file && vf.file.name) || ('camera ' + vfIdx);
+        return modal.addTask({ label: label });
+    });
+
+    showLoading('Loading videos…');
+
+    // Phase 4: parallel decoder-switching. For 4 cameras at ~500 ms each,
+    // sequential awaits would take ~2000 ms; Promise.all reduces this to
+    // ~max-of-all (~500 ms). On failure for any one camera, vf.decoder
+    // remains null so the second-pass createViewForVideoFile is skipped
+    // for that camera via the existing guard.
+    await Promise.all(newSession.videoFileIndices.map(async function (vfIdx, vi) {
         var vf = state.videoFiles[vfIdx];
         if (vf && vf.file) {
-            showLoading('Loading video: ' + vf.file.name + '...');
+            var taskId = taskIds[vi];
+            var onProgress = function (ev) {
+                if (ev && ev.error) modal.failTask(taskId, ev.error);
+                else modal.updateTask(taskId, ev);
+            };
             try {
-                if (vi < state.decoderPool.length) {
+                if (state.decoderPool[vi] != null) {
                     // Reuse pool decoder — swap source without creating new video element
+                    state.decoderPool[vi]._onProgress = onProgress;
+                    state.decoderPool[vi].onProgress = onProgress;
                     await state.decoderPool[vi].switchSource(vf.file);
                     vf.decoder = state.decoderPool[vi];
                 } else {
-                    // More cameras than pool — create new decoder and add to pool
-                    var newDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                    // No pool decoder for this slot — create one and assign by index.
+                    // Indexed assignment (not push) keeps slot order deterministic
+                    // when multiple inits resolve out of order.
+                    var newDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: onProgress });
                     await newDec.init(vf.file);
                     vf.decoder = newDec;
-                    state.decoderPool.push(newDec);
+                    state.decoderPool[vi] = newDec;
                 }
                 vf.videoWidth = vf.decoder.videoTrack.video.width;
                 vf.videoHeight = vf.decoder.videoTrack.video.height;
                 vf.frameCount = vf.decoder.samples.length;
+                // Note: completeTask is intentionally deferred until after
+                // the first frame has actually painted (see seekPromise.then
+                // below) so the bar can't sit at 100% while the canvas is
+                // still empty. The task currently sits at the mp4box
+                // ratio:1 weighted display (90%).
             } catch (e) {
                 console.error('[switchSession] Video init failed:', e);
+                modal.failTask(taskId, e);
             }
         }
-        if (vf && vf.decoder) {
-            createViewForVideoFile(vf);
+    }));
+
+    // Trim the pool to the new session's camera count. Surplus decoders
+    // (from a larger previous session) move into the cold reserve with a
+    // 60s eviction timer. Rehydration on the next swap pops from this
+    // reserve and cancels the timer. Keeps the pool's active region equal
+    // to the current session's camera count without throwing away usable
+    // decoders immediately. Catches stability-review Issue #3: pool slots
+    // from earlier-larger sessions leaking through repeated swaps.
+    var activeCount = newSession.videoFileIndices.length;
+    while (state.decoderPool.length > activeCount) {
+        // IIFE captures per-iteration `coldDec` binding; without it, all
+        // setTimeout closures reference the same hoisted `var`.
+        (function (coldDec) {
+            if (!coldDec) return;
+            // Wipe stale per-load callbacks so the cold decoder doesn't
+            // accidentally drive an unrelated modal task.
+            coldDec._onProgress = null;
+            coldDec.onProgress = null;
+            // Schedule close after 60s idle; rehydrate cancels this.
+            coldDec._coldTimer = setTimeout(function () {
+                var idx = state._decoderPoolCold.indexOf(coldDec);
+                if (idx >= 0) state._decoderPoolCold.splice(idx, 1);
+                if (typeof coldDec.close === 'function') {
+                    try { coldDec.close(); } catch (_e) {}
+                }
+                coldDec._coldTimer = null;
+            }, 60000);
+            state._decoderPoolCold.push(coldDec);
+        })(state.decoderPool.pop());
+    }
+
+    // Second pass — deterministic for-loop. createViewForVideoFile has DOM
+    // side effects so we run it in source order after Promise.all resolves,
+    // not interleaved with the parallel awaits.
+    for (var vi2 = 0; vi2 < newSession.videoFileIndices.length; vi2++) {
+        var vf2 = state.videoFiles[newSession.videoFileIndices[vi2]];
+        if (vf2 && vf2.decoder) {
+            createViewForVideoFile(vf2);
         }
     }
-    hideLoading();
-
     updateTotalFrames();
     paneManager.addAllViewsAsGrid();
     rebuildVideoController();
 
     var targetFrame = newSession.lastFrame || 0;
-    setTimeout(function() {
-        fitCanvasesToCells();
-        refreshPaneInteractions();
-        state.currentFrame = targetFrame;
-        if (videoController && state.views.length > 0) {
-            videoController.seekToFrame(targetFrame);
+    fitCanvasesToCells();
+    refreshPaneInteractions();
+    state.currentFrame = targetFrame;
+    // Keep the showLoading('Loading videos…') overlay up until the first
+    // frame has actually painted (seekToFrame resolves after each pane's
+    // decoder has decoded the target frame AND drawImage'd it). This
+    // prevents the user from scrubbing onto an empty canvas during the
+    // brief window between hideLoading and the first paint. Capped at
+    // SEEK_TIMEOUT_MS so a stuck decoder can't freeze the UI; on timeout
+    // the overlay lifts even though seekPromise is still running in the
+    // background — the frame paints whenever it's ready.
+    var SEEK_TIMEOUT_MS = 3000;
+    var seekRawPromise = (videoController && state.views.length > 0)
+        ? Promise.resolve(videoController.seekToFrame(targetFrame))
+        : Promise.resolve();
+    // When the seek actually succeeds, mark every non-failed task complete
+    // so the modal's bars finish to 100% (and the auto-dismiss schedules).
+    // This intentionally fires INDEPENDENTLY of the Promise.race below: if
+    // the seek wins the race, this then() runs immediately; if the timeout
+    // wins, this then() runs whenever the seek eventually finishes, even
+    // after hideLoading has lifted the overlay.
+    seekRawPromise.then(function () {
+        for (var ti = 0; ti < taskIds.length; ti++) {
+            var tid = taskIds[ti];
+            if (tid == null) continue;
+            var ts = modal.getTaskState(tid);
+            if (ts && ts.status !== 'error') modal.completeTask(tid);
         }
-        drawAllOverlays(targetFrame);
-    }, 50);
+    }, function (e) {
+        // Seek failure: log only — leave tasks at the mp4box ratio:1
+        // display (90%) so the user can see the load got close but the
+        // first frame never landed.
+        console.error('[switchSession] first-frame seek failed:', e);
+    });
+    await Promise.race([
+        seekRawPromise.catch(function () { return null; }),
+        new Promise(function (r) { setTimeout(r, SEEK_TIMEOUT_MS); }),
+    ]);
+    hideLoading();
+    drawAllOverlays(targetFrame);
 
     // Update sidebars and panels (immediate, no delay needed)
     populateViewStrip();
@@ -1648,6 +1811,15 @@ export async function switchSession(newIdx) {
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
     }
 
+    // Block 1: recompute the uploaded-camera filter for the NEW session
+    // (using the freshly-rebuilt state.views) before the timeline reads it.
+    // Inlined for test-harness compatibility — see comment near the earlier
+    // assignment at the top of switchSession.
+    if (newSession) {
+        newSession._uploadedCameras = (state.views || []).map(function (v) {
+            return v.cameraName || v.name;
+        });
+    }
     if (timeline) {
         timeline.setData(newSession);
         timeline.setTotalFrames(state.totalFrames);
@@ -1660,6 +1832,38 @@ export async function switchSession(newIdx) {
         }
         timeline._clampScroll();
         timeline.redraw();
+    }
+    // Block 2 (Prompt 4): re-render the Visibility tab's Timeline
+    // toggle lists from the new session's per-session hidden Sets.
+    try { populateTimelineVisibility(newSession); } catch (e) { /* non-fatal in tests */ }
+
+    // Restore per-session timeline height + collapsed state. First visit
+    // (no `_timelineHeight` stored) → fit to the new session's data,
+    // capped at 40% of window.innerHeight (same default the SLP-import
+    // path uses). Inlined rather than imported from `timeline-controller`
+    // so the brace-walked switchSession test harness doesn't need an
+    // additional stub parameter.
+    var _tlElIn = (typeof document !== 'undefined' && document.getElementById)
+        ? document.getElementById('timelineContainer')
+        : null;
+    if (_tlElIn) {
+        if (_tlElIn.classList && _tlElIn.classList.remove) {
+            _tlElIn.classList.remove('collapsed');
+        }
+        if (newSession._timelineHeight && newSession._timelineHeight > 0) {
+            _tlElIn.style.height = newSession._timelineHeight + 'px';
+        } else if (timeline && typeof timeline.getPreferredHeight === 'function') {
+            var _pref = timeline.getPreferredHeight();
+            var _winH = (typeof window !== 'undefined' && window.innerHeight)
+                ? window.innerHeight
+                : 1080;
+            var _target = Math.min(_pref, Math.floor(0.4 * _winH));
+            if (_target > 0) _tlElIn.style.height = _target + 'px';
+        }
+        if (newSession._timelineCollapsed && _tlElIn.classList && _tlElIn.classList.add) {
+            _tlElIn.classList.add('collapsed');
+        }
+        if (timeline && typeof timeline.resize === 'function') timeline.resize();
     }
 
     setStatus('Switched to ' + newSession.name, 'info');

@@ -10,6 +10,18 @@
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
          getActiveSession } from './app-state.js';
+// Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
+// Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
+// Import them explicitly so the local call sites in this file (menu
+// items, toolbar button) resolve to the new implementation.
+import {
+    toggleTimeline,
+    fitTimelineToData,
+    syncTimelineToggleButton,
+    installTimelineShortcuts,
+    getCachedTimelineHeight,
+    setCachedTimelineHeight,
+} from './timeline-controller.js';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session } from '../pose/pose-data.js';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject } from '../pose/triangulation.js';
@@ -17,7 +29,11 @@ import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojE
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
          setupPanelTabs, setupSkeletonEditing, parseSkeletonJSON, exportSkeletonJSON,
-         ensureSession, populateSessionAssignTable, populateUnassignedVideos } from './info-panel.js';
+         ensureSession, populateSessionAssignTable, populateUnassignedVideos,
+         populateTimelineVisibility } from './info-panel.js';
+// Block 2 (Prompt 4): rename migration for the per-session hidden-track
+// / hidden-identity Sets when the user renames an entity.
+import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
@@ -217,6 +233,8 @@ export function setupMenus() {
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        // Block 2 (Prompt 4): refresh Visibility-tab toggle lists.
+        populateTimelineVisibility(state.session);
     });
 
     document.getElementById('menuRenameTrack').addEventListener('click', function () {
@@ -225,13 +243,18 @@ export function setupMenus() {
         var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
         var idx = parseInt(prompt('Which track to rename?\n\n' + trackList + '\n\nEnter number:')) - 1;
         if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
-        var newName = prompt('New name for "' + state.session.tracks[idx] + '":', state.session.tracks[idx]);
+        var oldName = state.session.tracks[idx];
+        var newName = prompt('New name for "' + oldName + '":', oldName);
         if (!newName) return;
         state.session.tracks[idx] = newName;
+        // Block 2 (Prompt 4): migrate hidden-set membership across rename
+        // so the toggle state persists. Identity rename / no-op safe.
+        renameHiddenTrack(state.session, oldName, newName);
         setStatus('Renamed track ' + (idx + 1) + ' to: ' + newName, 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        populateTimelineVisibility(state.session);
     });
 
     document.getElementById('menuDeleteTrack').addEventListener('click', function () {
@@ -258,10 +281,15 @@ export function setupMenus() {
                 }
             }
         }
+        // Block 2 (Prompt 4): drop the now-defunct entry from the
+        // hidden-tracks Set so a future track with the same name won't
+        // start out hidden.
+        if (state.session._hiddenTracks) state.session._hiddenTracks.delete(name);
         setStatus('Deleted track: ' + name, 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        populateTimelineVisibility(state.session);
     });
 
     // Track/identity helpers are now top-level functions (above setupMenus)
@@ -340,6 +368,8 @@ export function setupMenus() {
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        // Block 2 (Prompt 4): refresh Visibility-tab toggle lists.
+        populateTimelineVisibility(state.session);
     });
 
     document.getElementById('menuRenameIdentity').addEventListener('click', function () {
@@ -348,13 +378,18 @@ export function setupMenus() {
         var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
         var idx = parseInt(prompt('Which identity to rename?\n\n' + idList + '\n\nEnter number:')) - 1;
         if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
-        var newName = prompt('New name for "' + state.session.identities[idx].name + '":', state.session.identities[idx].name);
+        var oldIdName = state.session.identities[idx].name;
+        var newName = prompt('New name for "' + oldIdName + '":', oldIdName);
         if (!newName) return;
         state.session.identities[idx].name = newName;
+        // Block 2 (Prompt 4): migrate hidden-identity Set membership
+        // so the toggle state persists across rename.
+        renameHiddenIdentity(state.session, oldIdName, newName);
         setStatus('Renamed identity to: ' + newName, 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        populateTimelineVisibility(state.session);
     });
 
     document.getElementById('menuDeleteIdentity').addEventListener('click', function () {
@@ -372,10 +407,14 @@ export function setupMenus() {
             }
         }
         state.session.identities.splice(idx, 1);
+        // Block 2 (Prompt 4): drop the deleted identity name from the
+        // hidden-identity Set.
+        if (state.session._hiddenIdentities) state.session._hiddenIdentities.delete(identity.name);
         setStatus('Deleted identity: ' + identity.name, 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
+        populateTimelineVisibility(state.session);
     });
 
     // Populate Assign Identity submenu on hover
@@ -1185,16 +1224,13 @@ export function setupUI() {
             }
         }
         // --- Cmd/Ctrl shortcuts (work even in inputs) ---
+        // Block 1 (Prompt 4): plain Ctrl/Cmd+J now toggles the timeline,
+        // and Ctrl/Cmd+Shift+J fires the legacy "Change Frame Number"
+        // command. Both bindings live in `ui/timeline-controller.js` and
+        // are installed once during `setupTimeline()`. Don't return early
+        // for those — let them propagate to the timeline handler.
         if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
             switch (e.key) {
-                case 'j':
-                case 'J': {
-                    // Focus frame index input
-                    e.preventDefault();
-                    var frameEl = document.getElementById('currentFrame');
-                    if (frameEl) frameEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-                    break;
-                }
                 case 'o':
                 case 'O': {
                     // Load single session folder using cached type
@@ -1896,42 +1932,21 @@ export function toggle3DViewport() {
     }
 }
 
-export function toggleTimeline() {
-    const container = document.getElementById('timelineContainer');
-    const willCollapse = !container.classList.contains('collapsed');
-    container.classList.toggle('collapsed');
-    if (!willCollapse && timeline) {
-        // Expanding: if container has no explicit inline height
-        // (e.g., first expand, or after a prior full hide), size
-        // it to fit loaded tracks so the user can see them.
-        if (!container.style.height) {
-            var preferred = timeline.getPreferredHeight();
-            container.style.height = preferred + 'px';
-        }
-        setTimeout(function () { timeline.resize(); }, 300);
-    }
-    syncTimelineToggleButton();
-}
-
-export function syncTimelineToggleButton() {
-    var btn = document.getElementById('timelineToggleBtn');
-    if (!btn) return;
-    var container = document.getElementById('timelineContainer');
-    btn.classList.toggle('active', !container.classList.contains('collapsed'));
-}
-
-// Resize the timeline container to fit the currently loaded tracks
-// (called after a session is imported or switched). Skips when the
-// user has explicitly collapsed the timeline via the toolbar button.
-export function fitTimelineToData() {
-    if (!timeline) return;
-    var container = document.getElementById('timelineContainer');
-    if (!container) return;
-    if (container.classList.contains('collapsed')) return;
-    var preferred = timeline.getPreferredHeight();
-    container.style.height = preferred + 'px';
-    timeline.resize();
-}
+// Block 1 (Prompt 4): toggleTimeline / syncTimelineToggleButton /
+// fitTimelineToData moved into `ui/timeline-controller.js`. The
+// controller caches the prior height across collapse/expand cycles,
+// adds the Ctrl/Cmd+J (and Shift+J) shortcuts, and is bridgeable into
+// the test runner (no transitive app.js imports). We re-export the
+// public surface here so existing call sites that import from
+// `ui-wiring.js` continue to work.
+export {
+    toggleTimeline,
+    fitTimelineToData,
+    syncTimelineToggleButton,
+    installTimelineShortcuts,
+    getCachedTimelineHeight,
+    setCachedTimelineHeight,
+};
 
 
 // ============================================
