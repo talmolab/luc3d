@@ -423,9 +423,17 @@ export class OnDemandVideoDecoder {
         try {
             var time = frameIndex / this._fps;
 
-            // Only seek if we're not already at the target time
+            // Only seek if we're not already at the target time. The tolerance
+            // must scale with the frame rate: a fixed constant (e.g. 10 ms)
+            // spans multiple frames on high-fps video (at 400 fps a 10 ms band
+            // covers ~4 frames), so adjacent-frame requests never re-seek and
+            // the display freezes. Half a frame period is the canonical
+            // "already on this frame?" threshold — the gap between adjacent
+            // frames (1/fps) always exceeds it, so every step re-seeks, while a
+            // redundant request for the current frame still short-circuits.
+            var framePeriod = (this._fps > 0) ? (1 / this._fps) : (1 / 30);
             var currentTime = this._videoEl.currentTime;
-            if (Math.abs(currentTime - time) > 0.01) {
+            if (Math.abs(currentTime - time) > framePeriod / 2) {
                 var seekPromise = new Promise(function (resolve) {
                     self._videoEl.addEventListener("seeked", function () { resolve(); }, { once: true });
                     setTimeout(resolve, 5000);

@@ -1158,7 +1158,14 @@ loaded over the network or from disk.
 **Purpose.** Video decoding and multi-view playback. Hybrid HTML5
 `<video>` + WebCodecs + mp4box.js decoder for frame-accurate seeking,
 plus a `VideoController` that synchronises playback across all
-overlay-paired video panes.
+overlay-paired video panes. In practice frame extraction always runs
+through the HTML5 `<video>` path (`_getFrameHTML5`); mp4box is used only
+to recover the true fps/frame-count, and the WebCodecs path stays off
+(`_mp4Initialized` never set true) to avoid B-frame decode-order
+mismatches. `_getFrameHTML5`'s seek guard uses a frame-rate-aware
+tolerance (half a frame period, `0.5/_fps`) so high-fps recordings
+(e.g. 400 fps) step every frame instead of freezing under a fixed
+constant (issue #89).
 
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
