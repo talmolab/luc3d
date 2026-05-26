@@ -538,6 +538,7 @@ var testFiles = [
     'test-session-switching.js',
     'test-session-switch-frame-reset.js',
     'test-switchsource-mp4box-await.js',
+    'test-html5-seek-tolerance.js',
     'test-switchsession-parallel-decoders.js',
     'test-decoder-onprogress.js',
     'test-switchsession-progress-wiring.js',
