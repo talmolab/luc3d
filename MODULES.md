@@ -162,6 +162,14 @@ which was removed during the ESM migration).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
+**Note.** `reorderGroupsByPrevTargets` passes a true `nTargets × nGroups`
+rectangular cost matrix to `hungarianAlgorithm` (no pre-padding to square
+with a `1000` filler). The solver's internal padding strips padded-row
+claims via its `p[j4] <= n` guard, so padded rows can no longer steal
+real group columns — a previously silent group-drop that surfaced
+downstream as duplicate identity colors. See
+`prompts/tracking-fixes/dup_id.md` Fix #2 for the analysis.
+
 **Key exports.**
 - `matchFrameInstances(frameGroup, cameras, session, opts)` — match all
   instances in one frame across views; returns groups + identity

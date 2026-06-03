@@ -267,7 +267,7 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
 function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments) {
     var nTargets = prevTargets3d.length;
     var nGroups = groups.length;
-    var n = Math.max(nTargets, nGroups);
+    if (nTargets === 0 || nGroups === 0) return groups;
 
     // Pre-triangulate current groups
     var groupPts3d = [];
@@ -275,12 +275,14 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
         groupPts3d.push(triangulateGroup(groups[gi0], camMap));
     }
 
+    // Build the real nTargets x nGroups cost matrix only. hungarianAlgorithm
+    // pads to square internally and strips padded-row claims via its
+    // p[j4] <= n guard, so passing a true rectangle prevents padded rows
+    // from stealing real groups (the duplicate-identity bug).
     var cost = [];
-    for (var ti = 0; ti < n; ti++) {
+    for (var ti = 0; ti < nTargets; ti++) {
         cost[ti] = [];
-        for (var gi = 0; gi < n; gi++) {
-            if (ti >= nTargets || gi >= nGroups) { cost[ti][gi] = 1000; continue; }
-
+        for (var gi = 0; gi < nGroups; gi++) {
             var prevPts3d = prevTargets3d[ti].points3d;
             var currPts3d = groupPts3d[gi];
             var score = 0, scoreCount = 0;
