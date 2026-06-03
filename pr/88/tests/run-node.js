@@ -462,7 +462,7 @@ for (var h = 0; h < helperNames.length; h++) {
 
 // Load source files
 var srcDir = path.join(__dirname, '..');
-var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'ui/timeline-visibility.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js', 'ui/app-state.js', 'ui/timeline-controller.js', 'pose/tracker.js'];
+var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'ui/timeline-visibility.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js', 'ui/app-state.js', 'ui/timeline-controller.js'];
 for (var i = 0; i < srcFiles.length; i++) {
     try { loadScript(path.join(srcDir, srcFiles[i])); }
     catch(e) { console.log(srcFiles[i] + ': ' + e.message.substring(0, 120)); }
@@ -538,6 +538,7 @@ var testFiles = [
     'test-session-switching.js',
     'test-session-switch-frame-reset.js',
     'test-switchsource-mp4box-await.js',
+    'test-html5-seek-tolerance.js',
     'test-switchsession-parallel-decoders.js',
     'test-decoder-onprogress.js',
     'test-switchsession-progress-wiring.js',
@@ -549,7 +550,6 @@ var testFiles = [
     'test-predicted-conversion.js',
     'test-save-load-json.js',
     'test-tracker.js',
-    'test-trackall-duplicates.js',
     'test-rotation.js',
     // Prompt 4 / Block 1 — pre-implementation failing tests.
     'test-timeline-tree-grouping.js',

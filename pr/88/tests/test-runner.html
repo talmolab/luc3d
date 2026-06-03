@@ -184,6 +184,9 @@
     <!-- Bug A regression: switchSource must await _initMp4box -->
     <script src="test-switchsource-mp4box-await.js"></script>
 
+    <!-- Issue #89: HTML5 seek tolerance must scale with frame rate (high-fps) -->
+    <script src="test-html5-seek-tolerance.js"></script>
+
     <!-- QoL: switchSession parallel decoders + slot stability + early timeline.setData -->
     <script src="test-switchsession-parallel-decoders.js"></script>
 
@@ -200,9 +203,6 @@
 
     <!-- Tracker geometry tests -->
     <script src="test-tracker.js"></script>
-
-    <!-- Track All duplicate-identity regression (dropped-group → stale global). -->
-    <script src="test-trackall-duplicates.js"></script>
 
     <!-- Bottom bar tests -->
     <script src="test-bottom-bar.js"></script>

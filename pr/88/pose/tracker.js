@@ -253,41 +253,6 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
         });
     }
 
-    // Mark every visible (cam, track) at this frame that the algorithm did
-    // NOT claim as "none" (identityId = -1) in the per-frame map.
-    // matchPairwise's top-N slice and reorderGroupsByPrevTargets' padded-row
-    // tie-break can both drop visible tracks from the surviving groups.
-    // Without this write, getIdentityForTrack would fall back to
-    // trackIdentityMap (global) and return an identity another track at
-    // this (frame, camera) already owns — two skeletons in the same
-    // identity color. -1 matches the existing "none" convention used by
-    // deduplicateFrameIdentities and the sidebar identity dropdown.
-    if (opts.perFrame && session.setFrameIdentity) {
-        for (var sci = 0; sci < cameras.length; sci++) {
-            var sCamName = cameras[sci].name;
-            var sLinked = frameGroup.getInstances(sCamName);
-            if (sLinked) {
-                for (var sli = 0; sli < sLinked.length; sli++) {
-                    var sInst = sLinked[sli];
-                    if (sInst.trackIdx == null) continue;
-                    var sLKey = sCamName + ':' + sInst.trackIdx;
-                    if (assignments.has(sLKey)) continue;
-                    session.setFrameIdentity(fi, sCamName, sInst.trackIdx, -1);
-                }
-            }
-            var sUnlinked = frameGroup.getUnlinkedInstances(sCamName);
-            if (sUnlinked) {
-                for (var sui = 0; sui < sUnlinked.length; sui++) {
-                    var sUl = sUnlinked[sui];
-                    if (sUl.instance.trackIdx == null) continue;
-                    var sUKey = sCamName + ':' + sUl.instance.trackIdx;
-                    if (assignments.has(sUKey)) continue;
-                    session.setFrameIdentity(fi, sCamName, sUl.instance.trackIdx, -1);
-                }
-            }
-        }
-    }
-
     return { groups: groups, numIdentities: groups.length, assignments: assignments, targets3d: targets3d };
 }
 
@@ -302,7 +267,7 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
 function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments) {
     var nTargets = prevTargets3d.length;
     var nGroups = groups.length;
-    var n = Math.max(nTargets, nGroups);
+    if (nTargets === 0 || nGroups === 0) return groups;
 
     // Pre-triangulate current groups
     var groupPts3d = [];
@@ -310,12 +275,14 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
         groupPts3d.push(triangulateGroup(groups[gi0], camMap));
     }
 
+    // Build the real nTargets x nGroups cost matrix only. hungarianAlgorithm
+    // pads to square internally and strips padded-row claims via its
+    // p[j4] <= n guard, so passing a true rectangle prevents padded rows
+    // from stealing real groups (the duplicate-identity bug).
     var cost = [];
-    for (var ti = 0; ti < n; ti++) {
+    for (var ti = 0; ti < nTargets; ti++) {
         cost[ti] = [];
-        for (var gi = 0; gi < n; gi++) {
-            if (ti >= nTargets || gi >= nGroups) { cost[ti][gi] = 1000; continue; }
-
+        for (var gi = 0; gi < nGroups; gi++) {
             var prevPts3d = prevTargets3d[ti].points3d;
             var currPts3d = groupPts3d[gi];
             var score = 0, scoreCount = 0;

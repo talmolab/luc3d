@@ -37,11 +37,6 @@ export const REPROJECTION_COLOR = '#e53e3e';
 // Fixed color for ungrouped UserInstances
 export const UNGROUPED_USER_COLOR = '#F8B195';
 
-// Color for instances with the explicit "Null" identity (identityId < 0).
-// Used by the viewer when coloring by identity, so unassigned tracks are
-// visually distinct from properly-identified ones.
-export const NULL_IDENTITY_COLOR = '#000000';
-
 export function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
@@ -73,10 +68,6 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
             var gIdentity = session.getIdentity(group.identityId);
             if (gIdentity && gIdentity.color) return gIdentity.color;
         }
-        // Explicit Null identity on the group itself.
-        if (group.identityId != null && group.identityId < 0) {
-            return NULL_IDENTITY_COLOR;
-        }
         if (session.getIdentityForTrack) {
             var probeIdx = null;
             if (cameraName && group.instances.has(cameraName)) {
@@ -89,10 +80,6 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
                 }
             }
             if (probeIdx != null) {
-                if (session.isNullIdentityForTrack &&
-                    session.isNullIdentityForTrack(probeIdx, cameraName, frameIdx)) {
-                    return NULL_IDENTITY_COLOR;
-                }
                 var tIdentity = session.getIdentityForTrack(probeIdx, cameraName, frameIdx);
                 if (tIdentity && tIdentity.color) return tIdentity.color;
             }
@@ -129,10 +116,6 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
  */
 export function getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) {
     if (useIdentity && session && instance.trackIdx != null) {
-        if (session.isNullIdentityForTrack &&
-            session.isNullIdentityForTrack(instance.trackIdx, cameraName, frameIdx)) {
-            return NULL_IDENTITY_COLOR;
-        }
         var identity = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
         if (identity && identity.color) return identity.color;
     }

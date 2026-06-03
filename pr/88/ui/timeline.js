@@ -565,12 +565,6 @@ export class Timeline {
             // on every annotated frame — not just a dot.
             this._drawGroupedUserFrameBars(ctx, 0, layout.trackAreaBottom, W);
 
-            // Black bars: frames that contain at least one Null identity
-            // (per-frame identity == -1). Same coverage as the blue
-            // grouped-user bars, drawn on top so Null frames are visible
-            // even when they also have user instances.
-            this._drawNullFrameBars(ctx, 0, layout.trackAreaBottom, W);
-
             // White bars: frames explicitly flagged as modified, drawn on
             // top of the blue bars. Both extend only from the top of the
             // timeline down to the bottom of the lowest track row — NOT
@@ -1422,28 +1416,15 @@ export class Timeline {
 
         // Build identity -> camName -> Set<frameIdx>
         var idCamFrames = {};  // "identityId:camName" -> Set<frameIdx>
-        // Per-camera frame set for instances with the Null identity
-        // (per-frame override == -1). Rendered as a synthetic identity row
-        // labeled "Null" with the canonical Null color.
-        var nullCamFrames = {};  // camName -> Set<frameIdx>
-        var hasNullSegments = false;
 
         if (hasIdentities) {
             for (var [frameIdx, fg] of session.frameGroups) {
                 // Grouped instances
                 for (var [camName, instances] of fg.instances) {
                     for (var i = 0; i < instances.length; i++) {
-                        var trackIdxI = instances[i].trackIdx;
-                        if (session.isNullIdentityForTrack &&
-                            session.isNullIdentityForTrack(trackIdxI, camName, frameIdx)) {
-                            if (!nullCamFrames[camName]) nullCamFrames[camName] = new Set();
-                            nullCamFrames[camName].add(frameIdx);
-                            hasNullSegments = true;
-                            continue;
-                        }
                         var idId = session.getIdentityIdForTrack
-                            ? session.getIdentityIdForTrack(camName, trackIdxI, frameIdx)
-                            : session.trackIdentityMap.get(camName + ':' + trackIdxI);
+                            ? session.getIdentityIdForTrack(camName, instances[i].trackIdx, frameIdx)
+                            : session.trackIdentityMap.get(camName + ':' + instances[i].trackIdx);
                         if (idId == null) continue;
                         var segKey = idId + ':' + camName;
                         if (!idCamFrames[segKey]) idCamFrames[segKey] = new Set();
@@ -1453,17 +1434,9 @@ export class Timeline {
                 // Unlinked instances
                 for (var [camName2, ulList] of fg.unlinkedInstances) {
                     for (var u = 0; u < ulList.length; u++) {
-                        var trackIdxU = ulList[u].instance.trackIdx;
-                        if (session.isNullIdentityForTrack &&
-                            session.isNullIdentityForTrack(trackIdxU, camName2, frameIdx)) {
-                            if (!nullCamFrames[camName2]) nullCamFrames[camName2] = new Set();
-                            nullCamFrames[camName2].add(frameIdx);
-                            hasNullSegments = true;
-                            continue;
-                        }
                         var idId2 = session.getIdentityIdForTrack
-                            ? session.getIdentityIdForTrack(camName2, trackIdxU, frameIdx)
-                            : session.trackIdentityMap.get(camName2 + ':' + trackIdxU);
+                            ? session.getIdentityIdForTrack(camName2, ulList[u].instance.trackIdx, frameIdx)
+                            : session.trackIdentityMap.get(camName2 + ':' + ulList[u].instance.trackIdx);
                         if (idId2 == null) continue;
                         var segKey2 = idId2 + ':' + camName2;
                         if (!idCamFrames[segKey2]) idCamFrames[segKey2] = new Set();
@@ -1504,34 +1477,6 @@ export class Timeline {
                         trackName: ident.name,
                         treeRole: 'middle',
                         _isIdentity: true, // marker for visibility filter (Block 2)
-                    });
-                    this._trackNames.push('');
-                }
-                // Synthetic "Null" identity row for this camera, if any
-                // frames have Null-identity instances on it. Identity id
-                // -1 keeps it grouped with the other identity rows for
-                // this camera in the visibility filter.
-                var nullFrameSet = nullCamFrames[cameraNames[ci]];
-                if (nullFrameSet && nullFrameSet.size > 0) {
-                    var nSorted = Array.from(nullFrameSet).sort(function (a, b) { return a - b; });
-                    var nSegments = [];
-                    var nStart = -1, nEnd = -1;
-                    for (var nsi = 0; nsi < nSorted.length; nsi++) {
-                        var nf = nSorted[nsi];
-                        if (nStart < 0) { nStart = nf; nEnd = nf; }
-                        else if (nf === nEnd + 1) { nEnd = nf; }
-                        else { nSegments.push({ start: nStart, end: nEnd }); nStart = nf; nEnd = nf; }
-                    }
-                    if (nStart >= 0) nSegments.push({ start: nStart, end: nEnd });
-                    this._trackSegments.push({
-                        trackIdx: -1,
-                        cameraName: cameraNames[ci],
-                        color: '#000000',
-                        segments: nSegments,
-                        trackName: 'Null',
-                        treeRole: 'middle',
-                        _isIdentity: true,
-                        _isNullIdentity: true,
                     });
                     this._trackNames.push('');
                 }
@@ -1586,25 +1531,8 @@ export class Timeline {
             this._frameMarkers.set(frameIdx, {
                 hasUser: hasUser,
                 hasPredicted: hasPredicted,
-                hasNull: false, // populated below from frameIdentityMap
                 modified: false, // The app can set this later
             });
-        }
-
-        // Scan the per-frame identity map for explicit Null entries
-        // (value < 0). Flag each frame that has at least one — used by
-        // _drawNullFrameBars to paint a vertical black bar similar to the
-        // grouped-user bars.
-        if (session.frameIdentityMap) {
-            for (const [fKey, fVal] of session.frameIdentityMap) {
-                if (fVal == null || fVal >= 0) continue;
-                const colonIdx = fKey.indexOf(':');
-                if (colonIdx < 0) continue;
-                const fIdx = parseInt(fKey.substring(0, colonIdx), 10);
-                if (Number.isNaN(fIdx)) continue;
-                const m = this._frameMarkers.get(fIdx);
-                if (m) m.hasNull = true;
-            }
         }
     }
 
@@ -1886,21 +1814,6 @@ export class Timeline {
             this.MARKER_USER_COLOR,
             function (m) { return m.hasUser; },
             0.55, 0.7);
-    }
-
-    /**
-     * Draw black vertical bars on frames that contain at least one Null
-     * identity (per-frame override value < 0). Mirrors
-     * `_drawGroupedUserFrameBars` for the Null case. Painted before the
-     * white modified-line so a modified Null frame still shows the
-     * modified marker on top.
-     * @private
-     */
-    _drawNullFrameBars(ctx, top, bottom, W) {
-        this._drawFrameBars(ctx, top, bottom, W,
-            '#000000',
-            function (m) { return m.hasNull; },
-            0.7, 0.85);
     }
 
     /**

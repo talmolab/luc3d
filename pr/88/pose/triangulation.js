@@ -1679,28 +1679,19 @@ export function triangulateCurrentFrame() {
     if ((!frameGroupsList || frameGroupsList.length === 0) && session.identities.length > 0) {
         var fg = session.getFrameGroup(frameIdx);
         if (fg) {
-            // identityId -> { camName -> Instance } — only positive ids
-            // (Null / no-identity are skipped and routed to the Ungrouped
-            // section below).
             var idBuckets = {};
-            // Snapshot every instance with its camera so step 2 can
-            // redistribute without re-scanning the frame.
-            var _allByCam = {};
-            // Per-camera Set of instances that will end up in a group
-            // (>= 2 cameras share the same identity). Everything else
-            // goes to fg.unlinkedInstances.
-            var _groupedByCam = {};
+            var allInstancesByCam = {};
 
             // Collect from grouped instances
             for (var [_cn, _insts] of fg.instances) {
                 for (var _i = 0; _i < _insts.length; _i++) {
                     var _inst = _insts[_i];
-                    if (!_allByCam[_cn]) _allByCam[_cn] = [];
-                    _allByCam[_cn].push(_inst);
+                    if (!allInstancesByCam[_cn]) allInstancesByCam[_cn] = [];
+                    allInstancesByCam[_cn].push(_inst);
                     var _idId = session.getIdentityIdForTrack
                         ? session.getIdentityIdForTrack(_cn, _inst.trackIdx, frameIdx)
                         : session.trackIdentityMap.get(_cn + ':' + _inst.trackIdx);
-                    if (_idId == null || _idId < 0) continue;
+                    if (_idId == null) continue;
                     if (!idBuckets[_idId]) idBuckets[_idId] = {};
                     if (!idBuckets[_idId][_cn]) idBuckets[_idId][_cn] = _inst;
                 }
@@ -1709,47 +1700,24 @@ export function triangulateCurrentFrame() {
             for (var [_cn2, _ulList] of fg.unlinkedInstances) {
                 for (var _u = 0; _u < _ulList.length; _u++) {
                     var _ulInst = _ulList[_u].instance;
-                    if (!_allByCam[_cn2]) _allByCam[_cn2] = [];
-                    _allByCam[_cn2].push(_ulInst);
+                    if (!allInstancesByCam[_cn2]) allInstancesByCam[_cn2] = [];
+                    allInstancesByCam[_cn2].push(_ulInst);
                     var _idId2 = session.getIdentityIdForTrack
                         ? session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx)
                         : session.trackIdentityMap.get(_cn2 + ':' + _ulInst.trackIdx);
-                    if (_idId2 == null || _idId2 < 0) continue;
+                    if (_idId2 == null) continue;
                     if (!idBuckets[_idId2]) idBuckets[_idId2] = {};
                     if (!idBuckets[_idId2][_cn2]) idBuckets[_idId2][_cn2] = _ulInst;
                 }
             }
 
-            // Mark instances that will end up in a multi-cam identity
-            // group. Single-camera identities can't be triangulated so
-            // their lone instance also routes to Ungrouped.
-            for (var _idStrA in idBuckets) {
-                var _bucketA = idBuckets[_idStrA];
-                var _camNamesA = Object.keys(_bucketA);
-                if (_camNamesA.length < 2) continue;
-                for (var _ciA = 0; _ciA < _camNamesA.length; _ciA++) {
-                    var _cnA = _camNamesA[_ciA];
-                    if (!_groupedByCam[_cnA]) _groupedByCam[_cnA] = new Set();
-                    _groupedByCam[_cnA].add(_bucketA[_cnA]);
-                }
-            }
-
-            // Clear existing groups + per-camera lists, then redistribute:
-            // grouped-bound -> fg.instances; everything else (Null
-            // identity, no identity, single-cam identity) ->
-            // fg.unlinkedInstances (Ungrouped section).
+            // Clear and re-add instances as linked
             session.instanceGroups.delete(frameIdx);
-            for (var _cn3 of fg.instances.keys()) fg.instances.set(_cn3, []);
+            for (var _cn3 in allInstancesByCam) fg.instances.set(_cn3, []);
             for (var _cn4 of fg.unlinkedInstances.keys()) fg.unlinkedInstances.set(_cn4, []);
-            for (var _cn5 in _allByCam) {
-                var _grouped = _groupedByCam[_cn5];
-                for (var _ai = 0; _ai < _allByCam[_cn5].length; _ai++) {
-                    var _instAi = _allByCam[_cn5][_ai];
-                    if (_grouped && _grouped.has(_instAi)) {
-                        fg.addInstance(_cn5, _instAi);
-                    } else {
-                        session.addUnlinkedInstance(frameIdx, _cn5, _instAi);
-                    }
+            for (var _cn5 in allInstancesByCam) {
+                for (var _ai = 0; _ai < allInstancesByCam[_cn5].length; _ai++) {
+                    fg.addInstance(_cn5, allInstancesByCam[_cn5][_ai]);
                 }
             }
 

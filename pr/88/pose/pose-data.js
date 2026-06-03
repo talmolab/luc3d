@@ -751,19 +751,11 @@ export class Session {
      * @returns {Identity|null}
      */
     getIdentityForTrack(trackIdx, cameraName, frameIdx) {
-        // Check per-frame override first. A negative value is the "none"
-        // identity (matches existing -1 convention used by
-        // deduplicateFrameIdentities and the sidebar identity dropdown).
-        // When present, short-circuit to null — do NOT fall back to
-        // global or suffix-scan, since either could leak an identity
-        // another track at this (frame, camera) already owns.
+        // Check per-frame override first
         if (frameIdx != null && cameraName) {
             var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
-            if (this.frameIdentityMap.has(frameKey)) {
-                var frameIdVal = this.frameIdentityMap.get(frameKey);
-                if (frameIdVal == null || frameIdVal < 0) return null;
-                return this.getIdentity(frameIdVal);
-            }
+            var frameIdVal = this.frameIdentityMap.get(frameKey);
+            if (frameIdVal != null) return this.getIdentity(frameIdVal);
         }
         // Per-frame without cameraName: check any camera at this frame
         if (frameIdx != null && !cameraName) {
@@ -772,7 +764,6 @@ export class Session {
             for (var [fKey, fIdVal] of this.frameIdentityMap) {
                 if (fKey.substring(0, framePrefix.length) === framePrefix &&
                     fKey.substring(fKey.length - trackSuffix.length) === trackSuffix) {
-                    if (fIdVal == null || fIdVal < 0) return null;
                     return this.getIdentity(fIdVal);
                 }
             }
@@ -799,11 +790,8 @@ export class Session {
     getIdentityIdForTrack(cameraName, trackIdx, frameIdx) {
         if (frameIdx != null) {
             var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
-            if (this.frameIdentityMap.has(frameKey)) {
-                var frameIdVal = this.frameIdentityMap.get(frameKey);
-                if (frameIdVal == null || frameIdVal < 0) return null;
-                return frameIdVal;
-            }
+            var frameIdVal = this.frameIdentityMap.get(frameKey);
+            if (frameIdVal != null) return frameIdVal;
         }
         var globalVal = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
         return globalVal != null ? globalVal : null;
@@ -818,25 +806,6 @@ export class Session {
      */
     setFrameIdentity(frameIdx, cameraName, trackIdx, identityId) {
         this.frameIdentityMap.set(frameIdx + ':' + cameraName + ':' + trackIdx, identityId);
-    }
-
-    /**
-     * True iff this (frame, cam, track) was explicitly marked as the "Null"
-     * identity in the per-frame map (value < 0). Used by the viewer to
-     * render unassigned tracks in the Null color rather than falling back
-     * to track-color. Distinct from "no per-frame entry at all" — that case
-     * returns false, and the caller may apply track-color as before.
-     * @param {number} trackIdx
-     * @param {string} cameraName
-     * @param {number} frameIdx
-     * @returns {boolean}
-     */
-    isNullIdentityForTrack(trackIdx, cameraName, frameIdx) {
-        if (frameIdx == null || !cameraName) return false;
-        var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
-        if (!this.frameIdentityMap.has(frameKey)) return false;
-        var v = this.frameIdentityMap.get(frameKey);
-        return v == null || v < 0;
     }
 
     /**

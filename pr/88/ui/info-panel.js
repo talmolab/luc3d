@@ -1302,7 +1302,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             idSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
             const optNone = document.createElement('option');
             optNone.value = '-1';
-            optNone.textContent = 'Null';
+            optNone.textContent = '(none)';
             idSelect.appendChild(optNone);
             if (state.session && state.session.identities) {
                 for (var idIdx = 0; idIdx < state.session.identities.length; idIdx++) {
