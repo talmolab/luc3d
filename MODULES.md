@@ -170,6 +170,14 @@ real group columns — a previously silent group-drop that surfaced
 downstream as duplicate identity colors. See
 `prompts/tracking-fixes/dup_id.md` Fix #2 for the analysis.
 
+**Auto-cap.** When the user leaves the "Number of animals" prompt empty,
+`trackAll` / `trackCurrentFrame` resolve `numAnimals` via
+`computeMaxInstancesPerView(session)` — the largest instance count seen
+in any (camera, frame) pair across the session — instead of leaving it
+null. Without the cap, leftover groups that survive reorder (after Fix
+#2) each spawn a fresh `addIdentity('id_N')` call and the identity pool
+drifts upward (e.g., 4 → 11 on the test fixture).
+
 **Key exports.**
 - `matchFrameInstances(frameGroup, cameras, session, opts)` — match all
   instances in one frame across views; returns groups + identity

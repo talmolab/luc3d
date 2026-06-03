@@ -560,6 +560,27 @@ function getTrackerHyperparams() {
 // Tracker state: number of animals (null = unconstrained)
 var trackerNumAnimals = null;
 
+// Auto-detect cap: the largest instance count seen in any (camera, frame)
+// pair across the session. Without a cap, leftover groups that survive
+// reorder spawn fresh addIdentity('id_N') calls per frame and the identity
+// count drifts upward; capping at the data-derived max keeps the identity
+// pool stable at the true animal count.
+function computeMaxInstancesPerView(session) {
+    var max = 0;
+    var cams = session.cameras || [];
+    for (var fi of session.frameGroups.keys()) {
+        var fg = session.frameGroups.get(fi);
+        for (var ci = 0; ci < cams.length; ci++) {
+            var cn = cams[ci].name;
+            var linked = fg.getInstances(cn);
+            var unlinked = fg.getUnlinkedInstances(cn);
+            var count = (linked ? linked.length : 0) + (unlinked ? unlinked.length : 0);
+            if (count > max) max = count;
+        }
+    }
+    return max;
+}
+
 function promptNumAnimals() {
     var input = prompt('Number of animals (leave empty for auto-detect):', trackerNumAnimals || '');
     if (input === null) return false;  // cancelled
@@ -594,16 +615,18 @@ export function trackCurrentFrame() {
         if (!promptNumAnimals()) return;
     }
 
+    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+
     try {
         var result = matchFrameInstances(fg, session.cameras, session, {
-            numAnimals: trackerNumAnimals
+            numAnimals: effectiveNumAnimals
         });
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
         if (result.numIdentities > 0) {
             setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
-                (trackerNumAnimals ? ' (constrained to ' + trackerNumAnimals + ')' : ''), 'success');
+                (effectiveNumAnimals ? ' (capped at ' + effectiveNumAnimals + ')' : ''), 'success');
         } else {
             setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
         }
@@ -689,7 +712,10 @@ export async function trackAll() {
     if (trackerNumAnimals == null) {
         if (!promptNumAnimals()) return;
     }
-    console.log('[TrackAll] numAnimals:', trackerNumAnimals, 'frames:', frameIndices.length);
+    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+    console.log('[TrackAll] numAnimals:', effectiveNumAnimals,
+        trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
+        'frames:', frameIndices.length);
     console.time('[TrackAll] total');
 
     // Clear old identities for fresh run
@@ -710,7 +736,7 @@ export async function trackAll() {
             if (fg) {
                 try {
                     var result = matchFrameInstances(fg, cameras, session, {
-                        numAnimals: trackerNumAnimals,
+                        numAnimals: effectiveNumAnimals,
                         perFrame: true,
                         prevAssignments: prevAssignments,
                         prevTargets3d: prevTargets3d
