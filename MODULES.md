@@ -170,6 +170,23 @@ real group columns — a previously silent group-drop that surfaced
 downstream as duplicate identity colors. See
 `prompts/tracking-fixes/dup_id.md` Fix #2 for the analysis.
 
+**Residual duplicate fixes (`prompts/dup-id-issue.md`).** Three changes
+target the residual duplicates that the rectangular fix left behind, all
+rooted in `matchPairwise` dropping *visible* instances:
+- *Incremental triangulation (Issue #1).* The "add remaining cameras"
+  stage iterates (up to `MAX_REFINE_PASSES`), re-triangulating each group
+  from ALL attached views every pass so a group that gains a 3rd/4th view
+  reprojects accurately into the cameras it still misses, recovering
+  instances a fragile 2-view seed had pushed past the gate.
+- *Adaptive gate (Issue #2).* `reprojectionGate(nViews)` replaces the
+  fixed 100px cutoff — tight (100) for a 2-view seed, looser (140/180) once
+  3+ views make the estimate trustworthy.
+- *Explicit "no identity" override (Issue #6).* `matchFrameInstances`
+  writes a negative sentinel (`EXPLICIT_NONE`) per-frame for every visible
+  instance that landed in no group, so `getIdentity*ForTrack` returns null
+  instead of falling back to the stale global `trackIdentityMap`. The two
+  getters in `pose-data.js` treat a negative per-frame value as "none".
+
 **Auto-cap.** When the user leaves the "Number of animals" prompt empty,
 `trackAll` / `trackCurrentFrame` resolve `numAnimals` via
 `computeMaxInstancesPerView(session)` — the largest instance count seen
