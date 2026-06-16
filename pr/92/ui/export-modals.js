@@ -9,7 +9,7 @@
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
 import { state, viewport3d, timeline, getActiveSession } from './app-state.js';
-import { InstanceGroup } from '../pose/pose-data.js';
+import { InstanceGroup, UnlinkedInstance } from '../pose/pose-data.js';
 import {
     triangulateAndReproject,
     storeReprojectedInstances,
@@ -312,10 +312,20 @@ export async function groupByIdentityAndTriangulateAll() {
         for (var [cn] of fg.instances) fg.instances.set(cn, []);
         for (var [cn2] of fg.unlinkedInstances) fg.unlinkedInstances.set(cn2, []);
 
-        // Add ALL instances back to fg.instances (they're now grouped/linked)
+        // Re-add instances. Grouping is by identity, so instances the tracker
+        // explicitly marked "no identity" (-1) cannot join a group — they stay
+        // in the unlinked/ungrouped pool (visible under "Ungrouped Instances")
+        // rather than being silently re-linked. Everything else is re-added as
+        // linked so the identity buckets below can form their groups.
         for (var cn3 in allInstancesByCam) {
             for (var ai = 0; ai < allInstancesByCam[cn3].length; ai++) {
-                fg.addInstance(cn3, allInstancesByCam[cn3][ai]);
+                var reInst = allInstancesByCam[cn3][ai];
+                if (session.isExplicitNoIdentity &&
+                    session.isExplicitNoIdentity(cn3, reInst.trackIdx, frameIdx)) {
+                    fg.addUnlinkedInstance(cn3, new UnlinkedInstance(reInst, cn3));
+                } else {
+                    fg.addInstance(cn3, reInst);
+                }
             }
         }
 

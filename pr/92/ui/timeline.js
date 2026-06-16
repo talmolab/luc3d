@@ -8,7 +8,7 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor } from './overlays.js';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js';
 
 // ============================================================================
 // Timeline class
@@ -560,15 +560,12 @@ export class Timeline {
         if (layout.showTracks) {
             this._drawTrackBars(ctx, layout.trackAreaTop, W);
 
-            // Blue bars: frames that have a grouped UserInstance. These
-            // span the track area so the user sees a solid blue column
-            // on every annotated frame — not just a dot.
-            this._drawGroupedUserFrameBars(ctx, 0, layout.trackAreaBottom, W);
-
-            // White bars: frames explicitly flagged as modified, drawn on
-            // top of the blue bars. Both extend only from the top of the
-            // timeline down to the bottom of the lowest track row — NOT
-            // into the marker or label areas.
+            // White vertical lines: frames explicitly flagged as modified
+            // (triangulated/grouped). They extend only from the top of the
+            // timeline down to the bottom of the lowest track row — NOT into
+            // the marker or label areas. (The blue "grouped user" column tint
+            // was removed; the white modified lines are the sole in-track
+            // frame indicator, so track/identity bars read as a flat color.)
             this._drawModifiedFrameLines(ctx, 0, layout.trackAreaBottom, W);
 
             // Separator between track area and marker area.
@@ -1416,6 +1413,9 @@ export class Timeline {
 
         // Build identity -> camName -> Set<frameIdx>
         var idCamFrames = {};  // "identityId:camName" -> Set<frameIdx>
+        // Frames the tracker explicitly marked as "no identity" (-1) get a
+        // gray "No ID" row per camera, keyed under this sentinel prefix.
+        var NO_ID_KEY = '__noid__';
 
         if (hasIdentities) {
             for (var [frameIdx, fg] of session.frameGroups) {
@@ -1425,7 +1425,15 @@ export class Timeline {
                         var idId = session.getIdentityIdForTrack
                             ? session.getIdentityIdForTrack(camName, instances[i].trackIdx, frameIdx)
                             : session.trackIdentityMap.get(camName + ':' + instances[i].trackIdx);
-                        if (idId == null) continue;
+                        if (idId == null) {
+                            if (session.isExplicitNoIdentity &&
+                                session.isExplicitNoIdentity(camName, instances[i].trackIdx, frameIdx)) {
+                                var nKey = NO_ID_KEY + ':' + camName;
+                                if (!idCamFrames[nKey]) idCamFrames[nKey] = new Set();
+                                idCamFrames[nKey].add(frameIdx);
+                            }
+                            continue;
+                        }
                         var segKey = idId + ':' + camName;
                         if (!idCamFrames[segKey]) idCamFrames[segKey] = new Set();
                         idCamFrames[segKey].add(frameIdx);
@@ -1437,7 +1445,15 @@ export class Timeline {
                         var idId2 = session.getIdentityIdForTrack
                             ? session.getIdentityIdForTrack(camName2, ulList[u].instance.trackIdx, frameIdx)
                             : session.trackIdentityMap.get(camName2 + ':' + ulList[u].instance.trackIdx);
-                        if (idId2 == null) continue;
+                        if (idId2 == null) {
+                            if (session.isExplicitNoIdentity &&
+                                session.isExplicitNoIdentity(camName2, ulList[u].instance.trackIdx, frameIdx)) {
+                                var nKey2 = NO_ID_KEY + ':' + camName2;
+                                if (!idCamFrames[nKey2]) idCamFrames[nKey2] = new Set();
+                                idCamFrames[nKey2].add(frameIdx);
+                            }
+                            continue;
+                        }
                         var segKey2 = idId2 + ':' + camName2;
                         if (!idCamFrames[segKey2]) idCamFrames[segKey2] = new Set();
                         idCamFrames[segKey2].add(frameIdx);
@@ -1480,6 +1496,23 @@ export class Timeline {
                     });
                     this._trackNames.push('');
                 }
+            }
+            // No-ID row: frames the tracker marked explicit-none (-1) for this
+            // camera. Rendered in space gray so proofreaders see un-identified
+            // instances — and the frames they occur on — in the tracks/id window.
+            var noIdFrames = idCamFrames[NO_ID_KEY + ':' + cameraNames[ci]];
+            if (noIdFrames && noIdFrames.size > 0) {
+                this._trackSegments.push({
+                    trackIdx: -1,
+                    cameraName: cameraNames[ci],
+                    color: NULL_ID_COLOR,
+                    segments: this._framesToSegments(noIdFrames),
+                    trackName: 'No ID',
+                    treeRole: 'middle',
+                    _isIdentity: true,
+                    _isNoId: true,
+                });
+                this._trackNames.push('');
             }
             if (this._trackSegments.length === camRowsBefore) {
                 this._trackSegments.push({
@@ -1655,16 +1688,21 @@ export class Timeline {
                 continue;
             }
 
-            // Draw segments
+            // Draw segments. Accumulate every segment rect into a single path
+            // and fill once at 0.7 alpha. A single fill paints each pixel only
+            // once, so segments widened by the min-width floor (long videos,
+            // pxPerFrame < 1) that overlap in pixels no longer compound their
+            // alpha into darker patches — the row stays a uniform shade.
             ctx.fillStyle = track.color;
+            ctx.globalAlpha = 0.7;
+            ctx.beginPath();
             for (let s = 0; s < track.segments.length; s++) {
                 const rect = this._computeSegmentDrawRect(track.segments[s]);
                 if (!rect) continue;
-
-                ctx.globalAlpha = 0.7;
-                ctx.fillRect(rect.x, rowY, rect.width, this.TRACK_ROW_HEIGHT);
-                ctx.globalAlpha = 1.0;
+                ctx.rect(rect.x, rowY, rect.width, this.TRACK_ROW_HEIGHT);
             }
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
         }
 
         // Reset text alignment
@@ -1801,22 +1839,6 @@ export class Timeline {
     }
 
     /**
-     * Draw blue vertical bars for frames that have a grouped user
-     * instance (`hasUser`). These render over the track area so the user
-     * sees a solid blue column on the frames that have been annotated,
-     * not just a dot in the marker row. Frames that are also `modified`
-     * are still drawn here — the white modified-line is painted on top
-     * afterwards.
-     * @private
-     */
-    _drawGroupedUserFrameBars(ctx, top, bottom, W) {
-        this._drawFrameBars(ctx, top, bottom, W,
-            this.MARKER_USER_COLOR,
-            function (m) { return m.hasUser; },
-            0.55, 0.7);
-    }
-
-    /**
      * Shared helper that draws colored vertical bars across the track
      * area for every frame matching `predicate`. `denseAlpha` is used
      * when frames are smaller than ~3 px (bars are binned by column);
@@ -1905,9 +1927,10 @@ export class Timeline {
             const x = this._frameToX(f + 0.5); // center of frame slot
             if (x < this.LEFT_MARGIN || x > W - this.RIGHT_PADDING) continue;
 
-            // Modified / grouped-user frames are drawn as full-height
-            // bars by `_drawModifiedFrameLines` / `_drawGroupedUserFrameBars`.
-            // The marker row only draws a dot for predicted-only frames.
+            // Modified frames are drawn as full-height white lines by
+            // `_drawModifiedFrameLines`. Grouped-user frames no longer get an
+            // in-track tint (the blue column was removed). The marker row
+            // draws a dot only for predicted-only frames.
             if (marker.modified || marker.hasUser) continue;
             if (marker.hasPredicted) {
                 ctx.strokeStyle = this.MARKER_PREDICTED_COLOR;
