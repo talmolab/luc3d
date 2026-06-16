@@ -162,6 +162,48 @@ which was removed during the ESM migration).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
+**Note.** `reorderGroupsByPrevTargets` passes a true `nTargets × nGroups`
+rectangular cost matrix to `hungarianAlgorithm` (no pre-padding to square
+with a `1000` filler). The solver's internal padding strips padded-row
+claims via its `p[j4] <= n` guard, so padded rows can no longer steal
+real group columns — a previously silent group-drop that surfaced
+downstream as duplicate identity colors. See
+`prompts/tracking-fixes/dup_id.md` Fix #2 for the analysis.
+
+**Residual duplicate fixes (`prompts/dup-id-issue.md`).** Three changes
+target the residual duplicates that the rectangular fix left behind, all
+rooted in `matchPairwise` dropping *visible* instances:
+- *Incremental triangulation (Issue #1).* The "add remaining cameras"
+  stage iterates (up to `MAX_REFINE_PASSES`), re-triangulating each group
+  from ALL attached views every pass so a group that gains a 3rd/4th view
+  reprojects accurately into the cameras it still misses, recovering
+  instances a fragile 2-view seed had pushed past the gate.
+- *Adaptive gate (Issue #2).* `reprojectionGate(nViews)` replaces the
+  fixed 100px cutoff — tight (100) for a 2-view seed, looser (140/180) once
+  3+ views make the estimate trustworthy.
+- *Explicit "no identity" override (Issue #6).* `matchFrameInstances`
+  writes a negative sentinel (`EXPLICIT_NONE`) per-frame for every visible
+  instance that landed in no group, so `getIdentity*ForTrack` returns null
+  instead of falling back to the stale global `trackIdentityMap`. The two
+  getters in `pose-data.js` treat a negative per-frame value as "none".
+  `Session.isExplicitNoIdentity(cam, trackIdx, frameIdx)` reports that
+  sentinel specifically (distinct from "no entry"). Consumers: overlays
+  color such instances space gray (`NULL_ID_COLOR`) when coloring by
+  identity; the timeline gives them a gray "No ID" row per camera in the
+  identity view; and the identity-grouping passes leave them in the unlinked
+  (ungrouped) pool since grouping is by identity — both
+  `triangulateCurrentFrame` (`triangulation.js`) and
+  `groupByIdentityAndTriangulateAll` (`ui/export-modals.js`, the "Triangulate
+  All" path).
+
+**Auto-cap.** When the user leaves the "Number of animals" prompt empty,
+`trackAll` / `trackCurrentFrame` resolve `numAnimals` via
+`computeMaxInstancesPerView(session)` — the largest instance count seen
+in any (camera, frame) pair across the session — instead of leaving it
+null. Without the cap, leftover groups that survive reorder (after Fix
+#2) each spawn a fresh `addIdentity('id_N')` call and the identity pool
+drifts upward (e.g., 4 → 11 on the test fixture).
+
 **Key exports.**
 - `matchFrameInstances(frameGroup, cameras, session, opts)` — match all
   instances in one frame across views; returns groups + identity
@@ -556,9 +598,12 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 
 **Key exports.**
 - Color: `TRACK_COLORS`, `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
-  `getTrackColor`, `getGroupColor`, `getInstanceColor`,
-  `adjustColorBrightness`, `errorColor`, `hexToRgb`, `brightenColor`,
-  `desaturateColor`, `complementaryColor`.
+  `NULL_ID_COLOR` (space gray `#a7adba` for explicit-none instances when
+  coloring by identity), `getTrackColor`, `getGroupColor`,
+  `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
+  `brightenColor`, `desaturateColor`, `complementaryColor`.
+  `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
+  `useIdentity` and `session.isExplicitNoIdentity(...)` is true.
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,

@@ -24,6 +24,12 @@ import { setStatus, showLoading, hideLoading } from '../import-export/save-load.
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 
+// Explicit "no identity" per-frame override value. Written for visible
+// instances that landed in no group this frame so that getIdentity*ForTrack
+// returns null instead of falling back to the stale global trackIdentityMap
+// (Issue #6 — defensive backstop against residual duplicate identity colors).
+var EXPLICIT_NONE = -1;
+
 // ============================================
 // Caches (cleared per-frame)
 // ============================================
@@ -253,6 +259,26 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
         });
     }
 
+    // Issue #6 (defensive): every VISIBLE instance that did not land in a group
+    // this frame gets an explicit "no identity" per-frame override instead of
+    // being left to fall back through getIdentity*ForTrack to the stale global
+    // trackIdentityMap (the residual duplicate-color source). Never clobber an
+    // existing per-frame override (e.g. a manual user assignment).
+    if (opts.perFrame && session.setFrameIdentity) {
+        for (var aci = 0; aci < activeCams.length; aci++) {
+            var acn = activeCams[aci];
+            var aInsts = camInstances[acn];
+            if (!aInsts) continue;
+            for (var aii = 0; aii < aInsts.length; aii++) {
+                var aTrack = aInsts[aii].trackIdx;
+                if (assignments.has(acn + ':' + aTrack)) continue;
+                if (session.frameIdentityMap &&
+                    session.frameIdentityMap.has(fi + ':' + acn + ':' + aTrack)) continue;
+                session.setFrameIdentity(fi, acn, aTrack, EXPLICIT_NONE);
+            }
+        }
+    }
+
     return { groups: groups, numIdentities: groups.length, assignments: assignments, targets3d: targets3d };
 }
 
@@ -267,7 +293,7 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
 function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignments) {
     var nTargets = prevTargets3d.length;
     var nGroups = groups.length;
-    var n = Math.max(nTargets, nGroups);
+    if (nTargets === 0 || nGroups === 0) return groups;
 
     // Pre-triangulate current groups
     var groupPts3d = [];
@@ -275,12 +301,14 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
         groupPts3d.push(triangulateGroup(groups[gi0], camMap));
     }
 
+    // Build the real nTargets x nGroups cost matrix only. hungarianAlgorithm
+    // pads to square internally and strips padded-row claims via its
+    // p[j4] <= n guard, so passing a true rectangle prevents padded rows
+    // from stealing real groups (the duplicate-identity bug).
     var cost = [];
-    for (var ti = 0; ti < n; ti++) {
+    for (var ti = 0; ti < nTargets; ti++) {
         cost[ti] = [];
-        for (var gi = 0; gi < n; gi++) {
-            if (ti >= nTargets || gi >= nGroups) { cost[ti][gi] = 1000; continue; }
-
+        for (var gi = 0; gi < nGroups; gi++) {
             var prevPts3d = prevTargets3d[ti].points3d;
             var currPts3d = groupPts3d[gi];
             var score = 0, scoreCount = 0;
@@ -370,6 +398,25 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
 // ============================================
 // Pairwise bootstrap
 // ============================================
+
+/**
+ * Adaptive reprojection acceptance gate (px) for attaching an instance to a
+ * group, scaled by how many views back the group's triangulated 3D estimate.
+ *
+ * A 2-view bootstrap seed is fragile, so it keeps the original tight 100px
+ * cutoff (a large reprojection there may mean a wrong association). Once 3+
+ * views constrain the 3D the estimate is trustworthy, so the gate loosens to
+ * tolerate detection noise and recover a correct instance that a fixed 100px
+ * cutoff would have dropped (Issue #1 / Issue #2).
+ *
+ * @param {number} nViews - number of views currently in the group
+ * @returns {number} acceptance threshold in pixels
+ */
+function reprojectionGate(nViews) {
+    if (nViews <= 2) return 100;
+    if (nViews === 3) return 140;
+    return 180;
+}
 
 /**
  * Bootstrap: pairwise cross-view matching using epipolar-first scoring.
@@ -475,37 +522,76 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
         }
     }
 
-    // Add remaining cameras via reprojection (fast — no pairwise scoring)
-    for (var ci = 2; ci < activeCams.length; ci++) {
-        var camName = activeCams[ci];
-        var cam3 = camMap[camName];
-        var insts3 = camInstances[camName];
-        if (!insts3 || insts3.length === 0) continue;
+    // Add remaining cameras via reprojection, with iterative refinement.
+    //
+    // Issue #1 (incremental triangulation): rather than reprojecting every
+    // group from its fragile 2-view bootstrap seed exactly once, iterate. Each
+    // pass re-triangulates every group from ALL views attached so far — an
+    // increasingly well-conditioned estimate — and attaches still-unmatched
+    // instances. A group that gains a 3rd/4th view in one pass reprojects more
+    // accurately into the remaining cameras on the next, so a visible instance
+    // that a fragile seed had pushed past the gate is recovered.
+    //
+    // Issue #2 (adaptive gate): reprojectionGate() scales the acceptance
+    // threshold with the group's view count, so loosening only happens once the
+    // estimate is trustworthy (see that function).
+    var remainingCams = activeCams.slice(2);
+    var attachedInsts = {};   // camName → Set of instance indices already grouped
+    for (var rc = 0; rc < remainingCams.length; rc++) attachedInsts[remainingCams[rc]] = new Set();
 
-        var cost3 = [];
-        for (var gi = 0; gi < groups.length; gi++) {
-            cost3[gi] = [];
-            var pts3d = triangulateGroup(groups[gi], camMap);
-            var reproj3 = pts3d ? reprojectPoints(pts3d, cam3.projectionMatrix) : null;
-            for (var ii = 0; ii < insts3.length; ii++) {
-                cost3[gi][ii] = reproj3 ? computeInstanceDistance(reproj3, insts3[ii].points) : Infinity;
+    var MAX_REFINE_PASSES = 3;
+    for (var pass = 0; pass < MAX_REFINE_PASSES; pass++) {
+        var attachedAny = false;
+        for (var rci = 0; rci < remainingCams.length; rci++) {
+            var camName = remainingCams[rci];
+            var cam3 = camMap[camName];
+            var insts3 = camInstances[camName];
+            if (!insts3 || insts3.length === 0) continue;
+            var used = attachedInsts[camName];
+
+            // Rectangular cost matrix over only the groups still missing this
+            // camera; re-triangulate each from all views attached so far.
+            var rows = [];     // parallel to cost3 rows: { gi, gate }
+            var cost3 = [];
+            for (var gi = 0; gi < groups.length; gi++) {
+                if (groups[gi].has(camName)) continue;
+                var pts3d = triangulateGroup(groups[gi], camMap);
+                if (!pts3d) continue;
+                var reproj3 = reprojectPoints(pts3d, cam3.projectionMatrix);
+                var costRow = [];
+                for (var ii = 0; ii < insts3.length; ii++) {
+                    costRow[ii] = used.has(ii) ? Infinity
+                        : computeInstanceDistance(reproj3, insts3[ii].points);
+                }
+                rows.push({ gi: gi, gate: reprojectionGate(groups[gi].size) });
+                cost3.push(costRow);
             }
-        }
-        if (cost3.length > 0 && insts3.length > 0) {
+            if (rows.length === 0) continue;
+
             var assign3 = hungarianAlgorithm(cost3);
-            var matched3 = new Set();
-            for (var gi2 = 0; gi2 < assign3.length; gi2++) {
-                var ii2 = assign3[gi2];
-                if (ii2 >= 0 && ii2 < insts3.length && cost3[gi2][ii2] < 100) {
-                    groups[gi2].set(camName, insts3[ii2]);
-                    matched3.add(ii2);
+            for (var r = 0; r < assign3.length; r++) {
+                var ii2 = assign3[r];
+                if (ii2 < 0 || ii2 >= insts3.length || used.has(ii2)) continue;
+                if (cost3[r][ii2] < rows[r].gate) {
+                    groups[rows[r].gi].set(camName, insts3[ii2]);
+                    used.add(ii2);
+                    attachedAny = true;
                 }
             }
-            if (!numAnimals) {
-                for (var ii3 = 0; ii3 < insts3.length; ii3++) {
-                    if (!matched3.has(ii3)) {
-                        var sg5 = new Map(); sg5.set(camName, insts3[ii3]); groups.push(sg5);
-                    }
+        }
+        if (!attachedAny) break;   // converged — no group grew this pass
+    }
+
+    // Solo groups for unmatched instances (unconstrained only).
+    if (!numAnimals) {
+        for (var sci = 0; sci < remainingCams.length; sci++) {
+            var scn = remainingCams[sci];
+            var sInsts = camInstances[scn];
+            if (!sInsts) continue;
+            var sUsed = attachedInsts[scn];
+            for (var si = 0; si < sInsts.length; si++) {
+                if (!sUsed.has(si)) {
+                    var sg5 = new Map(); sg5.set(scn, sInsts[si]); groups.push(sg5);
                 }
             }
         }
@@ -558,6 +644,27 @@ function getTrackerHyperparams() {
 // Tracker state: number of animals (null = unconstrained)
 var trackerNumAnimals = null;
 
+// Auto-detect cap: the largest instance count seen in any (camera, frame)
+// pair across the session. Without a cap, leftover groups that survive
+// reorder spawn fresh addIdentity('id_N') calls per frame and the identity
+// count drifts upward; capping at the data-derived max keeps the identity
+// pool stable at the true animal count.
+function computeMaxInstancesPerView(session) {
+    var max = 0;
+    var cams = session.cameras || [];
+    for (var fi of session.frameGroups.keys()) {
+        var fg = session.frameGroups.get(fi);
+        for (var ci = 0; ci < cams.length; ci++) {
+            var cn = cams[ci].name;
+            var linked = fg.getInstances(cn);
+            var unlinked = fg.getUnlinkedInstances(cn);
+            var count = (linked ? linked.length : 0) + (unlinked ? unlinked.length : 0);
+            if (count > max) max = count;
+        }
+    }
+    return max;
+}
+
 function promptNumAnimals() {
     var input = prompt('Number of animals (leave empty for auto-detect):', trackerNumAnimals || '');
     if (input === null) return false;  // cancelled
@@ -592,16 +699,18 @@ export function trackCurrentFrame() {
         if (!promptNumAnimals()) return;
     }
 
+    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+
     try {
         var result = matchFrameInstances(fg, session.cameras, session, {
-            numAnimals: trackerNumAnimals
+            numAnimals: effectiveNumAnimals
         });
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
         if (result.numIdentities > 0) {
             setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
-                (trackerNumAnimals ? ' (constrained to ' + trackerNumAnimals + ')' : ''), 'success');
+                (effectiveNumAnimals ? ' (capped at ' + effectiveNumAnimals + ')' : ''), 'success');
         } else {
             setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
         }
@@ -687,7 +796,10 @@ export async function trackAll() {
     if (trackerNumAnimals == null) {
         if (!promptNumAnimals()) return;
     }
-    console.log('[TrackAll] numAnimals:', trackerNumAnimals, 'frames:', frameIndices.length);
+    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+    console.log('[TrackAll] numAnimals:', effectiveNumAnimals,
+        trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
+        'frames:', frameIndices.length);
     console.time('[TrackAll] total');
 
     // Clear old identities for fresh run
@@ -708,7 +820,7 @@ export async function trackAll() {
             if (fg) {
                 try {
                     var result = matchFrameInstances(fg, cameras, session, {
-                        numAnimals: trackerNumAnimals,
+                        numAnimals: effectiveNumAnimals,
                         perFrame: true,
                         prevAssignments: prevAssignments,
                         prevTargets3d: prevTargets3d
