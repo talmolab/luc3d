@@ -186,6 +186,15 @@ rooted in `matchPairwise` dropping *visible* instances:
   instance that landed in no group, so `getIdentity*ForTrack` returns null
   instead of falling back to the stale global `trackIdentityMap`. The two
   getters in `pose-data.js` treat a negative per-frame value as "none".
+  `Session.isExplicitNoIdentity(cam, trackIdx, frameIdx)` reports that
+  sentinel specifically (distinct from "no entry"). Consumers: overlays
+  color such instances space gray (`NULL_ID_COLOR`) when coloring by
+  identity; the timeline gives them a gray "No ID" row per camera in the
+  identity view; and the identity-grouping passes leave them in the unlinked
+  (ungrouped) pool since grouping is by identity — both
+  `triangulateCurrentFrame` (`triangulation.js`) and
+  `groupByIdentityAndTriangulateAll` (`ui/export-modals.js`, the "Triangulate
+  All" path).
 
 **Auto-cap.** When the user leaves the "Number of animals" prompt empty,
 `trackAll` / `trackCurrentFrame` resolve `numAnimals` via
@@ -589,9 +598,12 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 
 **Key exports.**
 - Color: `TRACK_COLORS`, `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
-  `getTrackColor`, `getGroupColor`, `getInstanceColor`,
-  `adjustColorBrightness`, `errorColor`, `hexToRgb`, `brightenColor`,
-  `desaturateColor`, `complementaryColor`.
+  `NULL_ID_COLOR` (space gray `#a7adba` for explicit-none instances when
+  coloring by identity), `getTrackColor`, `getGroupColor`,
+  `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
+  `brightenColor`, `desaturateColor`, `complementaryColor`.
+  `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
+  `useIdentity` and `session.isExplicitNoIdentity(...)` is true.
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,

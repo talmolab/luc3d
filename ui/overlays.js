@@ -37,6 +37,11 @@ export const REPROJECTION_COLOR = '#e53e3e';
 // Fixed color for ungrouped UserInstances
 export const UNGROUPED_USER_COLOR = '#F8B195';
 
+// Space gray for instances the tracker explicitly marked as having no identity
+// (the -1 sentinel). Only applied when coloring by identity — see
+// Session.isExplicitNoIdentity.
+export const NULL_ID_COLOR = '#a7adba';
+
 export function getTrackColor(trackIdx) {
     return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
 }
@@ -80,6 +85,11 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
                 }
             }
             if (probeIdx != null) {
+                // Explicit "no identity" (-1) → space gray, not a track color.
+                if (session.isExplicitNoIdentity &&
+                    session.isExplicitNoIdentity(cameraName, probeIdx, frameIdx)) {
+                    return NULL_ID_COLOR;
+                }
                 var tIdentity = session.getIdentityForTrack(probeIdx, cameraName, frameIdx);
                 if (tIdentity && tIdentity.color) return tIdentity.color;
             }
@@ -116,6 +126,11 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
  */
 export function getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) {
     if (useIdentity && session && instance.trackIdx != null) {
+        // Explicit "no identity" (-1) → space gray, not a track color.
+        if (session.isExplicitNoIdentity &&
+            session.isExplicitNoIdentity(cameraName, instance.trackIdx, frameIdx)) {
+            return NULL_ID_COLOR;
+        }
         var identity = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
         if (identity && identity.color) return identity.color;
     }
