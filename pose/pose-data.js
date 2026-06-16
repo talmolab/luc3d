@@ -755,7 +755,11 @@ export class Session {
         if (frameIdx != null && cameraName) {
             var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
             var frameIdVal = this.frameIdentityMap.get(frameKey);
-            if (frameIdVal != null) return this.getIdentity(frameIdVal);
+            // A negative value is an explicit "no identity" override: the
+            // tracker marks a visible-but-ungrouped instance so it never falls
+            // back to the stale global trackIdentityMap (the source of residual
+            // duplicate identity colors). Return null instead of a stale id.
+            if (frameIdVal != null) return frameIdVal < 0 ? null : this.getIdentity(frameIdVal);
         }
         // Per-frame without cameraName: check any camera at this frame
         if (frameIdx != null && !cameraName) {
@@ -764,6 +768,9 @@ export class Session {
             for (var [fKey, fIdVal] of this.frameIdentityMap) {
                 if (fKey.substring(0, framePrefix.length) === framePrefix &&
                     fKey.substring(fKey.length - trackSuffix.length) === trackSuffix) {
+                    // Skip explicit "no identity" markers; prefer a real
+                    // per-frame id from another camera if one exists.
+                    if (fIdVal < 0) continue;
                     return this.getIdentity(fIdVal);
                 }
             }
@@ -791,10 +798,30 @@ export class Session {
         if (frameIdx != null) {
             var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
             var frameIdVal = this.frameIdentityMap.get(frameKey);
-            if (frameIdVal != null) return frameIdVal;
+            // Negative = explicit "no identity" override (see
+            // getIdentityForTrack). Return null rather than the stale global.
+            if (frameIdVal != null) return frameIdVal < 0 ? null : frameIdVal;
         }
         var globalVal = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
         return globalVal != null ? globalVal : null;
+    }
+
+    /**
+     * True iff the tracker explicitly marked this (frame, camera, track) as
+     * having NO identity — the negative sentinel written by
+     * matchFrameInstances' Issue #6 guard for visible-but-ungrouped instances.
+     * This is distinct from "no identity assigned" (no map entry at all): only
+     * the explicit negative marker counts. Used to render null-ID instances in
+     * space gray and to keep them out of identity-based groups on triangulation.
+     * @param {string} cameraName
+     * @param {number} trackIdx
+     * @param {number} frameIdx
+     * @returns {boolean}
+     */
+    isExplicitNoIdentity(cameraName, trackIdx, frameIdx) {
+        if (frameIdx == null || cameraName == null || trackIdx == null) return false;
+        var v = this.frameIdentityMap.get(frameIdx + ':' + cameraName + ':' + trackIdx);
+        return v != null && v < 0;
     }
 
     /**

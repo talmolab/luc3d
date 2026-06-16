@@ -1711,13 +1711,23 @@ export function triangulateCurrentFrame() {
                 }
             }
 
-            // Clear and re-add instances as linked
+            // Clear and re-add instances. Grouping is by identity, so an
+            // instance the tracker explicitly marked as "no identity" (-1)
+            // cannot belong to a group — it stays in the unlinked/ungrouped
+            // pool. Everything else is re-added as linked so the identity
+            // buckets below can form their groups.
             session.instanceGroups.delete(frameIdx);
             for (var _cn3 in allInstancesByCam) fg.instances.set(_cn3, []);
             for (var _cn4 of fg.unlinkedInstances.keys()) fg.unlinkedInstances.set(_cn4, []);
             for (var _cn5 in allInstancesByCam) {
                 for (var _ai = 0; _ai < allInstancesByCam[_cn5].length; _ai++) {
-                    fg.addInstance(_cn5, allInstancesByCam[_cn5][_ai]);
+                    var _reInst = allInstancesByCam[_cn5][_ai];
+                    if (session.isExplicitNoIdentity &&
+                        session.isExplicitNoIdentity(_cn5, _reInst.trackIdx, frameIdx)) {
+                        fg.addUnlinkedInstance(_cn5, new UnlinkedInstance(_reInst, _cn5));
+                    } else {
+                        fg.addInstance(_cn5, _reInst);
+                    }
                 }
             }
 
