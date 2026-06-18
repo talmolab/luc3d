@@ -1835,7 +1835,7 @@ export async function switchSession(newIdx) {
 
     // Restore per-session timeline height + collapsed state. First visit
     // (no `_timelineHeight` stored) → fit to the new session's data,
-    // capped at 40% of window.innerHeight (same default the SLP-import
+    // capped at 30% of window.innerHeight (same default the SLP-import
     // path uses). Inlined rather than imported from `timeline-controller`
     // so the brace-walked switchSession test harness doesn't need an
     // additional stub parameter.
@@ -1853,7 +1853,7 @@ export async function switchSession(newIdx) {
             var _winH = (typeof window !== 'undefined' && window.innerHeight)
                 ? window.innerHeight
                 : 1080;
-            var _target = Math.min(_pref, Math.floor(0.4 * _winH));
+            var _target = Math.min(_pref, Math.floor(0.3 * _winH));
             if (_target > 0) _tlElIn.style.height = _target + 'px';
         }
         if (newSession._timelineCollapsed && _tlElIn.classList && _tlElIn.classList.add) {

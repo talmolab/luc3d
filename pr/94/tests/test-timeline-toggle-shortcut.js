@@ -12,7 +12,7 @@
  *   - The cache survives switching between `Tracks` / `IDs` / `Both`
  *     modes.
  *   - On initial project load, the timeline height fits all tracks,
- *     capped at 40% of the window height.
+ *     capped at 30% of the window height.
  *   - The previous `Ctrl/Cmd + J` binding for "Change Frame Number"
  *     moves to `Ctrl/Cmd + Shift + J`.
  *
@@ -260,16 +260,16 @@
             cleanup(wrap);
         });
 
-        it('(T10b) initial-load height fits all tracks but is capped at 40% of window.innerHeight', function () {
+        it('(T10b) initial-load height fits all tracks but is capped at 30% of window.innerHeight', function () {
             var wrap = setupTimelineDOM();
             var container = wrap.querySelector('#timelineContainer') || findById(wrap, 'timelineContainer');
             // No prior inline height — simulate a fresh project load.
             container.style.height = '';
 
-            // Block 1 must expose either a "fit to data, capped at 40%"
+            // Block 1 must expose either a "fit to data, capped at 30%"
             // helper, or `fitTimelineToData()` must be updated to apply
             // the cap. Trigger it with a session that has many tracks
-            // so the natural preferred height would otherwise exceed 40%.
+            // so the natural preferred height would otherwise exceed 30%.
             var fitFn = null;
             var candidates = [
                 'fitTimelineToData',
@@ -289,9 +289,9 @@
             fitFn();
 
             var h = getHeightPx(container);
-            var cap = 0.4 * window.innerHeight;
+            var cap = 0.3 * window.innerHeight;
             assertLessThan(h, cap + 1,
-                'initial-load timeline height must be capped at 40% of ' +
+                'initial-load timeline height must be capped at 30% of ' +
                 'window.innerHeight. cap=' + cap + ' got=' + h);
 
             cleanup(wrap);
