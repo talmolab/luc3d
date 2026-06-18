@@ -111,9 +111,9 @@
             // Need at least one identity so `identities` mode is non-trivial.
             var session = buildSession(['camA'], { camA: 3 }, ['camA']);
             session.addIdentity('id_alpha');
-            session.trackIdentityMap.set('camA:0', session.identities[0].id);
-            session.trackIdentityMap.set('camA:1', session.identities[0].id);
-            session.trackIdentityMap.set('camA:2', session.identities[0].id);
+            session.assignTrackToIdentity(0, session.identities[0].id, 'camA');
+            session.assignTrackToIdentity(1, session.identities[0].id, 'camA');
+            session.assignTrackToIdentity(2, session.identities[0].id, 'camA');
 
             tl.setData(session);
             assertEqual(tl._displayMode, 'tracks',

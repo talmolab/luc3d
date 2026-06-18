@@ -1619,10 +1619,8 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     idOpt.textContent = state.session.identities[idi].name;
                     idSelectUl.appendChild(idOpt);
                 }
-                // Pre-select based on trackIdentityMap (per-camera)
-                var currentIdForTrack = state.session.getIdentityIdForTrack
-                    ? state.session.getIdentityIdForTrack(cam.name, ul.instance.trackIdx, state.currentFrame)
-                    : state.session.trackIdentityMap.get(cam.name + ':' + ul.instance.trackIdx);
+                // Pre-select based on the per-frame identity for this track.
+                var currentIdForTrack = state.session.getIdentityIdForTrack(cam.name, ul.instance.trackIdx, state.currentFrame);
                 idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
                 (function (inst, sel, camNameForId) {
                     sel.addEventListener('change', function (ev) {
@@ -1633,7 +1631,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             markDirty();
                             propagateIdentityForward(inst.trackIdx, newIdVal, camNameForId);
                         } else {
-                            state.session.trackIdentityMap.delete(camNameForId + ':' + inst.trackIdx);
+                            state.session.clearTrackIdentity(inst.trackIdx, camNameForId);
                             markDirty();
                         }
                         drawAllOverlays(state.currentFrame);

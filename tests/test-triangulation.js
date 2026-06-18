@@ -262,4 +262,81 @@
             assertTrue(result[1] >= 0);
         });
     });
+
+    // Regression: after "Track All" (per-frame identities, no groups yet),
+    // triangulation must auto-create groups from those identities so the 3D
+    // viewer populates. Both triangulateCurrentFrame and triangulateAllFrames
+    // go through ensureGroupsFromIdentities.
+    describe('ensureGroupsFromIdentities (auto-group from per-frame identities)', function () {
+        function cam(n) {
+            return new Camera(n, [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [1, 2, 3], [640, 480]);
+        }
+        function mkSession() {
+            return new Session([cam('CamA'), cam('CamB')],
+                new Skeleton('s', ['a', 'b'], [[0, 1]]), ['t0', 't1'], 'tri');
+        }
+
+        it('creates a group from a shared identity across 2 cameras (post Track All)', function () {
+            if (typeof ensureGroupsFromIdentities !== 'function') return;
+            var session = mkSession();
+            var fg = new FrameGroup(0);
+            fg.addInstance('CamA', new Instance([[1, 1], [2, 2]], 0, 'predicted', 1));
+            fg.addInstance('CamB', new Instance([[3, 3], [4, 4]], 0, 'predicted', 1));
+            session.addFrameGroup(fg);
+            var idMouse = session.addIdentity('mouse');
+            // Simulate Track All: per-frame identity for track 0 in both cameras.
+            session.setFrameIdentity(0, 'CamA', 0, idMouse.id);
+            session.setFrameIdentity(0, 'CamB', 0, idMouse.id);
+
+            assertTrue(!session.instanceGroups.get(0) || session.instanceGroups.get(0).length === 0,
+                'no groups before auto-create');
+            var groups = ensureGroupsFromIdentities(session, 0);
+            assertEqual(groups.length, 1, 'one group created from the shared identity');
+            assertEqual(groups[0].identityId, idMouse.id, 'group carries the identity');
+            assertEqual(groups[0].cameraNames.length, 2, 'group spans 2 cameras');
+        });
+
+        it('does NOT create a group for a single-view identity', function () {
+            if (typeof ensureGroupsFromIdentities !== 'function') return;
+            var session = mkSession();
+            var fg = new FrameGroup(0);
+            fg.addInstance('CamA', new Instance([[1, 1], [2, 2]], 0, 'predicted', 1)); // only CamA
+            session.addFrameGroup(fg);
+            var id = session.addIdentity('mouse');
+            session.setFrameIdentity(0, 'CamA', 0, id.id);
+
+            var groups = ensureGroupsFromIdentities(session, 0);
+            assertEqual(groups.length, 0, 'single-view identity does not form a group');
+        });
+
+        it('is a no-op when groups already exist (returns existing untouched)', function () {
+            if (typeof ensureGroupsFromIdentities !== 'function') return;
+            var session = mkSession();
+            var fg = new FrameGroup(0);
+            fg.addInstance('CamA', new Instance([[1, 1], [2, 2]], 0, 'predicted', 1));
+            session.addFrameGroup(fg);
+            var existing = new InstanceGroup(99, 0);
+            existing.addInstance('CamA', fg.getInstances('CamA')[0]);
+            session.instanceGroups.set(0, [existing]);
+
+            var groups = ensureGroupsFromIdentities(session, 0);
+            assertEqual(groups.length, 1);
+            assertEqual(groups[0].id, 99, 'returns the pre-existing group, does not rebuild');
+        });
+
+        it('no identities → no groups and instances left untouched', function () {
+            if (typeof ensureGroupsFromIdentities !== 'function') return;
+            var session = mkSession();
+            var fg = new FrameGroup(0);
+            fg.addInstance('CamA', new Instance([[1, 1], [2, 2]], 0, 'predicted', 1));
+            fg.addInstance('CamB', new Instance([[3, 3], [4, 4]], 0, 'predicted', 1));
+            session.addFrameGroup(fg);
+
+            var groups = ensureGroupsFromIdentities(session, 0);
+            assertEqual(groups.length, 0, 'no identities → no groups');
+            assertEqual(fg.getInstances('CamA').length, 1, 'CamA instance untouched');
+            assertEqual(fg.getInstances('CamB').length, 1, 'CamB instance untouched');
+        });
+    });
 })();

@@ -242,7 +242,7 @@
             tracker.trackFrame(fg, [cam1, cam2], session);
             tracker.applyResults(session);
             assertTrue(session.identities.length >= 1, 'identity created');
-            assertTrue(session.trackIdentityMap.size >= 1, 'track mapped');
+            assertTrue(session.frameIdentityMap.size >= 1, 'track mapped per-frame');
         });
     });
 })();
@@ -340,9 +340,9 @@
             tracker.trackFrame(fg, [cam1, cam2], session);
             tracker.applyResults(session);
 
-            // Both track indices should map to the same identity
-            var id1 = session.trackIdentityMap.get('c1:0');
-            var id2 = session.trackIdentityMap.get('c2:3');
+            // Both track indices should map to the same identity (per-frame)
+            var id1 = session.getIdentityIdForTrack('c1', 0, 0);
+            var id2 = session.getIdentityIdForTrack('c2', 3, 0);
             assertNotNull(id1, 'c1:0 mapped');
             assertNotNull(id2, 'c2:3 mapped');
             assertEqual(id1, id2, 'same identity for both views');

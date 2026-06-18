@@ -399,7 +399,6 @@ async function buildSlpBytes() {
                 lucid: {
                     sessionName: sess.name || null,
                     trustTracks: sess.trustTracks || false,
-                    trackIdentityMap: sess.trackIdentityMap ? Array.from(sess.trackIdentityMap.entries()) : [],
                     frameIdentityMap: sess.frameIdentityMap ? Array.from(sess.frameIdentityMap.entries()) : [],
                     skeleton: {
                         name: sess.skeleton.name || 'skeleton',
@@ -576,7 +575,6 @@ export function saveProject() {
                         return { id: id.id, name: id.name, color: id.color };
                     }),
                     trustTracks: sess.trustTracks || false,
-                    trackIdentityMap: Array.from(sess.trackIdentityMap.entries()),
                     frameIdentityMap: sess.frameIdentityMap
                         ? Array.from(sess.frameIdentityMap.entries())
                         : [],
@@ -623,7 +621,6 @@ export function saveProject() {
             return { id: id.id, name: id.name, color: id.color };
         }),
         trustTracks: state.session.trustTracks || false,
-        trackIdentityMap: Array.from(state.session.trackIdentityMap.entries()),
         frameIdentityMap: state.session.frameIdentityMap
             ? Array.from(state.session.frameIdentityMap.entries())
             : [],
@@ -1170,11 +1167,9 @@ function _restoreProjectV2(data) {
         }
     }
     if (data.trustTracks != null) session.trustTracks = data.trustTracks;
-    if (data.trackIdentityMap) {
-        for (var tmi = 0; tmi < data.trackIdentityMap.length; tmi++) {
-            session.trackIdentityMap.set(data.trackIdentityMap[tmi][0], data.trackIdentityMap[tmi][1]);
-        }
-    }
+    // Legacy global identity map (removed). Captured here and migrated to
+    // per-frame entries after frame groups load (see end of this function).
+    var legacyGlobalIdentities = data.trackIdentityMap || null;
     if (data.frameIdentityMap && data.frameIdentityMap.length > 0) {
         if (!session.frameIdentityMap) session.frameIdentityMap = new Map();
         for (var fmi = 0; fmi < data.frameIdentityMap.length; fmi++) {
@@ -1271,6 +1266,13 @@ function _restoreProjectV2(data) {
 
             session.addFrameGroup(fg);
         }
+    }
+
+    // Migrate any legacy global identities into per-frame entries now that
+    // frame groups exist (preserves identities from pre-per-frame projects).
+    if (legacyGlobalIdentities && legacyGlobalIdentities.length) {
+        var migrated = session.migrateGlobalIdentitiesToPerFrame(legacyGlobalIdentities);
+        if (migrated) console.log('[load] migrated', migrated, 'legacy global identities to per-frame');
     }
 
     state.session = session;

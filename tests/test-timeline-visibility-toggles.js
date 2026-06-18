@@ -282,10 +282,10 @@
             session.addIdentity('id_alpha');
             session.addIdentity('id_beta');
             // Map both cameras' tracks to the same identity pair.
-            session.trackIdentityMap.set('camA:0', session.identities[0].id);
-            session.trackIdentityMap.set('camA:1', session.identities[1].id);
-            session.trackIdentityMap.set('camB:0', session.identities[0].id);
-            session.trackIdentityMap.set('camB:1', session.identities[1].id);
+            session.assignTrackToIdentity(0, session.identities[0].id, 'camA');
+            session.assignTrackToIdentity(1, session.identities[1].id, 'camA');
+            session.assignTrackToIdentity(0, session.identities[0].id, 'camB');
+            session.assignTrackToIdentity(1, session.identities[1].id, 'camB');
 
             tl.setData(session);
             tl.setDisplayMode('identities');

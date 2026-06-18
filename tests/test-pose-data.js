@@ -424,14 +424,10 @@
             fg10.addInstance('cam0', new Instance([[1, 1]], 1, 'user', 0));
             session.frameGroups.set(10, fg10);
 
-            session.assignTrackToIdentity(0, 1, 'cam0');
-            session.assignTrackToIdentity(1, 2, 'cam0');
             session.propagateIdentity(50, 'cam0', 0, 2);
 
-            // Frame 10 has no per-frame override — falls back to global.
-            // Note: the global also got swapped (by our caller's assignTrackToIdentity
-            // step in real usage), so this test isolates propagateIdentity by
-            // checking that it didn't write any frameIdentityMap entry for fi < 50.
+            // propagateIdentity starts at frame 50, so it must not write any
+            // per-frame entry for the earlier frame 10.
             assertFalse(session.frameIdentityMap.has('10:cam0:0'));
             assertFalse(session.frameIdentityMap.has('10:cam0:1'));
         });
