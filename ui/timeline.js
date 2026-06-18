@@ -1391,8 +1391,8 @@ export class Timeline {
 
     /**
      * Build segments grouped by identity instead of track.
-     * Uses session.trackIdentityMap to find identity per camera:trackIdx,
-     * then colors by identity color.
+     * Uses session.getIdentityIdForTrack (per-frame identity) per
+     * camera:trackIdx, then colors by identity color.
      *
      * @param {Session} session
      * @private
@@ -1422,9 +1422,7 @@ export class Timeline {
                 // Grouped instances
                 for (var [camName, instances] of fg.instances) {
                     for (var i = 0; i < instances.length; i++) {
-                        var idId = session.getIdentityIdForTrack
-                            ? session.getIdentityIdForTrack(camName, instances[i].trackIdx, frameIdx)
-                            : session.trackIdentityMap.get(camName + ':' + instances[i].trackIdx);
+                        var idId = session.getIdentityIdForTrack(camName, instances[i].trackIdx, frameIdx);
                         if (idId == null) {
                             if (session.isExplicitNoIdentity &&
                                 session.isExplicitNoIdentity(camName, instances[i].trackIdx, frameIdx)) {
@@ -1442,9 +1440,7 @@ export class Timeline {
                 // Unlinked instances
                 for (var [camName2, ulList] of fg.unlinkedInstances) {
                     for (var u = 0; u < ulList.length; u++) {
-                        var idId2 = session.getIdentityIdForTrack
-                            ? session.getIdentityIdForTrack(camName2, ulList[u].instance.trackIdx, frameIdx)
-                            : session.trackIdentityMap.get(camName2 + ':' + ulList[u].instance.trackIdx);
+                        var idId2 = session.getIdentityIdForTrack(camName2, ulList[u].instance.trackIdx, frameIdx);
                         if (idId2 == null) {
                             if (session.isExplicitNoIdentity &&
                                 session.isExplicitNoIdentity(camName2, ulList[u].instance.trackIdx, frameIdx)) {

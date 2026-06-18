@@ -1688,9 +1688,7 @@ export function triangulateCurrentFrame() {
                     var _inst = _insts[_i];
                     if (!allInstancesByCam[_cn]) allInstancesByCam[_cn] = [];
                     allInstancesByCam[_cn].push(_inst);
-                    var _idId = session.getIdentityIdForTrack
-                        ? session.getIdentityIdForTrack(_cn, _inst.trackIdx, frameIdx)
-                        : session.trackIdentityMap.get(_cn + ':' + _inst.trackIdx);
+                    var _idId = session.getIdentityIdForTrack(_cn, _inst.trackIdx, frameIdx);
                     if (_idId == null) continue;
                     if (!idBuckets[_idId]) idBuckets[_idId] = {};
                     if (!idBuckets[_idId][_cn]) idBuckets[_idId][_cn] = _inst;
@@ -1702,9 +1700,7 @@ export function triangulateCurrentFrame() {
                     var _ulInst = _ulList[_u].instance;
                     if (!allInstancesByCam[_cn2]) allInstancesByCam[_cn2] = [];
                     allInstancesByCam[_cn2].push(_ulInst);
-                    var _idId2 = session.getIdentityIdForTrack
-                        ? session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx)
-                        : session.trackIdentityMap.get(_cn2 + ':' + _ulInst.trackIdx);
+                    var _idId2 = session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx);
                     if (_idId2 == null) continue;
                     if (!idBuckets[_idId2]) idBuckets[_idId2] = {};
                     if (!idBuckets[_idId2][_cn2]) idBuckets[_idId2][_cn2] = _ulInst;

@@ -1580,10 +1580,6 @@ export async function switchSession(newIdx) {
     }
     if (timeline) timeline.setData(newSession);
 
-    // Sync trust track labels toggle
-    var trustCheck = document.getElementById('menuTrustTracksCheck');
-    if (trustCheck) trustCheck.textContent = newSession.trustTracks ? '\u2611' : '\u2610';
-
     // Rebuild views — reuse pool decoders via switchSource
     setVideoController(null);
     state.views = [];

@@ -24,10 +24,9 @@ import { setStatus, showLoading, hideLoading } from '../import-export/save-load.
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 
-// Explicit "no identity" per-frame override value. Written for visible
-// instances that landed in no group this frame so that getIdentity*ForTrack
-// returns null instead of falling back to the stale global trackIdentityMap
-// (Issue #6 — defensive backstop against residual duplicate identity colors).
+// Explicit "no identity" per-frame value. Written for visible instances that
+// landed in no group this frame so that getIdentity*ForTrack returns null for
+// them (Issue #6 — prevents residual duplicate identity colors).
 var EXPLICIT_NONE = -1;
 
 // ============================================
@@ -251,20 +250,19 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
         targets3d[g].identityId = identity.id;
 
         groups[g].forEach(function(inst, cn) {
-            session.trackIdentityMap.set(cn + ':' + inst.trackIdx, identity.id);
-            if (opts.perFrame && session.setFrameIdentity) {
+            // Identity is recorded per-frame only (no global default map).
+            if (session.setFrameIdentity) {
                 session.setFrameIdentity(fi, cn, inst.trackIdx, identity.id);
             }
             assignments.set(cn + ':' + inst.trackIdx, identity.id);
         });
     }
 
-    // Issue #6 (defensive): every VISIBLE instance that did not land in a group
-    // this frame gets an explicit "no identity" per-frame override instead of
-    // being left to fall back through getIdentity*ForTrack to the stale global
-    // trackIdentityMap (the residual duplicate-color source). Never clobber an
-    // existing per-frame override (e.g. a manual user assignment).
-    if (opts.perFrame && session.setFrameIdentity) {
+    // Issue #6: every VISIBLE instance that did not land in a group this frame
+    // gets an explicit "no identity" per-frame marker, so getIdentity*ForTrack
+    // returns null for it instead of leaving it unmapped. Never clobber an
+    // existing per-frame entry (e.g. a manual user assignment).
+    if (session.setFrameIdentity) {
         for (var aci = 0; aci < activeCams.length; aci++) {
             var acn = activeCams[aci];
             var aInsts = camInstances[acn];
@@ -804,7 +802,6 @@ export async function trackAll() {
 
     // Clear old identities for fresh run
     session.identities = [];
-    session.trackIdentityMap = new Map();
     session.frameIdentityMap = new Map();
 
     showLoading('Assigning identities: 0/' + frameIndices.length + ' frames...');

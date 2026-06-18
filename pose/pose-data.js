@@ -562,9 +562,14 @@ export class Session {
         /** @type {Identity[]} */
         this.identities = [];
         this.trustTracks = false;
-        /** @type {Map<string, number>} "camName:trackIdx" → identityId (global default mapping) */
-        this.trackIdentityMap = new Map();
-        /** @type {Map<string, number>} "frameIdx:camName:trackIdx" → identityId (per-frame overrides) */
+        /**
+         * @type {Map<string, number>} "frameIdx:camName:trackIdx" → identityId.
+         * The SINGLE source of per-instance identity. A negative value is an
+         * explicit "no identity" marker. There is deliberately no global
+         * "camName:trackIdx" default map: a track's identity is a per-frame
+         * property (tracklets swap), and a global fallback painted stale
+         * duplicate identities whenever per-frame reality diverged from it.
+         */
         this.frameIdentityMap = new Map();
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
@@ -587,17 +592,16 @@ export class Session {
     }
 
     getOrCreateIdentityForTrack(trackIdx) {
-        // Check if any camera has this track mapped already
+        // Return the canonical "id_N" identity for a track, creating it if
+        // absent. Pure lookup/create — it does NOT assign the identity to any
+        // instance. Callers stamp per-frame identity themselves (via
+        // setFrameIdentity / assignTrackToIdentity) so this stays O(1) even
+        // when called once per (frame, track).
         var idName = 'id_' + trackIdx;
         for (var i = 0; i < this.identities.length; i++) {
             if (this.identities[i].name === idName) return this.identities[i];
         }
-        // Create new identity and map it for all cameras
-        var identity = this.addIdentity(idName);
-        for (var ci = 0; ci < this.cameras.length; ci++) {
-            this.trackIdentityMap.set(this.cameras[ci].name + ':' + trackIdx, identity.id);
-        }
-        return identity;
+        return this.addIdentity(idName);
     }
 
     /**
@@ -721,25 +725,201 @@ export class Session {
     }
 
     /**
-     * Assign a tracklet (trackIdx) in a specific camera to an Identity.
-     * Multiple trackIdx values on one camera may legitimately share an
-     * identity ("tracklet stitching" — the same physical subject appears
-     * as multiple disconnected tracklets across non-overlapping frame
-     * ranges). The per-frame uniqueness invariant (at most one trackIdx
-     * per camera per FRAME → one identity) is enforced separately by
-     * propagateIdentity; this global setter does not enforce it.
+     * "Propagate IDs → Tracks": overwrite every instance's track with its
+     * identity. Identity/grouping is the source of truth here — each instance
+     * that belongs to an identity-bearing InstanceGroup gets a trackIdx whose
+     * NAME is that identity's name; every other instance (ungrouped, unlinked,
+     * or in a group with no identity) becomes trackless (trackIdx = null)
+     * rather than keeping a stale index into the rewritten `tracks` array.
+     *
+     * This rewrites the session-level `tracks` name list to one entry per used
+     * identity and rewrites `frameIdentityMap` under the new trackIdx keys, so
+     * each instance's track resolves back to its identity (Color-by-Track and
+     * Color-by-Identity then show the same partition). Identity lives purely
+     * per-frame — there is no global default map to rebuild.
+     *
+     * SLP-export hazards this guards against: identity names are de-duplicated
+     * (a numeric suffix is appended on collision) and never empty, so the
+     * exported .slp gets exactly one uniquely-named Track per identity and no
+     * instance points at the wrong track name.
+     *
+     * @returns {{tracks:number, instances:number}} new track count and number
+     *   of instances whose trackIdx changed.
+     */
+    propagateIdentitiesToTracks() {
+        // The authoritative per-instance identity is what the viewer colors by:
+        // getIdentityIdForTrack(cam, trackIdx, frameIdx) — the per-frame map.
+        // (group.identityId is only populated once instances are triangulated/
+        // grouped, so it is NOT a reliable source right after Track All.) A
+        // small helper walks every visible instance — linked and unlinked —
+        // with its camera/frame.
+        var self = this;
+        function forEachInstance(cb) {
+            for (var [frameIdx, fg] of self.frameGroups) {
+                for (var [camName, insts] of fg.instances) {
+                    for (var ii = 0; ii < insts.length; ii++) cb(insts[ii], camName, frameIdx);
+                }
+                for (var [camName2, ul] of fg.unlinkedInstances) {
+                    for (var uu = 0; uu < ul.length; uu++) cb(ul[uu].instance, camName2, frameIdx);
+                }
+            }
+        }
+
+        // 1. Collect the identity ids actually carried by some visible instance,
+        //    preserving identities-array order for stable, reproducible track
+        //    indices. Build new tracks = identity names (unique + non-empty).
+        var usedSet = new Set();
+        forEachInstance(function (inst, camName, frameIdx) {
+            if (inst.trackIdx == null) return;
+            var id = self.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
+            if (id != null && id >= 0) usedSet.add(id);
+        });
+        var newTracks = [];
+        var idToTrackIdx = new Map();   // identityId → new trackIdx
+        var nameSeen = {};
+        for (var ix = 0; ix < this.identities.length; ix++) {
+            var ident = this.identities[ix];
+            if (!usedSet.has(ident.id)) continue;
+            var base = (ident.name != null && String(ident.name).trim() !== '')
+                ? String(ident.name) : ('id_' + ident.id);
+            var name = base, dup = 2;
+            while (nameSeen[name]) { name = base + '_' + dup; dup++; }  // de-dup
+            nameSeen[name] = true;
+            idToTrackIdx.set(ident.id, newTracks.length);
+            newTracks.push(name);
+        }
+
+        // 2. Rewrite each instance's trackIdx to its identity's new track (or
+        //    null when it has no identity), and record the matching per-frame
+        //    identity entry under the NEW trackIdx. Lookups here read the OLD
+        //    frameIdentityMap; we only swap in the new one in step 3, so this
+        //    pass is order-independent.
+        var changed = 0;
+        var newFrameMap = new Map();   // "frame:cam:newTrackIdx" → identityId
+        forEachInstance(function (inst, camName, frameIdx) {
+            var ni = null, id = null;
+            if (inst.trackIdx != null) {
+                id = self.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
+                if (id != null && idToTrackIdx.has(id)) ni = idToTrackIdx.get(id);
+            }
+            if (ni != null) newFrameMap.set(frameIdx + ':' + camName + ':' + ni, id);
+            if (inst.trackIdx !== ni) { inst.trackIdx = ni; changed++; }
+        });
+
+        // 3. Commit. Identity now lives purely per-frame under the new trackIdx
+        //    keys — each instance's track IS its identity, so the per-frame map
+        //    is what lookups read. (No global default map exists.) Already-
+        //    grouped frames keep their group.identityId, which agrees with the
+        //    new per-frame entries, so tracks and groups stay consistent.
+        this.tracks = newTracks;
+        this.frameIdentityMap = newFrameMap;
+        return { tracks: newTracks.length, instances: changed };
+    }
+
+    /**
+     * "Propagate Tracks → IDs": make each track label an identity. For every
+     * visible instance, stamp its per-frame identity to the canonical
+     * "id_<trackIdx>" identity (created on demand). Grouped frames also get
+     * their group.identityId aligned, so grouped and per-frame identity agree.
+     * @returns {{identities:number, instances:number}}
+     */
+    propagateTracksToIdentities() {
+        var self = this, changed = 0;
+        for (var [frameIdx, fg] of this.frameGroups) {
+            var stamp = function (inst, cam) {
+                if (inst.trackIdx == null) return;
+                var ident = self.getOrCreateIdentityForTrack(inst.trackIdx);
+                self.setFrameIdentity(frameIdx, cam, inst.trackIdx, ident.id);
+                changed++;
+            };
+            for (var [c1, insts] of fg.instances) for (var a = 0; a < insts.length; a++) stamp(insts[a], c1);
+            for (var [c2, ul] of fg.unlinkedInstances) for (var b = 0; b < ul.length; b++) stamp(ul[b].instance, c2);
+        }
+        // Align grouped frames' group.identityId with their instances' track.
+        for (var [, groups] of this.instanceGroups) {
+            for (var gi = 0; gi < groups.length; gi++) {
+                var anyTrack = null;
+                for (var [, gInst] of groups[gi].instances) {
+                    if (gInst.trackIdx != null) { anyTrack = gInst.trackIdx; break; }
+                }
+                if (anyTrack != null) {
+                    this.assignIdentityToGroup(groups[gi], this.getOrCreateIdentityForTrack(anyTrack).id);
+                }
+            }
+        }
+        return { identities: this.identities.length, instances: changed };
+    }
+
+    /**
+     * Assign a tracklet (trackIdx) to an Identity by stamping a per-frame
+     * entry on every frame where that (camera, trackIdx) instance appears.
+     * Multiple trackIdx values may legitimately share an identity across
+     * non-overlapping frame ranges ("tracklet stitching"). Per-frame
+     * uniqueness (at most one trackIdx per camera per FRAME → one identity)
+     * is enforced separately by propagateIdentity; this setter does not.
      * @param {number} trackIdx
      * @param {number} identityId
      * @param {string} [cameraName] - If omitted, assigns for ALL cameras
      */
     assignTrackToIdentity(trackIdx, identityId, cameraName) {
-        if (cameraName) {
-            this.trackIdentityMap.set(cameraName + ':' + trackIdx, identityId);
-        } else {
-            for (var ci = 0; ci < this.cameras.length; ci++) {
-                this.trackIdentityMap.set(this.cameras[ci].name + ':' + trackIdx, identityId);
-            }
+        var self = this;
+        function applies(cam) { return cameraName ? cam === cameraName : true; }
+        for (var [frameIdx, fg] of this.frameGroups) {
+            var seenCams = new Set();
+            var scan = function (inst, cam) {
+                if (inst.trackIdx !== trackIdx || !applies(cam) || seenCams.has(cam)) return;
+                seenCams.add(cam);
+                self.frameIdentityMap.set(frameIdx + ':' + cam + ':' + trackIdx, identityId);
+            };
+            for (var [cam1, insts] of fg.instances) for (var a = 0; a < insts.length; a++) scan(insts[a], cam1);
+            for (var [cam2, ul] of fg.unlinkedInstances) for (var b = 0; b < ul.length; b++) scan(ul[b].instance, cam2);
         }
+    }
+
+    /**
+     * Clear any per-frame identity for a track ("set to none"). Removes every
+     * "frameIdx:cameraName:trackIdx" entry, so the track resolves to no
+     * identity on all frames. The per-frame replacement for deleting a global
+     * "cameraName:trackIdx" mapping.
+     * @param {number} trackIdx
+     * @param {string} cameraName
+     */
+    clearTrackIdentity(trackIdx, cameraName) {
+        var suffix = ':' + cameraName + ':' + trackIdx;
+        for (var k of Array.from(this.frameIdentityMap.keys())) {
+            if (k.substring(k.length - suffix.length) === suffix) this.frameIdentityMap.delete(k);
+        }
+    }
+
+    /**
+     * Migrate a legacy global "cameraName:trackIdx → identityId" map (the
+     * removed `trackIdentityMap`) into per-frame entries, so projects saved
+     * before the per-frame-only model keep their identities. For each global
+     * entry, stamps `frameIdx:cameraName:trackIdx → identityId` on every frame
+     * where that instance actually exists, WITHOUT overwriting an existing
+     * (more specific) per-frame entry. Call after frame groups are loaded.
+     * @param {Array<[string, number]>} entries - [["cam:trackIdx", id], ...]
+     * @returns {number} per-frame entries written
+     */
+    migrateGlobalIdentitiesToPerFrame(entries) {
+        if (!entries || !entries.length) return 0;
+        var byKey = {};
+        for (var i = 0; i < entries.length; i++) byKey[entries[i][0]] = entries[i][1];
+        var self = this, n = 0;
+        function apply(inst, cam, frameIdx) {
+            if (inst.trackIdx == null) return;
+            var gid = byKey[cam + ':' + inst.trackIdx];
+            if (gid == null) return;
+            var key = frameIdx + ':' + cam + ':' + inst.trackIdx;
+            if (self.frameIdentityMap.has(key)) return;   // keep specific entry
+            self.frameIdentityMap.set(key, gid);
+            n++;
+        }
+        for (var [frameIdx, fg] of this.frameGroups) {
+            for (var [cam1, insts] of fg.instances) for (var a = 0; a < insts.length; a++) apply(insts[a], cam1, frameIdx);
+            for (var [cam2, ul] of fg.unlinkedInstances) for (var b = 0; b < ul.length; b++) apply(ul[b].instance, cam2, frameIdx);
+        }
+        return n;
     }
 
     /**
@@ -751,38 +931,25 @@ export class Session {
      * @returns {Identity|null}
      */
     getIdentityForTrack(trackIdx, cameraName, frameIdx) {
-        // Check per-frame override first
+        // Per-frame identity is the only source. A negative value is an
+        // explicit "no identity" marker → null (not a stale fallback).
         if (frameIdx != null && cameraName) {
             var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
             var frameIdVal = this.frameIdentityMap.get(frameKey);
-            // A negative value is an explicit "no identity" override: the
-            // tracker marks a visible-but-ungrouped instance so it never falls
-            // back to the stale global trackIdentityMap (the source of residual
-            // duplicate identity colors). Return null instead of a stale id.
             if (frameIdVal != null) return frameIdVal < 0 ? null : this.getIdentity(frameIdVal);
+            return null;
         }
-        // Per-frame without cameraName: check any camera at this frame
+        // Per-frame without cameraName: check any camera at this frame.
         if (frameIdx != null && !cameraName) {
             var framePrefix = frameIdx + ':';
             var trackSuffix = ':' + trackIdx;
             for (var [fKey, fIdVal] of this.frameIdentityMap) {
                 if (fKey.substring(0, framePrefix.length) === framePrefix &&
                     fKey.substring(fKey.length - trackSuffix.length) === trackSuffix) {
-                    // Skip explicit "no identity" markers; prefer a real
-                    // per-frame id from another camera if one exists.
-                    if (fIdVal < 0) continue;
+                    if (fIdVal < 0) continue;   // skip explicit "no identity"
                     return this.getIdentity(fIdVal);
                 }
             }
-        }
-        // Fall back to global
-        if (cameraName) {
-            var identityId = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
-            if (identityId != null) return this.getIdentity(identityId);
-        }
-        // Fallback: check any camera in global
-        for (var [key, idVal] of this.trackIdentityMap) {
-            if (key.endsWith(':' + trackIdx)) return this.getIdentity(idVal);
         }
         return null;
     }
@@ -795,15 +962,12 @@ export class Session {
      * @returns {number|null} identityId or null
      */
     getIdentityIdForTrack(cameraName, trackIdx, frameIdx) {
-        if (frameIdx != null) {
-            var frameKey = frameIdx + ':' + cameraName + ':' + trackIdx;
-            var frameIdVal = this.frameIdentityMap.get(frameKey);
-            // Negative = explicit "no identity" override (see
-            // getIdentityForTrack). Return null rather than the stale global.
-            if (frameIdVal != null) return frameIdVal < 0 ? null : frameIdVal;
-        }
-        var globalVal = this.trackIdentityMap.get(cameraName + ':' + trackIdx);
-        return globalVal != null ? globalVal : null;
+        if (frameIdx == null) return null;
+        var frameIdVal = this.frameIdentityMap.get(frameIdx + ':' + cameraName + ':' + trackIdx);
+        // Negative = explicit "no identity"; absent = no identity. Either way
+        // null — there is no global default to fall back to.
+        if (frameIdVal != null) return frameIdVal < 0 ? null : frameIdVal;
+        return null;
     }
 
     /**

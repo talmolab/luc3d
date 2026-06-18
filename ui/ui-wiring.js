@@ -161,36 +161,41 @@ export function setupMenus() {
         groupByIdentityAndTriangulateAll();
     });
 
-    document.getElementById('menuTrustTracks').addEventListener('click', function () {
+    // Propagate Tracks → IDs (one-shot): each track label becomes an identity,
+    // stamped per-frame on every instance. (Was the "Trust Track Labels"
+    // toggle; now a single action.)
+    document.getElementById('menuPropagateTracksToIds').addEventListener('click', function () {
         closeMenus();
-        if (!state.session) return;
-        state.session.trustTracks = !state.session.trustTracks;
-        var check = document.getElementById('menuTrustTracksCheck');
-        check.textContent = state.session.trustTracks ? '☑' : '☐';
+        if (!state.session) { setStatus('No session loaded', 'warning'); return; }
+        var session = state.session;
+        var res = session.propagateTracksToIdentities();
+        // Mark tracks as trusted (persisted in project metadata) and show IDs.
+        session.trustTracks = true;
+        state.colorByIdentity = true;
+        updateColorByChecks();
+        drawAllOverlays(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(session);
+        setStatus('Propagate Tracks → IDs: ' + res.identities + ' identities from tracks (' +
+            res.instances + ' instances)', 'success');
+    });
 
-        // When trusting tracks, propagate track numbers to identities
-        if (state.session.trustTracks) {
-            // Create identity for each track name (fast — just uses tracks array)
-            for (var ti = 0; ti < state.session.tracks.length; ti++) {
-                state.session.getOrCreateIdentityForTrack(ti);
-            }
-            // Assign identities to existing groups by track
-            for (var [fIdx2, groups] of state.session.instanceGroups) {
-                for (var gi = 0; gi < groups.length; gi++) {
-                    var identity = state.session.getOrCreateIdentityForTrack(groups[gi].identityId);
-                    state.session.assignIdentityToGroup(groups[gi], identity.id);
-                }
-            }
-            // Auto-switch to Color by Identity
-            state.colorByIdentity = true;
-            updateColorByChecks();
-            setStatus('Trust Track Labels: ON — ' + state.session.tracks.length + ' identities from tracks', 'success');
-            drawAllOverlays(state.currentFrame);
-            updateInfoPanel();
-            if (timeline) timeline.refreshTracks(state.session);
-        } else {
-            setStatus('Trust Track Labels: OFF — tracks and identities are independent', 'success');
+    // Propagate IDs → Tracks (one-shot): identity/grouping is the source of
+    // truth — overwrite every instance's track with its identity, rewriting the
+    // session track list to one uniquely-named track per used identity.
+    document.getElementById('menuPropagateIdsToTracks').addEventListener('click', function () {
+        closeMenus();
+        if (!state.session) { setStatus('No session loaded', 'warning'); return; }
+        var res = state.session.propagateIdentitiesToTracks();
+        if (res.tracks === 0) {
+            setStatus('Propagate IDs → Tracks: no identities are assigned to any group', 'warning');
+            return;
         }
+        drawAllOverlays(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session);
+        setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks from identities (' +
+            res.instances + ' instances updated)', 'success');
     });
 
     // Color by Track / Color by Identity toggles

@@ -469,11 +469,11 @@
             // so we must add at least one identity so 'identities' mode renders.
             session.addIdentity('id_0');
             session.addIdentity('id_1');
-            session.trackIdentityMap.set('camA:0', session.identities[0].id);
-            session.trackIdentityMap.set('camA:1', session.identities[1].id);
-            session.trackIdentityMap.set('camB:0', session.identities[0].id);
-            session.trackIdentityMap.set('camB:1', session.identities[1].id);
-            session.trackIdentityMap.set('camB:2', session.identities[0].id);
+            session.assignTrackToIdentity(0, session.identities[0].id, 'camA');
+            session.assignTrackToIdentity(1, session.identities[1].id, 'camA');
+            session.assignTrackToIdentity(0, session.identities[0].id, 'camB');
+            session.assignTrackToIdentity(1, session.identities[1].id, 'camB');
+            session.assignTrackToIdentity(2, session.identities[0].id, 'camB');
 
             tl.setData(session);
 

@@ -1934,7 +1934,6 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     sioSession.metadata.lucid = {
         sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
-        trackIdentityMap: Array.from(session.trackIdentityMap.entries()),
         frameIdentityMap: session.frameIdentityMap
             ? Array.from(session.frameIdentityMap.entries())
             : [],

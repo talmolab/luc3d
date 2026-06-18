@@ -46,11 +46,6 @@
         // Set trustTracks
         session.trustTracks = true;
 
-        // Track identity map (global)
-        session.trackIdentityMap.set('CamA:0', 0);
-        session.trackIdentityMap.set('CamB:0', 0);
-        session.trackIdentityMap.set('CamA:1', 1);
-
         // Frame identity map (per-frame overrides)
         if (!session.frameIdentityMap) session.frameIdentityMap = new Map();
         session.frameIdentityMap.set('5:CamA:0', 1); // frame 5, CamA, track 0 → identity 1
@@ -147,7 +142,6 @@
                 return { id: id.id, name: id.name, color: id.color };
             }),
             trustTracks: session.trustTracks || false,
-            trackIdentityMap: Array.from(session.trackIdentityMap.entries()),
             frameIdentityMap: session.frameIdentityMap
                 ? Array.from(session.frameIdentityMap.entries())
                 : [],
@@ -232,11 +226,6 @@
             }
         }
         if (data.trustTracks != null) session.trustTracks = data.trustTracks;
-        if (data.trackIdentityMap) {
-            for (var tmi = 0; tmi < data.trackIdentityMap.length; tmi++) {
-                session.trackIdentityMap.set(data.trackIdentityMap[tmi][0], data.trackIdentityMap[tmi][1]);
-            }
-        }
         if (data.frameIdentityMap && data.frameIdentityMap.length > 0) {
             if (!session.frameIdentityMap) session.frameIdentityMap = new Map();
             for (var fmi = 0; fmi < data.frameIdentityMap.length; fmi++) {
@@ -407,13 +396,6 @@
         it('trustTracks survives', function () {
             var r = roundtrip();
             assertTrue(r.restored.trustTracks, 'trustTracks is true');
-        });
-
-        it('trackIdentityMap survives', function () {
-            var r = roundtrip();
-            assertEqual(r.restored.trackIdentityMap.get('CamA:0'), 0);
-            assertEqual(r.restored.trackIdentityMap.get('CamB:0'), 0);
-            assertEqual(r.restored.trackIdentityMap.get('CamA:1'), 1);
         });
 
         it('frameIdentityMap survives', function () {

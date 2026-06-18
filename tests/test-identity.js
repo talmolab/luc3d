@@ -1,6 +1,18 @@
 (function () {
     const { describe, it, assertEqual, assertNotNull, assertTrue, assertNull } = TestFramework;
 
+    // Identity is stored per-frame (frameIdentityMap); there is no global
+    // track→identity map. assignTrackToIdentity / Track All only stamp frames
+    // where an instance with that (camera, trackIdx) exists, so tests register
+    // an instance first. Helper returns the created Instance.
+    function addInst(session, frameIdx, camName, trackIdx) {
+        var fg = session.getFrameGroup(frameIdx);
+        if (!fg) { fg = new FrameGroup(frameIdx); session.addFrameGroup(fg); }
+        var inst = new Instance([[0, 0]], trackIdx, 'predicted', 1.0);
+        fg.addInstance(camName, inst);
+        return inst;
+    }
+
     describe('Identity', function () {
         it('creates with id, name, and color', function () {
             var id = new Identity(0, 'mouse_A', '#ff6b6b');
@@ -528,30 +540,33 @@
 
     // ---- Per-camera track-to-identity mapping ----
 
-    describe('Per-camera trackIdentityMap', function () {
-        it('starts empty', function () {
+    describe('Per-camera per-frame identity', function () {
+        it('frame identity map starts empty', function () {
             var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
-            assertEqual(s.trackIdentityMap.size, 0);
+            assertEqual(s.frameIdentityMap.size, 0);
         });
 
-        it('assignTrackToIdentity with camera sets per-camera key', function () {
+        it('assignTrackToIdentity with camera stamps the per-frame key', function () {
             var s = new Session([new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])],
                 new Skeleton('s', ['a'], []), ['t0']);
             var id = s.addIdentity('id_0');
+            addInst(s, 0, 'CamA', 0);
             s.assignTrackToIdentity(0, id.id, 'CamA');
-            assertEqual(s.trackIdentityMap.get('CamA:0'), id.id);
+            assertEqual(s.frameIdentityMap.get('0:CamA:0'), id.id);
         });
 
-        it('assignTrackToIdentity without camera sets all cameras', function () {
+        it('assignTrackToIdentity without camera stamps all cameras', function () {
             var cams = [
                 new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
                 new Camera('CamB', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
             ];
             var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0']);
             var id = s.addIdentity('id_0');
+            addInst(s, 0, 'CamA', 0);
+            addInst(s, 0, 'CamB', 0);
             s.assignTrackToIdentity(0, id.id);
-            assertEqual(s.trackIdentityMap.get('CamA:0'), id.id);
-            assertEqual(s.trackIdentityMap.get('CamB:0'), id.id);
+            assertEqual(s.frameIdentityMap.get('0:CamA:0'), id.id);
+            assertEqual(s.frameIdentityMap.get('0:CamB:0'), id.id);
         });
 
         it('getIdentityForTrack with camera returns per-camera identity', function () {
@@ -562,38 +577,41 @@
             var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0', 't1']);
             var idA = s.addIdentity('id_0');
             var idB = s.addIdentity('id_1');
+            addInst(s, 0, 'CamA', 0);
+            addInst(s, 0, 'CamB', 0);
             s.assignTrackToIdentity(0, idA.id, 'CamA');
             s.assignTrackToIdentity(0, idB.id, 'CamB');  // different identity for same track!
 
-            var foundA = s.getIdentityForTrack(0, 'CamA');
-            var foundB = s.getIdentityForTrack(0, 'CamB');
+            var foundA = s.getIdentityForTrack(0, 'CamA', 0);
+            var foundB = s.getIdentityForTrack(0, 'CamB', 0);
             assertEqual(foundA.id, idA.id, 'CamA track 0 should be id_0');
             assertEqual(foundB.id, idB.id, 'CamB track 0 should be id_1');
         });
 
-        it('getIdentityForTrack without camera falls back to any match', function () {
+        it('getIdentityForTrack without camera finds any per-frame match', function () {
             var cams = [
                 new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
             ];
             var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0']);
             var id = s.addIdentity('id_0');
+            addInst(s, 0, 'CamA', 0);
             s.assignTrackToIdentity(0, id.id, 'CamA');
 
-            var found = s.getIdentityForTrack(0);
-            assertEqual(found.id, id.id, 'should find via fallback');
+            var found = s.getIdentityForTrack(0, null, 0);
+            assertEqual(found.id, id.id, 'should find via any-camera per-frame scan');
         });
 
         it('getIdentityForTrack returns null when not mapped', function () {
             var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
-            assertNull(s.getIdentityForTrack(0, 'CamA'));
-            assertNull(s.getIdentityForTrack(0));
+            assertNull(s.getIdentityForTrack(0, 'CamA', 0));
+            assertNull(s.getIdentityForTrack(0, null, 0));
         });
     });
 
     // ---- Trust tracks propagation ----
 
     describe('Trust tracks propagation', function () {
-        it('getOrCreateIdentityForTrack creates identity and maps all cameras', function () {
+        it('getOrCreateIdentityForTrack creates the id_N identity', function () {
             var cams = [
                 new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
                 new Camera('CamB', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
@@ -602,8 +620,7 @@
 
             var id0 = s.getOrCreateIdentityForTrack(0);
             assertEqual(id0.name, 'id_0');
-            assertEqual(s.trackIdentityMap.get('CamA:0'), id0.id, 'CamA mapped');
-            assertEqual(s.trackIdentityMap.get('CamB:0'), id0.id, 'CamB mapped');
+            assertEqual(s.identities.length, 1, 'one identity created');
         });
 
         it('getOrCreateIdentityForTrack returns same identity on second call', function () {
@@ -641,12 +658,15 @@
             var s = new Session(cams, new Skeleton('s', ['a'], []), ['tracklet_0', 'tracklet_1', 'tracklet_2']);
             var id0 = s.addIdentity('mouse_A');
 
-            // Assign tracklet 0 and tracklet 2 to same identity (stitching)
+            // Tracklet 0 lives at frame 0, tracklet 2 at frame 5 (non-overlapping).
+            addInst(s, 0, 'CamA', 0);
+            addInst(s, 5, 'CamA', 2);
+            // Assign both tracklets to same identity (stitching)
             s.assignTrackToIdentity(0, id0.id, 'CamA');
             s.assignTrackToIdentity(2, id0.id, 'CamA');
 
-            var found0 = s.getIdentityForTrack(0, 'CamA');
-            var found2 = s.getIdentityForTrack(2, 'CamA');
+            var found0 = s.getIdentityForTrack(0, 'CamA', 0);
+            var found2 = s.getIdentityForTrack(2, 'CamA', 5);
             assertEqual(found0.id, id0.id, 'tracklet 0 is mouse_A');
             assertEqual(found2.id, id0.id, 'tracklet 2 is also mouse_A');
             assertEqual(found0.color, found2.color, 'same color');
@@ -660,12 +680,13 @@
             var idA = s.addIdentity('mouse_A');
             var idB = s.addIdentity('mouse_B');
 
+            addInst(s, 0, 'CamA', 0);
             s.assignTrackToIdentity(0, idA.id, 'CamA');
-            assertEqual(s.getIdentityForTrack(0, 'CamA').name, 'mouse_A');
+            assertEqual(s.getIdentityForTrack(0, 'CamA', 0).name, 'mouse_A');
 
             // Reassign
             s.assignTrackToIdentity(0, idB.id, 'CamA');
-            assertEqual(s.getIdentityForTrack(0, 'CamA').name, 'mouse_B');
+            assertEqual(s.getIdentityForTrack(0, 'CamA', 0).name, 'mouse_B');
         });
     });
 
@@ -682,11 +703,13 @@
             var idB = s.addIdentity('mouse_B', '#ff00ff');
 
             // Track swap: CamA has correct track, CamB has swapped
+            addInst(s, 0, 'CamA', 0);
+            addInst(s, 0, 'CamB', 0);
             s.assignTrackToIdentity(0, idA.id, 'CamA');
             s.assignTrackToIdentity(0, idB.id, 'CamB');
 
-            var colorA = s.getIdentityForTrack(0, 'CamA').color;
-            var colorB = s.getIdentityForTrack(0, 'CamB').color;
+            var colorA = s.getIdentityForTrack(0, 'CamA', 0).color;
+            var colorB = s.getIdentityForTrack(0, 'CamB', 0).color;
             assertEqual(colorA, '#00ff00', 'CamA shows green');
             assertEqual(colorB, '#ff00ff', 'CamB shows magenta');
         });
@@ -701,14 +724,16 @@
             var id1 = s.addIdentity('id_1');
 
             // Both start as id_0
+            addInst(s, 0, 'CamA', 0);
+            addInst(s, 0, 'CamB', 0);
             s.assignTrackToIdentity(0, id0.id, 'CamA');
             s.assignTrackToIdentity(0, id0.id, 'CamB');
 
             // Change only CamB
             s.assignTrackToIdentity(0, id1.id, 'CamB');
 
-            assertEqual(s.getIdentityForTrack(0, 'CamA').id, id0.id, 'CamA unchanged');
-            assertEqual(s.getIdentityForTrack(0, 'CamB').id, id1.id, 'CamB changed');
+            assertEqual(s.getIdentityForTrack(0, 'CamA', 0).id, id0.id, 'CamA unchanged');
+            assertEqual(s.getIdentityForTrack(0, 'CamB', 0).id, id1.id, 'CamB changed');
         });
     });
 
@@ -742,10 +767,10 @@
             var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
             var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
             var id = s.addIdentity('id_0', '#00ff00');
-            s.assignTrackToIdentity(0, id.id, 'CamA');
+            s.setFrameIdentity(0, 'CamA', 0, id.id);
 
             var inst = new Instance([[10, 20]], 0, 'predicted');
-            var color = getInstanceColor(inst, s, 'CamA', true);
+            var color = getInstanceColor(inst, s, 'CamA', true, 0);
             assertEqual(color, '#00ff00', 'should return identity color');
         });
 
@@ -771,17 +796,17 @@
             var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
             var id0 = s.addIdentity('id_0', '#00ff00');
             var id1 = s.addIdentity('id_1', '#ff00ff');
-            s.assignTrackToIdentity(0, id0.id, 'CamA');
+            s.setFrameIdentity(0, 'CamA', 0, id0.id);
 
             var inst = new Instance([[10, 20]], 0, 'predicted');
 
             // Initially green
-            var color1 = getInstanceColor(inst, s, 'CamA', true);
+            var color1 = getInstanceColor(inst, s, 'CamA', true, 0);
             assertEqual(color1, '#00ff00', 'should be green initially');
 
             // Change to id_1 (magenta)
-            s.assignTrackToIdentity(0, id1.id, 'CamA');
-            var color2 = getInstanceColor(inst, s, 'CamA', true);
+            s.setFrameIdentity(0, 'CamA', 0, id1.id);
+            var color2 = getInstanceColor(inst, s, 'CamA', true, 0);
             assertEqual(color2, '#ff00ff', 'should be magenta after reassign');
         });
 
@@ -793,20 +818,20 @@
             var s = new Session(cams, new Skeleton('s', ['a'], []), ['track_0']);
             var id0 = s.addIdentity('id_0', '#00ff00');
             var id1 = s.addIdentity('id_1', '#ff00ff');
-            s.assignTrackToIdentity(0, id0.id, 'CamA');
-            s.assignTrackToIdentity(0, id1.id, 'CamB');
+            s.setFrameIdentity(0, 'CamA', 0, id0.id);
+            s.setFrameIdentity(0, 'CamB', 0, id1.id);
 
             var inst = new Instance([[10, 20]], 0, 'predicted');
-            var colorA = getInstanceColor(inst, s, 'CamA', true);
-            var colorB = getInstanceColor(inst, s, 'CamB', true);
+            var colorA = getInstanceColor(inst, s, 'CamA', true, 0);
+            var colorB = getInstanceColor(inst, s, 'CamB', true, 0);
             assertEqual(colorA, '#00ff00', 'CamA should be green');
             assertEqual(colorB, '#ff00ff', 'CamB should be magenta');
         });
     });
 
-    // ---- trackIdentityMap serialization ----
+    // ---- frameIdentityMap serialization ----
 
-    describe('trackIdentityMap serialization', function () {
+    describe('frameIdentityMap serialization', function () {
         it('round-trips through array of entries', function () {
             var cams = [
                 new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
@@ -814,20 +839,20 @@
             var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0', 't1']);
             var id0 = s.addIdentity('id_0');
             var id1 = s.addIdentity('id_1');
-            s.assignTrackToIdentity(0, id0.id, 'CamA');
-            s.assignTrackToIdentity(1, id1.id, 'CamA');
+            s.setFrameIdentity(0, 'CamA', 0, id0.id);
+            s.setFrameIdentity(0, 'CamA', 1, id1.id);
 
             // Serialize
-            var entries = Array.from(s.trackIdentityMap.entries());
+            var entries = Array.from(s.frameIdentityMap.entries());
             assertEqual(entries.length, 2);
 
             // Restore
             var s2 = new Session(cams, new Skeleton('s', ['a'], []), ['t0', 't1']);
             for (var i = 0; i < entries.length; i++) {
-                s2.trackIdentityMap.set(entries[i][0], entries[i][1]);
+                s2.frameIdentityMap.set(entries[i][0], entries[i][1]);
             }
-            assertEqual(s2.trackIdentityMap.get('CamA:0'), id0.id);
-            assertEqual(s2.trackIdentityMap.get('CamA:1'), id1.id);
+            assertEqual(s2.frameIdentityMap.get('0:CamA:0'), id0.id);
+            assertEqual(s2.frameIdentityMap.get('0:CamA:1'), id1.id);
         });
     });
     // ---- Timeline tracklet stress test ----
@@ -1024,17 +1049,16 @@
             assertEqual(val, id0.id, 'per-frame override should be set');
         });
 
-        it('getIdentityIdForTrack checks per-frame first', function () {
+        it('getIdentityIdForTrack reads per-frame entries independently', function () {
             var s = makeSession().session;
             var id0 = s.identities[0], id1 = s.identities[1];
-            // Set global to id_0
-            s.trackIdentityMap.set('cam1:0', id0.id);
-            // Set per-frame override to id_1 for frame 5
+            // Distinct per-frame identities for the same (cam, track).
+            s.setFrameIdentity(3, 'cam1', 0, id0.id);
             s.setFrameIdentity(5, 'cam1', 0, id1.id);
-            // Frame 5 should return id_1 (per-frame wins)
-            assertEqual(s.getIdentityIdForTrack('cam1', 0, 5), id1.id, 'per-frame should win');
-            // Frame 3 (no per-frame) should return id_0 (global)
-            assertEqual(s.getIdentityIdForTrack('cam1', 0, 3), id0.id, 'global fallback');
+            assertEqual(s.getIdentityIdForTrack('cam1', 0, 5), id1.id, 'frame 5 → id_1');
+            assertEqual(s.getIdentityIdForTrack('cam1', 0, 3), id0.id, 'frame 3 → id_0');
+            // A frame with no per-frame entry has no identity (no global fallback).
+            assertNull(s.getIdentityIdForTrack('cam1', 0, 1), 'unset frame → null');
         });
 
         it('getIdentityForTrack returns Identity object with per-frame', function () {
@@ -1078,7 +1102,6 @@
             }
             // Simulate manual change on frame 1: set to id_1
             s.setFrameIdentity(1, 'cam1', 0, id1.id);
-            s.trackIdentityMap.set('cam1:0', id1.id);
             // Frame 1 should now be id_1
             assertEqual(s.getIdentityIdForTrack('cam1', 0, 1), id1.id,
                 'manual change should override Track All');
@@ -1106,26 +1129,6 @@
     });
 
     describe('Session identity state consistency', function () {
-        it('assignTrackToIdentity updates global map', function () {
-            var cams = [new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])];
-            var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0']);
-            var id = s.addIdentity('id_0');
-            s.assignTrackToIdentity(0, id.id, 'cam1');
-            assertEqual(s.trackIdentityMap.get('cam1:0'), id.id, 'global map updated');
-        });
-
-        it('assignTrackToIdentity without camera sets all cameras', function () {
-            var cams = [
-                new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
-                new Camera('cam2', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480])
-            ];
-            var s = new Session(cams, new Skeleton('s', ['a'], []), ['t0']);
-            var id = s.addIdentity('id_0');
-            s.assignTrackToIdentity(0, id.id);
-            assertEqual(s.trackIdentityMap.get('cam1:0'), id.id, 'cam1 set');
-            assertEqual(s.trackIdentityMap.get('cam2:0'), id.id, 'cam2 set');
-        });
-
         it('new tracks beyond original count are accessible', function () {
             var s = new Session([], new Skeleton('s', ['a'], []), ['track_0']);
             assertEqual(s.tracks.length, 1);
@@ -1141,12 +1144,10 @@
             assertEqual(found, id, 'new identity should be immediately queryable');
         });
 
-        it('frameIdentityMap cleared separately from trackIdentityMap', function () {
+        it('frameIdentityMap can be cleared', function () {
             var s = new Session([], new Skeleton('s', ['a'], []), ['t0']);
-            s.trackIdentityMap.set('cam1:0', 0);
             s.frameIdentityMap.set('5:cam1:0', 1);
             s.frameIdentityMap = new Map();
-            assertEqual(s.trackIdentityMap.get('cam1:0'), 0, 'global unaffected');
             assertNull(s.frameIdentityMap.get('5:cam1:0') != null ? 'set' : null,
                 'per-frame cleared');
         });
@@ -1327,7 +1328,7 @@
             var fg = new FrameGroup(0);
             fg.addInstance('cam1', new Instance([[10, 20]], 0, 'predicted'));
             session.addFrameGroup(fg);
-            session.trackIdentityMap.set('cam1:0', id0.id);
+            session.setFrameIdentity(0, 'cam1', 0, id0.id);
 
             // Switch to identity mode
             tl.setDisplayMode('identities');
@@ -1338,7 +1339,7 @@
 
             // Change identity
             var id1 = session.addIdentity('id_1');
-            session.trackIdentityMap.set('cam1:0', id1.id);
+            session.setFrameIdentity(0, 'cam1', 0, id1.id);
             tl.refreshTracks(session);
 
             // Should still have segments (now under id_1)

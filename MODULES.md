@@ -103,9 +103,26 @@ session graph that holds them.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups, identity-mapping tables. Many methods:
-  identity assignment (`assignIdentityToGroup`, `propagateIdentity`,
-  `setFrameIdentity`), group editing (`createGroupFromUnlinked`,
+  frameGroups, instanceGroups. **Identity is stored ONLY per-frame** in
+  `frameIdentityMap` ("frameIdx:cam:trackIdx" → identityId; negative = explicit
+  "no identity"). There is deliberately no global "cam:trackIdx" default map
+  (the removed `trackIdentityMap`) — a global fallback painted stale duplicate
+  identities whenever per-frame reality diverged from it. Identity methods:
+  per-frame assignment (`setFrameIdentity`, `assignTrackToIdentity` — stamps
+  per-frame entries on every frame where that (cam,trackIdx) instance exists;
+  `clearTrackIdentity`; `propagateIdentity`), group assignment
+  (`assignIdentityToGroup`), lookup (`getIdentityIdForTrack`/
+  `getIdentityForTrack` — per-frame only, return null with no fallback;
+  `isExplicitNoIdentity`), `getOrCreateIdentityForTrack` (creates/returns the
+  "id_N" identity only — no map side effects), identity↔track propagation
+  (`propagateTracksToIdentities` for Tracks→IDs — stamps each instance's
+  per-frame identity from its track; `propagateIdentitiesToTracks` for
+  IDs→Tracks — overwrites each instance's `trackIdx` with its identity and
+  rewrites `tracks` to one unique, non-empty name per used identity so the
+  exported SLP has clean identity-named tracks, rewriting `frameIdentityMap`
+  under the new keys), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  converts a pre-per-frame project's global map to per-frame entries on load),
+  group editing (`createGroupFromUnlinked`,
   `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
   (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
   `_promoteIfMixed`), skeleton propagation
@@ -1001,7 +1018,12 @@ playback rate, and re-exports popular helpers like `unlinkGroup`,
 `showGroupContextMenu`, `seekToLabeledFrame`, `fitTimelineToData`.
 
 **Key exports.**
-- Menu / setup: `setupMenus`, `setupUI`.
+- Menu / setup: `setupMenus`, `setupUI`. The Tracks menu hosts both
+  identity↔track propagation actions (one-shot, under "Assign Identity"):
+  `Propagate Tracks → IDs` (`menuPropagateTracksToIds` — creates an identity
+  per track and assigns it to every group; sets `session.trustTracks`; was the
+  old Edit-menu "Trust Track Labels" toggle) and `Propagate IDs → Tracks`
+  (`menuPropagateIdsToTracks` — calls `Session.propagateIdentitiesToTracks`).
 - Group ops: `unlinkGroup`, `showGroupContextMenu`, `hideGroupContextMenu`.
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
