@@ -287,7 +287,15 @@ all-frames, multi-frame range).
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress)`,
   `reTriangulateGroup`, `triangulateCurrentFrame`,
   `triangulateAllFrames`, `sessionHasCalibration`,
-  `showCalibrationRequiredPopup`.
+  `showCalibrationRequiredPopup`,
+  `ensureGroupsFromIdentities(session, frameIdx)` — auto-creates a frame's
+  InstanceGroups from its per-frame identity assignments (>=2-camera buckets;
+  explicit-none stays unlinked) when none exist yet. Both
+  `triangulateCurrentFrame` and `triangulateAllFrames` call it, so each works
+  directly after **Track All** (which assigns identities but does not group).
+  `triangulateAllFrames` now sweeps every frame (not just pre-grouped ones),
+  so Triangulate All populates the 3D viewer after Track All; previously it
+  found no groups and bailed.
 
 **Imports from project modules.**
 - `./pose-data.js` — `mat3x3Multiply`, `FrameGroup`, `Instance`,
