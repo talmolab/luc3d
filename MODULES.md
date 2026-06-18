@@ -1323,7 +1323,12 @@ layer.
 - SLP build: `buildSlpExportData`, `buildPerCameraSlpJson`,
   `buildSlpLabels`, `buildSlpLabelsAllViews`,
   `buildSlpLabelsMultiSession`, `serializeSkeleton`,
-  `convertSlpToV06Compatible`.
+  `convertSlpToV06Compatible`. On 2D export both `buildSlpLabels` and
+  `buildSlpLabelsMultiSession` keep each instance's own track — grouped
+  AND ungrouped/unlinked — so a flat 2D project's tracks survive; an
+  ungrouped instance only drops its track if a grouped instance already
+  holds that track in the same frame (SLEAP forbids two instances sharing
+  a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`.
 - SLP parse: `parseSlpH5(file, onProgress)` — spawns worker.

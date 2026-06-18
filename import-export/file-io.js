@@ -1173,6 +1173,10 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
         if (groupedInstances.length === 0 && ungroupedInstances.length === 0 && reprojInstances.length === 0) continue;
 
         var frameInstances = [];
+        // Tracks already placed in THIS frame, so an ungrouped instance never
+        // duplicates a track a grouped instance holds (SLEAP forbids two
+        // instances sharing a (frame, track) pair).
+        var usedTrackIdx = {};
 
         // 1. Grouped UserInstances first (retain their track)
         for (var ii = 0; ii < groupedInstances.length; ii++) {
@@ -1184,6 +1188,7 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
             // from a 2D SLP with track=null). `null >= 0` is true in JS
             // so we need the explicit != null guard before the range check.
             var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+            if (track) usedTrackIdx[inst.trackIdx] = true;
 
             if (inst.type === 'user') {
                 frameInstances.push(new SIO.Instance({
@@ -1201,24 +1206,31 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
             }
         }
 
-        // 2. Ungrouped UserInstances next (no track assigned)
+        // 2. Ungrouped (unlinked) instances next — keep their OWN track so a
+        //    flat 2D project's tracks survive export. Skip a track already held
+        //    by a grouped instance this frame (SLEAP forbids two instances on
+        //    the same (frame, track)).
         for (var ugi = 0; ugi < ungroupedInstances.length; ugi++) {
             var ugInst = ungroupedInstances[ugi];
             var ugIsPred = ugInst.type === 'predicted';
             var ugScore = ugInst.score != null ? ugInst.score : 1.0;
             var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
+            var ugTrack = (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
+                ugInst.trackIdx < tracks.length && !usedTrackIdx[ugInst.trackIdx])
+                ? tracks[ugInst.trackIdx] : null;
+            if (ugTrack) usedTrackIdx[ugInst.trackIdx] = true;
 
             if (ugInst.type === 'user') {
                 frameInstances.push(new SIO.Instance({
                     points: ugPts,
                     skeleton: skeleton,
-                    track: null,
+                    track: ugTrack,
                 }));
             } else {
                 frameInstances.push(new SIO.PredictedInstance({
                     points: ugPts,
                     skeleton: skeleton,
-                    track: null,
+                    track: ugTrack,
                     score: ugScore,
                 }));
             }
@@ -1459,6 +1471,8 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
             if (groupedInstances.length === 0 && ungroupedInstances.length === 0 && reprojInstances.length === 0) continue;
 
             var frameInstances = [];
+            // Tracks already placed in THIS frame (see buildSlpLabels).
+            var usedTrackIdx = {};
 
             for (var ii = 0; ii < groupedInstances.length; ii++) {
                 var inst = groupedInstances[ii];
@@ -1469,6 +1483,7 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
                 if (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < session.tracks.length) {
                     instTrack = trackByName[session.tracks[inst.trackIdx]] || null;
                 }
+                if (instTrack) usedTrackIdx[inst.trackIdx] = true;
 
                 if (inst.type === 'user') {
                     frameInstances.push(new SIO.Instance({ points: pts, skeleton: skeleton, track: instTrack }));
@@ -1477,16 +1492,24 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
                 }
             }
 
+            // Ungrouped (unlinked) instances keep their own track too (skip a
+            // track a grouped instance already holds this frame).
             for (var ugi = 0; ugi < ungroupedInstances.length; ugi++) {
                 var ugInst = ungroupedInstances[ugi];
                 var ugIsPred = ugInst.type === 'predicted';
                 var ugScore = ugInst.score != null ? ugInst.score : 1.0;
                 var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
+                var ugTrack = null;
+                if (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
+                    ugInst.trackIdx < session.tracks.length && !usedTrackIdx[ugInst.trackIdx]) {
+                    ugTrack = trackByName[session.tracks[ugInst.trackIdx]] || null;
+                    if (ugTrack) usedTrackIdx[ugInst.trackIdx] = true;
+                }
 
                 if (ugInst.type === 'user') {
-                    frameInstances.push(new SIO.Instance({ points: ugPts, skeleton: skeleton, track: null }));
+                    frameInstances.push(new SIO.Instance({ points: ugPts, skeleton: skeleton, track: ugTrack }));
                 } else {
-                    frameInstances.push(new SIO.PredictedInstance({ points: ugPts, skeleton: skeleton, track: null, score: ugScore }));
+                    frameInstances.push(new SIO.PredictedInstance({ points: ugPts, skeleton: skeleton, track: ugTrack, score: ugScore }));
                 }
             }
 
