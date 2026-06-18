@@ -114,6 +114,8 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
     if (effectiveTrackIdx == null) {
         effectiveTrackIdx = group.identityId != null && group.identityId >= 0 ? group.identityId : 0;
     }
+    // The "No ID" track is the null track → same gray as the ID panel.
+    if (session && session.isNoIdTrack && session.isNoIdTrack(effectiveTrackIdx)) return NULL_ID_COLOR;
     return getTrackColor(effectiveTrackIdx);
 }
 
@@ -135,6 +137,8 @@ export function getInstanceColor(instance, session, cameraName, useIdentity, fra
         if (identity && identity.color) return identity.color;
     }
     if (instance.trackIdx == null) return UNGROUPED_USER_COLOR;
+    // The "No ID" track is the null track → same gray as the ID panel.
+    if (session && session.isNoIdTrack && session.isNoIdTrack(instance.trackIdx)) return NULL_ID_COLOR;
     return getTrackColor(instance.trackIdx);
 }
 

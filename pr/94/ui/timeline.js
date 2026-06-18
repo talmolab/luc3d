@@ -840,7 +840,10 @@ export class Timeline {
                 if (!segments || segments.length === 0) continue;
 
                 var trackName = session.tracks[t3] || ('track_' + t3);
-                var color = getTrackColor(t3);
+                // The "No ID" track is the null track → same gray the ID panel
+                // uses for its "No ID" row.
+                var color = (session.isNoIdTrack && session.isNoIdTrack(t3))
+                    ? NULL_ID_COLOR : getTrackColor(t3);
 
                 this._trackSegments.push({
                     trackIdx: t3,
