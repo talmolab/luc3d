@@ -1211,12 +1211,13 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
 
     setStatus('Multi-frame assignment complete: ' + assigned + '/' + totalFrames + ' frames assigned', 'success');
 
-    // Update timeline: mark frames with grouped UserInstances, refresh track bars
+    // Update timeline: mark frames with grouped UserInstances, refresh track
+    // bars, and re-apply the 30% cap (a bulk assignment can add many rows).
     if (timeline) {
         for (var [fIdx] of state.triangulationResults) {
             timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
         }
-        timeline.refreshTracks(state.session);
+        timeline.refreshTracks(state.session, { cap: true });
     }
 }
 

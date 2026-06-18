@@ -90,10 +90,6 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuGroupByTrack">Group by Track &amp; Triangulate All</div>
                     <div class="menu-dropdown-item" id="menuGroupByIdentity">Group by Identity &amp; Triangulate All</div>
-                    <div class="menu-separator"></div>
-                    <div class="menu-dropdown-item" id="menuTrustTracks">
-                        <span id="menuTrustTracksCheck">☐</span> Trust Track Labels
-                    </div>
                 </div>
             </div>
             <div class="menu-item" data-menu="tracks">
@@ -115,13 +111,8 @@
                     <div class="menu-dropdown-item menu-has-submenu" id="menuAssignIdentity">Assign Identity ▸
                         <div class="menu-submenu" id="menuAssignIdentitySub"></div>
                     </div>
-                    <div class="menu-separator"></div>
-                    <div class="menu-dropdown-item" id="menuColorByTrack">
-                        <span id="menuColorByTrackCheck">☑</span> Color by Track
-                    </div>
-                    <div class="menu-dropdown-item" id="menuColorById">
-                        <span id="menuColorByIdCheck">☐</span> Color by Identity
-                    </div>
+                    <div class="menu-dropdown-item" id="menuPropagateTracksToIds">Propagate Tracks → IDs</div>
+                    <div class="menu-dropdown-item" id="menuPropagateIdsToTracks">Propagate IDs → Tracks</div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -167,6 +158,12 @@
                 <label><input type="checkbox" id="visPredicted" checked> Predicted</label>
                 <label><input type="checkbox" id="visReprojections" checked> Reproj</label>
                 <label><input type="checkbox" id="visErrors" checked> Errors</label>
+            </div>
+            <div class="toolbar-separator"></div>
+            <div class="toolbar-group">
+                <span class="toolbar-checkboxes" style="margin-right:6px;font-weight:bold;">Color</span>
+                <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
+                <button class="toolbar-btn" id="colorById" title="Color instances by identity">ID</button>
             </div>
             <button class="toolbar-btn" id="infoPanelToggleBtn" style="margin-left:auto;" title="Toggle info panel (I)">Hide Panel</button>
         </div>

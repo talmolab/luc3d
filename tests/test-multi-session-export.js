@@ -510,6 +510,29 @@
 
             assertEqual(data.instances.length, 2, 'should have both grouped and unlinked instances');
         });
+
+        it('exports each instance\'s track — grouped AND ungrouped keep their trackIdx', function () {
+            // Regression: a flat 2D project (ungrouped/unlinked instances) must
+            // export tracks, not trackless. buildSlpExportData writes
+            // instance.track = trackIdx for both grouped and unlinked.
+            var session = makeSession(['CamA'], 'UngroupedTrackExport'); // tracks: track_0, track_1
+            var fg = new FrameGroup(0);
+
+            // Grouped instance on track 0.
+            fg.addInstance('CamA', makeInstance([[10, 20], [30, 40], [50, 60]], 0, 'user'));
+            // Unlinked instance on track 1 — must keep track 1, not -1.
+            var ul = makeInstance([[100, 200], [150, 250], [200, 300]], 1, 'user');
+            fg.addUnlinkedInstance('CamA', new UnlinkedInstance(ul, 'CamA'));
+            session.addFrameGroup(fg);
+
+            var views = [{ name: 'CamA', videoWidth: 640, videoHeight: 480, frameCount: 100 }];
+            var data = buildSlpExportData(session, views);
+
+            assertEqual(data.instances.length, 2, 'both instances exported');
+            var trackVals = data.instances.map(function (i) { return i.track; }).sort();
+            assertDeepEqual(trackVals, [0, 1], 'grouped → track 0, ungrouped → track 1 (no -1)');
+            assertFalse(trackVals.indexOf(-1) >= 0, 'no instance exported trackless');
+        });
     });
 
     // ---- Session name on export ----

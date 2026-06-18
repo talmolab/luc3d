@@ -334,9 +334,9 @@ export async function handleLoadSlpFile(slpFile) {
             // Restore lucid session-level metadata
             var lucidMeta = (sessData2.metadata && sessData2.metadata.lucid) || {};
             if (lucidMeta.trustTracks != null) session.trustTracks = lucidMeta.trustTracks;
-            if (lucidMeta.trackIdentityMap) {
-                session.trackIdentityMap = new Map(lucidMeta.trackIdentityMap);
-            }
+            // Legacy global identity map (removed) → migrated to per-frame
+            // after the instance groups below are reconstructed.
+            var legacyGlobalIdentities = lucidMeta.trackIdentityMap || null;
             if (lucidMeta.frameIdentityMap) {
                 session.frameIdentityMap = new Map(lucidMeta.frameIdentityMap);
             }
@@ -473,6 +473,12 @@ export async function handleLoadSlpFile(slpFile) {
                 }
             }
             console.log('[load-slp] Rebuilt', restoredGroups, 'instance groups from session data,', restoredWith3d, 'with 3D points');
+
+            // Migrate legacy global identities to per-frame now that groups exist.
+            if (legacyGlobalIdentities && legacyGlobalIdentities.length) {
+                var migratedSlp = session.migrateGlobalIdentitiesToPerFrame(legacyGlobalIdentities);
+                if (migratedSlp) console.log('[load-slp] migrated', migratedSlp, 'legacy global identities to per-frame');
+            }
 
         } else {
             // === Fallback: no session_json → treat as a flat 2D SLP

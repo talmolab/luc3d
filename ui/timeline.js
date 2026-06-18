@@ -344,11 +344,18 @@ export class Timeline {
 
         this._rebuildSegments(session);
         this._buildFrameMarkers(session);
-        // Grow-only container resize: some SLP-load call sites invoke
-        // setData without a matching fitTimelineToData, leaving a 96 px
-        // default container that _computeLayout collapses below the
-        // tracks-visible threshold. Mirrors refreshTracks.
-        this._growContainerToFit();
+        // Initial-load sizing: `setData` is the "new project/session
+        // loaded" entry point, so it sizes the container to the fit
+        // height directly — min(preferred, 30%-of-window cap). Many
+        // SLP/session load paths call setData WITHOUT a following
+        // `fitTimelineToData()`; doing the fit here guarantees the panel
+        // opens capped at 30% of the screen (scrolling via the
+        // overflow-y wrapper when there are more tracks than fit) and
+        // shows fully with no forced empty space when the tracks fit
+        // under the cap. Mid-session track changes go through
+        // refreshTracks(), which stays uncapped grow-only so a height
+        // the user expanded is never clipped.
+        this._fitContainerToData();
         this.resize();
     }
 
@@ -833,7 +840,10 @@ export class Timeline {
                 if (!segments || segments.length === 0) continue;
 
                 var trackName = session.tracks[t3] || ('track_' + t3);
-                var color = getTrackColor(t3);
+                // The "No ID" track is the null track → same gray the ID panel
+                // uses for its "No ID" row.
+                var color = (session.isNoIdTrack && session.isNoIdTrack(t3))
+                    ? NULL_ID_COLOR : getTrackColor(t3);
 
                 this._trackSegments.push({
                     trackIdx: t3,
@@ -1391,8 +1401,8 @@ export class Timeline {
 
     /**
      * Build segments grouped by identity instead of track.
-     * Uses session.trackIdentityMap to find identity per camera:trackIdx,
-     * then colors by identity color.
+     * Uses session.getIdentityIdForTrack (per-frame identity) per
+     * camera:trackIdx, then colors by identity color.
      *
      * @param {Session} session
      * @private
@@ -1422,9 +1432,7 @@ export class Timeline {
                 // Grouped instances
                 for (var [camName, instances] of fg.instances) {
                     for (var i = 0; i < instances.length; i++) {
-                        var idId = session.getIdentityIdForTrack
-                            ? session.getIdentityIdForTrack(camName, instances[i].trackIdx, frameIdx)
-                            : session.trackIdentityMap.get(camName + ':' + instances[i].trackIdx);
+                        var idId = session.getIdentityIdForTrack(camName, instances[i].trackIdx, frameIdx);
                         if (idId == null) {
                             if (session.isExplicitNoIdentity &&
                                 session.isExplicitNoIdentity(camName, instances[i].trackIdx, frameIdx)) {
@@ -1442,9 +1450,7 @@ export class Timeline {
                 // Unlinked instances
                 for (var [camName2, ulList] of fg.unlinkedInstances) {
                     for (var u = 0; u < ulList.length; u++) {
-                        var idId2 = session.getIdentityIdForTrack
-                            ? session.getIdentityIdForTrack(camName2, ulList[u].instance.trackIdx, frameIdx)
-                            : session.trackIdentityMap.get(camName2 + ':' + ulList[u].instance.trackIdx);
+                        var idId2 = session.getIdentityIdForTrack(camName2, ulList[u].instance.trackIdx, frameIdx);
                         if (idId2 == null) {
                             if (session.isExplicitNoIdentity &&
                                 session.isExplicitNoIdentity(camName2, ulList[u].instance.trackIdx, frameIdx)) {
@@ -1748,13 +1754,29 @@ export class Timeline {
             Math.max(this.MIN_SEGMENT_WIDTH_PX, W * this.MIN_SEGMENT_WIDTH_FRACTION)
         );
 
-        // Center the bar on the segment's midpoint. For wide segments
-        // (rawWidth >= minSegW), this matches the natural [x0raw, x1raw]
-        // extents; for narrow segments, it ensures the bar is drawn
-        // symmetrically around the same pixel the playhead would occupy.
-        const midX = (x0raw + x1raw) / 2;
         const rawWidth = x1raw - x0raw;
-        const width = Math.max(rawWidth, minSegW);
+
+        // Wide segments (natural width >= the min-width floor): draw the
+        // bar at its true extents, CLIPPED to the content area. Clipping
+        // (rather than the center-and-shift path below) is what keeps a
+        // segment whose left or right end is scrolled off-screen from
+        // ballooning to fill the whole row — the bug where panning the
+        // timeline made track bars "fill in/out". A partially-visible
+        // wide bar must shrink to its visible slice, never recenter.
+        if (rawWidth >= minSegW) {
+            var clipLeft = Math.max(x0raw, contentLeft);
+            var clipRight = Math.min(x1raw, contentRight);
+            var clipW = clipRight - clipLeft;
+            if (clipW <= 0) return null;
+            return { x: clipLeft, width: clipW };
+        }
+
+        // Narrow segments: enforce the min-width floor and center the bar
+        // on the segment's midpoint — the same pixel the playhead occupies
+        // (`_frameToX(frame + 0.5)`) — so a 1-frame bar reads as aligned
+        // with the current-frame indicator instead of drifting right.
+        const midX = (x0raw + x1raw) / 2;
+        const width = minSegW;
         let x = midX - width / 2;
 
         // Clamp inside the content area. If either edge would overflow,
@@ -2371,6 +2393,33 @@ export class Timeline {
      * @private
      */
     _handleWheel(e) {
+        // Horizontal two-finger trackpad swipe (significant deltaX, no Ctrl
+        // pinch) pans the visible frame window left/right — the same axis
+        // the middle/right-button drag and the scrollbar thumb move. We act
+        // on this BEFORE the vertical/pinch branches and only when the
+        // horizontal intent clearly dominates, so a normal vertical
+        // two-finger scroll (deltaY-heavy, deltaX ≈ 0) still falls through
+        // to native row scrolling and a Ctrl/pinch event still zooms.
+        if (!e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY) && e.deltaX !== 0) {
+            var hContentW = this._cssWidth - this.LEFT_MARGIN - this.RIGHT_PADDING;
+            if (hContentW > 0) {
+                // Convert the pixel-space deltaX into frame-space scroll.
+                // Positive deltaX = swipe content left = advance scrollFrame.
+                var framesPerPx = this._visibleFrames() / hContentW;
+                var prevScroll = this._scrollFrame;
+                this._scrollFrame += e.deltaX * framesPerPx;
+                this._clampScroll();
+                // Only consume the event (suppressing native horizontal
+                // overscroll/back-navigation) when we actually moved.
+                if (this._scrollFrame !== prevScroll) {
+                    e.preventDefault();
+                    this._updateScrollbar();
+                    this.redraw();
+                }
+            }
+            return;
+        }
+
         // Non-pinch wheel events delegate to the scroll wrapper. Returning
         // without preventDefault lets `_trackScrollEl` scroll naturally
         // (macOS two-finger scroll, mouse wheel, etc.).
@@ -2545,8 +2594,14 @@ export class Timeline {
      * frame-number labels would jump up to the new bottom — visible as
      * "the timeline got shorter."
      *
+     * Pass `{ cap: true }` to re-apply the initial-load 30%-of-window cap
+     * (via `_fitContainerToData`) instead of growing without bound. This is
+     * the right mode after Track / Triangulate / propagation, which can add
+     * many rows at once: the panel re-clamps to 30% and scrolls rather than
+     * taking over the screen.
+     *
      * @param {Session} session
-     * @param {{keepSize?: boolean}} [opts]
+     * @param {{keepSize?: boolean, cap?: boolean}} [opts]
      */
     refreshTracks(session, opts) {
         if (!session) return;
@@ -2559,7 +2614,11 @@ export class Timeline {
             this.redraw();
             return;
         }
-        this._growContainerToFit();
+        if (opts && opts.cap) {
+            this._fitContainerToData();   // re-clamp to the 30% cap
+        } else {
+            this._growContainerToFit();
+        }
         this.resize();
     }
 
@@ -2568,6 +2627,7 @@ export class Timeline {
      * current track set, enlarge it in-place. No-op when the timeline
      * has been manually collapsed (the toolbar button sets `.collapsed`
      * which forces height:0 via CSS).
+     *
      * @private
      */
     _growContainerToFit() {
@@ -2584,6 +2644,53 @@ export class Timeline {
         }
         if (preferred > currentPx + 0.5) {
             this._container.style.height = preferred + 'px';
+        }
+    }
+
+    /**
+     * Initial-load sizing used by `setData`: bound the container height to
+     * the 30%-of-window cap while still growing to fit the tracks. The
+     * rule is `clamp(current, preferred, cap)`:
+     *   - grow UP to `preferred` when the container is shorter than the
+     *     track block (so a fresh-loaded project isn't collapse-hidden),
+     *   - shrink DOWN to `cap` only when the current/preferred height
+     *     exceeds 30% of the window (so a many-track project opens capped
+     *     and the inner `_trackScrollEl` `overflow-y: auto` scrolls the
+     *     overflow rather than consuming the whole screen),
+     *   - otherwise leave the height untouched (heights between `preferred`
+     *     and `cap` already show every row with no scroll — no forced
+     *     empty space and no needless shrink of a container the host
+     *     sized larger).
+     * Mirrors the cap in `fitTimelineToData()` (ui/timeline-controller.js).
+     * No-op when collapsed. Falls back to grow-only in headless contexts
+     * that lack `window.innerHeight`.
+     * @private
+     */
+    _fitContainerToData() {
+        if (!this._container) return;
+        if (this._container.classList && this._container.classList.contains('collapsed')) return;
+        var cap = (typeof window !== 'undefined' && window.innerHeight)
+            ? Math.floor(0.3 * window.innerHeight)
+            : 0;
+        if (cap <= 0) {
+            // No window context (test/headless): preserve grow-only.
+            this._growContainerToFit();
+            return;
+        }
+        var preferred = this.getPreferredHeight();
+        var styleH = parseFloat(this._container.style && this._container.style.height);
+        var currentPx = (!isNaN(styleH) && styleH > 0) ? styleH : 0;
+        if (!currentPx) {
+            var rect = this._container.getBoundingClientRect
+                ? this._container.getBoundingClientRect()
+                : null;
+            currentPx = (rect && rect.height) || 0;
+        }
+        // Grow up to preferred, then clamp the result down to the cap.
+        var target = Math.max(currentPx, preferred);
+        if (target > cap) target = cap;
+        if (target > 0 && Math.abs(target - currentPx) > 0.5) {
+            this._container.style.height = target + 'px';
         }
     }
 

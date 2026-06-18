@@ -222,7 +222,7 @@ export function showGroupByTrackModal() {
 
 /**
  * Group instances by their assigned Identity (from tracker), then triangulate.
- * Uses session.trackIdentityMap to find which camera:trackIdx -> identityId.
+ * Uses session.getIdentityIdForTrack (per-frame identity) per camera:trackIdx.
  * For each frame, groups instances that share the same identity into InstanceGroups,
  * then triangulates each group.
  */
@@ -282,9 +282,7 @@ export async function groupByIdentityAndTriangulateAll() {
                 if (!allInstancesByCam[camName]) allInstancesByCam[camName] = [];
                 allInstancesByCam[camName].push(inst);
 
-                var identityId = session.getIdentityIdForTrack
-                    ? session.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx)
-                    : session.trackIdentityMap.get(camName + ':' + inst.trackIdx);
+                var identityId = session.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
                 if (identityId == null) continue;
                 if (!idBuckets[identityId]) idBuckets[identityId] = {};
                 if (!idBuckets[identityId][camName]) idBuckets[identityId][camName] = inst;
@@ -298,9 +296,7 @@ export async function groupByIdentityAndTriangulateAll() {
                 if (!allInstancesByCam[camName2]) allInstancesByCam[camName2] = [];
                 allInstancesByCam[camName2].push(ulInst);
 
-                var identityId2 = session.getIdentityIdForTrack
-                    ? session.getIdentityIdForTrack(camName2, ulInst.trackIdx, frameIdx)
-                    : session.trackIdentityMap.get(camName2 + ':' + ulInst.trackIdx);
+                var identityId2 = session.getIdentityIdForTrack(camName2, ulInst.trackIdx, frameIdx);
                 if (identityId2 == null) continue;
                 if (!idBuckets[identityId2]) idBuckets[identityId2] = {};
                 if (!idBuckets[identityId2][camName2]) idBuckets[identityId2][camName2] = ulInst;
@@ -487,11 +483,16 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             if (camNames.length < 2) continue;
 
             // Create InstanceGroup
-            // Auto-assign identity from track
+            // Auto-assign identity from track. getOrCreateIdentityForTrack only
+            // creates/returns the identity, so stamp the per-frame identity for
+            // each grouped instance here (no global default map exists).
             var identity = session.getOrCreateIdentityForTrack(trackIdx);
             var group = new InstanceGroup(Date.now() + trackIdx, identity.id);
             for (var ci2 = 0; ci2 < camNames.length; ci2++) {
                 group.addInstance(camNames[ci2], bucket[camNames[ci2]]);
+                if (session.setFrameIdentity) {
+                    session.setFrameIdentity(frameIdx, camNames[ci2], bucket[camNames[ci2]].trackIdx, identity.id);
+                }
             }
 
             // Store in session.instanceGroups
@@ -580,7 +581,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         for (var [fIdx] of state.triangulationResults) {
             timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
         }
-        timeline.refreshTracks(session);
+        timeline.refreshTracks(session, { cap: true });
     }
 
     // Update info panel

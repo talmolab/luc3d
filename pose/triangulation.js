@@ -1659,6 +1659,105 @@ export function reTriangulateGroup(instanceGroup) {
 }
 
 /**
+ * Ensure a frame has InstanceGroups, auto-creating them from the per-frame
+ * identity assignments when none exist yet. This is the state right after
+ * "Track All", which assigns identities per-frame but does NOT group:
+ * instances sharing an identity across >=2 cameras form a group; instances
+ * explicitly marked "no identity" stay in the unlinked/ungrouped pool. No-op
+ * (returns the existing list) when the frame already has groups or the session
+ * has no identities. Both triangulateCurrentFrame and triangulateAllFrames use
+ * this so each works directly after Track All (without it, Triangulate All
+ * found no groups and never populated the 3D viewer).
+ * @param {Session} session
+ * @param {number} frameIdx
+ * @returns {InstanceGroup[]} the frame's group list (possibly empty)
+ */
+export function ensureGroupsFromIdentities(session, frameIdx) {
+    var frameGroupsList = session.instanceGroups.get(frameIdx);
+    if (frameGroupsList && frameGroupsList.length > 0) return frameGroupsList;
+    if (session.identities.length === 0) return frameGroupsList || [];
+    var fg = session.getFrameGroup(frameIdx);
+    if (!fg) return frameGroupsList || [];
+
+    var idBuckets = {};
+    var allInstancesByCam = {};
+
+    // Collect from grouped instances
+    for (var [_cn, _insts] of fg.instances) {
+        for (var _i = 0; _i < _insts.length; _i++) {
+            var _inst = _insts[_i];
+            if (!allInstancesByCam[_cn]) allInstancesByCam[_cn] = [];
+            allInstancesByCam[_cn].push(_inst);
+            var _idId = session.getIdentityIdForTrack(_cn, _inst.trackIdx, frameIdx);
+            if (_idId == null) continue;
+            if (!idBuckets[_idId]) idBuckets[_idId] = {};
+            if (!idBuckets[_idId][_cn]) idBuckets[_idId][_cn] = _inst;
+        }
+    }
+    // Collect from unlinked instances
+    for (var [_cn2, _ulList] of fg.unlinkedInstances) {
+        for (var _u = 0; _u < _ulList.length; _u++) {
+            var _ulInst = _ulList[_u].instance;
+            if (!allInstancesByCam[_cn2]) allInstancesByCam[_cn2] = [];
+            allInstancesByCam[_cn2].push(_ulInst);
+            var _idId2 = session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx);
+            if (_idId2 == null) continue;
+            if (!idBuckets[_idId2]) idBuckets[_idId2] = {};
+            if (!idBuckets[_idId2][_cn2]) idBuckets[_idId2][_cn2] = _ulInst;
+        }
+    }
+
+    // Nothing groupable on this frame (no identity shared across >=2 cameras)
+    // → leave it untouched. Important when sweeping ALL frames so frames with
+    // no cross-view identity aren't needlessly reorganized.
+    var hasGroupable = false;
+    for (var _bk in idBuckets) {
+        if (Object.keys(idBuckets[_bk]).length >= 2) { hasGroupable = true; break; }
+    }
+    if (!hasGroupable) return frameGroupsList || [];
+
+    // Clear and re-add instances. Grouping is by identity, so an instance the
+    // tracker explicitly marked as "no identity" (-1) cannot belong to a group
+    // — it stays in the unlinked/ungrouped pool. Everything else is re-added as
+    // linked so the identity buckets below can form their groups.
+    session.instanceGroups.delete(frameIdx);
+    for (var _cn3 in allInstancesByCam) fg.instances.set(_cn3, []);
+    for (var _cn4 of fg.unlinkedInstances.keys()) fg.unlinkedInstances.set(_cn4, []);
+    for (var _cn5 in allInstancesByCam) {
+        for (var _ai = 0; _ai < allInstancesByCam[_cn5].length; _ai++) {
+            var _reInst = allInstancesByCam[_cn5][_ai];
+            if (session.isExplicitNoIdentity &&
+                session.isExplicitNoIdentity(_cn5, _reInst.trackIdx, frameIdx)) {
+                fg.addUnlinkedInstance(_cn5, new UnlinkedInstance(_reInst, _cn5));
+            } else {
+                fg.addInstance(_cn5, _reInst);
+            }
+        }
+    }
+
+    // Create InstanceGroups from identity buckets (>=2 cameras only).
+    for (var _idStr in idBuckets) {
+        var _identityId = parseInt(_idStr);
+        var _bucket = idBuckets[_idStr];
+        var _camNames = Object.keys(_bucket);
+        if (_camNames.length < 2) continue;
+        var _group = new InstanceGroup(Date.now() + _identityId, _identityId);
+        for (var _ci = 0; _ci < _camNames.length; _ci++) {
+            _group.addInstance(_camNames[_ci], _bucket[_camNames[_ci]]);
+        }
+        _group.observedPoints = {};
+        for (var _ci2 = 0; _ci2 < _camNames.length; _ci2++) {
+            _group.observedPoints[_camNames[_ci2]] = _bucket[_camNames[_ci2]].points;
+        }
+        if (!session.instanceGroups.has(frameIdx)) {
+            session.instanceGroups.set(frameIdx, []);
+        }
+        session.instanceGroups.get(frameIdx).push(_group);
+    }
+    return session.instanceGroups.get(frameIdx) || [];
+}
+
+/**
  * On-demand triangulation for the current frame's selected instance group.
  * Re-triangulates from whatever views have labels and updates reprojections.
  */
@@ -1673,87 +1772,8 @@ export function triangulateCurrentFrame() {
     const frameIdx = state.currentFrame;
     const cameras = state.session.cameras;
     var session = state.session;
-    var frameGroupsList = session.instanceGroups.get(frameIdx);
-
-    // If no InstanceGroups exist but identities are assigned, create groups from identity buckets
-    if ((!frameGroupsList || frameGroupsList.length === 0) && session.identities.length > 0) {
-        var fg = session.getFrameGroup(frameIdx);
-        if (fg) {
-            var idBuckets = {};
-            var allInstancesByCam = {};
-
-            // Collect from grouped instances
-            for (var [_cn, _insts] of fg.instances) {
-                for (var _i = 0; _i < _insts.length; _i++) {
-                    var _inst = _insts[_i];
-                    if (!allInstancesByCam[_cn]) allInstancesByCam[_cn] = [];
-                    allInstancesByCam[_cn].push(_inst);
-                    var _idId = session.getIdentityIdForTrack
-                        ? session.getIdentityIdForTrack(_cn, _inst.trackIdx, frameIdx)
-                        : session.trackIdentityMap.get(_cn + ':' + _inst.trackIdx);
-                    if (_idId == null) continue;
-                    if (!idBuckets[_idId]) idBuckets[_idId] = {};
-                    if (!idBuckets[_idId][_cn]) idBuckets[_idId][_cn] = _inst;
-                }
-            }
-            // Collect from unlinked instances
-            for (var [_cn2, _ulList] of fg.unlinkedInstances) {
-                for (var _u = 0; _u < _ulList.length; _u++) {
-                    var _ulInst = _ulList[_u].instance;
-                    if (!allInstancesByCam[_cn2]) allInstancesByCam[_cn2] = [];
-                    allInstancesByCam[_cn2].push(_ulInst);
-                    var _idId2 = session.getIdentityIdForTrack
-                        ? session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx)
-                        : session.trackIdentityMap.get(_cn2 + ':' + _ulInst.trackIdx);
-                    if (_idId2 == null) continue;
-                    if (!idBuckets[_idId2]) idBuckets[_idId2] = {};
-                    if (!idBuckets[_idId2][_cn2]) idBuckets[_idId2][_cn2] = _ulInst;
-                }
-            }
-
-            // Clear and re-add instances. Grouping is by identity, so an
-            // instance the tracker explicitly marked as "no identity" (-1)
-            // cannot belong to a group — it stays in the unlinked/ungrouped
-            // pool. Everything else is re-added as linked so the identity
-            // buckets below can form their groups.
-            session.instanceGroups.delete(frameIdx);
-            for (var _cn3 in allInstancesByCam) fg.instances.set(_cn3, []);
-            for (var _cn4 of fg.unlinkedInstances.keys()) fg.unlinkedInstances.set(_cn4, []);
-            for (var _cn5 in allInstancesByCam) {
-                for (var _ai = 0; _ai < allInstancesByCam[_cn5].length; _ai++) {
-                    var _reInst = allInstancesByCam[_cn5][_ai];
-                    if (session.isExplicitNoIdentity &&
-                        session.isExplicitNoIdentity(_cn5, _reInst.trackIdx, frameIdx)) {
-                        fg.addUnlinkedInstance(_cn5, new UnlinkedInstance(_reInst, _cn5));
-                    } else {
-                        fg.addInstance(_cn5, _reInst);
-                    }
-                }
-            }
-
-            // Create InstanceGroups from identity buckets
-            for (var _idStr in idBuckets) {
-                var _identityId = parseInt(_idStr);
-                var _bucket = idBuckets[_idStr];
-                var _camNames = Object.keys(_bucket);
-                if (_camNames.length < 2) continue;
-                var _group = new InstanceGroup(Date.now() + _identityId, _identityId);
-                for (var _ci = 0; _ci < _camNames.length; _ci++) {
-                    _group.addInstance(_camNames[_ci], _bucket[_camNames[_ci]]);
-                }
-                _group.observedPoints = {};
-                for (var _ci2 = 0; _ci2 < _camNames.length; _ci2++) {
-                    _group.observedPoints[_camNames[_ci2]] = _bucket[_camNames[_ci2]].points;
-                }
-                if (!session.instanceGroups.has(frameIdx)) {
-                    session.instanceGroups.set(frameIdx, []);
-                }
-                session.instanceGroups.get(frameIdx).push(_group);
-            }
-            frameGroupsList = session.instanceGroups.get(frameIdx);
-            console.log('[triangulate] Auto-created', (frameGroupsList ? frameGroupsList.length : 0), 'groups from identity assignments');
-        }
-    }
+    // Auto-create groups from identities when needed (e.g. right after Track All).
+    var frameGroupsList = ensureGroupsFromIdentities(session, frameIdx);
 
     if (!frameGroupsList || frameGroupsList.length === 0) {
         console.warn('[triangulate] No instanceGroups for frame', frameIdx);
@@ -1906,8 +1926,10 @@ export function triangulateCurrentFrame() {
             ' - check that instance groups have labels in 2+ camera views', 'warning');
     }
 
-    // Update timeline: mark frame only if it has grouped UserInstances
+    // Update timeline: mark frame only if it has grouped UserInstances,
+    // then re-apply the 30% cap (triangulation can add track rows).
     updateTimelineForFrame(frameIdx);
+    if (timeline) timeline.refreshTracks(state.session, { cap: true });
 }
 
 /**
@@ -1930,12 +1952,16 @@ export async function triangulateAllFrames() {
         return;
     }
 
-    var frameIndices = [];
-    for (var [fIdx] of state.session.instanceGroups) {
-        frameIndices.push(fIdx);
-    }
+    // Sweep every frame that has data. Groups are auto-created from per-frame
+    // identities below (ensureGroupsFromIdentities), so this works directly
+    // after Track All — which assigns identities but does not group. (Union of
+    // already-grouped frames and frame-group frames; the latter is a superset.)
+    var frameIdxSet = {};
+    for (var [fIdx] of state.session.instanceGroups) frameIdxSet[fIdx] = true;
+    for (var [fIdx2] of state.session.frameGroups) frameIdxSet[fIdx2] = true;
+    var frameIndices = Object.keys(frameIdxSet).map(Number).sort(function (a, b) { return a - b; });
     if (frameIndices.length === 0) {
-        setStatus('No instance groups to triangulate', 'warning');
+        setStatus('No frames to triangulate', 'warning');
         return;
     }
 
@@ -1948,7 +1974,8 @@ export async function triangulateAllFrames() {
 
     for (var fi = 0; fi < frameIndices.length; fi++) {
         var frameIdx = frameIndices[fi];
-        var frameGroupsList = state.session.instanceGroups.get(frameIdx);
+        // Auto-create groups from identities when needed (e.g. after Track All).
+        var frameGroupsList = ensureGroupsFromIdentities(state.session, frameIdx);
         if (!frameGroupsList || frameGroupsList.length === 0) continue;
 
         var frameResults = [];
@@ -2056,7 +2083,7 @@ export async function triangulateAllFrames() {
         for (var [fIdx] of state.triangulationResults) {
             timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
         }
-        timeline.refreshTracks(state.session);
+        timeline.refreshTracks(state.session, { cap: true });
     }
 }
 

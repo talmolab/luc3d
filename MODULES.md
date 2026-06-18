@@ -103,9 +103,32 @@ session graph that holds them.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups, identity-mapping tables. Many methods:
-  identity assignment (`assignIdentityToGroup`, `propagateIdentity`,
-  `setFrameIdentity`), group editing (`createGroupFromUnlinked`,
+  frameGroups, instanceGroups. **Identity is stored ONLY per-frame** in
+  `frameIdentityMap` ("frameIdx:cam:trackIdx" → identityId; negative = explicit
+  "no identity"). There is deliberately no global "cam:trackIdx" default map
+  (the removed `trackIdentityMap`) — a global fallback painted stale duplicate
+  identities whenever per-frame reality diverged from it. Identity methods:
+  per-frame assignment (`setFrameIdentity`, `assignTrackToIdentity` — stamps
+  per-frame entries on every frame where that (cam,trackIdx) instance exists;
+  `clearTrackIdentity`; `propagateIdentity`), group assignment
+  (`assignIdentityToGroup`), lookup (`getIdentityIdForTrack`/
+  `getIdentityForTrack` — per-frame only, return null with no fallback;
+  `isExplicitNoIdentity`; `isNoIdTrack(trackIdx)` — true for the dedicated
+  `NO_ID_TRACK_NAME` ("No ID") track, treated as the null track so overlays
+  and the Track panel color it `NULL_ID_COLOR`), `getOrCreateIdentityForTrack` (creates/returns the
+  "id_N" identity only — no map side effects), identity↔track propagation
+  (`propagateTracksToIdentities` for Tracks→IDs — stamps each instance's
+  per-frame identity from its track; `propagateIdentitiesToTracks` for
+  IDs→Tracks — overwrites each instance's `trackIdx` with its identity and
+  rewrites `tracks` to one unique, non-empty name per used identity so the
+  exported SLP has clean identity-named tracks, rewriting `frameIdentityMap`
+  under the new keys; instances explicitly marked "no identity" are collected
+  onto a single dedicated "No ID" track with their per-frame entry kept
+  negative, so the NULL identity survives propagation and stays visible in
+  both the Track panel and the ID panel — only entry-less instances go
+  trackless), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  converts a pre-per-frame project's global map to per-frame entries on load),
+  group editing (`createGroupFromUnlinked`,
   `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
   (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
   `_promoteIfMixed`), skeleton propagation
@@ -181,6 +204,12 @@ rooted in `matchPairwise` dropping *visible* instances:
 - *Adaptive gate (Issue #2).* `reprojectionGate(nViews)` replaces the
   fixed 100px cutoff — tight (100) for a 2-view seed, looser (140/180) once
   3+ views make the estimate trustworthy.
+- *Single-view groups get no identity (Issue #5).* `matchFrameInstances`
+  skips identity assignment for any group with `size < 2` (a lone detection
+  with no cross-view partner is not geometrically verified). Such instances
+  fall through to the Issue #6 guard and receive `EXPLICIT_NONE` instead of a
+  phantom identity, fixing a bug where a solo detection (e.g. frame 1759
+  `mid`/`midL`) showed an unassigned identity as present in the ID panel.
 - *Explicit "no identity" override (Issue #6).* `matchFrameInstances`
   writes a negative sentinel (`EXPLICIT_NONE`) per-frame for every visible
   instance that landed in no group, so `getIdentity*ForTrack` returns null
@@ -258,7 +287,15 @@ all-frames, multi-frame range).
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress)`,
   `reTriangulateGroup`, `triangulateCurrentFrame`,
   `triangulateAllFrames`, `sessionHasCalibration`,
-  `showCalibrationRequiredPopup`.
+  `showCalibrationRequiredPopup`,
+  `ensureGroupsFromIdentities(session, frameIdx)` — auto-creates a frame's
+  InstanceGroups from its per-frame identity assignments (>=2-camera buckets;
+  explicit-none stays unlinked) when none exist yet. Both
+  `triangulateCurrentFrame` and `triangulateAllFrames` call it, so each works
+  directly after **Track All** (which assigns identities but does not group).
+  `triangulateAllFrames` now sweeps every frame (not just pre-grouped ones),
+  so Triangulate All populates the 3D viewer after Track All; previously it
+  found no groups and bailed.
 
 **Imports from project modules.**
 - `./pose-data.js` — `mat3x3Multiply`, `FrameGroup`, `Instance`,
@@ -603,7 +640,10 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
   `brightenColor`, `desaturateColor`, `complementaryColor`.
   `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
-  `useIdentity` and `session.isExplicitNoIdentity(...)` is true.
+  `useIdentity` and `session.isExplicitNoIdentity(...)` is true, and also —
+  when coloring by track — for any instance/group on the "No ID" track
+  (`session.isNoIdTrack(trackIdx)`), so the null track matches the ID
+  panel's gray on the skeleton.
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,
@@ -711,7 +751,7 @@ saves the user's customized timeline height on the **outgoing** session
 (`oldSession._timelineHeight`, `oldSession._timelineCollapsed`) and
 restores it on the **incoming** session. First-visit sessions (no
 saved height) get a default fit via `Math.min(timeline.getPreferredHeight(),
-0.4 * window.innerHeight)`. The save/restore is **inlined** — it uses
+0.3 * window.innerHeight)`. The save/restore is **inlined** — it uses
 `document.getElementById` rather than importing `timeline-controller.js`,
 so the brace-walked `switchSession` test harnesses
 (`test-session-switch-frame-reset.js`,
@@ -747,13 +787,16 @@ shift-drag range select, pinch / Ctrl+wheel zoom, middle-click pan. Block 1 (Pro
 adds tree-grouped per-camera labels, an inner scrollable track-area
 wrapper, and an empty-camera placeholder row per camera without tracks.
 
-**Trackpad / wheel semantics.** `_handleWheel` only intercepts events
-where `e.ctrlKey === true` — that single flag covers macOS trackpad
-pinch (browsers translate pinch into `wheel` with `ctrlKey: true`) and
-explicit Ctrl/Cmd+wheel on a regular mouse. Every other wheel event
-(plain two-finger trackpad scroll, plain mouse wheel) returns without
-`preventDefault()`, so the event bubbles to `_trackScrollEl` and its
-`overflow-y: auto` produces native vertical scrolling. macOS's overlay
+**Trackpad / wheel semantics.** `_handleWheel` intercepts events where
+`e.ctrlKey === true` for zoom (covers macOS trackpad pinch — browsers
+translate pinch into `wheel` with `ctrlKey: true` — and explicit
+Ctrl/Cmd+wheel). It also intercepts horizontal-dominant scroll
+(`|deltaX| > |deltaY|`), panning `_scrollFrame` left/right (same axis as
+middle/right-drag pan and the scrollbar thumb) and calling
+`preventDefault()` only when the pan actually moved. Every other wheel
+event (vertical-dominant two-finger scroll, plain mouse wheel) returns
+without `preventDefault()`, so the event bubbles to `_trackScrollEl` and
+its `overflow-y: auto` produces native vertical scrolling. macOS's overlay
 scrollbar is defeated via `-webkit-appearance: none` on the
 `.timeline-track-area::-webkit-scrollbar` rule in `styles.css` so the
 bar is always visible (not just on idle-fade) while the content
@@ -769,6 +812,23 @@ when the bar appears/disappears.
   `getCameraGroups`, `getLabelLines`, `getRowCount`,
   `getTrackAreaElement`.
 
+**Initial-load 40% cap.** `setData(session)` sizes the container via
+`_fitContainerToData()`, which clamps the container height to
+`[preferred, floor(0.3 * window.innerHeight)]`: a small track set shows
+fully (no forced empty space), while a set taller than 30% of the window
+caps at 40% and the inner `_trackScrollEl` scrolls. (Previously `setData`
+called the uncapped `_growContainerToFit`, so a freshly loaded project
+displayed every row.) `refreshTracks` stays grow-only so a height the
+user expanded mid-session is never clipped.
+
+**Segment draw clipping.** `_computeSegmentDrawRect()` draws wide segments
+(`rawWidth >= minSegW`) at their true extents clipped to the visible
+content rect, so a bar scrolled partly off-screen shrinks to its visible
+slice; only narrow segments get the min-width center-and-clamp treatment.
+This fixes a bug where panning left/right made wide track bars "fill
+in/out" (a wide segment whose midpoint scrolled off-screen was clamped to
+the content edge and stretched across the whole row).
+
 **`refreshTracks` size-preserving mode.** Default `refreshTracks(session)`
 rebuilds segments, calls `_growContainerToFit` (grow-only), then
 `resize()`. Pass `{ keepSize: true }` to skip both — segments rebuild,
@@ -781,7 +841,12 @@ canvas shrinks down to `availableHeight` — visibly pulling the
 playhead / marker row / frame-number labels up to the new bottom even
 though the outer frame doesn't move. Track add / rename / delete
 paths still use the default mode so the container expands to keep
-new rows visible.
+new rows visible. Pass `{ cap: true }` to re-apply the initial-load 30%
+cap (`_fitContainerToData`) instead of growing without bound — used after
+Track All / Track Frame, Triangulate (current / all / group-by-identity),
+the Propagate IDs↔Tracks actions, and multi-frame identity assignment, all
+of which can add many rows at once, so the panel re-clamps to 30% and
+scrolls rather than taking over the screen.
 
 **Imports from project modules.**
 - `./overlays.js` — `getTrackColor`.
@@ -902,7 +967,7 @@ row onto `_cameraGroups[i].isAllHidden`. `_drawTrackBars` reads
 
 **Purpose.** Timeline toggle/fit/shortcut controller (Block 1 / Prompt
 4). Encapsulates collapse/expand with prior-height cache, fit-to-data
-sizing (capped at 40% of `window.innerHeight`), the toolbar-button
+sizing (capped at 30% of `window.innerHeight`), the toolbar-button
 sync helper, and the Ctrl/Cmd+J (toggle) / Ctrl/Cmd+Shift+J ("Change
 Frame Number") keyboard-shortcut installer. Has zero transitive
 `app.js` imports so it can be bridged into the test runner.
@@ -1001,7 +1066,17 @@ playback rate, and re-exports popular helpers like `unlinkGroup`,
 `showGroupContextMenu`, `seekToLabeledFrame`, `fitTimelineToData`.
 
 **Key exports.**
-- Menu / setup: `setupMenus`, `setupUI`.
+- Menu / setup: `setupMenus`, `setupUI`. The Tracks menu hosts both
+  identity↔track propagation actions (one-shot, under "Assign Identity"):
+  `Propagate Tracks → IDs` (`menuPropagateTracksToIds` — creates an identity
+  per track and assigns it to every group; sets `session.trustTracks`; was the
+  old Edit-menu "Trust Track Labels" toggle) and `Propagate IDs → Tracks`
+  (`menuPropagateIdsToTracks` — calls `Session.propagateIdentitiesToTracks`).
+- Color-by toggle: the "Color by" Tracks/ID control lives in the top
+  toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
+  checkbox), not the Tracks menu. `updateColorByToggle()` reflects
+  `state.colorByIdentity` on the buttons; each button's click sets the
+  state, re-renders via `drawAllOverlays`, and updates the active class.
 - Group ops: `unlinkGroup`, `showGroupContextMenu`, `hideGroupContextMenu`.
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
@@ -1256,7 +1331,12 @@ layer.
 - SLP build: `buildSlpExportData`, `buildPerCameraSlpJson`,
   `buildSlpLabels`, `buildSlpLabelsAllViews`,
   `buildSlpLabelsMultiSession`, `serializeSkeleton`,
-  `convertSlpToV06Compatible`.
+  `convertSlpToV06Compatible`. On 2D export both `buildSlpLabels` and
+  `buildSlpLabelsMultiSession` keep each instance's own track — grouped
+  AND ungrouped/unlinked — so a flat 2D project's tracks survive; an
+  ungrouped instance only drops its track if a grouped instance already
+  holds that track in the same frame (SLEAP forbids two instances sharing
+  a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`.
 - SLP parse: `parseSlpH5(file, onProgress)` — spawns worker.
