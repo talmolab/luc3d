@@ -728,15 +728,20 @@ export class Session {
      * "Propagate IDs → Tracks": overwrite every instance's track with its
      * identity. Identity/grouping is the source of truth here — each instance
      * that belongs to an identity-bearing InstanceGroup gets a trackIdx whose
-     * NAME is that identity's name; every other instance (ungrouped, unlinked,
-     * or in a group with no identity) becomes trackless (trackIdx = null)
-     * rather than keeping a stale index into the rewritten `tracks` array.
+     * NAME is that identity's name. Instances explicitly marked "no identity"
+     * (the negative per-frame sentinel — the gray "No ID" rows in the ID panel)
+     * are collected onto a single dedicated "No ID" track, with their per-frame
+     * entry kept negative under that track's index, so the explicit-none state
+     * survives propagation and stays visible in BOTH the Track panel (a "No ID"
+     * track row) and the ID panel (its "No ID" gray row). Only instances with
+     * no identity entry at all become trackless (trackIdx = null).
      *
      * This rewrites the session-level `tracks` name list to one entry per used
-     * identity and rewrites `frameIdentityMap` under the new trackIdx keys, so
-     * each instance's track resolves back to its identity (Color-by-Track and
-     * Color-by-Identity then show the same partition). Identity lives purely
-     * per-frame — there is no global default map to rebuild.
+     * identity (plus the optional "No ID" track) and rewrites `frameIdentityMap`
+     * under the new trackIdx keys, so each instance's track resolves back to its
+     * identity (Color-by-Track and Color-by-Identity then show the same
+     * partition). Identity lives purely per-frame — there is no global default
+     * map to rebuild.
      *
      * SLP-export hazards this guards against: identity names are de-duplicated
      * (a numeric suffix is appended on collision) and never empty, so the
@@ -767,12 +772,16 @@ export class Session {
 
         // 1. Collect the identity ids actually carried by some visible instance,
         //    preserving identities-array order for stable, reproducible track
-        //    indices. Build new tracks = identity names (unique + non-empty).
+        //    indices. Also note whether any instance is explicitly "no identity"
+        //    (the negative per-frame sentinel) so we can give those their own
+        //    track. Build new tracks = identity names (unique + non-empty).
         var usedSet = new Set();
+        var hasExplicitNone = false;
         forEachInstance(function (inst, camName, frameIdx) {
             if (inst.trackIdx == null) return;
             var id = self.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
             if (id != null && id >= 0) usedSet.add(id);
+            else if (self.isExplicitNoIdentity(camName, inst.trackIdx, frameIdx)) hasExplicitNone = true;
         });
         var newTracks = [];
         var idToTrackIdx = new Map();   // identityId → new trackIdx
@@ -789,20 +798,39 @@ export class Session {
             newTracks.push(name);
         }
 
-        // 2. Rewrite each instance's trackIdx to its identity's new track (or
-        //    null when it has no identity), and record the matching per-frame
-        //    identity entry under the NEW trackIdx. Lookups here read the OLD
-        //    frameIdentityMap; we only swap in the new one in step 3, so this
-        //    pass is order-independent.
+        // A single dedicated track for explicit "no identity" instances, so the
+        // NULL identity survives propagation and shows in both panels. Its
+        // per-frame entry stays negative (explicit-none) under this index.
+        var noIdTrackIdx = null;
+        if (hasExplicitNone) {
+            var noIdName = 'No ID', ndup = 2;
+            while (nameSeen[noIdName]) { noIdName = 'No ID_' + ndup; ndup++; }  // de-dup
+            nameSeen[noIdName] = true;
+            noIdTrackIdx = newTracks.length;
+            newTracks.push(noIdName);
+        }
+
+        // 2. Rewrite each instance's trackIdx to its identity's new track, to the
+        //    "No ID" track when it is explicitly un-identified, or null when it
+        //    has no identity entry at all. Record the matching per-frame entry
+        //    under the NEW trackIdx (the real id, or -1 for "No ID" so it stays
+        //    explicit-none). Lookups here read the OLD frameIdentityMap; we only
+        //    swap in the new one in step 3, so this pass is order-independent.
         var changed = 0;
         var newFrameMap = new Map();   // "frame:cam:newTrackIdx" → identityId
         forEachInstance(function (inst, camName, frameIdx) {
             var ni = null, id = null;
             if (inst.trackIdx != null) {
                 id = self.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
-                if (id != null && idToTrackIdx.has(id)) ni = idToTrackIdx.get(id);
+                if (id != null && idToTrackIdx.has(id)) {
+                    ni = idToTrackIdx.get(id);
+                    newFrameMap.set(frameIdx + ':' + camName + ':' + ni, id);
+                } else if (noIdTrackIdx != null &&
+                           self.isExplicitNoIdentity(camName, inst.trackIdx, frameIdx)) {
+                    ni = noIdTrackIdx;
+                    newFrameMap.set(frameIdx + ':' + camName + ':' + ni, -1);
+                }
             }
-            if (ni != null) newFrameMap.set(frameIdx + ':' + camName + ':' + ni, id);
             if (inst.trackIdx !== ni) { inst.trackIdx = ni; changed++; }
         });
 
