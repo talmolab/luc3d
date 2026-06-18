@@ -214,6 +214,14 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
     for (var g = 0; g < groups.length; g++) {
         var identity = null;
 
+        // A single-view group is just one instance with no cross-view partner,
+        // so it can't be triangulated or geometrically verified. Assigning it an
+        // identity writes a per-frame entry that makes the ID panel show that
+        // identity as "present" at this frame on the strength of an unverified
+        // lone detection (Issue #5). Skip it — the Issue #6 guard below then
+        // writes EXPLICIT_NONE for it, so getIdentity*ForTrack returns null.
+        if (groups[g].size < 2) continue;
+
         // Vote from prev assignments
         if (prevAssignments) {
             var votes = {};

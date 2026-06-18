@@ -120,7 +120,11 @@ session graph that holds them.
   IDs→Tracks — overwrites each instance's `trackIdx` with its identity and
   rewrites `tracks` to one unique, non-empty name per used identity so the
   exported SLP has clean identity-named tracks, rewriting `frameIdentityMap`
-  under the new keys), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  under the new keys; instances explicitly marked "no identity" are collected
+  onto a single dedicated "No ID" track with their per-frame entry kept
+  negative, so the NULL identity survives propagation and stays visible in
+  both the Track panel and the ID panel — only entry-less instances go
+  trackless), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
   group editing (`createGroupFromUnlinked`,
   `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
@@ -198,6 +202,12 @@ rooted in `matchPairwise` dropping *visible* instances:
 - *Adaptive gate (Issue #2).* `reprojectionGate(nViews)` replaces the
   fixed 100px cutoff — tight (100) for a 2-view seed, looser (140/180) once
   3+ views make the estimate trustworthy.
+- *Single-view groups get no identity (Issue #5).* `matchFrameInstances`
+  skips identity assignment for any group with `size < 2` (a lone detection
+  with no cross-view partner is not geometrically verified). Such instances
+  fall through to the Issue #6 guard and receive `EXPLICIT_NONE` instead of a
+  phantom identity, fixing a bug where a solo detection (e.g. frame 1759
+  `mid`/`midL`) showed an unassigned identity as present in the ID panel.
 - *Explicit "no identity" override (Issue #6).* `matchFrameInstances`
   writes a negative sentinel (`EXPLICIT_NONE`) per-frame for every visible
   instance that landed in no group, so `getIdentity*ForTrack` returns null
@@ -764,13 +774,16 @@ shift-drag range select, pinch / Ctrl+wheel zoom, middle-click pan. Block 1 (Pro
 adds tree-grouped per-camera labels, an inner scrollable track-area
 wrapper, and an empty-camera placeholder row per camera without tracks.
 
-**Trackpad / wheel semantics.** `_handleWheel` only intercepts events
-where `e.ctrlKey === true` — that single flag covers macOS trackpad
-pinch (browsers translate pinch into `wheel` with `ctrlKey: true`) and
-explicit Ctrl/Cmd+wheel on a regular mouse. Every other wheel event
-(plain two-finger trackpad scroll, plain mouse wheel) returns without
-`preventDefault()`, so the event bubbles to `_trackScrollEl` and its
-`overflow-y: auto` produces native vertical scrolling. macOS's overlay
+**Trackpad / wheel semantics.** `_handleWheel` intercepts events where
+`e.ctrlKey === true` for zoom (covers macOS trackpad pinch — browsers
+translate pinch into `wheel` with `ctrlKey: true` — and explicit
+Ctrl/Cmd+wheel). It also intercepts horizontal-dominant scroll
+(`|deltaX| > |deltaY|`), panning `_scrollFrame` left/right (same axis as
+middle/right-drag pan and the scrollbar thumb) and calling
+`preventDefault()` only when the pan actually moved. Every other wheel
+event (vertical-dominant two-finger scroll, plain mouse wheel) returns
+without `preventDefault()`, so the event bubbles to `_trackScrollEl` and
+its `overflow-y: auto` produces native vertical scrolling. macOS's overlay
 scrollbar is defeated via `-webkit-appearance: none` on the
 `.timeline-track-area::-webkit-scrollbar` rule in `styles.css` so the
 bar is always visible (not just on idle-fade) while the content
@@ -785,6 +798,23 @@ when the bar appears/disappears.
   `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
   `getCameraGroups`, `getLabelLines`, `getRowCount`,
   `getTrackAreaElement`.
+
+**Initial-load 40% cap.** `setData(session)` sizes the container via
+`_fitContainerToData()`, which clamps the container height to
+`[preferred, floor(0.4 * window.innerHeight)]`: a small track set shows
+fully (no forced empty space), while a set taller than 40% of the window
+caps at 40% and the inner `_trackScrollEl` scrolls. (Previously `setData`
+called the uncapped `_growContainerToFit`, so a freshly loaded project
+displayed every row.) `refreshTracks` stays grow-only so a height the
+user expanded mid-session is never clipped.
+
+**Segment draw clipping.** `_computeSegmentDrawRect()` draws wide segments
+(`rawWidth >= minSegW`) at their true extents clipped to the visible
+content rect, so a bar scrolled partly off-screen shrinks to its visible
+slice; only narrow segments get the min-width center-and-clamp treatment.
+This fixes a bug where panning left/right made wide track bars "fill
+in/out" (a wide segment whose midpoint scrolled off-screen was clamped to
+the content edge and stretched across the whole row).
 
 **`refreshTracks` size-preserving mode.** Default `refreshTracks(session)`
 rebuilds segments, calls `_growContainerToFit` (grow-only), then
@@ -1024,6 +1054,11 @@ playback rate, and re-exports popular helpers like `unlinkGroup`,
   per track and assigns it to every group; sets `session.trustTracks`; was the
   old Edit-menu "Trust Track Labels" toggle) and `Propagate IDs → Tracks`
   (`menuPropagateIdsToTracks` — calls `Session.propagateIdentitiesToTracks`).
+- Color-by toggle: the "Color by" Tracks/ID control lives in the top
+  toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
+  checkbox), not the Tracks menu. `updateColorByToggle()` reflects
+  `state.colorByIdentity` on the buttons; each button's click sets the
+  state, re-renders via `drawAllOverlays`, and updates the active class.
 - Group ops: `unlinkGroup`, `showGroupContextMenu`, `hideGroupContextMenu`.
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.

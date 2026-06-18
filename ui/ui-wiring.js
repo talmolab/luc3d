@@ -172,7 +172,7 @@ export function setupMenus() {
         // Mark tracks as trusted (persisted in project metadata) and show IDs.
         session.trustTracks = true;
         state.colorByIdentity = true;
-        updateColorByChecks();
+        updateColorByToggle();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(session);
@@ -198,24 +198,26 @@ export function setupMenus() {
             res.instances + ' instances updated)', 'success');
     });
 
-    // Color by Track / Color by Identity toggles
-    function updateColorByChecks() {
-        document.getElementById('menuColorByTrackCheck').textContent = state.colorByIdentity ? '☐' : '☑';
-        document.getElementById('menuColorByIdCheck').textContent = state.colorByIdentity ? '☑' : '☐';
-    }
+    // Color by Tracks / ID toolbar toggle
+    var colorByTracksBtn = document.getElementById('colorByTracks');
+    var colorByIdBtn = document.getElementById('colorById');
 
-    document.getElementById('menuColorByTrack').addEventListener('click', function () {
-        closeMenus();
+    function updateColorByToggle() {
+        colorByTracksBtn.classList.toggle('active', !state.colorByIdentity);
+        colorByIdBtn.classList.toggle('active', state.colorByIdentity);
+    }
+    updateColorByToggle();
+
+    colorByTracksBtn.addEventListener('click', function () {
         state.colorByIdentity = false;
-        updateColorByChecks();
+        updateColorByToggle();
         drawAllOverlays(state.currentFrame);
         setStatus('Coloring by Track', 'success');
     });
 
-    document.getElementById('menuColorById').addEventListener('click', function () {
-        closeMenus();
+    colorByIdBtn.addEventListener('click', function () {
         state.colorByIdentity = true;
-        updateColorByChecks();
+        updateColorByToggle();
         drawAllOverlays(state.currentFrame);
         setStatus('Coloring by Identity', 'success');
     });
