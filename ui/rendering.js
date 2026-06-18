@@ -43,6 +43,12 @@ export function setReprojErrorVisible(visible) {
 // ============================================
 
 export function getVisibilitySettings() {
+    // Read a `.line-style-options` (or node-style) button group's data-value,
+    // tolerating a missing element (headless test runner).
+    function styleVal(id, fallback) {
+        var el = document.getElementById(id);
+        return (el && el.getAttribute('data-value')) || fallback;
+    }
     return {
         showLegend: document.getElementById('visLegend').checked,
         showUser: document.getElementById('visUser').checked,
@@ -59,6 +65,7 @@ export function getVisibilitySettings() {
             showLabels: parseInt(document.getElementById('visUserLabelSize').value) > 0,
             preLineStyle: document.getElementById('visUserPreLineStyle').getAttribute('data-value') || 'dashed',
             postLineStyle: document.getElementById('visUserPostLineStyle').getAttribute('data-value') || 'solid',
+            nodeStyle: styleVal('visUserNodeStyle', 'circle'),
         },
         predictedOpts: {
             nodeSize: parseInt(document.getElementById('visPredNodeSize').value) || 4,
@@ -67,6 +74,7 @@ export function getVisibilitySettings() {
             showLabels: false,
             preLineStyle: document.getElementById('visPredPreLineStyle').getAttribute('data-value') || 'solid',
             postLineStyle: document.getElementById('visPredPostLineStyle').getAttribute('data-value') || 'solid',
+            nodeStyle: styleVal('visPredNodeStyle', 'circle'),
         },
         reprojOpts: {
             nodeSize: parseInt(document.getElementById('visReprojNodeSize').value) || 4,
@@ -77,6 +85,7 @@ export function getVisibilitySettings() {
             labelAlpha: parseFloat(document.getElementById('visReprojLabelAlpha').value),
             showLabels: parseInt(document.getElementById('visReprojLabelSize').value) > 0,
             lineStyle: document.getElementById('visReprojLineStyle').getAttribute('data-value') || 'dotted',
+            nodeStyle: styleVal('visReprojNodeStyle', 'x'),
         },
     };
 }

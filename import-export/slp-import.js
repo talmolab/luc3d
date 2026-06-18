@@ -32,7 +32,7 @@ import {
     rebuildVideoController, resolveImportTrackIdx,
 } from '../loading/session-loader.js';
 import {
-    showLoading, hideLoading, setStatus, clearDirty,
+    showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
 } from './save-load.js';
 
 // Circular import — these are still defined in app.js for now. They are only
@@ -54,6 +54,11 @@ import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 
 export async function handleLoadSlpFile(slpFile) {
     try {
+        // Warn + reset if 3D points were imported into a skeleton-only project.
+        if (!(await ensureNo3dImportBlockingLoad())) {
+            setStatus('Load cancelled', 'warning');
+            return;
+        }
 
         // TODO(slp-load): wire SLP-parse phases through ui/loading-progress-modal.js
         // once the modal API stabilizes (uses the same addTask/updateTask/completeTask
@@ -1503,8 +1508,12 @@ export async function handleAddSlp() {
 
 export async function handleLoadPoints3dH5() {
     try {
-        if (!state.session) {
-            setStatus('Load an SLP or session first before loading 3D points', 'error');
+        // A full session is NOT required — only a loaded skeleton. This lets a
+        // user load a skeleton (Skeleton tab) and then overlay imported 3D
+        // points in the 3D viewer without any video/calibration.
+        var skel = state.session && state.session.skeleton;
+        if (!skel || !skel.nodes || skel.nodes.length === 0) {
+            setStatus('Load a skeleton first before loading 3D points', 'error');
             return;
         }
 
@@ -1565,10 +1574,23 @@ export async function handleLoadPoints3dH5() {
             framesUpdated++;
         }
 
-        // Refresh 3D viewport
+        // Refresh 3D viewport. Force-create it if needed — a skeleton-only
+        // project has no calibration, so update3DViewport's auto-init (which
+        // gates on calibration) would skip it; setup3DViewport only needs a
+        // session + skeleton.
+        if (!viewport3d) {
+            try { setup3DViewport(); } catch (e) { console.warn('[3D] setup for points import failed:', e); }
+        }
         if (viewport3d) {
             viewport3d.skeleton = state.session.skeleton;
             viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+        }
+
+        // If this is a skeleton-only project (no cameras/video), record that we
+        // now hold imported 3D info. Loading a real session later must warn the
+        // user and fully reset, since it would otherwise silently discard this.
+        if (!state.session.cameras || state.session.cameras.length === 0) {
+            state.has3dImportWithoutSession = true;
         }
 
         drawAllOverlays(state.currentFrame);

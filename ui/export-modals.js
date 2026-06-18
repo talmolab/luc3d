@@ -18,7 +18,10 @@ import {
     triangulateMultiFrameInstances,
     sessionHasCalibration,
     showCalibrationRequiredPopup,
+    getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
+import { Viewport3D } from './viewport3d.js';
+import { getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
@@ -373,6 +376,11 @@ export async function groupByIdentityAndTriangulateAll() {
     hideLoading();
     setReprojErrorVisible(true);
     drawAllOverlays(state.currentFrame);
+    // Populate the 3D viewer for the current frame. Without this, "Triangulate
+    // All" (which routes here when identities exist) triangulated every frame
+    // but never refreshed the 3D viewport, leaving it empty — unlike single
+    // "Triangulate", which calls update3DViewport(frameIdx) at its tail.
+    update3DViewport(state.currentFrame);
     updateInfoPanel();
     setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
         totalTriangulated + ' across ' + allFrameIndices.length + ' frames', 'success');
@@ -1556,4 +1564,279 @@ function downloadBlob(blob, filename) {
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+// ============================================
+// Export 3D Video
+// ============================================
+
+/**
+ * Format a number of seconds as M:SS.
+ */
+function _fmtDuration(totalSeconds) {
+    var s = Math.max(0, Math.round(totalSeconds));
+    var m = Math.floor(s / 60);
+    var rem = s % 60;
+    return m + ':' + (rem < 10 ? '0' : '') + rem;
+}
+
+/**
+ * "Export 3D Video" modal. Reuses the existing Viewport3D panel (a second
+ * instance mounted in the modal) so the user can orbit/zoom to choose the
+ * camera angle. A frame scrubber (renders on release only — no live scrub),
+ * an editable FPS, and a live duration readout sit below. On Export, every
+ * frame is rendered into the modal viewport and encoded to an .mp4 via
+ * WebCodecs VideoEncoder + mp4-muxer, using the view and FPS the user set.
+ */
+export function showExport3DVideoModal() {
+    var session = getActiveSession();
+    if (!session) { setStatus('No session to export', 'error'); return; }
+
+    // Resolve the frame count to render (every frame, 0..N-1).
+    var frameCount = (state.totalFrames && state.totalFrames > 0) ? state.totalFrames : 0;
+    if (!frameCount) {
+        var maxF = -1;
+        if (session.frameGroups) for (var k of session.frameGroups.keys()) if (k > maxF) maxF = k;
+        if (session.instanceGroups) for (var k2 of session.instanceGroups.keys()) if (k2 > maxF) maxF = k2;
+        frameCount = maxF + 1;
+    }
+    if (frameCount <= 0) { setStatus('No frames to export', 'error'); return; }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.style.cssText = 'width:680px;max-width:95vw;';
+    modal.innerHTML =
+        '<h3>Export 3D Video</h3>' +
+        '<div style="display:flex;gap:14px;align-items:stretch;">' +
+        '  <div id="v3dExportViewport" style="width:500px;height:340px;background:#1a1a1a;border-radius:6px;position:relative;overflow:hidden;flex:0 0 auto;"></div>' +
+        '  <div style="flex:1 1 auto;display:flex;flex-direction:column;gap:12px;">' +
+        '    <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">Orbit and zoom the view to set the camera angle for the exported video.</div>' +
+        '    <div style="display:flex;align-items:center;gap:8px;">' +
+        '      <label style="font-size:13px;width:34px;">FPS</label>' +
+        '      <input type="number" id="v3dExportFps" min="1" max="240" step="1" style="width:74px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:4px;font-size:13px;padding:4px 6px;text-align:center;">' +
+        '    </div>' +
+        '    <div style="font-size:12px;color:var(--text-secondary);">Duration: <span id="v3dExportDuration">0:00</span></div>' +
+        '    <div style="font-size:12px;color:var(--text-secondary);"><span id="v3dExportFrameCount">' + frameCount + '</span> frames</div>' +
+        '  </div>' +
+        '</div>' +
+        '<div style="margin-top:12px;">' +
+        '  <div style="display:flex;align-items:center;gap:8px;">' +
+        '    <span style="font-size:12px;color:var(--text-secondary);min-width:42px;">Frame</span>' +
+        '    <input type="range" id="v3dExportScrub" min="0" max="' + (frameCount - 1) + '" value="0" style="flex:1;">' +
+        '    <span id="v3dExportScrubVal" style="font-size:12px;min-width:72px;text-align:right;">0 / ' + (frameCount - 1) + '</span>' +
+        '  </div>' +
+        '  <div id="v3dExportProgressWrap" style="display:none;margin-top:10px;">' +
+        '    <div style="background:#333;border-radius:4px;height:8px;overflow:hidden;">' +
+        '      <div id="v3dExportProgressFill" style="width:0%;height:100%;background:var(--accent,#4a9eff);transition:width 0.1s;"></div>' +
+        '    </div>' +
+        '    <div id="v3dExportProgressLabel" style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Encoding 0 / ' + frameCount + '</div>' +
+        '  </div>' +
+        '</div>' +
+        '<div class="modal-actions" style="margin-top:14px;display:flex;justify-content:flex-end;gap:10px;">' +
+        '  <button id="v3dExportCancel">Cancel</button>' +
+        '  <button class="primary" id="v3dExportBtn">Export</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // --- Instantiate a second Viewport3D into the modal (reuse existing panel
+    //     code; preserveDrawingBuffer so the canvas can be captured). ---
+    var containerEl = modal.querySelector('#v3dExportViewport');
+    function read3dNum(id, dflt) { var e = document.getElementById(id); return e ? (parseFloat(e.value) || dflt) : dflt; }
+    function read3dBool(id, dflt) { var e = document.getElementById(id); return e ? e.checked : dflt; }
+    var vp;
+    try {
+        vp = new Viewport3D(containerEl, {
+            cameras: session.cameras,
+            skeleton: session.skeleton,
+            getTrackColor: getTrackColor,
+            getGroupColor: function (group) {
+                return getGroupColor(group, session, state.colorByIdentity || false, state.currentFrame);
+            },
+            cameraLabelSize: read3dNum('vis3dLabelSize', 28),
+            cameraSphereSize: read3dNum('vis3dSphereSize', 3),
+            pyramidLength: read3dNum('vis3dPyramidLength', 40),
+            skeletonNodeSize: read3dNum('vis3dNodeSize', 2),
+            skeletonEdgeWeight: read3dNum('vis3dEdgeWeight', 0.8),
+            showCameraLabels: read3dBool('vis3dLabelShow', true),
+            showCameraSpheres: read3dBool('vis3dSphereShow', true),
+            showCameraPyramids: read3dBool('vis3dPyramidShow', true),
+            showSkeletonNodes: read3dBool('vis3dNodeShow', true),
+            showSkeletonEdges: read3dBool('vis3dEdgeShow', true),
+            skeletonNodeShape: (function () { var e = document.getElementById('vis3dNodeStyle'); return e ? (e.getAttribute('data-value') || 'circle') : 'circle'; })(),
+            preserveDrawingBuffer: true,
+        });
+    } catch (err) {
+        console.error('[3D video] failed to create viewport:', err);
+        overlay.remove();
+        setStatus('3D viewport unavailable (WebGL required) — cannot export 3D video', 'error');
+        return;
+    }
+    var startFrame = Math.min(state.currentFrame || 0, frameCount - 1);
+    vp.setFrame(getInstanceGroupsForFrame(startFrame));
+    setTimeout(function () { try { vp.fitToScene(); } catch (e) {} }, 150);
+
+    // --- Controls ---
+    var fpsInput = modal.querySelector('#v3dExportFps');
+    var durationEl = modal.querySelector('#v3dExportDuration');
+    var scrub = modal.querySelector('#v3dExportScrub');
+    var scrubVal = modal.querySelector('#v3dExportScrubVal');
+    var cancelBtn = modal.querySelector('#v3dExportCancel');
+    var exportBtn = modal.querySelector('#v3dExportBtn');
+    var progressWrap = modal.querySelector('#v3dExportProgressWrap');
+    var progressFill = modal.querySelector('#v3dExportProgressFill');
+    var progressLabel = modal.querySelector('#v3dExportProgressLabel');
+
+    fpsInput.value = Math.round(state.fps || 30);
+    scrub.value = startFrame;
+    scrubVal.textContent = startFrame + ' / ' + (frameCount - 1);
+
+    function currentFps() {
+        var f = parseFloat(fpsInput.value);
+        if (isNaN(f) || f <= 0) f = 30;
+        if (f > 240) f = 240;
+        return f;
+    }
+    function refreshDuration() {
+        durationEl.textContent = _fmtDuration(frameCount / currentFps());
+    }
+    refreshDuration();
+    fpsInput.addEventListener('input', refreshDuration);
+    fpsInput.addEventListener('change', function () { fpsInput.value = Math.round(currentFps()); refreshDuration(); });
+
+    // Scrubbing: update the numeric label live, but only RENDER the 3D frame on
+    // release (the 'change' event), per spec — no live scrub rendering.
+    scrub.addEventListener('input', function () {
+        scrubVal.textContent = scrub.value + ' / ' + (frameCount - 1);
+    });
+    scrub.addEventListener('change', function () {
+        var f = parseInt(scrub.value, 10) || 0;
+        vp.setFrame(getInstanceGroupsForFrame(f));
+    });
+
+    var exporting = false;
+    var cancelled = false;
+
+    function cleanup() {
+        try { vp.dispose(); } catch (e) {}
+        overlay.remove();
+    }
+
+    cancelBtn.addEventListener('click', function () {
+        if (exporting) { cancelled = true; return; }
+        cleanup();
+    });
+
+    exportBtn.addEventListener('click', async function () {
+        if (exporting) return;
+
+        if (typeof VideoEncoder === 'undefined' || typeof window.Mp4Muxer === 'undefined') {
+            setStatus('3D video export needs a Chromium-based browser (WebCodecs)', 'error');
+            return;
+        }
+
+        exporting = true;
+        cancelled = false;
+        exportBtn.disabled = true;
+        fpsInput.disabled = true;
+        scrub.disabled = true;
+        cancelBtn.textContent = 'Stop';
+        progressWrap.style.display = '';
+
+        var fps = currentFps();
+
+        // Lazy sessions: ensure all frames are available before sweeping.
+        if (session.lazyLoader) {
+            try { await loadAllLazyFrames(showLoading); hideLoading(); } catch (e) {}
+        }
+
+        // Even dimensions are required by most H.264 encoders. Capture through a
+        // 2D canvas so the encoder size is decoupled from devicePixelRatio.
+        var src = vp.renderer.domElement;
+        var W = src.width - (src.width % 2);
+        var H = src.height - (src.height % 2);
+        if (W < 2 || H < 2) { W = 640; H = 480; }
+        var cap = document.createElement('canvas');
+        cap.width = W; cap.height = H;
+        var capCtx = cap.getContext('2d');
+
+        var muxer, encoder;
+        try {
+            muxer = new window.Mp4Muxer.Muxer({
+                target: new window.Mp4Muxer.ArrayBufferTarget(),
+                video: { codec: 'avc', width: W, height: H, frameRate: fps },
+                fastStart: 'in-memory',
+            });
+            encoder = new VideoEncoder({
+                output: function (chunk, meta) { muxer.addVideoChunk(chunk, meta); },
+                error: function (e) { console.error('[3D video] encoder error:', e); },
+            });
+            encoder.configure({
+                codec: 'avc1.420028',
+                width: W, height: H,
+                bitrate: Math.min(16000000, Math.max(2000000, Math.round(W * H * fps * 0.12))),
+                framerate: fps,
+            });
+        } catch (err) {
+            console.error('[3D video] setup failed:', err);
+            setStatus('3D video export setup failed: ' + err.message, 'error');
+            exporting = false;
+            cleanup();
+            return;
+        }
+
+        var frameDurUs = Math.round(1e6 / fps);
+        var encodedOk = true;
+        try {
+            for (var i = 0; i < frameCount; i++) {
+                if (cancelled) break;
+
+                vp.setFrame(getInstanceGroupsForFrame(i));
+                // Force a render of the chosen camera view, then snapshot it.
+                vp.renderer.render(vp.scene, vp.threeCamera);
+                capCtx.drawImage(src, 0, 0, W, H);
+
+                var vframe = new VideoFrame(cap, {
+                    timestamp: Math.round(i * 1e6 / fps),
+                    duration: frameDurUs,
+                });
+                encoder.encode(vframe, { keyFrame: (i % 60 === 0) });
+                vframe.close();
+
+                // Update progress + relieve encoder backpressure periodically.
+                if (i % 5 === 0 || i === frameCount - 1) {
+                    var pct = Math.round(((i + 1) / frameCount) * 100);
+                    progressFill.style.width = pct + '%';
+                    progressLabel.textContent = 'Encoding ' + (i + 1) + ' / ' + frameCount;
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+                while (encoder.encodeQueueSize > 12 && !cancelled) {
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+            }
+
+            if (!cancelled) {
+                progressLabel.textContent = 'Finalizing...';
+                await encoder.flush();
+                muxer.finalize();
+                var buffer = muxer.target.buffer;
+                var blob = new Blob([buffer], { type: 'video/mp4' });
+                var fname = (session.name || 'session').replace(/[^\w.-]+/g, '_') + '_3d.mp4';
+                downloadBlob(blob, fname);
+                setStatus('3D video exported: ' + fname + ' (' + frameCount + ' frames @ ' + fps + ' fps)', 'success');
+            } else {
+                setStatus('3D video export cancelled', 'warning');
+            }
+        } catch (err) {
+            encodedOk = false;
+            console.error('[3D video] export failed:', err);
+            setStatus('3D video export failed: ' + err.message, 'error');
+        }
+
+        try { if (encoder.state !== 'closed') encoder.close(); } catch (e) {}
+        exporting = false;
+        cleanup();
+    });
 }

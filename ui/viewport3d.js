@@ -123,6 +123,15 @@ export class Viewport3D {
         /** @type {number} 3D skeleton edge radius multiplier (default 0.8) */
         this.skeletonEdgeWeight = options.skeletonEdgeWeight !== undefined ? options.skeletonEdgeWeight : 0.8;
 
+        /** @type {string} 3D skeleton node marker shape:
+         *  'circle' (sphere), 'square' (cube), 'triangle' (tetrahedron),
+         *  'x' (crossed bars). */
+        this.skeletonNodeShape = options.skeletonNodeShape || 'circle';
+
+        /** @type {boolean} Keep the WebGL drawing buffer after compositing so
+         *  the canvas can be captured frame-by-frame (used by 3D video export). */
+        this._preserveDrawingBuffer = !!options.preserveDrawingBuffer;
+
         /** @type {boolean} Whether to show camera labels */
         this.showCameraLabels = options.showCameraLabels !== undefined ? options.showCameraLabels : true;
 
@@ -162,7 +171,7 @@ export class Viewport3D {
         this.scene.background = new THREE.Color(0x1a1a1a);
 
         // --- Renderer ---
-        this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: this._preserveDrawingBuffer });
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.setSize(width, height);
         this.container.appendChild(this.renderer.domElement);
@@ -819,8 +828,23 @@ export class Viewport3D {
         const sphereSegments = 12;
         const cylinderSegments = 6;
 
-        // Shared geometries (instanced for performance)
-        const sphereGeo = new THREE.SphereGeometry(nodeRadius, sphereSegments, sphereSegments);
+        // Shared node geometry (one per shape, reused across all groups/nodes).
+        // 'x' has no single geometry — it's a group of two crossed bars built
+        // per node from the shared bar geometries below.
+        const nodeShape = this.skeletonNodeShape || 'circle';
+        let nodeGeo = null, xBarGeo = null;
+        if (nodeShape === 'square') {
+            const sq = nodeRadius * 1.7;
+            nodeGeo = new THREE.BoxGeometry(sq, sq, sq);
+        } else if (nodeShape === 'triangle') {
+            nodeGeo = new THREE.TetrahedronGeometry(nodeRadius * 1.4);
+        } else if (nodeShape === 'x') {
+            const barLen = nodeRadius * 2.6;
+            const barThin = Math.max(0.0001, nodeRadius * 0.45);
+            xBarGeo = new THREE.BoxGeometry(barLen, barThin, barThin);
+        } else {
+            nodeGeo = new THREE.SphereGeometry(nodeRadius, sphereSegments, sphereSegments);
+        }
         const edges = this.skeleton.edges || [];
         const nodes = this.skeleton.nodes || [];
 
@@ -856,19 +880,30 @@ export class Viewport3D {
             const instanceGroup3D = new THREE.Group();
             instanceGroup3D.name = 'instance_' + g;
 
-            // --- Draw keypoint spheres ---
+            // --- Draw keypoint markers (shape per Node Style toggle) ---
             if (this.showSkeletonNodes && nodeRadius > 0) {
                 for (let n = 0; n < pts.length; n++) {
                     const pt = pts[n];
                     if (pt == null) continue;
 
-                    const mesh = new THREE.Mesh(sphereGeo, nodeMaterial);
-                    mesh.position.set(pt[0], pt[1], pt[2]);
-                    if (scale !== 1.0) {
-                        mesh.scale.setScalar(scale);
+                    let nodeObj;
+                    if (nodeShape === 'x') {
+                        nodeObj = new THREE.Group();
+                        const barA = new THREE.Mesh(xBarGeo, nodeMaterial);
+                        barA.rotation.z = Math.PI / 4;
+                        const barB = new THREE.Mesh(xBarGeo, nodeMaterial);
+                        barB.rotation.z = -Math.PI / 4;
+                        nodeObj.add(barA);
+                        nodeObj.add(barB);
+                    } else {
+                        nodeObj = new THREE.Mesh(nodeGeo, nodeMaterial);
                     }
-                    mesh.name = 'node_' + (nodes[n] || n);
-                    instanceGroup3D.add(mesh);
+                    nodeObj.position.set(pt[0], pt[1], pt[2]);
+                    if (scale !== 1.0) {
+                        nodeObj.scale.setScalar(scale);
+                    }
+                    nodeObj.name = 'node_' + (nodes[n] || n);
+                    instanceGroup3D.add(nodeObj);
                 }
             }
 

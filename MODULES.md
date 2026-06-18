@@ -11,8 +11,9 @@ The codebase is split across four directories plus two root files:
 - `import-export/` — file pickers, parsers, project save/load, SLP import.
 - root — `app.js` entry point, `demo-data.js` synthetic dataset.
 
-External CDN imports (`three`, `mp4box`, `h5wasm`, `dockview-core`) are not
-listed under "Imports from project modules".
+External script-tag globals (`three`, `mp4box`, `h5wasm`, `dockview-core`, and
+`Mp4Muxer` — local copy in `lib/mp4-muxer/`, used for 3D-video `.mp4` muxing)
+are not listed under "Imports from project modules".
 
 ---
 
@@ -361,7 +362,19 @@ all-sessions, JSON labels, points3d H5, reproj H5).
 
 **Key exports.**
 - `showGroupByTrackModal()` — modal that bulk-groups by trackIdx.
-- `groupByIdentityAndTriangulateAll()` — bulk-group then triangulate.
+- `groupByIdentityAndTriangulateAll()` — bulk-group then triangulate. Ends by
+  calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
+  the current frame (this is the path "Triangulate All" takes when identities
+  exist; previously it refreshed only the 2D overlays, leaving 3D empty).
+- `showExport3DVideoModal()` — File ▸ "Export 3D Video". Mounts a second
+  `Viewport3D` (reusing the panel code) in a modal so the user can orbit/zoom to
+  pick the camera angle; a release-only frame scrubber (renders on `change`, not
+  during drag), an editable FPS (duration = frameCount / fps), and Cancel /
+  Export. Export renders every frame into the modal viewport and encodes an
+  `.mp4` via WebCodecs `VideoEncoder` (H.264, `avc1.420028`) muxed with
+  `mp4-muxer` (global `Mp4Muxer`, local copy in `lib/mp4-muxer/`). Captures
+  through an even-dimensioned 2D canvas; requires a Chromium-based browser
+  (WebCodecs) — falls back to an error status otherwise.
 - `showSlpExportModal()` — single-session SLP export modal.
 - `showSlpExportAllModal()` — multi-session SLP export.
 - `showTriangulateMultiFrameModal()` — frame-range triangulation modal.
@@ -375,7 +388,10 @@ all-sessions, JSON labels, points3d H5, reproj H5).
 - `../pose/triangulation.js` — `triangulateAndReproject`,
   `storeReprojectedInstances`, `frameHasGroupedUserInstances`,
   `loadAllLazyFrames`, `triangulateMultiFrameInstances`,
-  `sessionHasCalibration`, `showCalibrationRequiredPopup`.
+  `sessionHasCalibration`, `showCalibrationRequiredPopup`,
+  `getInstanceGroupsForFrame`.
+- `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
+- `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
@@ -386,9 +402,9 @@ all-sessions, JSON labels, points3d H5, reproj H5).
 
 **Imported by.** `ui/ui-wiring.js`.
 
-**User-facing features.** File menu Export (JSON / SLP / SLP All / H5
-points3d / H5 reproj), Edit menu Group-by-Track / Group-by-Identity,
-Multi-Frame Triangulate modal.
+**User-facing features.** File menu Export (JSON / SLP / SLP All /
+**3D Video (.mp4)** / H5 points3d / H5 reproj), Edit menu Group-by-Track /
+Group-by-Identity, Multi-Frame Triangulate modal.
 
 ---
 
@@ -634,6 +650,13 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 `instanceGroups` already resolved by the caller — no project imports.
 
 **Key exports.**
+- Node markers: `drawNodeShape(ctx, x, y, shape, size, color)` — draws one
+  keypoint marker in one of four styles (`'circle'`, `'x'`, `'triangle'`,
+  `'square'`). All 2D node draws route through it: `drawSkeleton`
+  (normal + nulled nodes, via `options.nodeShape`), `drawReprojectedSkeleton`
+  (via `options.nodeShape`, default `'x'`), and `drawUnlinkedInstances`
+  (`instNodeShape`). `drawFrameOverlays` threads the per-type Node Style toggle
+  through as `nodeShape: {user,predicted,reproj}Opts.nodeStyle`.
 - Color: `TRACK_COLORS`, `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
   `NULL_ID_COLOR` (space gray `#a7adba` for explicit-none instances when
   coloring by identity), `getTrackColor`, `getGroupColor`,
@@ -675,6 +698,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `setReprojErrorVisible(visible)` — show/hide the reproj-error info
   column.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
+  Each of `userOpts` / `predictedOpts` / `reprojOpts` now carries a `nodeStyle`
+  (`'circle'`/`'x'`/`'triangle'`/`'square'`) read from the per-section Node
+  Style button group (`visUserNodeStyle` / `visPredNodeStyle` /
+  `visReprojNodeStyle`; reproj defaults to `'x'`).
 - `drawAllOverlays(frameIdx)` — main per-frame redraw across every view.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
@@ -1077,6 +1104,14 @@ playback rate, and re-exports popular helpers like `unlinkGroup`,
   checkbox), not the Tracks menu. `updateColorByToggle()` reflects
   `state.colorByIdentity` on the buttons; each button's click sets the
   state, re-renders via `drawAllOverlays`, and updates the active class.
+- Node Style: the four per-section Node Style button groups
+  (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
+  `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
+  `data-value` + `drawAllOverlays` + `saveVisSettings`); they are added to
+  `visStyleIds` for persistence/restore. The handler additionally rebuilds the
+  3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
+- File ▸ "Export 3D Video" (`menuExportVideo3d`) is wired to
+  `showExport3DVideoModal()` (export-modals.js).
 - Group ops: `unlinkGroup`, `showGroupContextMenu`, `hideGroupContextMenu`.
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
@@ -1132,6 +1167,12 @@ via the options bag.
   `addCameraPyramids`, `selectCamera`, `showSelectedCameraView`,
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
   `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `dispose`.
+- Constructor options `skeletonNodeShape` (`'circle'` sphere / `'square'` cube /
+  `'triangle'` tetrahedron / `'x'` crossed bars — `updateSkeleton` builds the
+  matching node geometry) and `preserveDrawingBuffer` (keeps the WebGL buffer
+  after compositing so the canvas can be captured frame-by-frame; used by the
+  Export 3D Video modal). A second `Viewport3D` can be mounted in the export
+  modal's container, reusing this class rather than duplicating 3D code.
 
 **Imports from project modules.** None (uses the global `THREE` from CDN
 script tags).
@@ -1213,7 +1254,9 @@ filesystem enumeration, decoder rebuild.
 
 **User-facing features.** File menu Load Calibration / Load Videos /
 Load Session Folder / Load Multi-Session, all video-to-camera
-auto-matching, session-folder mode chooser.
+auto-matching, session-folder mode chooser. `handleLoadSessionFolder` calls
+`ensureNo3dImportBlockingLoad()` first, so loading a session over a
+skeleton-only 3D-points import prompts before discarding it.
 
 ---
 
@@ -1364,10 +1407,18 @@ saveAs, saveProjectSlp, saveProject), load dispatcher
 loading-overlay/status-text UI helpers.
 
 **Key exports.**
-- Project: `newProject`, `markDirty`, `clearDirty`, `quickSave`,
+- Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
+  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject`.
 - Status / overlay: `showLoading(msg)`, `hideLoading`,
   `setStatus(text, type)`.
+- 3D-import guard: `confirmDiscardImported3D()` (two-button warning modal,
+  Promise<boolean>) and `ensureNo3dImportBlockingLoad()` — called at the top of
+  the session-load entry points (`handleLoadProject`, `handleLoadSlpFile`,
+  `handleLoadSessionFolder`). When `state.has3dImportWithoutSession` is set
+  (3D points imported into a skeleton-only project), it warns and, on confirm,
+  fully resets via `newProject(true)` so nothing — not even the skeleton —
+  survives before the session loads. `newProject` clears the flag.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`,
@@ -1409,7 +1460,12 @@ current session, overlay reprojected points3d from H5.
   per-session video-load failure (failed session is dropped from
   `state.sessions`).
 - `handleAddSlp()` — additive merge into current session.
-- `handleLoadPoints3dH5()` — overlay 3D points from H5.
+- `handleLoadPoints3dH5()` — overlay 3D points from H5. Requires only a loaded
+  **skeleton** (not a full session): a camera-less skeleton-only project is
+  accepted, the 3D viewport is force-created (bypassing the calibration gate)
+  so the points render, and `state.has3dImportWithoutSession` is set so a later
+  session load warns + resets (see `ensureNo3dImportBlockingLoad` in
+  `save-load.js`).
 - `importSlpProjectWithProgress({ sessions, state, decoderFactory })` —
   testable entry point that loads a multi-session project through the
   progress modal. Sessions load SEQUENTIALLY; videos within a session load

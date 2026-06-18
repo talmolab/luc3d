@@ -61,7 +61,7 @@ import {
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
     showSlpExportModal, showSlpExportAllModal, showTriangulateMultiFrameModal,
-    showGroupByTrackModal, groupByIdentityAndTriangulateAll,
+    showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
 } from './export-modals.js';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
@@ -827,6 +827,12 @@ export function setupMenus() {
         showSlpExportModal();
     });
 
+    document.getElementById('menuExportVideo3d').addEventListener('click', function () {
+        closeMenus();
+        if (!state.session) { setStatus('No session to export', 'error'); return; }
+        showExport3DVideoModal();
+    });
+
     document.getElementById('menuExportPoints3dH5').addEventListener('click', function () {
         closeMenus();
         if (!state.session) { setStatus('No session to export', 'error'); return; }
@@ -1446,6 +1452,15 @@ export function setupUI() {
             if (container.id === 'visReprojNodeColor') {
                 updateReprojBrightnessEnabled();
             }
+            // 3D node style: rebuild the 3D skeleton with the new node geometry.
+            if (container.id === 'vis3dNodeStyle') {
+                if (viewport3d) {
+                    viewport3d.skeletonNodeShape = btn.getAttribute('data-style');
+                    var g3d = (typeof getInstanceGroupsForFrame === 'function')
+                        ? getInstanceGroupsForFrame(state.currentFrame) : [];
+                    viewport3d.setFrame(g3d);
+                }
+            }
             drawAllOverlays(state.currentFrame);
         });
     });
@@ -1481,6 +1496,7 @@ export function setupUI() {
         'visUserPreLineStyle', 'visUserPostLineStyle',
         'visPredPreLineStyle', 'visPredPostLineStyle',
         'visReprojLineStyle', 'visReprojNodeColor',
+        'visUserNodeStyle', 'visPredNodeStyle', 'visReprojNodeStyle', 'vis3dNodeStyle',
     ];
 
     function saveVisSettings() {
