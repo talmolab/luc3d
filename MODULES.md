@@ -113,7 +113,9 @@ session graph that holds them.
   `clearTrackIdentity`; `propagateIdentity`), group assignment
   (`assignIdentityToGroup`), lookup (`getIdentityIdForTrack`/
   `getIdentityForTrack` — per-frame only, return null with no fallback;
-  `isExplicitNoIdentity`), `getOrCreateIdentityForTrack` (creates/returns the
+  `isExplicitNoIdentity`; `isNoIdTrack(trackIdx)` — true for the dedicated
+  `NO_ID_TRACK_NAME` ("No ID") track, treated as the null track so overlays
+  and the Track panel color it `NULL_ID_COLOR`), `getOrCreateIdentityForTrack` (creates/returns the
   "id_N" identity only — no map side effects), identity↔track propagation
   (`propagateTracksToIdentities` for Tracks→IDs — stamps each instance's
   per-frame identity from its track; `propagateIdentitiesToTracks` for
@@ -630,7 +632,10 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
   `brightenColor`, `desaturateColor`, `complementaryColor`.
   `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
-  `useIdentity` and `session.isExplicitNoIdentity(...)` is true.
+  `useIdentity` and `session.isExplicitNoIdentity(...)` is true, and also —
+  when coloring by track — for any instance/group on the "No ID" track
+  (`session.isNoIdTrack(trackIdx)`), so the null track matches the ID
+  panel's gray on the skeleton.
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,

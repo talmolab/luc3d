@@ -1,6 +1,14 @@
 // pose-data.js - Data model for multi-view pose data
 // All vanilla JS classes, no imports/exports.
 
+/**
+ * Name of the dedicated track that `propagateIdentitiesToTracks` collects
+ * explicitly-un-identified ("no identity") instances onto. Treated as the
+ * null track everywhere: rendered in `NULL_ID_COLOR` (the same gray the ID
+ * panel uses for its "No ID" row) rather than a palette color.
+ */
+export const NO_ID_TRACK_NAME = 'No ID';
+
 export class Skeleton {
     /**
      * @param {string} name
@@ -803,8 +811,8 @@ export class Session {
         // per-frame entry stays negative (explicit-none) under this index.
         var noIdTrackIdx = null;
         if (hasExplicitNone) {
-            var noIdName = 'No ID', ndup = 2;
-            while (nameSeen[noIdName]) { noIdName = 'No ID_' + ndup; ndup++; }  // de-dup
+            var noIdName = NO_ID_TRACK_NAME, ndup = 2;
+            while (nameSeen[noIdName]) { noIdName = NO_ID_TRACK_NAME + '_' + ndup; ndup++; }  // de-dup
             nameSeen[noIdName] = true;
             noIdTrackIdx = newTracks.length;
             newTracks.push(noIdName);
@@ -1014,6 +1022,19 @@ export class Session {
         if (frameIdx == null || cameraName == null || trackIdx == null) return false;
         var v = this.frameIdentityMap.get(frameIdx + ':' + cameraName + ':' + trackIdx);
         return v != null && v < 0;
+    }
+
+    /**
+     * True iff `trackIdx` is the dedicated "No ID" track created by
+     * `propagateIdentitiesToTracks` for explicitly-un-identified instances.
+     * Such a track is the null track: colored in `NULL_ID_COLOR` (the ID
+     * panel's gray) rather than a palette color, both in the Track panel and
+     * on the skeleton when coloring by track.
+     * @param {number} trackIdx
+     * @returns {boolean}
+     */
+    isNoIdTrack(trackIdx) {
+        return trackIdx != null && this.tracks[trackIdx] === NO_ID_TRACK_NAME;
     }
 
     /**
