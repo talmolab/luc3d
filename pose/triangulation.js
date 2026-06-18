@@ -1902,8 +1902,10 @@ export function triangulateCurrentFrame() {
             ' - check that instance groups have labels in 2+ camera views', 'warning');
     }
 
-    // Update timeline: mark frame only if it has grouped UserInstances
+    // Update timeline: mark frame only if it has grouped UserInstances,
+    // then re-apply the 30% cap (triangulation can add track rows).
     updateTimelineForFrame(frameIdx);
+    if (timeline) timeline.refreshTracks(state.session, { cap: true });
 }
 
 /**
@@ -2052,7 +2054,7 @@ export async function triangulateAllFrames() {
         for (var [fIdx] of state.triangulationResults) {
             timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
         }
-        timeline.refreshTracks(state.session);
+        timeline.refreshTracks(state.session, { cap: true });
     }
 }
 

@@ -828,7 +828,12 @@ canvas shrinks down to `availableHeight` — visibly pulling the
 playhead / marker row / frame-number labels up to the new bottom even
 though the outer frame doesn't move. Track add / rename / delete
 paths still use the default mode so the container expands to keep
-new rows visible.
+new rows visible. Pass `{ cap: true }` to re-apply the initial-load 30%
+cap (`_fitContainerToData`) instead of growing without bound — used after
+Track All / Track Frame, Triangulate (current / all / group-by-identity),
+the Propagate IDs↔Tracks actions, and multi-frame identity assignment, all
+of which can add many rows at once, so the panel re-clamps to 30% and
+scrolls rather than taking over the screen.
 
 **Imports from project modules.**
 - `./overlays.js` — `getTrackColor`.

@@ -581,7 +581,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         for (var [fIdx] of state.triangulationResults) {
             timeline.setFrameModified(fIdx, frameHasGroupedUserInstances(fIdx));
         }
-        timeline.refreshTracks(session);
+        timeline.refreshTracks(session, { cap: true });
     }
 
     // Update info panel

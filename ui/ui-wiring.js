@@ -175,7 +175,7 @@ export function setupMenus() {
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (timeline) timeline.refreshTracks(session);
+        if (timeline) timeline.refreshTracks(session, { cap: true });
         setStatus('Propagate Tracks → IDs: ' + res.identities + ' identities from tracks (' +
             res.instances + ' instances)', 'success');
     });
@@ -193,7 +193,7 @@ export function setupMenus() {
         }
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session);
+        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks from identities (' +
             res.instances + ' instances updated)', 'success');
     });
