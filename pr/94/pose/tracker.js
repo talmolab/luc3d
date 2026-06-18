@@ -713,7 +713,7 @@ export function trackCurrentFrame() {
         });
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session);
+        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         if (result.numIdentities > 0) {
             setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
                 (effectiveNumAnimals ? ' (capped at ' + effectiveNumAnimals + ')' : ''), 'success');
@@ -853,7 +853,7 @@ export async function trackAll() {
         drawAllOverlays(state.currentFrame);
         console.timeEnd('[TrackAll] total');
         updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session);
+        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         setStatus('Tracked ' + frameIndices.length + ' frames, ' +
             session.identities.length + ' identities', 'success');
     } catch (e) {

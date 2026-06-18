@@ -2591,8 +2591,14 @@ export class Timeline {
      * frame-number labels would jump up to the new bottom — visible as
      * "the timeline got shorter."
      *
+     * Pass `{ cap: true }` to re-apply the initial-load 30%-of-window cap
+     * (via `_fitContainerToData`) instead of growing without bound. This is
+     * the right mode after Track / Triangulate / propagation, which can add
+     * many rows at once: the panel re-clamps to 30% and scrolls rather than
+     * taking over the screen.
+     *
      * @param {Session} session
-     * @param {{keepSize?: boolean}} [opts]
+     * @param {{keepSize?: boolean, cap?: boolean}} [opts]
      */
     refreshTracks(session, opts) {
         if (!session) return;
@@ -2605,7 +2611,11 @@ export class Timeline {
             this.redraw();
             return;
         }
-        this._growContainerToFit();
+        if (opts && opts.cap) {
+            this._fitContainerToData();   // re-clamp to the 30% cap
+        } else {
+            this._growContainerToFit();
+        }
         this.resize();
     }
 
