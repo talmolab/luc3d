@@ -5,7 +5,7 @@
  *   - toggleTimeline()        — collapse/expand the timeline, caching the
  *                                prior height so the next expand restores it.
  *   - fitTimelineToData()     — size the timeline container to fit all tracks,
- *                                capped at 40% of window.innerHeight.
+ *                                capped at 30% of window.innerHeight.
  *   - syncTimelineToggleButton() — keep the toolbar button's `.active` class
  *                                in sync with the container's collapsed state.
  *   - installTimelineShortcuts() — register the Ctrl/Cmd+J (toggle) and
@@ -106,7 +106,7 @@ export function toggleTimeline() {
 
 /**
  * Resize the timeline container to fit the currently loaded tracks,
- * capped at 40% of `window.innerHeight`. Skips when the user has
+ * capped at 30% of `window.innerHeight`. Skips when the user has
  * explicitly collapsed the timeline via the toolbar button.
  */
 export function fitTimelineToData() {
@@ -122,7 +122,7 @@ export function fitTimelineToData() {
     var winH = (typeof window !== 'undefined' && window.innerHeight)
         ? window.innerHeight
         : 1080;
-    var cap = Math.floor(0.4 * winH);
+    var cap = Math.floor(0.3 * winH);
     var target = Math.min(preferred, cap);
     if (target > 0) container.style.height = target + 'px';
     if (typeof timeline.resize === 'function') timeline.resize();

@@ -346,10 +346,10 @@ export class Timeline {
         this._buildFrameMarkers(session);
         // Initial-load sizing: `setData` is the "new project/session
         // loaded" entry point, so it sizes the container to the fit
-        // height directly — min(preferred, 40%-of-window cap). Many
+        // height directly — min(preferred, 30%-of-window cap). Many
         // SLP/session load paths call setData WITHOUT a following
         // `fitTimelineToData()`; doing the fit here guarantees the panel
-        // opens capped at 40% of the screen (scrolling via the
+        // opens capped at 30% of the screen (scrolling via the
         // overflow-y wrapper when there are more tracks than fit) and
         // shows fully with no forced empty space when the tracks fit
         // under the cap. Mid-session track changes go through
@@ -2636,12 +2636,12 @@ export class Timeline {
 
     /**
      * Initial-load sizing used by `setData`: bound the container height to
-     * the 40%-of-window cap while still growing to fit the tracks. The
+     * the 30%-of-window cap while still growing to fit the tracks. The
      * rule is `clamp(current, preferred, cap)`:
      *   - grow UP to `preferred` when the container is shorter than the
      *     track block (so a fresh-loaded project isn't collapse-hidden),
      *   - shrink DOWN to `cap` only when the current/preferred height
-     *     exceeds 40% of the window (so a many-track project opens capped
+     *     exceeds 30% of the window (so a many-track project opens capped
      *     and the inner `_trackScrollEl` `overflow-y: auto` scrolls the
      *     overflow rather than consuming the whole screen),
      *   - otherwise leave the height untouched (heights between `preferred`
@@ -2657,7 +2657,7 @@ export class Timeline {
         if (!this._container) return;
         if (this._container.classList && this._container.classList.contains('collapsed')) return;
         var cap = (typeof window !== 'undefined' && window.innerHeight)
-            ? Math.floor(0.4 * window.innerHeight)
+            ? Math.floor(0.3 * window.innerHeight)
             : 0;
         if (cap <= 0) {
             // No window context (test/headless): preserve grow-only.

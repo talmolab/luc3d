@@ -738,7 +738,7 @@ saves the user's customized timeline height on the **outgoing** session
 (`oldSession._timelineHeight`, `oldSession._timelineCollapsed`) and
 restores it on the **incoming** session. First-visit sessions (no
 saved height) get a default fit via `Math.min(timeline.getPreferredHeight(),
-0.4 * window.innerHeight)`. The save/restore is **inlined** — it uses
+0.3 * window.innerHeight)`. The save/restore is **inlined** — it uses
 `document.getElementById` rather than importing `timeline-controller.js`,
 so the brace-walked `switchSession` test harnesses
 (`test-session-switch-frame-reset.js`,
@@ -801,8 +801,8 @@ when the bar appears/disappears.
 
 **Initial-load 40% cap.** `setData(session)` sizes the container via
 `_fitContainerToData()`, which clamps the container height to
-`[preferred, floor(0.4 * window.innerHeight)]`: a small track set shows
-fully (no forced empty space), while a set taller than 40% of the window
+`[preferred, floor(0.3 * window.innerHeight)]`: a small track set shows
+fully (no forced empty space), while a set taller than 30% of the window
 caps at 40% and the inner `_trackScrollEl` scrolls. (Previously `setData`
 called the uncapped `_growContainerToFit`, so a freshly loaded project
 displayed every row.) `refreshTracks` stays grow-only so a height the
@@ -949,7 +949,7 @@ row onto `_cameraGroups[i].isAllHidden`. `_drawTrackBars` reads
 
 **Purpose.** Timeline toggle/fit/shortcut controller (Block 1 / Prompt
 4). Encapsulates collapse/expand with prior-height cache, fit-to-data
-sizing (capped at 40% of `window.innerHeight`), the toolbar-button
+sizing (capped at 30% of `window.innerHeight`), the toolbar-button
 sync helper, and the Ctrl/Cmd+J (toggle) / Ctrl/Cmd+Shift+J ("Change
 Frame Number") keyboard-shortcut installer. Has zero transitive
 `app.js` imports so it can be bridged into the test runner.
