@@ -26,6 +26,7 @@ verify/
 *~
 .vscode/
 .idea/
+.worktreeinclude
 
 # Scratch
 scratch/
