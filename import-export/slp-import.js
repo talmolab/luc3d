@@ -9,7 +9,7 @@ import {
     InstanceGroup, Session,
 } from '../pose/pose-data.js';
 import {
-    reprojectPoints, computeReprojectionErrors,
+    reprojectPointsCamera, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
 import {
@@ -613,7 +613,8 @@ export async function handleLoadSlpFile(slpFile) {
                         for (var ci2 = 0; ci2 < session.cameras.length; ci2++) {
                             var cam2 = session.cameras[ci2];
                             if (cam2.projectionMatrix) {
-                                reprojResult.reprojections[cam2.name] = reprojectPoints(grp.points3d, cam2.projectionMatrix);
+                                // Native (distorted) pixel space to match raw keypoints.
+                                reprojResult.reprojections[cam2.name] = reprojectPointsCamera(grp.points3d, cam2);
                             }
                         }
                         grp.reprojections = reprojResult.reprojections;

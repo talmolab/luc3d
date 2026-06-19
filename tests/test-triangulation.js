@@ -339,4 +339,218 @@
             assertEqual(fg.getInstances('CamB').length, 1, 'CamB instance untouched');
         });
     });
+
+    describe('Bundle Adjustment - triangulatePointBA', function () {
+        it('recovers a known 3D point from 2 clean views', function () {
+            if (typeof triangulatePointBA !== 'function') return;
+            var point3d = [10, 5, 50];
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var p1 = cam1.project(point3d);
+            var p2 = cam2.project(point3d);
+
+            var result = triangulatePointBA(
+                [p1, p2],
+                [cam1.projectionMatrix, cam2.projectionMatrix]
+            );
+            assertNotNull(result);
+            assertApprox(result[0], point3d[0], 1e-3, 'X coordinate');
+            assertApprox(result[1], point3d[1], 1e-3, 'Y coordinate');
+            assertApprox(result[2], point3d[2], 1e-3, 'Z coordinate');
+        });
+
+        it('returns null with fewer than 2 valid observations', function () {
+            if (typeof triangulatePointBA !== 'function') return;
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var result = triangulatePointBA(
+                [[100, 100], null],
+                [cam1.projectionMatrix, cam2.projectionMatrix]
+            );
+            assertNull(result);
+        });
+
+        it('refines a noisy DLT estimate to lower reprojection error', function () {
+            if (typeof triangulatePointBA !== 'function') return;
+            var point3d = [3, -2, 40];
+            var cam1 = makeTestCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('c2', [0, 0.25, 0], [18, 0, 0]);
+            var cam3 = makeTestCamera('c3', [0.15, 0, 0], [0, 12, 0]);
+            var cams = [cam1, cam2, cam3];
+            var mats = cams.map(function (c) { return c.projectionMatrix; });
+
+            // Add small, deterministic noise to each observation.
+            var noise = [[0.8, -0.6], [-0.5, 0.7], [0.4, 0.5]];
+            var obs = cams.map(function (c, i) {
+                var p = c.project(point3d);
+                return [p[0] + noise[i][0], p[1] + noise[i][1]];
+            });
+
+            function meanReproj(pt) {
+                var sum = 0, n = 0;
+                for (var i = 0; i < cams.length; i++) {
+                    var r = reprojectPoint(pt, mats[i]);
+                    var dx = obs[i][0] - r[0], dy = obs[i][1] - r[1];
+                    sum += Math.sqrt(dx * dx + dy * dy); n++;
+                }
+                return sum / n;
+            }
+
+            var dlt = triangulatePointDLT(obs, mats);
+            var ba = triangulatePointBA(obs, mats);
+            assertNotNull(ba);
+            // BA minimizes geometric error, so it should be <= the DLT error.
+            assertLessThan(meanReproj(ba), meanReproj(dlt) + 1e-9,
+                'BA error should not exceed DLT error');
+        });
+    });
+
+    describe('Bundle Adjustment - triangulateAndReproject method option', function () {
+        function mkGroup() {
+            var cam1 = makeTestCamera('CamA', [0, 0, 0], [0, 0, 0]);
+            var cam2 = makeTestCamera('CamB', [0, 0.3, 0], [20, 0, 0]);
+            var pt = [4, 1, 45];
+            var g = new InstanceGroup(1, 0);
+            g.addInstance('CamA', new Instance([cam1.project(pt)], 0, 'user', 1));
+            g.addInstance('CamB', new Instance([cam2.project(pt)], 0, 'user', 1));
+            return { group: g, cameras: [cam1, cam2], pt: pt };
+        }
+
+        it('defaults to DLT and reports method', function () {
+            if (typeof triangulateAndReproject !== 'function') return;
+            var t = mkGroup();
+            var res = triangulateAndReproject(t.group, t.cameras);
+            assertEqual(res.method, 'dlt');
+        });
+
+        it('runs BA when method:"ba" and reports method', function () {
+            if (typeof triangulateAndReproject !== 'function') return;
+            var t = mkGroup();
+            var res = triangulateAndReproject(t.group, t.cameras, { method: 'ba' });
+            assertEqual(res.method, 'ba');
+            assertNotNull(res.points3d[0]);
+            assertApprox(res.points3d[0][2], t.pt[2], 1e-2, 'Z recovered by BA');
+        });
+
+        it('reports both distorted and undistorted reprojection error', function () {
+            if (typeof triangulateAndReproject !== 'function') return;
+            var t = mkGroup();
+            var res = triangulateAndReproject(t.group, t.cameras, { method: 'ba' });
+            assertNotNull(res.meanError, 'distorted mean error present');
+            assertNotNull(res.meanErrorUndistorted, 'undistorted mean error present');
+            assertNotNull(res.errorsUndistorted, 'per-camera undistorted errors present');
+            // With distortion-free test cameras the two spaces coincide.
+            assertApprox(res.meanErrorUndistorted, res.meanError, 1e-9,
+                'distorted == undistorted error when there is no distortion');
+        });
+    });
+
+    describe('Bundle Adjustment - triangulationMethodLabel', function () {
+        it('maps method keys to human labels', function () {
+            if (typeof triangulationMethodLabel !== 'function') return;
+            assertEqual(triangulationMethodLabel('ba'), 'Bundle Adjustment');
+            assertEqual(triangulationMethodLabel('dlt'), 'DLT');
+            assertEqual(triangulationMethodLabel(undefined), 'DLT');
+        });
+    });
+
+    describe('Distortion - Camera.distortPoint', function () {
+        // Camera with non-trivial radial + tangential distortion.
+        function distortedCamera(name, rvec, tvec) {
+            return new Camera(
+                name,
+                [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                [-0.28, 0.07, 0.001, -0.0005, 0.0],
+                rvec, tvec, [640, 480]
+            );
+        }
+
+        it('is the inverse of undistortPoint (round-trip)', function () {
+            var cam = distortedCamera('d', [0, 0, 0], [0, 0, 0]);
+            // A point near the frame edge, where distortion is largest.
+            var distorted = [590, 70];
+            var ideal = cam.undistortPoint(distorted);
+            var back = cam.distortPoint(ideal);
+            assertApprox(back[0], distorted[0], 0.5, 'u round-trips through undistort∘distort');
+            assertApprox(back[1], distorted[1], 0.5, 'v round-trips');
+        });
+
+        it('is a no-op when there is no distortion', function () {
+            var cam = makeTestCamera('z', [0, 0, 0], [0, 0, 0]);
+            var p = cam.distortPoint([500, 100]);
+            assertApprox(p[0], 500, 1e-9, 'u unchanged');
+            assertApprox(p[1], 100, 1e-9, 'v unchanged');
+        });
+
+        it('moves edge points outward (radial barrel distortion)', function () {
+            var cam = distortedCamera('d', [0, 0, 0], [0, 0, 0]);
+            // Negative k1 → barrel: distorted points pulled toward the center,
+            // so distorting an ideal edge point moves it closer to the principal
+            // point than the ideal location.
+            var ideal = [620, 460];
+            var dist = cam.distortPoint(ideal);
+            var cx = 320, cy = 240;
+            var rIdeal = Math.hypot(ideal[0] - cx, ideal[1] - cy);
+            var rDist = Math.hypot(dist[0] - cx, dist[1] - cy);
+            assertLessThan(rDist, rIdeal, 'barrel distortion pulls edge points inward');
+        });
+    });
+
+    describe('Distortion - reprojection in native pixel space', function () {
+        function distortedCamera(name, rvec, tvec) {
+            return new Camera(
+                name,
+                [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                [-0.28, 0.07, 0.001, -0.0005, 0.0],
+                rvec, tvec, [640, 480]
+            );
+        }
+
+        it('reprojectPointCamera re-distorts so it matches the observed keypoint', function () {
+            if (typeof reprojectPointCamera !== 'function') return;
+            var cam1 = distortedCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = distortedCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var point3d = [14, 8, 38]; // projects near a frame edge
+
+            // The "observed" 2D keypoint is the distorted projection (what the
+            // real camera records). Build it as project(ideal) then distort.
+            function observe(cam) { return cam.distortPoint(cam.project(point3d)); }
+            var obs1 = observe(cam1);
+            var obs2 = observe(cam2);
+
+            // Triangulate from UNDISTORTED observations (the real pipeline).
+            var und = [cam1.undistortPoint(obs1), cam2.undistortPoint(obs2)];
+            var pt = triangulatePointDLT(und, [cam1.projectionMatrix, cam2.projectionMatrix]);
+            assertNotNull(pt);
+
+            // Distorted reprojection should land on the observed keypoint;
+            // the ideal (matrix-only) reprojection should be measurably off.
+            var reDist = reprojectPointCamera(pt, cam1);
+            var reIdeal = reprojectPoint(pt, cam1.projectionMatrix);
+            var errDist = Math.hypot(reDist[0] - obs1[0], reDist[1] - obs1[1]);
+            var errIdeal = Math.hypot(reIdeal[0] - obs1[0], reIdeal[1] - obs1[1]);
+            assertLessThan(errDist, 0.5, 'distorted reprojection matches observed keypoint');
+            assertGreaterThan(errIdeal, errDist, 'ideal reprojection is worse (the old bug)');
+        });
+
+        it('triangulateAndReproject reports distorted and undistorted error separately under real distortion', function () {
+            if (typeof triangulateAndReproject !== 'function') return;
+            var cam1 = distortedCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = distortedCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var point3d = [14, 8, 38]; // near a frame edge, where distortion bites
+            function observe(cam) { return cam.distortPoint(cam.project(point3d)); }
+
+            var g = new InstanceGroup(1, 0);
+            g.addInstance('c1', new Instance([observe(cam1)], 0, 'user', 1));
+            g.addInstance('c2', new Instance([observe(cam2)], 0, 'user', 1));
+
+            var res = triangulateAndReproject(g, [cam1, cam2], { method: 'ba' });
+            assertNotNull(res.meanError, 'distorted mean error present');
+            assertNotNull(res.meanErrorUndistorted, 'undistorted mean error present');
+            // Both are small (observations are exact), but computed in different
+            // spaces, so they need not be byte-identical.
+            assertLessThan(res.meanError, 1.0, 'distorted error small');
+            assertLessThan(res.meanErrorUndistorted, 1.0, 'undistorted error small');
+        });
+    });
 })();

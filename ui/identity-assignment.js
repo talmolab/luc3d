@@ -11,10 +11,11 @@ import { InstanceGroup, UnlinkedInstance } from '../pose/pose-data.js';
 import {
     frameHasGroupedUserInstances, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-    reprojectPoints, computeInstanceDistance, hungarianAlgorithm,
+    reprojectPointsCamera, computeInstanceDistance, hungarianAlgorithm,
     updateTimelineForFrame,
     triangulateCurrentFrame,
 } from '../pose/triangulation.js';
+import { getDefaultTriangulationMethod } from './settings.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { markDirty, setStatus } from '../import-export/save-load.js';
@@ -675,8 +676,10 @@ export function runTrackedAssignment(viewNames, prevGroups) {
             var viewName = availableViews[vii];
             var cam = cameraMap[viewName];
             if (cam && cam.projectionMatrix) {
-                projected[gi][viewName] = reprojectPoints(
-                    validPrevGroups[gi].points3d, cam.projectionMatrix
+                // Project into native (distorted) pixel space so distances to the
+                // raw observed detections are meaningful near the frame edges.
+                projected[gi][viewName] = reprojectPointsCamera(
+                    validPrevGroups[gi].points3d, cam
                 );
             }
         }
@@ -852,7 +855,7 @@ export function runSingleFrameTriangulation() {
     if (hasAssignment && state.lastAutoAssignViews && state.lastAutoAssignViews.length >= 2) {
         // Assignment exists — run immediately
         runAutomaticAssignment(state.lastAutoAssignViews);
-        triangulateCurrentFrame();
+        triangulateCurrentFrame(getDefaultTriangulationMethod());
     } else {
         // No assignment — show view selection toast (single frame mode)
         startViewSelectionForFrames(frameIdx, frameIdx, true);

@@ -869,6 +869,73 @@ body {
   display: block;
 }
 
+/* Triangulate / Triangulate All split dropdowns (DLT vs Bundle Adjustment) */
+.tri-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+.tri-caret {
+  margin-left: 4px;
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.tri-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  z-index: 200;
+  /* Pure-CSS "hover intent": no display:none (keeps it out of layout via
+     position:absolute), flush under the button (margin-top:0) so the cursor
+     never crosses a gap, and a delayed visibility transition keeps the menu
+     up for a short grace period after the cursor leaves. */
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.12s ease, transform 0.12s ease,
+    visibility 0s linear 0.35s;
+}
+
+.tri-dropdown:hover .tri-dropdown-menu,
+.tri-dropdown.open .tri-dropdown-menu {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
+}
+
+.tri-dropdown-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-primary);
+  transition: background var(--transition-fast);
+}
+
+.tri-dropdown-item:hover {
+  background: var(--accent-dim);
+}
+
+.tri-dropdown-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 /* Multi-frame assignment modal */
 .multi-frame-modal-overlay {
   position: fixed;
@@ -2066,7 +2133,37 @@ body {
   color: var(--text-muted);
 }
 
+/* Triangulation method label (under "Reprojection Error") */
+.error-method {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
 /* Reprojection error display */
+.error-display-row {
+  display: flex;
+  gap: 8px;
+}
+
+.error-stat {
+  flex: 1;
+  text-align: center;
+}
+
+.error-stat-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: -6px;
+}
+
 .error-display {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 22px;
@@ -2993,4 +3090,300 @@ kbd {
 .speed-popover .speed-presets button.active {
     border-color: var(--accent, #4a9eff);
     background: rgba(74,158,255,0.15);
+}
+
+/* ===== Settings modal ===== */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  width: 640px;
+  max-width: 92vw;
+  height: 460px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--transition-fast);
+}
+
+.settings-modal-close:hover {
+  color: var(--text-primary);
+}
+
+.settings-modal-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-nav {
+  width: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color);
+  padding: 8px 0;
+  overflow-y: auto;
+  background: var(--bg-tertiary);
+}
+
+.settings-nav-item {
+  padding: 9px 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.settings-nav-item:hover {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+.settings-nav-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.settings-panel-container {
+  flex: 1;
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
+.settings-panel {
+  display: none;
+}
+
+.settings-panel.active {
+  display: block;
+}
+
+.settings-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.settings-radio-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.settings-radio-row:hover {
+  background: var(--bg-button);
+}
+
+.settings-radio {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--text-muted);
+  border-radius: 4px;
+  flex-shrink: 0;
+  position: relative;
+  transition: border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.settings-radio-row.checked .settings-radio {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.settings-radio-row.checked .settings-radio::after {
+  content: '\2713';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.settings-radio-row.checked {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.settings-radio-label {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-radio-title {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.settings-radio-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.settings-kbd-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-kbd-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.settings-kbd-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-width: 44px;
+  text-align: center;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.settings-kbd-key:hover {
+  border-color: var(--accent);
+}
+
+.settings-kbd-key.capturing {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* Fixed (non-rebindable) reference shortcuts: shown but not interactive. */
+.settings-kbd-key.fixed {
+  cursor: default;
+  color: var(--text-muted);
+  background: transparent;
+  border-style: dashed;
+}
+
+.settings-kbd-key.fixed:hover {
+  border-color: var(--border-color);
+}
+
+/* Category subheader within the Keyboard Shortcuts list. */
+.settings-kbd-category {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  margin: 16px 0 4px;
+  padding-bottom: 2px;
+}
+
+.settings-kbd-category:first-child {
+  margin-top: 0;
+}
+
+.settings-kbd-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 12px;
+}
+
+.settings-coming-soon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 200px;
+  color: var(--text-muted);
+  font-size: 14px;
+  letter-spacing: 0.5px;
+}
+
+.settings-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-color);
+}
+
+.settings-btn {
+  padding: 7px 18px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  transition: background var(--transition-fast), color var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.settings-btn-cancel {
+  background: var(--bg-button);
+  color: var(--text-secondary);
+}
+
+.settings-btn-cancel:hover {
+  color: var(--text-primary);
+}
+
+.settings-btn-apply {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.settings-btn-apply:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
