@@ -299,6 +299,13 @@ keypoints previously produced spurious error that grew toward the frame edges
 switches. The temporal-identity cost in `ui/identity-assignment.js` likewise
 projects 3D targets with distortion before measuring distance to raw detections.
 
+`triangulateAndReproject` reports the reprojection error in **both** spaces:
+`meanError`/`errors` (distorted — what is drawn and broken down per view/node)
+and `meanErrorUndistorted`/`errorsUndistorted` (ideal pinhole — the space BA
+actually minimizes). The info panel shows the two headline averages side by side
+(labelled "Distorted" / "Undistorted"); the per-view and per-node breakdowns
+remain distorted-space.
+
 **Key exports.**
 - BA math: `triangulatePointBA(observations, projMatrices, initial?, options?)`,
   `triangulatePointsBA(allObservations, projMatrices, initialPoints?)`,
@@ -315,7 +322,9 @@ projects 3D targets with distortion before measuring distance to raw detections.
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
 - Group math: `triangulateAndReproject(instanceGroup, cameras, options)`
   (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`; returns
-  `.method`), `storeReprojectedInstances(group, triangulationResult, allCameras)`.
+  `.method`, `.meanError`/`.errors` distorted-space and
+  `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
+  `storeReprojectedInstances(group, triangulationResult, allCameras)`.
 - Lazy H5 loader: class `LazyFrameLoader`, `shouldUseLazyH5(file)`,
   `ensureLazyFrameData`, `buildLazyFrameGroupSync`, `batchLoadLazyFrames`,
   `loadAllLazyFrames`, `evictLazyFrames`. Spawns
