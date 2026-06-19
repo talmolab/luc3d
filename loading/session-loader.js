@@ -41,7 +41,7 @@ import {
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
-    setStatus, showLoading, hideLoading,
+    setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
 } from '../import-export/save-load.js';
 
 // Circular import — these are still defined in app.js for now. See module
@@ -1417,6 +1417,8 @@ export function loadSingleSessionFromCache() {
 }
 
 export async function handleLoadSessionFolder(showAllOptions) {
+    // Warn + reset if 3D points were imported into a skeleton-only project.
+    if (!(await ensureNo3dImportBlockingLoad())) return;
     var mode = await showSessionModeModal(!!showAllOptions);
     if (!mode) return; // cancelled
     if (mode === 'single-slp') {

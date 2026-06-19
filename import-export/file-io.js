@@ -778,7 +778,10 @@ export function buildPoints3dExportData(session) {
                 if (group.points3d) {
                     hasData = true;
                     for (let n = 0; n < Math.min(numNodes, group.points3d.length); n++) {
-                        framePts[idIdx][n] = group.points3d[n];
+                        // Missing nodes are null in the data model; leave the
+                        // [NaN,NaN,NaN] default so they round-trip back to NaN.
+                        var p = group.points3d[n];
+                        if (p != null) framePts[idIdx][n] = p;
                     }
                 }
             }
@@ -2482,7 +2485,12 @@ export async function parsePoints3dH5(arrayBuffer) {
                     var z = pts3dFlat[base + 2];
 
                     if (isNaN(x) || isNaN(y) || isNaN(z)) {
-                        nodePts.push([NaN, NaN, NaN]);
+                        // Missing keypoint — use null (the app-wide convention),
+                        // NOT [NaN,NaN,NaN]. A NaN-valued point array passes the
+                        // `pt == null` guards in overlays / the 3D viewport and
+                        // ends up as a mesh at a NaN position, which poisons
+                        // Three.js bounding-sphere / fitToScene math.
+                        nodePts.push(null);
                     } else {
                         nodePts.push([x, y, z]);
                         trackHasData = true;

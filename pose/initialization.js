@@ -10,7 +10,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
-         VIEW_NAMES } from '../ui/app-state.js';
+         hasRealVideo, VIEW_NAMES } from '../ui/app-state.js';
 import { Instance, UnlinkedInstance } from './pose-data.js';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
@@ -858,6 +858,7 @@ export function setup3DViewport() {
             showCameraPyramids: _3dPyramidShow ? _3dPyramidShow.checked : true,
             skeletonNodeSize: (function() { var e = document.getElementById('vis3dNodeSize'); return e ? parseFloat(e.value) || 2 : 2; })(),
             skeletonEdgeWeight: (function() { var e = document.getElementById('vis3dEdgeWeight'); return e ? parseFloat(e.value) || 0.8 : 0.8; })(),
+            skeletonNodeShape: (function() { var e = document.getElementById('vis3dNodeStyle'); return e ? (e.getAttribute('data-value') || 'circle') : 'circle'; })(),
             showSkeletonNodes: (function() { var e = document.getElementById('vis3dNodeShow'); return e ? e.checked : true; })(),
             showSkeletonEdges: (function() { var e = document.getElementById('vis3dEdgeShow'); return e ? e.checked : true; })(),
         }));
@@ -920,6 +921,26 @@ export function update3DViewport(frameIdx) {
     viewport3d.setFrame(groups);
 }
 
+/**
+ * Navigate to a frame from any UI entry point (timeline scrub, transport
+ * buttons, arrow keys). With video loaded this defers to the video
+ * controller's decode+render seek. For a video-less project — e.g. a skeleton
+ * with imported 3D points (`handleLoadPoints3dH5`) — there is no decoder, so
+ * we clamp + update `currentFrame` and re-render the overlays, the 3D
+ * viewport, and the seekbar directly so the full points3d duration is
+ * navigable.
+ */
+export function navigateToFrame(frameIdx) {
+    if (hasRealVideo()) { videoController.seekToFrame(frameIdx); return; }
+    var maxF = Math.max(0, (state.totalFrames || 1) - 1);
+    if (frameIdx < 0) frameIdx = 0;
+    if (frameIdx > maxF) frameIdx = maxF;
+    state.currentFrame = frameIdx;
+    try { drawAllOverlays(frameIdx); } catch (e) { console.warn('[nav] overlay draw failed:', e); }
+    // updateSeekbar updates the seekbar position AND the 3D viewport.
+    updateSeekbar(frameIdx);
+}
+
 // ============================================
 // Timeline Setup
 // ============================================
@@ -940,7 +961,9 @@ export function setupTimeline() {
         onFrameChange: (function () {
             var lastRender = 0, timer = null, pending = null;
             return function (frameIdx) {
-                if (!videoController) return;
+                // Video-less project (skeleton + imported 3D points): render the
+                // frame statically — no decoder to seek.
+                if (!hasRealVideo()) { navigateToFrame(frameIdx); return; }
                 if (state.isPlaying) videoController.stopPlayback();
                 pending = frameIdx;
                 var now = performance.now();
@@ -958,7 +981,8 @@ export function setupTimeline() {
             };
         })(),
         onDragEnd: function (frameIdx) {
-            if (videoController) videoController.seekToFrame(frameIdx);
+            if (hasRealVideo()) videoController.seekToFrame(frameIdx);
+            else navigateToFrame(frameIdx);
         },
         onRangeSelect: function (startFrame, endFrame) {
             setStatus('Selected range: ' + startFrame + '-' + endFrame);
