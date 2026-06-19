@@ -370,8 +370,8 @@ playback state, dirty tracking, multi-session UI.
 ### ui/export-modals.js
 
 **Purpose.** Modal dialogs for bulk-triangulation and export (Group-by-Track,
-Group-by-Identity, multi-frame triangulation, SLP per-session, SLP
-all-sessions, JSON labels, points3d H5, reproj H5).
+Group-by-Identity, multi-frame triangulation, SLP per-session, SLP by-camera,
+SLP all-sessions, JSON labels, points3d H5, reproj H5).
 
 **Key exports.**
 - `showGroupByTrackModal()` — modal that bulk-groups by trackIdx.
@@ -379,6 +379,26 @@ all-sessions, JSON labels, points3d H5, reproj H5).
   calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
   the current frame (this is the path "Triangulate All" takes when identities
   exist; previously it refreshed only the 2D overlays, leaving 3D empty).
+- `showSlpExportModal()` — per-session SLP export modal ("Export SLEAP File":
+  pick one camera per session, export to one file).
+- `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid;
+  download one camera column across all selected sessions into one SLEAP file.
+  A cell is a green ✓ (toggle on/off) only where the camera VIEW exists in that
+  session — derived from `state.videoFiles` (real loaded views), plus cameras
+  with labeled data for SLP-only projects; NOT from `session.cameras`, which is
+  the full calibration list and would falsely imply existence. Sessions missing
+  the view show a red ✗ (not selectable). A column's Download button is
+  proactively disabled (with an explanatory `title`) whenever its toggled-on
+  sessions have incompatible skeletons — checked set-based / order-insensitively
+  via `findSkeletonMismatch`, re-evaluated on every cell toggle; the in-click
+  check + mismatch popup remains as a fallback. A red warning under the tables
+  (`#slpByCamSkelWarning`) names the blocked column(s) and describes the
+  mismatch whenever any download is disabled. Columns ordered by
+  session frequency, then within-session name order, then session recency for
+  session-unique views.
+- `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: no longer
+  wired to a File-menu item (the "Export 2D SLP (All Views)" entry was removed);
+  retained for reference.
 - `showExport3DVideoModal()` — File ▸ "Export 3D Video". Mounts a second
   `Viewport3D` (reusing the panel code) in a modal so the user can orbit/zoom to
   pick the camera angle. Controls: prev (`⏮`) / play-pause (`▶`/`⏸`,
@@ -400,8 +420,6 @@ all-sessions, JSON labels, points3d H5, reproj H5).
   `.mp4` via WebCodecs `VideoEncoder` muxed with `mp4-muxer` (global `Mp4Muxer`,
   local copy in `lib/mp4-muxer/`). Timestamps are relative to the range start.
   Requires a Chromium-based browser (WebCodecs) — error status otherwise.
-- `showSlpExportModal()` — single-session SLP export modal.
-- `showSlpExportAllModal()` — multi-session SLP export.
 - `showTriangulateMultiFrameModal()` — frame-range triangulation modal.
 - `exportLabels()` — JSON labels export.
 - `exportPoints3dH5()` — points3d H5 export.
@@ -422,13 +440,14 @@ all-sessions, JSON labels, points3d H5, reproj H5).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `../import-export/file-io.js` — `exportSlpClientSide`,
-  `exportSlpMultiSession`, `buildPoints3dH5`, `buildReprojH5`.
+  `exportSlpMultiSession`, `findSkeletonMismatch`, `buildPoints3dH5`,
+  `buildReprojH5`.
 - `../pose/initialization.js` — `update3DViewport`.
 
 **Imported by.** `ui/ui-wiring.js`.
 
-**User-facing features.** File menu Export (JSON / SLP / SLP All /
-**3D Video (.mp4)** / H5 points3d / H5 reproj), Edit menu Group-by-Track /
+**User-facing features.** File menu Export (JSON / SLEAP File / SLEAP File By
+Cam / **3D Video (.mp4)** / H5 points3d / H5 reproj), Edit menu Group-by-Track /
 Group-by-Identity, Multi-Frame Triangulate modal.
 
 ---
@@ -1432,6 +1451,10 @@ layer.
   a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`.
+- Skeleton validation: `findSkeletonMismatch(selections)` — returns `null` when
+  all selected sessions share a skeleton (node count + names, in order),
+  otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
+  guard `buildSlpLabelsMultiSession` and to pre-flight the per-camera download.
 - SLP parse: `parseSlpH5(file, onProgress)` — spawns worker.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`.

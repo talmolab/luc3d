@@ -60,7 +60,8 @@ import {
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
-    showSlpExportModal, showSlpExportAllModal, showTriangulateMultiFrameModal,
+    showSlpExportModal, showSlpExportAllModal, showSlpExportByCamModal,
+    showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
 } from './export-modals.js';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
@@ -817,16 +818,24 @@ export function setupMenus() {
         exportLabels();
     });
 
-    document.getElementById('menuExportSlp').addEventListener('click', function () {
-        closeMenus();
-        if (state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
-        showSlpExportAllModal();
-    });
+    // Deprecated: "Export 2D SLP (All Views)" was removed from the File menu.
+    // The handler and showSlpExportAllModal are retained but no longer wired.
+    // document.getElementById('menuExportSlp').addEventListener('click', function () {
+    //     closeMenus();
+    //     if (state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
+    //     showSlpExportAllModal();
+    // });
 
     document.getElementById('menuExportSlpPerCam').addEventListener('click', function () {
         closeMenus();
         if (!state.sessions || state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
         showSlpExportModal();
+    });
+
+    document.getElementById('menuExportSlpByCam').addEventListener('click', function () {
+        closeMenus();
+        if (!state.sessions || state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
+        showSlpExportByCamModal();
     });
 
     document.getElementById('menuExportVideo3d').addEventListener('click', function () {

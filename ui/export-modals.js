@@ -28,6 +28,7 @@ import { showLoading, hideLoading, setStatus } from '../import-export/save-load.
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
+    findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
 } from '../import-export/file-io.js';
@@ -727,7 +728,7 @@ export function showSlpExportModal() {
     }
 
     modal.innerHTML =
-        '<h3>Export 2D SLP File</h3>' +
+        '<h3>Export SLEAP File</h3>' +
         '<div class="slp-export-multi-body">' +
         '<div class="slp-export-multi-left">' +
         '<div class="slp-export-panel-label">Sessions</div>' +
@@ -965,6 +966,438 @@ export function showSlpExportModal() {
             exportBtn.disabled = false;
             exportBtn.textContent = 'Export';
         }
+    });
+}
+
+// ============================================
+// Export SLEAP by Camera Modal
+// ============================================
+
+/**
+ * Modal warning popup for a skeleton mismatch during a per-camera download.
+ * Styled after showCalibrationRequiredPopup.
+ */
+function showSkeletonMismatchPopup(detail) {
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10001;display:flex;align-items:center;justify-content:center;';
+
+    var card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:460px;width:90%;text-align:center;';
+
+    var icon = document.createElement('div');
+    icon.style.cssText = 'font-size:36px;margin-bottom:12px;';
+    icon.textContent = '⚠';
+    card.appendChild(icon);
+
+    var title = document.createElement('div');
+    title.style.cssText = 'color:#fff;font-size:16px;font-weight:600;margin-bottom:8px;';
+    title.textContent = 'Cannot Export — Skeletons Differ';
+    card.appendChild(title);
+
+    var msg = document.createElement('div');
+    msg.style.cssText = 'color:#aaa;font-size:13px;margin-bottom:16px;line-height:1.5;';
+    msg.textContent = 'The selected views belong to sessions with different skeletons. '
+        + 'A single SLEAP file requires one shared skeleton, so these views cannot be exported together. '
+        + 'Deselect the mismatched sessions and try again.';
+    card.appendChild(msg);
+
+    if (detail) {
+        var det = document.createElement('div');
+        det.style.cssText = 'color:#888;font-size:11px;margin-bottom:16px;font-family:monospace;word-break:break-word;';
+        det.textContent = detail;
+        card.appendChild(det);
+    }
+
+    var btn = document.createElement('button');
+    btn.style.cssText = 'padding:8px 24px;font-size:14px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
+    btn.textContent = 'OK';
+    function dismiss() {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+    }
+    btn.addEventListener('click', dismiss);
+    function onKey(e) {
+        if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); dismiss(); }
+    }
+    document.addEventListener('keydown', onKey);
+
+    card.appendChild(btn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+}
+
+/**
+ * Build the camera matrix for the "Export SLEAP by Camera" modal.
+ *
+ * Columns are camera-view names found across ALL sessions, ordered left→right by:
+ *   1. Session frequency (primary) — views appearing in more sessions rank higher.
+ *   2. Earliest session (tie-breaker 1) — when frequencies tie, the view whose first
+ *      session is earlier (higher in the table) ranks higher, so each session's full
+ *      camera set stays grouped before the next session's (no interleaving when
+ *      sessions don't overlap).
+ *   3. Within-session order in that first session (tie-breaker 2).
+ * A stable alphabetical fallback breaks any remaining ties deterministically.
+ *
+ * @returns {{ camNames: string[], info: Object, cellLookup: Object[] }}
+ */
+/** True when a session holds any instance (grouped or unlinked) for a camera. */
+function _sessionCameraHasData(sess, camName) {
+    if (!sess || !sess.frameGroups) return false;
+    for (var pair of sess.frameGroups) {
+        var fg = pair[1];
+        if ((fg.instances.get(camName) || []).length > 0) return true;
+        if (fg.getUnlinkedInstances(camName).length > 0) return true;
+    }
+    return false;
+}
+
+function _buildByCamMatrix() {
+    var sessions = state.sessions || [];
+    var videoFiles = state.videoFiles || [];
+    // cellLookup[sessionIdx] = { camName: videoFileInfo } — a camera is present
+    // in a session ONLY when it has a real view here (a loaded video, or labeled
+    // data for SLP-only projects). session.cameras is the full *calibration*
+    // list and must NOT imply existence: a calibrated-but-unrecorded camera has
+    // no view in that session and is shown as a red ✗, not a toggle.
+    var cellLookup = sessions.map(function () { return {}; });
+    var orderInSession = sessions.map(function () { return {}; });
+    var counters = sessions.map(function () { return 0; });
+
+    // 1. Real camera views = loaded video files (one per recorded camera, incl.
+    //    deferred multi-session loads). Authoritative existence signal.
+    for (var vi = 0; vi < videoFiles.length; vi++) {
+        var vf = videoFiles[vi];
+        var si = (typeof vf.sessionIdx === 'number') ? vf.sessionIdx : 0;
+        if (si < 0 || si >= sessions.length) continue;
+        var cam = vf.assignedCamera || vf.name;
+        if (!cam || cellLookup[si][cam]) continue;
+        cellLookup[si][cam] = vf;
+        orderInSession[si][cam] = counters[si]++;
+    }
+
+    // 2. Cameras with labeled data but no loaded video still exist (SLP-only
+    //    projects). Stub videoFileInfo so the export path has the camera name.
+    for (var s2 = 0; s2 < sessions.length; s2++) {
+        var sessCams = sessions[s2].cameras || [];
+        for (var ci = 0; ci < sessCams.length; ci++) {
+            var cn = sessCams[ci].name;
+            if (!cn || cellLookup[s2][cn]) continue;
+            if (_sessionCameraHasData(sessions[s2], cn)) {
+                cellLookup[s2][cn] = { name: cn, videoWidth: 0, videoHeight: 0, frameCount: 0 };
+                orderInSession[s2][cn] = counters[s2]++;
+            }
+        }
+    }
+
+    // 3. Aggregate per camera for column ordering. firstSession/orderInFirst are
+    //    captured on first encounter — sessions are iterated in ascending order,
+    //    so the first session that holds a camera is its earliest.
+    var info = {};   // camName -> { name, count, firstSession, orderInFirst }
+    for (var s3 = 0; s3 < sessions.length; s3++) {
+        for (var cn3 in cellLookup[s3]) {
+            if (!info[cn3]) {
+                info[cn3] = { name: cn3, count: 0, firstSession: s3, orderInFirst: orderInSession[s3][cn3] };
+            }
+            info[cn3].count++;
+        }
+    }
+
+    // Ordering (left → right):
+    //   1. Session frequency (primary) — a camera in more sessions ranks higher.
+    //   2. Earliest session (tie-breaker) — when frequencies tie, the camera
+    //      whose first session is earlier (higher in the table) ranks higher, so
+    //      a session's whole camera set stays grouped left-to-right before the
+    //      next session's. (Non-overlapping sessions never interleave.)
+    //   3. Within-session order in that first session.
+    var camNames = Object.keys(info);
+    camNames.sort(function (a, b) {
+        var ra = info[a], rb = info[b];
+        if (rb.count !== ra.count) return rb.count - ra.count;
+        if (ra.firstSession !== rb.firstSession) return ra.firstSession - rb.firstSession;
+        if (ra.orderInFirst !== rb.orderInFirst) return ra.orderInFirst - rb.orderInFirst;
+        return a < b ? -1 : (a > b ? 1 : 0);
+    });
+
+    return { camNames: camNames, info: info, cellLookup: cellLookup };
+}
+
+export function showSlpExportByCamModal() {
+    if (!state.sessions || state.sessions.length === 0) {
+        setStatus('No sessions to export', 'warning');
+        return;
+    }
+
+    var sessions = state.sessions;
+    var matrix = _buildByCamMatrix();
+    var camNames = matrix.camNames;
+    var cellLookup = matrix.cellLookup;
+
+    // Toggle state: keyed "sessionIdx|camName". Default ON for every present cell.
+    var cellOn = {};
+    for (var si0 = 0; si0 < sessions.length; si0++) {
+        for (var ci0 = 0; ci0 < camNames.length; ci0++) {
+            if (cellLookup[si0][camNames[ci0]]) cellOn[si0 + '|' + camNames[ci0]] = true;
+        }
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal slp-export-modal slp-bycam-modal';
+
+    function cellKey(si, cn) { return si + '|' + cn; }
+
+    // ---- Build markup ----
+    // Two separate, independently-scrollable panels (session names | camera
+    // grid) with a small gap. Row heights are pinned in CSS so the two stay
+    // vertically aligned; vertical scroll is mirrored between them in JS. The
+    // session side is a div-list (not a table) so width:max-content lets long
+    // names widen it and scroll horizontally — a <table> won't grow its cell to
+    // overflowing content for scroll purposes.
+    var sessHtml = '<div class="slp-bycam-sess-inner">'
+        + '<div class="slp-bycam-sess-cell-d slp-bycam-sess-h-row">Session</div>';
+    for (var br = 0; br < sessions.length; br++) {
+        var sname = sessions[br].name || ('Session ' + (br + 1));
+        sessHtml += '<div class="slp-bycam-sess-cell-d slp-bycam-sess-row" title="' + sname + '">' + sname + '</div>';
+    }
+    sessHtml += '<div class="slp-bycam-sess-cell-d slp-bycam-sess-foot-row"></div></div>';
+
+    // Right: camera grid table (header = camera names, footer = Download).
+    var camHead = '<thead><tr>';
+    for (var hc = 0; hc < camNames.length; hc++) {
+        camHead += '<th class="slp-bycam-cam-head" title="' + camNames[hc] + '">'
+            + '<div class="slp-bycam-cam-name">' + camNames[hc] + '</div></th>';
+    }
+    camHead += '</tr></thead>';
+
+    var camBody = '<tbody>';
+    for (var cbr = 0; cbr < sessions.length; cbr++) {
+        camBody += '<tr>';
+        for (var bc = 0; bc < camNames.length; bc++) {
+            var cn2 = camNames[bc];
+            var vfInfo = cellLookup[cbr][cn2];
+            if (vfInfo) {
+                var cellLabel = vfInfo.slpFilename
+                    || (vfInfo.file && vfInfo.file.name) || vfInfo.name || cn2;
+                camBody += '<td class="slp-bycam-cell on" data-sess="' + cbr + '" data-cam="' + bc + '" '
+                    + 'title="' + cellLabel + '">✓</td>';
+            } else {
+                camBody += '<td class="slp-bycam-missing" title="' + cn2 + ' not in this session">✗</td>';
+            }
+        }
+        camBody += '</tr>';
+    }
+    camBody += '</tbody>';
+
+    var camFoot = '<tfoot><tr>';
+    for (var fc = 0; fc < camNames.length; fc++) {
+        camFoot += '<td class="slp-bycam-dl-cell">'
+            + '<button class="slp-bycam-dl-btn" data-cam="' + fc + '">Download</button></td>';
+    }
+    camFoot += '</tr></tfoot>';
+
+    var emptyNote = camNames.length === 0
+        ? '<div class="slp-export-note">No camera views found across sessions.</div>'
+        : '';
+
+    modal.innerHTML =
+        '<h3>Export SLEAP by Camera</h3>' +
+        '<div class="slp-export-note">Each column is a camera view found across sessions. '
+        + 'A green ✓ marks a session that has that view (toggle on/off); a red ✗ marks a session '
+        + 'where the view does not exist. Download a column to export that camera across every '
+        + 'selected session into one SLEAP file.</div>' +
+        emptyNote +
+        '<div class="slp-bycam-body">' +
+        '<div class="slp-bycam-scroll slp-bycam-sess-scroll">' + sessHtml + '</div>' +
+        '<div class="slp-bycam-scroll slp-bycam-cam-scroll">' +
+        '<table class="slp-bycam-table slp-bycam-cam-table">' + camHead + camBody + camFoot + '</table>' +
+        '</div>' +
+        '</div>' +
+        '<div class="slp-bycam-skel-warning" id="slpByCamSkelWarning" style="display:none"></div>' +
+        '<div class="slp-export-options">' +
+        '<label><input type="checkbox" id="slpByCamReproj"> Save Reprojections</label>' +
+        '<span class="slp-reproj-toggle" id="slpByCamReprojToggle">' +
+        '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
+        '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
+        '</span>' +
+        '</div>' +
+        '<div class="slp-export-error" id="slpByCamError"></div>' +
+        '<div class="modal-actions">' +
+        '<button id="slpByCamClose">Close</button>' +
+        '</div>';
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Start both tables scrolled to the very left.
+    var sessScroll = modal.querySelector('.slp-bycam-sess-scroll');
+    var camScroll = modal.querySelector('.slp-bycam-cam-scroll');
+    if (sessScroll) sessScroll.scrollLeft = 0;
+    if (camScroll) camScroll.scrollLeft = 0;
+
+    // Keep the two tables row-aligned: mirror vertical scroll between them
+    // (horizontal scroll stays independent per the table's own width).
+    if (sessScroll && camScroll) {
+        var _syncing = false;
+        function mirrorV(src, dst) {
+            src.addEventListener('scroll', function () {
+                if (_syncing) return;
+                if (dst.scrollTop !== src.scrollTop) {
+                    _syncing = true;
+                    dst.scrollTop = src.scrollTop;
+                    _syncing = false;
+                }
+            });
+        }
+        mirrorV(sessScroll, camScroll);
+        mirrorV(camScroll, sessScroll);
+    }
+
+    var errorDiv = document.getElementById('slpByCamError');
+    function clearError() { errorDiv.textContent = ''; }
+    function showError(msg) { errorDiv.textContent = msg; }
+
+    // ---- Cell toggling ----
+    modal.querySelectorAll('.slp-bycam-cell').forEach(function (cell) {
+        cell.addEventListener('click', function () {
+            var si = parseInt(cell.getAttribute('data-sess'));
+            var cn = camNames[parseInt(cell.getAttribute('data-cam'))];
+            var key = cellKey(si, cn);
+            cellOn[key] = !cellOn[key];
+            if (cellOn[key]) {
+                cell.classList.add('on'); cell.classList.remove('off');
+                cell.textContent = '✓';
+            } else {
+                cell.classList.remove('on'); cell.classList.add('off');
+                cell.textContent = '';
+            }
+            clearError();
+            updateDownloadStates();
+        });
+    });
+
+    // Proactively enable/disable per-column download buttons based on whether
+    // the currently toggled-on sessions for a column have compatible skeletons.
+    // Hoisted declaration so the cell-toggle handlers above can call it.
+    function updateDownloadStates() {
+        var blocked = [];
+        modal.querySelectorAll('.slp-bycam-dl-btn').forEach(function (btn) {
+            // Don't clobber the transient state of an in-progress export.
+            if (btn.textContent === 'Exporting...') return;
+            var camName = camNames[parseInt(btn.getAttribute('data-cam'))];
+            var selections = buildColumnSelections(camName);
+            var mismatch = selections.length >= 2 ? findSkeletonMismatch(selections) : null;
+            if (mismatch) {
+                btn.disabled = true;
+                btn.title = mismatch;
+                blocked.push({ cam: camName, detail: mismatch });
+            } else {
+                btn.disabled = false;
+                btn.removeAttribute('title');
+            }
+        });
+
+        // Surface a red message under the tables explaining any blocked columns.
+        var warn = document.getElementById('slpByCamSkelWarning');
+        if (warn) {
+            if (blocked.length) {
+                warn.textContent = 'Skeleton Mismatch Across Sessions. Download Blocked';
+                warn.style.display = '';
+            } else {
+                warn.textContent = '';
+                warn.style.display = 'none';
+            }
+        }
+    }
+
+    // ---- Reprojection toggle (mirrors showSlpExportModal) ----
+    var reprojCheckbox = document.getElementById('slpByCamReproj');
+    var reprojToggle = document.getElementById('slpByCamReprojToggle');
+    var toggleOptions = reprojToggle.querySelectorAll('.slp-toggle-option');
+    function updateReprojToggleState() {
+        if (reprojCheckbox.checked) reprojToggle.classList.remove('slp-toggle-disabled');
+        else reprojToggle.classList.add('slp-toggle-disabled');
+    }
+    reprojCheckbox.addEventListener('change', updateReprojToggleState);
+    updateReprojToggleState();
+    toggleOptions.forEach(function (opt) {
+        opt.addEventListener('click', function () {
+            if (reprojCheckbox.checked) {
+                toggleOptions.forEach(function (o) { o.classList.remove('slp-toggle-active'); });
+                opt.classList.add('slp-toggle-active');
+            }
+        });
+    });
+
+    function buildColumnSelections(camName) {
+        var selections = [];
+        for (var s = 0; s < sessions.length; s++) {
+            if (!cellOn[cellKey(s, camName)]) continue;
+            var vfInfo = cellLookup[s][camName];
+            if (!vfInfo) continue;
+            selections.push({
+                session: sessions[s],
+                cameraName: camName,
+                videoFileInfo: vfInfo,
+            });
+        }
+        return selections;
+    }
+
+    function sanitizeFilename(name) {
+        var base = String(name).replace(/\.[^.\/]+$/, '');      // drop a trailing extension
+        base = base.replace(/[\\\/:*?"<>|]+/g, '_').trim();       // strip path-unsafe chars
+        return (base || 'view') + '.slp';
+    }
+
+    // ---- Per-column download ----
+    modal.querySelectorAll('.slp-bycam-dl-btn').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            clearError();
+            var camName = camNames[parseInt(btn.getAttribute('data-cam'))];
+            var selections = buildColumnSelections(camName);
+            if (selections.length === 0) {
+                showError('No sessions selected for "' + camName + '".');
+                return;
+            }
+
+            // Pre-flight skeleton compatibility — pop up on mismatch.
+            var mismatch = findSkeletonMismatch(selections);
+            if (mismatch) {
+                showSkeletonMismatchPopup(mismatch);
+                return;
+            }
+
+            var saveReproj = reprojCheckbox.checked;
+            var activeToggle = reprojToggle.querySelector('.slp-toggle-active');
+            var reprojAsUser = saveReproj
+                ? (activeToggle && activeToggle.getAttribute('data-value') === 'user')
+                : null;
+
+            var outName = sanitizeFilename(camName);
+            var origText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Exporting...';
+            try {
+                var blob = await exportSlpMultiSession(selections, reprojAsUser);
+                downloadBlob(blob, outName);
+                setStatus('Exported ' + outName + ' (' + selections.length + ' session'
+                    + (selections.length === 1 ? '' : 's') + ')', 'success');
+            } catch (err) {
+                console.error('[slp-export-bycam]', err);
+                showError(err.message || String(err));
+            } finally {
+                btn.disabled = false;
+                btn.textContent = origText;
+            }
+        });
+    });
+
+    // Set initial disabled state for all download buttons.
+    updateDownloadStates();
+
+    document.getElementById('slpByCamClose').addEventListener('click', function () {
+        overlay.remove();
     });
 }
 

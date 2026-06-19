@@ -1285,6 +1285,237 @@ body {
   font-size: 11px;
 }
 
+/* Export SLEAP by Camera modal — fixed width so many cameras scroll the camera
+   table horizontally rather than stretching the modal across the screen. */
+.slp-bycam-modal {
+  width: min(1040px, 92vw);
+  min-width: 520px;
+  max-width: 92vw;
+}
+
+/* Two separate, independently-scrollable tables (session names | camera grid)
+   with a small gap. Row heights are pinned so the two stay row-aligned. */
+.slp-bycam-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+/* Each table gets its own scroll container. overflow-x:scroll keeps a bottom
+   scrollbar always present (mouse users) and scrolls on a trackpad; the
+   horizontal extent of each is driven by its own content width. */
+.slp-bycam-scroll {
+  max-height: 360px;
+  overflow-x: scroll;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  scrollbar-width: thin; /* Firefox */
+}
+
+/* Definite width (not auto) so the session table can exceed it and scroll
+   horizontally for long names — auto + overflow:scroll collapses to min-content
+   and clips instead. */
+.slp-bycam-sess-scroll {
+  flex: 0 0 200px;
+  width: 200px;
+  max-width: 200px;
+}
+
+.slp-bycam-cam-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Always-visible, themed scrollbars (esp. the horizontal one). */
+.slp-bycam-scroll::-webkit-scrollbar {
+  height: 12px;
+  width: 10px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 6px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Scoped under .slp-bycam-scroll to outrank the generic `.data-table`
+   (width:100%; border-collapse:collapse) defined later in this file.
+   width:max-content lets each table grow to its content and scroll; a
+   percentage min-width here would clamp max-content, so the camera table's
+   "fill when narrow" is handled separately below. */
+.slp-bycam-scroll > .slp-bycam-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: auto;
+  font-size: 12px;
+}
+.slp-bycam-cam-scroll > .slp-bycam-cam-table {
+  min-width: 100%; /* fill the container when there are few cameras */
+}
+
+.slp-bycam-table th,
+.slp-bycam-table td {
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  padding: 2px 6px;
+  box-sizing: border-box;
+}
+
+/* Pinned row heights so the two tables line up row-for-row across the gap. */
+.slp-bycam-table thead th { height: 28px; }
+.slp-bycam-table tbody td { height: 26px; }
+.slp-bycam-table tfoot td { height: 34px; }
+
+/* Compact, fixed-width camera columns (header / cells / ✗ / Download). */
+.slp-bycam-cam-head,
+.slp-bycam-cell,
+.slp-bycam-missing,
+.slp-bycam-dl-cell {
+  width: 92px;
+  min-width: 92px;
+  max-width: 92px;
+}
+
+/* Sticky header row (camera names / "Session" label). */
+.slp-bycam-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Sticky footer row (Download buttons / spacer). */
+.slp-bycam-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  text-align: center;
+}
+
+/* Session panel: a div-list (not a table). width:max-content on the inner
+   wrapper grows it to the longest name so the container scrolls horizontally;
+   min-width:100% fills the container for short names. */
+.slp-bycam-sess-inner {
+  width: max-content;
+  min-width: 100%;
+}
+.slp-bycam-sess-cell-d {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-color);
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+}
+.slp-bycam-sess-h-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+.slp-bycam-sess-row {
+  height: 26px;
+  font-variant-numeric: tabular-nums;
+}
+.slp-bycam-sess-foot-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  height: 34px;
+  border-bottom: none;
+}
+
+/* Long camera names scroll horizontally inside the header cell. */
+.slp-bycam-cam-name {
+  max-width: 80px;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* Toggle-able presence cell. */
+.slp-bycam-cell {
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+}
+
+.slp-bycam-cell.on {
+  background: rgba(250, 204, 21, 0.25);
+  color: #eab308;
+}
+
+.slp-bycam-cell.off {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.slp-bycam-cell:hover {
+  outline: 1px solid rgba(250, 204, 21, 0.6);
+  outline-offset: -1px;
+}
+
+/* Session lacks this camera view — red ✗, not selectable. */
+.slp-bycam-missing {
+  text-align: center;
+  color: #ef4444;
+  font-weight: 700;
+  cursor: not-allowed;
+  user-select: none;
+}
+
+.slp-bycam-dl-cell {
+  padding: 2px 3px;
+}
+
+/* Scoped under .slp-bycam-modal so these beat the generic
+   `.multi-frame-modal button` rule (0,1,1) on specificity (0,2,0) —
+   otherwise its 6px 16px padding / 13px font overflow the 92px column
+   and push the "Download" label off-center. */
+.slp-bycam-modal .slp-bycam-dl-btn {
+  width: 100%;
+  padding: 3px 2px;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.slp-bycam-modal .slp-bycam-dl-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Red warning shown under the tables when a column's download is blocked
+   because the selected sessions have mismatched skeletons. */
+.slp-bycam-skel-warning {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 4px;
+  white-space: pre-line;
+}
+
 
 /* Modal layout: range row with views list */
 .modal-range-row {
