@@ -1580,13 +1580,30 @@ function _fmtDuration(totalSeconds) {
     return m + ':' + (rem < 10 ? '0' : '') + rem;
 }
 
+// Target H.264 bitrate (bits/sec) for the 3D-video encoder — must match the
+// encoder.configure() call so the size estimate and the real output agree.
+function _v3dBitrate(W, H, fps) {
+    return Math.min(24000000, Math.max(2000000, Math.round(W * H * fps * 0.12)));
+}
+
+function _fmtBytes(bytes) {
+    if (!isFinite(bytes) || bytes <= 0) return '—';
+    var units = ['B', 'KB', 'MB', 'GB'];
+    var i = 0;
+    while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+    return (bytes >= 100 ? Math.round(bytes) : bytes.toFixed(1)) + ' ' + units[i];
+}
+
 /**
  * "Export 3D Video" modal. Reuses the existing Viewport3D panel (a second
  * instance mounted in the modal) so the user can orbit/zoom to choose the
- * camera angle. A frame scrubber (renders on release only — no live scrub),
- * an editable FPS, and a live duration readout sit below. On Export, every
- * frame is rendered into the modal viewport and encoded to an .mp4 via
- * WebCodecs VideoEncoder + mp4-muxer, using the view and FPS the user set.
+ * camera angle. Controls: prev/play/next transport, a progress bar with two
+ * draggable start/end nodes (defaulted to the first/last frame) backed by two
+ * editable, validated Start/End number fields, an editable FPS, a resolution
+ * picker (360p / 720p / 1080p / 2K — sets output dims and the matching H.264
+ * level), and a live duration readout. On Export, the chosen frame range is
+ * rendered into the modal viewport at the chosen resolution and encoded to an
+ * .mp4 via WebCodecs VideoEncoder + mp4-muxer.
  */
 export function showExport3DVideoModal() {
     var session = getActiveSession();
@@ -1602,30 +1619,66 @@ export function showExport3DVideoModal() {
     }
     if (frameCount <= 0) { setStatus('No frames to export', 'error'); return; }
 
+    var V3D_TBTN = 'padding:4px 9px;font-size:13px;line-height:1;cursor:pointer;background:var(--bg-tertiary,#2a2a2a);color:#ddd;border:1px solid var(--border-color,#444);border-radius:4px;';
+    var V3D_FIELD = 'background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:4px;font-size:13px;padding:4px 6px;';
+    var V3D_NUMF = 'width:66px;text-align:center;margin-left:4px;' + V3D_FIELD;
+    var V3D_HANDLE = 'position:absolute;top:5px;width:15px;height:15px;margin-left:-8px;border-radius:50%;background:var(--accent,#4a9eff);border:2px solid #fff;box-sizing:border-box;cursor:ew-resize;touch-action:none;z-index:2;';
+
+    // Standard output resolutions (16:9). The H.264 level in `codec` is bumped
+    // to match the resolution so the decoder advertises the right capability.
+    var V3D_RES = {
+        '360':  { w: 640,  h: 360,  codec: 'avc1.42001E', label: '360p (640×360)' },
+        '720':  { w: 1280, h: 720,  codec: 'avc1.42001F', label: '720p (1280×720)' },
+        '1080': { w: 1920, h: 1080, codec: 'avc1.420028', label: '1080p (1920×1080)' },
+        '2k':   { w: 2560, h: 1440, codec: 'avc1.420032', label: '2K (2560×1440)' },
+    };
+
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
     var modal = document.createElement('div');
     modal.className = 'multi-frame-modal';
-    modal.style.cssText = 'width:680px;max-width:95vw;';
+    modal.style.cssText = 'width:860px;max-width:95vw;box-sizing:border-box;';
     modal.innerHTML =
         '<h3>Export 3D Video</h3>' +
         '<div style="display:flex;gap:14px;align-items:stretch;">' +
         '  <div id="v3dExportViewport" style="width:500px;height:340px;background:#1a1a1a;border-radius:6px;position:relative;overflow:hidden;flex:0 0 auto;"></div>' +
-        '  <div style="flex:1 1 auto;display:flex;flex-direction:column;gap:12px;">' +
+        '  <div style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:12px;">' +
         '    <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">Orbit and zoom the view to set the camera angle for the exported video.</div>' +
         '    <div style="display:flex;align-items:center;gap:8px;">' +
         '      <label style="font-size:13px;width:34px;">FPS</label>' +
-        '      <input type="number" id="v3dExportFps" min="1" max="240" step="1" style="width:74px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:4px;font-size:13px;padding:4px 6px;text-align:center;">' +
+        '      <input type="number" id="v3dExportFps" min="1" max="240" step="1" style="width:74px;text-align:center;' + V3D_FIELD + '">' +
+        '    </div>' +
+        '    <div style="display:flex;align-items:center;gap:8px;">' +
+        '      <label style="font-size:13px;width:34px;">Res</label>' +
+        '      <select id="v3dExportRes" style="width:190px;max-width:100%;box-sizing:border-box;' + V3D_FIELD + '">' +
+        '        <option value="360">' + V3D_RES['360'].label + '</option>' +
+        '        <option value="720" selected>' + V3D_RES['720'].label + '</option>' +
+        '        <option value="1080">' + V3D_RES['1080'].label + '</option>' +
+        '        <option value="2k">' + V3D_RES['2k'].label + '</option>' +
+        '      </select>' +
         '    </div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Duration: <span id="v3dExportDuration">0:00</span></div>' +
-        '    <div style="font-size:12px;color:var(--text-secondary);"><span id="v3dExportFrameCount">' + frameCount + '</span> frames</div>' +
+        '    <div style="font-size:12px;color:var(--text-secondary);">Exported Frames: <span id="v3dExportSelCount">' + frameCount + '</span></div>' +
+        '    <div style="font-size:12px;color:var(--text-secondary);">Estimated File Size: <span id="v3dExportSize">—</span></div>' +
         '  </div>' +
         '</div>' +
         '<div style="margin-top:12px;">' +
-        '  <div style="display:flex;align-items:center;gap:8px;">' +
-        '    <span style="font-size:12px;color:var(--text-secondary);min-width:42px;">Frame</span>' +
-        '    <input type="range" id="v3dExportScrub" min="0" max="' + (frameCount - 1) + '" value="0" style="flex:1;">' +
-        '    <span id="v3dExportScrubVal" style="font-size:12px;min-width:72px;text-align:right;">0 / ' + (frameCount - 1) + '</span>' +
+        '  <div style="display:flex;align-items:center;gap:6px;">' +
+        '    <button id="v3dExportPrev" title="Previous frame" style="' + V3D_TBTN + '">⏮</button>' +
+        '    <button id="v3dExportPlay" title="Play / Pause" style="' + V3D_TBTN + '">▶</button>' +
+        '    <button id="v3dExportNext" title="Next frame" style="' + V3D_TBTN + '">⏭</button>' +
+        '    <div id="v3dExportTrack" style="position:relative;flex:1;height:26px;margin:0 10px;cursor:pointer;">' +
+        '      <div style="position:absolute;top:11px;left:0;right:0;height:4px;background:#444;border-radius:2px;"></div>' +
+        '      <div id="v3dExportRangeFill" style="position:absolute;top:11px;height:4px;background:var(--accent,#4a9eff);border-radius:2px;"></div>' +
+        '      <div id="v3dExportPlayhead" style="position:absolute;top:3px;width:2px;height:20px;background:#fff;opacity:0.8;margin-left:-1px;pointer-events:none;z-index:1;"></div>' +
+        '      <div id="v3dExportHandleStart" title="Start frame" style="' + V3D_HANDLE + '"></div>' +
+        '      <div id="v3dExportHandleEnd" title="End frame" style="' + V3D_HANDLE + '"></div>' +
+        '    </div>' +
+        '    <span id="v3dExportScrubVal" style="font-size:12px;min-width:48px;text-align:right;">0</span>' +
+        '  </div>' +
+        '  <div style="display:flex;align-items:center;gap:14px;margin-top:8px;font-size:12px;color:var(--text-secondary);">' +
+        '    <label>Start <input type="number" id="v3dExportStart" min="0" max="' + (frameCount - 1) + '" step="1" style="' + V3D_NUMF + '"></label>' +
+        '    <label>End <input type="number" id="v3dExportEnd" min="0" max="' + (frameCount - 1) + '" step="1" style="' + V3D_NUMF + '"></label>' +
         '  </div>' +
         '  <div id="v3dExportProgressWrap" style="display:none;margin-top:10px;">' +
         '    <div style="background:#333;border-radius:4px;height:8px;overflow:hidden;">' +
@@ -1680,9 +1733,21 @@ export function showExport3DVideoModal() {
 
     // --- Controls ---
     var fpsInput = modal.querySelector('#v3dExportFps');
+    var resSelect = modal.querySelector('#v3dExportRes');
     var durationEl = modal.querySelector('#v3dExportDuration');
-    var scrub = modal.querySelector('#v3dExportScrub');
-    var scrubVal = modal.querySelector('#v3dExportScrubVal');
+    var track = modal.querySelector('#v3dExportTrack');
+    var rangeFill = modal.querySelector('#v3dExportRangeFill');
+    var playhead = modal.querySelector('#v3dExportPlayhead');
+    var handleStart = modal.querySelector('#v3dExportHandleStart');
+    var handleEnd = modal.querySelector('#v3dExportHandleEnd');
+    var startField = modal.querySelector('#v3dExportStart');
+    var endField = modal.querySelector('#v3dExportEnd');
+    var selCountEl = modal.querySelector('#v3dExportSelCount');
+    var sizeEl = modal.querySelector('#v3dExportSize');
+    var previewValEl = modal.querySelector('#v3dExportScrubVal');
+    var prevBtn = modal.querySelector('#v3dExportPrev');
+    var playBtn = modal.querySelector('#v3dExportPlay');
+    var nextBtn = modal.querySelector('#v3dExportNext');
     var cancelBtn = modal.querySelector('#v3dExportCancel');
     var exportBtn = modal.querySelector('#v3dExportBtn');
     var progressWrap = modal.querySelector('#v3dExportProgressWrap');
@@ -1690,8 +1755,11 @@ export function showExport3DVideoModal() {
     var progressLabel = modal.querySelector('#v3dExportProgressLabel');
 
     fpsInput.value = Math.round(state.fps || 30);
-    scrub.value = startFrame;
-    scrubVal.textContent = startFrame + ' / ' + (frameCount - 1);
+
+    var lastIdx = frameCount - 1;
+    // Export range (inclusive) + the current preview frame.
+    var rangeStart = 0, rangeEnd = lastIdx, previewFrame = startFrame;
+    var playTimer = null;
 
     function currentFps() {
         var f = parseFloat(fpsInput.value);
@@ -1699,27 +1767,149 @@ export function showExport3DVideoModal() {
         if (f > 240) f = 240;
         return f;
     }
+    function selectedCount() { return rangeEnd - rangeStart + 1; }
     function refreshDuration() {
-        durationEl.textContent = _fmtDuration(frameCount / currentFps());
+        durationEl.textContent = _fmtDuration(selectedCount() / currentFps());
+        refreshSize();
     }
-    refreshDuration();
+    function refreshSize() {
+        var res = V3D_RES[resSelect.value] || V3D_RES['720'];
+        var fps = currentFps();
+        // bytes = bitrate(bits/s) × duration(s) / 8 — same bitrate the encoder uses.
+        var bytes = _v3dBitrate(res.w, res.h, fps) * (selectedCount() / fps) / 8;
+        sizeEl.textContent = _fmtBytes(bytes);
+    }
+    function pctOf(f) { return lastIdx > 0 ? (f / lastIdx) * 100 : 0; }
+
+    // Sync the track handles / fill / fields to the current range + preview.
+    function layoutTrack() {
+        handleStart.style.left = pctOf(rangeStart) + '%';
+        handleEnd.style.left = pctOf(rangeEnd) + '%';
+        rangeFill.style.left = pctOf(rangeStart) + '%';
+        rangeFill.style.width = (pctOf(rangeEnd) - pctOf(rangeStart)) + '%';
+        playhead.style.left = pctOf(previewFrame) + '%';
+        startField.value = rangeStart;
+        endField.value = rangeEnd;
+        selCountEl.textContent = selectedCount();
+        previewValEl.textContent = previewFrame;
+        refreshDuration();
+    }
+
+    // Render frame f into the modal viewport and move the playhead.
+    function showFrame(f) {
+        if (f < 0) f = 0;
+        if (f > lastIdx) f = lastIdx;
+        previewFrame = f;
+        playhead.style.left = pctOf(f) + '%';
+        previewValEl.textContent = f;
+        vp.setFrame(getInstanceGroupsForFrame(f));
+    }
+
+    function setRange(s, e) {
+        // Clamp into bounds and keep start <= end.
+        s = Math.max(0, Math.min(lastIdx, Math.round(s)));
+        e = Math.max(0, Math.min(lastIdx, Math.round(e)));
+        if (s > e) { var t = s; s = e; e = t; }
+        rangeStart = s; rangeEnd = e;
+        layoutTrack();
+    }
+
     fpsInput.addEventListener('input', refreshDuration);
     fpsInput.addEventListener('change', function () { fpsInput.value = Math.round(currentFps()); refreshDuration(); });
+    resSelect.addEventListener('change', refreshSize);
 
-    // Scrubbing: update the numeric label live, but only RENDER the 3D frame on
-    // release (the 'change' event), per spec — no live scrub rendering.
-    scrub.addEventListener('input', function () {
-        scrubVal.textContent = scrub.value + ' / ' + (frameCount - 1);
+    // --- Preview transport (play / prev / next) — plays across the range ---
+    function setPlaying(on) {
+        if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+        playBtn.textContent = on ? '⏸' : '▶';
+        if (!on) return;
+        var tick = function () {  // self-rescheduling so FPS edits take effect
+            if (previewFrame >= rangeEnd) { setPlaying(false); return; }
+            showFrame(previewFrame + 1);
+            playTimer = setTimeout(tick, 1000 / currentFps());
+        };
+        playTimer = setTimeout(tick, 1000 / currentFps());
+    }
+    function togglePlay() {
+        if (playTimer) { setPlaying(false); return; }
+        if (previewFrame >= rangeEnd || previewFrame < rangeStart) showFrame(rangeStart);
+        setPlaying(true);
+    }
+    playBtn.addEventListener('click', togglePlay);
+    prevBtn.addEventListener('click', function () { setPlaying(false); showFrame(previewFrame - 1); });
+    nextBtn.addEventListener('click', function () { setPlaying(false); showFrame(previewFrame + 1); });
+
+    // --- Draggable start/end nodes on the progress bar ---
+    var dragging = null;  // 'start' | 'end' | null
+    function frameFromClientX(clientX) {
+        var rect = track.getBoundingClientRect();
+        if (rect.width <= 0) return 0;
+        var pct = (clientX - rect.left) / rect.width;
+        pct = Math.max(0, Math.min(1, pct));
+        return Math.round(pct * lastIdx);
+    }
+    function onDragMove(ev) {
+        if (!dragging) return;
+        var f = frameFromClientX(ev.clientX);
+        // While dragging, move only the active node's bound; render on release.
+        if (dragging === 'start') setRange(Math.min(f, rangeEnd), rangeEnd);
+        else setRange(rangeStart, Math.max(f, rangeStart));
+        if (ev.cancelable) ev.preventDefault();
+    }
+    function onDragEnd() {
+        if (!dragging) return;
+        // Render the boundary frame the user just set (mouse-release only).
+        showFrame(dragging === 'start' ? rangeStart : rangeEnd);
+        dragging = null;
+        document.removeEventListener('pointermove', onDragMove);
+        document.removeEventListener('pointerup', onDragEnd);
+    }
+    function beginDrag(which, ev) {
+        if (exporting) return;
+        setPlaying(false);
+        dragging = which;
+        document.addEventListener('pointermove', onDragMove);
+        document.addEventListener('pointerup', onDragEnd);
+        if (ev.cancelable) ev.preventDefault();
+    }
+    handleStart.addEventListener('pointerdown', function (ev) { beginDrag('start', ev); });
+    handleEnd.addEventListener('pointerdown', function (ev) { beginDrag('end', ev); });
+    // Clicking the track grabs whichever node is nearer, then drags it.
+    track.addEventListener('pointerdown', function (ev) {
+        if (exporting) return;
+        if (ev.target === handleStart || ev.target === handleEnd) return;
+        var f = frameFromClientX(ev.clientX);
+        var which = Math.abs(f - rangeStart) <= Math.abs(f - rangeEnd) ? 'start' : 'end';
+        if (which === 'start') setRange(f, rangeEnd); else setRange(rangeStart, f);
+        beginDrag(which, ev);
     });
-    scrub.addEventListener('change', function () {
-        var f = parseInt(scrub.value, 10) || 0;
-        vp.setFrame(getInstanceGroupsForFrame(f));
-    });
+
+    // --- Editable Start/End fields — reject illegal input (revert on invalid) ---
+    function commitField(field, which) {
+        var raw = field.value.trim();
+        var v = Number(raw);
+        var ok = raw !== '' && Number.isInteger(v) && v >= 0 && v <= lastIdx &&
+            (which === 'start' ? v <= rangeEnd : v >= rangeStart);
+        if (!ok) {
+            // Illegal — revert to the last valid value, accept nothing.
+            field.value = (which === 'start') ? rangeStart : rangeEnd;
+            return;
+        }
+        if (which === 'start') setRange(v, rangeEnd); else setRange(rangeStart, v);
+        showFrame(v);
+    }
+    startField.addEventListener('change', function () { commitField(startField, 'start'); });
+    endField.addEventListener('change', function () { commitField(endField, 'end'); });
+
+    layoutTrack();
+    showFrame(startFrame);
 
     var exporting = false;
     var cancelled = false;
 
     function cleanup() {
+        setPlaying(false);
+        document.removeEventListener('keydown', onKey);
         try { vp.dispose(); } catch (e) {}
         overlay.remove();
     }
@@ -1729,6 +1919,16 @@ export function showExport3DVideoModal() {
         cleanup();
     });
 
+    // Esc closes the modal (or stops an in-progress export), per the app-wide
+    // modal convention (CLAUDE.md › Modals).
+    function onKey(e) {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        if (exporting) { cancelled = true; return; }
+        cleanup();
+    }
+    document.addEventListener('keydown', onKey);
+
     exportBtn.addEventListener('click', async function () {
         if (exporting) return;
 
@@ -1737,30 +1937,45 @@ export function showExport3DVideoModal() {
             return;
         }
 
+        setPlaying(false);
         exporting = true;
         cancelled = false;
         exportBtn.disabled = true;
         fpsInput.disabled = true;
-        scrub.disabled = true;
+        resSelect.disabled = true;
+        startField.disabled = true;
+        endField.disabled = true;
+        track.style.pointerEvents = 'none';
+        prevBtn.disabled = true;
+        playBtn.disabled = true;
+        nextBtn.disabled = true;
         cancelBtn.textContent = 'Stop';
         progressWrap.style.display = '';
 
         var fps = currentFps();
+        var expStart = rangeStart, expEnd = rangeEnd;
+        var nFrames = expEnd - expStart + 1;
+
+        // Output at the chosen standard resolution. Render the viewport at that
+        // size (pixelRatio 1 so the buffer is exactly W×H) and match the camera
+        // aspect so the 3D content isn't distorted.
+        var res = V3D_RES[resSelect.value] || V3D_RES['720'];
+        var W = res.w, H = res.h;
+        try {
+            vp.renderer.setPixelRatio(1);
+            vp.renderer.setSize(W, H, false);
+            vp.threeCamera.aspect = W / H;
+            vp.threeCamera.updateProjectionMatrix();
+        } catch (e) { console.warn('[3D video] resize failed:', e); }
+        var src = vp.renderer.domElement;
+        var cap = document.createElement('canvas');
+        cap.width = W; cap.height = H;
+        var capCtx = cap.getContext('2d');
 
         // Lazy sessions: ensure all frames are available before sweeping.
         if (session.lazyLoader) {
             try { await loadAllLazyFrames(showLoading); hideLoading(); } catch (e) {}
         }
-
-        // Even dimensions are required by most H.264 encoders. Capture through a
-        // 2D canvas so the encoder size is decoupled from devicePixelRatio.
-        var src = vp.renderer.domElement;
-        var W = src.width - (src.width % 2);
-        var H = src.height - (src.height % 2);
-        if (W < 2 || H < 2) { W = 640; H = 480; }
-        var cap = document.createElement('canvas');
-        cap.width = W; cap.height = H;
-        var capCtx = cap.getContext('2d');
 
         var muxer, encoder;
         try {
@@ -1774,9 +1989,9 @@ export function showExport3DVideoModal() {
                 error: function (e) { console.error('[3D video] encoder error:', e); },
             });
             encoder.configure({
-                codec: 'avc1.420028',
+                codec: res.codec,  // H.264 level matched to the chosen resolution
                 width: W, height: H,
-                bitrate: Math.min(16000000, Math.max(2000000, Math.round(W * H * fps * 0.12))),
+                bitrate: _v3dBitrate(W, H, fps),
                 framerate: fps,
             });
         } catch (err) {
@@ -1790,8 +2005,11 @@ export function showExport3DVideoModal() {
         var frameDurUs = Math.round(1e6 / fps);
         var encodedOk = true;
         try {
-            for (var i = 0; i < frameCount; i++) {
+            // Encode only the selected [expStart, expEnd] range; timestamps are
+            // relative to expStart so the clip starts at t=0.
+            for (var i = expStart; i <= expEnd; i++) {
                 if (cancelled) break;
+                var out = i - expStart;
 
                 vp.setFrame(getInstanceGroupsForFrame(i));
                 // Force a render of the chosen camera view, then snapshot it.
@@ -1799,17 +2017,17 @@ export function showExport3DVideoModal() {
                 capCtx.drawImage(src, 0, 0, W, H);
 
                 var vframe = new VideoFrame(cap, {
-                    timestamp: Math.round(i * 1e6 / fps),
+                    timestamp: Math.round(out * 1e6 / fps),
                     duration: frameDurUs,
                 });
-                encoder.encode(vframe, { keyFrame: (i % 60 === 0) });
+                encoder.encode(vframe, { keyFrame: (out % 60 === 0) });
                 vframe.close();
 
                 // Update progress + relieve encoder backpressure periodically.
-                if (i % 5 === 0 || i === frameCount - 1) {
-                    var pct = Math.round(((i + 1) / frameCount) * 100);
+                if (out % 5 === 0 || i === expEnd) {
+                    var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
-                    progressLabel.textContent = 'Encoding ' + (i + 1) + ' / ' + frameCount;
+                    progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
                 while (encoder.encodeQueueSize > 12 && !cancelled) {
@@ -1823,9 +2041,11 @@ export function showExport3DVideoModal() {
                 muxer.finalize();
                 var buffer = muxer.target.buffer;
                 var blob = new Blob([buffer], { type: 'video/mp4' });
-                var fname = (session.name || 'session').replace(/[^\w.-]+/g, '_') + '_3d.mp4';
+                var fname = (session.name || 'session').replace(/[^\w.-]+/g, '_') +
+                    '_3d_' + resSelect.value + '_f' + expStart + '-' + expEnd + '.mp4';
                 downloadBlob(blob, fname);
-                setStatus('3D video exported: ' + fname + ' (' + frameCount + ' frames @ ' + fps + ' fps)', 'success');
+                setStatus('3D video exported: ' + fname + ' (' + nFrames + ' frames @ ' + fps +
+                    ' fps, ' + W + '×' + H + ')', 'success');
             } else {
                 setStatus('3D video export cancelled', 'warning');
             }

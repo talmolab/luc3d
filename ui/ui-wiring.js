@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession } from './app-state.js';
+         getActiveSession, hasRealVideo } from './app-state.js';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -47,7 +47,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
-import { addNewInstanceSmart, update3DViewport } from '../pose/initialization.js';
+import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -917,12 +917,46 @@ export function hideGroupContextMenu() {
 // UI Setup
 // ============================================
 
+// --- Video-less playback (skeleton + imported 3D points) ---------------------
+// A timer-driven frame stepper used when there is no videoController to drive
+// native playback. Steps through [0, totalFrames-1] at state.fps, rendering
+// each frame's overlays + 3D viewport via navigateToFrame.
+var _noVideoPlayTimer = null;
+
+function stopNoVideoPlayback() {
+    if (_noVideoPlayTimer) { clearTimeout(_noVideoPlayTimer); _noVideoPlayTimer = null; }
+    state.isPlaying = false;
+    onPlaybackStateChange(false);
+}
+
+function startNoVideoPlayback() {
+    if ((state.totalFrames || 1) <= 1) return;
+    state.isPlaying = true;
+    onPlaybackStateChange(true);
+    var tick = function () {
+        if (!state.isPlaying) return;
+        var fps = state.fps && state.fps > 0 ? state.fps : 30;  // re-read so FPS edits apply
+        var next = state.currentFrame + 1;
+        if (next >= state.totalFrames) { stopNoVideoPlayback(); return; }  // stop at last frame
+        navigateToFrame(next);
+        _noVideoPlayTimer = setTimeout(tick, 1000 / fps);
+    };
+    var fps0 = state.fps && state.fps > 0 ? state.fps : 30;
+    _noVideoPlayTimer = setTimeout(tick, 1000 / fps0);
+}
+
+function toggleNoVideoPlayback() {
+    if (_noVideoPlayTimer) { stopNoVideoPlayback(); return; }
+    if (state.currentFrame >= (state.totalFrames - 1)) navigateToFrame(0);  // restart from 0 at the end
+    startNoVideoPlayback();
+}
+
 export function setupUI() {
     // Transport controls
-    document.getElementById('btnFirst').addEventListener('click', function () { if (videoController) videoController.seekToFrame(0); });
-    document.getElementById('btnPrev').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame - 1); });
+    document.getElementById('btnFirst').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(0); });
+    document.getElementById('btnPrev').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); });
     document.getElementById('btnPlay').addEventListener('click', function () {
-        if (!videoController) return;
+        if (!hasRealVideo()) { toggleNoVideoPlayback(); return; }
         if (state.isPlaying) { videoController.stopPlayback(); return; }
         // Pre-load frames before starting playback for lazy sessions
         if (state.session && state.session.lazyLoader) {
@@ -935,8 +969,8 @@ export function setupUI() {
             videoController.togglePlayback();
         }
     });
-    document.getElementById('btnNext').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame + 1); });
-    document.getElementById('btnLast').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.totalFrames - 1); });
+    document.getElementById('btnNext').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(state.currentFrame + 1); });
+    document.getElementById('btnLast').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(state.totalFrames - 1); });
 
     // Timeline toggle button — fully collapse / expand the timeline.
     document.getElementById('timelineToggleBtn').addEventListener('click', function () {
@@ -1083,7 +1117,19 @@ export function setupUI() {
 
     document.addEventListener('keydown', function (e) {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-        if (!videoController) return;
+        if (!hasRealVideo()) {
+            // Video-less project (skeleton + imported 3D points): support frame
+            // stepping + play/pause over the points3d duration even though
+            // there's no decoder.
+            switch (e.key) {
+                case 'ArrowRight': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame + 1); break;
+                case 'ArrowLeft': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); break;
+                case 'Home': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(0); break;
+                case 'End': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.totalFrames - 1); break;
+                case ' ': e.preventDefault(); toggleNoVideoPlayback(); break;
+            }
+            return;
+        }
         // Shift+R+Arrow is the rotation chord — don't also step frames.
         if (e.shiftKey && _rKeyDown) return;
 

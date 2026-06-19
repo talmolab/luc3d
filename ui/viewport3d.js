@@ -885,6 +885,10 @@ export class Viewport3D {
                 for (let n = 0; n < pts.length; n++) {
                     const pt = pts[n];
                     if (pt == null) continue;
+                    // Guard against NaN/Inf coords (e.g. missing keypoints in an
+                    // imported points3d H5) — they would produce NaN meshes and
+                    // poison bounding-sphere / fitToScene math.
+                    if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
 
                     let nodeObj;
                     if (nodeShape === 'x') {
@@ -917,6 +921,8 @@ export class Viewport3D {
                 const srcPt = pts[srcIdx];
                 const dstPt = pts[dstIdx];
                 if (srcPt == null || dstPt == null) continue;
+                if (!isFinite(srcPt[0]) || !isFinite(srcPt[1]) || !isFinite(srcPt[2])) continue;
+                if (!isFinite(dstPt[0]) || !isFinite(dstPt[1]) || !isFinite(dstPt[2])) continue;
 
                 const cylinder = this._createCylinder(
                     srcPt, dstPt,
@@ -1213,11 +1219,17 @@ export class Viewport3D {
             points.push(pos);
         }
 
-        // Collect skeleton points from current frame
+        // Collect skeleton points from current frame. Node markers may be a
+        // Mesh (circle/square/triangle) or a Group of bars ('x'); both are
+        // named 'node_*'. Skip any with non-finite coords defensively.
         if (this._skeletonGroup) {
             this._skeletonGroup.traverse(function (child) {
-                if (child.isMesh && child.name.startsWith('node_')) {
-                    points.push([child.position.x, child.position.y, child.position.z]);
+                if (child.name && child.name.indexOf('node_') === 0 &&
+                    (child.isMesh || child.isGroup || child.isObject3D)) {
+                    var p = child.position;
+                    if (isFinite(p.x) && isFinite(p.y) && isFinite(p.z)) {
+                        points.push([p.x, p.y, p.z]);
+                    }
                 }
             });
         }
