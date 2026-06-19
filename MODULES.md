@@ -885,6 +885,78 @@ the headless test runner doesn't crash on a missing `document`.
 
 ---
 
+### ui/settings.js
+
+**Purpose.** Central user-settings store: the default triangulation method
+(`'dlt'` | `'ba'`, default `'dlt'`) plus a comprehensive **catalog of every
+keyboard shortcut** (`ACTION_CATALOG`). Settings persist to `localStorage`
+(`lucid.settings.v1`) and survive reloads. The catalog is the single source of
+truth for the Settings ▸ Keyboard Shortcuts panel — see the keyboard-shortcuts
+note in `CLAUDE.md`.
+
+**Catalog entries.** `{ id, label, category, binding, editable, dispatched }`.
+`binding` is a "+"-joined accelerator (modifier tokens: `Mod` = Ctrl-or-Cmd,
+`Ctrl`, `Cmd`/`Meta`, `Shift`, `Alt`/`Option`/`Opt`; last token is the key) for
+dispatched entries, or a free-form display string (e.g. `← / →`, `1 – 9`) for
+fixed reference entries. `dispatched:true` → matched live and needs a runtime
+handler via `setHandler`; `dispatched:false` → handled by its own dedicated
+handler elsewhere and listed for reference only.
+
+**Key exports.**
+- `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
+  read/write the default method used by implicit triangulation paths.
+- `getActions()` — catalog snapshot `[{ id, label, category, binding,
+  defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
+- `getBinding(id)` — effective binding string (user override or catalog default).
+- `setHandler(id, fn)` — attach the runtime handler for a dispatched action.
+- `matchesBinding(id, e)` — true if a `KeyboardEvent` triggers the action under
+  its effective binding (combo-aware; used by `timeline-controller`-style owners
+  and by `dispatchEvent`).
+- `dispatchEvent(e)` — resolve a `KeyboardEvent` to a dispatched action and run
+  its handler (skips when typing in inputs); returns `true` if handled.
+- `applyBindings(map)` — commit an `{ id: binding }` override map (editable-only;
+  bindings equal to the default are dropped); `resetBindings()` clears all.
+- `formatBinding(str)` — prettify a binding for display.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/identity-assignment.js`,
+`ui/settings-modal.js`.
+
+---
+
+### ui/settings-modal.js
+
+**Purpose.** Builds and shows the "Settings" modal (opened from Help ▸
+Settings). Wizard-style layout: a left nav (`settings-nav`) of categories and a
+right panel area (`settings-panel-container`), with a Cancel / Apply footer.
+
+**Key exports.**
+- `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
+  `'keyboard'` | `'wizard'` (default `'triangulation'`). Single-instance.
+
+**Behavior.** Three panels: **Default Triangulation** (single-select DLT/BA
+radio rows, initialized from `getDefaultTriangulationMethod()`), **Keyboard
+Shortcuts** (the full `getActions()` catalog grouped by category — editable
+entries get a click-to-capture key chip with conflict rejection; fixed entries
+render a greyed, dashed reference chip), and **Tracking Wizard** (a "Coming
+Soon" placeholder). All edits mutate a local `working` state only (only editable
+bindings are tracked); nothing commits until **Apply**
+(`setDefaultTriangulationMethod` + `applyBindings`). Cancel / close `×` /
+backdrop click / Escape discard. A capture-phase document keydown listener makes
+the modal fully capture the keyboard (background shortcuts don't fire while it's
+open) and is removed on teardown.
+
+**Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
+`setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`).
+
+**Imported by.** `ui/ui-wiring.js`.
+
+**User-facing features.** Settings modal — choose default triangulation method,
+remap keyboard shortcuts, Tracking Wizard placeholder.
+
+---
+
 ### ui/timeline.js
 
 **Purpose.** SLEAP-like canvas timeline showing track occupancy bars,
@@ -1229,16 +1301,39 @@ header for the full list. Notable ones: `app-state.js`,
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js`, `export-modals.js`,
-`sessions-panes.js`.
+`sessions-panes.js`, `settings.js`, `settings-modal.js`.
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
 `ui/layout-controls.js`, `loading/session-loader.js`,
 `import-export/slp-import.js`.
 
-**User-facing features.** Menu bar (File / Edit / View / Help), transport
-controls (play/pause/seek/speed), keyboard shortcuts (Space, arrows,
-T, A, etc.), grid/single view toggle, info-panel/3D/timeline visibility
-toggles, "seek to next labeled frame".
+**User-facing features.** Menu bar (File / Edit / Tracks / View / Hot Keys,
+plus a right-aligned Help menu), transport controls (play/pause/seek/speed), keyboard shortcuts (Space,
+arrows, T, A, etc.), grid/single view toggle, info-panel/3D/timeline
+visibility toggles, "seek to next labeled frame".
+
+**Help menu + Settings.** The right-aligned (`margin-left:auto`) menu is
+**Help** (its dropdown opens right-aligned via `right:0`): `menuDocumentation`
+opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
+`menuSettings` opens the Settings modal via `showSettingsModal()`
+(`ui/settings-modal.js`).
+
+**Triangulate dropdowns + default method.** The toolbar `Triangulate` /
+`Triangulate All` buttons are **hover-only** split dropdowns (no click action);
+`wireTriDropdown` wires only the menu items (DLT / BA explicit picks). Implicit
+triangulation — the `t` shortcut, the Edit ▸ Triangulate menu item, and the
+auto-assign flow in `identity-assignment.js` — uses the user's default method
+from `getDefaultTriangulationMethod()` (`ui/settings.js`).
+
+**Catalog-driven keyboard shortcuts.** The dispatched shortcuts attach runtime
+handlers via `setHandler(id, fn)` (from `ui/settings.js`) and are resolved by a
+single dedicated `keydown` listener calling `dispatchEvent(e)`. This covers the
+editable plain keys (`u`/`p`/`r`/`e` toggles, `v` view mode, `g` grid, `t`
+triangulate, `n` add-instance, `?` help) plus the fixed-binding `Shift+U`
+ungroup. Their bindings live in `ACTION_CATALOG` (the single source of truth for
+the Settings panel). Other shortcuts (Save, transport, `Mod+J`, identity/track
+digits, etc.) keep their own handlers and appear in the catalog as fixed
+reference entries. `Enter`/`Escape` remain hard-coded modal-button special cases.
 
 **Block 2 (Prompt 4) visibility wiring + rename migration.** Every
 track-add / track-rename / track-delete / identity-add / identity-rename /

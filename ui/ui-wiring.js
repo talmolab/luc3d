@@ -46,6 +46,9 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
+// User settings: default triangulation method + editable keyboard bindings.
+import { getDefaultTriangulationMethod, setHandler, dispatchEvent } from './settings.js';
+import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
@@ -148,7 +151,18 @@ export function setupMenus() {
 
     document.getElementById('menuTriangulate').addEventListener('click', function () {
         closeMenus();
-        triangulateCurrentFrame();
+        // Implicit triangulation (menu/keyboard) uses the Settings default method.
+        triangulateCurrentFrame(getDefaultTriangulationMethod());
+    });
+
+    // Help menu: Documentation (external docs) and Settings (preferences modal).
+    document.getElementById('menuDocumentation').addEventListener('click', function () {
+        closeMenus();
+        window.open('https://talmolab.github.io/luc3d-docs/', '_blank', 'noopener');
+    });
+    document.getElementById('menuSettings').addEventListener('click', function () {
+        closeMenus();
+        showSettingsModal();
     });
 
     document.getElementById('menuTriangulateMulti').addEventListener('click', function () {
@@ -1267,12 +1281,48 @@ export function setupUI() {
         }
     });
 
+    // Attach runtime handlers for the centrally-dispatched keyboard actions
+    // declared in the settings catalog (ui/settings.js). Their bindings are the
+    // source of truth and are editable via Settings ▸ Keyboard Shortcuts; the
+    // dedicated dispatcher below resolves each keydown to its action.
+    function toggleVisCheckbox(id) {
+        var cb = document.getElementById(id);
+        if (cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change', { bubbles: true })); }
+    }
+    setHandler('toggleUser', function () { toggleVisCheckbox('visUser'); });
+    setHandler('togglePredicted', function () { toggleVisCheckbox('visPredicted'); });
+    setHandler('toggleReproj', function () { toggleVisCheckbox('visReprojections'); });
+    setHandler('toggleErrors', function () { toggleVisCheckbox('visErrors'); });
+    setHandler('cycleViewMode', function () { toggleViewMode(); showViewIndicator(); });
+    setHandler('gridMode', function () { setGridMode(); showViewIndicator(); });
+    // Triangulate uses the Settings default method (DLT/BA).
+    setHandler('triangulate', function () { triangulateCurrentFrame(getDefaultTriangulationMethod()); });
+    setHandler('addInstance', function () { if (interactionManager) interactionManager._addNewInstance(); });
+    setHandler('ungroup', function () {
+        if (interactionManager && interactionManager.selectedInstanceGroup) {
+            unlinkGroup(interactionManager.selectedInstanceGroup);
+        }
+    });
+    setHandler('showHotkeys', function () { showHotkeysHelp(); });
+
+    // Single dispatcher for catalog-driven shortcuts. Runs before the structural
+    // handlers below; if a catalog action matches it consumes the event.
+    document.addEventListener('keydown', function (e) {
+        if (dispatchEvent(e)) e.preventDefault();
+    });
+
     // --- New keyboard shortcuts (Prompt 36) ---
     document.addEventListener('keydown', function (e) {
         // Ctrl+S / Cmd+S = Quick Save
         if (e.key === 's' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
             e.preventDefault();
             quickSave();
+            return;
+        }
+        // Cmd/Ctrl+, = open Settings (standard preferences shortcut)
+        if (e.key === ',' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            showSettingsModal();
             return;
         }
         // --- Ctrl+Shift+T = Track All ---
@@ -1360,47 +1410,9 @@ export function setupUI() {
                 }
                 break;
             }
-            case 'u': {
-                e.preventDefault();
-                var visUser = document.getElementById('visUser');
-                if (visUser) { visUser.checked = !visUser.checked; visUser.dispatchEvent(new Event('change', { bubbles: true })); }
-                break;
-            }
-            case 'p': {
-                e.preventDefault();
-                var visPred = document.getElementById('visPredicted');
-                if (visPred) { visPred.checked = !visPred.checked; visPred.dispatchEvent(new Event('change', { bubbles: true })); }
-                break;
-            }
-            case 'r': {
-                e.preventDefault();
-                var visReproj = document.getElementById('visReprojections');
-                if (visReproj) { visReproj.checked = !visReproj.checked; visReproj.dispatchEvent(new Event('change', { bubbles: true })); }
-                break;
-            }
-            case 'e': {
-                e.preventDefault();
-                var visErrors = document.getElementById('visErrors');
-                if (visErrors) { visErrors.checked = !visErrors.checked; visErrors.dispatchEvent(new Event('change', { bubbles: true })); }
-                break;
-            }
-            case 'v': {
-                e.preventDefault();
-                toggleViewMode();
-                showViewIndicator();
-                break;
-            }
-            case 'g': {
-                e.preventDefault();
-                setGridMode();
-                showViewIndicator();
-                break;
-            }
-            case 't': {
-                e.preventDefault();
-                triangulateCurrentFrame();
-                break;
-            }
+            // Other plain-key shortcuts (visibility toggles, view modes,
+            // triangulate, add-instance, ungroup, help, …) are handled by the
+            // catalog dispatcher installed above (ui/settings.js dispatchEvent).
         }
     });
 
@@ -1833,29 +1845,18 @@ export function setupUI() {
         }
         startEditGroup(selectedGroup);
     });
-    // Triangulate / Triangulate All are split dropdowns: each opens a menu with
-    // DLT (Fast) and BA (Slow & Accurate). The menu opens on hover (CSS) and on
-    // click of the button (toggles .open so it stays open until a choice/outside
-    // click). Choosing an item runs that method and closes the menu.
+    // Triangulate / Triangulate All are hover-only dropdowns: hovering the button
+    // reveals a menu with DLT (Fast) and BA (Slow & Accurate) (shown purely via
+    // CSS :hover). The buttons themselves no longer trigger anything on click —
+    // only choosing a menu item runs that method. Implicit triangulation (the
+    // keyboard shortcut and the Edit menu) uses the Settings default method.
     function wireTriDropdown(dropdownId, buttonId, onPick) {
         var dropdown = document.getElementById(dropdownId);
-        var button = document.getElementById(buttonId);
-        if (!dropdown || !button) return;
-
-        button.addEventListener('click', function (e) {
-            e.stopPropagation();
-            var isOpen = dropdown.classList.contains('open');
-            // Close any other open tri-dropdowns first
-            document.querySelectorAll('.tri-dropdown.open').forEach(function (d) {
-                d.classList.remove('open');
-            });
-            if (!isOpen) dropdown.classList.add('open');
-        });
+        if (!dropdown) return;
 
         dropdown.querySelectorAll('.tri-dropdown-item').forEach(function (item) {
             item.addEventListener('click', function (e) {
                 e.stopPropagation();
-                dropdown.classList.remove('open');
                 onPick(item.getAttribute('data-method') === 'ba' ? 'ba' : 'dlt');
             });
         });

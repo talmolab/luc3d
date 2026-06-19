@@ -15,6 +15,7 @@ import {
     updateTimelineForFrame,
     triangulateCurrentFrame,
 } from '../pose/triangulation.js';
+import { getDefaultTriangulationMethod } from './settings.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { markDirty, setStatus } from '../import-export/save-load.js';
@@ -854,7 +855,7 @@ export function runSingleFrameTriangulation() {
     if (hasAssignment && state.lastAutoAssignViews && state.lastAutoAssignViews.length >= 2) {
         // Assignment exists — run immediately
         runAutomaticAssignment(state.lastAutoAssignViews);
-        triangulateCurrentFrame();
+        triangulateCurrentFrame(getDefaultTriangulationMethod());
     } else {
         // No assignment — show view selection toast (single frame mode)
         startViewSelectionForFrames(frameIdx, frameIdx, true);

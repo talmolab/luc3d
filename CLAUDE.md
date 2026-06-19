@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 26 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 28 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (5 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport (12 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, settings (14 files)
 - `loading/` — video decoding, session loading, SLP/package readers, web workers (5 files)
 - `import-export/` — file I/O, save/load, SLP import/merge (4 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -45,3 +45,14 @@ Browser-based tests in `tests/test-runner.html`. Open in browser to run.
 
 ## Maintenance
 **When modifying any module, always update the corresponding entry in `MODULES.md` to reflect the change — including exports, dependencies, and purpose.**
+
+**Keyboard shortcuts.** Every keyboard shortcut in the app must have an entry in
+`ACTION_CATALOG` in `ui/settings.js` so it is listed (and stays accurate) in
+**Settings ▸ Keyboard Shortcuts**. When you add, change, or remove a shortcut:
+- Add/update its catalog entry: `{ id, label, category, binding, editable, dispatched }`.
+- `dispatched: true` means the binding is matched live by `dispatchEvent()` and
+  needs a handler attached via `setHandler(id, fn)` (see `ui/ui-wiring.js`); such
+  shortcuts are rebindable when `editable: true`.
+- `dispatched: false` means the shortcut keeps its own dedicated handler
+  (transport, `timeline-controller.js`, `interaction.js`, …) and the catalog
+  entry is reference-only — keep its `binding` string in sync with that handler.
