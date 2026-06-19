@@ -1021,11 +1021,13 @@ function showSkeletonMismatchPopup(detail) {
 /**
  * Build the camera matrix for the "Export SLEAP by Camera" modal.
  *
- * Columns are camera/video names found across ALL sessions, ordered left→right by:
- *   1. Session frequency (primary) — videos appearing in more sessions rank higher.
- *   2. Name order within a session (tie-breaker 1) — earliest-listed video ranks higher.
- *   3. Session recency for session-unique videos (tie-breaker 2) — when both appear in
- *      exactly one session, the one in the higher-numbered (later) session ranks higher.
+ * Columns are camera-view names found across ALL sessions, ordered left→right by:
+ *   1. Session frequency (primary) — views appearing in more sessions rank higher.
+ *   2. Earliest session (tie-breaker 1) — when frequencies tie, the view whose first
+ *      session is earlier (higher in the table) ranks higher, so each session's full
+ *      camera set stays grouped before the next session's (no interleaving when
+ *      sessions don't overlap).
+ *   3. Within-session order in that first session (tie-breaker 2).
  * A stable alphabetical fallback breaks any remaining ties deterministically.
  *
  * @returns {{ camNames: string[], info: Object, cellLookup: Object[] }}
@@ -1079,26 +1081,33 @@ function _buildByCamMatrix() {
         }
     }
 
-    // 3. Aggregate per camera for column ordering.
-    var info = {};   // camName -> { name, count, minOrder, maxSession }
+    // 3. Aggregate per camera for column ordering. firstSession/orderInFirst are
+    //    captured on first encounter — sessions are iterated in ascending order,
+    //    so the first session that holds a camera is its earliest.
+    var info = {};   // camName -> { name, count, firstSession, orderInFirst }
     for (var s3 = 0; s3 < sessions.length; s3++) {
         for (var cn3 in cellLookup[s3]) {
-            if (!info[cn3]) info[cn3] = { name: cn3, count: 0, minOrder: Infinity, maxSession: -1 };
-            var rec = info[cn3];
-            rec.count++;
-            var ord = orderInSession[s3][cn3];
-            if (ord < rec.minOrder) rec.minOrder = ord;
-            if (s3 > rec.maxSession) rec.maxSession = s3;
+            if (!info[cn3]) {
+                info[cn3] = { name: cn3, count: 0, firstSession: s3, orderInFirst: orderInSession[s3][cn3] };
+            }
+            info[cn3].count++;
         }
     }
 
+    // Ordering (left → right):
+    //   1. Session frequency (primary) — a camera in more sessions ranks higher.
+    //   2. Earliest session (tie-breaker) — when frequencies tie, the camera
+    //      whose first session is earlier (higher in the table) ranks higher, so
+    //      a session's whole camera set stays grouped left-to-right before the
+    //      next session's. (Non-overlapping sessions never interleave.)
+    //   3. Within-session order in that first session.
     var camNames = Object.keys(info);
     camNames.sort(function (a, b) {
         var ra = info[a], rb = info[b];
-        if (rb.count !== ra.count) return rb.count - ra.count;            // freq desc
-        if (ra.minOrder !== rb.minOrder) return ra.minOrder - rb.minOrder; // name order asc
-        if (ra.count === 1 && rb.count === 1) return rb.maxSession - ra.maxSession; // recency desc
-        return a < b ? -1 : (a > b ? 1 : 0);                              // stable alpha
+        if (rb.count !== ra.count) return rb.count - ra.count;
+        if (ra.firstSession !== rb.firstSession) return ra.firstSession - rb.firstSession;
+        if (ra.orderInFirst !== rb.orderInFirst) return ra.orderInFirst - rb.orderInFirst;
+        return a < b ? -1 : (a > b ? 1 : 0);
     });
 
     return { camNames: camNames, info: info, cellLookup: cellLookup };
@@ -1197,6 +1206,10 @@ export function showSlpExportByCamModal() {
 
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
+
+    // Start scrolled to the very left so the first columns are in view.
+    var scrollEl = modal.querySelector('.slp-bycam-scroll');
+    if (scrollEl) scrollEl.scrollLeft = 0;
 
     var errorDiv = document.getElementById('slpByCamError');
     function clearError() { errorDiv.textContent = ''; }

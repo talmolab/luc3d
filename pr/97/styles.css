@@ -1285,19 +1285,44 @@ body {
   font-size: 11px;
 }
 
-/* Export SLEAP by Camera modal */
+/* Export SLEAP by Camera modal — fixed width so many cameras scroll the table
+   horizontally rather than stretching the modal across the screen. */
 .slp-bycam-modal {
-  min-width: 860px;
-  max-width: 95vw;
+  width: min(1040px, 92vw);
+  min-width: 520px;
+  max-width: 92vw;
 }
 
-/* Scroll container: vertical for many sessions, horizontal for many cameras. */
+/* Scroll container: vertical for many sessions, horizontal for many cameras.
+   overflow-x:scroll keeps the bottom scrollbar always visible (mouse users),
+   and it also scrolls on a trackpad. */
 .slp-bycam-scroll {
   max-height: 380px;
-  overflow: auto;
+  overflow-x: scroll;
+  overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   margin: 8px 0;
+}
+
+/* Always-visible, themed scrollbars (esp. the horizontal one). */
+.slp-bycam-scroll::-webkit-scrollbar {
+  height: 12px;
+  width: 10px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 6px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+.slp-bycam-scroll {
+  scrollbar-width: thin; /* Firefox */
 }
 
 .slp-bycam-table {
@@ -1311,9 +1336,19 @@ body {
 .slp-bycam-table td {
   border-bottom: 1px solid var(--border-color);
   border-right: 1px solid var(--border-color);
-  height: 28px;
-  padding: 2px 8px;
+  height: 26px;
+  padding: 2px 6px;
   box-sizing: border-box;
+}
+
+/* Compact, fixed-width camera columns (header / cells / ✗ / Download). */
+.slp-bycam-cam-head,
+.slp-bycam-cell,
+.slp-bycam-missing,
+.slp-bycam-dl-cell {
+  width: 92px;
+  min-width: 92px;
+  max-width: 92px;
 }
 
 /* Sticky header row (camera names). */
@@ -1360,7 +1395,7 @@ body {
 
 /* Long camera names scroll horizontally inside the header cell. */
 .slp-bycam-cam-name {
-  max-width: 160px;
+  max-width: 80px;
   overflow-x: auto;
   white-space: nowrap;
   font-weight: 600;
@@ -1399,9 +1434,14 @@ body {
   user-select: none;
 }
 
+.slp-bycam-dl-cell {
+  padding: 2px 3px;
+}
+
 .slp-bycam-dl-btn {
-  padding: 3px 10px;
-  font-size: 12px;
+  width: 100%;
+  padding: 3px 2px;
+  font-size: 11px;
   cursor: pointer;
 }
 
