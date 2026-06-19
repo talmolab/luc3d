@@ -108,6 +108,9 @@ export function setupMenus() {
         document.querySelectorAll('.toolbar-dropdown').forEach(function (d) {
             d.style.display = 'none';
         });
+        document.querySelectorAll('.tri-dropdown.open').forEach(function (d) {
+            d.classList.remove('open');
+        });
         hideGroupContextMenu();
         activeMenu = null;
         // Clear multi-select when clicking outside the view strip
@@ -1757,18 +1760,49 @@ export function setupUI() {
         }
         startEditGroup(selectedGroup);
     });
-    // Triangulate current frame
-    document.getElementById('tbTriangulate').addEventListener('click', function () {
-        triangulateCurrentFrame();
+    // Triangulate / Triangulate All are split dropdowns: each opens a menu with
+    // DLT (Fast) and BA (Slow & Accurate). The menu opens on hover (CSS) and on
+    // click of the button (toggles .open so it stays open until a choice/outside
+    // click). Choosing an item runs that method and closes the menu.
+    function wireTriDropdown(dropdownId, buttonId, onPick) {
+        var dropdown = document.getElementById(dropdownId);
+        var button = document.getElementById(buttonId);
+        if (!dropdown || !button) return;
+
+        button.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var isOpen = dropdown.classList.contains('open');
+            // Close any other open tri-dropdowns first
+            document.querySelectorAll('.tri-dropdown.open').forEach(function (d) {
+                d.classList.remove('open');
+            });
+            if (!isOpen) dropdown.classList.add('open');
+        });
+
+        dropdown.querySelectorAll('.tri-dropdown-item').forEach(function (item) {
+            item.addEventListener('click', function (e) {
+                e.stopPropagation();
+                dropdown.classList.remove('open');
+                onPick(item.getAttribute('data-method') === 'ba' ? 'ba' : 'dlt');
+            });
+        });
+    }
+
+    // Triangulate current frame with the chosen method.
+    wireTriDropdown('triangulateDropdown', 'tbTriangulate', function (method) {
+        triangulateCurrentFrame(method);
     });
-    // Triangulate all: group by identity first, then triangulate
-    document.getElementById('tbTriangulateAll').addEventListener('click', function () {
-        // If identities exist, group by identity first then triangulate
-        if (state.session && state.session.identities.length > 0) {
+
+    // Triangulate all frames. DLT keeps the existing "group by identity first"
+    // behavior (grouping always uses DLT); BA triangulates every group with
+    // bundle adjustment (auto-grouping from identities as needed).
+    wireTriDropdown('triangulateAllDropdown', 'tbTriangulateAll', function (method) {
+        if (method === 'ba') {
+            triangulateAllFrames('ba');
+        } else if (state.session && state.session.identities.length > 0) {
             groupByIdentityAndTriangulateAll();
         } else {
-            // No identities — fall back to triangulating existing groups
-            triangulateAllFrames();
+            triangulateAllFrames('dlt');
         }
     });
 

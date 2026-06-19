@@ -90,7 +90,10 @@ session graph that holds them.
   `addEdge`, `removeEdge`, static `defaultMouse()`.
 - `Camera` — intrinsics (`matrix`), distortion, rvec/tvec, image size.
   Cached getters `rotationMatrix`, `extrinsicMatrix`, `projectionMatrix`;
-  methods `project`, `projectPoints`, `undistortPoint`.
+  methods `project`, `projectPoints` (ideal pinhole, no distortion),
+  `undistortPoint` (distorted→ideal, iterative), and `distortPoint`
+  (ideal→distorted, OpenCV forward model — the inverse of `undistortPoint`,
+  used to re-distort reprojections into native pixel space).
 - `Instance` — per-view 2D keypoints with `trackIdx`, `type`
   (`user`/`predicted`/`reprojected`), `score`, `occluded[]`, `nulledNodes`.
   Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`.
@@ -262,21 +265,49 @@ propagation across frames, find-match-for-selected.
 
 ### pose/triangulation.js
 
-**Purpose.** DLT triangulation, reprojection math, fundamental-matrix /
-epipolar utilities, Hungarian assignment. Also hosts the lazy-H5 frame
-loader and the user-facing triangulation orchestration (single-frame,
-all-frames, multi-frame range).
+**Purpose.** DLT triangulation, bundle-adjustment refinement, reprojection
+math, fundamental-matrix / epipolar utilities, Hungarian assignment. Also
+hosts the lazy-H5 frame loader and the user-facing triangulation orchestration
+(single-frame, all-frames, multi-frame range).
+
+**Triangulation methods.** `'dlt'` (default) is the fast linear DLT.
+`'ba'` initializes from DLT then runs per-point Levenberg–Marquardt bundle
+adjustment minimizing geometric reprojection error (slower, more accurate).
+Cameras are fixed (calibrated), so each keypoint is refined independently.
+The method is selected via `options.method` on `triangulateAndReproject` and
+threaded through the orchestration functions; the chosen method is recorded on
+each group (`group.triangulationMethod`) and in each `state.triangulationResults`
+entry (`.method`) so the info panel can label it. Grouping operations
+(`groupByIdentityAndTriangulateAll`, group-by-track) always use DLT.
+
+**Distortion handling.** 2D keypoints on disk are lens-distorted. Triangulation
+(DLT and BA) runs in ideal pinhole space: observations are undistorted first
+(`Camera.undistortPoint`). Reprojections meant for display or error comparison
+must therefore be **re-distorted** back to native pixel space
+(`reprojectPointCamera` / `reprojectPointsCamera` → project, then
+`Camera.distortPoint`). Comparing ideal reprojections against raw distorted
+keypoints previously produced spurious error that grew toward the frame edges
+("fisheyed coordinates", issue #85) and could drive cross-view identity
+switches. The temporal-identity cost in `ui/identity-assignment.js` likewise
+projects 3D targets with distortion before measuring distance to raw detections.
 
 **Key exports.**
+- BA math: `triangulatePointBA(observations, projMatrices, initial?, options?)`,
+  `triangulatePointsBA(allObservations, projMatrices, initialPoints?)`,
+  `triangulationMethodLabel(method)` → `'DLT'` | `'Bundle Adjustment'`.
 - Math: `triangulatePointDLT`, `triangulatePoints`, `reprojectPoint`,
-  `reprojectPoints`, `computeReprojectionError`,
+  `reprojectPoints` (ideal pinhole), `reprojectPointCamera` /
+  `reprojectPointsCamera` (project then re-distort into the camera's native
+  pixel space — use these whenever reprojections are compared against or drawn
+  over raw keypoints), `computeReprojectionError`,
   `computeReprojectionErrors`, `computeMeanReprojectionError`,
   `computeInstanceDistance`, `hungarianAlgorithm`, `cameraCenter`,
   `invert3x3`, `backProjectToRay`, `backProjectToRays`,
   `pointToRayDistance`, `pointsToRayDistances`,
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
-- Group math: `triangulateAndReproject(instanceGroup, cameras, options)`,
-  `storeReprojectedInstances(group, triangulationResult, allCameras)`.
+- Group math: `triangulateAndReproject(instanceGroup, cameras, options)`
+  (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`; returns
+  `.method`), `storeReprojectedInstances(group, triangulationResult, allCameras)`.
 - Lazy H5 loader: class `LazyFrameLoader`, `shouldUseLazyH5(file)`,
   `ensureLazyFrameData`, `buildLazyFrameGroupSync`, `batchLoadLazyFrames`,
   `loadAllLazyFrames`, `evictLazyFrames`. Spawns
@@ -284,9 +315,10 @@ all-frames, multi-frame range).
   sub-path deployments work — see ISSUES.md I-8) for HDF5 reads.
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
-- Orchestration: `triangulateMultiFrameInstances(start, end, onProgress)`,
-  `reTriangulateGroup`, `triangulateCurrentFrame`,
-  `triangulateAllFrames`, `sessionHasCalibration`,
+- Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,
+  `reTriangulateGroup` (preserves the group's existing method),
+  `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
+  (`method` defaults to `'dlt'`), `sessionHasCalibration`,
   `showCalibrationRequiredPopup`,
   `ensureGroupsFromIdentities(session, frameIdx)` — auto-creates a frame's
   InstanceGroups from its per-frame identity assignments (>=2-camera buckets;

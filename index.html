@@ -143,8 +143,20 @@
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
-                <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate</button>
-                <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All</button>
+                <div class="tri-dropdown" id="triangulateDropdown">
+                    <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu">
+                        <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
+                        <div class="tri-dropdown-item" data-method="ba">BA <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
+                    </div>
+                </div>
+                <div class="tri-dropdown" id="triangulateAllDropdown">
+                    <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu">
+                        <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
+                        <div class="tri-dropdown-item" data-method="ba">BA <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
+                    </div>
+                </div>
             </div>
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
@@ -233,6 +245,7 @@
                     <!-- Reprojection Error -->
                     <div class="info-section" id="reprojErrorSection" style="display:none">
                         <h3>Reprojection Error</h3>
+                        <div class="error-method" id="errorMethod" style="display:none"></div>
                         <div class="error-display" id="errorDisplay">-</div>
                         <div id="perCameraErrors"></div>
                         <details id="errorBreakdownDetails" style="margin-top:6px;" open>

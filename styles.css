@@ -869,6 +869,60 @@ body {
   display: block;
 }
 
+/* Triangulate / Triangulate All split dropdowns (DLT vs Bundle Adjustment) */
+.tri-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+.tri-caret {
+  margin-left: 4px;
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.tri-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  z-index: 200;
+}
+
+.tri-dropdown:hover .tri-dropdown-menu,
+.tri-dropdown.open .tri-dropdown-menu {
+  display: block;
+}
+
+.tri-dropdown-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-primary);
+  transition: background var(--transition-fast);
+}
+
+.tri-dropdown-item:hover {
+  background: var(--accent-dim);
+}
+
+.tri-dropdown-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 /* Multi-frame assignment modal */
 .multi-frame-modal-overlay {
   position: fixed;
@@ -1833,6 +1887,17 @@ body {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* Triangulation method label (under "Reprojection Error") */
+.error-method {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: 2px;
 }
 
 /* Reprojection error display */

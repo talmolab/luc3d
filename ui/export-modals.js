@@ -350,8 +350,10 @@ export async function groupByIdentityAndTriangulateAll() {
 
             // Triangulate — store only points3d (compact).
             // Reprojections are computed on-the-fly when drawing.
+            // Grouping always uses fast DLT.
             var triResult = triangulateAndReproject(group, cameras, { triangulateOnly: true });
             group.points3d = triResult.points3d;
+            group.triangulationMethod = triResult.method;
             group.observedPoints = {};
             for (var _oci = 0; _oci < camNames.length; _oci++) {
                 group.observedPoints[camNames[_oci]] = bucket[camNames[_oci]].points;
@@ -520,6 +522,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             if (viewsWithLabels < 2) continue;
 
             var result = triangulateAndReproject(group, groupCameras);
+            group.triangulationMethod = result.method;
 
             group.reprojections = result.reprojections;
             group.points3d = result.points3d;
