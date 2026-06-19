@@ -2145,6 +2145,25 @@ body {
 }
 
 /* Reprojection error display */
+.error-display-row {
+  display: flex;
+  gap: 8px;
+}
+
+.error-stat {
+  flex: 1;
+  text-align: center;
+}
+
+.error-stat-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: -6px;
+}
+
 .error-display {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 22px;

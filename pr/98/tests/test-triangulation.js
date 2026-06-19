@@ -431,6 +431,18 @@
             assertNotNull(res.points3d[0]);
             assertApprox(res.points3d[0][2], t.pt[2], 1e-2, 'Z recovered by BA');
         });
+
+        it('reports both distorted and undistorted reprojection error', function () {
+            if (typeof triangulateAndReproject !== 'function') return;
+            var t = mkGroup();
+            var res = triangulateAndReproject(t.group, t.cameras, { method: 'ba' });
+            assertNotNull(res.meanError, 'distorted mean error present');
+            assertNotNull(res.meanErrorUndistorted, 'undistorted mean error present');
+            assertNotNull(res.errorsUndistorted, 'per-camera undistorted errors present');
+            // With distortion-free test cameras the two spaces coincide.
+            assertApprox(res.meanErrorUndistorted, res.meanError, 1e-9,
+                'distorted == undistorted error when there is no distortion');
+        });
     });
 
     describe('Bundle Adjustment - triangulationMethodLabel', function () {
@@ -519,6 +531,26 @@
             var errIdeal = Math.hypot(reIdeal[0] - obs1[0], reIdeal[1] - obs1[1]);
             assertLessThan(errDist, 0.5, 'distorted reprojection matches observed keypoint');
             assertGreaterThan(errIdeal, errDist, 'ideal reprojection is worse (the old bug)');
+        });
+
+        it('triangulateAndReproject reports distorted and undistorted error separately under real distortion', function () {
+            if (typeof triangulateAndReproject !== 'function') return;
+            var cam1 = distortedCamera('c1', [0, 0, 0], [0, 0, 0]);
+            var cam2 = distortedCamera('c2', [0, 0.3, 0], [20, 0, 0]);
+            var point3d = [14, 8, 38]; // near a frame edge, where distortion bites
+            function observe(cam) { return cam.distortPoint(cam.project(point3d)); }
+
+            var g = new InstanceGroup(1, 0);
+            g.addInstance('c1', new Instance([observe(cam1)], 0, 'user', 1));
+            g.addInstance('c2', new Instance([observe(cam2)], 0, 'user', 1));
+
+            var res = triangulateAndReproject(g, [cam1, cam2], { method: 'ba' });
+            assertNotNull(res.meanError, 'distorted mean error present');
+            assertNotNull(res.meanErrorUndistorted, 'undistorted mean error present');
+            // Both are small (observations are exact), but computed in different
+            // spaces, so they need not be byte-identical.
+            assertLessThan(res.meanError, 1.0, 'distorted error small');
+            assertLessThan(res.meanErrorUndistorted, 1.0, 'undistorted error small');
         });
     });
 })();
