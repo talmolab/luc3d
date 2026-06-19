@@ -370,8 +370,13 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   session — derived from `state.videoFiles` (real loaded views), plus cameras
   with labeled data for SLP-only projects; NOT from `session.cameras`, which is
   the full calibration list and would falsely imply existence. Sessions missing
-  the view show a red ✗ (not selectable). Pre-flights skeleton compatibility
-  (`findSkeletonMismatch`) and pops a warning on mismatch. Columns ordered by
+  the view show a red ✗ (not selectable). A column's Download button is
+  proactively disabled (with an explanatory `title`) whenever its toggled-on
+  sessions have incompatible skeletons — checked set-based / order-insensitively
+  via `findSkeletonMismatch`, re-evaluated on every cell toggle; the in-click
+  check + mismatch popup remains as a fallback. A red warning under the tables
+  (`#slpByCamSkelWarning`) names the blocked column(s) and describes the
+  mismatch whenever any download is disabled. Columns ordered by
   session frequency, then within-session name order, then session recency for
   session-unique views.
 - `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: no longer

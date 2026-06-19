@@ -1486,11 +1486,34 @@ body {
   padding: 2px 3px;
 }
 
-.slp-bycam-dl-btn {
+/* Scoped under .slp-bycam-modal so these beat the generic
+   `.multi-frame-modal button` rule (0,1,1) on specificity (0,2,0) —
+   otherwise its 6px 16px padding / 13px font overflow the 92px column
+   and push the "Download" label off-center. */
+.slp-bycam-modal .slp-bycam-dl-btn {
   width: 100%;
   padding: 3px 2px;
   font-size: 11px;
   cursor: pointer;
+  text-align: center;
+}
+
+.slp-bycam-modal .slp-bycam-dl-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Red warning shown under the tables when a column's download is blocked
+   because the selected sessions have mismatched skeletons. */
+.slp-bycam-skel-warning {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 4px;
+  white-space: pre-line;
 }
 
 

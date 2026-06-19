@@ -1205,6 +1205,7 @@ export function showSlpExportByCamModal() {
         '<table class="slp-bycam-table slp-bycam-cam-table">' + camHead + camBody + camFoot + '</table>' +
         '</div>' +
         '</div>' +
+        '<div class="slp-bycam-skel-warning" id="slpByCamSkelWarning" style="display:none"></div>' +
         '<div class="slp-export-options">' +
         '<label><input type="checkbox" id="slpByCamReproj"> Save Reprojections</label>' +
         '<span class="slp-reproj-toggle" id="slpByCamReprojToggle">' +
@@ -1263,8 +1264,43 @@ export function showSlpExportByCamModal() {
                 cell.textContent = '';
             }
             clearError();
+            updateDownloadStates();
         });
     });
+
+    // Proactively enable/disable per-column download buttons based on whether
+    // the currently toggled-on sessions for a column have compatible skeletons.
+    // Hoisted declaration so the cell-toggle handlers above can call it.
+    function updateDownloadStates() {
+        var blocked = [];
+        modal.querySelectorAll('.slp-bycam-dl-btn').forEach(function (btn) {
+            // Don't clobber the transient state of an in-progress export.
+            if (btn.textContent === 'Exporting...') return;
+            var camName = camNames[parseInt(btn.getAttribute('data-cam'))];
+            var selections = buildColumnSelections(camName);
+            var mismatch = selections.length >= 2 ? findSkeletonMismatch(selections) : null;
+            if (mismatch) {
+                btn.disabled = true;
+                btn.title = mismatch;
+                blocked.push({ cam: camName, detail: mismatch });
+            } else {
+                btn.disabled = false;
+                btn.removeAttribute('title');
+            }
+        });
+
+        // Surface a red message under the tables explaining any blocked columns.
+        var warn = document.getElementById('slpByCamSkelWarning');
+        if (warn) {
+            if (blocked.length) {
+                warn.textContent = 'Skeleton Mismatch Across Sessions. Download Blocked';
+                warn.style.display = '';
+            } else {
+                warn.textContent = '';
+                warn.style.display = 'none';
+            }
+        }
+    }
 
     // ---- Reprojection toggle (mirrors showSlpExportModal) ----
     var reprojCheckbox = document.getElementById('slpByCamReproj');
@@ -1348,6 +1384,9 @@ export function showSlpExportByCamModal() {
             }
         });
     });
+
+    // Set initial disabled state for all download buttons.
+    updateDownloadStates();
 
     document.getElementById('slpByCamClose').addEventListener('click', function () {
         overlay.remove();
