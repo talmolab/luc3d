@@ -212,6 +212,7 @@ export function setupMenus() {
         state.colorByIdentity = false;
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         setStatus('Coloring by Track', 'success');
     });
 
@@ -219,6 +220,7 @@ export function setupMenus() {
         state.colorByIdentity = true;
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         setStatus('Coloring by Identity', 'success');
     });
 

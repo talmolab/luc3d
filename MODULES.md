@@ -1147,7 +1147,10 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. `updateColorByToggle()` reflects
   `state.colorByIdentity` on the buttons; each button's click sets the
-  state, re-renders via `drawAllOverlays`, and updates the active class.
+  state, re-renders the 2D overlays via `drawAllOverlays` AND the 3D viewer
+  via `update3DViewport` (whose `getGroupColor` closure reads
+  `state.colorByIdentity` live, so instances recolor instantly), and updates
+  the active class.
 - Node Style: the four per-section Node Style button groups
   (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
   `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
