@@ -11,8 +11,9 @@ The codebase is split across four directories plus two root files:
 - `import-export/` — file pickers, parsers, project save/load, SLP import.
 - root — `app.js` entry point, `demo-data.js` synthetic dataset.
 
-External CDN imports (`three`, `mp4box`, `h5wasm`, `dockview-core`) are not
-listed under "Imports from project modules".
+External script-tag globals (`three`, `mp4box`, `h5wasm`, `dockview-core`, and
+`Mp4Muxer` — local copy in `lib/mp4-muxer/`, used for 3D-video `.mp4` muxing)
+are not listed under "Imports from project modules".
 
 ---
 
@@ -37,8 +38,15 @@ the old `app.js` entry point.
   "Show Camera View"/"Show Initial View" buttons.
 - `update3DViewport(frameIdx)` — pushes current InstanceGroups into the 3D
   scene; auto-initializes the viewport if calibration is present.
+- `navigateToFrame(frameIdx)` — unified frame navigation used by every UI entry
+  point (timeline scrub/drag, transport buttons, arrow/Home/End keys). With a
+  video controller it defers to `videoController.seekToFrame`; for a video-less
+  project (skeleton + imported 3D points) it clamps to `[0, totalFrames-1]`,
+  updates `state.currentFrame`, and re-renders overlays + seekbar + 3D viewport
+  directly so the full points3d duration is navigable without a decoder.
 - `setupTimeline()` — instantiates `Timeline` and wires its frame-change /
-  range-select callbacks plus the display-mode button group.
+  range-select callbacks plus the display-mode button group. The frame-change /
+  drag-end callbacks fall back to `navigateToFrame` when there's no video.
 - `updateFpsDisplay()` — refreshes the FPS readout.
 
 **Imports from project modules.**
@@ -336,6 +344,12 @@ Exports `state` (mutable shared bag) plus five live-binding controllers
   `paneManager` — live `let` bindings.
 - `setVideoController`, `setInteractionManager`, `setViewport3D`,
   `setTimeline`, `setPaneManager`.
+- `hasRealVideo()` — true only when a view actually has a decoder. A non-null
+  `videoController` is NOT sufficient: `setupEmptyVideoController()` installs one
+  at app init, and a skeleton + imported-3D-points project keeps that empty
+  controller. Frame navigation / playback branch on this, not on the
+  controller's existence (used by `navigateToFrame`, the transport buttons, and
+  the keyboard handler so play/pause + stepping work without video).
 - `VIEW_NAMES` — `['back', 'mid', 'side', 'top']`.
 - `getActiveSession()`, `setActiveSession(session)`.
 
@@ -361,7 +375,10 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 
 **Key exports.**
 - `showGroupByTrackModal()` — modal that bulk-groups by trackIdx.
-- `groupByIdentityAndTriangulateAll()` — bulk-group then triangulate.
+- `groupByIdentityAndTriangulateAll()` — bulk-group then triangulate. Ends by
+  calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
+  the current frame (this is the path "Triangulate All" takes when identities
+  exist; previously it refreshed only the 2D overlays, leaving 3D empty).
 - `showSlpExportModal()` — per-session SLP export modal ("Export SLEAP File":
   pick one camera per session, export to one file).
 - `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid;
@@ -382,6 +399,27 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: no longer
   wired to a File-menu item (the "Export 2D SLP (All Views)" entry was removed);
   retained for reference.
+- `showExport3DVideoModal()` — File ▸ "Export 3D Video". Mounts a second
+  `Viewport3D` (reusing the panel code) in a modal so the user can orbit/zoom to
+  pick the camera angle. Controls: prev (`⏮`) / play-pause (`▶`/`⏸`,
+  self-rescheduling timer at the current FPS) / next (`⏭`) preview transport; a
+  progress-bar track with two **draggable start/end nodes** (default first/last
+  frame) backed by two **editable, validated Start/End fields** (illegal input —
+  non-integer, out of `[0, lastFrame]`, or crossing the other bound — is rejected
+  and reverted); an editable FPS (duration = selectedFrames / fps); a
+  **resolution picker** (360p/720p/1080p/2K) that sets the output dimensions and
+  the matching H.264 level (`avc1.42001E` / `42001F` / `420028` / `420032`); live
+  readouts for **Duration**, **Exported Frames** (= selected range, updates with
+  the Start/End nodes/fields) and **Estimated File Size** (`_v3dBitrate` ×
+  duration ÷ 8, formatted by `_fmtBytes`; recomputed on range/FPS/resolution
+  change — same bitrate the encoder is configured with); and
+  Cancel / Export (all inputs disabled + playback stopped during an export).
+  Export renders only the selected `[start, end]` range into the viewport at the
+  chosen resolution (`renderer.setPixelRatio(1)` + `setSize(W,H)` + matching
+  camera aspect), captures through an even-dimensioned 2D canvas, and encodes an
+  `.mp4` via WebCodecs `VideoEncoder` muxed with `mp4-muxer` (global `Mp4Muxer`,
+  local copy in `lib/mp4-muxer/`). Timestamps are relative to the range start.
+  Requires a Chromium-based browser (WebCodecs) — error status otherwise.
 - `showTriangulateMultiFrameModal()` — frame-range triangulation modal.
 - `exportLabels()` — JSON labels export.
 - `exportPoints3dH5()` — points3d H5 export.
@@ -393,7 +431,10 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `../pose/triangulation.js` — `triangulateAndReproject`,
   `storeReprojectedInstances`, `frameHasGroupedUserInstances`,
   `loadAllLazyFrames`, `triangulateMultiFrameInstances`,
-  `sessionHasCalibration`, `showCalibrationRequiredPopup`.
+  `sessionHasCalibration`, `showCalibrationRequiredPopup`,
+  `getInstanceGroupsForFrame`.
+- `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
+- `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
@@ -406,8 +447,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 **Imported by.** `ui/ui-wiring.js`.
 
 **User-facing features.** File menu Export (JSON / SLEAP File / SLEAP File By
-Cam / H5 points3d / H5 reproj), Edit menu Group-by-Track / Group-by-Identity,
-Multi-Frame Triangulate modal.
+Cam / **3D Video (.mp4)** / H5 points3d / H5 reproj), Edit menu Group-by-Track /
+Group-by-Identity, Multi-Frame Triangulate modal.
 
 ---
 
@@ -653,6 +694,13 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 `instanceGroups` already resolved by the caller — no project imports.
 
 **Key exports.**
+- Node markers: `drawNodeShape(ctx, x, y, shape, size, color)` — draws one
+  keypoint marker in one of four styles (`'circle'`, `'x'`, `'triangle'`,
+  `'square'`). All 2D node draws route through it: `drawSkeleton`
+  (normal + nulled nodes, via `options.nodeShape`), `drawReprojectedSkeleton`
+  (via `options.nodeShape`, default `'x'`), and `drawUnlinkedInstances`
+  (`instNodeShape`). `drawFrameOverlays` threads the per-type Node Style toggle
+  through as `nodeShape: {user,predicted,reproj}Opts.nodeStyle`.
 - Color: `TRACK_COLORS`, `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
   `NULL_ID_COLOR` (space gray `#a7adba` for explicit-none instances when
   coloring by identity), `getTrackColor`, `getGroupColor`,
@@ -694,6 +742,13 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `setReprojErrorVisible(visible)` — show/hide the reproj-error info
   column.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
+  Each of `userOpts` / `predictedOpts` / `reprojOpts` now carries a `nodeStyle`
+  (`'circle'`/`'x'`/`'triangle'`/`'square'`) read from the per-section Node
+  Style button group (`visUserNodeStyle` / `visPredNodeStyle` /
+  `visReprojNodeStyle`). Defaults: user `'circle'`, predicted `'x'`, reproj
+  `'circle'` — reproj matches the 3D viewer marker (also `'circle'`) per
+  issue #95. (`drawReprojectedSkeleton`'s own primitive fallback stays `'x'`
+  for direct callers; the user-facing default comes from here.)
 - `drawAllOverlays(frameIdx)` — main per-frame redraw across every view.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
@@ -925,6 +980,17 @@ no identities, both passes would emit a placeholder — the merge keeps
 exactly one (`emptyEmittedForCam` flag) so the gutter doesn't show
 the same empty camera twice.
 
+**3D-points-only projects.** `_rebuildSegments` first checks
+`_is3DPointsProject(session)` — true when the session has no cameras but its
+`instanceGroups` carry `group.points3d` (skeleton + `handleLoadPoints3dH5`).
+The normal per-camera builders enumerate `session.cameras` and so produce zero
+rows in that case, leaving an empty track panel. `_build3DPointsSegments`
+instead builds one row per track/identity directly from the InstanceGroups
+(occupancy = frames where the group has ≥1 non-null 3D keypoint), colored by
+`getTrackColor(identityId)`, under a synthetic `'3D'` camera group so the
+existing tree-grouping / draw / visibility paths work unchanged. Covered by
+`tests/test-timeline-3dpoints.js`.
+
 **Visibility panel row sizing (Phase-7 refinements).** `styles.css`
 scopes a **compact** 28×16 `.toggle-switch` (knob 12×12, travel 12px)
 to `.vis-toggle-row .toggle-switch` so the narrower toggles fit cleanly
@@ -1082,7 +1148,15 @@ still see which camera has its content collapsed.
 **Purpose.** Top-level UI wiring. Builds the menu bar, transport controls,
 keyboard handlers, visibility tab, view-mode (grid/single) switching,
 playback rate, and re-exports popular helpers like `unlinkGroup`,
-`showGroupContextMenu`, `seekToLabeledFrame`, `fitTimelineToData`.
+`showGroupContextMenu`, `seekToLabeledFrame`, `fitTimelineToData`. Transport
+buttons and the Arrow/Home/End keyboard handlers route through
+`navigateToFrame` (from `initialization.js`) so frame stepping works in a
+video-less skeleton + imported-3D-points project as well as with video. When
+there is no `videoController`, play/pause (the `btnPlay` button and the spacebar)
+drive a private timer-based stepper (`startNoVideoPlayback` /
+`stopNoVideoPlayback` / `toggleNoVideoPlayback`) that advances frames at
+`state.fps` over `[0, totalFrames-1]`, rendering each via `navigateToFrame` and
+stopping at the last frame; the step transport buttons/keys stop it first.
 
 **Key exports.**
 - Menu / setup: `setupMenus`, `setupUI`. The Tracks menu hosts both
@@ -1095,7 +1169,18 @@ playback rate, and re-exports popular helpers like `unlinkGroup`,
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. `updateColorByToggle()` reflects
   `state.colorByIdentity` on the buttons; each button's click sets the
-  state, re-renders via `drawAllOverlays`, and updates the active class.
+  state, re-renders the 2D overlays via `drawAllOverlays` AND the 3D viewer
+  via `update3DViewport` (whose `getGroupColor` closure reads
+  `state.colorByIdentity` live, so instances recolor instantly), and updates
+  the active class.
+- Node Style: the four per-section Node Style button groups
+  (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
+  `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
+  `data-value` + `drawAllOverlays` + `saveVisSettings`); they are added to
+  `visStyleIds` for persistence/restore. The handler additionally rebuilds the
+  3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
+- File ▸ "Export 3D Video" (`menuExportVideo3d`) is wired to
+  `showExport3DVideoModal()` (export-modals.js).
 - Group ops: `unlinkGroup`, `showGroupContextMenu`, `hideGroupContextMenu`.
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
@@ -1151,6 +1236,12 @@ via the options bag.
   `addCameraPyramids`, `selectCamera`, `showSelectedCameraView`,
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
   `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `dispose`.
+- Constructor options `skeletonNodeShape` (`'circle'` sphere / `'square'` cube /
+  `'triangle'` tetrahedron / `'x'` crossed bars — `updateSkeleton` builds the
+  matching node geometry) and `preserveDrawingBuffer` (keeps the WebGL buffer
+  after compositing so the canvas can be captured frame-by-frame; used by the
+  Export 3D Video modal). A second `Viewport3D` can be mounted in the export
+  modal's container, reusing this class rather than duplicating 3D code.
 
 **Imports from project modules.** None (uses the global `THREE` from CDN
 script tags).
@@ -1232,7 +1323,9 @@ filesystem enumeration, decoder rebuild.
 
 **User-facing features.** File menu Load Calibration / Load Videos /
 Load Session Folder / Load Multi-Session, all video-to-camera
-auto-matching, session-folder mode chooser.
+auto-matching, session-folder mode chooser. `handleLoadSessionFolder` calls
+`ensureNo3dImportBlockingLoad()` first, so loading a session over a
+skeleton-only 3D-points import prompts before discarding it.
 
 ---
 
@@ -1387,10 +1480,18 @@ saveAs, saveProjectSlp, saveProject), load dispatcher
 loading-overlay/status-text UI helpers.
 
 **Key exports.**
-- Project: `newProject`, `markDirty`, `clearDirty`, `quickSave`,
+- Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
+  is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject`.
 - Status / overlay: `showLoading(msg)`, `hideLoading`,
   `setStatus(text, type)`.
+- 3D-import guard: `confirmDiscardImported3D()` (two-button warning modal,
+  Promise<boolean>) and `ensureNo3dImportBlockingLoad()` — called at the top of
+  the session-load entry points (`handleLoadProject`, `handleLoadSlpFile`,
+  `handleLoadSessionFolder`). When `state.has3dImportWithoutSession` is set
+  (3D points imported into a skeleton-only project), it warns and, on confirm,
+  fully resets via `newProject(true)` so nothing — not even the skeleton —
+  survives before the session loads. `newProject` clears the flag.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`,
@@ -1432,7 +1533,18 @@ current session, overlay reprojected points3d from H5.
   per-session video-load failure (failed session is dropped from
   `state.sessions`).
 - `handleAddSlp()` — additive merge into current session.
-- `handleLoadPoints3dH5()` — overlay 3D points from H5.
+- `handleLoadPoints3dH5()` — overlay 3D points from H5. Requires only a loaded
+  **skeleton** (not a full session): a camera-less skeleton-only project is
+  accepted, the 3D viewport is force-created (bypassing the calibration gate)
+  so the points render, and `state.has3dImportWithoutSession` is set so a later
+  session load warns + resets (see `ensureNo3dImportBlockingLoad` in
+  `save-load.js`). For a skeleton-only project there is no video to define a
+  frame count, so it adopts the file's full duration (max `frame_indices` + 1)
+  as `state.totalFrames`, calls `timeline.setTotalFrames`, and writes the
+  `#totalFrames` counter DOM directly (it must NOT call `updateTotalFrames()`,
+  which reads decoder sample counts and would reset the count to 0), making
+  every frame navigable (otherwise only frame 0 would be reachable). The H5
+  `track_names` / n-tracks dimension carries the identity/track assignment.
 - `importSlpProjectWithProgress({ sessions, state, decoderFactory })` —
   testable entry point that loads a multi-session project through the
   progress modal. Sessions load SEQUENTIALLY; videos within a session load

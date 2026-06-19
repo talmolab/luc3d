@@ -28,6 +28,13 @@ python3 -m http.server 8080
 - sleap-io.js 0.2.1 (local copy in `lib/sleap-io/`, client-side SLP export)
 - All loaded via script tags / import maps in index.html
 
+## UI Conventions
+**Modals must close on `Esc`** unless explicitly stated otherwise. When building
+or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
+`Escape` (and removes the listener on close). For a modal mid-operation (e.g. an
+in-progress export), `Esc` should cancel/stop that operation rather than tear the
+modal down. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
+
 ## Tests
 Browser-based tests in `tests/test-runner.html`. Open in browser to run.
 

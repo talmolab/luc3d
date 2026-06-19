@@ -385,6 +385,59 @@ export function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, f
  * @param {number}  [options.canvasHeight]
  * @param {boolean} [options.showLabels]   - Draw node name labels (default: false)
  */
+/**
+ * Draw a single keypoint marker in one of four styles.
+ * Shapes: 'circle' (filled disc), 'x' (cross), 'triangle' (filled), 'square'
+ * (filled). `size` is the circle radius; the other shapes are scaled to read
+ * at a comparable visual weight.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} x  canvas x
+ * @param {number} y  canvas y
+ * @param {string} shape  'circle' | 'x' | 'triangle' | 'square'
+ * @param {number} size  base node size (circle radius)
+ * @param {string} color
+ */
+export function drawNodeShape(ctx, x, y, shape, size, color) {
+    switch (shape) {
+        case 'x': {
+            var xr = size * 0.9;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = Math.max(2, size * 0.35);
+            ctx.beginPath();
+            ctx.moveTo(x - xr, y - xr); ctx.lineTo(x + xr, y + xr);
+            ctx.moveTo(x + xr, y - xr); ctx.lineTo(x - xr, y + xr);
+            ctx.stroke();
+            break;
+        }
+        case 'square': {
+            var s = size * 1.6;
+            ctx.fillStyle = color;
+            ctx.fillRect(x - s / 2, y - s / 2, s, s);
+            break;
+        }
+        case 'triangle': {
+            var r = size * 1.3;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(x, y - r);
+            ctx.lineTo(x + r * 0.866, y + r * 0.5);
+            ctx.lineTo(x - r * 0.866, y + r * 0.5);
+            ctx.closePath();
+            ctx.fill();
+            break;
+        }
+        case 'circle':
+        default: {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+        }
+    }
+}
+
 export function drawSkeleton(ctx, instance, skeleton, options) {
     options = options || {};
     const points = instance.points;
@@ -488,45 +541,19 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
 
     // --- 2. Draw nodes ---
     // Normal nodes
-    ctx.fillStyle = color;
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
         if (nulledNodes && nulledNodes.has(i)) continue;
-        if (nodeShape === 'x') {
-            var xr = nodeSize * 0.9;
-            ctx.strokeStyle = color;
-            ctx.lineWidth = Math.max(2, nodeSize * 0.35);
-            ctx.beginPath();
-            ctx.moveTo(cp.x - xr, cp.y - xr); ctx.lineTo(cp.x + xr, cp.y + xr);
-            ctx.moveTo(cp.x + xr, cp.y - xr); ctx.lineTo(cp.x - xr, cp.y + xr);
-            ctx.stroke();
-        } else {
-            ctx.beginPath();
-            ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
-            ctx.fill();
-        }
+        drawNodeShape(ctx, cp.x, cp.y, nodeShape, nodeSize, color);
     }
     // Grayed-out (nulled) nodes
     if (nulledNodes && nulledNodes.size > 0) {
-        ctx.fillStyle = '#aaaaaa';
         ctx.globalAlpha = alpha * 0.55;
         for (const ni of nulledNodes) {
             const cp = canvasPoints[ni];
             if (!cp) continue;
-            if (nodeShape === 'x') {
-                var xr = nodeSize * 0.9;
-                ctx.strokeStyle = '#888888';
-                ctx.lineWidth = Math.max(2, nodeSize * 0.35);
-                ctx.beginPath();
-                ctx.moveTo(cp.x - xr, cp.y - xr); ctx.lineTo(cp.x + xr, cp.y + xr);
-                ctx.moveTo(cp.x + xr, cp.y - xr); ctx.lineTo(cp.x - xr, cp.y + xr);
-                ctx.stroke();
-            } else {
-                ctx.beginPath();
-                ctx.arc(cp.x, cp.y, nodeSize, 0, Math.PI * 2);
-                ctx.fill();
-            }
+            drawNodeShape(ctx, cp.x, cp.y, nodeShape, nodeSize, '#999999');
         }
         ctx.globalAlpha = alpha;
     }
@@ -646,20 +673,15 @@ export function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, option
         ctx.setLineDash([]);
     }
 
-    // --- 2. Draw X markers (designated reprojection color) ---
-    ctx.strokeStyle = color;
-    const arm = markerSize;  // length from center to tip of each arm
+    // --- 2. Draw markers (designated reprojection color) ---
+    // Primitive default stays 'x' for backwards compatibility; the user-facing
+    // default (reproj marker = 3D marker = circle, issue #95) is supplied by
+    // getVisibilitySettings via options.nodeShape at the production call sites.
+    const reprojShape = options.nodeShape || 'x';
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
-        ctx.beginPath();
-        // First stroke of X: top-left to bottom-right
-        ctx.moveTo(cp.x - arm, cp.y - arm);
-        ctx.lineTo(cp.x + arm, cp.y + arm);
-        // Second stroke of X: top-right to bottom-left
-        ctx.moveTo(cp.x + arm, cp.y - arm);
-        ctx.lineTo(cp.x - arm, cp.y + arm);
-        ctx.stroke();
+        drawNodeShape(ctx, cp.x, cp.y, reprojShape, markerSize, color);
     }
 
     ctx.restore();
@@ -1386,6 +1408,9 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
         const isPredicted = instance.type === 'predicted';
         const instNodeSize = isPredicted && predictedRender ? (predictedRender.nodeSize || nodeSize) : nodeSize;
         const instLineWidth = isPredicted && predictedRender ? (predictedRender.lineWidth || lineWidth) : lineWidth;
+        const instNodeShape = isPredicted && predictedRender
+            ? (predictedRender.nodeStyle || 'circle')
+            : (options.nodeStyle || 'circle');
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
@@ -1456,25 +1481,19 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
         }
 
         // Normal nodes
-        ctx.fillStyle = color;
         for (let i = 0; i < canvasPoints.length; i++) {
             const cp = canvasPoints[i];
             if (!cp) continue;
             if (nulledNodes && nulledNodes.has(i)) continue;
-            ctx.beginPath();
-            ctx.arc(cp.x, cp.y, instNodeSize, 0, Math.PI * 2);
-            ctx.fill();
+            drawNodeShape(ctx, cp.x, cp.y, instNodeShape, instNodeSize, color);
         }
         // Grayed-out (nulled) nodes
         if (nulledNodes && nulledNodes.size > 0) {
-            ctx.fillStyle = '#aaaaaa';
             ctx.globalAlpha = alpha * 0.55;
             for (const ni of nulledNodes) {
                 const cp = canvasPoints[ni];
                 if (!cp) continue;
-                ctx.beginPath();
-                ctx.arc(cp.x, cp.y, instNodeSize, 0, Math.PI * 2);
-                ctx.fill();
+                drawNodeShape(ctx, cp.x, cp.y, instNodeShape, instNodeSize, '#999999');
             }
             ctx.globalAlpha = alpha;
         }
@@ -1691,7 +1710,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                         color: reprojXColor,
                         edgeColor: isSelected ? '#ffffff' : reprojTrackColor,
                         lineStyle: reprojOpts.lineStyle || 'dotted',
-                        nodeShape: 'x',
+                        nodeShape: reprojOpts.nodeStyle || 'circle',
                     }));
 
                     if (reprojOpts.showLabels) {
@@ -1715,6 +1734,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                         drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
                             color: reprojXColor,
                             edgeColor: reprojTrackColor,
+                            nodeShape: reprojOpts.nodeStyle || 'circle',
                         }));
                     }
                 }
@@ -1760,6 +1780,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                 edgeColor: isSelected ? '#ffffff' : desaturateColor(baseColor, 0.4),
                 alpha: drawAlpha,
                 lineStyle: predictedOpts.postLineStyle || 'solid',
+                nodeShape: predictedOpts.nodeStyle || 'x',
             }));
         }
     }
@@ -1791,6 +1812,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             drawSkeleton(ctx, inst, skeleton, Object.assign({}, userRender, {
                 color: drawColor,
                 lineStyle: userOpts.postLineStyle || 'solid',
+                nodeShape: userOpts.nodeStyle || 'circle',
             }));
 
             userInstances.push(inst);
