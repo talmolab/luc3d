@@ -39,10 +39,80 @@ import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js
 import { handleLoadSlpFile } from './slp-import.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 
-export function newProject() {
-    if (state.session || state.views.length > 0) {
+/**
+ * Confirmation modal shown when the user starts loading a real session while
+ * 3D points were imported into a skeleton-only project. Resolves true to
+ * proceed (and discard), false to cancel. Styled like
+ * showCalibrationRequiredPopup but with two buttons.
+ */
+export function confirmDiscardImported3D() {
+    return new Promise(function (resolve) {
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;';
+        var card = document.createElement('div');
+        card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:440px;width:90%;text-align:center;';
+        var icon = document.createElement('div');
+        icon.style.cssText = 'font-size:36px;margin-bottom:12px;';
+        icon.textContent = '⚠';
+        card.appendChild(icon);
+        var title = document.createElement('div');
+        title.style.cssText = 'color:#fff;font-size:16px;font-weight:600;margin-bottom:8px;';
+        title.textContent = 'Discard imported 3D points?';
+        card.appendChild(title);
+        var msg = document.createElement('div');
+        msg.style.cssText = 'color:#aaa;font-size:13px;margin-bottom:18px;line-height:1.5;';
+        msg.textContent = 'Importing a session will remove all imported 3D point information, including the loaded skeleton. This cannot be undone. Continue and load the session?';
+        card.appendChild(msg);
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:10px;justify-content:center;';
+        var cancelBtn = document.createElement('button');
+        cancelBtn.style.cssText = 'padding:8px 20px;font-size:14px;cursor:pointer;background:var(--bg-tertiary,#2a2a2a);color:#ddd;border:1px solid var(--border-color,#444);border-radius:6px;';
+        cancelBtn.textContent = 'Cancel';
+        var okBtn = document.createElement('button');
+        okBtn.style.cssText = 'padding:8px 20px;font-size:14px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
+        okBtn.textContent = 'Load Session';
+        row.appendChild(cancelBtn);
+        row.appendChild(okBtn);
+        card.appendChild(row);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        function done(result) {
+            overlay.remove();
+            document.removeEventListener('keydown', onKey);
+            resolve(result);
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); done(false); }
+            else if (e.key === 'Enter') { e.preventDefault(); done(true); }
+        }
+        document.addEventListener('keydown', onKey);
+        cancelBtn.addEventListener('click', function () { done(false); });
+        okBtn.addEventListener('click', function () { done(true); });
+    });
+}
+
+/**
+ * Guard for session-load entry points. If the project holds 3D points imported
+ * without a session, prompt the user; on confirm, fully reset the project
+ * (nothing survives, not even the skeleton) and return true so the caller can
+ * proceed with the load. Returns false if the user cancels.
+ */
+export async function ensureNo3dImportBlockingLoad() {
+    if (!state.has3dImportWithoutSession) return true;
+    var ok = await confirmDiscardImported3D();
+    if (!ok) return false;
+    newProject(true);  // full reset, no extra confirm
+    return true;
+}
+
+export function newProject(force) {
+    if (!force && (state.session || state.views.length > 0)) {
         if (!confirm('Unsaved changes will be lost. Start a new project?')) return;
     }
+
+    // Drop the "imported 3D points without a session" marker — a full reset
+    // erases any such overlay (including the skeleton) by design.
+    state.has3dImportWithoutSession = false;
 
     // Detach interaction handlers from old canvases
     if (interactionManager) {
@@ -727,6 +797,11 @@ export function saveProject() {
 
 export async function handleLoadProject(prePickedFile) {
     try {
+        // Warn + reset if 3D points were imported into a skeleton-only project.
+        if (!(await ensureNo3dImportBlockingLoad())) {
+            setStatus('Load cancelled', 'warning');
+            return;
+        }
         var file;
         if (prePickedFile) {
             file = prePickedFile;

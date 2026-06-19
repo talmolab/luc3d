@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession } from './app-state.js';
+         getActiveSession, hasRealVideo } from './app-state.js';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -46,8 +46,11 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
+// User settings: default triangulation method + editable keyboard bindings.
+import { getDefaultTriangulationMethod, setHandler, dispatchEvent } from './settings.js';
+import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
-import { addNewInstanceSmart, update3DViewport } from '../pose/initialization.js';
+import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -60,8 +63,9 @@ import {
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
-    showSlpExportModal, showSlpExportAllModal, showTriangulateMultiFrameModal,
-    showGroupByTrackModal, groupByIdentityAndTriangulateAll,
+    showSlpExportModal, showSlpExportAllModal, showSlpExportByCamModal,
+    showTriangulateMultiFrameModal,
+    showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
 } from './export-modals.js';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
@@ -147,7 +151,18 @@ export function setupMenus() {
 
     document.getElementById('menuTriangulate').addEventListener('click', function () {
         closeMenus();
-        triangulateCurrentFrame();
+        // Implicit triangulation (menu/keyboard) uses the Settings default method.
+        triangulateCurrentFrame(getDefaultTriangulationMethod());
+    });
+
+    // Help menu: Documentation (external docs) and Settings (preferences modal).
+    document.getElementById('menuDocumentation').addEventListener('click', function () {
+        closeMenus();
+        window.open('https://talmolab.github.io/luc3d-docs/', '_blank', 'noopener');
+    });
+    document.getElementById('menuSettings').addEventListener('click', function () {
+        closeMenus();
+        showSettingsModal();
     });
 
     document.getElementById('menuTriangulateMulti').addEventListener('click', function () {
@@ -215,6 +230,7 @@ export function setupMenus() {
         state.colorByIdentity = false;
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         setStatus('Coloring by Track', 'success');
     });
 
@@ -222,6 +238,7 @@ export function setupMenus() {
         state.colorByIdentity = true;
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         setStatus('Coloring by Identity', 'success');
     });
 
@@ -818,16 +835,30 @@ export function setupMenus() {
         exportLabels();
     });
 
-    document.getElementById('menuExportSlp').addEventListener('click', function () {
-        closeMenus();
-        if (state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
-        showSlpExportAllModal();
-    });
+    // Deprecated: "Export 2D SLP (All Views)" was removed from the File menu.
+    // The handler and showSlpExportAllModal are retained but no longer wired.
+    // document.getElementById('menuExportSlp').addEventListener('click', function () {
+    //     closeMenus();
+    //     if (state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
+    //     showSlpExportAllModal();
+    // });
 
     document.getElementById('menuExportSlpPerCam').addEventListener('click', function () {
         closeMenus();
         if (!state.sessions || state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
         showSlpExportModal();
+    });
+
+    document.getElementById('menuExportSlpByCam').addEventListener('click', function () {
+        closeMenus();
+        if (!state.sessions || state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
+        showSlpExportByCamModal();
+    });
+
+    document.getElementById('menuExportVideo3d').addEventListener('click', function () {
+        closeMenus();
+        if (!state.session) { setStatus('No session to export', 'error'); return; }
+        showExport3DVideoModal();
     });
 
     document.getElementById('menuExportPoints3dH5').addEventListener('click', function () {
@@ -914,12 +945,46 @@ export function hideGroupContextMenu() {
 // UI Setup
 // ============================================
 
+// --- Video-less playback (skeleton + imported 3D points) ---------------------
+// A timer-driven frame stepper used when there is no videoController to drive
+// native playback. Steps through [0, totalFrames-1] at state.fps, rendering
+// each frame's overlays + 3D viewport via navigateToFrame.
+var _noVideoPlayTimer = null;
+
+function stopNoVideoPlayback() {
+    if (_noVideoPlayTimer) { clearTimeout(_noVideoPlayTimer); _noVideoPlayTimer = null; }
+    state.isPlaying = false;
+    onPlaybackStateChange(false);
+}
+
+function startNoVideoPlayback() {
+    if ((state.totalFrames || 1) <= 1) return;
+    state.isPlaying = true;
+    onPlaybackStateChange(true);
+    var tick = function () {
+        if (!state.isPlaying) return;
+        var fps = state.fps && state.fps > 0 ? state.fps : 30;  // re-read so FPS edits apply
+        var next = state.currentFrame + 1;
+        if (next >= state.totalFrames) { stopNoVideoPlayback(); return; }  // stop at last frame
+        navigateToFrame(next);
+        _noVideoPlayTimer = setTimeout(tick, 1000 / fps);
+    };
+    var fps0 = state.fps && state.fps > 0 ? state.fps : 30;
+    _noVideoPlayTimer = setTimeout(tick, 1000 / fps0);
+}
+
+function toggleNoVideoPlayback() {
+    if (_noVideoPlayTimer) { stopNoVideoPlayback(); return; }
+    if (state.currentFrame >= (state.totalFrames - 1)) navigateToFrame(0);  // restart from 0 at the end
+    startNoVideoPlayback();
+}
+
 export function setupUI() {
     // Transport controls
-    document.getElementById('btnFirst').addEventListener('click', function () { if (videoController) videoController.seekToFrame(0); });
-    document.getElementById('btnPrev').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame - 1); });
+    document.getElementById('btnFirst').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(0); });
+    document.getElementById('btnPrev').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); });
     document.getElementById('btnPlay').addEventListener('click', function () {
-        if (!videoController) return;
+        if (!hasRealVideo()) { toggleNoVideoPlayback(); return; }
         if (state.isPlaying) { videoController.stopPlayback(); return; }
         // Pre-load frames before starting playback for lazy sessions
         if (state.session && state.session.lazyLoader) {
@@ -932,8 +997,8 @@ export function setupUI() {
             videoController.togglePlayback();
         }
     });
-    document.getElementById('btnNext').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.currentFrame + 1); });
-    document.getElementById('btnLast').addEventListener('click', function () { if (videoController) videoController.seekToFrame(state.totalFrames - 1); });
+    document.getElementById('btnNext').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(state.currentFrame + 1); });
+    document.getElementById('btnLast').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(state.totalFrames - 1); });
 
     // Timeline toggle button — fully collapse / expand the timeline.
     document.getElementById('timelineToggleBtn').addEventListener('click', function () {
@@ -1080,7 +1145,19 @@ export function setupUI() {
 
     document.addEventListener('keydown', function (e) {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-        if (!videoController) return;
+        if (!hasRealVideo()) {
+            // Video-less project (skeleton + imported 3D points): support frame
+            // stepping + play/pause over the points3d duration even though
+            // there's no decoder.
+            switch (e.key) {
+                case 'ArrowRight': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame + 1); break;
+                case 'ArrowLeft': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); break;
+                case 'Home': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(0); break;
+                case 'End': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.totalFrames - 1); break;
+                case ' ': e.preventDefault(); toggleNoVideoPlayback(); break;
+            }
+            return;
+        }
         // Shift+R+Arrow is the rotation chord — don't also step frames.
         if (e.shiftKey && _rKeyDown) return;
 
@@ -1204,12 +1281,48 @@ export function setupUI() {
         }
     });
 
+    // Attach runtime handlers for the centrally-dispatched keyboard actions
+    // declared in the settings catalog (ui/settings.js). Their bindings are the
+    // source of truth and are editable via Settings ▸ Keyboard Shortcuts; the
+    // dedicated dispatcher below resolves each keydown to its action.
+    function toggleVisCheckbox(id) {
+        var cb = document.getElementById(id);
+        if (cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change', { bubbles: true })); }
+    }
+    setHandler('toggleUser', function () { toggleVisCheckbox('visUser'); });
+    setHandler('togglePredicted', function () { toggleVisCheckbox('visPredicted'); });
+    setHandler('toggleReproj', function () { toggleVisCheckbox('visReprojections'); });
+    setHandler('toggleErrors', function () { toggleVisCheckbox('visErrors'); });
+    setHandler('cycleViewMode', function () { toggleViewMode(); showViewIndicator(); });
+    setHandler('gridMode', function () { setGridMode(); showViewIndicator(); });
+    // Triangulate uses the Settings default method (DLT/BA).
+    setHandler('triangulate', function () { triangulateCurrentFrame(getDefaultTriangulationMethod()); });
+    setHandler('addInstance', function () { if (interactionManager) interactionManager._addNewInstance(); });
+    setHandler('ungroup', function () {
+        if (interactionManager && interactionManager.selectedInstanceGroup) {
+            unlinkGroup(interactionManager.selectedInstanceGroup);
+        }
+    });
+    setHandler('showHotkeys', function () { showHotkeysHelp(); });
+
+    // Single dispatcher for catalog-driven shortcuts. Runs before the structural
+    // handlers below; if a catalog action matches it consumes the event.
+    document.addEventListener('keydown', function (e) {
+        if (dispatchEvent(e)) e.preventDefault();
+    });
+
     // --- New keyboard shortcuts (Prompt 36) ---
     document.addEventListener('keydown', function (e) {
         // Ctrl+S / Cmd+S = Quick Save
         if (e.key === 's' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
             e.preventDefault();
             quickSave();
+            return;
+        }
+        // Cmd/Ctrl+, = open Settings (standard preferences shortcut)
+        if (e.key === ',' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            showSettingsModal();
             return;
         }
         // --- Ctrl+Shift+T = Track All ---
@@ -1297,47 +1410,9 @@ export function setupUI() {
                 }
                 break;
             }
-            case 'u': {
-                e.preventDefault();
-                var visUser = document.getElementById('visUser');
-                if (visUser) { visUser.checked = !visUser.checked; visUser.dispatchEvent(new Event('change', { bubbles: true })); }
-                break;
-            }
-            case 'p': {
-                e.preventDefault();
-                var visPred = document.getElementById('visPredicted');
-                if (visPred) { visPred.checked = !visPred.checked; visPred.dispatchEvent(new Event('change', { bubbles: true })); }
-                break;
-            }
-            case 'r': {
-                e.preventDefault();
-                var visReproj = document.getElementById('visReprojections');
-                if (visReproj) { visReproj.checked = !visReproj.checked; visReproj.dispatchEvent(new Event('change', { bubbles: true })); }
-                break;
-            }
-            case 'e': {
-                e.preventDefault();
-                var visErrors = document.getElementById('visErrors');
-                if (visErrors) { visErrors.checked = !visErrors.checked; visErrors.dispatchEvent(new Event('change', { bubbles: true })); }
-                break;
-            }
-            case 'v': {
-                e.preventDefault();
-                toggleViewMode();
-                showViewIndicator();
-                break;
-            }
-            case 'g': {
-                e.preventDefault();
-                setGridMode();
-                showViewIndicator();
-                break;
-            }
-            case 't': {
-                e.preventDefault();
-                triangulateCurrentFrame();
-                break;
-            }
+            // Other plain-key shortcuts (visibility toggles, view modes,
+            // triangulate, add-instance, ungroup, help, …) are handled by the
+            // catalog dispatcher installed above (ui/settings.js dispatchEvent).
         }
     });
 
@@ -1449,6 +1524,15 @@ export function setupUI() {
             if (container.id === 'visReprojNodeColor') {
                 updateReprojBrightnessEnabled();
             }
+            // 3D node style: rebuild the 3D skeleton with the new node geometry.
+            if (container.id === 'vis3dNodeStyle') {
+                if (viewport3d) {
+                    viewport3d.skeletonNodeShape = btn.getAttribute('data-style');
+                    var g3d = (typeof getInstanceGroupsForFrame === 'function')
+                        ? getInstanceGroupsForFrame(state.currentFrame) : [];
+                    viewport3d.setFrame(g3d);
+                }
+            }
             drawAllOverlays(state.currentFrame);
         });
     });
@@ -1484,6 +1568,7 @@ export function setupUI() {
         'visUserPreLineStyle', 'visUserPostLineStyle',
         'visPredPreLineStyle', 'visPredPostLineStyle',
         'visReprojLineStyle', 'visReprojNodeColor',
+        'visUserNodeStyle', 'visPredNodeStyle', 'visReprojNodeStyle', 'vis3dNodeStyle',
     ];
 
     function saveVisSettings() {
@@ -1760,29 +1845,18 @@ export function setupUI() {
         }
         startEditGroup(selectedGroup);
     });
-    // Triangulate / Triangulate All are split dropdowns: each opens a menu with
-    // DLT (Fast) and BA (Slow & Accurate). The menu opens on hover (CSS) and on
-    // click of the button (toggles .open so it stays open until a choice/outside
-    // click). Choosing an item runs that method and closes the menu.
+    // Triangulate / Triangulate All are hover-only dropdowns: hovering the button
+    // reveals a menu with DLT (Fast) and BA (Slow & Accurate) (shown purely via
+    // CSS :hover). The buttons themselves no longer trigger anything on click —
+    // only choosing a menu item runs that method. Implicit triangulation (the
+    // keyboard shortcut and the Edit menu) uses the Settings default method.
     function wireTriDropdown(dropdownId, buttonId, onPick) {
         var dropdown = document.getElementById(dropdownId);
-        var button = document.getElementById(buttonId);
-        if (!dropdown || !button) return;
-
-        button.addEventListener('click', function (e) {
-            e.stopPropagation();
-            var isOpen = dropdown.classList.contains('open');
-            // Close any other open tri-dropdowns first
-            document.querySelectorAll('.tri-dropdown.open').forEach(function (d) {
-                d.classList.remove('open');
-            });
-            if (!isOpen) dropdown.classList.add('open');
-        });
+        if (!dropdown) return;
 
         dropdown.querySelectorAll('.tri-dropdown-item').forEach(function (item) {
             item.addEventListener('click', function (e) {
                 e.stopPropagation();
-                dropdown.classList.remove('open');
                 onPick(item.getAttribute('data-method') === 'ba' ? 'ba' : 'dlt');
             });
         });
