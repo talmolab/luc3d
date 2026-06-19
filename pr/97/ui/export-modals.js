@@ -1030,26 +1030,66 @@ function showSkeletonMismatchPopup(detail) {
  *
  * @returns {{ camNames: string[], info: Object, cellLookup: Object[] }}
  */
+/** True when a session holds any instance (grouped or unlinked) for a camera. */
+function _sessionCameraHasData(sess, camName) {
+    if (!sess || !sess.frameGroups) return false;
+    for (var pair of sess.frameGroups) {
+        var fg = pair[1];
+        if ((fg.instances.get(camName) || []).length > 0) return true;
+        if (fg.getUnlinkedInstances(camName).length > 0) return true;
+    }
+    return false;
+}
+
 function _buildByCamMatrix() {
     var sessions = state.sessions || [];
-    var cellLookup = [];   // cellLookup[sessionIdx] = { camName: entry }
-    var info = {};         // camName -> { name, count, minOrder, maxSession }
+    var videoFiles = state.videoFiles || [];
+    // cellLookup[sessionIdx] = { camName: videoFileInfo } — a camera is present
+    // in a session ONLY when it has a real view here (a loaded video, or labeled
+    // data for SLP-only projects). session.cameras is the full *calibration*
+    // list and must NOT imply existence: a calibrated-but-unrecorded camera has
+    // no view in that session and is shown as a red ✗, not a toggle.
+    var cellLookup = sessions.map(function () { return {}; });
+    var orderInSession = sessions.map(function () { return {}; });
+    var counters = sessions.map(function () { return 0; });
 
-    for (var si = 0; si < sessions.length; si++) {
-        var entries = _buildCameraEntriesForSession(si);
-        var map = {};
-        for (var p = 0; p < entries.length; p++) {
-            var cn = entries[p].camName;
-            map[cn] = entries[p];
-            if (!info[cn]) {
-                info[cn] = { name: cn, count: 0, seen: {}, minOrder: p, maxSession: si };
+    // 1. Real camera views = loaded video files (one per recorded camera, incl.
+    //    deferred multi-session loads). Authoritative existence signal.
+    for (var vi = 0; vi < videoFiles.length; vi++) {
+        var vf = videoFiles[vi];
+        var si = (typeof vf.sessionIdx === 'number') ? vf.sessionIdx : 0;
+        if (si < 0 || si >= sessions.length) continue;
+        var cam = vf.assignedCamera || vf.name;
+        if (!cam || cellLookup[si][cam]) continue;
+        cellLookup[si][cam] = vf;
+        orderInSession[si][cam] = counters[si]++;
+    }
+
+    // 2. Cameras with labeled data but no loaded video still exist (SLP-only
+    //    projects). Stub videoFileInfo so the export path has the camera name.
+    for (var s2 = 0; s2 < sessions.length; s2++) {
+        var sessCams = sessions[s2].cameras || [];
+        for (var ci = 0; ci < sessCams.length; ci++) {
+            var cn = sessCams[ci].name;
+            if (!cn || cellLookup[s2][cn]) continue;
+            if (_sessionCameraHasData(sessions[s2], cn)) {
+                cellLookup[s2][cn] = { name: cn, videoWidth: 0, videoHeight: 0, frameCount: 0 };
+                orderInSession[s2][cn] = counters[s2]++;
             }
-            var rec = info[cn];
-            if (!rec.seen[si]) { rec.seen[si] = true; rec.count++; }
-            if (p < rec.minOrder) rec.minOrder = p;
-            if (si > rec.maxSession) rec.maxSession = si;
         }
-        cellLookup.push(map);
+    }
+
+    // 3. Aggregate per camera for column ordering.
+    var info = {};   // camName -> { name, count, minOrder, maxSession }
+    for (var s3 = 0; s3 < sessions.length; s3++) {
+        for (var cn3 in cellLookup[s3]) {
+            if (!info[cn3]) info[cn3] = { name: cn3, count: 0, minOrder: Infinity, maxSession: -1 };
+            var rec = info[cn3];
+            rec.count++;
+            var ord = orderInSession[s3][cn3];
+            if (ord < rec.minOrder) rec.minOrder = ord;
+            if (s3 > rec.maxSession) rec.maxSession = s3;
+        }
     }
 
     var camNames = Object.keys(info);
@@ -1105,12 +1145,14 @@ export function showSlpExportByCamModal() {
             + '<td class="slp-bycam-sess-col"><div class="slp-bycam-sess-name">' + sname + '</div></td>';
         for (var bc = 0; bc < camNames.length; bc++) {
             var cn2 = camNames[bc];
-            var entry = cellLookup[br][cn2];
-            if (entry) {
+            var vfInfo = cellLookup[br][cn2];
+            if (vfInfo) {
+                var cellLabel = vfInfo.slpFilename
+                    || (vfInfo.file && vfInfo.file.name) || vfInfo.name || cn2;
                 bodyHtml += '<td class="slp-bycam-cell on" data-sess="' + br + '" data-cam="' + bc + '" '
-                    + 'title="' + (entry.sourceLabel || cn2) + '">✓</td>';
+                    + 'title="' + cellLabel + '">✓</td>';
             } else {
-                bodyHtml += '<td class="slp-bycam-empty">—</td>';
+                bodyHtml += '<td class="slp-bycam-missing" title="' + cn2 + ' not in this session">✗</td>';
             }
         }
         bodyHtml += '</tr>';
@@ -1124,14 +1166,15 @@ export function showSlpExportByCamModal() {
     footHtml += '</tr>';
 
     var emptyNote = camNames.length === 0
-        ? '<div class="slp-export-note">No videos found across sessions.</div>'
+        ? '<div class="slp-export-note">No camera views found across sessions.</div>'
         : '';
 
     modal.innerHTML =
         '<h3>Export SLEAP by Camera</h3>' +
-        '<div class="slp-export-note">Each column is a video/camera found across sessions. '
-        + 'Toggle cells on (yellow) or off (gray), then Download a column to export that camera '
-        + 'across every selected session into one SLEAP file.</div>' +
+        '<div class="slp-export-note">Each column is a camera view found across sessions. '
+        + 'A green ✓ marks a session that has that view (toggle on/off); a red ✗ marks a session '
+        + 'where the view does not exist. Download a column to export that camera across every '
+        + 'selected session into one SLEAP file.</div>' +
         emptyNote +
         '<div class="slp-bycam-scroll">' +
         '<table class="data-table slp-bycam-table">' +
@@ -1200,12 +1243,12 @@ export function showSlpExportByCamModal() {
         var selections = [];
         for (var s = 0; s < sessions.length; s++) {
             if (!cellOn[cellKey(s, camName)]) continue;
-            var entry = cellLookup[s][camName];
-            if (!entry) continue;
+            var vfInfo = cellLookup[s][camName];
+            if (!vfInfo) continue;
             selections.push({
                 session: sessions[s],
                 cameraName: camName,
-                videoFileInfo: entry.videoFile,
+                videoFileInfo: vfInfo,
             });
         }
         return selections;
