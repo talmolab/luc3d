@@ -726,7 +726,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   Each of `userOpts` / `predictedOpts` / `reprojOpts` now carries a `nodeStyle`
   (`'circle'`/`'x'`/`'triangle'`/`'square'`) read from the per-section Node
   Style button group (`visUserNodeStyle` / `visPredNodeStyle` /
-  `visReprojNodeStyle`; reproj defaults to `'x'`).
+  `visReprojNodeStyle`). Defaults: user `'circle'`, predicted `'x'`, reproj
+  `'circle'` — reproj matches the 3D viewer marker (also `'circle'`) per
+  issue #95. (`drawReprojectedSkeleton`'s own primitive fallback stays `'x'`
+  for direct callers; the user-facing default comes from here.)
 - `drawAllOverlays(frameIdx)` — main per-frame redraw across every view.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
