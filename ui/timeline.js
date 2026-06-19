@@ -944,8 +944,79 @@ export class Timeline {
      * @param {Session} session
      * @private
      */
+    /**
+     * Detect a camera-less project whose only data is imported 3D points
+     * (skeleton + `handleLoadPoints3dH5`). Such a project has no cameras, so the
+     * normal per-camera track/identity builders produce zero rows; the 3D points
+     * live on InstanceGroups (group.points3d + group.identityId) instead.
+     * @private
+     */
+    _is3DPointsProject(session) {
+        if (!session || (session.cameras && session.cameras.length > 0)) return false;
+        if (!session.instanceGroups) return false;
+        for (var [, grps] of session.instanceGroups) {
+            for (var gi = 0; gi < grps.length; gi++) {
+                var pts = grps[gi].points3d;
+                if (pts && pts.some(function (p) { return p != null; })) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Build one timeline row per track/identity from imported 3D points, with a
+     * synthetic "3D" camera group so the existing tree-grouping / draw paths
+     * work unchanged. A track occupies a frame when its InstanceGroup holds at
+     * least one non-null 3D keypoint there.
+     * @private
+     */
+    _build3DPointsSegments(session) {
+        this._trackSegments = [];
+        this._trackNames = [];
+        var CAM = '3D';
+
+        var idFrames = {};   // identityId -> Set<frameIdx>
+        var idOrder = [];
+        for (var [frameIdx, groups] of session.instanceGroups) {
+            for (var gi = 0; gi < groups.length; gi++) {
+                var g = groups[gi];
+                if (!g.points3d || !g.points3d.some(function (p) { return p != null; })) continue;
+                var id = g.identityId;
+                if (id == null) continue;
+                if (!idFrames[id]) { idFrames[id] = new Set(); idOrder.push(id); }
+                idFrames[id].add(frameIdx);
+            }
+        }
+        idOrder.sort(function (a, b) { return a - b; });
+
+        for (var k = 0; k < idOrder.length; k++) {
+            var idv = idOrder[k];
+            var name = (session.tracks && session.tracks[idv]) || ('track_' + idv);
+            this._trackSegments.push({
+                trackIdx: idv,
+                cameraName: CAM,
+                color: getTrackColor(idv),
+                segments: this._framesToSegments(idFrames[idv]),
+                trackName: name,
+                treeRole: 'middle',
+                _isIdentity: true,
+            });
+            this._trackNames.push('');
+        }
+
+        if (this._trackSegments.length === 0) {
+            this._trackSegments.push({
+                trackIdx: -1, cameraName: CAM, color: null,
+                segments: [], trackName: '', treeRole: 'empty', _isIdentity: true,
+            });
+            this._trackNames.push('');
+        }
+    }
+
     _rebuildSegments(session) {
-        if (this._displayMode === 'identities') {
+        if (this._is3DPointsProject(session)) {
+            this._build3DPointsSegments(session);
+        } else if (this._displayMode === 'identities') {
             this._buildIdentitySegments(session);
         } else if (this._displayMode === 'both') {
             // Build tracks then identities, then interleave by camera so

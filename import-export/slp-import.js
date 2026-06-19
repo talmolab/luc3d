@@ -32,7 +32,7 @@ import {
     rebuildVideoController, resolveImportTrackIdx,
 } from '../loading/session-loader.js';
 import {
-    showLoading, hideLoading, setStatus, clearDirty,
+    showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
 } from './save-load.js';
 
 // Circular import — these are still defined in app.js for now. They are only
@@ -43,7 +43,7 @@ import { updateInfoPanel } from '../ui/info-panel.js';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData } from '../ui/ui-wiring.js';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
@@ -54,6 +54,11 @@ import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 
 export async function handleLoadSlpFile(slpFile) {
     try {
+        // Warn + reset if 3D points were imported into a skeleton-only project.
+        if (!(await ensureNo3dImportBlockingLoad())) {
+            setStatus('Load cancelled', 'warning');
+            return;
+        }
 
         // TODO(slp-load): wire SLP-parse phases through ui/loading-progress-modal.js
         // once the modal API stabilizes (uses the same addTask/updateTask/completeTask
@@ -1504,8 +1509,12 @@ export async function handleAddSlp() {
 
 export async function handleLoadPoints3dH5() {
     try {
-        if (!state.session) {
-            setStatus('Load an SLP or session first before loading 3D points', 'error');
+        // A full session is NOT required — only a loaded skeleton. This lets a
+        // user load a skeleton (Skeleton tab) and then overlay imported 3D
+        // points in the 3D viewer without any video/calibration.
+        var skel = state.session && state.session.skeleton;
+        if (!skel || !skel.nodes || skel.nodes.length === 0) {
+            setStatus('Load a skeleton first before loading 3D points', 'error');
             return;
         }
 
@@ -1535,6 +1544,15 @@ export async function handleLoadPoints3dH5() {
 
         // Populate InstanceGroups with 3D data
         var framesUpdated = 0;
+        var maxFrameIdx = -1;
+        // The file's full duration spans every entry in frame_indices (even
+        // frames whose keypoints are all-NaN and therefore carry no group).
+        if (ptsData.frameIndices) {
+            for (var fIdxRaw of ptsData.frameIndices) {
+                var fIdxNum = Number(fIdxRaw);
+                if (fIdxNum > maxFrameIdx) maxFrameIdx = fIdxNum;
+            }
+        }
         for (var [frameIdx, trackMap] of ptsData.points3d) {
             // Ensure instanceGroups entry exists for this frame
             if (!state.session.instanceGroups.has(frameIdx)) {
@@ -1563,21 +1581,51 @@ export async function handleLoadPoints3dH5() {
                     frameGroupsList.push(newGroup);
                 }
             }
+            if (frameIdx > maxFrameIdx) maxFrameIdx = frameIdx;
             framesUpdated++;
         }
 
-        // Refresh 3D viewport
+        // Refresh 3D viewport. Force-create it if needed — a skeleton-only
+        // project has no calibration, so update3DViewport's auto-init (which
+        // gates on calibration) would skip it; setup3DViewport only needs a
+        // session + skeleton.
+        if (!viewport3d) {
+            try { setup3DViewport(); } catch (e) { console.warn('[3D] setup for points import failed:', e); }
+        }
         if (viewport3d) {
             viewport3d.skeleton = state.session.skeleton;
             viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
         }
 
+        // If this is a skeleton-only project (no cameras/video), record that we
+        // now hold imported 3D info. Loading a real session later must warn the
+        // user and fully reset, since it would otherwise silently discard this.
+        // There is no video to define a frame count, so adopt the points3d
+        // file's full duration (max frame index + 1) as totalFrames; otherwise
+        // only frame 0 would be navigable.
+        if (!state.session.cameras || state.session.cameras.length === 0) {
+            state.has3dImportWithoutSession = true;
+            if (maxFrameIdx + 1 > (state.totalFrames || 0)) {
+                state.totalFrames = maxFrameIdx + 1;
+            }
+            // No decoders exist, so updateTotalFrames() (which reads decoder
+            // sample counts) would reset this to 0 — write the frame-counter
+            // DOM directly instead.
+            var totalEl = document.getElementById('totalFrames');
+            if (totalEl) totalEl.textContent = state.totalFrames;
+        }
+
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (timeline) timeline.setData(state.session);
+        if (timeline) {
+            timeline.setData(state.session);
+            timeline.setTotalFrames(state.totalFrames);
+        }
+        updateSeekbar(state.currentFrame);
 
         hideLoading();
-        setStatus('3D points loaded: ' + framesUpdated + ' frames, ' + ptsData.trackNames.length + ' tracks', 'success');
+        setStatus('3D points loaded: ' + framesUpdated + ' frames (duration ' +
+            state.totalFrames + '), ' + ptsData.trackNames.length + ' tracks', 'success');
     } catch (err) {
         console.error('Failed to load 3D points:', err);
         hideLoading();

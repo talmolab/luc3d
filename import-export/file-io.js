@@ -12,6 +12,7 @@
  */
 
 import { Camera, Skeleton, Instance, Identity } from '../pose/pose-data.js';
+import { validateSkeletonCompatibility } from './slp-merge.js';
 
 // ============================================
 // Generic file picker
@@ -778,7 +779,10 @@ export function buildPoints3dExportData(session) {
                 if (group.points3d) {
                     hasData = true;
                     for (let n = 0; n < Math.min(numNodes, group.points3d.length); n++) {
-                        framePts[idIdx][n] = group.points3d[n];
+                        // Missing nodes are null in the data model; leave the
+                        // [NaN,NaN,NaN] default so they round-trip back to NaN.
+                        var p = group.points3d[n];
+                        if (p != null) framePts[idIdx][n] = p;
                     }
                 }
             }
@@ -1299,7 +1303,12 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
  * @param {number} numNodes
  * @returns {Array} Point array
  */
-function _buildSioPoints(inst, numNodes, perPointScore) {
+function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
+    // nodeOrder: optional. When set, nodeOrder[canonicalIdx] = this instance's
+    // local point index, so points stored in a session's own skeleton node
+    // order are emitted in the canonical (first-session) order. Used by
+    // buildSlpLabelsMultiSession when sessions share a skeleton whose nodes
+    // are ordered differently per session (common in real SLEAP files).
     // perPointScore: optional. When set, each Point carries `score` so
     // sleap-io.js writes a non-zero `pred_points.score` for predicted
     // instances. SLEAP GUI hides predicted points below a small score
@@ -1311,13 +1320,14 @@ function _buildSioPoints(inst, numNodes, perPointScore) {
     var pts = [];
     var nulledNodes = inst.nulledNodes || null;
     for (var n = 0; n < numNodes; n++) {
-        var pt = inst.points[n];
-        var isNulled = nulledNodes && nulledNodes.has(n);
+        var src = nodeOrder ? nodeOrder[n] : n;   // canonical → local point index
+        var pt = (src == null) ? undefined : inst.points[src];
+        var isNulled = nulledNodes && src != null && nulledNodes.has(src);
         var entry;
         if (pt == null || isNulled) {
             entry = { xy: [NaN, NaN], visible: false, complete: false };
         } else {
-            var occ = inst.occluded && inst.occluded[n];
+            var occ = inst.occluded && inst.occluded[src];
             entry = { xy: [pt[0], pt[1]], visible: !occ, complete: true };
         }
         if (perPointScore != null) entry.score = perPointScore;
@@ -1356,30 +1366,59 @@ export async function exportSlpClientSide(session, cameraName, reprojAsUser, vid
  * @param {object} [instanceFilter]
  * @returns {SIO.Labels}
  */
+/** Normalize a Skeleton's node list to an array of plain name strings. */
+function _skelNodeNames(skeleton) {
+    return (skeleton.nodes || []).map(function (n) {
+        return typeof n === 'string' ? n : (n.name || '');
+    });
+}
+
+/**
+ * Validate that every selection in a multi-session export shares the same
+ * skeleton. Compatibility is *set-based* — the same node names in a different
+ * order are compatible (the export remaps each session's points into the
+ * canonical order), matching `validateSkeletonCompatibility` used on import.
+ * Only a differing node count or a missing/extra node name is a true mismatch.
+ *
+ * Returns `null` when the skeletons are compatible, otherwise a human-readable
+ * mismatch message.
+ *
+ * Pure (no SleapIO dependency) so the UI can pre-flight a multi-view download
+ * — and unit tests can assert the rule — without writing an SLP.
+ *
+ * Real SLEAP `.slp` files routinely store the same skeleton with the nodes in
+ * a different order per file, so an order-sensitive check would spuriously
+ * block legitimate cross-session exports.
+ *
+ * @param {Array<{session}>} selections
+ * @returns {string|null}
+ */
+export function findSkeletonMismatch(selections) {
+    if (!selections || selections.length < 2) return null;
+    var baseNames = _skelNodeNames(selections[0].session.skeleton);
+    for (var si = 1; si < selections.length; si++) {
+        var names = _skelNodeNames(selections[si].session.skeleton);
+        var compat = validateSkeletonCompatibility({ nodes: baseNames }, { nodes: names });
+        if (compat.error) {
+            return 'Skeleton mismatch: session ' + si + ' — ' + compat.error;
+        }
+    }
+    return null;
+}
+
 export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
     if (!selections || selections.length === 0) throw new Error('No selections provided');
 
     // 1. Validate skeleton compatibility (throw on mismatch).
+    var mismatch = findSkeletonMismatch(selections);
+    if (mismatch) throw new Error(mismatch);
+
     var baseSkel = selections[0].session.skeleton;
     var baseNodes = baseSkel.nodes.map(function (n) {
         return typeof n === 'string' ? n : (n.name || '');
     });
-    for (var si = 1; si < selections.length; si++) {
-        var s = selections[si].session.skeleton;
-        var sNodes = s.nodes.map(function (n) {
-            return typeof n === 'string' ? n : (n.name || '');
-        });
-        if (sNodes.length !== baseNodes.length) {
-            throw new Error('Skeleton mismatch: session ' + si + ' has ' + sNodes.length + ' nodes, expected ' + baseNodes.length);
-        }
-        for (var ni = 0; ni < sNodes.length; ni++) {
-            if (sNodes[ni] !== baseNodes[ni]) {
-                throw new Error('Skeleton mismatch: session ' + si + ' node[' + ni + ']="' + sNodes[ni] + '" differs from "' + baseNodes[ni] + '"');
-            }
-        }
-    }
 
     // 2. Build skeleton from first session.
     var sioNodes = baseNodes.map(function (name) { return new SIO.Node(name); });
@@ -1412,6 +1451,25 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
         var session = selections[sel].session;
         var cameraName = selections[sel].cameraName;
         var videoFileInfo = selections[sel].videoFileInfo;
+
+        // Per-session node remap: when this session's skeleton has the same
+        // node set as the canonical (first) skeleton but in a different order,
+        // its instance points must be re-indexed into the canonical order
+        // before they are written under the shared skeleton. nodeOrder[c] =
+        // this session's local point index for canonical node c (null = no
+        // remap needed, i.e. identical order or the first session).
+        var nodeOrder = null;
+        if (sel > 0) {
+            var selNames = _skelNodeNames(session.skeleton);
+            var compat = validateSkeletonCompatibility({ nodes: baseNodes }, { nodes: selNames });
+            if (compat.error) throw new Error('Skeleton mismatch: session ' + sel + ' — ' + compat.error);
+            if (compat.reorderMap) {
+                nodeOrder = new Array(numNodes);
+                for (var rm = 0; rm < compat.reorderMap.length; rm++) {
+                    nodeOrder[compat.reorderMap[rm]] = rm;
+                }
+            }
+        }
 
         var videoFilename = videoFileInfo.videoPath
             || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
@@ -1478,7 +1536,7 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
                 var inst = groupedInstances[ii];
                 var instIsPred = inst.type === 'predicted';
                 var instScore = inst.score != null ? inst.score : 1.0;
-                var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
+                var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined, nodeOrder);
                 var instTrack = null;
                 if (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < session.tracks.length) {
                     instTrack = trackByName[session.tracks[inst.trackIdx]] || null;
@@ -1498,7 +1556,7 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
                 var ugInst = ungroupedInstances[ugi];
                 var ugIsPred = ugInst.type === 'predicted';
                 var ugScore = ugInst.score != null ? ugInst.score : 1.0;
-                var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
+                var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined, nodeOrder);
                 var ugTrack = null;
                 if (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
                     ugInst.trackIdx < session.tracks.length && !usedTrackIdx[ugInst.trackIdx]) {
@@ -1517,7 +1575,7 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
                 for (var ri = 0; ri < reprojInstances.length; ri++) {
                     var rInst = reprojInstances[ri];
                     var rScore = rInst.score != null ? rInst.score : 1.0;
-                    var rPts = _buildSioPoints(rInst, numNodes, reprojAsUser ? undefined : rScore);
+                    var rPts = _buildSioPoints(rInst, numNodes, reprojAsUser ? undefined : rScore, nodeOrder);
 
                     if (reprojAsUser) {
                         frameInstances.push(new SIO.Instance({ points: rPts, skeleton: skeleton, track: null }));
@@ -2482,7 +2540,12 @@ export async function parsePoints3dH5(arrayBuffer) {
                     var z = pts3dFlat[base + 2];
 
                     if (isNaN(x) || isNaN(y) || isNaN(z)) {
-                        nodePts.push([NaN, NaN, NaN]);
+                        // Missing keypoint — use null (the app-wide convention),
+                        // NOT [NaN,NaN,NaN]. A NaN-valued point array passes the
+                        // `pt == null` guards in overlays / the 3D viewport and
+                        // ends up as a mesh at a NaN position, which poisons
+                        // Three.js bounding-sphere / fitToScene math.
+                        nodePts.push(null);
                     } else {
                         nodePts.push([x, y, z]);
                         trackHasData = true;

@@ -18,13 +18,17 @@ import {
     triangulateMultiFrameInstances,
     sessionHasCalibration,
     showCalibrationRequiredPopup,
+    getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
+import { Viewport3D } from './viewport3d.js';
+import { getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
+    findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
 } from '../import-export/file-io.js';
@@ -375,6 +379,11 @@ export async function groupByIdentityAndTriangulateAll() {
     hideLoading();
     setReprojErrorVisible(true);
     drawAllOverlays(state.currentFrame);
+    // Populate the 3D viewer for the current frame. Without this, "Triangulate
+    // All" (which routes here when identities exist) triangulated every frame
+    // but never refreshed the 3D viewport, leaving it empty — unlike single
+    // "Triangulate", which calls update3DViewport(frameIdx) at its tail.
+    update3DViewport(state.currentFrame);
     updateInfoPanel();
     setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
         totalTriangulated + ' across ' + allFrameIndices.length + ' frames', 'success');
@@ -722,7 +731,7 @@ export function showSlpExportModal() {
     }
 
     modal.innerHTML =
-        '<h3>Export 2D SLP File</h3>' +
+        '<h3>Export SLEAP File</h3>' +
         '<div class="slp-export-multi-body">' +
         '<div class="slp-export-multi-left">' +
         '<div class="slp-export-panel-label">Sessions</div>' +
@@ -960,6 +969,438 @@ export function showSlpExportModal() {
             exportBtn.disabled = false;
             exportBtn.textContent = 'Export';
         }
+    });
+}
+
+// ============================================
+// Export SLEAP by Camera Modal
+// ============================================
+
+/**
+ * Modal warning popup for a skeleton mismatch during a per-camera download.
+ * Styled after showCalibrationRequiredPopup.
+ */
+function showSkeletonMismatchPopup(detail) {
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10001;display:flex;align-items:center;justify-content:center;';
+
+    var card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:460px;width:90%;text-align:center;';
+
+    var icon = document.createElement('div');
+    icon.style.cssText = 'font-size:36px;margin-bottom:12px;';
+    icon.textContent = '⚠';
+    card.appendChild(icon);
+
+    var title = document.createElement('div');
+    title.style.cssText = 'color:#fff;font-size:16px;font-weight:600;margin-bottom:8px;';
+    title.textContent = 'Cannot Export — Skeletons Differ';
+    card.appendChild(title);
+
+    var msg = document.createElement('div');
+    msg.style.cssText = 'color:#aaa;font-size:13px;margin-bottom:16px;line-height:1.5;';
+    msg.textContent = 'The selected views belong to sessions with different skeletons. '
+        + 'A single SLEAP file requires one shared skeleton, so these views cannot be exported together. '
+        + 'Deselect the mismatched sessions and try again.';
+    card.appendChild(msg);
+
+    if (detail) {
+        var det = document.createElement('div');
+        det.style.cssText = 'color:#888;font-size:11px;margin-bottom:16px;font-family:monospace;word-break:break-word;';
+        det.textContent = detail;
+        card.appendChild(det);
+    }
+
+    var btn = document.createElement('button');
+    btn.style.cssText = 'padding:8px 24px;font-size:14px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
+    btn.textContent = 'OK';
+    function dismiss() {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+    }
+    btn.addEventListener('click', dismiss);
+    function onKey(e) {
+        if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); dismiss(); }
+    }
+    document.addEventListener('keydown', onKey);
+
+    card.appendChild(btn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+}
+
+/**
+ * Build the camera matrix for the "Export SLEAP by Camera" modal.
+ *
+ * Columns are camera-view names found across ALL sessions, ordered left→right by:
+ *   1. Session frequency (primary) — views appearing in more sessions rank higher.
+ *   2. Earliest session (tie-breaker 1) — when frequencies tie, the view whose first
+ *      session is earlier (higher in the table) ranks higher, so each session's full
+ *      camera set stays grouped before the next session's (no interleaving when
+ *      sessions don't overlap).
+ *   3. Within-session order in that first session (tie-breaker 2).
+ * A stable alphabetical fallback breaks any remaining ties deterministically.
+ *
+ * @returns {{ camNames: string[], info: Object, cellLookup: Object[] }}
+ */
+/** True when a session holds any instance (grouped or unlinked) for a camera. */
+function _sessionCameraHasData(sess, camName) {
+    if (!sess || !sess.frameGroups) return false;
+    for (var pair of sess.frameGroups) {
+        var fg = pair[1];
+        if ((fg.instances.get(camName) || []).length > 0) return true;
+        if (fg.getUnlinkedInstances(camName).length > 0) return true;
+    }
+    return false;
+}
+
+function _buildByCamMatrix() {
+    var sessions = state.sessions || [];
+    var videoFiles = state.videoFiles || [];
+    // cellLookup[sessionIdx] = { camName: videoFileInfo } — a camera is present
+    // in a session ONLY when it has a real view here (a loaded video, or labeled
+    // data for SLP-only projects). session.cameras is the full *calibration*
+    // list and must NOT imply existence: a calibrated-but-unrecorded camera has
+    // no view in that session and is shown as a red ✗, not a toggle.
+    var cellLookup = sessions.map(function () { return {}; });
+    var orderInSession = sessions.map(function () { return {}; });
+    var counters = sessions.map(function () { return 0; });
+
+    // 1. Real camera views = loaded video files (one per recorded camera, incl.
+    //    deferred multi-session loads). Authoritative existence signal.
+    for (var vi = 0; vi < videoFiles.length; vi++) {
+        var vf = videoFiles[vi];
+        var si = (typeof vf.sessionIdx === 'number') ? vf.sessionIdx : 0;
+        if (si < 0 || si >= sessions.length) continue;
+        var cam = vf.assignedCamera || vf.name;
+        if (!cam || cellLookup[si][cam]) continue;
+        cellLookup[si][cam] = vf;
+        orderInSession[si][cam] = counters[si]++;
+    }
+
+    // 2. Cameras with labeled data but no loaded video still exist (SLP-only
+    //    projects). Stub videoFileInfo so the export path has the camera name.
+    for (var s2 = 0; s2 < sessions.length; s2++) {
+        var sessCams = sessions[s2].cameras || [];
+        for (var ci = 0; ci < sessCams.length; ci++) {
+            var cn = sessCams[ci].name;
+            if (!cn || cellLookup[s2][cn]) continue;
+            if (_sessionCameraHasData(sessions[s2], cn)) {
+                cellLookup[s2][cn] = { name: cn, videoWidth: 0, videoHeight: 0, frameCount: 0 };
+                orderInSession[s2][cn] = counters[s2]++;
+            }
+        }
+    }
+
+    // 3. Aggregate per camera for column ordering. firstSession/orderInFirst are
+    //    captured on first encounter — sessions are iterated in ascending order,
+    //    so the first session that holds a camera is its earliest.
+    var info = {};   // camName -> { name, count, firstSession, orderInFirst }
+    for (var s3 = 0; s3 < sessions.length; s3++) {
+        for (var cn3 in cellLookup[s3]) {
+            if (!info[cn3]) {
+                info[cn3] = { name: cn3, count: 0, firstSession: s3, orderInFirst: orderInSession[s3][cn3] };
+            }
+            info[cn3].count++;
+        }
+    }
+
+    // Ordering (left → right):
+    //   1. Session frequency (primary) — a camera in more sessions ranks higher.
+    //   2. Earliest session (tie-breaker) — when frequencies tie, the camera
+    //      whose first session is earlier (higher in the table) ranks higher, so
+    //      a session's whole camera set stays grouped left-to-right before the
+    //      next session's. (Non-overlapping sessions never interleave.)
+    //   3. Within-session order in that first session.
+    var camNames = Object.keys(info);
+    camNames.sort(function (a, b) {
+        var ra = info[a], rb = info[b];
+        if (rb.count !== ra.count) return rb.count - ra.count;
+        if (ra.firstSession !== rb.firstSession) return ra.firstSession - rb.firstSession;
+        if (ra.orderInFirst !== rb.orderInFirst) return ra.orderInFirst - rb.orderInFirst;
+        return a < b ? -1 : (a > b ? 1 : 0);
+    });
+
+    return { camNames: camNames, info: info, cellLookup: cellLookup };
+}
+
+export function showSlpExportByCamModal() {
+    if (!state.sessions || state.sessions.length === 0) {
+        setStatus('No sessions to export', 'warning');
+        return;
+    }
+
+    var sessions = state.sessions;
+    var matrix = _buildByCamMatrix();
+    var camNames = matrix.camNames;
+    var cellLookup = matrix.cellLookup;
+
+    // Toggle state: keyed "sessionIdx|camName". Default ON for every present cell.
+    var cellOn = {};
+    for (var si0 = 0; si0 < sessions.length; si0++) {
+        for (var ci0 = 0; ci0 < camNames.length; ci0++) {
+            if (cellLookup[si0][camNames[ci0]]) cellOn[si0 + '|' + camNames[ci0]] = true;
+        }
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal slp-export-modal slp-bycam-modal';
+
+    function cellKey(si, cn) { return si + '|' + cn; }
+
+    // ---- Build markup ----
+    // Two separate, independently-scrollable panels (session names | camera
+    // grid) with a small gap. Row heights are pinned in CSS so the two stay
+    // vertically aligned; vertical scroll is mirrored between them in JS. The
+    // session side is a div-list (not a table) so width:max-content lets long
+    // names widen it and scroll horizontally — a <table> won't grow its cell to
+    // overflowing content for scroll purposes.
+    var sessHtml = '<div class="slp-bycam-sess-inner">'
+        + '<div class="slp-bycam-sess-cell-d slp-bycam-sess-h-row">Session</div>';
+    for (var br = 0; br < sessions.length; br++) {
+        var sname = sessions[br].name || ('Session ' + (br + 1));
+        sessHtml += '<div class="slp-bycam-sess-cell-d slp-bycam-sess-row" title="' + sname + '">' + sname + '</div>';
+    }
+    sessHtml += '<div class="slp-bycam-sess-cell-d slp-bycam-sess-foot-row"></div></div>';
+
+    // Right: camera grid table (header = camera names, footer = Download).
+    var camHead = '<thead><tr>';
+    for (var hc = 0; hc < camNames.length; hc++) {
+        camHead += '<th class="slp-bycam-cam-head" title="' + camNames[hc] + '">'
+            + '<div class="slp-bycam-cam-name">' + camNames[hc] + '</div></th>';
+    }
+    camHead += '</tr></thead>';
+
+    var camBody = '<tbody>';
+    for (var cbr = 0; cbr < sessions.length; cbr++) {
+        camBody += '<tr>';
+        for (var bc = 0; bc < camNames.length; bc++) {
+            var cn2 = camNames[bc];
+            var vfInfo = cellLookup[cbr][cn2];
+            if (vfInfo) {
+                var cellLabel = vfInfo.slpFilename
+                    || (vfInfo.file && vfInfo.file.name) || vfInfo.name || cn2;
+                camBody += '<td class="slp-bycam-cell on" data-sess="' + cbr + '" data-cam="' + bc + '" '
+                    + 'title="' + cellLabel + '">✓</td>';
+            } else {
+                camBody += '<td class="slp-bycam-missing" title="' + cn2 + ' not in this session">✗</td>';
+            }
+        }
+        camBody += '</tr>';
+    }
+    camBody += '</tbody>';
+
+    var camFoot = '<tfoot><tr>';
+    for (var fc = 0; fc < camNames.length; fc++) {
+        camFoot += '<td class="slp-bycam-dl-cell">'
+            + '<button class="slp-bycam-dl-btn" data-cam="' + fc + '">Download</button></td>';
+    }
+    camFoot += '</tr></tfoot>';
+
+    var emptyNote = camNames.length === 0
+        ? '<div class="slp-export-note">No camera views found across sessions.</div>'
+        : '';
+
+    modal.innerHTML =
+        '<h3>Export SLEAP by Camera</h3>' +
+        '<div class="slp-export-note">Each column is a camera view found across sessions. '
+        + 'A green ✓ marks a session that has that view (toggle on/off); a red ✗ marks a session '
+        + 'where the view does not exist. Download a column to export that camera across every '
+        + 'selected session into one SLEAP file.</div>' +
+        emptyNote +
+        '<div class="slp-bycam-body">' +
+        '<div class="slp-bycam-scroll slp-bycam-sess-scroll">' + sessHtml + '</div>' +
+        '<div class="slp-bycam-scroll slp-bycam-cam-scroll">' +
+        '<table class="slp-bycam-table slp-bycam-cam-table">' + camHead + camBody + camFoot + '</table>' +
+        '</div>' +
+        '</div>' +
+        '<div class="slp-bycam-skel-warning" id="slpByCamSkelWarning" style="display:none"></div>' +
+        '<div class="slp-export-options">' +
+        '<label><input type="checkbox" id="slpByCamReproj"> Save Reprojections</label>' +
+        '<span class="slp-reproj-toggle" id="slpByCamReprojToggle">' +
+        '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
+        '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
+        '</span>' +
+        '</div>' +
+        '<div class="slp-export-error" id="slpByCamError"></div>' +
+        '<div class="modal-actions">' +
+        '<button id="slpByCamClose">Close</button>' +
+        '</div>';
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Start both tables scrolled to the very left.
+    var sessScroll = modal.querySelector('.slp-bycam-sess-scroll');
+    var camScroll = modal.querySelector('.slp-bycam-cam-scroll');
+    if (sessScroll) sessScroll.scrollLeft = 0;
+    if (camScroll) camScroll.scrollLeft = 0;
+
+    // Keep the two tables row-aligned: mirror vertical scroll between them
+    // (horizontal scroll stays independent per the table's own width).
+    if (sessScroll && camScroll) {
+        var _syncing = false;
+        function mirrorV(src, dst) {
+            src.addEventListener('scroll', function () {
+                if (_syncing) return;
+                if (dst.scrollTop !== src.scrollTop) {
+                    _syncing = true;
+                    dst.scrollTop = src.scrollTop;
+                    _syncing = false;
+                }
+            });
+        }
+        mirrorV(sessScroll, camScroll);
+        mirrorV(camScroll, sessScroll);
+    }
+
+    var errorDiv = document.getElementById('slpByCamError');
+    function clearError() { errorDiv.textContent = ''; }
+    function showError(msg) { errorDiv.textContent = msg; }
+
+    // ---- Cell toggling ----
+    modal.querySelectorAll('.slp-bycam-cell').forEach(function (cell) {
+        cell.addEventListener('click', function () {
+            var si = parseInt(cell.getAttribute('data-sess'));
+            var cn = camNames[parseInt(cell.getAttribute('data-cam'))];
+            var key = cellKey(si, cn);
+            cellOn[key] = !cellOn[key];
+            if (cellOn[key]) {
+                cell.classList.add('on'); cell.classList.remove('off');
+                cell.textContent = '✓';
+            } else {
+                cell.classList.remove('on'); cell.classList.add('off');
+                cell.textContent = '';
+            }
+            clearError();
+            updateDownloadStates();
+        });
+    });
+
+    // Proactively enable/disable per-column download buttons based on whether
+    // the currently toggled-on sessions for a column have compatible skeletons.
+    // Hoisted declaration so the cell-toggle handlers above can call it.
+    function updateDownloadStates() {
+        var blocked = [];
+        modal.querySelectorAll('.slp-bycam-dl-btn').forEach(function (btn) {
+            // Don't clobber the transient state of an in-progress export.
+            if (btn.textContent === 'Exporting...') return;
+            var camName = camNames[parseInt(btn.getAttribute('data-cam'))];
+            var selections = buildColumnSelections(camName);
+            var mismatch = selections.length >= 2 ? findSkeletonMismatch(selections) : null;
+            if (mismatch) {
+                btn.disabled = true;
+                btn.title = mismatch;
+                blocked.push({ cam: camName, detail: mismatch });
+            } else {
+                btn.disabled = false;
+                btn.removeAttribute('title');
+            }
+        });
+
+        // Surface a red message under the tables explaining any blocked columns.
+        var warn = document.getElementById('slpByCamSkelWarning');
+        if (warn) {
+            if (blocked.length) {
+                warn.textContent = 'Skeleton Mismatch Across Sessions. Download Blocked';
+                warn.style.display = '';
+            } else {
+                warn.textContent = '';
+                warn.style.display = 'none';
+            }
+        }
+    }
+
+    // ---- Reprojection toggle (mirrors showSlpExportModal) ----
+    var reprojCheckbox = document.getElementById('slpByCamReproj');
+    var reprojToggle = document.getElementById('slpByCamReprojToggle');
+    var toggleOptions = reprojToggle.querySelectorAll('.slp-toggle-option');
+    function updateReprojToggleState() {
+        if (reprojCheckbox.checked) reprojToggle.classList.remove('slp-toggle-disabled');
+        else reprojToggle.classList.add('slp-toggle-disabled');
+    }
+    reprojCheckbox.addEventListener('change', updateReprojToggleState);
+    updateReprojToggleState();
+    toggleOptions.forEach(function (opt) {
+        opt.addEventListener('click', function () {
+            if (reprojCheckbox.checked) {
+                toggleOptions.forEach(function (o) { o.classList.remove('slp-toggle-active'); });
+                opt.classList.add('slp-toggle-active');
+            }
+        });
+    });
+
+    function buildColumnSelections(camName) {
+        var selections = [];
+        for (var s = 0; s < sessions.length; s++) {
+            if (!cellOn[cellKey(s, camName)]) continue;
+            var vfInfo = cellLookup[s][camName];
+            if (!vfInfo) continue;
+            selections.push({
+                session: sessions[s],
+                cameraName: camName,
+                videoFileInfo: vfInfo,
+            });
+        }
+        return selections;
+    }
+
+    function sanitizeFilename(name) {
+        var base = String(name).replace(/\.[^.\/]+$/, '');      // drop a trailing extension
+        base = base.replace(/[\\\/:*?"<>|]+/g, '_').trim();       // strip path-unsafe chars
+        return (base || 'view') + '.slp';
+    }
+
+    // ---- Per-column download ----
+    modal.querySelectorAll('.slp-bycam-dl-btn').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            clearError();
+            var camName = camNames[parseInt(btn.getAttribute('data-cam'))];
+            var selections = buildColumnSelections(camName);
+            if (selections.length === 0) {
+                showError('No sessions selected for "' + camName + '".');
+                return;
+            }
+
+            // Pre-flight skeleton compatibility — pop up on mismatch.
+            var mismatch = findSkeletonMismatch(selections);
+            if (mismatch) {
+                showSkeletonMismatchPopup(mismatch);
+                return;
+            }
+
+            var saveReproj = reprojCheckbox.checked;
+            var activeToggle = reprojToggle.querySelector('.slp-toggle-active');
+            var reprojAsUser = saveReproj
+                ? (activeToggle && activeToggle.getAttribute('data-value') === 'user')
+                : null;
+
+            var outName = sanitizeFilename(camName);
+            var origText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Exporting...';
+            try {
+                var blob = await exportSlpMultiSession(selections, reprojAsUser);
+                downloadBlob(blob, outName);
+                setStatus('Exported ' + outName + ' (' + selections.length + ' session'
+                    + (selections.length === 1 ? '' : 's') + ')', 'success');
+            } catch (err) {
+                console.error('[slp-export-bycam]', err);
+                showError(err.message || String(err));
+            } finally {
+                btn.disabled = false;
+                btn.textContent = origText;
+            }
+        });
+    });
+
+    // Set initial disabled state for all download buttons.
+    updateDownloadStates();
+
+    document.getElementById('slpByCamClose').addEventListener('click', function () {
+        overlay.remove();
     });
 }
 
@@ -1559,4 +2000,499 @@ function downloadBlob(blob, filename) {
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+// ============================================
+// Export 3D Video
+// ============================================
+
+/**
+ * Format a number of seconds as M:SS.
+ */
+function _fmtDuration(totalSeconds) {
+    var s = Math.max(0, Math.round(totalSeconds));
+    var m = Math.floor(s / 60);
+    var rem = s % 60;
+    return m + ':' + (rem < 10 ? '0' : '') + rem;
+}
+
+// Target H.264 bitrate (bits/sec) for the 3D-video encoder — must match the
+// encoder.configure() call so the size estimate and the real output agree.
+function _v3dBitrate(W, H, fps) {
+    return Math.min(24000000, Math.max(2000000, Math.round(W * H * fps * 0.12)));
+}
+
+function _fmtBytes(bytes) {
+    if (!isFinite(bytes) || bytes <= 0) return '—';
+    var units = ['B', 'KB', 'MB', 'GB'];
+    var i = 0;
+    while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+    return (bytes >= 100 ? Math.round(bytes) : bytes.toFixed(1)) + ' ' + units[i];
+}
+
+/**
+ * "Export 3D Video" modal. Reuses the existing Viewport3D panel (a second
+ * instance mounted in the modal) so the user can orbit/zoom to choose the
+ * camera angle. Controls: prev/play/next transport, a progress bar with two
+ * draggable start/end nodes (defaulted to the first/last frame) backed by two
+ * editable, validated Start/End number fields, an editable FPS, a resolution
+ * picker (360p / 720p / 1080p / 2K — sets output dims and the matching H.264
+ * level), and a live duration readout. On Export, the chosen frame range is
+ * rendered into the modal viewport at the chosen resolution and encoded to an
+ * .mp4 via WebCodecs VideoEncoder + mp4-muxer.
+ */
+export function showExport3DVideoModal() {
+    var session = getActiveSession();
+    if (!session) { setStatus('No session to export', 'error'); return; }
+
+    // Resolve the frame count to render (every frame, 0..N-1).
+    var frameCount = (state.totalFrames && state.totalFrames > 0) ? state.totalFrames : 0;
+    if (!frameCount) {
+        var maxF = -1;
+        if (session.frameGroups) for (var k of session.frameGroups.keys()) if (k > maxF) maxF = k;
+        if (session.instanceGroups) for (var k2 of session.instanceGroups.keys()) if (k2 > maxF) maxF = k2;
+        frameCount = maxF + 1;
+    }
+    if (frameCount <= 0) { setStatus('No frames to export', 'error'); return; }
+
+    var V3D_TBTN = 'padding:4px 9px;font-size:13px;line-height:1;cursor:pointer;background:var(--bg-tertiary,#2a2a2a);color:#ddd;border:1px solid var(--border-color,#444);border-radius:4px;';
+    var V3D_FIELD = 'background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:4px;font-size:13px;padding:4px 6px;';
+    var V3D_NUMF = 'width:66px;text-align:center;margin-left:4px;' + V3D_FIELD;
+    var V3D_HANDLE = 'position:absolute;top:5px;width:15px;height:15px;margin-left:-8px;border-radius:50%;background:var(--accent,#4a9eff);border:2px solid #fff;box-sizing:border-box;cursor:ew-resize;touch-action:none;z-index:2;';
+
+    // Standard output resolutions (16:9). The H.264 level in `codec` is bumped
+    // to match the resolution so the decoder advertises the right capability.
+    var V3D_RES = {
+        '360':  { w: 640,  h: 360,  codec: 'avc1.42001E', label: '360p (640×360)' },
+        '720':  { w: 1280, h: 720,  codec: 'avc1.42001F', label: '720p (1280×720)' },
+        '1080': { w: 1920, h: 1080, codec: 'avc1.420028', label: '1080p (1920×1080)' },
+        '2k':   { w: 2560, h: 1440, codec: 'avc1.420032', label: '2K (2560×1440)' },
+    };
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.style.cssText = 'width:860px;max-width:95vw;box-sizing:border-box;';
+    modal.innerHTML =
+        '<h3>Export 3D Video</h3>' +
+        '<div style="display:flex;gap:14px;align-items:stretch;">' +
+        '  <div id="v3dExportViewport" style="width:500px;height:340px;background:#1a1a1a;border-radius:6px;position:relative;overflow:hidden;flex:0 0 auto;"></div>' +
+        '  <div style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:12px;">' +
+        '    <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">Orbit and zoom the view to set the camera angle for the exported video.</div>' +
+        '    <div style="display:flex;align-items:center;gap:8px;">' +
+        '      <label style="font-size:13px;width:34px;">FPS</label>' +
+        '      <input type="number" id="v3dExportFps" min="1" max="240" step="1" style="width:74px;text-align:center;' + V3D_FIELD + '">' +
+        '    </div>' +
+        '    <div style="display:flex;align-items:center;gap:8px;">' +
+        '      <label style="font-size:13px;width:34px;">Res</label>' +
+        '      <select id="v3dExportRes" style="width:190px;max-width:100%;box-sizing:border-box;' + V3D_FIELD + '">' +
+        '        <option value="360">' + V3D_RES['360'].label + '</option>' +
+        '        <option value="720" selected>' + V3D_RES['720'].label + '</option>' +
+        '        <option value="1080">' + V3D_RES['1080'].label + '</option>' +
+        '        <option value="2k">' + V3D_RES['2k'].label + '</option>' +
+        '      </select>' +
+        '    </div>' +
+        '    <div style="font-size:12px;color:var(--text-secondary);">Duration: <span id="v3dExportDuration">0:00</span></div>' +
+        '    <div style="font-size:12px;color:var(--text-secondary);">Exported Frames: <span id="v3dExportSelCount">' + frameCount + '</span></div>' +
+        '    <div style="font-size:12px;color:var(--text-secondary);">Estimated File Size: <span id="v3dExportSize">—</span></div>' +
+        '  </div>' +
+        '</div>' +
+        '<div style="margin-top:12px;">' +
+        '  <div style="display:flex;align-items:center;gap:6px;">' +
+        '    <button id="v3dExportPrev" title="Previous frame" style="' + V3D_TBTN + '">⏮</button>' +
+        '    <button id="v3dExportPlay" title="Play / Pause" style="' + V3D_TBTN + '">▶</button>' +
+        '    <button id="v3dExportNext" title="Next frame" style="' + V3D_TBTN + '">⏭</button>' +
+        '    <div id="v3dExportTrack" style="position:relative;flex:1;height:26px;margin:0 10px;cursor:pointer;">' +
+        '      <div style="position:absolute;top:11px;left:0;right:0;height:4px;background:#444;border-radius:2px;"></div>' +
+        '      <div id="v3dExportRangeFill" style="position:absolute;top:11px;height:4px;background:var(--accent,#4a9eff);border-radius:2px;"></div>' +
+        '      <div id="v3dExportPlayhead" style="position:absolute;top:3px;width:2px;height:20px;background:#fff;opacity:0.8;margin-left:-1px;pointer-events:none;z-index:1;"></div>' +
+        '      <div id="v3dExportHandleStart" title="Start frame" style="' + V3D_HANDLE + '"></div>' +
+        '      <div id="v3dExportHandleEnd" title="End frame" style="' + V3D_HANDLE + '"></div>' +
+        '    </div>' +
+        '    <span id="v3dExportScrubVal" style="font-size:12px;min-width:48px;text-align:right;">0</span>' +
+        '  </div>' +
+        '  <div style="display:flex;align-items:center;gap:14px;margin-top:8px;font-size:12px;color:var(--text-secondary);">' +
+        '    <label>Start <input type="number" id="v3dExportStart" min="0" max="' + (frameCount - 1) + '" step="1" style="' + V3D_NUMF + '"></label>' +
+        '    <label>End <input type="number" id="v3dExportEnd" min="0" max="' + (frameCount - 1) + '" step="1" style="' + V3D_NUMF + '"></label>' +
+        '  </div>' +
+        '  <div id="v3dExportProgressWrap" style="display:none;margin-top:10px;">' +
+        '    <div style="background:#333;border-radius:4px;height:8px;overflow:hidden;">' +
+        '      <div id="v3dExportProgressFill" style="width:0%;height:100%;background:var(--accent,#4a9eff);transition:width 0.1s;"></div>' +
+        '    </div>' +
+        '    <div id="v3dExportProgressLabel" style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Encoding 0 / ' + frameCount + '</div>' +
+        '  </div>' +
+        '</div>' +
+        '<div class="modal-actions" style="margin-top:14px;display:flex;justify-content:flex-end;gap:10px;">' +
+        '  <button id="v3dExportCancel">Cancel</button>' +
+        '  <button class="primary" id="v3dExportBtn">Export</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // --- Instantiate a second Viewport3D into the modal (reuse existing panel
+    //     code; preserveDrawingBuffer so the canvas can be captured). ---
+    var containerEl = modal.querySelector('#v3dExportViewport');
+    function read3dNum(id, dflt) { var e = document.getElementById(id); return e ? (parseFloat(e.value) || dflt) : dflt; }
+    function read3dBool(id, dflt) { var e = document.getElementById(id); return e ? e.checked : dflt; }
+    var vp;
+    try {
+        vp = new Viewport3D(containerEl, {
+            cameras: session.cameras,
+            skeleton: session.skeleton,
+            getTrackColor: getTrackColor,
+            getGroupColor: function (group) {
+                return getGroupColor(group, session, state.colorByIdentity || false, state.currentFrame);
+            },
+            cameraLabelSize: read3dNum('vis3dLabelSize', 28),
+            cameraSphereSize: read3dNum('vis3dSphereSize', 3),
+            pyramidLength: read3dNum('vis3dPyramidLength', 40),
+            skeletonNodeSize: read3dNum('vis3dNodeSize', 2),
+            skeletonEdgeWeight: read3dNum('vis3dEdgeWeight', 0.8),
+            showCameraLabels: read3dBool('vis3dLabelShow', true),
+            showCameraSpheres: read3dBool('vis3dSphereShow', true),
+            showCameraPyramids: read3dBool('vis3dPyramidShow', true),
+            showSkeletonNodes: read3dBool('vis3dNodeShow', true),
+            showSkeletonEdges: read3dBool('vis3dEdgeShow', true),
+            skeletonNodeShape: (function () { var e = document.getElementById('vis3dNodeStyle'); return e ? (e.getAttribute('data-value') || 'circle') : 'circle'; })(),
+            preserveDrawingBuffer: true,
+        });
+    } catch (err) {
+        console.error('[3D video] failed to create viewport:', err);
+        overlay.remove();
+        setStatus('3D viewport unavailable (WebGL required) — cannot export 3D video', 'error');
+        return;
+    }
+    var startFrame = Math.min(state.currentFrame || 0, frameCount - 1);
+    vp.setFrame(getInstanceGroupsForFrame(startFrame));
+    setTimeout(function () { try { vp.fitToScene(); } catch (e) {} }, 150);
+
+    // --- Controls ---
+    var fpsInput = modal.querySelector('#v3dExportFps');
+    var resSelect = modal.querySelector('#v3dExportRes');
+    var durationEl = modal.querySelector('#v3dExportDuration');
+    var track = modal.querySelector('#v3dExportTrack');
+    var rangeFill = modal.querySelector('#v3dExportRangeFill');
+    var playhead = modal.querySelector('#v3dExportPlayhead');
+    var handleStart = modal.querySelector('#v3dExportHandleStart');
+    var handleEnd = modal.querySelector('#v3dExportHandleEnd');
+    var startField = modal.querySelector('#v3dExportStart');
+    var endField = modal.querySelector('#v3dExportEnd');
+    var selCountEl = modal.querySelector('#v3dExportSelCount');
+    var sizeEl = modal.querySelector('#v3dExportSize');
+    var previewValEl = modal.querySelector('#v3dExportScrubVal');
+    var prevBtn = modal.querySelector('#v3dExportPrev');
+    var playBtn = modal.querySelector('#v3dExportPlay');
+    var nextBtn = modal.querySelector('#v3dExportNext');
+    var cancelBtn = modal.querySelector('#v3dExportCancel');
+    var exportBtn = modal.querySelector('#v3dExportBtn');
+    var progressWrap = modal.querySelector('#v3dExportProgressWrap');
+    var progressFill = modal.querySelector('#v3dExportProgressFill');
+    var progressLabel = modal.querySelector('#v3dExportProgressLabel');
+
+    fpsInput.value = Math.round(state.fps || 30);
+
+    var lastIdx = frameCount - 1;
+    // Export range (inclusive) + the current preview frame.
+    var rangeStart = 0, rangeEnd = lastIdx, previewFrame = startFrame;
+    var playTimer = null;
+
+    function currentFps() {
+        var f = parseFloat(fpsInput.value);
+        if (isNaN(f) || f <= 0) f = 30;
+        if (f > 240) f = 240;
+        return f;
+    }
+    function selectedCount() { return rangeEnd - rangeStart + 1; }
+    function refreshDuration() {
+        durationEl.textContent = _fmtDuration(selectedCount() / currentFps());
+        refreshSize();
+    }
+    function refreshSize() {
+        var res = V3D_RES[resSelect.value] || V3D_RES['720'];
+        var fps = currentFps();
+        // bytes = bitrate(bits/s) × duration(s) / 8 — same bitrate the encoder uses.
+        var bytes = _v3dBitrate(res.w, res.h, fps) * (selectedCount() / fps) / 8;
+        sizeEl.textContent = _fmtBytes(bytes);
+    }
+    function pctOf(f) { return lastIdx > 0 ? (f / lastIdx) * 100 : 0; }
+
+    // Sync the track handles / fill / fields to the current range + preview.
+    function layoutTrack() {
+        handleStart.style.left = pctOf(rangeStart) + '%';
+        handleEnd.style.left = pctOf(rangeEnd) + '%';
+        rangeFill.style.left = pctOf(rangeStart) + '%';
+        rangeFill.style.width = (pctOf(rangeEnd) - pctOf(rangeStart)) + '%';
+        playhead.style.left = pctOf(previewFrame) + '%';
+        startField.value = rangeStart;
+        endField.value = rangeEnd;
+        selCountEl.textContent = selectedCount();
+        previewValEl.textContent = previewFrame;
+        refreshDuration();
+    }
+
+    // Render frame f into the modal viewport and move the playhead.
+    function showFrame(f) {
+        if (f < 0) f = 0;
+        if (f > lastIdx) f = lastIdx;
+        previewFrame = f;
+        playhead.style.left = pctOf(f) + '%';
+        previewValEl.textContent = f;
+        vp.setFrame(getInstanceGroupsForFrame(f));
+    }
+
+    function setRange(s, e) {
+        // Clamp into bounds and keep start <= end.
+        s = Math.max(0, Math.min(lastIdx, Math.round(s)));
+        e = Math.max(0, Math.min(lastIdx, Math.round(e)));
+        if (s > e) { var t = s; s = e; e = t; }
+        rangeStart = s; rangeEnd = e;
+        layoutTrack();
+    }
+
+    fpsInput.addEventListener('input', refreshDuration);
+    fpsInput.addEventListener('change', function () { fpsInput.value = Math.round(currentFps()); refreshDuration(); });
+    resSelect.addEventListener('change', refreshSize);
+
+    // --- Preview transport (play / prev / next) — plays across the range ---
+    function setPlaying(on) {
+        if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+        playBtn.textContent = on ? '⏸' : '▶';
+        if (!on) return;
+        var tick = function () {  // self-rescheduling so FPS edits take effect
+            if (previewFrame >= rangeEnd) { setPlaying(false); return; }
+            showFrame(previewFrame + 1);
+            playTimer = setTimeout(tick, 1000 / currentFps());
+        };
+        playTimer = setTimeout(tick, 1000 / currentFps());
+    }
+    function togglePlay() {
+        if (playTimer) { setPlaying(false); return; }
+        if (previewFrame >= rangeEnd || previewFrame < rangeStart) showFrame(rangeStart);
+        setPlaying(true);
+    }
+    playBtn.addEventListener('click', togglePlay);
+    prevBtn.addEventListener('click', function () { setPlaying(false); showFrame(previewFrame - 1); });
+    nextBtn.addEventListener('click', function () { setPlaying(false); showFrame(previewFrame + 1); });
+
+    // --- Draggable start/end nodes on the progress bar ---
+    var dragging = null;  // 'start' | 'end' | null
+    function frameFromClientX(clientX) {
+        var rect = track.getBoundingClientRect();
+        if (rect.width <= 0) return 0;
+        var pct = (clientX - rect.left) / rect.width;
+        pct = Math.max(0, Math.min(1, pct));
+        return Math.round(pct * lastIdx);
+    }
+    function onDragMove(ev) {
+        if (!dragging) return;
+        var f = frameFromClientX(ev.clientX);
+        // While dragging, move only the active node's bound; render on release.
+        if (dragging === 'start') setRange(Math.min(f, rangeEnd), rangeEnd);
+        else setRange(rangeStart, Math.max(f, rangeStart));
+        if (ev.cancelable) ev.preventDefault();
+    }
+    function onDragEnd() {
+        if (!dragging) return;
+        // Render the boundary frame the user just set (mouse-release only).
+        showFrame(dragging === 'start' ? rangeStart : rangeEnd);
+        dragging = null;
+        document.removeEventListener('pointermove', onDragMove);
+        document.removeEventListener('pointerup', onDragEnd);
+    }
+    function beginDrag(which, ev) {
+        if (exporting) return;
+        setPlaying(false);
+        dragging = which;
+        document.addEventListener('pointermove', onDragMove);
+        document.addEventListener('pointerup', onDragEnd);
+        if (ev.cancelable) ev.preventDefault();
+    }
+    handleStart.addEventListener('pointerdown', function (ev) { beginDrag('start', ev); });
+    handleEnd.addEventListener('pointerdown', function (ev) { beginDrag('end', ev); });
+    // Clicking the track grabs whichever node is nearer, then drags it.
+    track.addEventListener('pointerdown', function (ev) {
+        if (exporting) return;
+        if (ev.target === handleStart || ev.target === handleEnd) return;
+        var f = frameFromClientX(ev.clientX);
+        var which = Math.abs(f - rangeStart) <= Math.abs(f - rangeEnd) ? 'start' : 'end';
+        if (which === 'start') setRange(f, rangeEnd); else setRange(rangeStart, f);
+        beginDrag(which, ev);
+    });
+
+    // --- Editable Start/End fields — reject illegal input (revert on invalid) ---
+    function commitField(field, which) {
+        var raw = field.value.trim();
+        var v = Number(raw);
+        var ok = raw !== '' && Number.isInteger(v) && v >= 0 && v <= lastIdx &&
+            (which === 'start' ? v <= rangeEnd : v >= rangeStart);
+        if (!ok) {
+            // Illegal — revert to the last valid value, accept nothing.
+            field.value = (which === 'start') ? rangeStart : rangeEnd;
+            return;
+        }
+        if (which === 'start') setRange(v, rangeEnd); else setRange(rangeStart, v);
+        showFrame(v);
+    }
+    startField.addEventListener('change', function () { commitField(startField, 'start'); });
+    endField.addEventListener('change', function () { commitField(endField, 'end'); });
+
+    layoutTrack();
+    showFrame(startFrame);
+
+    var exporting = false;
+    var cancelled = false;
+
+    function cleanup() {
+        setPlaying(false);
+        document.removeEventListener('keydown', onKey);
+        try { vp.dispose(); } catch (e) {}
+        overlay.remove();
+    }
+
+    cancelBtn.addEventListener('click', function () {
+        if (exporting) { cancelled = true; return; }
+        cleanup();
+    });
+
+    // Esc closes the modal (or stops an in-progress export), per the app-wide
+    // modal convention (CLAUDE.md › Modals).
+    function onKey(e) {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        if (exporting) { cancelled = true; return; }
+        cleanup();
+    }
+    document.addEventListener('keydown', onKey);
+
+    exportBtn.addEventListener('click', async function () {
+        if (exporting) return;
+
+        if (typeof VideoEncoder === 'undefined' || typeof window.Mp4Muxer === 'undefined') {
+            setStatus('3D video export needs a Chromium-based browser (WebCodecs)', 'error');
+            return;
+        }
+
+        setPlaying(false);
+        exporting = true;
+        cancelled = false;
+        exportBtn.disabled = true;
+        fpsInput.disabled = true;
+        resSelect.disabled = true;
+        startField.disabled = true;
+        endField.disabled = true;
+        track.style.pointerEvents = 'none';
+        prevBtn.disabled = true;
+        playBtn.disabled = true;
+        nextBtn.disabled = true;
+        cancelBtn.textContent = 'Stop';
+        progressWrap.style.display = '';
+
+        var fps = currentFps();
+        var expStart = rangeStart, expEnd = rangeEnd;
+        var nFrames = expEnd - expStart + 1;
+
+        // Output at the chosen standard resolution. Render the viewport at that
+        // size (pixelRatio 1 so the buffer is exactly W×H) and match the camera
+        // aspect so the 3D content isn't distorted.
+        var res = V3D_RES[resSelect.value] || V3D_RES['720'];
+        var W = res.w, H = res.h;
+        try {
+            vp.renderer.setPixelRatio(1);
+            vp.renderer.setSize(W, H, false);
+            vp.threeCamera.aspect = W / H;
+            vp.threeCamera.updateProjectionMatrix();
+        } catch (e) { console.warn('[3D video] resize failed:', e); }
+        var src = vp.renderer.domElement;
+        var cap = document.createElement('canvas');
+        cap.width = W; cap.height = H;
+        var capCtx = cap.getContext('2d');
+
+        // Lazy sessions: ensure all frames are available before sweeping.
+        if (session.lazyLoader) {
+            try { await loadAllLazyFrames(showLoading); hideLoading(); } catch (e) {}
+        }
+
+        var muxer, encoder;
+        try {
+            muxer = new window.Mp4Muxer.Muxer({
+                target: new window.Mp4Muxer.ArrayBufferTarget(),
+                video: { codec: 'avc', width: W, height: H, frameRate: fps },
+                fastStart: 'in-memory',
+            });
+            encoder = new VideoEncoder({
+                output: function (chunk, meta) { muxer.addVideoChunk(chunk, meta); },
+                error: function (e) { console.error('[3D video] encoder error:', e); },
+            });
+            encoder.configure({
+                codec: res.codec,  // H.264 level matched to the chosen resolution
+                width: W, height: H,
+                bitrate: _v3dBitrate(W, H, fps),
+                framerate: fps,
+            });
+        } catch (err) {
+            console.error('[3D video] setup failed:', err);
+            setStatus('3D video export setup failed: ' + err.message, 'error');
+            exporting = false;
+            cleanup();
+            return;
+        }
+
+        var frameDurUs = Math.round(1e6 / fps);
+        var encodedOk = true;
+        try {
+            // Encode only the selected [expStart, expEnd] range; timestamps are
+            // relative to expStart so the clip starts at t=0.
+            for (var i = expStart; i <= expEnd; i++) {
+                if (cancelled) break;
+                var out = i - expStart;
+
+                vp.setFrame(getInstanceGroupsForFrame(i));
+                // Force a render of the chosen camera view, then snapshot it.
+                vp.renderer.render(vp.scene, vp.threeCamera);
+                capCtx.drawImage(src, 0, 0, W, H);
+
+                var vframe = new VideoFrame(cap, {
+                    timestamp: Math.round(out * 1e6 / fps),
+                    duration: frameDurUs,
+                });
+                encoder.encode(vframe, { keyFrame: (out % 60 === 0) });
+                vframe.close();
+
+                // Update progress + relieve encoder backpressure periodically.
+                if (out % 5 === 0 || i === expEnd) {
+                    var pct = Math.round(((out + 1) / nFrames) * 100);
+                    progressFill.style.width = pct + '%';
+                    progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+                while (encoder.encodeQueueSize > 12 && !cancelled) {
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+            }
+
+            if (!cancelled) {
+                progressLabel.textContent = 'Finalizing...';
+                await encoder.flush();
+                muxer.finalize();
+                var buffer = muxer.target.buffer;
+                var blob = new Blob([buffer], { type: 'video/mp4' });
+                var fname = (session.name || 'session').replace(/[^\w.-]+/g, '_') +
+                    '_3d_' + resSelect.value + '_f' + expStart + '-' + expEnd + '.mp4';
+                downloadBlob(blob, fname);
+                setStatus('3D video exported: ' + fname + ' (' + nFrames + ' frames @ ' + fps +
+                    ' fps, ' + W + '×' + H + ')', 'success');
+            } else {
+                setStatus('3D video export cancelled', 'warning');
+            }
+        } catch (err) {
+            encodedOk = false;
+            console.error('[3D video] export failed:', err);
+            setStatus('3D video export failed: ' + err.message, 'error');
+        }
+
+        try { if (encoder.state !== 'closed') encoder.close(); } catch (e) {}
+        exporting = false;
+        cleanup();
+    });
 }
