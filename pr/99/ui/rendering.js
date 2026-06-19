@@ -74,7 +74,7 @@ export function getVisibilitySettings() {
             showLabels: false,
             preLineStyle: document.getElementById('visPredPreLineStyle').getAttribute('data-value') || 'solid',
             postLineStyle: document.getElementById('visPredPostLineStyle').getAttribute('data-value') || 'solid',
-            nodeStyle: styleVal('visPredNodeStyle', 'circle'),
+            nodeStyle: styleVal('visPredNodeStyle', 'x'),
         },
         reprojOpts: {
             nodeSize: parseInt(document.getElementById('visReprojNodeSize').value) || 4,
@@ -85,7 +85,7 @@ export function getVisibilitySettings() {
             labelAlpha: parseFloat(document.getElementById('visReprojLabelAlpha').value),
             showLabels: parseInt(document.getElementById('visReprojLabelSize').value) > 0,
             lineStyle: document.getElementById('visReprojLineStyle').getAttribute('data-value') || 'dotted',
-            nodeStyle: styleVal('visReprojNodeStyle', 'x'),
+            nodeStyle: styleVal('visReprojNodeStyle', 'circle'),
         },
     };
 }

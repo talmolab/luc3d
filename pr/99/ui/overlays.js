@@ -674,8 +674,9 @@ export function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, option
     }
 
     // --- 2. Draw markers (designated reprojection color) ---
-    // Defaults to 'x' for backwards compatibility; honors the Node Style
-    // toggle when the caller supplies options.nodeShape.
+    // Primitive default stays 'x' for backwards compatibility; the user-facing
+    // default (reproj marker = 3D marker = circle, issue #95) is supplied by
+    // getVisibilitySettings via options.nodeShape at the production call sites.
     const reprojShape = options.nodeShape || 'x';
     for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
@@ -1709,7 +1710,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                         color: reprojXColor,
                         edgeColor: isSelected ? '#ffffff' : reprojTrackColor,
                         lineStyle: reprojOpts.lineStyle || 'dotted',
-                        nodeShape: reprojOpts.nodeStyle || 'x',
+                        nodeShape: reprojOpts.nodeStyle || 'circle',
                     }));
 
                     if (reprojOpts.showLabels) {
@@ -1733,7 +1734,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                         drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {
                             color: reprojXColor,
                             edgeColor: reprojTrackColor,
-                            nodeShape: reprojOpts.nodeStyle || 'x',
+                            nodeShape: reprojOpts.nodeStyle || 'circle',
                         }));
                     }
                 }
@@ -1779,7 +1780,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                 edgeColor: isSelected ? '#ffffff' : desaturateColor(baseColor, 0.4),
                 alpha: drawAlpha,
                 lineStyle: predictedOpts.postLineStyle || 'solid',
-                nodeShape: predictedOpts.nodeStyle || 'circle',
+                nodeShape: predictedOpts.nodeStyle || 'x',
             }));
         }
     }
