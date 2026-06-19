@@ -1139,40 +1139,54 @@ export function showSlpExportByCamModal() {
 
     function cellKey(si, cn) { return si + '|' + cn; }
 
-    // ---- Build table markup ----
-    var headHtml = '<tr><th class="slp-bycam-sess-col slp-bycam-corner">Session</th>';
-    for (var hc = 0; hc < camNames.length; hc++) {
-        headHtml += '<th class="slp-bycam-cam-head" title="' + camNames[hc] + '">'
-            + '<div class="slp-bycam-cam-name">' + camNames[hc] + '</div></th>';
-    }
-    headHtml += '</tr>';
-
-    var bodyHtml = '';
+    // ---- Build markup ----
+    // Two separate, independently-scrollable panels (session names | camera
+    // grid) with a small gap. Row heights are pinned in CSS so the two stay
+    // vertically aligned; vertical scroll is mirrored between them in JS. The
+    // session side is a div-list (not a table) so width:max-content lets long
+    // names widen it and scroll horizontally — a <table> won't grow its cell to
+    // overflowing content for scroll purposes.
+    var sessHtml = '<div class="slp-bycam-sess-inner">'
+        + '<div class="slp-bycam-sess-cell-d slp-bycam-sess-h-row">Session</div>';
     for (var br = 0; br < sessions.length; br++) {
         var sname = sessions[br].name || ('Session ' + (br + 1));
-        bodyHtml += '<tr>'
-            + '<td class="slp-bycam-sess-col"><div class="slp-bycam-sess-name">' + sname + '</div></td>';
+        sessHtml += '<div class="slp-bycam-sess-cell-d slp-bycam-sess-row" title="' + sname + '">' + sname + '</div>';
+    }
+    sessHtml += '<div class="slp-bycam-sess-cell-d slp-bycam-sess-foot-row"></div></div>';
+
+    // Right: camera grid table (header = camera names, footer = Download).
+    var camHead = '<thead><tr>';
+    for (var hc = 0; hc < camNames.length; hc++) {
+        camHead += '<th class="slp-bycam-cam-head" title="' + camNames[hc] + '">'
+            + '<div class="slp-bycam-cam-name">' + camNames[hc] + '</div></th>';
+    }
+    camHead += '</tr></thead>';
+
+    var camBody = '<tbody>';
+    for (var cbr = 0; cbr < sessions.length; cbr++) {
+        camBody += '<tr>';
         for (var bc = 0; bc < camNames.length; bc++) {
             var cn2 = camNames[bc];
-            var vfInfo = cellLookup[br][cn2];
+            var vfInfo = cellLookup[cbr][cn2];
             if (vfInfo) {
                 var cellLabel = vfInfo.slpFilename
                     || (vfInfo.file && vfInfo.file.name) || vfInfo.name || cn2;
-                bodyHtml += '<td class="slp-bycam-cell on" data-sess="' + br + '" data-cam="' + bc + '" '
+                camBody += '<td class="slp-bycam-cell on" data-sess="' + cbr + '" data-cam="' + bc + '" '
                     + 'title="' + cellLabel + '">✓</td>';
             } else {
-                bodyHtml += '<td class="slp-bycam-missing" title="' + cn2 + ' not in this session">✗</td>';
+                camBody += '<td class="slp-bycam-missing" title="' + cn2 + ' not in this session">✗</td>';
             }
         }
-        bodyHtml += '</tr>';
+        camBody += '</tr>';
     }
+    camBody += '</tbody>';
 
-    var footHtml = '<tr><td class="slp-bycam-sess-col slp-bycam-corner"></td>';
+    var camFoot = '<tfoot><tr>';
     for (var fc = 0; fc < camNames.length; fc++) {
-        footHtml += '<td class="slp-bycam-dl-cell">'
+        camFoot += '<td class="slp-bycam-dl-cell">'
             + '<button class="slp-bycam-dl-btn" data-cam="' + fc + '">Download</button></td>';
     }
-    footHtml += '</tr>';
+    camFoot += '</tr></tfoot>';
 
     var emptyNote = camNames.length === 0
         ? '<div class="slp-export-note">No camera views found across sessions.</div>'
@@ -1185,12 +1199,11 @@ export function showSlpExportByCamModal() {
         + 'where the view does not exist. Download a column to export that camera across every '
         + 'selected session into one SLEAP file.</div>' +
         emptyNote +
-        '<div class="slp-bycam-scroll">' +
-        '<table class="data-table slp-bycam-table">' +
-        '<thead>' + headHtml + '</thead>' +
-        '<tbody>' + bodyHtml + '</tbody>' +
-        '<tfoot>' + footHtml + '</tfoot>' +
-        '</table>' +
+        '<div class="slp-bycam-body">' +
+        '<div class="slp-bycam-scroll slp-bycam-sess-scroll">' + sessHtml + '</div>' +
+        '<div class="slp-bycam-scroll slp-bycam-cam-scroll">' +
+        '<table class="slp-bycam-table slp-bycam-cam-table">' + camHead + camBody + camFoot + '</table>' +
+        '</div>' +
         '</div>' +
         '<div class="slp-export-options">' +
         '<label><input type="checkbox" id="slpByCamReproj"> Save Reprojections</label>' +
@@ -1207,9 +1220,29 @@ export function showSlpExportByCamModal() {
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
-    // Start scrolled to the very left so the first columns are in view.
-    var scrollEl = modal.querySelector('.slp-bycam-scroll');
-    if (scrollEl) scrollEl.scrollLeft = 0;
+    // Start both tables scrolled to the very left.
+    var sessScroll = modal.querySelector('.slp-bycam-sess-scroll');
+    var camScroll = modal.querySelector('.slp-bycam-cam-scroll');
+    if (sessScroll) sessScroll.scrollLeft = 0;
+    if (camScroll) camScroll.scrollLeft = 0;
+
+    // Keep the two tables row-aligned: mirror vertical scroll between them
+    // (horizontal scroll stays independent per the table's own width).
+    if (sessScroll && camScroll) {
+        var _syncing = false;
+        function mirrorV(src, dst) {
+            src.addEventListener('scroll', function () {
+                if (_syncing) return;
+                if (dst.scrollTop !== src.scrollTop) {
+                    _syncing = true;
+                    dst.scrollTop = src.scrollTop;
+                    _syncing = false;
+                }
+            });
+        }
+        mirrorV(sessScroll, camScroll);
+        mirrorV(camScroll, sessScroll);
+    }
 
     var errorDiv = document.getElementById('slpByCamError');
     function clearError() { errorDiv.textContent = ''; }
