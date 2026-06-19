@@ -49,6 +49,15 @@ export let timeline = null;
 export let paneManager = null;
 
 export function setVideoController(v) { videoController = v; }
+
+// True only when real decodable video is loaded. A non-null `videoController`
+// is NOT sufficient: `setupEmptyVideoController()` installs one at app init
+// before any video exists, and a skeleton + imported-3D-points project keeps
+// that empty controller. Frame navigation / playback must branch on whether
+// any view actually has a decoder, not on the controller's existence.
+export function hasRealVideo() {
+    return !!(videoController && state.views && state.views.some(function (v) { return v.decoder; }));
+}
 export function setInteractionManager(v) { interactionManager = v; }
 export function setViewport3D(v) { viewport3d = v; }
 export function setTimeline(v) { timeline = v; }
