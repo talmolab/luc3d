@@ -282,6 +282,47 @@ export class Camera {
         // Back to pixel coordinates
         return [x * fx + cx, y * fy + cy];
     }
+
+    /**
+     * Apply the OpenCV distortion model to an ideal (undistorted) pixel point.
+     * Converts ideal pinhole pixel coords to the distorted pixel coords that the
+     * real (lens-distorted) camera would observe. This is the forward inverse of
+     * `undistortPoint`.
+     *
+     * Used to re-distort reprojected 3D points back into the native image space
+     * so reprojection markers and errors line up with the raw observed keypoints
+     * — without it, reprojections drift outward near the frame edges ("fisheyed
+     * coordinates") wherever radial distortion is significant.
+     *
+     * @param {number[]} point2d - [u, v] ideal (undistorted) pixel coordinates
+     * @returns {number[]} [u, v] distorted pixel coordinates
+     */
+    distortPoint(point2d) {
+        const K = this.matrix;
+        const d = this.dist;
+        if (!d || (d[0] === 0 && d[1] === 0 && d[2] === 0 && d[3] === 0 && (d.length < 5 || d[4] === 0))) {
+            return point2d; // No distortion
+        }
+
+        const fx = K[0][0], fy = K[1][1], cx = K[0][2], cy = K[1][2];
+        const k1 = d[0], k2 = d[1], p1 = d[2], p2 = d[3], k3 = d.length > 4 ? d[4] : 0;
+
+        // Ideal pixel -> normalized camera coordinates
+        const x = (point2d[0] - cx) / fx;
+        const y = (point2d[1] - cy) / fy;
+
+        const r2 = x * x + y * y;
+        const r4 = r2 * r2;
+        const r6 = r4 * r2;
+        const radial = 1 + k1 * r2 + k2 * r4 + k3 * r6;
+
+        // Tangential distortion
+        const xd = x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x);
+        const yd = y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y;
+
+        // Distorted normalized -> pixel coordinates
+        return [xd * fx + cx, yd * fy + cy];
+    }
 }
 
 

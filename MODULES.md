@@ -98,7 +98,10 @@ session graph that holds them.
   `addEdge`, `removeEdge`, static `defaultMouse()`.
 - `Camera` — intrinsics (`matrix`), distortion, rvec/tvec, image size.
   Cached getters `rotationMatrix`, `extrinsicMatrix`, `projectionMatrix`;
-  methods `project`, `projectPoints`, `undistortPoint`.
+  methods `project`, `projectPoints` (ideal pinhole, no distortion),
+  `undistortPoint` (distorted→ideal, iterative), and `distortPoint`
+  (ideal→distorted, OpenCV forward model — the inverse of `undistortPoint`,
+  used to re-distort reprojections into native pixel space).
 - `Instance` — per-view 2D keypoints with `trackIdx`, `type`
   (`user`/`predicted`/`reprojected`), `score`, `occluded[]`, `nulledNodes`.
   Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`.
@@ -270,20 +273,57 @@ propagation across frames, find-match-for-selected.
 
 ### pose/triangulation.js
 
-**Purpose.** DLT triangulation, reprojection math, fundamental-matrix /
-epipolar utilities, Hungarian assignment. Also hosts the lazy-H5 frame
-loader and the user-facing triangulation orchestration (single-frame,
-all-frames, multi-frame range).
+**Purpose.** DLT triangulation, bundle-adjustment refinement, reprojection
+math, fundamental-matrix / epipolar utilities, Hungarian assignment. Also
+hosts the lazy-H5 frame loader and the user-facing triangulation orchestration
+(single-frame, all-frames, multi-frame range).
+
+**Triangulation methods.** `'dlt'` (default) is the fast linear DLT.
+`'ba'` initializes from DLT then runs per-point Levenberg–Marquardt bundle
+adjustment minimizing geometric reprojection error (slower, more accurate).
+Cameras are fixed (calibrated), so each keypoint is refined independently.
+The method is selected via `options.method` on `triangulateAndReproject` and
+threaded through the orchestration functions; the chosen method is recorded on
+each group (`group.triangulationMethod`) and in each `state.triangulationResults`
+entry (`.method`) so the info panel can label it. Grouping operations
+(`groupByIdentityAndTriangulateAll`, group-by-track) always use DLT.
+
+**Distortion handling.** 2D keypoints on disk are lens-distorted. Triangulation
+(DLT and BA) runs in ideal pinhole space: observations are undistorted first
+(`Camera.undistortPoint`). Reprojections meant for display or error comparison
+must therefore be **re-distorted** back to native pixel space
+(`reprojectPointCamera` / `reprojectPointsCamera` → project, then
+`Camera.distortPoint`). Comparing ideal reprojections against raw distorted
+keypoints previously produced spurious error that grew toward the frame edges
+("fisheyed coordinates", issue #85) and could drive cross-view identity
+switches. The temporal-identity cost in `ui/identity-assignment.js` likewise
+projects 3D targets with distortion before measuring distance to raw detections.
+
+`triangulateAndReproject` reports the reprojection error in **both** spaces:
+`meanError`/`errors` (distorted — what is drawn and broken down per view/node)
+and `meanErrorUndistorted`/`errorsUndistorted` (ideal pinhole — the space BA
+actually minimizes). The info panel shows the two headline averages side by side
+(labelled "Distorted" / "Undistorted"); the per-view and per-node breakdowns
+remain distorted-space.
 
 **Key exports.**
+- BA math: `triangulatePointBA(observations, projMatrices, initial?, options?)`,
+  `triangulatePointsBA(allObservations, projMatrices, initialPoints?)`,
+  `triangulationMethodLabel(method)` → `'DLT'` | `'Bundle Adjustment'`.
 - Math: `triangulatePointDLT`, `triangulatePoints`, `reprojectPoint`,
-  `reprojectPoints`, `computeReprojectionError`,
+  `reprojectPoints` (ideal pinhole), `reprojectPointCamera` /
+  `reprojectPointsCamera` (project then re-distort into the camera's native
+  pixel space — use these whenever reprojections are compared against or drawn
+  over raw keypoints), `computeReprojectionError`,
   `computeReprojectionErrors`, `computeMeanReprojectionError`,
   `computeInstanceDistance`, `hungarianAlgorithm`, `cameraCenter`,
   `invert3x3`, `backProjectToRay`, `backProjectToRays`,
   `pointToRayDistance`, `pointsToRayDistances`,
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
-- Group math: `triangulateAndReproject(instanceGroup, cameras, options)`,
+- Group math: `triangulateAndReproject(instanceGroup, cameras, options)`
+  (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`; returns
+  `.method`, `.meanError`/`.errors` distorted-space and
+  `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
 - Lazy H5 loader: class `LazyFrameLoader`, `shouldUseLazyH5(file)`,
   `ensureLazyFrameData`, `buildLazyFrameGroupSync`, `batchLoadLazyFrames`,
@@ -292,9 +332,10 @@ all-frames, multi-frame range).
   sub-path deployments work — see ISSUES.md I-8) for HDF5 reads.
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
-- Orchestration: `triangulateMultiFrameInstances(start, end, onProgress)`,
-  `reTriangulateGroup`, `triangulateCurrentFrame`,
-  `triangulateAllFrames`, `sessionHasCalibration`,
+- Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,
+  `reTriangulateGroup` (preserves the group's existing method),
+  `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
+  (`method` defaults to `'dlt'`), `sessionHasCalibration`,
   `showCalibrationRequiredPopup`,
   `ensureGroupsFromIdentities(session, frameIdx)` — auto-creates a frame's
   InstanceGroups from its per-frame identity assignments (>=2-camera buckets;
@@ -853,6 +894,78 @@ the headless test runner doesn't crash on a missing `document`.
 
 ---
 
+### ui/settings.js
+
+**Purpose.** Central user-settings store: the default triangulation method
+(`'dlt'` | `'ba'`, default `'dlt'`) plus a comprehensive **catalog of every
+keyboard shortcut** (`ACTION_CATALOG`). Settings persist to `localStorage`
+(`lucid.settings.v1`) and survive reloads. The catalog is the single source of
+truth for the Settings ▸ Keyboard Shortcuts panel — see the keyboard-shortcuts
+note in `CLAUDE.md`.
+
+**Catalog entries.** `{ id, label, category, binding, editable, dispatched }`.
+`binding` is a "+"-joined accelerator (modifier tokens: `Mod` = Ctrl-or-Cmd,
+`Ctrl`, `Cmd`/`Meta`, `Shift`, `Alt`/`Option`/`Opt`; last token is the key) for
+dispatched entries, or a free-form display string (e.g. `← / →`, `1 – 9`) for
+fixed reference entries. `dispatched:true` → matched live and needs a runtime
+handler via `setHandler`; `dispatched:false` → handled by its own dedicated
+handler elsewhere and listed for reference only.
+
+**Key exports.**
+- `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
+  read/write the default method used by implicit triangulation paths.
+- `getActions()` — catalog snapshot `[{ id, label, category, binding,
+  defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
+- `getBinding(id)` — effective binding string (user override or catalog default).
+- `setHandler(id, fn)` — attach the runtime handler for a dispatched action.
+- `matchesBinding(id, e)` — true if a `KeyboardEvent` triggers the action under
+  its effective binding (combo-aware; used by `timeline-controller`-style owners
+  and by `dispatchEvent`).
+- `dispatchEvent(e)` — resolve a `KeyboardEvent` to a dispatched action and run
+  its handler (skips when typing in inputs); returns `true` if handled.
+- `applyBindings(map)` — commit an `{ id: binding }` override map (editable-only;
+  bindings equal to the default are dropped); `resetBindings()` clears all.
+- `formatBinding(str)` — prettify a binding for display.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/identity-assignment.js`,
+`ui/settings-modal.js`.
+
+---
+
+### ui/settings-modal.js
+
+**Purpose.** Builds and shows the "Settings" modal (opened from Help ▸
+Settings). Wizard-style layout: a left nav (`settings-nav`) of categories and a
+right panel area (`settings-panel-container`), with a Cancel / Apply footer.
+
+**Key exports.**
+- `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
+  `'keyboard'` | `'wizard'` (default `'triangulation'`). Single-instance.
+
+**Behavior.** Three panels: **Default Triangulation** (single-select DLT/BA
+radio rows, initialized from `getDefaultTriangulationMethod()`), **Keyboard
+Shortcuts** (the full `getActions()` catalog grouped by category — editable
+entries get a click-to-capture key chip with conflict rejection; fixed entries
+render a greyed, dashed reference chip), and **Tracking Wizard** (a "Coming
+Soon" placeholder). All edits mutate a local `working` state only (only editable
+bindings are tracked); nothing commits until **Apply**
+(`setDefaultTriangulationMethod` + `applyBindings`). Cancel / close `×` /
+backdrop click / Escape discard. A capture-phase document keydown listener makes
+the modal fully capture the keyboard (background shortcuts don't fire while it's
+open) and is removed on teardown.
+
+**Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
+`setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`).
+
+**Imported by.** `ui/ui-wiring.js`.
+
+**User-facing features.** Settings modal — choose default triangulation method,
+remap keyboard shortcuts, Tracking Wizard placeholder.
+
+---
+
 ### ui/timeline.js
 
 **Purpose.** SLEAP-like canvas timeline showing track occupancy bars,
@@ -1197,16 +1310,39 @@ header for the full list. Notable ones: `app-state.js`,
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js`, `export-modals.js`,
-`sessions-panes.js`.
+`sessions-panes.js`, `settings.js`, `settings-modal.js`.
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
 `ui/layout-controls.js`, `loading/session-loader.js`,
 `import-export/slp-import.js`.
 
-**User-facing features.** Menu bar (File / Edit / View / Help), transport
-controls (play/pause/seek/speed), keyboard shortcuts (Space, arrows,
-T, A, etc.), grid/single view toggle, info-panel/3D/timeline visibility
-toggles, "seek to next labeled frame".
+**User-facing features.** Menu bar (File / Edit / Tracks / View / Hot Keys,
+plus a right-aligned Help menu), transport controls (play/pause/seek/speed), keyboard shortcuts (Space,
+arrows, T, A, etc.), grid/single view toggle, info-panel/3D/timeline
+visibility toggles, "seek to next labeled frame".
+
+**Help menu + Settings.** The right-aligned (`margin-left:auto`) menu is
+**Help** (its dropdown opens right-aligned via `right:0`): `menuDocumentation`
+opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
+`menuSettings` opens the Settings modal via `showSettingsModal()`
+(`ui/settings-modal.js`).
+
+**Triangulate dropdowns + default method.** The toolbar `Triangulate` /
+`Triangulate All` buttons are **hover-only** split dropdowns (no click action);
+`wireTriDropdown` wires only the menu items (DLT / BA explicit picks). Implicit
+triangulation — the `t` shortcut, the Edit ▸ Triangulate menu item, and the
+auto-assign flow in `identity-assignment.js` — uses the user's default method
+from `getDefaultTriangulationMethod()` (`ui/settings.js`).
+
+**Catalog-driven keyboard shortcuts.** The dispatched shortcuts attach runtime
+handlers via `setHandler(id, fn)` (from `ui/settings.js`) and are resolved by a
+single dedicated `keydown` listener calling `dispatchEvent(e)`. This covers the
+editable plain keys (`u`/`p`/`r`/`e` toggles, `v` view mode, `g` grid, `t`
+triangulate, `n` add-instance, `?` help) plus the fixed-binding `Shift+U`
+ungroup. Their bindings live in `ACTION_CATALOG` (the single source of truth for
+the Settings panel). Other shortcuts (Save, transport, `Mod+J`, identity/track
+digits, etc.) keep their own handlers and appear in the catalog as fixed
+reference entries. `Enter`/`Escape` remain hard-coded modal-button special cases.
 
 **Block 2 (Prompt 4) visibility wiring + rename migration.** Every
 track-add / track-rename / track-delete / identity-add / identity-rename /

@@ -135,7 +135,9 @@ export function drawAllOverlays(frameIdx) {
                     points3d: _triRes.points3d,
                     reprojections: _triRes.reprojections,
                     errors: _triRes.errors,
+                    errorsUndistorted: _triRes.errorsUndistorted,
                     meanError: _triRes.meanError,
+                    meanErrorUndistorted: _triRes.meanErrorUndistorted,
                 });
             }
         }

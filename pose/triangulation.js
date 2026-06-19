@@ -323,6 +323,180 @@ export function triangulatePoints(allObservations, projectionMatrices) {
 
 
 // ============================================
+// Bundle Adjustment (non-linear refinement)
+// ============================================
+//
+// With fixed (calibrated) cameras, each 3D point is independent of the others,
+// so "bundle adjustment" here reduces to a per-point non-linear least-squares
+// refinement that minimizes the geometric reprojection error across all views.
+// DLT minimizes an *algebraic* error; this minimizes the true pixel error and
+// is therefore slower but more accurate. We solve it with Levenberg–Marquardt,
+// initialized from the DLT solution.
+
+/**
+ * Project a 3D point through a 3x4 projection matrix and compute the Jacobian
+ * of the projected (u, v) with respect to the 3D point (X, Y, Z).
+ *
+ * @param {number[]} point - [X, Y, Z]
+ * @param {number[][]} P - 3x4 projection matrix
+ * @returns {{u:number, v:number, Ju:number[], Jv:number[]}|null}
+ *   u, v: projected pixel coordinates.
+ *   Ju: [du/dX, du/dY, du/dZ], Jv: [dv/dX, dv/dY, dv/dZ].
+ *   null if the point is on/behind the principal plane (degenerate).
+ */
+function projectAndJacobian(point, P) {
+    const X = point[0], Y = point[1], Z = point[2];
+    const nu = P[0][0] * X + P[0][1] * Y + P[0][2] * Z + P[0][3];
+    const nv = P[1][0] * X + P[1][1] * Y + P[1][2] * Z + P[1][3];
+    const den = P[2][0] * X + P[2][1] * Y + P[2][2] * Z + P[2][3];
+    if (Math.abs(den) < 1e-12) return null;
+
+    const u = nu / den;
+    const v = nv / den;
+
+    // d(u)/d(Xj) = (P0j - u*P2j) / den ; d(v)/d(Xj) = (P1j - v*P2j) / den
+    const Ju = [
+        (P[0][0] - u * P[2][0]) / den,
+        (P[0][1] - u * P[2][1]) / den,
+        (P[0][2] - u * P[2][2]) / den
+    ];
+    const Jv = [
+        (P[1][0] - v * P[2][0]) / den,
+        (P[1][1] - v * P[2][1]) / den,
+        (P[1][2] - v * P[2][2]) / den
+    ];
+    return { u: u, v: v, Ju: Ju, Jv: Jv };
+}
+
+/**
+ * Refine a single 3D point by minimizing the total squared reprojection error
+ * across all views via Levenberg–Marquardt.
+ *
+ * @param {(number[]|null)[]} observations - 2D points [[x1,y1], ...] (undistorted),
+ *   null where the point is not visible in that camera.
+ * @param {number[][][]} projectionMatrices - 3x4 projection matrices, one per camera.
+ * @param {number[]|null} [initial] - Initial [X,Y,Z] guess. If null, DLT is used.
+ * @param {{maxIterations?:number, tol?:number}} [options]
+ * @returns {number[]|null} Refined [X, Y, Z], or null if < 2 valid observations.
+ */
+export function triangulatePointBA(observations, projectionMatrices, initial, options) {
+    options = options || {};
+    const maxIter = options.maxIterations || 20;
+    const tol = options.tol || 1e-8;
+
+    // Collect valid observation indices
+    const validIndices = [];
+    for (let i = 0; i < observations.length; i++) {
+        if (observations[i] != null && projectionMatrices[i] != null) {
+            validIndices.push(i);
+        }
+    }
+    if (validIndices.length < 2) return null;
+
+    // Initialize from the provided guess or fall back to DLT
+    let p;
+    if (initial && initial.length === 3 &&
+        isFinite(initial[0]) && isFinite(initial[1]) && isFinite(initial[2])) {
+        p = [initial[0], initial[1], initial[2]];
+    } else {
+        p = triangulatePointDLT(observations, projectionMatrices);
+    }
+    if (p == null) return null;
+
+    function computeCost(pt) {
+        let sum = 0;
+        for (let k = 0; k < validIndices.length; k++) {
+            const idx = validIndices[k];
+            const pr = projectAndJacobian(pt, projectionMatrices[idx]);
+            if (pr == null) return Infinity;
+            const du = observations[idx][0] - pr.u;
+            const dv = observations[idx][1] - pr.v;
+            sum += du * du + dv * dv;
+        }
+        return sum;
+    }
+
+    let lambda = 1e-3;
+    let cost = computeCost(p);
+
+    for (let iter = 0; iter < maxIter; iter++) {
+        // Accumulate normal equations: JtJ (3x3) and Jtr (3)
+        const JtJ = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+        const Jtr = [0, 0, 0];
+        let ok = true;
+        for (let k = 0; k < validIndices.length; k++) {
+            const idx = validIndices[k];
+            const pr = projectAndJacobian(p, projectionMatrices[idx]);
+            if (pr == null) { ok = false; break; }
+            const ru = observations[idx][0] - pr.u;
+            const rv = observations[idx][1] - pr.v;
+            for (let a = 0; a < 3; a++) {
+                Jtr[a] += pr.Ju[a] * ru + pr.Jv[a] * rv;
+                for (let b = 0; b < 3; b++) {
+                    JtJ[a][b] += pr.Ju[a] * pr.Ju[b] + pr.Jv[a] * pr.Jv[b];
+                }
+            }
+        }
+        if (!ok) break;
+
+        // Levenberg–Marquardt damped step; grow lambda until the cost drops.
+        let improved = false;
+        for (let attempt = 0; attempt < 8; attempt++) {
+            const A = [
+                [JtJ[0][0] * (1 + lambda), JtJ[0][1], JtJ[0][2]],
+                [JtJ[1][0], JtJ[1][1] * (1 + lambda), JtJ[1][2]],
+                [JtJ[2][0], JtJ[2][1], JtJ[2][2] * (1 + lambda)]
+            ];
+            const Ainv = invert3x3(A);
+            if (Ainv == null) { lambda *= 10; continue; }
+
+            const delta = [
+                Ainv[0][0] * Jtr[0] + Ainv[0][1] * Jtr[1] + Ainv[0][2] * Jtr[2],
+                Ainv[1][0] * Jtr[0] + Ainv[1][1] * Jtr[1] + Ainv[1][2] * Jtr[2],
+                Ainv[2][0] * Jtr[0] + Ainv[2][1] * Jtr[1] + Ainv[2][2] * Jtr[2]
+            ];
+            const pNew = [p[0] + delta[0], p[1] + delta[1], p[2] + delta[2]];
+            const newCost = computeCost(pNew);
+
+            if (newCost < cost) {
+                const stepMag = Math.abs(delta[0]) + Math.abs(delta[1]) + Math.abs(delta[2]);
+                const rel = (cost - newCost) / (cost + 1e-12);
+                p = pNew;
+                cost = newCost;
+                lambda = Math.max(lambda * 0.3, 1e-12);
+                improved = true;
+                if (stepMag < tol || rel < tol) return p;
+                break;
+            }
+            lambda *= 10;
+            if (lambda > 1e12) return p; // Converged / stuck
+        }
+        if (!improved) break;
+    }
+
+    return p;
+}
+
+/**
+ * Bundle-adjust an array of keypoints. Each keypoint is refined independently,
+ * initialized from a DLT estimate (or the supplied initial points).
+ *
+ * @param {(number[]|null)[][]} allObservations - one observation array per keypoint.
+ * @param {number[][][]} projectionMatrices - [P1, P2, ...] one per camera.
+ * @param {(number[]|null)[]} [initialPoints] - per-keypoint [X,Y,Z] initial guesses.
+ * @returns {(number[]|null)[]} Refined [X,Y,Z] or null for each keypoint.
+ */
+export function triangulatePointsBA(allObservations, projectionMatrices, initialPoints) {
+    const results = [];
+    for (let k = 0; k < allObservations.length; k++) {
+        const init = initialPoints ? initialPoints[k] : null;
+        results.push(triangulatePointBA(allObservations[k], projectionMatrices, init));
+    }
+    return results;
+}
+
+
+// ============================================
 // Reprojection
 // ============================================
 
@@ -362,6 +536,45 @@ export function reprojectPoints(points3d, projectionMatrix) {
             results.push(null);
         } else {
             results.push(reprojectPoint(points3d[i], projectionMatrix));
+        }
+    }
+    return results;
+}
+
+/**
+ * Reproject a 3D point into a camera's native (lens-distorted) pixel space:
+ * project through the ideal pinhole matrix, then apply the camera's distortion
+ * model. The result lands where the real camera observes the point, so it lines
+ * up with the raw 2D keypoints (which are never undistorted on disk).
+ *
+ * Triangulation itself works in undistorted space (observations are undistorted
+ * first), but reprojections used for display/error must be re-distorted — else
+ * markers and reprojection error blow up near the frame edges where distortion
+ * is largest.
+ *
+ * @param {number[]} point3d - [X, Y, Z]
+ * @param {Camera} camera - camera with .projectionMatrix and .distortPoint
+ * @returns {number[]} [x, y] distorted pixel point
+ */
+export function reprojectPointCamera(point3d, camera) {
+    const ideal = reprojectPoint(point3d, camera.projectionMatrix);
+    return camera.distortPoint ? camera.distortPoint(ideal) : ideal;
+}
+
+/**
+ * Reproject an array of 3D points into a camera's native (distorted) pixel space.
+ *
+ * @param {(number[]|null)[]} points3d - Array of [X,Y,Z] or null
+ * @param {Camera} camera - camera with .projectionMatrix and .distortPoint
+ * @returns {(number[]|null)[]} Array of [x,y] or null (if input point is null)
+ */
+export function reprojectPointsCamera(points3d, camera) {
+    const results = [];
+    for (let i = 0; i < points3d.length; i++) {
+        if (points3d[i] == null) {
+            results.push(null);
+        } else {
+            results.push(reprojectPointCamera(points3d[i], camera));
         }
     }
     return results;
@@ -531,18 +744,30 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         allObservations.push(obsForKeypoint);
     }
 
-    // Step 2: Triangulate
-    const points3d = triangulatePoints(allObservations, projMatrices);
+    // Step 2: Triangulate.
+    //   'dlt' (default) — fast linear DLT.
+    //   'ba'            — DLT to initialize, then non-linear bundle-adjustment
+    //                     refinement minimizing geometric reprojection error.
+    const method = (options && options.method === 'ba') ? 'ba' : 'dlt';
+    let points3d;
+    if (method === 'ba') {
+        const dltPoints = triangulatePoints(allObservations, projMatrices);
+        points3d = triangulatePointsBA(allObservations, projMatrices, dltPoints);
+    } else {
+        points3d = triangulatePoints(allObservations, projMatrices);
+    }
 
     // Fast path: skip reprojections/errors when only 3D points are needed (bulk ops)
     if (options && options.triangulateOnly) {
-        return { points3d: points3d, reprojections: {}, errors: {}, meanError: null };
+        return { points3d: points3d, reprojections: {}, errors: {}, meanError: null, method: method };
     }
 
-    // Step 3: Reproject to each camera
+    // Step 3: Reproject to each camera, in the camera's native (distorted) pixel
+    // space so reprojections align with the raw observed keypoints (the error in
+    // Step 4 compares against the raw, still-distorted observations).
     const reprojections = {};
     for (let c = 0; c < cameraNames.length; c++) {
-        reprojections[cameraNames[c]] = reprojectPoints(points3d, projMatrices[c]);
+        reprojections[cameraNames[c]] = reprojectPointsCamera(points3d, cameraMap[cameraNames[c]]);
     }
 
     // Step 4: Compute per-camera reprojection errors
@@ -576,12 +801,52 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
 
     const meanError = totalCount > 0 ? totalError / totalCount : null;
 
+    // Step 5: Undistorted-space reprojection error. This is the space BA actually
+    // optimizes in: compare the ideal (pinhole, un-distorted) reprojection against
+    // the already-undistorted observations collected in Step 1. Reported alongside
+    // the distorted-space error so the headline can show both; the per-view and
+    // per-node breakdowns continue to use the distorted-space errors above.
+    const errorsPerCameraUndistorted = {};
+    let totalErrorUndist = 0;
+    let totalCountUndist = 0;
+    for (let c = 0; c < cameraNames.length; c++) {
+        const camName = cameraNames[c];
+        // Ideal reprojection (no re-distortion) for this camera.
+        const idealReproj = reprojectPoints(points3d, projMatrices[c]);
+        // Undistorted observations for this camera, per keypoint (from Step 1).
+        const observedUndist = [];
+        for (let k = 0; k < numKeypoints; k++) {
+            observedUndist.push(allObservations[k][c]);
+        }
+        const camErrs = computeReprojectionErrors(observedUndist, idealReproj);
+        errorsPerCameraUndistorted[camName] = camErrs;
+        for (let k = 0; k < camErrs.length; k++) {
+            if (camErrs[k] != null) {
+                totalErrorUndist += camErrs[k];
+                totalCountUndist++;
+            }
+        }
+    }
+    const meanErrorUndistorted = totalCountUndist > 0 ? totalErrorUndist / totalCountUndist : null;
+
     return {
         points3d: points3d,
         reprojections: reprojections,
         errors: errorsPerCamera,
-        meanError: meanError
+        errorsUndistorted: errorsPerCameraUndistorted,
+        meanError: meanError,
+        meanErrorUndistorted: meanErrorUndistorted,
+        method: method
     };
+}
+
+/**
+ * Human-readable label for a triangulation method key.
+ * @param {string} method - 'dlt' or 'ba'
+ * @returns {string}
+ */
+export function triangulationMethodLabel(method) {
+    return method === 'ba' ? 'Bundle Adjustment' : 'DLT';
 }
 
 // ============================================
@@ -1040,7 +1305,8 @@ export function storeReprojectedInstances(group, triangulationResult, allCameras
         var cam = allCameras[ci];
         var reprojPts = triangulationResult.reprojections[cam.name];
         if (!reprojPts && cam.projectionMatrix) {
-            reprojPts = reprojectPoints(triangulationResult.points3d, cam.projectionMatrix);
+            // Reproject into native (distorted) pixel space to match raw keypoints.
+            reprojPts = reprojectPointsCamera(triangulationResult.points3d, cam);
         }
         if (reprojPts) {
             var existing = group.getReprojectedInstance
@@ -1491,7 +1757,8 @@ export function updateTimelineForFrame(frameIdx) {
  *
  * Returns `{triangulated, totalGroups, totalErrors}`.
  */
-export async function triangulateMultiFrameInstances(startFrame, endFrame, onProgress) {
+export async function triangulateMultiFrameInstances(startFrame, endFrame, onProgress, method) {
+    method = (method === 'ba') ? 'ba' : 'dlt';
     var totalFrames = endFrame - startFrame + 1;
     var session = state.session;
     var cameras = session.cameras;
@@ -1540,7 +1807,8 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
 
                 var groupCamNames = group.cameraNames;
                 var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
-                var result = triangulateAndReproject(group, groupCameras);
+                var result = triangulateAndReproject(group, groupCameras, { method: method });
+                group.triangulationMethod = result.method;
 
                 group.reprojections = result.reprojections;
                 group.points3d = result.points3d;
@@ -1564,7 +1832,10 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
                     points3d: result.points3d,
                     reprojections: result.reprojections,
                     errors: result.errors,
+                    errorsUndistorted: result.errorsUndistorted,
                     meanError: result.meanError,
+                    meanErrorUndistorted: result.meanErrorUndistorted,
+                    method: result.method,
                 });
 
                 if (result.meanError != null) {
@@ -1609,7 +1880,11 @@ export function reTriangulateGroup(instanceGroup) {
     var oldReprojections = instanceGroup.reprojections;
     var oldPoints3d = instanceGroup.points3d;
 
-    var result = triangulateAndReproject(instanceGroup, groupCameras);
+    // Preserve whichever method this group was last triangulated with so a node
+    // move re-refines consistently (e.g. a BA group stays BA).
+    var method = (instanceGroup.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+    var result = triangulateAndReproject(instanceGroup, groupCameras, { method: method });
+    instanceGroup.triangulationMethod = result.method;
 
     // Only update if we got valid results
     var validPts = result.points3d && result.points3d.some(function (p) { return p != null; });
@@ -1639,7 +1914,7 @@ export function reTriangulateGroup(instanceGroup) {
     var frameResults = state.triangulationResults.get(frameIdx) || [];
     var newEntry = { group: instanceGroup, points3d: result.points3d,
         reprojections: result.reprojections, errors: result.errors,
-        meanError: result.meanError };
+        meanError: result.meanError, method: result.method };
     var replaced = false;
     for (var ri = 0; ri < frameResults.length; ri++) {
         if (frameResults[ri].group === instanceGroup) {
@@ -1761,7 +2036,7 @@ export function ensureGroupsFromIdentities(session, frameIdx) {
  * On-demand triangulation for the current frame's selected instance group.
  * Re-triangulates from whatever views have labels and updates reprojections.
  */
-export function triangulateCurrentFrame() {
+export function triangulateCurrentFrame(method) {
     if (!state.session) return;
 
     if (!sessionHasCalibration()) {
@@ -1769,6 +2044,7 @@ export function triangulateCurrentFrame() {
         return;
     }
 
+    method = (method === 'ba') ? 'ba' : 'dlt';
     const frameIdx = state.currentFrame;
     const cameras = state.session.cameras;
     var session = state.session;
@@ -1837,7 +2113,8 @@ export function triangulateCurrentFrame() {
             const groupCamNames = group.cameraNames;
             const groupCameras = cameras.filter(c => groupCamNames.indexOf(c.name) >= 0);
 
-            const result = triangulateAndReproject(group, groupCameras);
+            const result = triangulateAndReproject(group, groupCameras, { method: method });
+            group.triangulationMethod = result.method;
 
             // Check for NaN in points3d
             const hasNaN = result.points3d.some(p => p && (isNaN(p[0]) || isNaN(p[1]) || isNaN(p[2])));
@@ -1882,7 +2159,10 @@ export function triangulateCurrentFrame() {
                 points3d: result.points3d,
                 reprojections: result.reprojections,
                 errors: result.errors,
+                errorsUndistorted: result.errorsUndistorted,
                 meanError: result.meanError,
+                meanErrorUndistorted: result.meanErrorUndistorted,
+                method: result.method,
             });
         }
 
@@ -1912,10 +2192,12 @@ export function triangulateCurrentFrame() {
         viewport3d.fitToScene();
     }
 
+    var methodLabel = triangulationMethodLabel(method);
     if (frameResults.length > 0 && frameResults[0].meanError != null) {
         updateTriangulationBadge('triangulated',
-            'Error: ' + frameResults[0].meanError.toFixed(2) + 'px');
-        setStatus('Triangulated frame ' + (frameIdx + 1) + ' (' + frameResults.length + ' group(s), error: ' +
+            methodLabel + ' • Error: ' + frameResults[0].meanError.toFixed(2) + 'px');
+        setStatus('Triangulated frame ' + (frameIdx + 1) + ' via ' + methodLabel + ' (' +
+            frameResults.length + ' group(s), error: ' +
             frameResults[0].meanError.toFixed(2) + 'px)', 'success');
     } else if (frameResults.length > 0) {
         updateTriangulationBadge('triangulated', 'Triangulated');
@@ -1936,7 +2218,7 @@ export function triangulateCurrentFrame() {
  * Triangulate all frames in the session.
  * Uses the same logic as triangulateCurrentFrame but batched across all frames.
  */
-export async function triangulateAllFrames() {
+export async function triangulateAllFrames(method) {
     if (!state.session) {
         setStatus('No session loaded', 'warning');
         return;
@@ -1946,6 +2228,7 @@ export async function triangulateAllFrames() {
         return;
     }
 
+    method = (method === 'ba') ? 'ba' : 'dlt';
     var cameras = state.session.cameras;
     if (cameras.length < 2) {
         setStatus('Need at least 2 cameras for triangulation', 'warning');
@@ -1966,7 +2249,8 @@ export async function triangulateAllFrames() {
     }
 
     markDirty();
-    showLoading('Triangulating ' + frameIndices.length + ' frames...');
+    showLoading('Triangulating ' + frameIndices.length + ' frames (' +
+        triangulationMethodLabel(method) + ')...');
     var totalTriangulated = 0;
     var totalGroups = 0;
     var totalErrors = [];
@@ -2018,7 +2302,8 @@ export async function triangulateAllFrames() {
                 var groupCamNames2 = group.cameraNames;
                 var groupCameras2 = cameras.filter(function (c) { return groupCamNames2.indexOf(c.name) >= 0; });
 
-                var result = triangulateAndReproject(group, groupCameras2);
+                var result = triangulateAndReproject(group, groupCameras2, { method: method });
+                group.triangulationMethod = result.method;
 
                 group.reprojections = result.reprojections;
                 group.points3d = result.points3d;
@@ -2043,7 +2328,10 @@ export async function triangulateAllFrames() {
                     points3d: result.points3d,
                     reprojections: result.reprojections,
                     errors: result.errors,
+                    errorsUndistorted: result.errorsUndistorted,
                     meanError: result.meanError,
+                    meanErrorUndistorted: result.meanErrorUndistorted,
+                    method: result.method,
                 });
 
                 if (result.meanError != null) {
@@ -2075,7 +2363,8 @@ export async function triangulateAllFrames() {
     var avgError = totalErrors.length > 0
         ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
         : 'N/A';
-    setStatus('Triangulated ' + totalTriangulated + ' frames (' + totalGroups + ' groups, avg error: ' + avgError + 'px)', 'success');
+    setStatus('Triangulated ' + totalTriangulated + ' frames via ' + triangulationMethodLabel(method) +
+        ' (' + totalGroups + ' groups, avg error: ' + avgError + 'px)', 'success');
     console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
 
     // Update timeline: mark frames with grouped UserInstances, refresh track bars

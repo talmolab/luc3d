@@ -1053,11 +1053,14 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
     // Reprojection error display
     const results = state.triangulationResults.get(frameIdx);
     let meanError = null;
+    let meanErrorUndist = null;
     let maxError = 0;
 
     if (results) {
         let totalErr = 0;
         let totalCount = 0;
+        let totalErrUndist = 0;
+        let totalCountUndist = 0;
         for (const r of results) {
             if (r.meanError != null) {
                 for (const camName in r.errors) {
@@ -1070,23 +1073,67 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     }
                 }
             }
+            // Undistorted-space errors (the space BA optimizes in), aggregated the
+            // same way so the two headline averages are directly comparable.
+            if (r.errorsUndistorted) {
+                for (const camName in r.errorsUndistorted) {
+                    for (const err of r.errorsUndistorted[camName]) {
+                        if (err != null) {
+                            totalErrUndist += err;
+                            totalCountUndist++;
+                        }
+                    }
+                }
+            }
         }
         if (totalCount > 0) meanError = totalErr / totalCount;
+        if (totalCountUndist > 0) meanErrorUndist = totalErrUndist / totalCountUndist;
     }
 
-    const errorDisplay = document.getElementById('errorDisplay');
-    if (meanError != null) {
-        errorDisplay.textContent = meanError.toFixed(2);
-        errorDisplay.className = 'error-display ' +
-            (meanError < 2 ? 'low' : meanError < 5 ? 'medium' : 'high');
+    // Renders a "<value> px" (colour-coded) headline value into an element, or
+    // "-" when there is no value.
+    const setErrorStat = function (el, value) {
+        if (!el) return;
+        if (value != null) {
+            el.textContent = value.toFixed(2);
+            el.className = 'error-display ' +
+                (value < 2 ? 'low' : value < 5 ? 'medium' : 'high');
+            const unitSpan = document.createElement('span');
+            unitSpan.className = 'error-unit';
+            unitSpan.textContent = ' px';
+            el.appendChild(unitSpan);
+        } else {
+            el.textContent = '-';
+            el.className = 'error-display';
+        }
+    };
+    setErrorStat(document.getElementById('errorDisplay'), meanError);
+    setErrorStat(document.getElementById('errorDisplayUndist'), meanErrorUndist);
 
-        const unitSpan = document.createElement('span');
-        unitSpan.className = 'error-unit';
-        unitSpan.textContent = ' px';
-        errorDisplay.appendChild(unitSpan);
-    } else {
-        errorDisplay.textContent = '-';
-        errorDisplay.className = 'error-display';
+    // Triangulation method label ('DLT' or 'Bundle Adjustment'). Prefer the
+    // per-result method; fall back to the group's recorded method.
+    const errorMethodEl = document.getElementById('errorMethod');
+    if (errorMethodEl) {
+        let method = null;
+        if (results && results.length > 0) {
+            for (const r of results) {
+                if (r.method) { method = r.method; break; }
+                if (r.group && r.group.triangulationMethod) { method = r.group.triangulationMethod; break; }
+            }
+        }
+        // Fall back to the frame's groups (e.g. after "Group by ... & Triangulate
+        // All", which records the method on each group but not in results).
+        if (!method && instanceGroups) {
+            for (const g of instanceGroups) {
+                if (g && g.triangulationMethod) { method = g.triangulationMethod; break; }
+            }
+        }
+        if (method) {
+            errorMethodEl.textContent = method === 'ba' ? 'Bundle Adjustment' : 'DLT';
+            errorMethodEl.style.display = '';
+        } else {
+            errorMethodEl.style.display = 'none';
+        }
     }
 
     // Per-camera errors
