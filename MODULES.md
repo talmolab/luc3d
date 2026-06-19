@@ -366,9 +366,14 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   pick one camera per session, export to one file).
 - `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid;
   download one camera column across all selected sessions into one SLEAP file.
-  Pre-flights skeleton compatibility (`findSkeletonMismatch`) and pops a warning
-  on mismatch. Columns ordered by session frequency, then within-session name
-  order, then session recency for session-unique videos.
+  A cell is a green ✓ (toggle on/off) only where the camera VIEW exists in that
+  session — derived from `state.videoFiles` (real loaded views), plus cameras
+  with labeled data for SLP-only projects; NOT from `session.cameras`, which is
+  the full calibration list and would falsely imply existence. Sessions missing
+  the view show a red ✗ (not selectable). Pre-flights skeleton compatibility
+  (`findSkeletonMismatch`) and pops a warning on mismatch. Columns ordered by
+  session frequency, then within-session name order, then session recency for
+  session-unique views.
 - `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: no longer
   wired to a File-menu item (the "Export 2D SLP (All Views)" entry was removed);
   retained for reference.

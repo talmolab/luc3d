@@ -1390,11 +1390,13 @@ body {
   outline-offset: -1px;
 }
 
-/* Session lacks this camera. */
-.slp-bycam-empty {
+/* Session lacks this camera view — red ✗, not selectable. */
+.slp-bycam-missing {
   text-align: center;
-  color: var(--text-muted);
-  opacity: 0.4;
+  color: #ef4444;
+  font-weight: 700;
+  cursor: not-allowed;
+  user-select: none;
 }
 
 .slp-bycam-dl-btn {
