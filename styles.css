@@ -1285,6 +1285,124 @@ body {
   font-size: 11px;
 }
 
+/* Export SLEAP by Camera modal */
+.slp-bycam-modal {
+  min-width: 860px;
+  max-width: 95vw;
+}
+
+/* Scroll container: vertical for many sessions, horizontal for many cameras. */
+.slp-bycam-scroll {
+  max-height: 380px;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin: 8px 0;
+}
+
+.slp-bycam-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+}
+
+.slp-bycam-table th,
+.slp-bycam-table td {
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  height: 28px;
+  padding: 2px 8px;
+  box-sizing: border-box;
+}
+
+/* Sticky header row (camera names). */
+.slp-bycam-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Sticky footer row (Download buttons). */
+.slp-bycam-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  text-align: center;
+}
+
+/* Sticky left column (session names) — stays visible during horizontal scroll. */
+.slp-bycam-sess-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-secondary);
+  min-width: 180px;
+  max-width: 260px;
+}
+
+/* Corner cells must sit above both the sticky row and sticky column. */
+.slp-bycam-corner {
+  z-index: 3 !important;
+}
+
+/* Long session names scroll horizontally inside their cell. */
+.slp-bycam-sess-name {
+  max-width: 244px;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Long camera names scroll horizontally inside the header cell. */
+.slp-bycam-cam-name {
+  max-width: 160px;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* Toggle-able presence cell. */
+.slp-bycam-cell {
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+}
+
+.slp-bycam-cell.on {
+  background: rgba(250, 204, 21, 0.25);
+  color: #eab308;
+}
+
+.slp-bycam-cell.off {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.slp-bycam-cell:hover {
+  outline: 1px solid rgba(250, 204, 21, 0.6);
+  outline-offset: -1px;
+}
+
+/* Session lacks this camera. */
+.slp-bycam-empty {
+  text-align: center;
+  color: var(--text-muted);
+  opacity: 0.4;
+}
+
+.slp-bycam-dl-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 
 /* Modal layout: range row with views list */
 .modal-range-row {

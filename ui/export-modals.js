@@ -25,6 +25,7 @@ import { showLoading, hideLoading, setStatus } from '../import-export/save-load.
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
+    findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
 } from '../import-export/file-io.js';
@@ -719,7 +720,7 @@ export function showSlpExportModal() {
     }
 
     modal.innerHTML =
-        '<h3>Export 2D SLP File</h3>' +
+        '<h3>Export SLEAP File</h3>' +
         '<div class="slp-export-multi-body">' +
         '<div class="slp-export-multi-left">' +
         '<div class="slp-export-panel-label">Sessions</div>' +
@@ -957,6 +958,310 @@ export function showSlpExportModal() {
             exportBtn.disabled = false;
             exportBtn.textContent = 'Export';
         }
+    });
+}
+
+// ============================================
+// Export SLEAP by Camera Modal
+// ============================================
+
+/**
+ * Modal warning popup for a skeleton mismatch during a per-camera download.
+ * Styled after showCalibrationRequiredPopup.
+ */
+function showSkeletonMismatchPopup(detail) {
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10001;display:flex;align-items:center;justify-content:center;';
+
+    var card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:460px;width:90%;text-align:center;';
+
+    var icon = document.createElement('div');
+    icon.style.cssText = 'font-size:36px;margin-bottom:12px;';
+    icon.textContent = '⚠';
+    card.appendChild(icon);
+
+    var title = document.createElement('div');
+    title.style.cssText = 'color:#fff;font-size:16px;font-weight:600;margin-bottom:8px;';
+    title.textContent = 'Cannot Export — Skeletons Differ';
+    card.appendChild(title);
+
+    var msg = document.createElement('div');
+    msg.style.cssText = 'color:#aaa;font-size:13px;margin-bottom:16px;line-height:1.5;';
+    msg.textContent = 'The selected views belong to sessions with different skeletons. '
+        + 'A single SLEAP file requires one shared skeleton, so these views cannot be exported together. '
+        + 'Deselect the mismatched sessions and try again.';
+    card.appendChild(msg);
+
+    if (detail) {
+        var det = document.createElement('div');
+        det.style.cssText = 'color:#888;font-size:11px;margin-bottom:16px;font-family:monospace;word-break:break-word;';
+        det.textContent = detail;
+        card.appendChild(det);
+    }
+
+    var btn = document.createElement('button');
+    btn.style.cssText = 'padding:8px 24px;font-size:14px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
+    btn.textContent = 'OK';
+    function dismiss() {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+    }
+    btn.addEventListener('click', dismiss);
+    function onKey(e) {
+        if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); dismiss(); }
+    }
+    document.addEventListener('keydown', onKey);
+
+    card.appendChild(btn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+}
+
+/**
+ * Build the camera matrix for the "Export SLEAP by Camera" modal.
+ *
+ * Columns are camera/video names found across ALL sessions, ordered left→right by:
+ *   1. Session frequency (primary) — videos appearing in more sessions rank higher.
+ *   2. Name order within a session (tie-breaker 1) — earliest-listed video ranks higher.
+ *   3. Session recency for session-unique videos (tie-breaker 2) — when both appear in
+ *      exactly one session, the one in the higher-numbered (later) session ranks higher.
+ * A stable alphabetical fallback breaks any remaining ties deterministically.
+ *
+ * @returns {{ camNames: string[], info: Object, cellLookup: Object[] }}
+ */
+function _buildByCamMatrix() {
+    var sessions = state.sessions || [];
+    var cellLookup = [];   // cellLookup[sessionIdx] = { camName: entry }
+    var info = {};         // camName -> { name, count, minOrder, maxSession }
+
+    for (var si = 0; si < sessions.length; si++) {
+        var entries = _buildCameraEntriesForSession(si);
+        var map = {};
+        for (var p = 0; p < entries.length; p++) {
+            var cn = entries[p].camName;
+            map[cn] = entries[p];
+            if (!info[cn]) {
+                info[cn] = { name: cn, count: 0, seen: {}, minOrder: p, maxSession: si };
+            }
+            var rec = info[cn];
+            if (!rec.seen[si]) { rec.seen[si] = true; rec.count++; }
+            if (p < rec.minOrder) rec.minOrder = p;
+            if (si > rec.maxSession) rec.maxSession = si;
+        }
+        cellLookup.push(map);
+    }
+
+    var camNames = Object.keys(info);
+    camNames.sort(function (a, b) {
+        var ra = info[a], rb = info[b];
+        if (rb.count !== ra.count) return rb.count - ra.count;            // freq desc
+        if (ra.minOrder !== rb.minOrder) return ra.minOrder - rb.minOrder; // name order asc
+        if (ra.count === 1 && rb.count === 1) return rb.maxSession - ra.maxSession; // recency desc
+        return a < b ? -1 : (a > b ? 1 : 0);                              // stable alpha
+    });
+
+    return { camNames: camNames, info: info, cellLookup: cellLookup };
+}
+
+export function showSlpExportByCamModal() {
+    if (!state.sessions || state.sessions.length === 0) {
+        setStatus('No sessions to export', 'warning');
+        return;
+    }
+
+    var sessions = state.sessions;
+    var matrix = _buildByCamMatrix();
+    var camNames = matrix.camNames;
+    var cellLookup = matrix.cellLookup;
+
+    // Toggle state: keyed "sessionIdx|camName". Default ON for every present cell.
+    var cellOn = {};
+    for (var si0 = 0; si0 < sessions.length; si0++) {
+        for (var ci0 = 0; ci0 < camNames.length; ci0++) {
+            if (cellLookup[si0][camNames[ci0]]) cellOn[si0 + '|' + camNames[ci0]] = true;
+        }
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal slp-export-modal slp-bycam-modal';
+
+    function cellKey(si, cn) { return si + '|' + cn; }
+
+    // ---- Build table markup ----
+    var headHtml = '<tr><th class="slp-bycam-sess-col slp-bycam-corner">Session</th>';
+    for (var hc = 0; hc < camNames.length; hc++) {
+        headHtml += '<th class="slp-bycam-cam-head" title="' + camNames[hc] + '">'
+            + '<div class="slp-bycam-cam-name">' + camNames[hc] + '</div></th>';
+    }
+    headHtml += '</tr>';
+
+    var bodyHtml = '';
+    for (var br = 0; br < sessions.length; br++) {
+        var sname = sessions[br].name || ('Session ' + (br + 1));
+        bodyHtml += '<tr>'
+            + '<td class="slp-bycam-sess-col"><div class="slp-bycam-sess-name">' + sname + '</div></td>';
+        for (var bc = 0; bc < camNames.length; bc++) {
+            var cn2 = camNames[bc];
+            var entry = cellLookup[br][cn2];
+            if (entry) {
+                bodyHtml += '<td class="slp-bycam-cell on" data-sess="' + br + '" data-cam="' + bc + '" '
+                    + 'title="' + (entry.sourceLabel || cn2) + '">✓</td>';
+            } else {
+                bodyHtml += '<td class="slp-bycam-empty">—</td>';
+            }
+        }
+        bodyHtml += '</tr>';
+    }
+
+    var footHtml = '<tr><td class="slp-bycam-sess-col slp-bycam-corner"></td>';
+    for (var fc = 0; fc < camNames.length; fc++) {
+        footHtml += '<td class="slp-bycam-dl-cell">'
+            + '<button class="slp-bycam-dl-btn" data-cam="' + fc + '">Download</button></td>';
+    }
+    footHtml += '</tr>';
+
+    var emptyNote = camNames.length === 0
+        ? '<div class="slp-export-note">No videos found across sessions.</div>'
+        : '';
+
+    modal.innerHTML =
+        '<h3>Export SLEAP by Camera</h3>' +
+        '<div class="slp-export-note">Each column is a video/camera found across sessions. '
+        + 'Toggle cells on (yellow) or off (gray), then Download a column to export that camera '
+        + 'across every selected session into one SLEAP file.</div>' +
+        emptyNote +
+        '<div class="slp-bycam-scroll">' +
+        '<table class="data-table slp-bycam-table">' +
+        '<thead>' + headHtml + '</thead>' +
+        '<tbody>' + bodyHtml + '</tbody>' +
+        '<tfoot>' + footHtml + '</tfoot>' +
+        '</table>' +
+        '</div>' +
+        '<div class="slp-export-options">' +
+        '<label><input type="checkbox" id="slpByCamReproj"> Save Reprojections</label>' +
+        '<span class="slp-reproj-toggle" id="slpByCamReprojToggle">' +
+        '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
+        '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
+        '</span>' +
+        '</div>' +
+        '<div class="slp-export-error" id="slpByCamError"></div>' +
+        '<div class="modal-actions">' +
+        '<button id="slpByCamClose">Close</button>' +
+        '</div>';
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    var errorDiv = document.getElementById('slpByCamError');
+    function clearError() { errorDiv.textContent = ''; }
+    function showError(msg) { errorDiv.textContent = msg; }
+
+    // ---- Cell toggling ----
+    modal.querySelectorAll('.slp-bycam-cell').forEach(function (cell) {
+        cell.addEventListener('click', function () {
+            var si = parseInt(cell.getAttribute('data-sess'));
+            var cn = camNames[parseInt(cell.getAttribute('data-cam'))];
+            var key = cellKey(si, cn);
+            cellOn[key] = !cellOn[key];
+            if (cellOn[key]) {
+                cell.classList.add('on'); cell.classList.remove('off');
+                cell.textContent = '✓';
+            } else {
+                cell.classList.remove('on'); cell.classList.add('off');
+                cell.textContent = '';
+            }
+            clearError();
+        });
+    });
+
+    // ---- Reprojection toggle (mirrors showSlpExportModal) ----
+    var reprojCheckbox = document.getElementById('slpByCamReproj');
+    var reprojToggle = document.getElementById('slpByCamReprojToggle');
+    var toggleOptions = reprojToggle.querySelectorAll('.slp-toggle-option');
+    function updateReprojToggleState() {
+        if (reprojCheckbox.checked) reprojToggle.classList.remove('slp-toggle-disabled');
+        else reprojToggle.classList.add('slp-toggle-disabled');
+    }
+    reprojCheckbox.addEventListener('change', updateReprojToggleState);
+    updateReprojToggleState();
+    toggleOptions.forEach(function (opt) {
+        opt.addEventListener('click', function () {
+            if (reprojCheckbox.checked) {
+                toggleOptions.forEach(function (o) { o.classList.remove('slp-toggle-active'); });
+                opt.classList.add('slp-toggle-active');
+            }
+        });
+    });
+
+    function buildColumnSelections(camName) {
+        var selections = [];
+        for (var s = 0; s < sessions.length; s++) {
+            if (!cellOn[cellKey(s, camName)]) continue;
+            var entry = cellLookup[s][camName];
+            if (!entry) continue;
+            selections.push({
+                session: sessions[s],
+                cameraName: camName,
+                videoFileInfo: entry.videoFile,
+            });
+        }
+        return selections;
+    }
+
+    function sanitizeFilename(name) {
+        var base = String(name).replace(/\.[^.\/]+$/, '');      // drop a trailing extension
+        base = base.replace(/[\\\/:*?"<>|]+/g, '_').trim();       // strip path-unsafe chars
+        return (base || 'view') + '.slp';
+    }
+
+    // ---- Per-column download ----
+    modal.querySelectorAll('.slp-bycam-dl-btn').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            clearError();
+            var camName = camNames[parseInt(btn.getAttribute('data-cam'))];
+            var selections = buildColumnSelections(camName);
+            if (selections.length === 0) {
+                showError('No sessions selected for "' + camName + '".');
+                return;
+            }
+
+            // Pre-flight skeleton compatibility — pop up on mismatch.
+            var mismatch = findSkeletonMismatch(selections);
+            if (mismatch) {
+                showSkeletonMismatchPopup(mismatch);
+                return;
+            }
+
+            var saveReproj = reprojCheckbox.checked;
+            var activeToggle = reprojToggle.querySelector('.slp-toggle-active');
+            var reprojAsUser = saveReproj
+                ? (activeToggle && activeToggle.getAttribute('data-value') === 'user')
+                : null;
+
+            var outName = sanitizeFilename(camName);
+            var origText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Exporting...';
+            try {
+                var blob = await exportSlpMultiSession(selections, reprojAsUser);
+                downloadBlob(blob, outName);
+                setStatus('Exported ' + outName + ' (' + selections.length + ' session'
+                    + (selections.length === 1 ? '' : 's') + ')', 'success');
+            } catch (err) {
+                console.error('[slp-export-bycam]', err);
+                showError(err.message || String(err));
+            } finally {
+                btn.disabled = false;
+                btn.textContent = origText;
+            }
+        });
+    });
+
+    document.getElementById('slpByCamClose').addEventListener('click', function () {
+        overlay.remove();
     });
 }
 

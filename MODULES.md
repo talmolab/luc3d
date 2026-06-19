@@ -356,14 +356,22 @@ playback state, dirty tracking, multi-session UI.
 ### ui/export-modals.js
 
 **Purpose.** Modal dialogs for bulk-triangulation and export (Group-by-Track,
-Group-by-Identity, multi-frame triangulation, SLP per-session, SLP
-all-sessions, JSON labels, points3d H5, reproj H5).
+Group-by-Identity, multi-frame triangulation, SLP per-session, SLP by-camera,
+SLP all-sessions, JSON labels, points3d H5, reproj H5).
 
 **Key exports.**
 - `showGroupByTrackModal()` — modal that bulk-groups by trackIdx.
 - `groupByIdentityAndTriangulateAll()` — bulk-group then triangulate.
-- `showSlpExportModal()` — single-session SLP export modal.
-- `showSlpExportAllModal()` — multi-session SLP export.
+- `showSlpExportModal()` — per-session SLP export modal ("Export SLEAP File":
+  pick one camera per session, export to one file).
+- `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid;
+  download one camera column across all selected sessions into one SLEAP file.
+  Pre-flights skeleton compatibility (`findSkeletonMismatch`) and pops a warning
+  on mismatch. Columns ordered by session frequency, then within-session name
+  order, then session recency for session-unique videos.
+- `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: no longer
+  wired to a File-menu item (the "Export 2D SLP (All Views)" entry was removed);
+  retained for reference.
 - `showTriangulateMultiFrameModal()` — frame-range triangulation modal.
 - `exportLabels()` — JSON labels export.
 - `exportPoints3dH5()` — points3d H5 export.
@@ -381,13 +389,14 @@ all-sessions, JSON labels, points3d H5, reproj H5).
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
 - `../import-export/file-io.js` — `exportSlpClientSide`,
-  `exportSlpMultiSession`, `buildPoints3dH5`, `buildReprojH5`.
+  `exportSlpMultiSession`, `findSkeletonMismatch`, `buildPoints3dH5`,
+  `buildReprojH5`.
 - `../pose/initialization.js` — `update3DViewport`.
 
 **Imported by.** `ui/ui-wiring.js`.
 
-**User-facing features.** File menu Export (JSON / SLP / SLP All / H5
-points3d / H5 reproj), Edit menu Group-by-Track / Group-by-Identity,
+**User-facing features.** File menu Export (JSON / SLEAP File / SLEAP File By
+Cam / H5 points3d / H5 reproj), Edit menu Group-by-Track / Group-by-Identity,
 Multi-Frame Triangulate modal.
 
 ---
@@ -1339,6 +1348,10 @@ layer.
   a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`.
+- Skeleton validation: `findSkeletonMismatch(selections)` — returns `null` when
+  all selected sessions share a skeleton (node count + names, in order),
+  otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
+  guard `buildSlpLabelsMultiSession` and to pre-flight the per-camera download.
 - SLP parse: `parseSlpH5(file, onProgress)` — spawns worker.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`.
