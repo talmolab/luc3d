@@ -1138,6 +1138,44 @@
             ];
             assertNull(findSkeletonMismatch(selections), 'matching skeletons export together');
         });
+
+        it('importing one session twice and changing one skeleton blocks EVERY camera download', function () {
+            // Reproduces the reported flow: the arm-reach-lucid-session fixture
+            // (cameras CamA/CamB/CamC, a 3-node skeleton) imported twice. With
+            // both copies sharing a skeleton, every camera column is exportable;
+            // changing one copy's skeleton must disable the download on every
+            // shared column — exactly what updateDownloadStates() does in the
+            // "Export SLEAP by Camera" modal (it disables a column's button
+            // whenever findSkeletonMismatch is non-null for its selections).
+            var cams = ['CamA', 'CamB', 'CamC'];
+            var s1 = makeSession(cams, 'arm-reach-lucid-session');
+            var s2 = makeSession(cams, 'arm-reach-lucid-session (copy)');
+
+            // Each camera column spans both sessions (the cell is ON for both).
+            function columnSelections(cam) {
+                return [
+                    { session: s1, cameraName: cam, videoFileInfo: { name: cam } },
+                    { session: s2, cameraName: cam, videoFileInfo: { name: cam } },
+                ];
+            }
+
+            // Both imports share the fixture skeleton -> nothing is blocked.
+            cams.forEach(function (cam) {
+                assertNull(findSkeletonMismatch(columnSelections(cam)),
+                    'duplicate import with identical skeletons leaves "' + cam + '" exportable');
+            });
+
+            // Change the skeleton on ONE of the two sessions (different node set).
+            s2.skeleton = new Skeleton('changed', ['head', 'thorax', 'wing'], [[0, 1], [1, 2]]);
+
+            // Now every shared camera column must be blocked.
+            cams.forEach(function (cam) {
+                var msg = findSkeletonMismatch(columnSelections(cam));
+                assertNotNull(msg, 'changed skeleton must block the "' + cam + '" download');
+                assertTrue(msg.indexOf('Skeleton mismatch') >= 0,
+                    'block reason for "' + cam + '" names the skeleton mismatch');
+            });
+        });
     });
 
 })();
