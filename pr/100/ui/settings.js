@@ -55,6 +55,7 @@ const ACTION_CATALOG = [
     { id: 'triangulate', label: 'Triangulate current frame', category: 'Editing', binding: 't', editable: true, dispatched: true },
     { id: 'trackFrame', label: 'Track current frame', category: 'Editing', binding: 'Shift+T', editable: false, dispatched: false },
     { id: 'trackAll', label: 'Track all frames', category: 'Editing', binding: 'Mod+Shift+T', editable: false, dispatched: false },
+    { id: 'openTrackingWizard', label: 'Open Tracking Wizard', category: 'Editing', binding: 'Mod+T', editable: false, dispatched: false },
     { id: 'findMatch', label: 'Find match for selection', category: 'Editing', binding: 'f', editable: false, dispatched: false },
 
     // --- Identity & Tracks (select a group first) ---
