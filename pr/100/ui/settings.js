@@ -47,7 +47,7 @@ const ACTION_CATALOG = [
     { id: 'gotoFrame', label: 'Go to frame number', category: 'Navigation', binding: 'Mod+Shift+J', editable: false, dispatched: false },
 
     // --- Editing ---
-    { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+Shift+I', editable: true, dispatched: true },
+    { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+I', editable: true, dispatched: true },
     { id: 'addInstance', label: 'Add instance', category: 'Editing', binding: 'n', editable: true, dispatched: true },
     { id: 'deleteInstance', label: 'Delete selected (Shift: cascade)', category: 'Editing', binding: 'Delete', editable: false, dispatched: false },
     { id: 'ungroup', label: 'Ungroup selected', category: 'Editing', binding: 'Shift+u', editable: true, dispatched: true },
@@ -55,7 +55,7 @@ const ACTION_CATALOG = [
     { id: 'triangulate', label: 'Triangulate current frame', category: 'Editing', binding: 't', editable: true, dispatched: true },
     { id: 'trackFrame', label: 'Track current frame', category: 'Editing', binding: 'Shift+T', editable: true, dispatched: true },
     { id: 'trackAll', label: 'Track all frames', category: 'Editing', binding: 'Mod+Shift+T', editable: true, dispatched: true },
-    { id: 'openTrackingWizard', label: 'Open Tracking Wizard', category: 'Editing', binding: 'Mod+I', editable: true, dispatched: true },
+    { id: 'openTrackingWizard', label: 'Open Tracking Wizard', category: 'Editing', binding: 'Mod+Shift+I', editable: true, dispatched: true },
     { id: 'findMatch', label: 'Find match for selection', category: 'Editing', binding: 'f', editable: true, dispatched: true },
 
     // --- Identity & Tracks (select a group first) ---
