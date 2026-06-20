@@ -405,11 +405,23 @@ export function resetBindings() {
     persist();
 }
 
-// Prettify a binding string for display (uppercases a bare single letter,
-// leaves accelerators and free-form strings intact).
+// True when running on a macOS / iOS device, so the Ctrl-or-Cmd `Mod` token is
+// shown as "Cmd" rather than "Ctrl". Falls back to "Ctrl" off-browser (Node).
+function isAppleDevice() {
+    if (typeof navigator === 'undefined') return false;
+    var plat = navigator.platform ||
+        (navigator.userAgentData && navigator.userAgentData.platform) ||
+        navigator.userAgent || '';
+    return /Mac|iPhone|iPad|iPod/i.test(plat);
+}
+
+// Prettify a binding string for display: render the platform-appropriate
+// modifier for the `Mod` token (Cmd on Apple devices, Ctrl elsewhere), uppercase
+// a bare single letter, and leave accelerators / free-form strings intact.
 export function formatBinding(str) {
     if (!str) return '';
-    if (/^[a-z]$/.test(str)) return str.toUpperCase();
+    var s = str.replace(/\bmod\b/gi, isAppleDevice() ? 'Cmd' : 'Ctrl');
+    if (/^[a-z]$/.test(s)) return s.toUpperCase();
     // Uppercase the trailing single-letter key of a simple accelerator.
-    return str.replace(/\+([a-z])$/, function (_m, c) { return '+' + c.toUpperCase(); });
+    return s.replace(/\+([a-z])$/, function (_m, c) { return '+' + c.toUpperCase(); });
 }

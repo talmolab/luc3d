@@ -964,7 +964,10 @@ handler elsewhere and listed for reference only.
   its handler (skips when typing in inputs); returns `true` if handled.
 - `applyBindings(map)` — commit an `{ id: binding }` override map (editable-only;
   bindings equal to the default are dropped); `resetBindings()` clears all.
-- `formatBinding(str)` — prettify a binding for display.
+- `formatBinding(str)` — prettify a binding for display; renders the `Mod`
+  token as **Cmd** on Apple devices and **Ctrl** elsewhere (via
+  `navigator.platform`), so the Hot Keys modal and Settings panel show the
+  device-appropriate modifier.
 
 **Imports from project modules.** None.
 
