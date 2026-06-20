@@ -1404,8 +1404,8 @@ is now dispatched: it attaches a runtime handler via `setHandler(id, fn)` (from
 calling `dispatchEvent(e)`, so it is **editable and rebindable** (chords or
 multi-key sequences) from the Settings panel. This covers the plain-key toggles
 (`u`/`p`/`r`/`e`, `v`, `g`, `t`, `n`, `i` info, `\` 3D, `?`, `Shift+U` ungroup,
-`f` find), the track actions (`Shift+T`, `Mod+Shift+T`), the wizard (`Mod+I`,
-moved off `Mod+T`), smart-add (`Mod+Shift+I`, moved off `Mod+I`), settings
+`f` find), the track actions (`Shift+T`, `Mod+Shift+T`), the wizard (`Mod+Shift+I`),
+smart-add new instance (`Mod+I`), settings
 (`Mod+,`) and load-session (`Mod+O`). Bindings live in `ACTION_CATALOG` (the
 single source of truth for the Settings panel). The remaining shortcuts keep
 their own dedicated handlers and appear as **fixed** reference entries (not
