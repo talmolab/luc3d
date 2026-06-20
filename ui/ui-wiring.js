@@ -165,6 +165,13 @@ export function setupMenus() {
         showSettingsModal();
     });
 
+    // Tracks ▸ Tracking Wizard: opens the same Settings modal focused on the
+    // Tracking Wizard panel (node weights, etc.).
+    document.getElementById('menuTrackingWizard').addEventListener('click', function () {
+        closeMenus();
+        showSettingsModal('wizard');
+    });
+
     document.getElementById('menuTriangulateMulti').addEventListener('click', function () {
         closeMenus();
         showTriangulateMultiFrameModal();

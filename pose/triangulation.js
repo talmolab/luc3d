@@ -642,17 +642,22 @@ export function computeMeanReprojectionError(observed2d, reprojected2d) {
  *
  * @param {(number[]|null)[]} pointsA - Array of [x,y] or null
  * @param {(number[]|null)[]} pointsB - Array of [x,y] or null
- * @returns {number} Mean pixel distance, or Infinity if no valid pairs
+ * @param {number[]} [weights] - Optional per-node weights (parallel to points).
+ *   Each node's distance is scaled by its weight and the mean is weighted
+ *   accordingly; a node with weight 0 is ignored. Omitted ⇒ all weights 1.
+ * @returns {number} (Weighted) mean pixel distance, or Infinity if no valid pairs
  */
-export function computeInstanceDistance(pointsA, pointsB) {
+export function computeInstanceDistance(pointsA, pointsB, weights) {
     var totalDist = 0, count = 0;
     var len = Math.min(pointsA.length, pointsB.length);
     for (var i = 0; i < len; i++) {
         if (pointsA[i] != null && pointsB[i] != null) {
+            var w = weights ? (weights[i] != null ? weights[i] : 1) : 1;
+            if (w <= 0) continue;
             var dx = pointsA[i][0] - pointsB[i][0];
             var dy = pointsA[i][1] - pointsB[i][1];
-            totalDist += Math.sqrt(dx * dx + dy * dy);
-            count++;
+            totalDist += w * Math.sqrt(dx * dx + dy * dy);
+            count += w;
         }
     }
     return count > 0 ? totalDist / count : Infinity;

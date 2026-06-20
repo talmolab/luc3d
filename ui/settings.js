@@ -23,6 +23,12 @@ const DEFAULTS = {
     triangulationMethod: 'dlt', // 'dlt' | 'ba'
 };
 
+// Default weight for any skeleton node not explicitly overridden. A weight of 1
+// means the node participates fully in the tracking cost (epipolar, reprojection,
+// instance distance); 0 means it is ignored. Stored overrides are keyed by node
+// name so they persist across reloads independently of node ordering.
+const DEFAULT_NODE_WEIGHT = 1;
+
 // Catalog of every shortcut. `binding` is a "+"-joined accelerator string for
 // dispatched entries (modifier tokens: Mod = Ctrl-or-Cmd, Ctrl, Cmd/Meta, Shift,
 // Alt/Option/Opt; last token is the key), or a free-form display string for
@@ -90,10 +96,12 @@ function loadSettings() {
             return {
                 triangulationMethod: parsed.triangulationMethod === 'ba' ? 'ba' : 'dlt',
                 keybindings: (parsed.keybindings && typeof parsed.keybindings === 'object') ? parsed.keybindings : {},
+                nodeWeights: (parsed.nodeWeights && typeof parsed.nodeWeights === 'object') ? parsed.nodeWeights : {},
+                trackingThresholds: (parsed.trackingThresholds && typeof parsed.trackingThresholds === 'object') ? parsed.trackingThresholds : {},
             };
         }
     } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
-    return { triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {} };
+    return { triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {}, nodeWeights: {}, trackingThresholds: {} };
 }
 
 function persist() {
@@ -108,6 +116,170 @@ export function getDefaultTriangulationMethod() {
 
 export function setDefaultTriangulationMethod(method) {
     _settings.triangulationMethod = method === 'ba' ? 'ba' : 'dlt';
+    persist();
+}
+
+// --- Node weights ----------------------------------------------------------
+
+// Clamp an arbitrary value to a valid weight in [0, 1], or null if not a number.
+function clampWeight(v) {
+    var n = typeof v === 'number' ? v : parseFloat(v);
+    if (!isFinite(n)) return null;
+    if (n < 0) return 0;
+    if (n > 1) return 1;
+    return n;
+}
+
+// Effective weight for a single node name (stored override, else default 1).
+export function getNodeWeight(name) {
+    var w = clampWeight(_settings.nodeWeights[name]);
+    return w == null ? DEFAULT_NODE_WEIGHT : w;
+}
+
+// Snapshot of all stored node-weight overrides (name → weight). Nodes without an
+// override are absent (they default to DEFAULT_NODE_WEIGHT).
+export function getNodeWeights() {
+    var out = {};
+    Object.keys(_settings.nodeWeights).forEach(function (k) {
+        var w = clampWeight(_settings.nodeWeights[k]);
+        if (w != null) out[k] = w;
+    });
+    return out;
+}
+
+// Resolve a parallel weight array for an ordered list of node names — the form
+// the tracker consumes (indexed to match Instance.points). Unknown/invalid
+// entries fall back to DEFAULT_NODE_WEIGHT. Returns null for a non-array input.
+export function getNodeWeightArray(nodeNames) {
+    if (!Array.isArray(nodeNames)) return null;
+    return nodeNames.map(function (n) { return getNodeWeight(n); });
+}
+
+// Commit a name → weight override map (from the Tracking Wizard's Apply button).
+// Values are clamped to [0, 1]; entries equal to the default are dropped so the
+// stored set stays minimal.
+export function setNodeWeights(map) {
+    var next = {};
+    if (map && typeof map === 'object') {
+        Object.keys(map).forEach(function (name) {
+            var w = clampWeight(map[name]);
+            if (w != null && w !== DEFAULT_NODE_WEIGHT) next[name] = w;
+        });
+    }
+    _settings.nodeWeights = next;
+    persist();
+}
+
+// --- Tracking thresholds ---------------------------------------------------
+
+// Catalog of user-editable cross-view-tracker thresholds (Tier A scoring knobs +
+// Tier B reprojection gates). Each entry is the single source of truth for the
+// Tracking Wizard's "Tracking Thresholds" section AND the default the tracker
+// falls back to. `min`/`max`/`step` drive the number field; `desc` is the inline
+// explanation shown under the label.
+const TRACKING_THRESHOLDS = [
+    {
+        id: 'epipolarDecay', label: 'Epipolar error decay', default: 10,
+        min: 0.1, max: 1000, step: 0.1,
+        desc: 'Scale in the epipolar match score exp(−mean epipolar error / value). Larger values are more tolerant of epipolar misalignment when deciding two views show the same animal.',
+    },
+    {
+        id: 'reprojSigma', label: 'Reprojection tolerance σ (px)', default: 20,
+        min: 0.1, max: 1000, step: 0.5,
+        desc: 'Keypoint reprojection spread (pixels) for the OKS consistency score; residuals beyond roughly this many pixels are penalized sharply. Raise it to accept noisier detections.',
+    },
+    {
+        id: 'epipolarWeight', label: 'Epipolar score weight', default: 0.4,
+        min: 0, max: 1, step: 0.01,
+        desc: 'Weight of the epipolar score in the combined cross-view match score. Paired with the reprojection weight (the two defaults sum to 1).',
+    },
+    {
+        id: 'reprojWeight', label: 'Reprojection score weight', default: 0.6,
+        min: 0, max: 1, step: 0.01,
+        desc: 'Weight of the reprojection (OKS) score in the combined cross-view match score. Paired with the epipolar weight (the two defaults sum to 1).',
+    },
+    {
+        id: 'minMatchScore', label: 'Minimum match score', default: 0.05,
+        min: 0, max: 1, step: 0.01,
+        desc: 'In auto (unconstrained) mode, candidate cross-view matches scoring below this are discarded. Raise for fewer, higher-confidence matches; lower to keep marginal ones.',
+    },
+    {
+        id: 'prevIdentityBonus', label: 'Previous-identity bonus', default: 0.3,
+        min: 0, max: 5, step: 0.05,
+        desc: 'Score bonus when two instances shared the same identity in the previous frame, rewarding temporal continuity. Larger values make identities stickier across frames.',
+    },
+    {
+        id: 'reprojGate2', label: 'Reprojection gate — 2 views (px)', default: 100,
+        min: 1, max: 2000, step: 1,
+        desc: 'Maximum reprojection distance (px) to attach an instance to a 2-view group. Kept tight because a 2-view triangulation seed is fragile.',
+    },
+    {
+        id: 'reprojGate3', label: 'Reprojection gate — 3 views (px)', default: 140,
+        min: 1, max: 2000, step: 1,
+        desc: 'Maximum reprojection distance (px) to attach an instance to a 3-view group. Looser than the 2-view gate once a third view stabilizes the 3D estimate.',
+    },
+    {
+        id: 'reprojGate4', label: 'Reprojection gate — 4+ views (px)', default: 180,
+        min: 1, max: 2000, step: 1,
+        desc: 'Maximum reprojection distance (px) to attach an instance to a group of 4 or more views, where the triangulated 3D point is well constrained.',
+    },
+];
+
+const _thrById = new Map();
+TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
+
+// Clamp a value to a threshold's [min, max] range, or null if not a number.
+function clampThreshold(def, v) {
+    var n = typeof v === 'number' ? v : parseFloat(v);
+    if (!isFinite(n)) return null;
+    if (n < def.min) return def.min;
+    if (n > def.max) return def.max;
+    return n;
+}
+
+// Catalog snapshot for the Tracking Wizard: [{ id, label, default, value, min,
+// max, step, desc }] with the effective value resolved (override or default).
+export function getTrackingThresholdDefs() {
+    return TRACKING_THRESHOLDS.map(function (t) {
+        return {
+            id: t.id, label: t.label, default: t.default,
+            value: getTrackingThreshold(t.id),
+            min: t.min, max: t.max, step: t.step, desc: t.desc,
+        };
+    });
+}
+
+// Effective value for one threshold (stored override clamped to range, else the
+// catalog default).
+export function getTrackingThreshold(id) {
+    var def = _thrById.get(id);
+    if (!def) return null;
+    var v = clampThreshold(def, _settings.trackingThresholds[id]);
+    return v == null ? def.default : v;
+}
+
+// Effective values for every threshold, as an { id: value } map — the form the
+// tracker reads once per run.
+export function getTrackingThresholds() {
+    var out = {};
+    TRACKING_THRESHOLDS.forEach(function (t) { out[t.id] = getTrackingThreshold(t.id); });
+    return out;
+}
+
+// Commit an { id: value } override map (from the Tracking Wizard's Apply button).
+// Values are clamped to each threshold's range; entries equal to the default are
+// dropped so the stored set stays minimal.
+export function setTrackingThresholds(map) {
+    var next = {};
+    if (map && typeof map === 'object') {
+        Object.keys(map).forEach(function (id) {
+            var def = _thrById.get(id);
+            if (!def) return;
+            var v = clampThreshold(def, map[id]);
+            if (v != null && v !== def.default) next[id] = v;
+        });
+    }
+    _settings.trackingThresholds = next;
     persist();
 }
 

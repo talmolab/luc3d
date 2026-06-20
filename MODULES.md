@@ -196,6 +196,26 @@ which was removed during the ESM migration).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
+**Node weights.** At the start of `matchFrameInstances`, the module resolves a
+per-node weight array (`_nodeWeights`) from the session skeleton via
+`getNodeWeightArray` (`ui/settings.js`, set in the Tracking Wizard). Every
+per-node cost — `epipolarScore`, `reprojectionScore`, the 3D-distance signal in
+`reorderGroupsByPrevTargets`, and each `computeInstanceDistance` call — scales a
+node's contribution by its weight and skips weight-0 nodes, so a node set to 0 is
+ignored by the tracker entirely. `null` weights ⇒ every node weighted 1
+(behaviorally identical to before this feature).
+
+**Tracking thresholds.** `matchFrameInstances` also snapshots the user-editable
+tracking thresholds (`_thresholds = getTrackingThresholds()`, `ui/settings.js`,
+set in the Tracking Wizard). The `thr(id)` helper reads that snapshot (falling
+back to live defaults) so the Tier A scoring knobs and Tier B reprojection gates
+are no longer hard-coded: `epipolarScore` divides by `epipolarDecay`,
+`reprojectionScore` uses `reprojSigma`, `crossViewScore` blends by
+`epipolarWeight`/`reprojWeight`, `matchPairwise` filters auto-mode matches by
+`minMatchScore` and adds `prevIdentityBonus`, and `reprojectionGate(nViews)`
+returns `reprojGate2`/`reprojGate3`/`reprojGate4`. Defaults reproduce the prior
+constants exactly.
+
 **Note.** `reorderGroupsByPrevTargets` passes a true `nTargets × nGroups`
 rectangular cost matrix to `hungarianAlgorithm` (no pre-padding to square
 with a `1000` filler). The solver's internal padding strips padded-row
@@ -236,6 +256,14 @@ rooted in `matchPairwise` dropping *visible* instances:
   `groupByIdentityAndTriangulateAll` (`ui/export-modals.js`, the "Triangulate
   All" path).
 
+**Null-node status.** After a run, `trackCurrentFrame` / `trackAll` count the
+null (non-triangulated) 3D nodes across the groups the tracker formed
+(`countNullNodesInTargets` over each frame's `targets3d`; single-view groups with
+no `points3d` are skipped) and show the total in the bottom-left status bar
+(`#statusNullNodes`, `setNullNodesStatus`) and the completion message. Because
+node weights change which instances get grouped (not which nodes triangulate),
+this is the headline metric for comparing weight settings.
+
 **Auto-cap.** When the user leaves the "Number of animals" prompt empty,
 `trackAll` / `trackCurrentFrame` resolve `numAnimals` via
 `computeMaxInstancesPerView(session)` — the largest instance count seen
@@ -260,6 +288,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `computeInstanceDistance`, `hungarianAlgorithm`.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `getActiveSession`.
+- `../ui/settings.js` — `getNodeWeightArray`, `getTrackingThresholds`,
+  `getTrackingThreshold`.
 - `../import-export/save-load.js` — `setStatus`, `showLoading`, `hideLoading`.
 - `../ui/rendering.js` — `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateInfoPanel`.
@@ -309,7 +339,9 @@ projects 3D targets with distortion before measuring distance to raw detections.
   pixel space — use these whenever reprojections are compared against or drawn
   over raw keypoints), `computeReprojectionError`,
   `computeReprojectionErrors`, `computeMeanReprojectionError`,
-  `computeInstanceDistance`, `hungarianAlgorithm`, `cameraCenter`,
+  `computeInstanceDistance(pointsA, pointsB, weights?)` (optional per-node
+  `weights` → weighted mean distance; weight-0 nodes ignored; omitted ⇒ all 1),
+  `hungarianAlgorithm`, `cameraCenter`,
   `invert3x3`, `backProjectToRay`, `backProjectToRays`,
   `pointToRayDistance`, `pointsToRayDistances`,
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
@@ -888,11 +920,13 @@ the headless test runner doesn't crash on a missing `document`.
 ### ui/settings.js
 
 **Purpose.** Central user-settings store: the default triangulation method
-(`'dlt'` | `'ba'`, default `'dlt'`) plus a comprehensive **catalog of every
-keyboard shortcut** (`ACTION_CATALOG`). Settings persist to `localStorage`
-(`lucid.settings.v1`) and survive reloads. The catalog is the single source of
-truth for the Settings ▸ Keyboard Shortcuts panel — see the keyboard-shortcuts
-note in `CLAUDE.md`.
+(`'dlt'` | `'ba'`, default `'dlt'`), per-skeleton-node **tracking weights**
+(name → weight in `[0,1]`, default `1`), the cross-view **tracking thresholds**
+(`TRACKING_THRESHOLDS` catalog — Tier A scoring knobs + Tier B reprojection
+gates), plus a comprehensive **catalog of every keyboard shortcut**
+(`ACTION_CATALOG`). Settings persist to `localStorage` (`lucid.settings.v1`) and
+survive reloads. The catalog is the single source of truth for the Settings ▸
+Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 
 **Catalog entries.** `{ id, label, category, binding, editable, dispatched }`.
 `binding` is a "+"-joined accelerator (modifier tokens: `Mod` = Ctrl-or-Cmd,
@@ -905,6 +939,20 @@ handler elsewhere and listed for reference only.
 **Key exports.**
 - `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
   read/write the default method used by implicit triangulation paths.
+- `getNodeWeight(name)` / `getNodeWeights()` / `getNodeWeightArray(nodeNames)` /
+  `setNodeWeights(map)` — read/write per-node tracking weights (clamped to
+  `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
+  resolves a parallel weight array for an ordered node-name list — the form the
+  tracker consumes (indexed to match `Instance.points`).
+- `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
+  `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
+  cross-view tracker's user-editable thresholds. `getTrackingThresholdDefs`
+  returns the wizard's render catalog `[{ id, label, default, value, min, max,
+  step, desc }]`; `getTrackingThresholds` returns the effective `{ id: value }`
+  map the tracker snapshots per run. Values clamp to each threshold's range and
+  entries equal to the default are dropped. Ids: `epipolarDecay`, `reprojSigma`,
+  `epipolarWeight`, `reprojWeight`, `minMatchScore`, `prevIdentityBonus`,
+  `reprojGate2`, `reprojGate3`, `reprojGate4`.
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
@@ -921,7 +969,7 @@ handler elsewhere and listed for reference only.
 **Imports from project modules.** None.
 
 **Imported by.** `ui/ui-wiring.js`, `ui/identity-assignment.js`,
-`ui/settings-modal.js`.
+`ui/settings-modal.js`, `pose/tracker.js`.
 
 ---
 
@@ -939,21 +987,29 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 radio rows, initialized from `getDefaultTriangulationMethod()`), **Keyboard
 Shortcuts** (the full `getActions()` catalog grouped by category — editable
 entries get a click-to-capture key chip with conflict rejection; fixed entries
-render a greyed, dashed reference chip), and **Tracking Wizard** (a "Coming
-Soon" placeholder). All edits mutate a local `working` state only (only editable
-bindings are tracked); nothing commits until **Apply**
-(`setDefaultTriangulationMethod` + `applyBindings`). Cancel / close `×` /
-backdrop click / Escape discard. A capture-phase document keydown listener makes
-the modal fully capture the keyboard (background shortcuts don't fire while it's
-open) and is removed on teardown.
+render a greyed, dashed reference chip), and **Tracking Wizard** (two sections:
+**Node Weights** — one row per node of the active session's skeleton with a
+number field, range `0–1`, step `0.01`, spinner arrows suppressed, seeded from
+`getNodeWeight(name)`, with a hint when no skeleton is loaded; and **Tracking
+Thresholds** — one labelled+described number field per `getTrackingThresholdDefs()`
+entry, range/step from the catalog). All edits mutate a local `working` state
+only (only editable bindings are tracked); nothing commits until **Apply**
+(`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
+`setTrackingThresholds`). Cancel / close `×` / backdrop click / Escape discard. A
+capture-phase document keydown listener makes the modal fully capture the
+keyboard (background shortcuts don't fire while it's open) and is removed on
+teardown.
 
 **Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
-`setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`).
+`setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`,
+`getNodeWeight`, `setNodeWeights`, `getTrackingThresholdDefs`,
+`setTrackingThresholds`); `./app-state.js` (`getActiveSession`).
 
 **Imported by.** `ui/ui-wiring.js`.
 
 **User-facing features.** Settings modal — choose default triangulation method,
-remap keyboard shortcuts, Tracking Wizard placeholder.
+remap keyboard shortcuts, set per-node tracking weights (Tracking Wizard, also
+reachable via Tracks ▸ Tracking Wizard).
 
 ---
 
@@ -1316,7 +1372,8 @@ visibility toggles, "seek to next labeled frame".
 **Help** (its dropdown opens right-aligned via `right:0`): `menuDocumentation`
 opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
 `menuSettings` opens the Settings modal via `showSettingsModal()`
-(`ui/settings-modal.js`).
+(`ui/settings-modal.js`). The Tracks menu's `menuTrackingWizard` item opens the
+same modal focused on the Tracking Wizard panel via `showSettingsModal('wizard')`.
 
 **Triangulate dropdowns + default method.** The toolbar `Triangulate` /
 `Triangulate All` buttons are **hover-only** split dropdowns (no click action);
