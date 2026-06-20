@@ -47,7 +47,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, setHandler, dispatchEvent } from './settings.js';
+import { getDefaultTriangulationMethod, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js';
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
@@ -788,48 +788,50 @@ export function setupMenus() {
     document.getElementById('menuHotkeys').addEventListener('click', showHotkeysHelp);
 
     function showHotkeysHelp() {
+        // Generated from the same catalog (ACTION_CATALOG via getActions) that
+        // drives Settings ▸ Keyboard Shortcuts, so this list stays in sync with
+        // the Settings page and any user rebindings.
+        function esc(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
         var overlay = document.createElement('div');
         overlay.className = 'multi-frame-modal-overlay';
         var modal = document.createElement('div');
         modal.className = 'multi-frame-modal';
         modal.style.maxWidth = '550px';
+
+        var rows = '';
+        var lastCategory = null;
+        getActions().forEach(function (a) {
+            if (a.category !== lastCategory) {
+                if (rows) rows += '<tr><td colspan="2" style="height:8px;"></td></tr>';
+                lastCategory = a.category;
+                rows += '<tr><td><b>' + esc(a.category) + '</b></td><td></td></tr>';
+            }
+            rows += '<tr><td><code>' + esc(formatBinding(a.binding)) + '</code></td><td>' + esc(a.label) + '</td></tr>';
+        });
+
         modal.innerHTML =
             '<h3>Keyboard Shortcuts</h3>' +
             '<div style="max-height:60vh;overflow-y:auto;">' +
             '<table class="data-table" style="font-size:12px;">' +
             '<thead><tr><th>Key</th><th>Action</th></tr></thead>' +
-            '<tbody>' +
-            '<tr><td><b>Navigation</b></td><td></td></tr>' +
-            '<tr><td><code>←</code> / <code>→</code></td><td>Previous / Next frame</td></tr>' +
-            '<tr><td><code>Option+←</code> / <code>Option+→</code></td><td>Previous / Next frame with user annotation</td></tr>' +
-            '<tr><td><code>Home</code> / <code>End</code></td><td>First / Last frame</td></tr>' +
-            '<tr><td><code>Space</code></td><td>Play / Pause</td></tr>' +
-            '<tr><td colspan="2" style="height:8px;"></td></tr>' +
-            '<tr><td><b>Editing</b></td><td></td></tr>' +
-            '<tr><td><code>N</code></td><td>Add new instance</td></tr>' +
-            '<tr><td><code>Delete</code></td><td>Delete selected instance</td></tr>' +
-            '<tr><td><code>U</code></td><td>Ungroup selected</td></tr>' +
-            '<tr><td><code>T</code></td><td>Triangulate current frame</td></tr>' +
-            '<tr><td><code>Tab</code> / <code>Shift+Tab</code></td><td>Cycle selection</td></tr>' +
-            '<tr><td><code>Double-click</code></td><td>Convert predicted → user label</td></tr>' +
-            '<tr><td colspan="2" style="height:8px;"></td></tr>' +
-            '<tr><td><b>Identity (select group first)</b></td><td></td></tr>' +
-            '<tr><td><code>1</code> – <code>9</code></td><td>Assign identity 1–9 to selected instance</td></tr>' +
-            '<tr><td colspan="2" style="height:8px;"></td></tr>' +
-            '<tr><td><b>Tracks (select group first)</b></td><td></td></tr>' +
-            '<tr><td><code>Shift+1</code> – <code>Shift+9</code></td><td>Assign track 1–9 (propagates forward)</td></tr>' +
-            '<tr><td colspan="2" style="height:8px;"></td></tr>' +
-            '<tr><td><b>View</b></td><td></td></tr>' +
-            '<tr><td><code>\\</code></td><td>Toggle 3D viewport</td></tr>' +
-            '<tr><td><code>I</code></td><td>Toggle info panel</td></tr>' +
-            '<tr><td><code>Shift+R+\u2192</code> / <code>Shift+R+\u2190</code></td><td>Rotate video CW / CCW (hold for continuous)</td></tr>' +
-            '<tr><td><code>?</code></td><td>Show this help</td></tr>' +
-            '</tbody></table></div>' +
+            '<tbody>' + rows + '</tbody></table></div>' +
             '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
-        document.getElementById('hotkeysClose').addEventListener('click', function () { overlay.remove(); });
-        overlay.addEventListener('click', function (ev) { if (ev.target === overlay) overlay.remove(); });
+
+        function teardown() {
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+        }
+        function onKey(ev) {
+            if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); teardown(); }
+        }
+        document.addEventListener('keydown', onKey, true);
+        document.getElementById('hotkeysClose').addEventListener('click', teardown);
+        overlay.addEventListener('click', function (ev) { if (ev.target === overlay) teardown(); });
     }
 
     document.getElementById('menuSaveSkeleton').addEventListener('click', function () {
@@ -1330,6 +1332,13 @@ export function setupUI() {
         if (e.key === ',' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
             e.preventDefault();
             showSettingsModal();
+            return;
+        }
+        // Cmd/Ctrl+T = open Tracking Wizard (must precede the Track All block so
+        // the unshifted combo isn't shadowed; Shift differs from Track All).
+        if ((e.key === 't' || e.key === 'T') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            showSettingsModal('wizard');
             return;
         }
         // --- Ctrl+Shift+T = Track All ---

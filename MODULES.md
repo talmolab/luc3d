@@ -1373,7 +1373,12 @@ visibility toggles, "seek to next labeled frame".
 opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
 `menuSettings` opens the Settings modal via `showSettingsModal()`
 (`ui/settings-modal.js`). The Tracks menu's `menuTrackingWizard` item opens the
-same modal focused on the Tracking Wizard panel via `showSettingsModal('wizard')`.
+same modal focused on the Tracking Wizard panel via `showSettingsModal('wizard')`,
+as does the **`Mod+T`** shortcut (catalog id `openTrackingWizard`, handled by the
+dedicated keydown block). The **Hot Keys** modal (`showHotkeysHelp`,
+`menuHotkeys`) is generated from `getActions()` — the same `ACTION_CATALOG`
+snapshot that drives Settings ▸ Keyboard Shortcuts — so it stays in sync with the
+catalog and any user rebindings (grouped by category; Esc closes it).
 
 **Triangulate dropdowns + default method.** The toolbar `Triangulate` /
 `Triangulate All` buttons are **hover-only** split dropdowns (no click action);
