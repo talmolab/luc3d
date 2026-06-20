@@ -958,12 +958,17 @@ handler elsewhere and listed for reference only.
 - `getBinding(id)` — effective binding string (user override or catalog default).
 - `setHandler(id, fn)` — attach the runtime handler for a dispatched action.
 - `matchesBinding(id, e)` — true if a `KeyboardEvent` triggers the action under
-  its effective binding (combo-aware; used by `timeline-controller`-style owners
-  and by `dispatchEvent`).
+  its effective binding (single-chord only; for external owners like
+  `timeline-controller`).
 - `dispatchEvent(e)` — resolve a `KeyboardEvent` to a dispatched action and run
-  its handler (skips when typing in inputs); returns `true` if handled.
+  its handler (skips when typing in inputs); returns `true` if handled. Supports
+  **multi-key sequence** bindings (chords separated by spaces, e.g. `"g t"`) via a
+  rolling keystroke buffer with a 1.2 s gap reset; single-chord bindings fire
+  immediately, the longest matching sequence wins (ties → catalog order). A
+  binding may be one chord (`Mod+Shift+I`) or a sequence (`g t`).
 - `applyBindings(map)` — commit an `{ id: binding }` override map (editable-only;
-  bindings equal to the default are dropped); `resetBindings()` clears all.
+  non-default, parseable chord/sequence strings; defaults dropped);
+  `resetBindings()` clears all.
 - `formatBinding(str)` — prettify a binding for display; renders the `Mod`
   token as **Cmd** on Apple devices and **Ctrl** elsewhere (via
   `navigator.platform`), so the Hot Keys modal and Settings panel show the
@@ -989,7 +994,10 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 **Behavior.** Three panels: **Default Triangulation** (single-select DLT/BA
 radio rows, initialized from `getDefaultTriangulationMethod()`), **Keyboard
 Shortcuts** (the full `getActions()` catalog grouped by category — editable
-entries get a click-to-capture key chip with conflict rejection; fixed entries
+entries get a click-to-capture key chip that records a **chord or a multi-key
+sequence**: keep pressing keys (the primary Ctrl/Cmd modifier is normalized to
+`Mod` via `chordFromEvent`) until you click anywhere to set, or Esc to cancel,
+with duplicate-binding rejection; fixed entries
 render a greyed, dashed reference chip), and **Tracking Wizard** (two sections:
 **Node Weights** — one row per node of the active session's skeleton with a
 number field, range `0–1`, step `0.01`, spinner arrows suppressed, seeded from
@@ -1390,15 +1398,22 @@ triangulation — the `t` shortcut, the Edit ▸ Triangulate menu item, and the
 auto-assign flow in `identity-assignment.js` — uses the user's default method
 from `getDefaultTriangulationMethod()` (`ui/settings.js`).
 
-**Catalog-driven keyboard shortcuts.** The dispatched shortcuts attach runtime
-handlers via `setHandler(id, fn)` (from `ui/settings.js`) and are resolved by a
-single dedicated `keydown` listener calling `dispatchEvent(e)`. This covers the
-editable plain keys (`u`/`p`/`r`/`e` toggles, `v` view mode, `g` grid, `t`
-triangulate, `n` add-instance, `?` help) plus the fixed-binding `Shift+U`
-ungroup. Their bindings live in `ACTION_CATALOG` (the single source of truth for
-the Settings panel). Other shortcuts (Save, transport, `Mod+J`, identity/track
-digits, etc.) keep their own handlers and appear in the catalog as fixed
-reference entries. `Enter`/`Escape` remain hard-coded modal-button special cases.
+**Catalog-driven keyboard shortcuts.** Every **standard single-action** shortcut
+is now dispatched: it attaches a runtime handler via `setHandler(id, fn)` (from
+`ui/settings.js`) and is resolved by a single dedicated `keydown` listener
+calling `dispatchEvent(e)`, so it is **editable and rebindable** (chords or
+multi-key sequences) from the Settings panel. This covers the plain-key toggles
+(`u`/`p`/`r`/`e`, `v`, `g`, `t`, `n`, `i` info, `\` 3D, `?`, `Shift+U` ungroup,
+`f` find), the track actions (`Shift+T`, `Mod+Shift+T`), the wizard (`Mod+I`,
+moved off `Mod+T`), smart-add (`Mod+Shift+I`, moved off `Mod+I`), settings
+(`Mod+,`) and load-session (`Mod+O`). Bindings live in `ACTION_CATALOG` (the
+single source of truth for the Settings panel). The remaining shortcuts keep
+their own dedicated handlers and appear as **fixed** reference entries (not
+rebindable): `Mod+S` Save (works while typing), transport (`←/→`, `Space`,
+`Home`/`End`, `Opt+←/→`), the `1–9` identity / `Shift+1–9` track digit ranges,
+zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete`/`c` (canvas-context ops in
+`interaction.js`), and `Mod+J`/`Mod+Shift+J` (timeline-controller).
+`Enter`/`Escape` remain hard-coded modal-button special cases.
 
 **Block 2 (Prompt 4) visibility wiring + rename migration.** Every
 track-add / track-rename / track-delete / identity-add / identity-rename /

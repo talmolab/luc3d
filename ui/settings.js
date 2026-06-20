@@ -36,8 +36,8 @@ const DEFAULT_NODE_WEIGHT = 1;
 const ACTION_CATALOG = [
     // --- File ---
     { id: 'save', label: 'Save project', category: 'File', binding: 'Mod+S', editable: false, dispatched: false },
-    { id: 'loadSession', label: 'Load single session folder', category: 'File', binding: 'Mod+O', editable: false, dispatched: false },
-    { id: 'openSettings', label: 'Open Settings', category: 'File', binding: 'Mod+,', editable: false, dispatched: false },
+    { id: 'loadSession', label: 'Load single session folder', category: 'File', binding: 'Mod+O', editable: true, dispatched: true },
+    { id: 'openSettings', label: 'Open Settings', category: 'File', binding: 'Mod+,', editable: true, dispatched: true },
 
     // --- Navigation ---
     { id: 'prevNextFrame', label: 'Previous / Next frame', category: 'Navigation', binding: '← / →', editable: false, dispatched: false },
@@ -47,24 +47,24 @@ const ACTION_CATALOG = [
     { id: 'gotoFrame', label: 'Go to frame number', category: 'Navigation', binding: 'Mod+Shift+J', editable: false, dispatched: false },
 
     // --- Editing ---
-    { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+I', editable: false, dispatched: false },
+    { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+Shift+I', editable: true, dispatched: true },
     { id: 'addInstance', label: 'Add instance', category: 'Editing', binding: 'n', editable: true, dispatched: true },
     { id: 'deleteInstance', label: 'Delete selected (Shift: cascade)', category: 'Editing', binding: 'Delete', editable: false, dispatched: false },
-    { id: 'ungroup', label: 'Ungroup selected', category: 'Editing', binding: 'Shift+u', editable: false, dispatched: true },
+    { id: 'ungroup', label: 'Ungroup selected', category: 'Editing', binding: 'Shift+u', editable: true, dispatched: true },
     { id: 'group', label: 'Group selected (assignment mode)', category: 'Editing', binding: 'c', editable: false, dispatched: false },
     { id: 'triangulate', label: 'Triangulate current frame', category: 'Editing', binding: 't', editable: true, dispatched: true },
-    { id: 'trackFrame', label: 'Track current frame', category: 'Editing', binding: 'Shift+T', editable: false, dispatched: false },
-    { id: 'trackAll', label: 'Track all frames', category: 'Editing', binding: 'Mod+Shift+T', editable: false, dispatched: false },
-    { id: 'openTrackingWizard', label: 'Open Tracking Wizard', category: 'Editing', binding: 'Mod+T', editable: false, dispatched: false },
-    { id: 'findMatch', label: 'Find match for selection', category: 'Editing', binding: 'f', editable: false, dispatched: false },
+    { id: 'trackFrame', label: 'Track current frame', category: 'Editing', binding: 'Shift+T', editable: true, dispatched: true },
+    { id: 'trackAll', label: 'Track all frames', category: 'Editing', binding: 'Mod+Shift+T', editable: true, dispatched: true },
+    { id: 'openTrackingWizard', label: 'Open Tracking Wizard', category: 'Editing', binding: 'Mod+I', editable: true, dispatched: true },
+    { id: 'findMatch', label: 'Find match for selection', category: 'Editing', binding: 'f', editable: true, dispatched: true },
 
     // --- Identity & Tracks (select a group first) ---
     { id: 'assignIdentity', label: 'Assign identity 1–9 to selection', category: 'Identity & Tracks', binding: '1 – 9', editable: false, dispatched: false },
     { id: 'assignTrack', label: 'Assign track 1–9 (propagates)', category: 'Identity & Tracks', binding: 'Shift+1 – 9', editable: false, dispatched: false },
 
     // --- View ---
-    { id: 'toggleInfoPanel', label: 'Toggle info panel', category: 'View', binding: 'i', editable: false, dispatched: false },
-    { id: 'toggle3D', label: 'Toggle 3D viewport', category: 'View', binding: '\\', editable: false, dispatched: false },
+    { id: 'toggleInfoPanel', label: 'Toggle info panel', category: 'View', binding: 'i', editable: true, dispatched: true },
+    { id: 'toggle3D', label: 'Toggle 3D viewport', category: 'View', binding: '\\', editable: true, dispatched: true },
     { id: 'toggleTimeline', label: 'Collapse / show timeline', category: 'View', binding: 'Mod+J', editable: false, dispatched: false },
     { id: 'cycleViewMode', label: 'Cycle single-view mode', category: 'View', binding: 'v', editable: true, dispatched: true },
     { id: 'gridMode', label: 'Grid view', category: 'View', binding: 'g', editable: true, dispatched: true },
@@ -338,14 +338,26 @@ function parseBinding(str) {
     return b.key ? b : null;
 }
 
-// True if KeyboardEvent `e` triggers the action `id` under its effective
-// binding. Only meaningful for dispatched actions with a well-formed binding.
-export function matchesBinding(id, e) {
-    const a = _byId.get(id);
-    if (!a || !a.dispatched || !e) return false;
-    const b = parseBinding(getBinding(id));
-    if (!b) return false;
+// Parse a binding string into a SEQUENCE of chord matchers (chords separated by
+// whitespace; e.g. "g t" is press-g-then-t, "Mod+Shift+I" is one chord). Returns
+// null if any chord is malformed.
+function parseSequence(str) {
+    if (!str || typeof str !== 'string') return null;
+    const chords = str.trim().split(/\s+/).filter(Boolean);
+    if (!chords.length) return null;
+    const out = [];
+    for (let i = 0; i < chords.length; i++) {
+        const b = parseBinding(chords[i]);
+        if (!b) return null;
+        out.push(b);
+    }
+    return out;
+}
 
+// True if a single chord matcher `b` matches a keyboard-event-like `e`
+// (`{ key, ctrlKey, metaKey, shiftKey, altKey }`).
+function matchChord(b, e) {
+    if (!b || !e) return false;
     // Ctrl / Cmd.
     if (b.mod) {
         if (!(e.ctrlKey || e.metaKey)) return false;
@@ -358,8 +370,8 @@ export function matchesBinding(id, e) {
 
     const isAlpha = /^[a-z]$/i.test(b.key);
     // Shift. For a bare letter, shift must NOT be held (Shift+u is a different
-    // binding). For a symbol key (e.g. "?") whose character already implies
-    // shift, the shift flag is ignored unless explicitly required.
+    // binding). For a symbol key whose character already implies shift, the shift
+    // flag is ignored unless explicitly required.
     if (b.shift) {
         if (!e.shiftKey) return false;
     } else if (isAlpha) {
@@ -370,18 +382,66 @@ export function matchesBinding(id, e) {
     return isAlpha ? ek.toLowerCase() === b.key.toLowerCase() : ek === b.key;
 }
 
-// Resolve a KeyboardEvent to a dispatched action and run its handler. Skips when
-// typing in an input. Returns true if an action handled the event.
+// True if KeyboardEvent `e` triggers the action `id` under its effective binding.
+// Only meaningful for dispatched actions whose binding is a single chord (the
+// form used by external owners like timeline-controller).
+export function matchesBinding(id, e) {
+    const a = _byId.get(id);
+    if (!a || !a.dispatched || !e) return false;
+    const seq = parseSequence(getBinding(id));
+    if (!seq || seq.length !== 1) return false;
+    return matchChord(seq[0], e);
+}
+
+// Names of keys that are modifiers on their own — ignored as sequence steps so a
+// chord like "Shift+T" isn't recorded as two presses.
+function isModifierKey(k) {
+    return k === 'Shift' || k === 'Control' || k === 'Meta' ||
+        k === 'Alt' || k === 'AltGraph' || k === 'CapsLock';
+}
+
+// Rolling buffer of recent non-modifier keystrokes, for multi-key sequence
+// matching. Reset when too much time elapses between keys.
+let _seqBuf = [];
+const _SEQ_GAP_MS = 1200;
+
+function _now() {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+
+// Resolve a KeyboardEvent to a dispatched action and run its handler, supporting
+// multi-key sequence bindings. Skips when typing in an input. Returns true if an
+// action handled the event (single-chord bindings fire immediately).
 export function dispatchEvent(e) {
     if (!e) return false;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return false;
+    if (isModifierKey(e.key)) return false; // wait for the real key in a chord
+
+    const now = _now();
+    if (_seqBuf.length && (now - _seqBuf[_seqBuf.length - 1].t) > _SEQ_GAP_MS) _seqBuf = [];
+    _seqBuf.push({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey, altKey: e.altKey, t: now });
+    if (_seqBuf.length > 8) _seqBuf = _seqBuf.slice(-8);
+
+    // Pick the longest sequence whose chords match the tail of the buffer; ties
+    // resolve to catalog order (first wins), matching the old single-chord rule.
+    let best = null, bestLen = 0;
     for (let i = 0; i < ACTION_CATALOG.length; i++) {
         const a = ACTION_CATALOG[i];
-        if (a.dispatched && _handlers.has(a.id) && matchesBinding(a.id, e)) {
-            _handlers.get(a.id)();
-            return true;
+        if (!a.dispatched || !_handlers.has(a.id)) continue;
+        const seq = parseSequence(getBinding(a.id));
+        if (!seq || seq.length > _seqBuf.length) continue;
+        let ok = true;
+        const off = _seqBuf.length - seq.length;
+        for (let j = 0; j < seq.length; j++) {
+            if (!matchChord(seq[j], _seqBuf[off + j])) { ok = false; break; }
         }
+        if (ok && seq.length > bestLen) { best = a; bestLen = seq.length; }
+    }
+    if (best) {
+        _seqBuf = [];
+        _handlers.get(best.id)();
+        return true;
     }
     return false;
 }
@@ -394,7 +454,9 @@ export function applyBindings(map) {
     Object.keys(map).forEach(function (id) {
         const a = _byId.get(id);
         const v = map[id];
-        if (a && a.editable && v && v !== a.binding) next[id] = v;
+        // Only keep editable actions whose binding is a valid, non-default,
+        // parseable chord/sequence string.
+        if (a && a.editable && v && v !== a.binding && parseSequence(v)) next[id] = v;
     });
     _settings.keybindings = next;
     persist();
@@ -417,11 +479,16 @@ function isAppleDevice() {
 
 // Prettify a binding string for display: render the platform-appropriate
 // modifier for the `Mod` token (Cmd on Apple devices, Ctrl elsewhere), uppercase
-// a bare single letter, and leave accelerators / free-form strings intact.
+// a bare single letter, and join multi-key sequences with a space. Free-form
+// reference strings (e.g. "← / →", "1 – 9") pass through unchanged because the
+// per-token formatting is idempotent on them.
 export function formatBinding(str) {
     if (!str) return '';
-    var s = str.replace(/\bmod\b/gi, isAppleDevice() ? 'Cmd' : 'Ctrl');
-    if (/^[a-z]$/.test(s)) return s.toUpperCase();
-    // Uppercase the trailing single-letter key of a simple accelerator.
-    return s.replace(/\+([a-z])$/, function (_m, c) { return '+' + c.toUpperCase(); });
+    var mod = isAppleDevice() ? 'Cmd' : 'Ctrl';
+    return String(str).trim().split(/\s+/).map(function (chord) {
+        var c = chord.replace(/\bmod\b/gi, mod);
+        if (/^[a-z]$/.test(c)) return c.toUpperCase();
+        // Uppercase the trailing single-letter key of a simple accelerator.
+        return c.replace(/\+([a-z])$/, function (_m, ch) { return '+' + ch.toUpperCase(); });
+    }).join(' ');
 }

@@ -23,6 +23,39 @@ import {
 } from './settings.js';
 import { getActiveSession } from './app-state.js';
 
+// True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
+// is recorded as the cross-platform `Mod` token (matching the catalog defaults).
+function _isAppleDevice() {
+    if (typeof navigator === 'undefined') return false;
+    var plat = navigator.platform ||
+        (navigator.userAgentData && navigator.userAgentData.platform) ||
+        navigator.userAgent || '';
+    return /Mac|iPhone|iPad|iPod/i.test(plat);
+}
+
+// Keys that are modifiers on their own — ignored as a sequence step.
+function isModifierKeyName(k) {
+    return k === 'Shift' || k === 'Control' || k === 'Meta' ||
+        k === 'Alt' || k === 'AltGraph' || k === 'CapsLock';
+}
+
+// Build a canonical chord string (e.g. "Mod+Shift+I") from a KeyboardEvent. The
+// platform-primary modifier becomes `Mod` so captured bindings match catalog
+// defaults and conflict-detect cleanly.
+function chordFromEvent(e) {
+    const apple = _isAppleDevice();
+    const parts = [];
+    if (apple) {
+        if (e.metaKey) parts.push('Mod'); else if (e.ctrlKey) parts.push('Ctrl');
+    } else {
+        if (e.ctrlKey) parts.push('Mod'); else if (e.metaKey) parts.push('Cmd');
+    }
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    parts.push(e.key);
+    return parts.join('+');
+}
+
 // Show the Settings modal. `initialPanel` is one of 'triangulation' |
 // 'keyboard' | 'wizard' and defaults to 'triangulation'.
 export function showSettingsModal(initialPanel) {
@@ -227,61 +260,76 @@ export function showSettingsModal(initialPanel) {
             keyChip.classList.add('fixed');
             keyChip.title = 'This shortcut is fixed';
         } else {
+            keyChip.title = 'Click, then press keys (a chord or a multi-key sequence). Click anywhere to set; Esc cancels.';
             keyChip.addEventListener('click', function () {
                 // Ignore re-entry if already capturing this (or another) chip.
                 if (capturingState) return;
 
                 const previousText = keyChip.textContent;
+                const previousBinding = working.keyMap[action.id];
+                let seq = [];
                 keyChip.classList.add('capturing');
-                keyChip.textContent = 'Press a key…';
+                keyChip.textContent = 'Press keys…';
 
-                function onKeyDown(e) {
-                    e.preventDefault();
+                function render() {
+                    keyChip.textContent = seq.length ? formatBinding(seq.join(' ')) : 'Press keys…';
+                }
+
+                function cleanup() {
                     document.removeEventListener('keydown', onKeyDown, true);
+                    document.removeEventListener('mousedown', onStop, true);
                     capturingState = null;
+                    keyChip.classList.remove('capturing');
+                }
 
-                    if (e.key === 'Escape') {
-                        // Cancel capture, restore previous value.
-                        keyChip.classList.remove('capturing');
-                        keyChip.textContent = previousText;
-                        return;
-                    }
+                function cancel() {
+                    cleanup();
+                    keyChip.textContent = previousText;
+                }
 
-                    // Only accept single printable characters (rejects modifiers,
-                    // arrows, function keys, etc.).
-                    if (e.key.length !== 1) {
-                        keyChip.classList.remove('capturing');
-                        keyChip.textContent = previousText;
-                        return;
-                    }
-
-                    const newKey = e.key;
-
-                    // Conflict check: reject a key already used by any other
-                    // action (editable or fixed), case-insensitively.
+                function finalize() {
+                    cleanup();
+                    if (!seq.length) { keyChip.textContent = previousText; return; }
+                    const binding = seq.join(' ');
+                    // Conflict: reject a binding already used by another action.
                     let conflict = false;
                     actions.forEach(function (other) {
                         if (other.id === action.id) return;
                         const ob = currentBindingOf(other);
-                        if (ob && ob.toLowerCase() === newKey.toLowerCase()) conflict = true;
+                        if (ob && ob.toLowerCase() === binding.toLowerCase()) conflict = true;
                     });
                     if (conflict) {
-                        keyChip.classList.remove('capturing');
+                        working.keyMap[action.id] = previousBinding;
                         keyChip.textContent = 'In use';
-                        setTimeout(function () {
-                            keyChip.textContent = previousText;
-                        }, 700);
+                        setTimeout(function () { keyChip.textContent = previousText; }, 800);
                         return;
                     }
-
-                    // Accept.
-                    working.keyMap[action.id] = newKey;
-                    keyChip.classList.remove('capturing');
-                    keyChip.textContent = formatBinding(newKey);
+                    working.keyMap[action.id] = binding;
+                    keyChip.textContent = formatBinding(binding);
                 }
+
+                function onKeyDown(e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    if (e.key === 'Escape') { cancel(); return; }
+                    if (isModifierKeyName(e.key)) return;  // wait for the real key
+                    if (e.key === ' ') return;             // space can't be a sequence token
+                    seq.push(chordFromEvent(e));
+                    render();
+                }
+
+                // A click anywhere ends key input and commits the sequence.
+                function onStop() { finalize(); }
 
                 capturingState = { chip: keyChip };
                 document.addEventListener('keydown', onKeyDown, true);
+                // Defer the click-to-stop listener so the click that STARTED
+                // capture doesn't immediately finalize it.
+                setTimeout(function () {
+                    if (capturingState && capturingState.chip === keyChip) {
+                        document.addEventListener('mousedown', onStop, true);
+                    }
+                }, 0);
             });
         }
 
@@ -292,7 +340,7 @@ export function showSettingsModal(initialPanel) {
 
     const kbdHint = document.createElement('div');
     kbdHint.className = 'settings-kbd-hint';
-    kbdHint.textContent = 'Click an editable key, then press the new key. Greyed keys are fixed. Changes apply when you click Apply.';
+    kbdHint.textContent = 'Click a key, then press a chord or a multi-key sequence (keep typing for a sequence); click anywhere to set, Esc to cancel. Greyed keys are fixed. Changes apply when you click Apply.';
     kbdPanel.appendChild(kbdHint);
 
     panelContainer.appendChild(kbdPanel);

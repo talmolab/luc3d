@@ -1218,25 +1218,8 @@ export function setupUI() {
     });
 
     // Additional keyboard shortcuts
-    document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-        switch (e.key) {
-            case 'i':
-            case 'I':
-                if (!e.ctrlKey && !e.metaKey) {
-                    toggleInfoPanel();
-                    e.preventDefault();
-                }
-                break;
-            case '\\':
-                if (!e.ctrlKey && !e.metaKey) {
-                    toggle3DViewport();
-                    e.preventDefault();
-                }
-                break;
-        }
-    });
+    // (Info-panel `i` and 3D-viewport `\` toggles are now catalog-dispatched and
+    // rebindable — see the setHandler('toggleInfoPanel'/'toggle3D') calls.)
 
     // --- Identity & Track hotkeys ---
     document.addEventListener('keydown', function (e) {
@@ -1313,6 +1296,20 @@ export function setupUI() {
         }
     });
     setHandler('showHotkeys', function () { showHotkeysHelp(); });
+    // Standard single-action shortcuts, now catalog-dispatched (and rebindable).
+    setHandler('openSettings', function () { showSettingsModal(); });
+    setHandler('openTrackingWizard', function () { showSettingsModal('wizard'); });
+    setHandler('loadSession', function () { loadSingleSessionFromCache(); });
+    setHandler('addInstanceSmart', function () { addNewInstanceSmart(); });
+    setHandler('trackFrame', function () { trackCurrentFrame(); });
+    setHandler('trackAll', function () { trackAll(); });
+    setHandler('findMatch', function () {
+        if (interactionManager && (interactionManager.selectedUnlinked || interactionManager.selectedInstanceGroup)) {
+            findMatchForSelected();
+        }
+    });
+    setHandler('toggleInfoPanel', function () { toggleInfoPanel(); });
+    setHandler('toggle3D', function () { toggle3DViewport(); });
 
     // Single dispatcher for catalog-driven shortcuts. Runs before the structural
     // handlers below; if a catalog action matches it consumes the event.
@@ -1322,71 +1319,19 @@ export function setupUI() {
 
     // --- New keyboard shortcuts (Prompt 36) ---
     document.addEventListener('keydown', function (e) {
-        // Ctrl+S / Cmd+S = Quick Save
+        // Ctrl+S / Cmd+S = Quick Save (kept as a dedicated handler so it works
+        // even while typing in a field; not catalog-rebindable).
         if (e.key === 's' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
             e.preventDefault();
             quickSave();
             return;
         }
-        // Cmd/Ctrl+, = open Settings (standard preferences shortcut)
-        if (e.key === ',' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-            e.preventDefault();
-            showSettingsModal();
-            return;
-        }
-        // Cmd/Ctrl+T = open Tracking Wizard (must precede the Track All block so
-        // the unshifted combo isn't shadowed; Shift differs from Track All).
-        if ((e.key === 't' || e.key === 'T') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-            e.preventDefault();
-            showSettingsModal('wizard');
-            return;
-        }
-        // --- Ctrl+Shift+T = Track All ---
-        if (e.key === 'T' && e.shiftKey && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            trackAll();
-            return;
-        }
-        // --- Shift+T = Track Frame ---
-        if (e.key === 'T' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-            e.preventDefault();
-            trackCurrentFrame();
-            return;
-        }
-        // F = Find Match for selected instance
-        if (e.key === 'f' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-            if (interactionManager && (interactionManager.selectedUnlinked || interactionManager.selectedInstanceGroup)) {
-                e.preventDefault();
-                findMatchForSelected();
-            }
-        }
-        // --- Cmd/Ctrl shortcuts (work even in inputs) ---
-        // Block 1 (Prompt 4): plain Ctrl/Cmd+J now toggles the timeline,
-        // and Ctrl/Cmd+Shift+J fires the legacy "Change Frame Number"
-        // command. Both bindings live in `ui/timeline-controller.js` and
-        // are installed once during `setupTimeline()`. Don't return early
-        // for those — let them propagate to the timeline handler.
-        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
-            switch (e.key) {
-                case 'o':
-                case 'O': {
-                    // Load single session folder using cached type
-                    e.preventDefault();
-                    loadSingleSessionFromCache();
-                    break;
-                }
-                case 'i':
-                case 'I': {
-                    // Add new instance with smart initialization
-                    e.preventDefault();
-                    addNewInstanceSmart();
-                    break;
-                }
-            }
-            return;
-        }
+        // NOTE: Settings (Mod+,), Tracking Wizard (Mod+I), Load session (Mod+O),
+        // Add-instance-smart (Mod+Shift+I), Track Frame (Shift+T), Track All
+        // (Mod+Shift+T) and Find Match (f) are now catalog-dispatched and
+        // rebindable — their handlers are attached via setHandler() above and run
+        // through dispatchEvent(). Mod+J / Mod+Shift+J still belong to the
+        // timeline handler (`ui/timeline-controller.js`).
 
         // --- Plain key shortcuts (skip when typing in inputs or any modifier held) ---
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
