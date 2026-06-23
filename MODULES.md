@@ -302,9 +302,13 @@ projects 3D targets with distortion before measuring distance to raw detections.
 `triangulateAndReproject` reports the reprojection error in **both** spaces:
 `meanError`/`errors` (distorted — what is drawn and broken down per view/node)
 and `meanErrorUndistorted`/`errorsUndistorted` (ideal pinhole — the space BA
-actually minimizes). The info panel shows the two headline averages side by side
-(labelled "Distorted" / "Undistorted"); the per-view and per-node breakdowns
-remain distorted-space.
+actually minimizes). The info panel shows the distorted value as the headline
+("N.NN px", colour-coded) with the undistorted value as a small subtitle below
+it ("undist N.NN px"); the per-view and per-node breakdowns remain
+distorted-space. Both error spaces are recomputed on project load — `.slp`
+projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
+(`_restoreProjectV2`) — mirroring this dual computation so the undistorted
+subtitle is populated for loaded projects, not just freshly triangulated ones.
 
 **Key exports.**
 - BA math: `triangulatePointBA(observations, projMatrices, initial?, options?)`,

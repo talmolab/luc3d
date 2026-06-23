@@ -2145,23 +2145,17 @@ body {
 }
 
 /* Reprojection error display */
-.error-display-row {
-  display: flex;
-  gap: 8px;
-}
-
-.error-stat {
-  flex: 1;
+.error-display-undist {
   text-align: center;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: -8px;
+  padding-bottom: 10px;
 }
 
-.error-stat-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-top: -6px;
+.error-display-undist:empty {
+  display: none;
 }
 
 .error-display {

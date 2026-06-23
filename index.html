@@ -259,16 +259,8 @@
                     <div class="info-section" id="reprojErrorSection" style="display:none">
                         <h3>Reprojection Error</h3>
                         <div class="error-method" id="errorMethod" style="display:none"></div>
-                        <div class="error-display-row">
-                            <div class="error-stat">
-                                <div class="error-display" id="errorDisplay">-</div>
-                                <div class="error-stat-label">Distorted</div>
-                            </div>
-                            <div class="error-stat">
-                                <div class="error-display" id="errorDisplayUndist">-</div>
-                                <div class="error-stat-label">Undistorted</div>
-                            </div>
-                        </div>
+                        <div class="error-display" id="errorDisplay">-</div>
+                        <div class="error-display-undist" id="errorDisplayUndist"></div>
                         <div id="perCameraErrors"></div>
                         <details id="errorBreakdownDetails" style="margin-top:6px;" open>
                             <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);user-select:none;">Per-node breakdown</summary>

@@ -9,7 +9,7 @@ import {
     InstanceGroup, Session,
 } from '../pose/pose-data.js';
 import {
-    reprojectPointsCamera, computeReprojectionErrors,
+    reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
 import {
@@ -641,7 +641,8 @@ export async function handleLoadSlpFile(slpFile) {
                             if (obsInst) grp.observedPoints[session.cameras[ci3].name] = obsInst.points;
                         }
 
-                        // Compute per-camera reprojection errors
+                        // Compute per-camera reprojection errors (distorted/native
+                        // pixel space): re-distorted reprojection vs raw observation.
                         var trErrors = {};
                         var trTotalErr = 0, trTotalCount = 0;
                         for (var trCamName in grp.reprojections) {
@@ -658,12 +659,39 @@ export async function handleLoadSlpFile(slpFile) {
                             }
                         }
 
+                        // Undistorted-space errors (mirror triangulateAndReproject
+                        // Step 5): ideal pinhole reprojection vs undistorted
+                        // observation. Without this the Undistorted headline reads
+                        // "-" for groups loaded from an SLP project.
+                        var trErrorsUndist = {};
+                        var trTotalErrU = 0, trTotalCountU = 0;
+                        for (var ciu = 0; ciu < session.cameras.length; ciu++) {
+                            var camU = session.cameras[ciu];
+                            if (!camU.projectionMatrix) continue;
+                            var rawObsU = grp.observedPoints[camU.name];
+                            if (!rawObsU) continue;
+                            var idealRep = reprojectPoints(grp.points3d, camU.projectionMatrix);
+                            var obsUndist = [];
+                            for (var ku = 0; ku < rawObsU.length; ku++) {
+                                obsUndist.push(rawObsU[ku] != null ? camU.undistortPoint(rawObsU[ku]) : null);
+                            }
+                            trErrorsUndist[camU.name] = computeReprojectionErrors(obsUndist, idealRep);
+                            for (var eiu = 0; eiu < trErrorsUndist[camU.name].length; eiu++) {
+                                if (trErrorsUndist[camU.name][eiu] != null) {
+                                    trTotalErrU += trErrorsUndist[camU.name][eiu];
+                                    trTotalCountU++;
+                                }
+                            }
+                        }
+
                         frameTriResults.push({
                             group: grp,
                             points3d: grp.points3d,
                             reprojections: grp.reprojections,
                             errors: trErrors,
-                            meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null
+                            errorsUndistorted: trErrorsUndist,
+                            meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null,
+                            meanErrorUndistorted: trTotalCountU > 0 ? trTotalErrU / trTotalCountU : null
                         });
 
                         grp.markClean();

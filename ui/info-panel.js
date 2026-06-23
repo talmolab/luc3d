@@ -1108,7 +1108,14 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
         }
     };
     setErrorStat(document.getElementById('errorDisplay'), meanError);
-    setErrorStat(document.getElementById('errorDisplayUndist'), meanErrorUndist);
+    // Undistorted residual as a small subtitle below the distorted headline
+    // (e.g. "undist 4.17 px"); blank when unavailable.
+    const undistEl = document.getElementById('errorDisplayUndist');
+    if (undistEl) {
+        undistEl.textContent = meanErrorUndist != null
+            ? ('undist ' + meanErrorUndist.toFixed(2) + ' px')
+            : '';
+    }
 
     // Triangulation method label ('DLT' or 'Bundle Adjustment'). Prefer the
     // per-result method; fall back to the group's recorded method.

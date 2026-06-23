@@ -10,7 +10,7 @@ import {
     InstanceGroup, Session,
 } from '../pose/pose-data.js';
 import {
-    getInstanceGroupsForFrame, storeReprojectedInstances,
+    getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
 import { OnDemandVideoDecoder } from '../loading/video.js';
 import { createDemoSkeleton } from '../demo-data.js';
@@ -1375,20 +1375,34 @@ function _restoreProjectV2(data) {
     }
     state.triangulationResults = new Map();
 
+    // Camera lookup by name, for recomputing the undistorted-space error below.
+    var trCamByName = {};
+    for (var trci = 0; trci < cameras.length; trci++) trCamByName[cameras[trci].name] = cameras[trci];
+
     // Rebuild triangulationResults from saved reprojection/error data
     for (var [trFrameIdx, trGroups] of session.instanceGroups) {
         var trFrameResults = [];
             for (var trgi = 0; trgi < trGroups.length; trgi++) {
                 var trGroup = trGroups[trgi];
                 if (trGroup.points3d && trGroup.reprojections) {
-                    // Recompute errors from saved observed + reprojected points
+                    // Distorted-space error from saved observed + reprojected
+                    // points (saved reprojections are native/distorted pixels).
                     var trErrors = {};
                     var trTotalErr = 0, trTotalCount = 0;
+                    // Undistorted-space error (mirror triangulateAndReproject
+                    // Step 5): ideal pinhole reprojection vs undistorted obs, so
+                    // the Undistorted headline isn't blank for loaded projects.
+                    var trErrorsUndist = {};
+                    var trTotalErrU = 0, trTotalCountU = 0;
                     for (var trCamName in trGroup.reprojections) {
                         var trObs = trGroup.observedPoints ? trGroup.observedPoints[trCamName] : null;
                         var trRep = trGroup.reprojections[trCamName];
                         if (!trObs || !trRep) continue;
                         trErrors[trCamName] = [];
+                        var trCam = trCamByName[trCamName];
+                        var idealRep = (trCam && trCam.projectionMatrix)
+                            ? reprojectPoints(trGroup.points3d, trCam.projectionMatrix) : null;
+                        trErrorsUndist[trCamName] = [];
                         for (var trni = 0; trni < trRep.length; trni++) {
                             if (trObs[trni] && trRep[trni]) {
                                 var dx = trRep[trni][0] - trObs[trni][0];
@@ -1400,6 +1414,18 @@ function _restoreProjectV2(data) {
                             } else {
                                 trErrors[trCamName].push(null);
                             }
+                            // Undistorted residual for this keypoint.
+                            if (idealRep && trObs[trni] && idealRep[trni] && trCam && trCam.undistortPoint) {
+                                var ou = trCam.undistortPoint(trObs[trni]);
+                                var dxu = idealRep[trni][0] - ou[0];
+                                var dyu = idealRep[trni][1] - ou[1];
+                                var erru = Math.sqrt(dxu * dxu + dyu * dyu);
+                                trErrorsUndist[trCamName].push(erru);
+                                trTotalErrU += erru;
+                                trTotalCountU++;
+                            } else {
+                                trErrorsUndist[trCamName].push(null);
+                            }
                         }
                     }
                     trFrameResults.push({
@@ -1407,7 +1433,9 @@ function _restoreProjectV2(data) {
                         points3d: trGroup.points3d,
                         reprojections: trGroup.reprojections,
                         errors: trErrors,
-                        meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null
+                        errorsUndistorted: trErrorsUndist,
+                        meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null,
+                        meanErrorUndistorted: trTotalCountU > 0 ? trTotalErrU / trTotalCountU : null
                     });
                     // Also store reprojected instances for overlay rendering
                     storeReprojectedInstances(trGroup, { reprojections: trGroup.reprojections, points3d: trGroup.points3d }, cameras);
