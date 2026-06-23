@@ -461,6 +461,23 @@ async function buildSlpBytes() {
             }
         }
 
+        // Per-session identities. The file-level identities_json dataset is a
+        // concatenation across all sessions (kept for SLEAP/headless compat),
+        // so it cannot be the source of truth on reload — every session would
+        // inherit every other session's IDs and the per-session identity_idx
+        // values would point into the wrong slice. Persist each session's own
+        // identity list (in session.identities order, so identity_idx stays
+        // valid) here and prefer it on import.
+        var sessIdentitiesJson = [];
+        if (sess.identities && sess.identities.length > 0) {
+            for (var sidi = 0; sidi < sess.identities.length; sidi++) {
+                var sIdent = sess.identities[sidi];
+                var sIdentObj = { name: sIdent.name };
+                if (sIdent.color) sIdentObj.color = sIdent.color;
+                sessIdentitiesJson.push(sIdentObj);
+            }
+        }
+
         calibSessions.push({
             calibration: calibration,
             camcorder_to_video_idx_map: camcorderMap,
@@ -470,6 +487,7 @@ async function buildSlpBytes() {
                     sessionName: sess.name || null,
                     trustTracks: sess.trustTracks || false,
                     frameIdentityMap: sess.frameIdentityMap ? Array.from(sess.frameIdentityMap.entries()) : [],
+                    identities: sessIdentitiesJson,
                     skeleton: {
                         name: sess.skeleton.name || 'skeleton',
                         nodes: sess.skeleton.nodes,

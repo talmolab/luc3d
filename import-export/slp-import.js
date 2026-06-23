@@ -29,7 +29,7 @@ import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
-    rebuildVideoController, resolveImportTrackIdx,
+    rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
 } from '../loading/session-loader.js';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
@@ -317,12 +317,26 @@ export async function handleLoadSlpFile(slpFile) {
             }
         }
 
-        // Restore identities from SLP
-        if (slpData.identities && slpData.identities.length > 0) {
-            session.identities = slpData.identities.map(function (idData, idx) {
+        // Restore identities from SLP. Prefer the per-session identity list
+        // saved in this session's lucid metadata so IDs stay scoped per
+        // session — the file-level identities_json is a cross-session
+        // concatenation and using it for every session leaks IDs between
+        // sessions (and misaligns identity_idx). Fall back to the global list
+        // only for legacy / non-lucid SLPs that lack per-session metadata.
+        var slpSessForIds = (slpData.sessions && slpData.sessions.length > slpSessIdx)
+            ? slpData.sessions[slpSessIdx] : null;
+        var perSessionIdentities = (slpSessForIds && slpSessForIds.metadata
+            && slpSessForIds.metadata.lucid && slpSessForIds.metadata.lucid.identities) || null;
+        var identitySource = (perSessionIdentities && perSessionIdentities.length > 0)
+            ? perSessionIdentities
+            : ((slpData.identities && slpData.identities.length > 0) ? slpData.identities : null);
+        if (identitySource) {
+            session.identities = identitySource.map(function (idData, idx) {
                 return new Identity(idx, idData.name || ('id_' + idx), idData.color || null);
             });
-            console.log('[load-slp] Loaded', session.identities.length, 'identities');
+            console.log('[load-slp] Loaded', session.identities.length, 'identities for session',
+                slpSessIdx, perSessionIdentities && perSessionIdentities.length > 0
+                    ? '(per-session metadata)' : '(global fallback)');
         }
 
         // Build InstanceGroups from sessions_json if available (preserves
@@ -819,7 +833,11 @@ export async function handleLoadSlpFile(slpFile) {
                 var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
                 var vidFiles = Array.from(videoFiles).filter(function (f) {
                     var ext = f.name.substring(f.name.lastIndexOf('.')).toLowerCase();
-                    return vidExts.indexOf(ext) >= 0;
+                    if (vidExts.indexOf(ext) < 0) return false;
+                    // Exclude per-camera calibration clips that live in
+                    // <cam>/calibration_images/ — their names embed the camera
+                    // name and would otherwise be matched as a session video.
+                    return !isCalibrationVideoFile(f);
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 

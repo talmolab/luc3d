@@ -1439,6 +1439,13 @@ filesystem enumeration, decoder rebuild.
 - Video assignment: `autoAssignVideosToCameras`, `forceVideoSelection`,
   `forceVideoSelectionWithFolder`, `matchSessionFolder`,
   `pickParentDirectoryForSessions`, `showParentDirMatchSummary`.
+- `isCalibrationVideoFile(file)` — true for per-camera calibration clips
+  (`<cam>/calibration_images/<date>-<cam>-calibration.mp4`). The folder scans
+  recurse into camera subfolders, so these clips would otherwise be collected
+  and substring-matched to a camera (their filename embeds the camera name).
+  Applied in the parent-directory pick (both FSA + webkitdirectory branches),
+  the "Select Session Folder" scan, and the SLP-import video filter so the
+  calibration video never loads as a session view.
 - View/grid: `createViewForVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
   `rebuildVideoController`, `updateTotalFrames`.
@@ -1587,6 +1594,11 @@ layer.
   a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`.
+- `buildSlpLabelsAllViews` writes each session's identity list into that
+  session's `metadata.lucid.identities` (in `session.identities` order, so
+  `identity_idx` stays valid). The file-level `identities_json` dataset is a
+  cross-session concatenation kept only for SLEAP/headless compatibility — it
+  is NOT the per-session source of truth on reload (see slp-import.js).
 - Skeleton validation: `findSkeletonMismatch(selections)` — returns `null` when
   all selected sessions share a skeleton (node count + names, in order),
   otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
@@ -1619,6 +1631,11 @@ loading-overlay/status-text UI helpers.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
   is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject`.
+- `buildSlpBytes` (internal) assembles the multi-session SLP. Each session's
+  `sessions_json` payload carries per-session `metadata.lucid.identities`
+  (alongside `frameIdentityMap`/`tracks`), keeping identities scoped per
+  session across save/load. The file-level `identities_json` remains a
+  cross-session concatenation for SLEAP compatibility only.
 - Status / overlay: `showLoading(msg)`, `hideLoading`,
   `setStatus(text, type)`.
 - 3D-import guard: `confirmDiscardImported3D()` (two-button warning modal,
@@ -1654,6 +1671,12 @@ the status bar at the bottom.
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
+
+On load, identities are restored **per session**: each session prefers its
+own `metadata.lucid.identities` (from `sessions_json`) and only falls back to
+the file-level global `identities_json` for legacy/non-lucid SLPs. This keeps
+IDs from leaking across sessions and keeps each session's `identity_idx`
+references aligned with its own identity list.
 
 **Key exports.**
 - `handleLoadSlpFile(slpFile)` — replace-current-state load. Drives the
