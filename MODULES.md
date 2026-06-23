@@ -133,14 +133,15 @@ session graph that holds them.
   IDs→Tracks — overwrites each instance's `trackIdx` with its identity and
   rewrites `tracks` to one unique, non-empty name per used identity so the
   exported SLP has clean identity-named tracks, rewriting `frameIdentityMap`
-  under the new keys; instances explicitly marked "no identity" are collected
-  onto a single dedicated "No ID" track with their per-frame entry kept
-  negative, so the NULL identity survives propagation and stays visible in
-  both the Track panel and the ID panel — only entry-less instances go
-  trackless), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  under the new keys; instances with no identity — whether entry-less OR
+  explicitly marked "no identity" (negative sentinel) — become trackless
+  (`trackIdx = null`): a null identity propagates to a null track, and no
+  dedicated "No ID" track is created), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
-  group editing (`createGroupFromUnlinked`,
-  `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
+  group editing (`createGroupFromUnlinked` — when no identity is passed it
+  derives one from the first member's track, but only if that member HAS a
+  track: grouping trackless instances yields a group with NO identity (-1), not
+  a fabricated "id_null"; `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
   (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
   `_promoteIfMixed`), skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
@@ -546,6 +547,19 @@ multi-frame triangulation modals, track-swap dialogs.
 **Purpose.** Right-hand info panel — populates the Videos, Cameras,
 Skeleton, Sessions, and Frame Info tables; hosts the skeleton editor and
 the per-frame instance-group / unlinked-instance tables.
+
+**Instance-panel track/identity dropdowns.** Each grouped/unlinked instance
+row has a track `<select>` and an identity `<select>`. Both include a
+`+ New Track` / `+ New ID` option (value `__new__`). Choosing it replaces the
+select with an inline text box (`startInlineNameEntry`) where the user types a
+name and presses Enter to create + assign it (Esc or blur cancels); tracks are
+deduped by name, identities reuse an existing same-named identity. This replaces
+the removed Tracks-menu "Assign Track" / "Assign Identity" submenus; the reusable
+`assignTrackToSelected` / `assignIdentityToSelected` helpers remain exported from
+`ui/identity-assignment.js`. These assignment/create handlers (and the
+`assign*ToSelected` helpers) refresh the timeline with `{ keepSize: true }` so a
+track/identity edit never regrows the bottom timeline panel — it rebuilds +
+repaints at the user's current height instead of growing to fit all rows.
 
 **Key exports.**
 - Tab control: `setupPanelTabs`.
@@ -1260,6 +1274,47 @@ still see which camera has its content collapsed.
 
 ---
 
+### ui/track-identity-ops.js
+
+**Purpose.** Pure, DOM-free operations backing the Tracks-menu New / Rename /
+Delete modals (which live in `ui/ui-wiring.js`). Extracted so the substantive
+logic is unit-testable headlessly — `ui/ui-wiring.js` itself can't be loaded in
+the test runner (app.js import graph).
+
+**Key exports.**
+- `nameExists(session, kind, name)` — duplicate-name guard (`kind` =
+  `'track' | 'identity'`).
+- `countNulledByCamera(session, kind, idx)` → `{ perCamera, total }` — the
+  Delete modal's per-camera breakdown of instances that will be nulled. Identity
+  counting uses the **canonical per-frame identity source**
+  (`session.getIdentityIdForTrack(cam, trackIdx, frameIdx)`), NOT
+  `group.identityId` (which is only populated after triangulation — reading it
+  left the Delete-Identity table empty/stale).
+- `deleteTrackAt(session, idx)` — first **ungroups** any GroupedInstance that
+  uses the deleted track (`session.unlinkGroup`, members return to the unlinked
+  pool); then splices the track, nulls every instance on it (`trackIdx = null`,
+  the app-wide trackless sentinel — NOT -1, which crashes the overlay renderer),
+  and shifts higher `trackIdx` down. Covers frameGroups (linked + unlinked) AND
+  any remaining GroupedInstances explicitly, with a `seen` set so shared instance
+  refs aren't double-decremented. Also remaps the `frameIdentityMap` keys
+  ("frame:cam:trackIdx") in lockstep — deleted-track entries move to the
+  trackless (`null`) key, higher ones shift down — so an instance keeps its
+  identity when it loses its track (instead of the per-frame entries orphaning
+  or misattributing). Returns the name.
+- `deleteIdentityAt(session, idx)` — **ungroups** every GroupedInstance carrying
+  the id (matched via `group.identityId` OR, pre-triangulation, via the per-frame
+  `getIdentityIdForTrack`; falls back to nulling `group.identityId` in sessions
+  without `unlinkGroup`), clears the per-frame `frameIdentityMap` entries pointing
+  at it (so instances resolve to "no identity"), splices the identity, and drops
+  the hidden-identities entry. Returns the name.
+
+**Imports from project modules.** None (operates on the passed `session`).
+
+**Imported by.** `ui/ui-wiring.js`. Bridged into `tests/test-runner.html` and
+covered by `tests/test-track-identity-modals.js`.
+
+---
+
 ### ui/ui-wiring.js
 
 **Purpose.** Top-level UI wiring. Builds the menu bar, transport controls,
@@ -1277,8 +1332,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 
 **Key exports.**
 - Menu / setup: `setupMenus`, `setupUI`. The Tracks menu hosts both
-  identity↔track propagation actions (one-shot, under "Assign Identity"):
-  `Propagate Tracks → IDs` (`menuPropagateTracksToIds` — creates an identity
+  identity↔track propagation actions (one-shot): `Propagate Tracks → IDs`
+  (`menuPropagateTracksToIds` — creates an identity
   per track and assigns it to every group; sets `session.trustTracks`; was the
   old Edit-menu "Trust Track Labels" toggle) and `Propagate IDs → Tracks`
   (`menuPropagateIdsToTracks` — calls `Session.propagateIdentitiesToTracks`).
@@ -1332,11 +1387,42 @@ opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
 (`ui/settings-modal.js`).
 
 **Triangulate dropdowns + default method.** The toolbar `Triangulate` /
-`Triangulate All` buttons are **hover-only** split dropdowns (no click action);
-`wireTriDropdown` wires only the menu items (DLT / BA explicit picks). Implicit
-triangulation — the `t` shortcut, the Edit ▸ Triangulate menu item, and the
-auto-assign flow in `identity-assignment.js` — uses the user's default method
-from `getDefaultTriangulationMethod()` (`ui/settings.js`).
+`Triangulate All` are **split buttons**: clicking the button itself runs the
+user's default method (`getDefaultTriangulationMethod()` from `ui/settings.js`),
+while hovering reveals a menu for picking DLT / BA explicitly. `wireTriDropdown`
+wires both the button click (default method) and the menu items (explicit
+picks). Implicit triangulation — the `t` shortcut, the Edit ▸ Triangulate menu
+item, and the auto-assign flow in `identity-assignment.js` — also uses the
+default method.
+
+**Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
+actions for both tracks and identities open shared private modal helpers in
+`ui/ui-wiring.js`, each taking `kind = 'track' | 'identity'` (selecting data
+source, title, and apply binding). All share the `.rename-list` scrollable list
+styling (yellow selection via `.rename-list-item.selected`) and the
+`.multi-frame-modal` shell; all close on Esc (replacing the old `prompt()`
+chains):
+- `showCreateModal(kind)` — New Track / New Identity: read-only
+  (`.rename-list.readonly`) reference list of current entries + a "New name"
+  text entry. Cancel / Create; Enter creates. Validates non-empty + duplicate.
+- `showRenameModal(kind)` — Rename Track / Rename Identity: single-select list +
+  "New name for …" entry. Apply renames `session.tracks` /
+  `session.identities[].name`, migrates hidden-set membership
+  (`renameHiddenTrack` / `renameHiddenIdentity`). Enter applies.
+- `showDeleteModal(kind)` — Delete Track / Delete Identity: single-select list, a
+  red `.delete-warning` line ("Current track/identity "X" instances will have
+  null …"), and — in place of a text entry — a per-camera table of instances
+  that will be nulled with a `.delete-total-row` Total. Cancel / Delete (`.danger`
+  button); deletion is an explicit click (NOT bound to Enter, since destructive).
+The count + delete logic lives in `ui/track-identity-ops.js`
+(`countNulledByCamera` / `deleteTrackAt` / `deleteIdentityAt`): both delete paths
+first ungroup any GroupedInstance bound to the deleted track/identity, then track
+delete nulls the trackIdx (remapping `frameIdentityMap` so identities follow) and
+shifts higher indices down, while identity delete clears the per-frame
+`frameIdentityMap`; both the count and delete use the per-frame identity source
+(`getIdentityIdForTrack`), not `group.identityId`.
+All apply paths refresh overlays / info panel / timeline (`keepSize`) /
+visibility.
 
 **Catalog-driven keyboard shortcuts.** The dispatched shortcuts attach runtime
 handlers via `setHandler(id, fn)` (from `ui/settings.js`) and are resolved by a

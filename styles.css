@@ -978,6 +978,89 @@ body {
   margin-top: 20px;
 }
 
+/* Rename Track / Identity modal */
+.rename-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.rename-list-item {
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rename-list-item:last-child {
+  border-bottom: none;
+}
+
+.rename-list-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.rename-list-item.selected {
+  background: #ffd54a;
+  color: #1a1a1a;
+}
+
+.rename-name-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.rename-name-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+/* Read-only (reference) list, e.g. current tracks in the New modal */
+.rename-list.readonly .rename-list-item {
+  cursor: default;
+}
+
+.rename-list.readonly .rename-list-item:hover {
+  background: transparent;
+}
+
+/* Delete modal: red warning line + per-camera count total */
+.delete-warning {
+  color: #e5484d;
+  font-size: 12px;
+  margin: 0 0 12px;
+  min-height: 14px;
+}
+
+.delete-total-row td {
+  font-weight: 700;
+  border-top: 1px solid var(--border-color);
+}
+
+.multi-frame-modal button.danger {
+  background: #e5484d;
+  border-color: #e5484d;
+  color: #fff;
+}
+
+.multi-frame-modal button.danger:hover {
+  background: #d13b40;
+  border-color: #d13b40;
+}
+
 .multi-frame-modal button {
   padding: 6px 16px;
   border-radius: 4px;

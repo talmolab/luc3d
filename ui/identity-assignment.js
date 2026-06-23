@@ -102,7 +102,7 @@ export function assignTrackToSelected(trackIdx) {
     }
     drawAllOverlays(state.currentFrame);
     updateInfoPanel();
-    if (timeline) timeline.refreshTracks(state.session);
+    if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
 }
 
 /**
@@ -144,7 +144,7 @@ export function assignIdentityToSelected(identityId, identityName) {
 
     drawAllOverlays(state.currentFrame);
     updateInfoPanel();
-    if (timeline) timeline.refreshTracks(state.session);
+    if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
 
     var msg = 'Assigned ' + identityName;
     if (propagated > 0) msg += ' (propagated to ' + propagated + ' future instances)';

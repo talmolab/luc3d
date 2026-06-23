@@ -457,6 +457,94 @@
         });
     });
 
+    describe('Session.propagateIdentitiesToTracks — null IDs → null tracks', function () {
+        function buildSession() {
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam], sk, ['t0', 't1'], 'S');
+            // Identity ids come from a module-global counter, so capture the id.
+            session._idA = session.addIdentity('id_A');
+            const fg = new FrameGroup(50);
+            fg.addInstance('cam0', new Instance([[0, 0]], 0, 'user', 0)); // track 0
+            fg.addInstance('cam0', new Instance([[1, 1]], 1, 'user', 0)); // track 1
+            session.frameGroups.set(50, fg);
+            return session;
+        }
+
+        it('explicit "no identity" propagates to a null (trackless) track, not a "No ID" track', function () {
+            const session = buildSession();
+            session.setFrameIdentity(50, 'cam0', 0, session._idA.id);  // track 0 → id_A
+            session.setFrameIdentity(50, 'cam0', 1, -1);  // track 1 → explicit none
+            assertTrue(session.isExplicitNoIdentity('cam0', 1, 50), 'precondition: track1 is explicit-none');
+
+            const res = session.propagateIdentitiesToTracks();
+
+            // Exactly one track (id_A). No dedicated "No ID" track is created.
+            assertEqual(res.tracks, 1, 'one track (id_A) only');
+            assertEqual(session.tracks.length, 1, 'tracks list has a single entry');
+            assertEqual(session.tracks.indexOf(NO_ID_TRACK_NAME), -1, 'no "No ID" track created');
+            assertEqual(session.tracks[0], 'id_A', 'the one track is the used identity');
+
+            const insts = session.frameGroups.get(50).instances.get('cam0');
+            const idA = insts.find(function (i) { return i.trackIdx === 0; });
+            const none = insts.find(function (i) { return i.trackIdx == null; });
+            assertTrue(!!idA, 'identified instance keeps a real track (idx 0)');
+            assertTrue(!!none, 'explicit-none instance becomes trackless (null)');
+        });
+
+        it('instances with no identity entry at all also become trackless', function () {
+            const session = buildSession();
+            session.setFrameIdentity(50, 'cam0', 0, session._idA.id);  // track 0 → id_A
+            // track 1: no frameIdentityMap entry at all.
+
+            session.propagateIdentitiesToTracks();
+
+            const insts = session.frameGroups.get(50).instances.get('cam0');
+            const none = insts.find(function (i) { return i.trackIdx == null; });
+            assertTrue(!!none, 'unidentified instance becomes trackless (null)');
+            assertEqual(session.tracks.indexOf(NO_ID_TRACK_NAME), -1, 'still no "No ID" track');
+        });
+    });
+
+    describe('Session.createGroupFromUnlinked — trackless grouping', function () {
+        function build() {
+            const sk = new Skeleton('test', ['a'], []);
+            const camA = new Camera('camA', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const camB = new Camera('camB', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            return new Session([camA, camB], sk, ['t0'], 'S');
+        }
+
+        it('grouping trackless instances yields a group with NO identity (-1), not id_null', function () {
+            const session = build();
+            const idsBefore = session.identities.length;
+            // Two unlinked instances with NULL tracks.
+            const ulA = session.addUnlinkedInstance(0, 'camA', new Instance([[0, 0]], null, 'user', 0));
+            const ulB = session.addUnlinkedInstance(0, 'camB', new Instance([[1, 1]], null, 'user', 0));
+
+            const group = session.createGroupFromUnlinked(0, [ulA, ulB]);
+
+            assertEqual(group.identityId, -1, 'group has no identity');
+            assertEqual(session.identities.length, idsBefore, 'no "id_null" identity fabricated');
+            // Members stay trackless.
+            assertNull(group.instances.get('camA').trackIdx, 'camA member stays trackless');
+            assertNull(group.instances.get('camB').trackIdx, 'camB member stays trackless');
+        });
+
+        it('grouping tracked instances still derives identity from the first track', function () {
+            const session = build();
+            const ulA = session.addUnlinkedInstance(0, 'camA', new Instance([[0, 0]], 0, 'user', 0));
+            const ulB = session.addUnlinkedInstance(0, 'camB', new Instance([[1, 1]], 0, 'user', 0));
+
+            const group = session.createGroupFromUnlinked(0, [ulA, ulB]);
+
+            assertTrue(group.identityId >= 0, 'group gets a real identity from track 0');
+            assertEqual(session.getIdentity(group.identityId).name, 'id_0', 'identity is id_0');
+        });
+    });
+
     describe('Session.assignIdentityToGroup — per-frame group uniqueness', function () {
         function buildSessionWithGroups() {
             const sk = new Skeleton('test', ['a'], []);

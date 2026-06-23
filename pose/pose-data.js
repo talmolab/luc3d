@@ -777,16 +777,14 @@ export class Session {
      * "Propagate IDs → Tracks": overwrite every instance's track with its
      * identity. Identity/grouping is the source of truth here — each instance
      * that belongs to an identity-bearing InstanceGroup gets a trackIdx whose
-     * NAME is that identity's name. Instances explicitly marked "no identity"
-     * (the negative per-frame sentinel — the gray "No ID" rows in the ID panel)
-     * are collected onto a single dedicated "No ID" track, with their per-frame
-     * entry kept negative under that track's index, so the explicit-none state
-     * survives propagation and stays visible in BOTH the Track panel (a "No ID"
-     * track row) and the ID panel (its "No ID" gray row). Only instances with
-     * no identity entry at all become trackless (trackIdx = null).
+     * NAME is that identity's name. Instances with no identity — whether they
+     * have no identity entry at all OR are explicitly marked "no identity" (the
+     * negative per-frame sentinel) — become trackless (trackIdx = null). A null
+     * identity propagates to a null track; we do NOT create a dedicated "No ID"
+     * track for explicit-none instances.
      *
      * This rewrites the session-level `tracks` name list to one entry per used
-     * identity (plus the optional "No ID" track) and rewrites `frameIdentityMap`
+     * identity and rewrites `frameIdentityMap`
      * under the new trackIdx keys, so each instance's track resolves back to its
      * identity (Color-by-Track and Color-by-Identity then show the same
      * partition). Identity lives purely per-frame — there is no global default
@@ -821,16 +819,12 @@ export class Session {
 
         // 1. Collect the identity ids actually carried by some visible instance,
         //    preserving identities-array order for stable, reproducible track
-        //    indices. Also note whether any instance is explicitly "no identity"
-        //    (the negative per-frame sentinel) so we can give those their own
-        //    track. Build new tracks = identity names (unique + non-empty).
+        //    indices. Build new tracks = identity names (unique + non-empty).
         var usedSet = new Set();
-        var hasExplicitNone = false;
         forEachInstance(function (inst, camName, frameIdx) {
             if (inst.trackIdx == null) return;
             var id = self.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
             if (id != null && id >= 0) usedSet.add(id);
-            else if (self.isExplicitNoIdentity(camName, inst.trackIdx, frameIdx)) hasExplicitNone = true;
         });
         var newTracks = [];
         var idToTrackIdx = new Map();   // identityId → new trackIdx
@@ -847,24 +841,11 @@ export class Session {
             newTracks.push(name);
         }
 
-        // A single dedicated track for explicit "no identity" instances, so the
-        // NULL identity survives propagation and shows in both panels. Its
-        // per-frame entry stays negative (explicit-none) under this index.
-        var noIdTrackIdx = null;
-        if (hasExplicitNone) {
-            var noIdName = NO_ID_TRACK_NAME, ndup = 2;
-            while (nameSeen[noIdName]) { noIdName = NO_ID_TRACK_NAME + '_' + ndup; ndup++; }  // de-dup
-            nameSeen[noIdName] = true;
-            noIdTrackIdx = newTracks.length;
-            newTracks.push(noIdName);
-        }
-
-        // 2. Rewrite each instance's trackIdx to its identity's new track, to the
-        //    "No ID" track when it is explicitly un-identified, or null when it
-        //    has no identity entry at all. Record the matching per-frame entry
-        //    under the NEW trackIdx (the real id, or -1 for "No ID" so it stays
-        //    explicit-none). Lookups here read the OLD frameIdentityMap; we only
-        //    swap in the new one in step 3, so this pass is order-independent.
+        // 2. Rewrite each instance's trackIdx to its identity's new track, or to
+        //    null when it has no identity (no entry at all OR explicit-none).
+        //    Record the matching per-frame entry under the NEW trackIdx. Lookups
+        //    here read the OLD frameIdentityMap; we only swap in the new one in
+        //    step 3, so this pass is order-independent.
         var changed = 0;
         var newFrameMap = new Map();   // "frame:cam:newTrackIdx" → identityId
         forEachInstance(function (inst, camName, frameIdx) {
@@ -874,11 +855,9 @@ export class Session {
                 if (id != null && idToTrackIdx.has(id)) {
                     ni = idToTrackIdx.get(id);
                     newFrameMap.set(frameIdx + ':' + camName + ':' + ni, id);
-                } else if (noIdTrackIdx != null &&
-                           self.isExplicitNoIdentity(camName, inst.trackIdx, frameIdx)) {
-                    ni = noIdTrackIdx;
-                    newFrameMap.set(frameIdx + ':' + camName + ':' + ni, -1);
                 }
+                // No identity (including explicit "no identity") → trackless
+                // (null). No dedicated "No ID" track is created.
             }
             if (inst.trackIdx !== ni) { inst.trackIdx = ni; changed++; }
         });
@@ -1284,11 +1263,18 @@ export class Session {
         const fg = this.frameGroups.get(frameIdx);
         if (!fg) throw new Error('No FrameGroup for frame ' + frameIdx);
 
-        // Determine identity
+        // Determine identity. Derive it from the first member's track only when
+        // that member actually HAS a track. Grouping trackless instances
+        // (trackIdx == null) must yield a group with NO identity (-1) — do NOT
+        // fabricate an "id_null" identity from a null track value.
         if (identityId === undefined || identityId < 0) {
             const firstTrackIdx = unlinkedList[0].instance.trackIdx;
-            const identity = this.getOrCreateIdentityForTrack(firstTrackIdx);
-            identityId = identity.id;
+            if (firstTrackIdx == null) {
+                identityId = -1;
+            } else {
+                const identity = this.getOrCreateIdentityForTrack(firstTrackIdx);
+                identityId = identity.id;
+            }
         }
 
         const group = new InstanceGroup(Date.now(), identityId);

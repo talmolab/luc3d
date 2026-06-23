@@ -106,6 +106,7 @@
     <script src="test-timeline-bugs.js"></script>
     <script src="test-timeline-height.js"></script>
     <script src="test-grouped-track-dropdown.js"></script>
+    <script src="test-track-identity-modals.js"></script>
     <script src="test-video-controller.js"></script>
     <script src="test-multi-video.js"></script>
 
@@ -241,11 +242,14 @@
         // imports `ui/app-state.js` (no transitive app.js dependency), so
         // it's safe to bridge into the test runner.
         import * as __TimelineCtrl from '../ui/timeline-controller.js';
+        // Pure (DOM-free) ops backing the Track/Identity menu modals. No app.js
+        // in its import graph, so it's safe to bridge for unit tests.
+        import * as __TrackIdentityOps from '../ui/track-identity-ops.js';
         Object.assign(window, __PoseData, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
                               __LoadingProgressModal,
-                              __TimelineCtrl);
+                              __TimelineCtrl, __TrackIdentityOps);
         // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
         // are intentionally NOT bridged here. All three transitively import app.js
         // (circular, awaiting later passes), and app.js requires the full DOM +
