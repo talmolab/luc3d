@@ -196,6 +196,26 @@ which was removed during the ESM migration).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
+**Node weights.** At the start of `matchFrameInstances`, the module resolves a
+per-node weight array (`_nodeWeights`) from the session skeleton via
+`getNodeWeightArray` (`ui/settings.js`, set in the Tracking Wizard). Every
+per-node cost — `epipolarScore`, `reprojectionScore`, the 3D-distance signal in
+`reorderGroupsByPrevTargets`, and each `computeInstanceDistance` call — scales a
+node's contribution by its weight and skips weight-0 nodes, so a node set to 0 is
+ignored by the tracker entirely. `null` weights ⇒ every node weighted 1
+(behaviorally identical to before this feature).
+
+**Tracking thresholds.** `matchFrameInstances` also snapshots the user-editable
+tracking thresholds (`_thresholds = getTrackingThresholds()`, `ui/settings.js`,
+set in the Tracking Wizard). The `thr(id)` helper reads that snapshot (falling
+back to live defaults) so the Tier A scoring knobs and Tier B reprojection gates
+are no longer hard-coded: `epipolarScore` divides by `epipolarDecay`,
+`reprojectionScore` uses `reprojSigma`, `crossViewScore` blends by
+`epipolarWeight`/`reprojWeight`, `matchPairwise` filters auto-mode matches by
+`minMatchScore` and adds `prevIdentityBonus`, and `reprojectionGate(nViews)`
+returns `reprojGate2`/`reprojGate3`/`reprojGate4`. Defaults reproduce the prior
+constants exactly.
+
 **Note.** `reorderGroupsByPrevTargets` passes a true `nTargets × nGroups`
 rectangular cost matrix to `hungarianAlgorithm` (no pre-padding to square
 with a `1000` filler). The solver's internal padding strips padded-row
@@ -236,6 +256,14 @@ rooted in `matchPairwise` dropping *visible* instances:
   `groupByIdentityAndTriangulateAll` (`ui/export-modals.js`, the "Triangulate
   All" path).
 
+**Null-node status.** After a run, `trackCurrentFrame` / `trackAll` count the
+null (non-triangulated) 3D nodes across the groups the tracker formed
+(`countNullNodesInTargets` over each frame's `targets3d`; single-view groups with
+no `points3d` are skipped) and show the total in the bottom-left status bar
+(`#statusNullNodes`, `setNullNodesStatus`) and the completion message. Because
+node weights change which instances get grouped (not which nodes triangulate),
+this is the headline metric for comparing weight settings.
+
 **Auto-cap.** When the user leaves the "Number of animals" prompt empty,
 `trackAll` / `trackCurrentFrame` resolve `numAnimals` via
 `computeMaxInstancesPerView(session)` — the largest instance count seen
@@ -260,6 +288,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `computeInstanceDistance`, `hungarianAlgorithm`.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `getActiveSession`.
+- `../ui/settings.js` — `getNodeWeightArray`, `getTrackingThresholds`,
+  `getTrackingThreshold`.
 - `../import-export/save-load.js` — `setStatus`, `showLoading`, `hideLoading`.
 - `../ui/rendering.js` — `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateInfoPanel`.
@@ -316,7 +346,9 @@ remain distorted-space.
   pixel space — use these whenever reprojections are compared against or drawn
   over raw keypoints), `computeReprojectionError`,
   `computeReprojectionErrors`, `computeMeanReprojectionError`,
-  `computeInstanceDistance`, `hungarianAlgorithm`, `cameraCenter`,
+  `computeInstanceDistance(pointsA, pointsB, weights?)` (optional per-node
+  `weights` → weighted mean distance; weight-0 nodes ignored; omitted ⇒ all 1),
+  `hungarianAlgorithm`, `cameraCenter`,
   `invert3x3`, `backProjectToRay`, `backProjectToRays`,
   `pointToRayDistance`, `pointsToRayDistances`,
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
@@ -897,11 +929,13 @@ the headless test runner doesn't crash on a missing `document`.
 ### ui/settings.js
 
 **Purpose.** Central user-settings store: the default triangulation method
-(`'dlt'` | `'ba'`, default `'dlt'`) plus a comprehensive **catalog of every
-keyboard shortcut** (`ACTION_CATALOG`). Settings persist to `localStorage`
-(`lucid.settings.v1`) and survive reloads. The catalog is the single source of
-truth for the Settings ▸ Keyboard Shortcuts panel — see the keyboard-shortcuts
-note in `CLAUDE.md`.
+(`'dlt'` | `'ba'`, default `'dlt'`), per-skeleton-node **tracking weights**
+(name → weight in `[0,1]`, default `1`), the cross-view **tracking thresholds**
+(`TRACKING_THRESHOLDS` catalog — Tier A scoring knobs + Tier B reprojection
+gates), plus a comprehensive **catalog of every keyboard shortcut**
+(`ACTION_CATALOG`). Settings persist to `localStorage` (`lucid.settings.v1`) and
+survive reloads. The catalog is the single source of truth for the Settings ▸
+Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 
 **Catalog entries.** `{ id, label, category, binding, editable, dispatched }`.
 `binding` is a "+"-joined accelerator (modifier tokens: `Mod` = Ctrl-or-Cmd,
@@ -914,23 +948,45 @@ handler elsewhere and listed for reference only.
 **Key exports.**
 - `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
   read/write the default method used by implicit triangulation paths.
+- `getNodeWeight(name)` / `getNodeWeights()` / `getNodeWeightArray(nodeNames)` /
+  `setNodeWeights(map)` — read/write per-node tracking weights (clamped to
+  `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
+  resolves a parallel weight array for an ordered node-name list — the form the
+  tracker consumes (indexed to match `Instance.points`).
+- `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
+  `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
+  cross-view tracker's user-editable thresholds. `getTrackingThresholdDefs`
+  returns the wizard's render catalog `[{ id, label, default, value, min, max,
+  step, desc }]`; `getTrackingThresholds` returns the effective `{ id: value }`
+  map the tracker snapshots per run. Values clamp to each threshold's range and
+  entries equal to the default are dropped. Ids: `epipolarDecay`, `reprojSigma`,
+  `epipolarWeight`, `reprojWeight`, `minMatchScore`, `prevIdentityBonus`,
+  `reprojGate2`, `reprojGate3`, `reprojGate4`.
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
 - `setHandler(id, fn)` — attach the runtime handler for a dispatched action.
 - `matchesBinding(id, e)` — true if a `KeyboardEvent` triggers the action under
-  its effective binding (combo-aware; used by `timeline-controller`-style owners
-  and by `dispatchEvent`).
+  its effective binding (single-chord only; for external owners like
+  `timeline-controller`).
 - `dispatchEvent(e)` — resolve a `KeyboardEvent` to a dispatched action and run
-  its handler (skips when typing in inputs); returns `true` if handled.
+  its handler (skips when typing in inputs); returns `true` if handled. Supports
+  **multi-key sequence** bindings (chords separated by spaces, e.g. `"g t"`) via a
+  rolling keystroke buffer with a 1.2 s gap reset; single-chord bindings fire
+  immediately, the longest matching sequence wins (ties → catalog order). A
+  binding may be one chord (`Mod+Shift+I`) or a sequence (`g t`).
 - `applyBindings(map)` — commit an `{ id: binding }` override map (editable-only;
-  bindings equal to the default are dropped); `resetBindings()` clears all.
-- `formatBinding(str)` — prettify a binding for display.
+  non-default, parseable chord/sequence strings; defaults dropped);
+  `resetBindings()` clears all.
+- `formatBinding(str)` — prettify a binding for display; renders the `Mod`
+  token as **Cmd** on Apple devices and **Ctrl** elsewhere (via
+  `navigator.platform`), so the Hot Keys modal and Settings panel show the
+  device-appropriate modifier.
 
 **Imports from project modules.** None.
 
 **Imported by.** `ui/ui-wiring.js`, `ui/identity-assignment.js`,
-`ui/settings-modal.js`.
+`ui/settings-modal.js`, `pose/tracker.js`.
 
 ---
 
@@ -947,22 +1003,33 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 **Behavior.** Three panels: **Default Triangulation** (single-select DLT/BA
 radio rows, initialized from `getDefaultTriangulationMethod()`), **Keyboard
 Shortcuts** (the full `getActions()` catalog grouped by category — editable
-entries get a click-to-capture key chip with conflict rejection; fixed entries
-render a greyed, dashed reference chip), and **Tracking Wizard** (a "Coming
-Soon" placeholder). All edits mutate a local `working` state only (only editable
-bindings are tracked); nothing commits until **Apply**
-(`setDefaultTriangulationMethod` + `applyBindings`). Cancel / close `×` /
-backdrop click / Escape discard. A capture-phase document keydown listener makes
-the modal fully capture the keyboard (background shortcuts don't fire while it's
-open) and is removed on teardown.
+entries get a click-to-capture key chip that records a **chord or a multi-key
+sequence**: keep pressing keys (the primary Ctrl/Cmd modifier is normalized to
+`Mod` via `chordFromEvent`) until you click anywhere to set, or Esc to cancel,
+with duplicate-binding rejection; fixed entries
+render a greyed, dashed reference chip), and **Tracking Wizard** (two sections:
+**Node Weights** — one row per node of the active session's skeleton with a
+number field, range `0–1`, step `0.01`, spinner arrows suppressed, seeded from
+`getNodeWeight(name)`, with a hint when no skeleton is loaded; and **Tracking
+Thresholds** — one labelled+described number field per `getTrackingThresholdDefs()`
+entry, range/step from the catalog). All edits mutate a local `working` state
+only (only editable bindings are tracked); nothing commits until **Apply**
+(`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
+`setTrackingThresholds`). Cancel / close `×` / backdrop click / Escape discard. A
+capture-phase document keydown listener makes the modal fully capture the
+keyboard (background shortcuts don't fire while it's open) and is removed on
+teardown.
 
 **Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
-`setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`).
+`setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`,
+`getNodeWeight`, `setNodeWeights`, `getTrackingThresholdDefs`,
+`setTrackingThresholds`); `./app-state.js` (`getActiveSession`).
 
 **Imported by.** `ui/ui-wiring.js`.
 
 **User-facing features.** Settings modal — choose default triangulation method,
-remap keyboard shortcuts, Tracking Wizard placeholder.
+remap keyboard shortcuts, set per-node tracking weights (Tracking Wizard, also
+reachable via Tracks ▸ Tracking Wizard).
 
 ---
 
@@ -1325,7 +1392,13 @@ visibility toggles, "seek to next labeled frame".
 **Help** (its dropdown opens right-aligned via `right:0`): `menuDocumentation`
 opens the docs site (`https://talmolab.github.io/luc3d-docs/`) in a new tab;
 `menuSettings` opens the Settings modal via `showSettingsModal()`
-(`ui/settings-modal.js`).
+(`ui/settings-modal.js`). The Tracks menu's `menuTrackingWizard` item opens the
+same modal focused on the Tracking Wizard panel via `showSettingsModal('wizard')`,
+as does the **`Mod+T`** shortcut (catalog id `openTrackingWizard`, handled by the
+dedicated keydown block). The **Hot Keys** modal (`showHotkeysHelp`,
+`menuHotkeys`) is generated from `getActions()` — the same `ACTION_CATALOG`
+snapshot that drives Settings ▸ Keyboard Shortcuts — so it stays in sync with the
+catalog and any user rebindings (grouped by category; Esc closes it).
 
 **Triangulate dropdowns + default method.** The toolbar `Triangulate` /
 `Triangulate All` buttons are **hover-only** split dropdowns (no click action);
@@ -1334,15 +1407,22 @@ triangulation — the `t` shortcut, the Edit ▸ Triangulate menu item, and the
 auto-assign flow in `identity-assignment.js` — uses the user's default method
 from `getDefaultTriangulationMethod()` (`ui/settings.js`).
 
-**Catalog-driven keyboard shortcuts.** The dispatched shortcuts attach runtime
-handlers via `setHandler(id, fn)` (from `ui/settings.js`) and are resolved by a
-single dedicated `keydown` listener calling `dispatchEvent(e)`. This covers the
-editable plain keys (`u`/`p`/`r`/`e` toggles, `v` view mode, `g` grid, `t`
-triangulate, `n` add-instance, `?` help) plus the fixed-binding `Shift+U`
-ungroup. Their bindings live in `ACTION_CATALOG` (the single source of truth for
-the Settings panel). Other shortcuts (Save, transport, `Mod+J`, identity/track
-digits, etc.) keep their own handlers and appear in the catalog as fixed
-reference entries. `Enter`/`Escape` remain hard-coded modal-button special cases.
+**Catalog-driven keyboard shortcuts.** Every **standard single-action** shortcut
+is now dispatched: it attaches a runtime handler via `setHandler(id, fn)` (from
+`ui/settings.js`) and is resolved by a single dedicated `keydown` listener
+calling `dispatchEvent(e)`, so it is **editable and rebindable** (chords or
+multi-key sequences) from the Settings panel. This covers the plain-key toggles
+(`u`/`p`/`r`/`e`, `v`, `g`, `t`, `n`, `i` info, `\` 3D, `?`, `Shift+U` ungroup,
+`f` find), the track actions (`Shift+T`, `Mod+Shift+T`), the wizard (`Mod+Shift+I`),
+smart-add new instance (`Mod+I`), settings
+(`Mod+,`) and load-session (`Mod+O`). Bindings live in `ACTION_CATALOG` (the
+single source of truth for the Settings panel). The remaining shortcuts keep
+their own dedicated handlers and appear as **fixed** reference entries (not
+rebindable): `Mod+S` Save (works while typing), transport (`←/→`, `Space`,
+`Home`/`End`, `Opt+←/→`), the `1–9` identity / `Shift+1–9` track digit ranges,
+zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete`/`c` (canvas-context ops in
+`interaction.js`), and `Mod+J`/`Mod+Shift+J` (timeline-controller).
+`Enter`/`Escape` remain hard-coded modal-button special cases.
 
 **Block 2 (Prompt 4) visibility wiring + rename migration.** Every
 track-add / track-rename / track-delete / identity-add / identity-rename /
