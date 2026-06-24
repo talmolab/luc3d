@@ -113,6 +113,8 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuPropagateTracksToIds">Propagate Tracks → IDs</div>
                     <div class="menu-dropdown-item" id="menuPropagateIdsToTracks">Propagate IDs → Tracks</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuTrackingWizard">Tracking Wizard...</div>
                 </div>
             </div>
             <div class="menu-item" data-menu="view">
@@ -814,6 +816,7 @@
                     <span id="statusText">Ready</span>
                     <span id="saveDirtyDot" style="display:none;width:8px;height:8px;border-radius:50%;background:var(--warning-color);margin-left:6px;vertical-align:middle;" title="Unsaved changes"></span>
                 </span>
+                <span class="status-item" id="statusNullNodes" style="display:none;" title="Total null (non-triangulated) 3D nodes across all groups formed by the last tracking run">Null nodes: 0</span>
             </div>
             <div class="status-right">
                 <span class="status-item" id="statusCamera">Camera: -</span>
