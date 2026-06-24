@@ -20,6 +20,7 @@ import {
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
 import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold } from '../ui/settings.js';
 import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
@@ -35,6 +36,30 @@ var EXPLICIT_NONE = -1;
 
 var _fMatrixCache = {};   // "cam1:cam2" → F matrix
 var _undistortCache = new WeakMap();  // Instance → undistorted points
+
+// Per-node weights for the current track run (parallel to Instance.points), set
+// at the start of matchFrameInstances from the user's Tracking Wizard settings.
+// null ⇒ every node weighted 1. A node weighted 0 is excluded from all costs.
+var _nodeWeights = null;
+
+// Weight for node index k under the active run (default 1 when unset/invalid).
+function nodeWeight(k) {
+    if (!_nodeWeights) return 1;
+    var w = _nodeWeights[k];
+    return (typeof w === 'number' && isFinite(w)) ? w : 1;
+}
+
+// User-editable tracking thresholds for the current run (Tracking Wizard),
+// snapshotted at the start of matchFrameInstances. null ⇒ read live defaults.
+var _thresholds = null;
+
+// Effective value of a tracking threshold by id (run snapshot, else live default).
+function thr(id) {
+    if (_thresholds && typeof _thresholds[id] === 'number' && isFinite(_thresholds[id])) {
+        return _thresholds[id];
+    }
+    return getTrackingThreshold(id);
+}
 
 function getCachedF(camA, camB) {
     var key = camA.name + ':' + camB.name;
@@ -82,6 +107,8 @@ function epipolarScore(instA, camA, instB, camB) {
 
     for (var k = 0; k < numKp; k++) {
         if (ptsA[k] == null || ptsB[k] == null) continue;
+        var w = nodeWeight(k);
+        if (w <= 0) continue;
         var x1 = ptsA[k][0], y1 = ptsA[k][1];
         var x2 = ptsB[k][0], y2 = ptsB[k][1];
         var l0 = F[0][0]*x1 + F[0][1]*y1 + F[0][2];
@@ -89,10 +116,10 @@ function epipolarScore(instA, camA, instB, camB) {
         var l2 = F[2][0]*x1 + F[2][1]*y1 + F[2][2];
         var num = Math.abs(x2*l0 + y2*l1 + l2);
         var denom = Math.sqrt(l0*l0 + l1*l1);
-        if (denom > 1e-12) { totalErr += num / denom; validCount++; }
+        if (denom > 1e-12) { totalErr += w * (num / denom); validCount += w; }
     }
     if (validCount === 0) return 0;
-    return Math.exp(-totalErr / validCount / 10.0);
+    return Math.exp(-totalErr / validCount / thr('epipolarDecay'));
 }
 
 /**
@@ -105,19 +132,22 @@ function reprojectionScore(instA, camA, instB, camB) {
     var PA = camA.projectionMatrix, PB = camB.projectionMatrix;
     var numKp = Math.min(uA.length, uB.length);
     var totalOks = 0, validCount = 0;
-    var sigma2x2 = 2 * 20.0 * 20.0;
+    var sigma = thr('reprojSigma');
+    var sigma2x2 = 2 * sigma * sigma;
 
     for (var k = 0; k < numKp; k++) {
         if (uA[k] == null || uB[k] == null) continue;
+        var w = nodeWeight(k);
+        if (w <= 0) continue;
         var pt3d = triangulatePointDLT([uA[k], uB[k]], [PA, PB]);
         if (pt3d == null) continue;
         var repA = reprojectPoint(pt3d, PA);
         var repB = reprojectPoint(pt3d, PB);
         var dxA = instA.points[k][0] - repA[0], dyA = instA.points[k][1] - repA[1];
         var dxB = instB.points[k][0] - repB[0], dyB = instB.points[k][1] - repB[1];
-        totalOks += (Math.exp(-(dxA*dxA + dyA*dyA) / sigma2x2) +
+        totalOks += w * (Math.exp(-(dxA*dxA + dyA*dyA) / sigma2x2) +
                      Math.exp(-(dxB*dxB + dyB*dyB) / sigma2x2)) / 2;
-        validCount++;
+        validCount += w;
     }
     return validCount > 0 ? totalOks / validCount : 0;
 }
@@ -126,8 +156,8 @@ function reprojectionScore(instA, camA, instB, camB) {
  * Combined score: fast epipolar + reprojection OKS.
  */
 function crossViewScore(instA, camA, instB, camB) {
-    return 0.4 * epipolarScore(instA, camA, instB, camB) +
-           0.6 * reprojectionScore(instA, camA, instB, camB);
+    return thr('epipolarWeight') * epipolarScore(instA, camA, instB, camB) +
+           thr('reprojWeight') * reprojectionScore(instA, camA, instB, camB);
 }
 
 
@@ -169,6 +199,16 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
     var numAnimals = opts.numAnimals || null;
     var prevAssignments = opts.prevAssignments || null;
     var prevTargets3d = opts.prevTargets3d || null;
+
+    // Resolve user-defined per-node weights for this run (Tracking Wizard).
+    // Indexed to match Instance.points; null ⇒ all nodes weighted 1.
+    _nodeWeights = (session && session.skeleton && Array.isArray(session.skeleton.nodes))
+        ? getNodeWeightArray(session.skeleton.nodes)
+        : null;
+
+    // Snapshot the user-editable tracking thresholds once for this run so every
+    // scoring/gate call sees a consistent set (Tracking Wizard).
+    _thresholds = getTrackingThresholds();
 
     clearFrameCache();
 
@@ -326,7 +366,7 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     var cam = camMap[camName];
                     if (!cam) return;
                     var reproj = reprojectPoints(prevPts3d, cam.projectionMatrix);
-                    var d = computeInstanceDistance(reproj, inst.points);
+                    var d = computeInstanceDistance(reproj, inst.points, _nodeWeights);
                     if (d < Infinity) { reprojTotal += d; reprojCount++; }
                 });
                 if (reprojCount > 0) {
@@ -341,11 +381,13 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                 var numKp = Math.min(prevPts3d.length, currPts3d.length);
                 for (var k = 0; k < numKp; k++) {
                     if (prevPts3d[k] && currPts3d[k]) {
+                        var w3d = nodeWeight(k);
+                        if (w3d <= 0) continue;
                         var dx = prevPts3d[k][0] - currPts3d[k][0];
                         var dy = prevPts3d[k][1] - currPts3d[k][1];
                         var dz = prevPts3d[k][2] - currPts3d[k][2];
-                        totalDist3d += Math.sqrt(dx*dx + dy*dy + dz*dz);
-                        count3d++;
+                        totalDist3d += w3d * Math.sqrt(dx*dx + dy*dy + dz*dz);
+                        count3d += w3d;
                     }
                 }
                 if (count3d > 0) {
@@ -362,7 +404,7 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     var cam = camMap[camName];
                     if (!cam || !prevInst) return;
                     var reproj = reprojectPoints(currPts3d, cam.projectionMatrix);
-                    var d = computeInstanceDistance(reproj, prevInst.points);
+                    var d = computeInstanceDistance(reproj, prevInst.points, _nodeWeights);
                     if (d < Infinity) { oksTotal += Math.exp(-d / 50.0); oksCount++; }
                 });
                 if (oksCount > 0) { score += oksTotal / oksCount; scoreCount++; }
@@ -419,9 +461,9 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
  * @returns {number} acceptance threshold in pixels
  */
 function reprojectionGate(nViews) {
-    if (nViews <= 2) return 100;
-    if (nViews === 3) return 140;
-    return 180;
+    if (nViews <= 2) return thr('reprojGate2');
+    if (nViews === 3) return thr('reprojGate3');
+    return thr('reprojGate4');
 }
 
 /**
@@ -447,7 +489,7 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
             if (prevAssignments) {
                 var pidA = prevAssignments.get(bestCam1 + ':' + insts1[a].trackIdx);
                 var pidB = prevAssignments.get(bestCam2 + ':' + insts2[b].trackIdx);
-                if (pidA != null && pidB != null && pidA === pidB) score += 0.3;
+                if (pidA != null && pidB != null && pidA === pidB) score += thr('prevIdentityBonus');
             }
             scoreMatrix[a][b] = score;
         }
@@ -473,7 +515,7 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
         if (prevAssignments) {
             var pA = prevAssignments.get(bestCam1 + ':' + insts1[m.a].trackIdx);
             var pB = prevAssignments.get(bestCam2 + ':' + insts2[m.b].trackIdx);
-            if (pA != null && pB != null && pA === pB) fullScore += 0.3;
+            if (pA != null && pB != null && pA === pB) fullScore += thr('prevIdentityBonus');
         }
         matches[mi].score = fullScore;
     }
@@ -482,7 +524,8 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
     if (numAnimals) {
         matches = matches.slice(0, numAnimals);
     } else {
-        matches = matches.filter(function(m) { return m.score > 0.05; });
+        var minMatchScore = thr('minMatchScore');
+        matches = matches.filter(function(m) { return m.score > minMatchScore; });
     }
 
     var groups = [];
@@ -567,7 +610,7 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
                 var costRow = [];
                 for (var ii = 0; ii < insts3.length; ii++) {
                     costRow[ii] = used.has(ii) ? Infinity
-                        : computeInstanceDistance(reproj3, insts3[ii].points);
+                        : computeInstanceDistance(reproj3, insts3[ii].points, _nodeWeights);
                 }
                 rows.push({ gi: gi, gate: reprojectionGate(groups[gi].size) });
                 cost3.push(costRow);
@@ -647,6 +690,37 @@ function getTrackerHyperparams() {
     };
 }
 
+// ============================================
+// Null-node accounting (status bar)
+// ============================================
+
+// Count null (non-triangulated) 3D nodes across the groups a tracking run
+// produced. `targets3d` is the per-frame array returned by matchFrameInstances;
+// each entry's `points3d` is a per-node array (null entry ⇒ that node could not
+// be triangulated). Single-view groups (points3d === null) are skipped — they
+// were never triangulated, so they are not "null nodes" in the 3D sense.
+function countNullNodesInTargets(targets3d) {
+    var nulls = 0;
+    if (!targets3d) return 0;
+    for (var i = 0; i < targets3d.length; i++) {
+        var p = targets3d[i] && targets3d[i].points3d;
+        if (!p) continue;
+        for (var k = 0; k < p.length; k++) {
+            if (p[k] == null) nulls++;
+        }
+    }
+    return nulls;
+}
+
+// Show the total null-node count in the bottom-left status bar.
+function setNullNodesStatus(n) {
+    var el = document.getElementById('statusNullNodes');
+    if (el) {
+        el.textContent = 'Null nodes: ' + n;
+        el.style.display = '';
+    }
+}
+
 // Tracker state: number of animals (null = unconstrained)
 var trackerNumAnimals = null;
 
@@ -711,12 +785,15 @@ export function trackCurrentFrame() {
         var result = matchFrameInstances(fg, session.cameras, session, {
             numAnimals: effectiveNumAnimals
         });
+        var nullNodes = countNullNodesInTargets(result.targets3d);
+        setNullNodesStatus(nullNodes);
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         if (result.numIdentities > 0) {
             setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
-                (effectiveNumAnimals ? ' (capped at ' + effectiveNumAnimals + ')' : ''), 'success');
+                (effectiveNumAnimals ? ' (capped at ' + effectiveNumAnimals + ')' : '') +
+                ', ' + nullNodes + ' null nodes', 'success');
         } else {
             setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
         }
@@ -818,6 +895,7 @@ export async function trackAll() {
 
     var prevAssignments = null;
     var prevTargets3d = null;
+    var totalNullNodes = 0;
     try {
         for (var f = 0; f < frameIndices.length; f++) {
             var fi = frameIndices[f];
@@ -830,6 +908,7 @@ export async function trackAll() {
                         prevAssignments: prevAssignments,
                         prevTargets3d: prevTargets3d
                     });
+                    totalNullNodes += countNullNodesInTargets(result.targets3d);
                     if (result.assignments && result.assignments.size > 0) {
                         prevAssignments = result.assignments;
                     }
@@ -850,12 +929,15 @@ export async function trackAll() {
         }
 
         hideLoading();
+        setNullNodesStatus(totalNullNodes);
         drawAllOverlays(state.currentFrame);
         console.timeEnd('[TrackAll] total');
+        console.log('[TrackAll] total null nodes:', totalNullNodes);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         setStatus('Tracked ' + frameIndices.length + ' frames, ' +
-            session.identities.length + ' identities', 'success');
+            session.identities.length + ' identities, ' +
+            totalNullNodes + ' null nodes', 'success');
     } catch (e) {
         hideLoading();
         console.error('[TrackAll] error:', e, e.stack);

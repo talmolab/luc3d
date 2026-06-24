@@ -42,3 +42,6 @@ scratch/
 # lib/sleap-io are committed; only these two vendored fallbacks are ignored.)
 lib/dockview-core/
 lib/yaml/
+
+# Bench driver node deps (not part of the served app)
+scripts/bench/node_modules/
