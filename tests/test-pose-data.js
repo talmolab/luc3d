@@ -766,4 +766,45 @@
             assertEqual(fg20.getUnlinkedInstances('cam1')[0].instance, orphanB);
         });
     });
+
+    // ---- Per-session track independence ----
+
+    describe('Session tracks are per-session (no shared array)', function () {
+        // NOTE: instantiate inside each it() — the bridged globals (Skeleton,
+        // Session) are assigned by a deferred module script that runs AFTER this
+        // classic test script loads, so describe-body construction would throw.
+        it('constructor copies the tracks array so sessions never share it', function () {
+            const sk = new Skeleton('m', ['a', 'b'], []);
+            const shared = ['track_0', 'track_1'];
+            const s1 = new Session([], sk, shared);
+            const s2 = new Session([], sk, shared);
+            assertFalse(s1.tracks === s2.tracks, 'each session has its own array');
+            assertFalse(s1.tracks === shared, 'session does not alias the source array');
+            // Mutating one session's tracks leaves the other (and the source) intact.
+            s1.tracks.push('track_2');
+            assertEqual(s2.tracks.length, 2);
+            assertEqual(shared.length, 2);
+        });
+
+        it('deleteTrackAt on one session does not affect another', function () {
+            const sk = new Skeleton('m', ['a', 'b'], []);
+            const src = ['back', 'left', 'right'];
+            const s1 = new Session([], sk, src);
+            const s2 = new Session([], sk, src);
+            const removed = deleteTrackAt(s1, 1); // delete 'left' from s1 only
+            assertEqual(removed, 'left');
+            assertDeepEqual(s1.tracks, ['back', 'right']);
+            assertDeepEqual(s2.tracks, ['back', 'left', 'right']);
+        });
+
+        it('adding/renaming a track in one session leaves the other unchanged', function () {
+            const sk = new Skeleton('m', ['a', 'b'], []);
+            const src = ['t0', 't1'];
+            const s1 = new Session([], sk, src);
+            const s2 = new Session([], sk, src);
+            s1.tracks.push('t2');
+            s1.tracks[0] = 'renamed';
+            assertDeepEqual(s2.tracks, ['t0', 't1']);
+        });
+    });
 })();

@@ -114,7 +114,12 @@ session graph that holds them.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups. **Identity is stored ONLY per-frame** in
+  frameGroups, instanceGroups. **Tracks and identities are per-session.** The
+  constructor copies the incoming `tracks` array (`tracks.slice()`) so two
+  sessions never share one — otherwise deleting/adding/renaming a track in one
+  session would mutate the others (the multi-session SLP loader used to pass the
+  same `slpData.tracks` reference to every session). **Identity is stored ONLY
+  per-frame** in
   `frameIdentityMap` ("frameIdx:cam:trackIdx" → identityId; negative = explicit
   "no identity"). There is deliberately no global "cam:trackIdx" default map
   (the removed `trackIdentityMap`) — a global fallback painted stale duplicate
@@ -1545,7 +1550,9 @@ filesystem enumeration, decoder rebuild.
   `rebuildVideoController`, `updateTotalFrames`.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
-- Misc: `resolveImportTrackIdx`.
+- Misc: `resolveImportTrackIdx` — re-exported from
+  `import-export/import-track-resolve.js` (moved there so it's unit-testable;
+  session-loader pulls app.js and can't be bridged into the test runner).
 
 **Imports from project modules.**
 - `../ui/app-state.js`, `../pose/pose-data.js`, `./video.js`,
@@ -1729,9 +1736,22 @@ loading-overlay/status-text UI helpers.
   `sessions_json` payload carries per-session `metadata.lucid.identities`
   (alongside `frameIdentityMap`/`tracks`), keeping identities scoped per
   session across save/load. The file-level `identities_json` remains a
-  cross-session concatenation for SLEAP compatibility only.
+  cross-session concatenation for SLEAP compatibility only. The file-level
+  `allTracks` is a name-deduped union across sessions; after it is built,
+  `buildSlpBytes` **re-points every instance's `track` to the canonical (first-
+  seen) Track object for its name** so sleap-io's object-identity
+  `tracks.indexOf(instance.track)` resolves it to the right global slot.
+  Otherwise a later session's instance on a shared-name track (its own SIO.Track
+  object was discarded by the dedup) serialized as `-1` (trackless), dropping the
+  track. (On load, the global slot is re-localized to the session's own track
+  index by name — see `slp-import.js` / `remapGlobalTrackToSession`.)
 - Status / overlay: `showLoading(msg)`, `hideLoading`,
   `setStatus(text, type)`.
+
+**Trackless (null track) preservation.** `_restoreProjectV2` restores grouped
+and unlinked instances with `trackIdx = null` when the saved `trackIdx` is null
+(it no longer defaults to `0`), so a trackless instance stays trackless across a
+project save/reload — matching the SLP import path in `slp-import.js`.
 - 3D-import guard: `confirmDiscardImported3D()` (two-button warning modal,
   Promise<boolean>) and `ensureNo3dImportBlockingLoad()` — called at the top of
   the session-load entry points (`handleLoadProject`, `handleLoadSlpFile`,
@@ -1772,6 +1792,36 @@ the file-level global `identities_json` for legacy/non-lucid SLPs. This keeps
 IDs from leaking across sessions and keeps each session's `identity_idx`
 references aligned with its own identity list.
 
+**Tracks are likewise per-session.** Each session takes a fresh **copy** of its
+track list — `metadata.lucid.tracks.slice()` when present, else
+`slpData.tracks.slice()`. Without the copy, every session in a non-lucid SLP
+shared the one `slpData.tracks` array (and the per-session maxTrack padding
+mutated it), so deleting a track in one session hit all of them. (The `Session`
+constructor also copies defensively — see `pose/pose-data.js`.)
+
+**Global→per-session track-index remap (critical).** The worker reads each
+instance's track column as an index into the file-level GLOBAL track union
+(`slpData.tracks`). For a lucid multi-session project (`hasPerSessionTracks`),
+pass-1 translates that global index to THIS session's track index by NAME via
+`remapGlobalTrackToSession` (in `import-track-resolve.js`), and the `maxTrack`
+padding is SKIPPED. Using the raw global index as a per-session index — plus the
+padding — was the `global_0` → `track_3` corruption: deleting `global_0` in one
+session reorders the saved global union, pushing another session's `global_0` to
+a higher global index that then padded phantom `track_N` names on reload.
+Verified by `verify/roundtrip-tracks-multisession-harness.html` (distinct names)
+and `verify/ms-delete-track-roundtrip-harness.html` (real shared-name fixture,
+delete → save → reload, comparing fixed vs. old loader).
+
+**Trackless (null track) preservation.** A trackless instance is exported with
+`track=null` (sleap-io writes it as `-1` in the SLP `instances` table — a valid
+"no track" value that SLEAP GUI also supports). On re-import a null/`-1` track
+stays trackless (`trackIdx = null`) for **both user and predicted** instances:
+the raw-instance path uses `resolveImportTrackIdx`
+(`import-export/import-track-resolve.js`), and the lucid grouped-reconstruction
+path keeps `instMeta.trackIdx` null instead of defaulting to `0`. Defaulting to
+`0` (the former predicted-instance behavior) snapped a deleted-track instance
+onto the first track label (e.g. `global_0`) after an export/reload round-trip.
+
 **Key exports.**
 - `handleLoadSlpFile(slpFile)` — replace-current-state load. Drives the
   two-level LoadingProgressModal: all N session groups are pre-allocated
@@ -1803,6 +1853,17 @@ references aligned with its own identity list.
   progress modal. Sessions load SEQUENTIALLY; videos within a session load
   IN PARALLEL via the private `_loadSessionVideosParallel` helper. Skip-
   and-continue at the session level. Also attached to `window` / `globalThis`.
+- `reconstructInstanceGroupsFromDicts(session, fgDicts, camKeyToName, nodeNames, opts)`
+  — async; rebuilds one session's `InstanceGroup`s + member `Instance`s from its
+  saved `frame_group_dicts` (lucid grouping metadata in `sessions_json`),
+  removing the matching pass-1 raw-SLP duplicates and restoring `points3d`.
+  Extracted from `handleLoadSlpFile` (which now calls it) so the SLP grouped-
+  reconstruction path is headlessly round-trip testable — it preserves trackless
+  (`trackIdx` null) and identity-less (`identity_idx` -1) instances rather than
+  defaulting them to track/identity 0. `opts.onProgress(msg)` receives batch
+  progress; `opts.batch` (default 20000) sets the yield interval. Returns
+  `{ restoredGroups, restoredWith3d }`. Exercised by
+  `verify/roundtrip-null3d-harness.html`.
 
 **Private helpers (not exported).**
 - `_loadSessionVideosParallel({ sessionIdx, session, state, modal, groupId, decoderFactory })`
@@ -1830,6 +1891,43 @@ File menu Load Points3D H5.
 
 ---
 
+### import-export/import-track-resolve.js
+
+**Purpose.** One pure (dependency-free) helper, `resolveImportTrackIdx(session,
+rawTrackIdx, instType)`, that maps an imported instance's raw track index to
+LUCID's internal representation. A trackless instance (`track = -1` or `null`)
+stays trackless (`trackIdx = null`) for **both** user and predicted instances;
+real track indices pass through. Defensively normalizes an unsigned-int32
+readback of `-1` (`0xFFFFFFFF`) back to `-1`.
+
+Extracted from `loading/session-loader.js` (which transitively imports `app.js`
+and so can't be bridged into the test runner) specifically so it can be unit
+tested. `session`/`instType` are retained in the signature but no longer
+consulted. The former predicted-instance "coerce trackless → 0" behavior caused
+a deleted-track instance to reappear on the first track (`global_0`) after an
+export → reimport round trip.
+
+Also exports `remapGlobalTrackToSession(rawTrackIdx, globalTrackNames,
+sessionTrackNames)` — maps a per-instance track index from the file-level
+(GLOBAL) track list to a SPECIFIC session's track index, **by name**. A
+multi-session SLP stores ONE global track list (`tracks_json`) and writes each
+instance's track column as an index into it, but tracks are per-session. Without
+this remap, deleting a track in one session reorders the global union and
+silently remaps another session's instances (the `global_0` → `track_3` bug).
+Trackless stays trackless; a global track absent from the session returns `-1`.
+`slp-import.js` calls it in pass-1 for lucid multi-session projects; the
+save-side counterpart (re-pointing instances to canonical Track objects so they
+serialize to the right global slot) lives in `save-load.js` `buildSlpBytes`.
+
+**Key exports.** `resolveImportTrackIdx`, `remapGlobalTrackToSession`.
+
+**Imported by.** `loading/session-loader.js` (re-exports `resolveImportTrackIdx`;
+the three import paths keep importing it from there),
+`import-export/slp-import.js` (both functions). Bridged into
+`tests/test-runner.html`; covered by `tests/test-import-track-resolve.js`.
+
+---
+
 ### import-export/slp-merge.js
 
 **Purpose.** Pure helpers for additive multi-SLP loading — skeleton
@@ -1840,8 +1938,10 @@ compatibility check, track merging, frame merging, group rebuild.
   `{error, reorderMap}`.
 - `mergeTracksIntoSession(session, incomingTracks)`.
 - `mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName,
-  cameras, trackRemap, nodeReorderMap)`.
-- `rebuildInstanceGroupsForFrames(session, frameIndices)`.
+  cameras, trackRemap, nodeReorderMap)` — trackless instances (track=-1/null),
+  user OR predicted, keep `trackIdx = null` (no longer coerce predictions to 0).
+- `rebuildInstanceGroupsForFrames(session, frameIndices)` — groups by `trackIdx`;
+  trackless instances of any type are skipped (not bucketed into track 0).
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Instance`,

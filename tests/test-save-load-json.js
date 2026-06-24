@@ -257,7 +257,9 @@
                             var instData = groupData.instances[camName];
                             var inst = new Instance(
                                 instData.points,
-                                instData.trackIdx || groupData.identityId,
+                                // null trackIdx = trackless; preserve it (mirrors
+                                // _restoreProjectV2 — must not snap to track 0).
+                                instData.trackIdx != null ? instData.trackIdx : null,
                                 instData.type || 'user',
                                 instData.score || 1.0
                             );
@@ -296,7 +298,9 @@
                         var ulData = frameData.unlinkedInstances[ui];
                         var ulInst = new Instance(
                             ulData.points,
-                            ulData.trackIdx != null ? ulData.trackIdx : 0,
+                            // null trackIdx = trackless; preserve it (mirrors
+                            // _restoreProjectV2 — must not snap to track 0).
+                            ulData.trackIdx != null ? ulData.trackIdx : null,
                             ulData.type || 'user',
                             ulData.score || 1.0
                         );
@@ -656,6 +660,49 @@
             var fg = r.restored.getFrameGroup(0);
             var ul = fg.getUnlinkedInstances('CamA')[0].instance;
             assertTrue(ul.modified, 'modified is true');
+        });
+    });
+
+    // ============================================
+    // Trackless (null trackIdx) instances
+    // ============================================
+
+    describe('JSON roundtrip - trackless instances', function () {
+        // A trackless instance has trackIdx === null. On reload it must STAY
+        // null — historically the loader defaulted null → 0, snapping trackless
+        // instances onto the first track label after a save/reload round-trip.
+        function tracklessRoundtrip() {
+            var skeleton = new Skeleton('m', ['a', 'b'], [[0, 1]]);
+            var cams = [new Camera('CamA', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [64,64])];
+            var session = new Session(cams, skeleton, ['track_0', 'track_1']);
+
+            // Grouped instance with NO track.
+            var fg = new FrameGroup(0);
+            session.addFrameGroup(fg);
+            var trackless = new Instance([[10, 20], [30, 40]], null, 'user', 1.0);
+            var grp = new InstanceGroup(7001, -1); // identityId -1 = no identity
+            grp.addInstance('CamA', trackless);
+            session.instanceGroups.set(0, [grp]);
+
+            // Unlinked instance with NO track.
+            var ulTrackless = new Instance([[50, 60], [70, 80]], null, 'user', 1.0);
+            fg.addUnlinkedInstance('CamA', new UnlinkedInstance(ulTrackless, 'CamA'));
+
+            return deserializeSession(JSON.parse(JSON.stringify(serializeSession(session))));
+        }
+
+        it('grouped trackless instance stays trackless (not track 0)', function () {
+            var restored = tracklessRoundtrip();
+            var g = restored.getInstanceGroupsForFrame(0)[0];
+            var inst = g.instances.get('CamA');
+            assertNull(inst.trackIdx, 'grouped instance trackIdx is null after reload');
+        });
+
+        it('unlinked trackless instance stays trackless (not track 0)', function () {
+            var restored = tracklessRoundtrip();
+            var fg = restored.getFrameGroup(0);
+            var ul = fg.getUnlinkedInstances('CamA')[0].instance;
+            assertNull(ul.trackIdx, 'unlinked instance trackIdx is null after reload');
         });
     });
 

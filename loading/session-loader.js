@@ -35,6 +35,8 @@ import {
     loadCalibrationFile,
 } from '../import-export/file-io.js';
 
+import { resolveImportTrackIdx } from '../import-export/import-track-resolve.js';
+
 import {
     LazyFrameLoader, shouldUseLazyH5, getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
@@ -2462,33 +2464,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
     }
 }
 
-/**
- * Resolve an imported instance's trackIdx. Enforces the rule that no
- * two UserInstances in the same view share a track: trackless user
- * instances stay trackless (trackIdx=null) so they can't collide with
- * an existing user instance on track 0. Downstream uses `trackIdx !=
- * null` as the untracked test (timeline.js, overlays.js, etc.) —
- * trackless user instances render with fallback coloring and can be
- * grouped by the user via the Assign menu.
- *
- * PredictedInstances keep the coerce-to-0 behavior since user+
- * predicted on the same track is allowed. `session` is unused but
- * kept in the signature in case future logic needs context.
- *
- * Called from three import paths (handleLoadSessionFolderSingleSlp,
- * handleLoadSessionFolderPerCamera, handleLoadSlpFile pass 1).
- */
-export function resolveImportTrackIdx(session, rawTrackIdx, instType) {
-    // Defensively normalize an unsigned-int32 readback of a signed -1
-    // (0xFFFFFFFF = 4294967295) back to -1. The post-pass writes the
-    // track column as signed i4, but if h5wasm's compound reader
-    // introspects the field as unsigned, -1 comes through as a large
-    // positive number and slips past the `>= 0` check as a "real" track.
-    if (typeof rawTrackIdx === 'number' && rawTrackIdx > 0x7FFFFFFF) {
-        rawTrackIdx = rawTrackIdx - 0x100000000;
-    }
-    if (rawTrackIdx != null && rawTrackIdx >= 0) return rawTrackIdx;
-    var isUser = !instType || instType === 'user';
-    if (!isUser) return 0;
-    return null;
-}
+// resolveImportTrackIdx moved to ../import-export/import-track-resolve.js (a
+// dependency-free module) so it can be unit tested headlessly. Re-exported here
+// (and used internally below) so the three import paths keep their import site.
+export { resolveImportTrackIdx };

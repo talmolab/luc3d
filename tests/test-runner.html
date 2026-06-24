@@ -150,6 +150,9 @@
     <!-- SLP merge tests -->
     <script src="test-slp-merge.js"></script>
 
+    <!-- Import trackIdx resolver (trackless user + predicted) tests -->
+    <script src="test-import-track-resolve.js"></script>
+
     <!-- Tempdata triangulation pipeline tests -->
     <script src="test-tempdata-triangulation.js"></script>
 
@@ -245,11 +248,15 @@
         // Pure (DOM-free) ops backing the Track/Identity menu modals. No app.js
         // in its import graph, so it's safe to bridge for unit tests.
         import * as __TrackIdentityOps from '../ui/track-identity-ops.js';
+        // Pure (DOM-free) import-trackIdx resolver. Extracted from
+        // session-loader.js (which pulls app.js) precisely so it's bridgeable.
+        import * as __ImportTrackResolve from '../import-export/import-track-resolve.js';
         Object.assign(window, __PoseData, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
                               __LoadingProgressModal,
-                              __TimelineCtrl, __TrackIdentityOps);
+                              __TimelineCtrl, __TrackIdentityOps,
+                              __ImportTrackResolve);
         // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
         // are intentionally NOT bridged here. All three transitively import app.js
         // (circular, awaiting later passes), and app.js requires the full DOM +

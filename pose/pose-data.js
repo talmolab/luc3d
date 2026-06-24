@@ -600,7 +600,10 @@ export class Session {
     constructor(cameras, skeleton, tracks, name) {
         this.cameras = cameras;
         this.skeleton = skeleton;
-        this.tracks = tracks;
+        // Copy the tracks array so each session owns it. Tracks are per-session
+        // (like identities): two sessions must never share one array, or
+        // deleting/adding/renaming a track in one would mutate the others.
+        this.tracks = Array.isArray(tracks) ? tracks.slice() : (tracks || []);
         this.name = name || 'Session 1';
         this.videoFileIndices = [];
         this.lastFrame = 0;

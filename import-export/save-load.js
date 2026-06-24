@@ -520,6 +520,30 @@ async function buildSlpBytes() {
         allSessions = allSessions.concat(sessLabels.sessions || []);
     }
 
+    // Re-point every instance's track to the canonical (deduped) Track object
+    // for its NAME. buildSlpLabelsAllViews creates a fresh SIO.Track array per
+    // session, but the allTracks dedup above keeps only the FIRST session's
+    // object per shared name. sleap-io serializes each instance's track via
+    // labels.tracks.indexOf(instance.track) using OBJECT IDENTITY, so a later
+    // session's instance still pointing at its own (discarded) Track object
+    // would serialize as -1 (trackless) — dropping the track on any shared-name
+    // track. Mapping every instance.track to the canonical object makes indexOf
+    // resolve it to the correct global slot. (Tracks are then re-localized to
+    // each session's own list by NAME on load — see slp-import.js.)
+    var canonicalTrackByName = {};
+    for (var ctI = 0; ctI < allTracks.length; ctI++) {
+        canonicalTrackByName[allTracks[ctI].name] = allTracks[ctI];
+    }
+    for (var lfI = 0; lfI < allLabeledFrames.length; lfI++) {
+        var lfInsts = allLabeledFrames[lfI].instances || [];
+        for (var inI = 0; inI < lfInsts.length; inI++) {
+            var sioInst = lfInsts[inI];
+            if (sioInst && sioInst.track && canonicalTrackByName[sioInst.track.name]) {
+                sioInst.track = canonicalTrackByName[sioInst.track.name];
+            }
+        }
+    }
+
     var labels = new SIO.Labels({
         labeledFrames: allLabeledFrames,
         videos: allVideos,
@@ -1301,7 +1325,8 @@ function _restoreProjectV2(data) {
                         var instData = groupData.instances[camName];
                         var inst = new Instance(
                             instData.points,
-                            instData.trackIdx != null ? instData.trackIdx : (groupData.trackIdx != null ? groupData.trackIdx : 0),
+                            // null trackIdx = trackless; preserve it (don't snap to track 0).
+                            instData.trackIdx != null ? instData.trackIdx : (groupData.trackIdx != null ? groupData.trackIdx : null),
                             instData.type || 'user',
                             instData.score || 1.0
                         );
@@ -1343,7 +1368,8 @@ function _restoreProjectV2(data) {
                     var ulData = frameData.unlinkedInstances[ui];
                     var ulInst = new Instance(
                         ulData.points,
-                        ulData.trackIdx != null ? ulData.trackIdx : 0,
+                        // null trackIdx = trackless; preserve it (don't snap to track 0).
+                        ulData.trackIdx != null ? ulData.trackIdx : null,
                         ulData.type || 'user',
                         ulData.score || 1.0
                     );
