@@ -1136,32 +1136,6 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
         }
     }
 
-    // Triangulation method label ('DLT' or 'Bundle Adjustment'). Prefer the
-    // per-result method; fall back to the group's recorded method.
-    const errorMethodEl = document.getElementById('errorMethod');
-    if (errorMethodEl) {
-        let method = null;
-        if (results && results.length > 0) {
-            for (const r of results) {
-                if (r.method) { method = r.method; break; }
-                if (r.group && r.group.triangulationMethod) { method = r.group.triangulationMethod; break; }
-            }
-        }
-        // Fall back to the frame's groups (e.g. after "Group by ... & Triangulate
-        // All", which records the method on each group but not in results).
-        if (!method && instanceGroups) {
-            for (const g of instanceGroups) {
-                if (g && g.triangulationMethod) { method = g.triangulationMethod; break; }
-            }
-        }
-        if (method) {
-            errorMethodEl.textContent = method === 'ba' ? 'Bundle Adjustment' : 'DLT';
-            errorMethodEl.style.display = '';
-        } else {
-            errorMethodEl.style.display = 'none';
-        }
-    }
-
     // Per-camera errors
     const perCamDiv = document.getElementById('perCameraErrors');
     perCamDiv.textContent = '';
