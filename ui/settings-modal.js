@@ -16,7 +16,45 @@ import {
     getActions,
     applyBindings,
     formatBinding,
+    getNodeWeight,
+    setNodeWeights,
+    getTrackingThresholdDefs,
+    setTrackingThresholds,
 } from './settings.js';
+import { getActiveSession } from './app-state.js';
+
+// True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
+// is recorded as the cross-platform `Mod` token (matching the catalog defaults).
+function _isAppleDevice() {
+    if (typeof navigator === 'undefined') return false;
+    var plat = navigator.platform ||
+        (navigator.userAgentData && navigator.userAgentData.platform) ||
+        navigator.userAgent || '';
+    return /Mac|iPhone|iPad|iPod/i.test(plat);
+}
+
+// Keys that are modifiers on their own — ignored as a sequence step.
+function isModifierKeyName(k) {
+    return k === 'Shift' || k === 'Control' || k === 'Meta' ||
+        k === 'Alt' || k === 'AltGraph' || k === 'CapsLock';
+}
+
+// Build a canonical chord string (e.g. "Mod+Shift+I") from a KeyboardEvent. The
+// platform-primary modifier becomes `Mod` so captured bindings match catalog
+// defaults and conflict-detect cleanly.
+function chordFromEvent(e) {
+    const apple = _isAppleDevice();
+    const parts = [];
+    if (apple) {
+        if (e.metaKey) parts.push('Mod'); else if (e.ctrlKey) parts.push('Ctrl');
+    } else {
+        if (e.ctrlKey) parts.push('Mod'); else if (e.metaKey) parts.push('Cmd');
+    }
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    parts.push(e.key);
+    return parts.join('+');
+}
 
 // Show the Settings modal. `initialPanel` is one of 'triangulation' |
 // 'keyboard' | 'wizard' and defaults to 'triangulation'.
@@ -33,10 +71,24 @@ export function showSettingsModal(initialPanel) {
     const working = {
         method: getDefaultTriangulationMethod(),
         keyMap: {},
+        nodeWeights: {},
+        thresholds: {},
     };
     const actions = getActions();
     // Only editable actions are user-rebindable; the working map tracks those.
     actions.forEach(function (a) { if (a.editable) working.keyMap[a.id] = a.binding; });
+
+    // Seed the working node-weight map from the active session's skeleton, if any.
+    // Keyed by node name; values are the current effective weight (default 1).
+    const activeSession = getActiveSession();
+    const skeletonNodes = (activeSession && activeSession.skeleton && Array.isArray(activeSession.skeleton.nodes))
+        ? activeSession.skeleton.nodes.slice()
+        : [];
+    skeletonNodes.forEach(function (name) { working.nodeWeights[name] = getNodeWeight(name); });
+
+    // Seed the working tracking-threshold map from the catalog's effective values.
+    const thresholdDefs = getTrackingThresholdDefs();
+    thresholdDefs.forEach(function (def) { working.thresholds[def.id] = def.value; });
 
     // --- Build DOM --------------------------------------------------------
     const overlay = document.createElement('div');
@@ -148,6 +200,17 @@ export function showSettingsModal(initialPanel) {
     // Initialize checked row from current default.
     if (radioRows[working.method]) radioRows[working.method].classList.add('checked');
 
+    // Docs link for additional information on triangulation methods.
+    const triDocsNote = document.createElement('div');
+    triDocsNote.className = 'settings-kbd-hint settings-docs-note';
+    const triDocsLink = document.createElement('a');
+    triDocsLink.href = 'https://talmolab.github.io/luc3d-docs/how-it-works/triangulation/';
+    triDocsLink.target = '_blank';
+    triDocsLink.rel = 'noopener';
+    triDocsLink.textContent = 'Triangulation Docs';
+    triDocsNote.appendChild(triDocsLink);
+    triPanel.appendChild(triDocsNote);
+
     panelContainer.appendChild(triPanel);
     panels.triangulation = triPanel;
 
@@ -197,61 +260,76 @@ export function showSettingsModal(initialPanel) {
             keyChip.classList.add('fixed');
             keyChip.title = 'This shortcut is fixed';
         } else {
+            keyChip.title = 'Click, then press keys (a chord or a multi-key sequence). Click anywhere to set; Esc cancels.';
             keyChip.addEventListener('click', function () {
                 // Ignore re-entry if already capturing this (or another) chip.
                 if (capturingState) return;
 
                 const previousText = keyChip.textContent;
+                const previousBinding = working.keyMap[action.id];
+                let seq = [];
                 keyChip.classList.add('capturing');
-                keyChip.textContent = 'Press a key…';
+                keyChip.textContent = 'Press keys…';
 
-                function onKeyDown(e) {
-                    e.preventDefault();
+                function render() {
+                    keyChip.textContent = seq.length ? formatBinding(seq.join(' ')) : 'Press keys…';
+                }
+
+                function cleanup() {
                     document.removeEventListener('keydown', onKeyDown, true);
+                    document.removeEventListener('mousedown', onStop, true);
                     capturingState = null;
+                    keyChip.classList.remove('capturing');
+                }
 
-                    if (e.key === 'Escape') {
-                        // Cancel capture, restore previous value.
-                        keyChip.classList.remove('capturing');
-                        keyChip.textContent = previousText;
-                        return;
-                    }
+                function cancel() {
+                    cleanup();
+                    keyChip.textContent = previousText;
+                }
 
-                    // Only accept single printable characters (rejects modifiers,
-                    // arrows, function keys, etc.).
-                    if (e.key.length !== 1) {
-                        keyChip.classList.remove('capturing');
-                        keyChip.textContent = previousText;
-                        return;
-                    }
-
-                    const newKey = e.key;
-
-                    // Conflict check: reject a key already used by any other
-                    // action (editable or fixed), case-insensitively.
+                function finalize() {
+                    cleanup();
+                    if (!seq.length) { keyChip.textContent = previousText; return; }
+                    const binding = seq.join(' ');
+                    // Conflict: reject a binding already used by another action.
                     let conflict = false;
                     actions.forEach(function (other) {
                         if (other.id === action.id) return;
                         const ob = currentBindingOf(other);
-                        if (ob && ob.toLowerCase() === newKey.toLowerCase()) conflict = true;
+                        if (ob && ob.toLowerCase() === binding.toLowerCase()) conflict = true;
                     });
                     if (conflict) {
-                        keyChip.classList.remove('capturing');
+                        working.keyMap[action.id] = previousBinding;
                         keyChip.textContent = 'In use';
-                        setTimeout(function () {
-                            keyChip.textContent = previousText;
-                        }, 700);
+                        setTimeout(function () { keyChip.textContent = previousText; }, 800);
                         return;
                     }
-
-                    // Accept.
-                    working.keyMap[action.id] = newKey;
-                    keyChip.classList.remove('capturing');
-                    keyChip.textContent = formatBinding(newKey);
+                    working.keyMap[action.id] = binding;
+                    keyChip.textContent = formatBinding(binding);
                 }
+
+                function onKeyDown(e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    if (e.key === 'Escape') { cancel(); return; }
+                    if (isModifierKeyName(e.key)) return;  // wait for the real key
+                    if (e.key === ' ') return;             // space can't be a sequence token
+                    seq.push(chordFromEvent(e));
+                    render();
+                }
+
+                // A click anywhere ends key input and commits the sequence.
+                function onStop() { finalize(); }
 
                 capturingState = { chip: keyChip };
                 document.addEventListener('keydown', onKeyDown, true);
+                // Defer the click-to-stop listener so the click that STARTED
+                // capture doesn't immediately finalize it.
+                setTimeout(function () {
+                    if (capturingState && capturingState.chip === keyChip) {
+                        document.addEventListener('mousedown', onStop, true);
+                    }
+                }, 0);
             });
         }
 
@@ -262,7 +340,7 @@ export function showSettingsModal(initialPanel) {
 
     const kbdHint = document.createElement('div');
     kbdHint.className = 'settings-kbd-hint';
-    kbdHint.textContent = 'Click an editable key, then press the new key. Greyed keys are fixed. Changes apply when you click Apply.';
+    kbdHint.textContent = 'Click a key, then press a chord or a multi-key sequence (keep typing for a sequence); click anywhere to set, Esc to cancel. Greyed keys are fixed. Changes apply when you click Apply.';
     kbdPanel.appendChild(kbdHint);
 
     panelContainer.appendChild(kbdPanel);
@@ -275,11 +353,145 @@ export function showSettingsModal(initialPanel) {
     const wizTitle = document.createElement('div');
     wizTitle.className = 'settings-panel-title';
     wizTitle.textContent = 'Tracking Wizard';
-    const wizSoon = document.createElement('div');
-    wizSoon.className = 'settings-coming-soon';
-    wizSoon.textContent = 'Coming Soon';
     wizPanel.appendChild(wizTitle);
-    wizPanel.appendChild(wizSoon);
+
+    // --- Node Weights section --------------------------------------------
+    // Each skeleton node gets a 0–1 weight controlling how much it counts in the
+    // tracking cost (epipolar, reprojection, instance distance). 1 = full weight,
+    // 0 = ignored entirely. Edits mutate working.nodeWeights; committed on Apply.
+    const nwCategory = document.createElement('div');
+    nwCategory.className = 'settings-kbd-category';
+    nwCategory.textContent = 'Node Weights';
+    wizPanel.appendChild(nwCategory);
+
+    const nwHint = document.createElement('div');
+    nwHint.className = 'settings-kbd-hint';
+    nwHint.style.marginTop = '0';
+    nwHint.style.marginBottom = '8px';
+    nwHint.textContent = 'Weight of each skeleton node in the tracking algorithm (0–1). ' +
+        '1 = fully considered (epipolar cost, reprojection, …); 0 = ignored. Changes apply when you click Apply.';
+    wizPanel.appendChild(nwHint);
+
+    if (skeletonNodes.length === 0) {
+        const nwEmpty = document.createElement('div');
+        nwEmpty.className = 'settings-kbd-hint';
+        nwEmpty.textContent = 'Load a session with a skeleton to configure node weights.';
+        wizPanel.appendChild(nwEmpty);
+    } else {
+        // Compact, scrollable multi-column table so long skeletons don't push the
+        // Tracking Thresholds section off-screen.
+        const nwList = document.createElement('div');
+        nwList.className = 'settings-node-weight-list';
+        wizPanel.appendChild(nwList);
+
+        skeletonNodes.forEach(function (name) {
+            const row = document.createElement('div');
+            row.className = 'settings-node-weight-row';
+
+            const label = document.createElement('div');
+            label.className = 'settings-kbd-label';
+            label.textContent = name;
+
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.className = 'settings-num-input';
+            input.min = '0';
+            input.max = '1';
+            input.step = '0.01';
+            input.value = String(working.nodeWeights[name]);
+            input.setAttribute('aria-label', 'Weight for node ' + name);
+
+            // Keep the working map in sync as the user types. Empty/invalid input
+            // is tolerated mid-edit; clamping to [0,1] happens on blur and on Apply.
+            input.addEventListener('input', function () {
+                const v = parseFloat(input.value);
+                if (isFinite(v)) working.nodeWeights[name] = v;
+            });
+            input.addEventListener('blur', function () {
+                let v = parseFloat(input.value);
+                if (!isFinite(v)) v = working.nodeWeights[name];
+                if (v < 0) v = 0;
+                if (v > 1) v = 1;
+                working.nodeWeights[name] = v;
+                input.value = String(v);
+            });
+
+            row.appendChild(label);
+            row.appendChild(input);
+            nwList.appendChild(row);
+        });
+    }
+
+    // --- Tracking Thresholds section -------------------------------------
+    // Tier A (scoring) + Tier B (reprojection gates) knobs of the cross-view
+    // tracker. Each renders a labelled number field (range/step from the catalog)
+    // with an inline description. Edits mutate working.thresholds; clamped to the
+    // catalog range on blur and on Apply.
+    const thCategory = document.createElement('div');
+    thCategory.className = 'settings-kbd-category';
+    thCategory.textContent = 'Tracking Thresholds';
+    wizPanel.appendChild(thCategory);
+
+    const thHint = document.createElement('div');
+    thHint.className = 'settings-kbd-hint';
+    thHint.style.marginTop = '0';
+    thHint.style.marginBottom = '8px';
+    thHint.textContent = 'Thresholds the cross-view tracker uses when matching instances across views. ' +
+        'Defaults are tuned values — change them only if tracking under/over-matches. Changes apply when you click Apply.';
+    wizPanel.appendChild(thHint);
+
+    thresholdDefs.forEach(function (def) {
+        const row = document.createElement('div');
+        row.className = 'settings-threshold-row';
+
+        const labelWrap = document.createElement('div');
+        labelWrap.className = 'settings-threshold-label-wrap';
+        const thTitle = document.createElement('div');
+        thTitle.className = 'settings-threshold-title';
+        thTitle.textContent = def.label;
+        const thDesc = document.createElement('div');
+        thDesc.className = 'settings-threshold-desc';
+        thDesc.textContent = def.desc;
+        labelWrap.appendChild(thTitle);
+        labelWrap.appendChild(thDesc);
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'settings-num-input';
+        input.min = String(def.min);
+        input.max = String(def.max);
+        input.step = String(def.step);
+        input.value = String(working.thresholds[def.id]);
+        input.setAttribute('aria-label', def.label);
+
+        input.addEventListener('input', function () {
+            const v = parseFloat(input.value);
+            if (isFinite(v)) working.thresholds[def.id] = v;
+        });
+        input.addEventListener('blur', function () {
+            let v = parseFloat(input.value);
+            if (!isFinite(v)) v = working.thresholds[def.id];
+            if (v < def.min) v = def.min;
+            if (v > def.max) v = def.max;
+            working.thresholds[def.id] = v;
+            input.value = String(v);
+        });
+
+        row.appendChild(labelWrap);
+        row.appendChild(input);
+        wizPanel.appendChild(row);
+    });
+
+    // Docs link at the bottom of the thresholds.
+    const docsNote = document.createElement('div');
+    docsNote.className = 'settings-kbd-hint settings-docs-note';
+    const docsLink = document.createElement('a');
+    docsLink.href = 'https://talmolab.github.io/luc3d-docs/how-it-works/tracking-triangulation/';
+    docsLink.target = '_blank';
+    docsLink.rel = 'noopener';
+    docsLink.textContent = 'Tracker Docs';
+    docsNote.appendChild(docsLink);
+    wizPanel.appendChild(docsNote);
 
     panelContainer.appendChild(wizPanel);
     panels.wizard = wizPanel;
@@ -327,6 +539,8 @@ export function showSettingsModal(initialPanel) {
     function commit() {
         setDefaultTriangulationMethod(working.method);
         applyBindings(working.keyMap);
+        setNodeWeights(working.nodeWeights);
+        setTrackingThresholds(working.thresholds);
         teardown();
     }
 
