@@ -806,11 +806,41 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
 
     const meanError = totalCount > 0 ? totalError / totalCount : null;
 
+    // Step 5: Undistorted-space reprojection error. This is the space BA actually
+    // optimizes in: compare the ideal (pinhole, un-distorted) reprojection against
+    // the already-undistorted observations collected in Step 1. Reported alongside
+    // the distorted-space error so the headline can show both; the per-view and
+    // per-node breakdowns continue to use the distorted-space errors above.
+    const errorsPerCameraUndistorted = {};
+    let totalErrorUndist = 0;
+    let totalCountUndist = 0;
+    for (let c = 0; c < cameraNames.length; c++) {
+        const camName = cameraNames[c];
+        // Ideal reprojection (no re-distortion) for this camera.
+        const idealReproj = reprojectPoints(points3d, projMatrices[c]);
+        // Undistorted observations for this camera, per keypoint (from Step 1).
+        const observedUndist = [];
+        for (let k = 0; k < numKeypoints; k++) {
+            observedUndist.push(allObservations[k][c]);
+        }
+        const camErrs = computeReprojectionErrors(observedUndist, idealReproj);
+        errorsPerCameraUndistorted[camName] = camErrs;
+        for (let k = 0; k < camErrs.length; k++) {
+            if (camErrs[k] != null) {
+                totalErrorUndist += camErrs[k];
+                totalCountUndist++;
+            }
+        }
+    }
+    const meanErrorUndistorted = totalCountUndist > 0 ? totalErrorUndist / totalCountUndist : null;
+
     return {
         points3d: points3d,
         reprojections: reprojections,
         errors: errorsPerCamera,
+        errorsUndistorted: errorsPerCameraUndistorted,
         meanError: meanError,
+        meanErrorUndistorted: meanErrorUndistorted,
         method: method
     };
 }
@@ -1807,7 +1837,9 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
                     points3d: result.points3d,
                     reprojections: result.reprojections,
                     errors: result.errors,
+                    errorsUndistorted: result.errorsUndistorted,
                     meanError: result.meanError,
+                    meanErrorUndistorted: result.meanErrorUndistorted,
                     method: result.method,
                 });
 
@@ -2132,7 +2164,9 @@ export function triangulateCurrentFrame(method) {
                 points3d: result.points3d,
                 reprojections: result.reprojections,
                 errors: result.errors,
+                errorsUndistorted: result.errorsUndistorted,
                 meanError: result.meanError,
+                meanErrorUndistorted: result.meanErrorUndistorted,
                 method: result.method,
             });
         }
@@ -2299,7 +2333,9 @@ export async function triangulateAllFrames(method) {
                     points3d: result.points3d,
                     reprojections: result.reprojections,
                     errors: result.errors,
+                    errorsUndistorted: result.errorsUndistorted,
                     meanError: result.meanError,
+                    meanErrorUndistorted: result.meanErrorUndistorted,
                     method: result.method,
                 });
 
