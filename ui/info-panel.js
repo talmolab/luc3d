@@ -1342,6 +1342,12 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             // Track dropdown
             var trackSelect = document.createElement('select');
             trackSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
+            // "(none)" — a trackless group. Must exist so a group with no track
+            // shows as trackless instead of silently snapping to the first track.
+            var noneTrackOpt = document.createElement('option');
+            noneTrackOpt.value = '-1';
+            noneTrackOpt.textContent = '(none)';
+            trackSelect.appendChild(noneTrackOpt);
             for (var tsi = 0; tsi < (state.session.tracks || []).length; tsi++) {
                 var tOpt = document.createElement('option');
                 tOpt.value = tsi;
@@ -1352,18 +1358,27 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             newTrackOpt.value = '__new__';
             newTrackOpt.textContent = '(+) New Track';
             trackSelect.appendChild(newTrackOpt);
-            // Source the current track from the first instance's
-            // trackIdx, NOT group.identityId. identityId is an
-            // identity index and is -1 for groups whose identity
-            // export was dropped (SLP re-import path), which would
-            // otherwise leave the dropdown showing no selection.
+            // Source the current track from the first instance's trackIdx, NOT
+            // group.identityId. A trackless group (trackIdx == null — e.g. one
+            // formed by grouping trackless instances) shows "(none)"; it must
+            // NOT default to the first track (index 0).
             var firstGroupInst = group.instances.values().next().value;
             var groupDisplayTrackIdx = (firstGroupInst && firstGroupInst.trackIdx != null && firstGroupInst.trackIdx >= 0)
                 ? firstGroupInst.trackIdx
-                : 0;
-            trackSelect.value = groupDisplayTrackIdx;
+                : -1;
+            trackSelect.value = String(groupDisplayTrackIdx);
             (function (g, sel, curTrack) {
                 function applyTrack(newTrack) {
+                    if (newTrack < 0) {
+                        // "(none)" → make the whole group trackless.
+                        for (var [cnN, ginstN] of g.instances) ginstN.trackIdx = null;
+                        state.session.assignIdentityToGroup(g, -1);
+                        setStatus('Track → (none)', 'success');
+                        drawAllOverlays(state.currentFrame);
+                        updateInfoPanel();
+                        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                        return;
+                    }
                     var totalProp = 0;
                     for (var [cn, ginst] of g.instances) {
                         totalProp += swapAssignTrack(state.currentFrame, cn, ginst, newTrack, state.session);

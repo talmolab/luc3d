@@ -549,11 +549,15 @@ Skeleton, Sessions, and Frame Info tables; hosts the skeleton editor and
 the per-frame instance-group / unlinked-instance tables.
 
 **Instance-panel track/identity dropdowns.** Each grouped/unlinked instance
-row has a track `<select>` and an identity `<select>`. Both include a
-`+ New Track` / `+ New ID` option (value `__new__`). Choosing it replaces the
-select with an inline text box (`startInlineNameEntry`) where the user types a
-name and presses Enter to create + assign it (Esc or blur cancels); tracks are
-deduped by name, identities reuse an existing same-named identity. This replaces
+row has a track `<select>` and an identity `<select>`. Both selects include a
+`(none)` option (value `-1`) and a `(+) New Track` / `(+) New ID` option (value
+`__new__`). The track select defaults to `(none)` for a trackless instance/group
+(trackIdx == null) — it does NOT snap to the first track (index 0); selecting
+`(none)` sets the instance(s) trackless (the group path also unassigns its
+identity). Choosing `(+) New …` replaces the select with an inline text box
+(`startInlineNameEntry`) where the user types a name and presses Enter to create
++ assign it (Esc or blur cancels); tracks are deduped by name, identities reuse
+an existing same-named identity. This replaces
 the removed Tracks-menu "Assign Track" / "Assign Identity" submenus; the reusable
 `assignTrackToSelected` / `assignIdentityToSelected` helpers remain exported from
 `ui/identity-assignment.js`. These assignment/create handlers (and the
