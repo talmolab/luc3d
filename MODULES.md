@@ -708,6 +708,15 @@ keypoints, double-click to convert predicted → user, shift-drag to add
 to manual-assignment selection, right-click to null/restore nodes,
 keyboard shortcuts (delete, alt-drag clone, etc.).
 
+**Grouping/ungrouping shortcuts.** `onKeyDown` handles only the legacy `c`
+confirm-group alias (creates a group from a ready ≥2 assignment selection).
+The primary group (`Shift+G`) and ungroup (`Shift+U`) shortcuts are
+**catalog-dispatched** and wired in `ui/ui-wiring.js` (`setHandler`); ungroup
+delegates to that module's `unlinkGroup` (the complete path: data-model
+`Session.unlinkGroup` + triangulation purge + overlay/3D/timeline/info-panel
+refresh). The old incomplete `InteractionManager._unlinkSelectedGroup` helper
+was **removed** (it had no production callers).
+
 ---
 
 ### ui/loading-progress-modal.js
@@ -1429,7 +1438,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
 - File ▸ "Export 3D Video" (`menuExportVideo3d`) is wired to
   `showExport3DVideoModal()` (export-modals.js).
-- Group ops: `unlinkGroup`, `showGroupContextMenu`, `hideGroupContextMenu`.
+- Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
+  Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
+  `showGroupContextMenu`, `hideGroupContextMenu`.
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
 - Toggles: `toggleInfoPanel`, `updateInfoPanelToggleBtn`,
@@ -1511,15 +1522,19 @@ is now dispatched: it attaches a runtime handler via `setHandler(id, fn)` (from
 `ui/settings.js`) and is resolved by a single dedicated `keydown` listener
 calling `dispatchEvent(e)`, so it is **editable and rebindable** (chords or
 multi-key sequences) from the Settings panel. This covers the plain-key toggles
-(`u`/`p`/`r`/`e`, `v`, `g`, `t`, `n`, `i` info, `\` 3D, `?`, `Shift+U` ungroup,
-`f` find), the track actions (`Shift+T`, `Mod+Shift+T`), the wizard (`Mod+Shift+I`),
-smart-add new instance (`Mod+I`), settings
-(`Mod+,`) and load-session (`Mod+O`). Bindings live in `ACTION_CATALOG` (the
+(`u`/`p`/`r`/`e`, `v`, `g`, `t`, `n`, `i` info, `\` 3D, `?`, `Shift+G` group,
+`Shift+U` ungroup, `f` find), the track actions (`Shift+T`, `Mod+Shift+T`),
+the wizard (`Mod+Shift+I`), smart-add new instance (`Mod+I`), settings
+(`Mod+,`) and load-session (`Mod+O`). `Shift+G` (`group`) is wired to the **same** shared
+`performGroupButtonAction()` as the toolbar Group button, so the key does exactly
+what the button does: ungroup a selected group, create the group once ≥2 are
+picked in assignment mode, or otherwise toggle assignment mode. Bindings live in `ACTION_CATALOG` (the
 single source of truth for the Settings panel). The remaining shortcuts keep
 their own dedicated handlers and appear as **fixed** reference entries (not
 rebindable): `Mod+S` Save (works while typing), transport (`←/→`, `Space`,
 `Home`/`End`, `Opt+←/→`), the `1–9` identity / `Shift+1–9` track digit ranges,
-zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete`/`c` (canvas-context ops in
+zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete` plus the legacy `c`
+confirm-group alias (`groupConfirmLegacy`, canvas-context ops in
 `interaction.js`), and `Mod+J`/`Mod+Shift+J` (timeline-controller).
 `Enter`/`Escape` remain hard-coded modal-button special cases.
 

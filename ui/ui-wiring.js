@@ -1091,6 +1091,30 @@ export function unlinkGroup(group) {
 }
 
 /**
+ * Context-sensitive Group action shared by the toolbar Group button and the
+ * Shift+G shortcut, so the key does exactly what the button does:
+ *  - a grouped instance selected (not mid-assignment) → ungroup it
+ *  - in assignment mode with ≥2 picked → create the group
+ *  - in assignment mode with <2 → cancel assignment mode
+ *  - otherwise → enter assignment mode
+ */
+export function performGroupButtonAction() {
+    if (!interactionManager) return;
+    // Ungroup: a grouped instance is selected and we're not mid-assignment.
+    if (interactionManager.selectedInstanceGroup && !interactionManager.selectedReprojected && !interactionManager.assignmentMode) {
+        unlinkGroup(interactionManager.selectedInstanceGroup);
+        return;
+    }
+    if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 2) {
+        interactionManager._createGroupFromAssignment();
+    } else if (interactionManager.assignmentMode) {
+        interactionManager.setAssignmentMode(false);
+    } else {
+        interactionManager.setAssignmentMode(true);
+    }
+}
+
+/**
  * Show context menu for an InstanceGroup row.
  */
 export function showGroupContextMenu(x, y, group) {
@@ -1452,6 +1476,8 @@ export function setupUI() {
             unlinkGroup(interactionManager.selectedInstanceGroup);
         }
     });
+    // Group shortcut (Shift+G): do exactly what the toolbar Group button does.
+    setHandler('group', performGroupButtonAction);
     setHandler('showHotkeys', function () { showHotkeysHelp(); });
     // Standard single-action shortcuts, now catalog-dispatched (and rebindable).
     setHandler('openSettings', function () { showSettingsModal(); });
@@ -1926,22 +1952,9 @@ export function setupUI() {
     });
     document.getElementById('btnPrevLabeled').addEventListener('click', function() { seekToLabeledFrame(-1); });
     document.getElementById('btnNextLabeled').addEventListener('click', function() { seekToLabeledFrame(1); });
-    // Group button: toggle assignment mode, create group, or ungroup
-    document.getElementById('tbGroup').addEventListener('click', function () {
-        if (!interactionManager) return;
-        // Ungroup mode: grouped instance selected and not in assignment mode
-        if (interactionManager.selectedInstanceGroup && !interactionManager.selectedReprojected && !interactionManager.assignmentMode) {
-            unlinkGroup(interactionManager.selectedInstanceGroup);
-            return;
-        }
-        if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 2) {
-            interactionManager._createGroupFromAssignment();
-        } else if (interactionManager.assignmentMode) {
-            interactionManager.setAssignmentMode(false);
-        } else {
-            interactionManager.setAssignmentMode(true);
-        }
-    });
+    // Group button: toggle assignment mode, create group, or ungroup.
+    // Shares performGroupButtonAction() with the Shift+G shortcut.
+    document.getElementById('tbGroup').addEventListener('click', performGroupButtonAction);
     // Edit Group button
     document.getElementById('tbEditGroup').addEventListener('click', function () {
         if (!interactionManager) return;
