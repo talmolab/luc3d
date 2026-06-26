@@ -1306,6 +1306,29 @@ body {
   gap: 12px;
 }
 
+/* Stacked variant: each option on its own row (e.g. By-Cam modal — Save
+   Reprojections sits beneath Save PredictedInstances). */
+.slp-export-options.slp-export-options-stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.slp-export-options-stacked .slp-opt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Disabled option row (e.g. no reprojections available to save). */
+.slp-export-options-stacked .slp-opt-disabled {
+  opacity: 0.5;
+}
+
+.slp-export-options-stacked .slp-opt-disabled label {
+  cursor: not-allowed;
+}
+
 .slp-reproj-toggle {
   display: inline-flex;
   border: 1px solid var(--border-color);

@@ -1193,13 +1193,15 @@ export function showSlpExportByCamModal() {
         '</div>' +
         '</div>' +
         '<div class="slp-bycam-skel-warning" id="slpByCamSkelWarning" style="display:none"></div>' +
-        '<div class="slp-export-options">' +
-        '<label><input type="checkbox" id="slpByCamIncPred" checked> Predicted Instances</label>' +
+        '<div class="slp-export-options slp-export-options-stacked">' +
+        '<label class="slp-opt-row"><input type="checkbox" id="slpByCamIncPred" checked> Save PredictedInstances</label>' +
+        '<div class="slp-opt-row" id="slpByCamReprojRow">' +
         '<label><input type="checkbox" id="slpByCamReproj"> Save Reprojections</label>' +
         '<span class="slp-reproj-toggle" id="slpByCamReprojToggle">' +
         '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
         '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
         '</span>' +
+        '</div>' +
         '</div>' +
         '<div class="slp-bycam-all-row">' +
         '<button id="slpByCamDownloadAll" class="slp-bycam-all-btn">Download All</button>' +
@@ -1363,6 +1365,34 @@ export function showSlpExportByCamModal() {
         else reprojToggle.classList.add('slp-toggle-disabled');
     }
     reprojCheckbox.addEventListener('change', updateReprojToggleState);
+
+    // "Save Reprojections" is only meaningful when at least one session has
+    // reprojected instances (i.e. triangulation/tracking has been computed, so
+    // an InstanceGroup carries a reprojection for some camera). Disable the
+    // whole row otherwise.
+    function anySessionHasReprojections() {
+        for (var s = 0; s < sessions.length; s++) {
+            var igMap = sessions[s] && sessions[s].instanceGroups;
+            if (!igMap) continue;
+            for (var groups of igMap.values()) {
+                for (var g = 0; g < groups.length; g++) {
+                    if (groups[g].reprojectedInstances && groups[g].reprojectedInstances.size > 0) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    if (!anySessionHasReprojections()) {
+        reprojCheckbox.checked = false;
+        reprojCheckbox.disabled = true;
+        var reprojRow = document.getElementById('slpByCamReprojRow');
+        if (reprojRow) {
+            reprojRow.classList.add('slp-opt-disabled');
+            reprojRow.title = 'No reprojections available — triangulate or track a session first.';
+        }
+    }
     updateReprojToggleState();
     toggleOptions.forEach(function (opt) {
         opt.addEventListener('click', function () {
