@@ -1,7 +1,7 @@
 /**
  * test-2026-03-09-changes.js - Tests for the 2026-03-09 feature set:
  *   - Null node graying in selection highlight
- *   - Ungroup button (unlinkGroup via _unlinkSelectedGroup)
+ *   - Ungroup (Session.unlinkGroup data-model op)
  *   - ReprojectedInstance right-click nulls reprojected node
  *   - Visibility checkbox deselects hidden types
  *   - Per-view skeleton cache for new UserInstances
@@ -187,15 +187,17 @@
     });
 
     // ============================================
-    // 3. _unlinkSelectedGroup in InteractionManager
+    // 3. Ungroup via Session.unlinkGroup
     // ============================================
+    // The old InteractionManager._unlinkSelectedGroup() helper was removed (dead
+    // in production). The Shift+U shortcut and toolbar delegate to ui-wiring's
+    // unlinkGroup(), which calls the data-model Session.unlinkGroup() exercised here.
 
-    describe('Ungroup - InteractionManager._unlinkSelectedGroup', function () {
-        it('_unlinkSelectedGroup clears selection and disbands group', function () {
+    describe('Ungroup - Session.unlinkGroup', function () {
+        it('unlinkGroup clears selection and disbands group', function () {
             if (typeof InteractionManager !== 'function') return;
 
             var env = createGroupedEnv();
-            var deletedCalls = [];
 
             var views = [
                 { name: 'cam1', overlayCanvas: document.createElement('canvas'), videoWidth: 640, videoHeight: 480 },
@@ -210,9 +212,6 @@
                     return env.session.getInstanceGroupsForFrame(0);
                 },
                 onSelectionChanged: function () {},
-                onInstanceDeleted: function (frameIdx, group, deletedViews) {
-                    deletedCalls.push({ frameIdx: frameIdx, group: group, deletedViews: deletedViews });
-                },
                 onNodeMoved: function () {},
                 requestRedraw: function () {},
             });
@@ -223,13 +222,13 @@
             mgr.select(env.group, -1);
             assertEqual(mgr.selectedInstanceGroup, env.group, 'group selected');
 
-            // Unlink it
-            mgr._unlinkSelectedGroup();
+            // Unlink via the surviving path: clear selection + data-model op.
+            mgr.clearSelection();
+            env.session.unlinkGroup(0, env.group);
 
             assertNull(mgr.selectedInstanceGroup, 'selection cleared');
             assertEqual(env.session.getInstanceGroupsForFrame(0).length, 0, 'group removed');
             assertEqual(env.fg.getUnlinkedInstances('cam1').length, 1, 'unlinked created');
-            assertEqual(deletedCalls.length, 1, 'onInstanceDeleted called');
 
             mgr.detach();
         });

@@ -35,6 +35,8 @@ import {
     loadCalibrationFile,
 } from '../import-export/file-io.js';
 
+import { resolveImportTrackIdx } from '../import-export/import-track-resolve.js';
+
 import {
     LazyFrameLoader, shouldUseLazyH5, getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
@@ -356,6 +358,25 @@ export async function handleLoadVideos() {
     }
 }
 
+/**
+ * True if a picked file is a per-camera CALIBRATION video rather than a
+ * session recording. Calibration clips live in a `calibration_images/`
+ * subfolder of each camera folder (e.g.
+ * `.../back/calibration_images/<date>-back-calibration.mp4`) and must never be
+ * loaded as a session video. Their filenames embed the camera name, so the
+ * substring matcher in autoAssignVideosToCameras (and the SLP-import camera
+ * matcher) would otherwise bind them to a real camera and surface them as an
+ * extra view. Detect by path segment (robust to whichever directory the user
+ * picked as the root) OR by the `-calibration` / `_calibration` filename stem.
+ */
+export function isCalibrationVideoFile(file) {
+    if (!file) return false;
+    var relPath = (file.webkitRelativePath || file.name || '').replace(/\\/g, '/').toLowerCase();
+    if (relPath.split('/').indexOf('calibration_images') >= 0) return true;
+    var stem = (file.name || '').toLowerCase().replace(/\.[^.]+$/, '');
+    return stem.endsWith('-calibration') || stem.endsWith('_calibration');
+}
+
 export function autoAssignVideosToCameras() {
     if (!state.session) return;
     var cameraNames = state.session.cameras.map(function (c) { return c.name; });
@@ -475,6 +496,8 @@ export async function pickParentDirectoryForSessions(sessionNames) {
             // parts[0] = parent dir, parts[1] = session subdir, parts[2] = camera subdir, parts[3+] = files
             // Skip files at session root (only include files inside camera subdirs)
             if (parts.length < 4) continue;
+            // Skip per-camera calibration clips (back/calibration_images/...).
+            if (isCalibrationVideoFile(allFiles[i])) continue;
             var dirName = parts[1];
             if (!dirFiles[dirName]) dirFiles[dirName] = [];
             dirFiles[dirName].push(allFiles[i]);
@@ -548,7 +571,9 @@ export async function pickParentDirectoryForSessions(sessionNames) {
             // Camera subdir files have "Session/CamA/file.mp4" (3+ parts)
             var files = allFiles.filter(function (f) {
                 var rp = f.webkitRelativePath || f.name;
-                return rp.split('/').length >= 3;
+                if (rp.split('/').length < 3) return false;
+                // Exclude per-camera calibration clips (calibration_images/).
+                return !isCalibrationVideoFile(f);
             });
             matched.set(sessName, files);
         }
@@ -696,7 +721,7 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
                 if (parts.length < 2) continue;
                 var fnLower = parts[parts.length - 1].toLowerCase();
                 var ext = fnLower.substring(fnLower.lastIndexOf('.'));
-                if (videoExtensions.indexOf(ext) >= 0) {
+                if (videoExtensions.indexOf(ext) >= 0 && !isCalibrationVideoFile(file)) {
                     matchedFiles.push(file);
                 }
             }
@@ -2439,33 +2464,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
     }
 }
 
-/**
- * Resolve an imported instance's trackIdx. Enforces the rule that no
- * two UserInstances in the same view share a track: trackless user
- * instances stay trackless (trackIdx=null) so they can't collide with
- * an existing user instance on track 0. Downstream uses `trackIdx !=
- * null` as the untracked test (timeline.js, overlays.js, etc.) —
- * trackless user instances render with fallback coloring and can be
- * grouped by the user via the Assign menu.
- *
- * PredictedInstances keep the coerce-to-0 behavior since user+
- * predicted on the same track is allowed. `session` is unused but
- * kept in the signature in case future logic needs context.
- *
- * Called from three import paths (handleLoadSessionFolderSingleSlp,
- * handleLoadSessionFolderPerCamera, handleLoadSlpFile pass 1).
- */
-export function resolveImportTrackIdx(session, rawTrackIdx, instType) {
-    // Defensively normalize an unsigned-int32 readback of a signed -1
-    // (0xFFFFFFFF = 4294967295) back to -1. The post-pass writes the
-    // track column as signed i4, but if h5wasm's compound reader
-    // introspects the field as unsigned, -1 comes through as a large
-    // positive number and slips past the `>= 0` check as a "real" track.
-    if (typeof rawTrackIdx === 'number' && rawTrackIdx > 0x7FFFFFFF) {
-        rawTrackIdx = rawTrackIdx - 0x100000000;
-    }
-    if (rawTrackIdx != null && rawTrackIdx >= 0) return rawTrackIdx;
-    var isUser = !instType || instType === 'user';
-    if (!isUser) return 0;
-    return null;
-}
+// resolveImportTrackIdx moved to ../import-export/import-track-resolve.js (a
+// dependency-free module) so it can be unit tested headlessly. Re-exported here
+// (and used internally below) so the three import paths keep their import site.
+export { resolveImportTrackIdx };

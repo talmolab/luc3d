@@ -868,15 +868,6 @@ export function populateSessionsPanel() {
 
         (function(idx, row) {
             row.addEventListener('click', function() { switchSession(idx); });
-            row.addEventListener('dblclick', function(e) {
-                e.stopPropagation();
-                var newName = prompt('Rename session:', state.sessions[idx].name);
-                if (newName && newName.trim()) {
-                    state.sessions[idx].name = newName.trim();
-                    populateSessionsPanel();
-                    populateSessionStrip();
-                }
-            });
             // Drop zone for video-to-session drag
             row.addEventListener('dragenter', function(e) {
                 if (idx !== state.activeSessionIdx) {
@@ -946,14 +937,6 @@ export function populateSessionStrip() {
         (function(idx, el) {
             el.addEventListener('click', function() {
                 switchSession(idx);
-            });
-            el.addEventListener('dblclick', function(e) {
-                e.stopPropagation();
-                var newName = prompt('Rename session:', state.sessions[idx].name);
-                if (newName && newName.trim()) {
-                    state.sessions[idx].name = newName.trim();
-                    populateSessionStrip();
-                }
             });
             // Drop zone for video-to-session drag
             el.addEventListener('dragenter', function(e) {

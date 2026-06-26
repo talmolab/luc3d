@@ -74,6 +74,336 @@ import {
     populateViewStrip, populateSessionsPanel, populateSessionStrip,
     showMoveVideoModal, removeSession, switchSession,
 } from './sessions-panes.js';
+import {
+    nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
+} from './track-identity-ops.js';
+
+// ============================================
+// Rename Track / Identity modal
+// ============================================
+
+/**
+ * Modal for renaming a track or an identity. The same layout serves both;
+ * `kind` selects the data source, the title, and the apply binding. Shows a
+ * scrollable single-select list (selection highlighted in yellow), a
+ * "New name for …" text entry below it, and Cancel / Apply buttons. Esc closes
+ * the modal; Enter applies (per the app-wide modal convention, CLAUDE.md).
+ *
+ * @param {'track'|'identity'} kind
+ */
+function showRenameModal(kind) {
+    if (!state.session) { setStatus('No session', 'warning'); return; }
+    var isTrack = kind === 'track';
+    var items = isTrack
+        ? state.session.tracks.map(function (name, i) { return { idx: i, name: name }; })
+        : state.session.identities.map(function (id, i) { return { idx: i, name: id.name }; });
+    if (items.length === 0) {
+        setStatus(isTrack ? 'No tracks' : 'No identities', 'warning');
+        return;
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.innerHTML =
+        '<h3>' + (isTrack ? 'Rename Track' : 'Rename Identity') + '</h3>' +
+        '<div class="rename-list" id="renameList"></div>' +
+        '<label class="rename-name-label" id="renameNameLabel" style="display:none;"></label>' +
+        '<input type="text" class="rename-name-input" id="renameNameInput" placeholder="New name" disabled>' +
+        '<div class="modal-actions">' +
+        '<button id="renameCancel">Cancel</button>' +
+        '<button class="primary" id="renameApply" disabled>Apply</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    var listEl = modal.querySelector('#renameList');
+    var nameLabel = modal.querySelector('#renameNameLabel');
+    var nameInput = modal.querySelector('#renameNameInput');
+    var applyBtn = modal.querySelector('#renameApply');
+    var selectedIdx = null;
+
+    function currentName(idx) {
+        return isTrack ? state.session.tracks[idx] : state.session.identities[idx].name;
+    }
+
+    function selectItem(idx) {
+        selectedIdx = idx;
+        var rows = listEl.querySelectorAll('.rename-list-item');
+        rows.forEach(function (el) {
+            el.classList.toggle('selected', parseInt(el.getAttribute('data-idx')) === idx);
+        });
+        var name = currentName(idx);
+        nameLabel.textContent = 'New name for "' + name + '"';
+        nameLabel.style.display = '';
+        nameInput.disabled = false;
+        nameInput.value = name;
+        applyBtn.disabled = false;
+        nameInput.focus();
+        nameInput.select();
+    }
+
+    // Build the list with textContent (names are user-provided — no innerHTML).
+    items.forEach(function (it) {
+        var row = document.createElement('div');
+        row.className = 'rename-list-item';
+        row.setAttribute('data-idx', it.idx);
+        row.textContent = it.name;
+        row.addEventListener('click', function () { selectItem(it.idx); });
+        listEl.appendChild(row);
+    });
+
+    function close() {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+    }
+
+    function apply() {
+        if (selectedIdx == null) return;
+        var newName = nameInput.value.trim();
+        if (!newName) { setStatus('Enter a name', 'warning'); return; }
+        if (isTrack) {
+            var oldName = state.session.tracks[selectedIdx];
+            if (newName === oldName) { close(); return; }
+            if (nameExists(state.session, 'track', newName)) {
+                setStatus('Track "' + newName + '" already exists', 'warning'); return;
+            }
+            state.session.tracks[selectedIdx] = newName;
+            renameHiddenTrack(state.session, oldName, newName);
+            setStatus('Renamed track to: ' + newName, 'success');
+        } else {
+            var idObj = state.session.identities[selectedIdx];
+            var oldIdName = idObj.name;
+            if (newName === oldIdName) { close(); return; }
+            idObj.name = newName;
+            renameHiddenIdentity(state.session, oldIdName, newName);
+            setStatus('Renamed identity to: ' + newName, 'success');
+        }
+        drawAllOverlays(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+        populateTimelineVisibility(state.session);
+        close();
+    }
+
+    function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+        else if (e.key === 'Enter' && selectedIdx != null) { e.preventDefault(); apply(); }
+    }
+    document.addEventListener('keydown', onKey);
+
+    modal.querySelector('#renameCancel').addEventListener('click', close);
+    applyBtn.addEventListener('click', apply);
+
+    // Pre-select the first entry for convenience.
+    selectItem(items[0].idx);
+}
+
+/**
+ * Modal for creating a new track or identity. Same layout for both; `kind`
+ * selects the data source, title, and create binding. Shows a scrollable
+ * (read-only) list of the current tracks/identities for reference and a text
+ * entry for the new name. Cancel / Create buttons; Esc closes, Enter creates.
+ *
+ * @param {'track'|'identity'} kind
+ */
+function showCreateModal(kind) {
+    if (!state.session) { setStatus('No session', 'warning'); return; }
+    var isTrack = kind === 'track';
+    var names = isTrack
+        ? state.session.tracks.slice()
+        : state.session.identities.map(function (id) { return id.name; });
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.innerHTML =
+        '<h3>' + (isTrack ? 'New Track' : 'New Identity') + '</h3>' +
+        '<label class="rename-name-label">Current ' + (isTrack ? 'tracks' : 'identities') + '</label>' +
+        '<div class="rename-list readonly" id="createList"></div>' +
+        '<label class="rename-name-label">New ' + (isTrack ? 'track' : 'identity') + ' name</label>' +
+        '<input type="text" class="rename-name-input" id="createNameInput">' +
+        '<div class="modal-actions">' +
+        '<button id="createCancel">Cancel</button>' +
+        '<button class="primary" id="createApply">Create</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    var listEl = modal.querySelector('#createList');
+    if (names.length === 0) {
+        var empty = document.createElement('div');
+        empty.className = 'rename-list-item';
+        empty.style.color = 'var(--text-muted)';
+        empty.textContent = isTrack ? '(no tracks yet)' : '(no identities yet)';
+        listEl.appendChild(empty);
+    } else {
+        names.forEach(function (nm) {
+            var row = document.createElement('div');
+            row.className = 'rename-list-item';
+            row.textContent = nm;            // user-provided — textContent, not innerHTML
+            listEl.appendChild(row);
+        });
+    }
+
+    var nameInput = modal.querySelector('#createNameInput');
+    nameInput.value = isTrack
+        ? ('track_' + state.session.tracks.length)
+        : ('identity_' + state.session.identities.length);
+    nameInput.focus();
+    nameInput.select();
+
+    function close() {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+    }
+    function apply() {
+        var name = nameInput.value.trim();
+        if (!name) { setStatus('Enter a name', 'warning'); return; }
+        if (isTrack) {
+            if (nameExists(state.session, 'track', name)) {
+                setStatus('Track "' + name + '" already exists', 'warning'); return;
+            }
+            state.session.tracks.push(name);
+            setStatus('Created track: ' + name, 'success');
+        } else {
+            if (nameExists(state.session, 'identity', name)) {
+                setStatus('Identity "' + name + '" already exists', 'warning'); return;
+            }
+            state.session.addIdentity(name);
+            setStatus('Created identity: ' + name, 'success');
+        }
+        drawAllOverlays(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+        populateTimelineVisibility(state.session);
+        close();
+    }
+    function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+        else if (e.key === 'Enter') { e.preventDefault(); apply(); }
+    }
+    document.addEventListener('keydown', onKey);
+    modal.querySelector('#createCancel').addEventListener('click', close);
+    modal.querySelector('#createApply').addEventListener('click', apply);
+}
+
+/**
+ * Modal for deleting a track or identity. Same layout for both; `kind` selects
+ * the data source, title, warning text, and delete binding. Shows a scrollable
+ * single-select list (yellow highlight), a red warning line, and — in place of
+ * a text entry — a per-camera breakdown of how many instances will be nulled
+ * (with a Total row). Cancel / Delete buttons; Esc closes. Deletion is an
+ * explicit Delete-button click (not bound to Enter) since it is destructive.
+ *
+ * @param {'track'|'identity'} kind
+ */
+function showDeleteModal(kind) {
+    if (!state.session) { setStatus('No session', 'warning'); return; }
+    var isTrack = kind === 'track';
+    var items = isTrack
+        ? state.session.tracks.map(function (name, i) { return { idx: i, name: name }; })
+        : state.session.identities.map(function (id, i) { return { idx: i, name: id.name }; });
+    if (items.length === 0) {
+        setStatus(isTrack ? 'No tracks' : 'No identities', 'warning');
+        return;
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.innerHTML =
+        '<h3>' + (isTrack ? 'Delete Track' : 'Delete Identity') + '</h3>' +
+        '<div class="rename-list" id="deleteList"></div>' +
+        '<div class="delete-warning" id="deleteWarning"></div>' +
+        '<label class="rename-name-label">Instances nulled by camera</label>' +
+        '<div class="slp-export-table-container">' +
+        '<table class="data-table"><thead><tr><th>Camera</th><th style="text-align:right;">Instances</th></tr></thead>' +
+        '<tbody id="deleteCamBody"></tbody></table>' +
+        '</div>' +
+        '<div class="modal-actions">' +
+        '<button id="deleteCancel">Cancel</button>' +
+        '<button class="danger" id="deleteApply">Delete</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    var listEl = modal.querySelector('#deleteList');
+    var warnEl = modal.querySelector('#deleteWarning');
+    var camBody = modal.querySelector('#deleteCamBody');
+    var selectedIdx = null;
+
+    function selectItem(idx) {
+        selectedIdx = idx;
+        listEl.querySelectorAll('.rename-list-item').forEach(function (el) {
+            el.classList.toggle('selected', parseInt(el.getAttribute('data-idx')) === idx);
+        });
+        var name = isTrack ? state.session.tracks[idx] : state.session.identities[idx].name;
+        warnEl.textContent = isTrack
+            ? ('Current track "' + name + '" instances will have null track')
+            : ('Current identity "' + name + '" instances will have null identity');
+
+        // Per-camera breakdown of the instances that will be nulled.
+        var res = countNulledByCamera(state.session, kind, idx);
+        camBody.textContent = '';
+        state.session.cameras.forEach(function (c) {
+            var n = res.perCamera[c.name] || 0;
+            var tr = document.createElement('tr');
+            var td1 = document.createElement('td'); td1.textContent = c.name;
+            var td2 = document.createElement('td');
+            td2.style.textAlign = 'right'; td2.className = 'mono'; td2.textContent = String(n);
+            tr.appendChild(td1); tr.appendChild(td2);
+            camBody.appendChild(tr);
+        });
+        var trT = document.createElement('tr');
+        trT.className = 'delete-total-row';
+        var tdL = document.createElement('td'); tdL.textContent = 'Total';
+        var tdR = document.createElement('td');
+        tdR.style.textAlign = 'right'; tdR.className = 'mono'; tdR.textContent = String(res.total);
+        trT.appendChild(tdL); trT.appendChild(tdR);
+        camBody.appendChild(trT);
+    }
+
+    items.forEach(function (it) {
+        var row = document.createElement('div');
+        row.className = 'rename-list-item';
+        row.setAttribute('data-idx', it.idx);
+        row.textContent = it.name;
+        row.addEventListener('click', function () { selectItem(it.idx); });
+        listEl.appendChild(row);
+    });
+
+    function close() {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+    }
+
+    function doDelete() {
+        if (selectedIdx == null) return;
+        var deletedName = isTrack
+            ? deleteTrackAt(state.session, selectedIdx)
+            : deleteIdentityAt(state.session, selectedIdx);
+        setStatus('Deleted ' + (isTrack ? 'track' : 'identity') + ': ' + deletedName, 'success');
+        drawAllOverlays(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+        populateTimelineVisibility(state.session);
+        close();
+    }
+
+    function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+    }
+    document.addEventListener('keydown', onKey);
+    modal.querySelector('#deleteCancel').addEventListener('click', close);
+    modal.querySelector('#deleteApply').addEventListener('click', doDelete);
+
+    // Pre-select the first entry so the warning + counts populate immediately.
+    selectItem(items[0].idx);
+}
 
 // ============================================
 // Menu Setup
@@ -255,115 +585,26 @@ export function setupMenus() {
 
     document.getElementById('menuNewTrack').addEventListener('click', function () {
         closeMenus();
-        if (!state.session) { setStatus('No session', 'warning'); return; }
-        var name = prompt('New track name:', 'track_' + state.session.tracks.length);
-        if (!name) return;
-        if (state.session.tracks.indexOf(name) >= 0) {
-            setStatus('Track "' + name + '" already exists', 'warning');
-            return;
-        }
-        state.session.tracks.push(name);
-        setStatus('Created track: ' + name, 'success');
-        drawAllOverlays(state.currentFrame);
-        updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session);
-        // Block 2 (Prompt 4): refresh Visibility-tab toggle lists.
-        populateTimelineVisibility(state.session);
+        showCreateModal('track');
     });
 
     document.getElementById('menuRenameTrack').addEventListener('click', function () {
         closeMenus();
-        if (!state.session || state.session.tracks.length === 0) { setStatus('No tracks', 'warning'); return; }
-        var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
-        var idx = parseInt(prompt('Which track to rename?\n\n' + trackList + '\n\nEnter number:')) - 1;
-        if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
-        var oldName = state.session.tracks[idx];
-        var newName = prompt('New name for "' + oldName + '":', oldName);
-        if (!newName) return;
-        state.session.tracks[idx] = newName;
-        // Block 2 (Prompt 4): migrate hidden-set membership across rename
-        // so the toggle state persists. Identity rename / no-op safe.
-        renameHiddenTrack(state.session, oldName, newName);
-        setStatus('Renamed track ' + (idx + 1) + ' to: ' + newName, 'success');
-        drawAllOverlays(state.currentFrame);
-        updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session);
-        populateTimelineVisibility(state.session);
+        showRenameModal('track');
     });
 
     document.getElementById('menuDeleteTrack').addEventListener('click', function () {
         closeMenus();
-        if (!state.session || state.session.tracks.length === 0) { setStatus('No tracks', 'warning'); return; }
-        var trackList = state.session.tracks.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n');
-        var idx = parseInt(prompt('Which track to delete?\n\n' + trackList + '\n\nEnter number:')) - 1;
-        if (isNaN(idx) || idx < 0 || idx >= state.session.tracks.length) return;
-        var name = state.session.tracks[idx];
-        if (!confirm('Delete track "' + name + '"? Instances will become trackless.')) return;
-        state.session.tracks.splice(idx, 1);
-        // Shift trackIdx on all instances
-        for (var [fIdx, fg] of state.session.frameGroups) {
-            for (var [cn, insts] of fg.instances) {
-                for (var i = 0; i < insts.length; i++) {
-                    if (insts[i].trackIdx === idx) insts[i].trackIdx = -1;
-                    else if (insts[i].trackIdx > idx) insts[i].trackIdx--;
-                }
-            }
-            for (var [cn2, ulList] of fg.unlinkedInstances) {
-                for (var u = 0; u < ulList.length; u++) {
-                    if (ulList[u].instance.trackIdx === idx) ulList[u].instance.trackIdx = -1;
-                    else if (ulList[u].instance.trackIdx > idx) ulList[u].instance.trackIdx--;
-                }
-            }
-        }
-        // Block 2 (Prompt 4): drop the now-defunct entry from the
-        // hidden-tracks Set so a future track with the same name won't
-        // start out hidden.
-        if (state.session._hiddenTracks) state.session._hiddenTracks.delete(name);
-        setStatus('Deleted track: ' + name, 'success');
-        drawAllOverlays(state.currentFrame);
-        updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session);
-        populateTimelineVisibility(state.session);
+        showDeleteModal('track');
     });
 
     // Track/identity helpers are now top-level functions (above setupMenus)
 
-    // Populate Assign Track submenu on hover
-    document.getElementById('menuAssignTrack').addEventListener('mouseenter', function () {
-        var sub = document.getElementById('menuAssignTrackSub');
-        sub.innerHTML = '';
-        if (!state.session) return;
-        for (var i = 0; i < state.session.tracks.length; i++) {
-            var item = document.createElement('div');
-            item.className = 'menu-submenu-item';
-            item.textContent = state.session.tracks[i];
-            item.setAttribute('data-idx', i);
-            item.addEventListener('click', function (ev) {
-                ev.stopPropagation();
-                closeMenus();
-                assignTrackToSelected(parseInt(this.getAttribute('data-idx')));
-            });
-            sub.appendChild(item);
-        }
-        // "New Track..." option at bottom
-        var newItem = document.createElement('div');
-        newItem.className = 'menu-submenu-item menu-submenu-new';
-        newItem.textContent = '+ New Track...';
-        newItem.addEventListener('click', function (ev) {
-            ev.stopPropagation();
-            closeMenus();
-            var name = prompt('New track name:', 'track_' + state.session.tracks.length);
-            if (!name) return;
-            if (state.session.tracks.indexOf(name) < 0) state.session.tracks.push(name);
-            var idx = state.session.tracks.indexOf(name);
-            assignTrackToSelected(idx);
-            // Always refresh UI (assignTrackToSelected may return early if nothing selected)
-            drawAllOverlays(state.currentFrame);
-            updateInfoPanel();
-            if (timeline) timeline.refreshTracks(state.session);
-        });
-        sub.appendChild(newItem);
-    });
+    // "Assign Track" / "Assign Identity" were removed from the Track menu UI.
+    // Per-instance track/identity assignment now lives in the Instance panel
+    // dropdowns (ui/info-panel.js). The reusable assignment helpers
+    // (assignTrackToSelected / assignIdentityToSelected) remain exported from
+    // ui/identity-assignment.js.
 
     document.getElementById('menuSwapTracks').addEventListener('click', function () {
         closeMenus();
@@ -392,101 +633,17 @@ export function setupMenus() {
 
     document.getElementById('menuNewIdentity').addEventListener('click', function () {
         closeMenus();
-        if (!state.session) { setStatus('No session', 'warning'); return; }
-        var name = prompt('New identity name:', 'identity_' + state.session.identities.length);
-        if (!name) return;
-        var existing = state.session.identities.find(function (id) { return id.name === name; });
-        if (existing) { setStatus('Identity "' + name + '" already exists', 'warning'); return; }
-        state.session.addIdentity(name);
-        setStatus('Created identity: ' + name, 'success');
-        drawAllOverlays(state.currentFrame);
-        updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session);
-        // Block 2 (Prompt 4): refresh Visibility-tab toggle lists.
-        populateTimelineVisibility(state.session);
+        showCreateModal('identity');
     });
 
     document.getElementById('menuRenameIdentity').addEventListener('click', function () {
         closeMenus();
-        if (!state.session || state.session.identities.length === 0) { setStatus('No identities', 'warning'); return; }
-        var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
-        var idx = parseInt(prompt('Which identity to rename?\n\n' + idList + '\n\nEnter number:')) - 1;
-        if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
-        var oldIdName = state.session.identities[idx].name;
-        var newName = prompt('New name for "' + oldIdName + '":', oldIdName);
-        if (!newName) return;
-        state.session.identities[idx].name = newName;
-        // Block 2 (Prompt 4): migrate hidden-identity Set membership
-        // so the toggle state persists across rename.
-        renameHiddenIdentity(state.session, oldIdName, newName);
-        setStatus('Renamed identity to: ' + newName, 'success');
-        drawAllOverlays(state.currentFrame);
-        updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session);
-        populateTimelineVisibility(state.session);
+        showRenameModal('identity');
     });
 
     document.getElementById('menuDeleteIdentity').addEventListener('click', function () {
         closeMenus();
-        if (!state.session || state.session.identities.length === 0) { setStatus('No identities', 'warning'); return; }
-        var idList = state.session.identities.map(function (id, i) { return (i + 1) + '. ' + id.name; }).join('\n');
-        var idx = parseInt(prompt('Which identity to delete?\n\n' + idList + '\n\nEnter number:')) - 1;
-        if (isNaN(idx) || idx < 0 || idx >= state.session.identities.length) return;
-        var identity = state.session.identities[idx];
-        if (!confirm('Delete identity "' + identity.name + '"? Groups will become unassigned.')) return;
-        // Unassign all groups with this identity
-        for (var [fIdx, groups] of state.session.instanceGroups) {
-            for (var gi = 0; gi < groups.length; gi++) {
-                if (groups[gi].identityId === identity.id) groups[gi].identityId = -1;
-            }
-        }
-        state.session.identities.splice(idx, 1);
-        // Block 2 (Prompt 4): drop the deleted identity name from the
-        // hidden-identity Set.
-        if (state.session._hiddenIdentities) state.session._hiddenIdentities.delete(identity.name);
-        setStatus('Deleted identity: ' + identity.name, 'success');
-        drawAllOverlays(state.currentFrame);
-        updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session);
-        populateTimelineVisibility(state.session);
-    });
-
-    // Populate Assign Identity submenu on hover
-    document.getElementById('menuAssignIdentity').addEventListener('mouseenter', function () {
-        var sub = document.getElementById('menuAssignIdentitySub');
-        sub.innerHTML = '';
-        if (!state.session) return;
-        for (var i = 0; i < state.session.identities.length; i++) {
-            var item = document.createElement('div');
-            item.className = 'menu-submenu-item';
-            item.textContent = state.session.identities[i].name;
-            item.setAttribute('data-id', state.session.identities[i].id);
-            item.addEventListener('click', function (ev) {
-                ev.stopPropagation();
-                closeMenus();
-                var newId = parseInt(this.getAttribute('data-id'));
-                var idName = this.textContent;
-                assignIdentityToSelected(newId, idName);
-            });
-            sub.appendChild(item);
-        }
-        // "New Identity..." at bottom
-        var newItem = document.createElement('div');
-        newItem.className = 'menu-submenu-item menu-submenu-new';
-        newItem.textContent = '+ New Identity...';
-        newItem.addEventListener('click', function (ev) {
-            ev.stopPropagation();
-            closeMenus();
-            var name = prompt('New identity name:', 'identity_' + state.session.identities.length);
-            if (!name) return;
-            var identity = state.session.addIdentity(name);
-            assignIdentityToSelected(identity.id, name);
-            // Always refresh UI (assignIdentityToSelected may return early if nothing selected)
-            drawAllOverlays(state.currentFrame);
-            updateInfoPanel();
-            if (timeline) timeline.refreshTracks(state.session);
-        });
-        sub.appendChild(newItem);
+        showDeleteModal('identity');
     });
 
     // Set Env / Clear Env buttons on 3D viewport
@@ -934,6 +1091,30 @@ export function unlinkGroup(group) {
 }
 
 /**
+ * Context-sensitive Group action shared by the toolbar Group button and the
+ * Shift+G shortcut, so the key does exactly what the button does:
+ *  - a grouped instance selected (not mid-assignment) → ungroup it
+ *  - in assignment mode with ≥2 picked → create the group
+ *  - in assignment mode with <2 → cancel assignment mode
+ *  - otherwise → enter assignment mode
+ */
+export function performGroupButtonAction() {
+    if (!interactionManager) return;
+    // Ungroup: a grouped instance is selected and we're not mid-assignment.
+    if (interactionManager.selectedInstanceGroup && !interactionManager.selectedReprojected && !interactionManager.assignmentMode) {
+        unlinkGroup(interactionManager.selectedInstanceGroup);
+        return;
+    }
+    if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 2) {
+        interactionManager._createGroupFromAssignment();
+    } else if (interactionManager.assignmentMode) {
+        interactionManager.setAssignmentMode(false);
+    } else {
+        interactionManager.setAssignmentMode(true);
+    }
+}
+
+/**
  * Show context menu for an InstanceGroup row.
  */
 export function showGroupContextMenu(x, y, group) {
@@ -1295,6 +1476,8 @@ export function setupUI() {
             unlinkGroup(interactionManager.selectedInstanceGroup);
         }
     });
+    // Group shortcut (Shift+G): do exactly what the toolbar Group button does.
+    setHandler('group', performGroupButtonAction);
     setHandler('showHotkeys', function () { showHotkeysHelp(); });
     // Standard single-action shortcuts, now catalog-dispatched (and rebindable).
     setHandler('openSettings', function () { showSettingsModal(); });
@@ -1769,22 +1952,9 @@ export function setupUI() {
     });
     document.getElementById('btnPrevLabeled').addEventListener('click', function() { seekToLabeledFrame(-1); });
     document.getElementById('btnNextLabeled').addEventListener('click', function() { seekToLabeledFrame(1); });
-    // Group button: toggle assignment mode, create group, or ungroup
-    document.getElementById('tbGroup').addEventListener('click', function () {
-        if (!interactionManager) return;
-        // Ungroup mode: grouped instance selected and not in assignment mode
-        if (interactionManager.selectedInstanceGroup && !interactionManager.selectedReprojected && !interactionManager.assignmentMode) {
-            unlinkGroup(interactionManager.selectedInstanceGroup);
-            return;
-        }
-        if (interactionManager.assignmentMode && interactionManager.assignmentSelection.length >= 2) {
-            interactionManager._createGroupFromAssignment();
-        } else if (interactionManager.assignmentMode) {
-            interactionManager.setAssignmentMode(false);
-        } else {
-            interactionManager.setAssignmentMode(true);
-        }
-    });
+    // Group button: toggle assignment mode, create group, or ungroup.
+    // Shares performGroupButtonAction() with the Shift+G shortcut.
+    document.getElementById('tbGroup').addEventListener('click', performGroupButtonAction);
     // Edit Group button
     document.getElementById('tbEditGroup').addEventListener('click', function () {
         if (!interactionManager) return;
@@ -1806,14 +1976,23 @@ export function setupUI() {
         }
         startEditGroup(selectedGroup);
     });
-    // Triangulate / Triangulate All are hover-only dropdowns: hovering the button
-    // reveals a menu with DLT (Fast) and BA (Slow & Accurate) (shown purely via
-    // CSS :hover). The buttons themselves no longer trigger anything on click —
-    // only choosing a menu item runs that method. Implicit triangulation (the
-    // keyboard shortcut and the Edit menu) uses the Settings default method.
+    // Triangulate / Triangulate All are split buttons: hovering reveals a menu
+    // with DLT (Fast) and BA (Slow & Accurate) (shown purely via CSS :hover) for
+    // picking a method explicitly, while *clicking the button itself* runs the
+    // Settings default method. Choosing a menu item runs that specific method.
+    // Implicit triangulation (the keyboard shortcut and the Edit menu) also uses
+    // the Settings default method.
     function wireTriDropdown(dropdownId, buttonId, onPick) {
         var dropdown = document.getElementById(dropdownId);
         if (!dropdown) return;
+
+        var button = document.getElementById(buttonId);
+        if (button) {
+            button.addEventListener('click', function (e) {
+                e.stopPropagation();
+                onPick(getDefaultTriangulationMethod());
+            });
+        }
 
         dropdown.querySelectorAll('.tri-dropdown-item').forEach(function (item) {
             item.addEventListener('click', function (e) {
@@ -1823,7 +2002,7 @@ export function setupUI() {
         });
     }
 
-    // Triangulate current frame with the chosen method.
+    // Triangulate current frame with the chosen (or default) method.
     wireTriDropdown('triangulateDropdown', 'tbTriangulate', function (method) {
         triangulateCurrentFrame(method);
     });

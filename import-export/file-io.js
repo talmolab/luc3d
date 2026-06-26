@@ -2012,12 +2012,26 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     // Attach lucid-specific session metadata
     sioSession.metadata = sioSession.metadata || {};
     console.log('[buildSlpLabelsAllViews] Saving session name:', session.name);
+    // Per-session identities — see buildSlpBytes in save-load.js. The
+    // file-level identities_json is a cross-session concatenation, so the
+    // per-session list must be persisted here and preferred on import to keep
+    // IDs scoped per session.
+    var sessIdentitiesJson = [];
+    if (session.identities && session.identities.length > 0) {
+        for (var sidi = 0; sidi < session.identities.length; sidi++) {
+            var sIdent = session.identities[sidi];
+            var sIdentObj = { name: sIdent.name };
+            if (sIdent.color) sIdentObj.color = sIdent.color;
+            sessIdentitiesJson.push(sIdentObj);
+        }
+    }
     sioSession.metadata.lucid = {
         sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
         frameIdentityMap: session.frameIdentityMap
             ? Array.from(session.frameIdentityMap.entries())
             : [],
+        identities: sessIdentitiesJson,
         skeleton: {
             name: session.skeleton.name || 'skeleton',
             nodes: session.skeleton.nodes,

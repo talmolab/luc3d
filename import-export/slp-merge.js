@@ -107,19 +107,16 @@ export function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName
 
         for (var ii = 0; ii < fd.instances.length; ii++) {
             var instData = fd.instances[ii];
-            // Trackless user instances (track=-1 in SLP, e.g., reprojections
-            // exported as UserInstance from LUCID 2D export) keep null trackIdx
-            // so they don't collide with existing user instances on track 0.
-            // Predicted instances keep the coerce-to-0 behavior — user+predicted
-            // on the same track is allowed.
-            var instType = instData.type || 'predicted';
+            // Trackless instances (track=-1/null in SLP — e.g. reprojections
+            // exported as UserInstance, or predictions whose track was deleted)
+            // keep null trackIdx for BOTH user and predicted types. Coercing
+            // trackless predictions to track 0 made a deleted-track instance
+            // reappear on the first track (global_0) after a merge/reimport.
             var newTrackIdx;
             if (instData.trackIdx != null && instData.trackIdx >= 0) {
                 newTrackIdx = trackRemap.has(instData.trackIdx) ? trackRemap.get(instData.trackIdx) : instData.trackIdx;
-            } else if (instType === 'user') {
-                newTrackIdx = null;
             } else {
-                newTrackIdx = 0;
+                newTrackIdx = null;
             }
 
             // Reorder points if node ordering differs between incoming and existing skeleton
@@ -159,11 +156,12 @@ export function rebuildInstanceGroupsForFrames(session, frameIndices) {
         var trackInstances = new Map();
         for (var [cn, insts] of fg.instances) {
             for (var i = 0; i < insts.length; i++) {
-                // Trackless user instances skip grouping entirely — grouping
-                // them into bucket 0 would collide with the existing user
-                // instance on track 0 in the same view.
-                if (insts[i].trackIdx == null && (insts[i].type || 'user') === 'user') continue;
-                var tIdx = insts[i].trackIdx != null ? insts[i].trackIdx : 0;
+                // Trackless instances (user OR predicted) skip trackIdx grouping
+                // entirely — they have no track to group by, and bucketing them
+                // into track 0 would both collide with a real track-0 instance
+                // and resurrect the deleted-track-becomes-global_0 bug.
+                if (insts[i].trackIdx == null) continue;
+                var tIdx = insts[i].trackIdx;
                 if (!trackInstances.has(tIdx)) trackInstances.set(tIdx, []);
                 trackInstances.get(tIdx).push({ camName: cn, instance: insts[i] });
             }
