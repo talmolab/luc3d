@@ -2067,24 +2067,36 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         for (var cdi = 0; cdi < matchedCameraDirs.length; cdi++) {
             var camDir = matchedCameraDirs[cdi];
             if (camDir.slps.length > 0) {
+                // Pick exactly ONE .slp per camera — the highest `_vN` version
+                // (first-wins on a tie / when none are versioned). A camera dir
+                // accumulates successive exports (e.g. `<stem>_v1.slp`,
+                // `<stem>_v2.slp`, …); only the latest reflects current state.
+                // Parsing every file here stacked all versions' instances into
+                // the same (frame, camera) slot — the same two tracks repeated N
+                // times in the Instances tab.
                 var bestVersion = -1;
+                var bestSlp = camDir.slps[0];
                 for (var sli = 0; sli < camDir.slps.length; sli++) {
                     var slStem = camDir.slps[sli].name.replace(/\.[^.]+$/, '');
                     var slVer = slStem.match(/_(?:3D_)?v(\d+)$/);
                     var ver = slVer ? parseInt(slVer[1]) : 0;
-                    if (ver > bestVersion) bestVersion = ver;
+                    if (ver > bestVersion) { bestVersion = ver; bestSlp = camDir.slps[sli]; }
                 }
                 slpVersionsLoaded[camDir.camName] = bestVersion;
-                for (var sli2 = 0; sli2 < camDir.slps.length; sli2++) {
-                    if (shouldUseLazyH5(camDir.slps[sli2])) {
-                        lazyJobs.push({ camName: camDir.camName, file: camDir.slps[sli2] });
-                    } else {
-                        parseJobs.push({
-                            camName: camDir.camName,
-                            file: camDir.slps[sli2],
-                            promise: parseSlpH5(camDir.slps[sli2]).catch(function (e) { return null; }),
-                        });
-                    }
+                if (camDir.slps.length > 1) {
+                    console.log('[session-folder] ' + camDir.camName + ': '
+                        + camDir.slps.length + ' .slp files found — loading only "'
+                        + bestSlp.name + '" (highest version), skipping '
+                        + (camDir.slps.length - 1) + ' older file(s).');
+                }
+                if (shouldUseLazyH5(bestSlp)) {
+                    lazyJobs.push({ camName: camDir.camName, file: bestSlp });
+                } else {
+                    parseJobs.push({
+                        camName: camDir.camName,
+                        file: bestSlp,
+                        promise: parseSlpH5(bestSlp).catch(function (e) { return null; }),
+                    });
                 }
             }
         }
