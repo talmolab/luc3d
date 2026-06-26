@@ -86,63 +86,6 @@
             assertFalse(sk.removeEdge(0));
             assertFalse(sk.removeEdge(-1));
         });
-
-        // ---- defaultLayout ----
-        const approx = TestFramework.assertApprox;
-        const bbox = function (pts) {
-            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-            pts.forEach(function (p) {
-                if (p[0] < minX) minX = p[0];
-                if (p[0] > maxX) maxX = p[0];
-                if (p[1] < minY) minY = p[1];
-                if (p[1] > maxY) maxY = p[1];
-            });
-            return { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
-        };
-
-        it('defaultLayout: a chain (arm) lays out as a straight, evenly spaced line', function () {
-            const sk = new Skeleton('arm', ['shoulder', 'elbow', 'wrist'], [[0, 1], [1, 2]]);
-            const pts = sk.defaultLayout(100, 200, 30);
-            assertEqual(pts.length, 3);
-            // Colinear: all three share one x (vertical spine)
-            approx(pts[0][0], pts[1][0], 1e-6, 'x colinear 0-1');
-            approx(pts[1][0], pts[2][0], 1e-6, 'x colinear 1-2');
-            // Adjacent nodes spaced ~step apart
-            approx(Math.abs(pts[1][1] - pts[0][1]), 30, 1e-6, 'spacing 0-1');
-            approx(Math.abs(pts[2][1] - pts[1][1]), 30, 1e-6, 'spacing 1-2');
-        });
-
-        it('defaultLayout: centers the bounding box on (cx, cy)', function () {
-            const sk = new Skeleton('arm', ['a', 'b', 'c'], [[0, 1], [1, 2]]);
-            const pts = sk.defaultLayout(100, 200, 30);
-            const bb = bbox(pts);
-            approx((bb.minX + bb.maxX) / 2, 100, 1e-6, 'center x');
-            approx((bb.minY + bb.maxY) / 2, 200, 1e-6, 'center y');
-        });
-
-        it('defaultLayout: a branching skeleton keeps the spine straight and offsets the branch', function () {
-            // Spine a-b-c-d (diameter); 'limb' branches off b.
-            const sk = new Skeleton('branchy',
-                ['a', 'b', 'c', 'd', 'limb'],
-                [[0, 1], [1, 2], [2, 3], [1, 4]]);
-            const pts = sk.defaultLayout(0, 0, 40);
-            // The four spine nodes are colinear in x.
-            approx(pts[0][0], pts[1][0], 1e-6, 'spine x 0-1');
-            approx(pts[1][0], pts[2][0], 1e-6, 'spine x 1-2');
-            approx(pts[2][0], pts[3][0], 1e-6, 'spine x 2-3');
-            // The limb is offset off the spine axis (different x).
-            assertTrue(Math.abs(pts[4][0] - pts[1][0]) > 1, 'limb offset from spine');
-        });
-
-        it('defaultLayout: no edges → vertical line, correct length, finite', function () {
-            const sk = new Skeleton('dots', ['a', 'b', 'c', 'd'], []);
-            const pts = sk.defaultLayout(50, 60, 25);
-            assertEqual(pts.length, 4);
-            pts.forEach(function (p, i) {
-                assertTrue(isFinite(p[0]) && isFinite(p[1]), 'finite ' + i);
-                approx(p[0], 50, 1e-6, 'vertical line x ' + i);
-            });
-        });
     });
 
     // ---- Camera ----

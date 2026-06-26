@@ -308,14 +308,14 @@ export async function handleLoadVideos() {
         }
 
         // Create views for assigned videos that don't have views yet
-        var newViewsCreated = false;
+        var newViewNames = [];
         for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
             var vf2 = state.videoFiles[vi2];
             if (vf2.assignedCamera) {
                 var hasView = state.views.some(function (v) { return v.name === vf2.assignedCamera; });
                 if (!hasView) {
                     createViewForVideoFile(vf2);
-                    newViewsCreated = true;
+                    newViewNames.push(vf2.assignedCamera);
                 }
             }
         }
@@ -323,10 +323,25 @@ export async function handleLoadVideos() {
         // Update total frames before rebuilding controller so seekToFrame works correctly
         updateTotalFrames();
 
-        if (newViewsCreated) {
+        if (newViewNames.length > 0) {
             populateViewStrip();
             populateSessionStrip();
-            paneManager.addAllViewsAsGrid();
+            // First load (nothing docked yet): lay out a fresh grid of all views.
+            // Subsequent load: panels for previously-loaded videos already exist.
+            // Re-running addAllViewsAsGrid would add a SECOND, non-interactable
+            // panel for each existing view (it deliberately bypasses the
+            // duplicate guard for grid init), and that new panel would steal the
+            // `view.canvas` reference — leaving the original panel as a
+            // non-interactable mirror. Add only the NEW views via the
+            // dedup-aware addVideoPanel so existing videos aren't duplicated.
+            var alreadyDocked = paneManager.dockedViews && paneManager.dockedViews.size > 0;
+            if (alreadyDocked) {
+                for (var nv = 0; nv < newViewNames.length; nv++) {
+                    paneManager.addVideoPanel(newViewNames[nv], { direction: 'right' });
+                }
+            } else {
+                paneManager.addAllViewsAsGrid();
+            }
             rebuildVideoController();
             fitCanvasesToCells();
         }

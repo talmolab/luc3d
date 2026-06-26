@@ -34,7 +34,7 @@ the old `app.js` entry point.
   Pose source priority: cached `lastUserPoints` → user instance on the current
   frame → user instance on the nearest **prior** frame (so ctrl+i inherits a
   labeled pose without first nudging a node) → nearest predicted instance →
-  `Skeleton.defaultLayout` topology layout at the cursor.
+  default BFS spread layout at the cursor.
 - `setupInteraction()` — instantiates `InteractionManager` with all callback
   wiring (selection, drag, double-click, edit-group, etc.).
 - `setup3DViewport()` — instantiates `Viewport3D` and wires the
@@ -100,9 +100,7 @@ session graph that holds them.
 - `Skeleton` — node names + edge list. Methods: `addNode`, `removeNode`,
   `addEdge`, `removeEdge`, `clone()` (deep copy with fresh nodes/edges arrays;
   used to cache/seed a remembered skeleton without aliasing a live session),
-  `defaultLayout(cx, cy, step)` (pure topology-based 2D node placement —
-  longest-path spine laid straight with branches fanning off, centered at
-  `(cx,cy)`; used for smart-add's default skeleton), static `defaultMouse()`.
+  static `defaultMouse()`.
 - `Camera` — intrinsics (`matrix`), distortion, rvec/tvec, image size.
   Cached getters `rotationMatrix`, `extrinsicMatrix`, `projectionMatrix`;
   methods `project`, `projectPoints` (ideal pinhole, no distortion),
@@ -718,8 +716,9 @@ edit-group mode, keyboard shortcuts.
   `findNearestNode`, `findNearestUnlinkedNode`, `setAssignmentMode`,
   `setEditGroupMode`, `addToAssignmentSelection`,
   `getAssignmentSelectedIds`, `onMouseDown`/`onMouseMove`/`onMouseUp`/
-  `onMouseLeave`, `onKeyDown`, `_addNewInstance` (used by smart-add; delegates
-  default node placement to `Skeleton.defaultLayout`).
+  `onMouseLeave`, `onKeyDown`, `_addNewInstance` (used by smart-add; lays out a
+  new skeleton via an inline BFS fan-out from the highest-degree root, with a
+  vertical-line fallback when there are no edges).
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
@@ -1687,6 +1686,14 @@ seed the skeleton from `buildRememberedSkeleton()` (falling back to an empty
 skeleton), so a skeleton built/imported earlier in the app session carries over to
 newly loaded videos. SLP/project load paths keep parsing their own embedded
 skeleton via `parseSkeletonJSON`.
+
+`handleLoadVideos` only uses `paneManager.addAllViewsAsGrid()` on the **first**
+load (nothing docked yet); subsequent loads add just the newly created views via
+the dedup-aware `paneManager.addVideoPanel(name, { direction: 'right' })`. This
+avoids re-docking already-loaded videos as duplicate (non-interactable mirror)
+panels — `addAllViewsAsGrid` intentionally bypasses the duplicate guard, so
+calling it on every load duplicated prior videos and let the newest panel steal
+each `view.canvas` reference.
 
 **Imports from project modules.**
 - `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
