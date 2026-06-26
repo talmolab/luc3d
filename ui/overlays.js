@@ -43,7 +43,12 @@ export const UNGROUPED_USER_COLOR = '#F8B195';
 export const NULL_ID_COLOR = '#a7adba';
 
 export function getTrackColor(trackIdx) {
-    return TRACK_COLORS[trackIdx % TRACK_COLORS.length];
+    // Guard against null / negative / non-finite indices: JS `-1 % n === -1`,
+    // and TRACK_COLORS[-1] is undefined, which would crash the color helpers
+    // (hexToRgb). Normalize into a valid, in-range slot.
+    var n = TRACK_COLORS.length;
+    var i = Number.isFinite(trackIdx) ? ((trackIdx % n) + n) % n : 0;
+    return TRACK_COLORS[i];
 }
 
 /**

@@ -10,7 +10,7 @@ import {
     InstanceGroup, Session,
 } from '../pose/pose-data.js';
 import {
-    getInstanceGroupsForFrame, storeReprojectedInstances,
+    getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
 import { OnDemandVideoDecoder } from '../loading/video.js';
 import { createDemoSkeleton } from '../demo-data.js';
@@ -461,6 +461,23 @@ async function buildSlpBytes() {
             }
         }
 
+        // Per-session identities. The file-level identities_json dataset is a
+        // concatenation across all sessions (kept for SLEAP/headless compat),
+        // so it cannot be the source of truth on reload — every session would
+        // inherit every other session's IDs and the per-session identity_idx
+        // values would point into the wrong slice. Persist each session's own
+        // identity list (in session.identities order, so identity_idx stays
+        // valid) here and prefer it on import.
+        var sessIdentitiesJson = [];
+        if (sess.identities && sess.identities.length > 0) {
+            for (var sidi = 0; sidi < sess.identities.length; sidi++) {
+                var sIdent = sess.identities[sidi];
+                var sIdentObj = { name: sIdent.name };
+                if (sIdent.color) sIdentObj.color = sIdent.color;
+                sessIdentitiesJson.push(sIdentObj);
+            }
+        }
+
         calibSessions.push({
             calibration: calibration,
             camcorder_to_video_idx_map: camcorderMap,
@@ -470,6 +487,7 @@ async function buildSlpBytes() {
                     sessionName: sess.name || null,
                     trustTracks: sess.trustTracks || false,
                     frameIdentityMap: sess.frameIdentityMap ? Array.from(sess.frameIdentityMap.entries()) : [],
+                    identities: sessIdentitiesJson,
                     skeleton: {
                         name: sess.skeleton.name || 'skeleton',
                         nodes: sess.skeleton.nodes,
@@ -500,6 +518,30 @@ async function buildSlpBytes() {
         }
         allIdentities = allIdentities.concat(sessLabels.identities || []);
         allSessions = allSessions.concat(sessLabels.sessions || []);
+    }
+
+    // Re-point every instance's track to the canonical (deduped) Track object
+    // for its NAME. buildSlpLabelsAllViews creates a fresh SIO.Track array per
+    // session, but the allTracks dedup above keeps only the FIRST session's
+    // object per shared name. sleap-io serializes each instance's track via
+    // labels.tracks.indexOf(instance.track) using OBJECT IDENTITY, so a later
+    // session's instance still pointing at its own (discarded) Track object
+    // would serialize as -1 (trackless) — dropping the track on any shared-name
+    // track. Mapping every instance.track to the canonical object makes indexOf
+    // resolve it to the correct global slot. (Tracks are then re-localized to
+    // each session's own list by NAME on load — see slp-import.js.)
+    var canonicalTrackByName = {};
+    for (var ctI = 0; ctI < allTracks.length; ctI++) {
+        canonicalTrackByName[allTracks[ctI].name] = allTracks[ctI];
+    }
+    for (var lfI = 0; lfI < allLabeledFrames.length; lfI++) {
+        var lfInsts = allLabeledFrames[lfI].instances || [];
+        for (var inI = 0; inI < lfInsts.length; inI++) {
+            var sioInst = lfInsts[inI];
+            if (sioInst && sioInst.track && canonicalTrackByName[sioInst.track.name]) {
+                sioInst.track = canonicalTrackByName[sioInst.track.name];
+            }
+        }
     }
 
     var labels = new SIO.Labels({
@@ -1283,7 +1325,8 @@ function _restoreProjectV2(data) {
                         var instData = groupData.instances[camName];
                         var inst = new Instance(
                             instData.points,
-                            instData.trackIdx != null ? instData.trackIdx : (groupData.trackIdx != null ? groupData.trackIdx : 0),
+                            // null trackIdx = trackless; preserve it (don't snap to track 0).
+                            instData.trackIdx != null ? instData.trackIdx : (groupData.trackIdx != null ? groupData.trackIdx : null),
                             instData.type || 'user',
                             instData.score || 1.0
                         );
@@ -1325,7 +1368,8 @@ function _restoreProjectV2(data) {
                     var ulData = frameData.unlinkedInstances[ui];
                     var ulInst = new Instance(
                         ulData.points,
-                        ulData.trackIdx != null ? ulData.trackIdx : 0,
+                        // null trackIdx = trackless; preserve it (don't snap to track 0).
+                        ulData.trackIdx != null ? ulData.trackIdx : null,
                         ulData.type || 'user',
                         ulData.score || 1.0
                     );
@@ -1357,20 +1401,34 @@ function _restoreProjectV2(data) {
     }
     state.triangulationResults = new Map();
 
+    // Camera lookup by name, for recomputing the undistorted-space error below.
+    var trCamByName = {};
+    for (var trci = 0; trci < cameras.length; trci++) trCamByName[cameras[trci].name] = cameras[trci];
+
     // Rebuild triangulationResults from saved reprojection/error data
     for (var [trFrameIdx, trGroups] of session.instanceGroups) {
         var trFrameResults = [];
             for (var trgi = 0; trgi < trGroups.length; trgi++) {
                 var trGroup = trGroups[trgi];
                 if (trGroup.points3d && trGroup.reprojections) {
-                    // Recompute errors from saved observed + reprojected points
+                    // Distorted-space error from saved observed + reprojected
+                    // points (saved reprojections are native/distorted pixels).
                     var trErrors = {};
                     var trTotalErr = 0, trTotalCount = 0;
+                    // Undistorted-space error (mirror triangulateAndReproject
+                    // Step 5): ideal pinhole reprojection vs undistorted obs, so
+                    // the Undistorted headline isn't blank for loaded projects.
+                    var trErrorsUndist = {};
+                    var trTotalErrU = 0, trTotalCountU = 0;
                     for (var trCamName in trGroup.reprojections) {
                         var trObs = trGroup.observedPoints ? trGroup.observedPoints[trCamName] : null;
                         var trRep = trGroup.reprojections[trCamName];
                         if (!trObs || !trRep) continue;
                         trErrors[trCamName] = [];
+                        var trCam = trCamByName[trCamName];
+                        var idealRep = (trCam && trCam.projectionMatrix)
+                            ? reprojectPoints(trGroup.points3d, trCam.projectionMatrix) : null;
+                        trErrorsUndist[trCamName] = [];
                         for (var trni = 0; trni < trRep.length; trni++) {
                             if (trObs[trni] && trRep[trni]) {
                                 var dx = trRep[trni][0] - trObs[trni][0];
@@ -1382,6 +1440,18 @@ function _restoreProjectV2(data) {
                             } else {
                                 trErrors[trCamName].push(null);
                             }
+                            // Undistorted residual for this keypoint.
+                            if (idealRep && trObs[trni] && idealRep[trni] && trCam && trCam.undistortPoint) {
+                                var ou = trCam.undistortPoint(trObs[trni]);
+                                var dxu = idealRep[trni][0] - ou[0];
+                                var dyu = idealRep[trni][1] - ou[1];
+                                var erru = Math.sqrt(dxu * dxu + dyu * dyu);
+                                trErrorsUndist[trCamName].push(erru);
+                                trTotalErrU += erru;
+                                trTotalCountU++;
+                            } else {
+                                trErrorsUndist[trCamName].push(null);
+                            }
                         }
                     }
                     trFrameResults.push({
@@ -1389,7 +1459,9 @@ function _restoreProjectV2(data) {
                         points3d: trGroup.points3d,
                         reprojections: trGroup.reprojections,
                         errors: trErrors,
-                        meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null
+                        errorsUndistorted: trErrorsUndist,
+                        meanError: trTotalCount > 0 ? trTotalErr / trTotalCount : null,
+                        meanErrorUndistorted: trTotalCountU > 0 ? trTotalErrU / trTotalCountU : null
                     });
                     // Also store reprojected instances for overlay rendering
                     storeReprojectedInstances(trGroup, { reprojections: trGroup.reprojections, points3d: trGroup.points3d }, cameras);

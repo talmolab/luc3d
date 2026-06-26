@@ -41,6 +41,45 @@ import {
 } from './timeline-visibility.js';
 
 // ============================================
+// Inline name entry for "+ New Track" / "+ New ID"
+// ============================================
+
+// Replace a track/identity <select> with an inline text box so the user can
+// type a new name and accept it with Enter (Esc or blur cancels). On commit,
+// onCommit(name) is responsible for creating + assigning and re-rendering the
+// panel (which restores the normal <select>); on cancel we just re-render.
+function startInlineNameEntry(selectEl, defaultName, onCommit) {
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.value = defaultName;
+    input.style.cssText = selectEl.style.cssText;
+    selectEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    var done = false;
+    function finish(commit) {
+        if (done) return;
+        done = true;
+        var name = input.value.trim();
+        if (commit && name) {
+            onCommit(name);
+        } else {
+            // Cancel — rebuild the panel to restore the original dropdown.
+            updateInfoPanel();
+        }
+    }
+    input.addEventListener('keydown', function (e) {
+        e.stopPropagation();
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', function () { finish(false); });
+    input.addEventListener('click', function (e) { e.stopPropagation(); });
+    input.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+}
+
+// ============================================
 // Panel tab switching
 // ============================================
 
@@ -1108,7 +1147,14 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
         }
     };
     setErrorStat(document.getElementById('errorDisplay'), meanError);
-    setErrorStat(document.getElementById('errorDisplayUndist'), meanErrorUndist);
+    // Undistorted residual as a small subtitle below the distorted headline
+    // (e.g. "undist 4.17 px"); blank when unavailable.
+    const undistEl = document.getElementById('errorDisplayUndist');
+    if (undistEl) {
+        undistEl.textContent = meanErrorUndist != null
+            ? ('undist ' + meanErrorUndist.toFixed(2) + ' px')
+            : '';
+    }
 
     // Triangulation method label ('DLT' or 'Bundle Adjustment'). Prefer the
     // per-result method; fall back to the group's recorded method.
@@ -1296,27 +1342,43 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             // Track dropdown
             var trackSelect = document.createElement('select');
             trackSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
+            // "(none)" — a trackless group. Must exist so a group with no track
+            // shows as trackless instead of silently snapping to the first track.
+            var noneTrackOpt = document.createElement('option');
+            noneTrackOpt.value = '-1';
+            noneTrackOpt.textContent = '(none)';
+            trackSelect.appendChild(noneTrackOpt);
             for (var tsi = 0; tsi < (state.session.tracks || []).length; tsi++) {
                 var tOpt = document.createElement('option');
                 tOpt.value = tsi;
                 tOpt.textContent = state.session.tracks[tsi];
                 trackSelect.appendChild(tOpt);
             }
-            // Source the current track from the first instance's
-            // trackIdx, NOT group.identityId. identityId is an
-            // identity index and is -1 for groups whose identity
-            // export was dropped (SLP re-import path), which would
-            // otherwise leave the dropdown showing no selection.
+            var newTrackOpt = document.createElement('option');
+            newTrackOpt.value = '__new__';
+            newTrackOpt.textContent = '(+) New Track';
+            trackSelect.appendChild(newTrackOpt);
+            // Source the current track from the first instance's trackIdx, NOT
+            // group.identityId. A trackless group (trackIdx == null — e.g. one
+            // formed by grouping trackless instances) shows "(none)"; it must
+            // NOT default to the first track (index 0).
             var firstGroupInst = group.instances.values().next().value;
             var groupDisplayTrackIdx = (firstGroupInst && firstGroupInst.trackIdx != null && firstGroupInst.trackIdx >= 0)
                 ? firstGroupInst.trackIdx
-                : 0;
-            trackSelect.value = groupDisplayTrackIdx;
+                : -1;
+            trackSelect.value = String(groupDisplayTrackIdx);
             (function (g, sel, curTrack) {
-                sel.addEventListener('change', function (ev) {
-                    ev.stopPropagation();
-                    var newTrack = parseInt(sel.value);
-                    if (newTrack === curTrack) return;
+                function applyTrack(newTrack) {
+                    if (newTrack < 0) {
+                        // "(none)" → make the whole group trackless.
+                        for (var [cnN, ginstN] of g.instances) ginstN.trackIdx = null;
+                        state.session.assignIdentityToGroup(g, -1);
+                        setStatus('Track → (none)', 'success');
+                        drawAllOverlays(state.currentFrame);
+                        updateInfoPanel();
+                        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                        return;
+                    }
                     var totalProp = 0;
                     for (var [cn, ginst] of g.instances) {
                         totalProp += swapAssignTrack(state.currentFrame, cn, ginst, newTrack, state.session);
@@ -1329,7 +1391,22 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                         (totalProp > 0 ? ' (propagated ' + totalProp + ')' : ''), 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
-                    if (timeline) timeline.refreshTracks(state.session);
+                    if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                }
+                sel.addEventListener('change', function (ev) {
+                    ev.stopPropagation();
+                    if (sel.value === '__new__') {
+                        startInlineNameEntry(sel, 'track_' + state.session.tracks.length, function (name) {
+                            var idx = state.session.tracks.indexOf(name);
+                            if (idx < 0) { state.session.tracks.push(name); idx = state.session.tracks.length - 1; }
+                            applyTrack(idx);
+                            populateTimelineVisibility(state.session);
+                        });
+                        return;
+                    }
+                    var newTrack = parseInt(sel.value);
+                    if (newTrack === curTrack) return;
+                    applyTrack(newTrack);
                 });
                 sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                 sel.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
@@ -1360,11 +1437,13 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     idSelect.appendChild(opt);
                 }
             }
+            var newIdOpt = document.createElement('option');
+            newIdOpt.value = '__new__';
+            newIdOpt.textContent = '(+) New ID';
+            idSelect.appendChild(newIdOpt);
             idSelect.value = String(group.identityId != null ? group.identityId : -1);
             (function (g, sel) {
-                sel.addEventListener('change', function (e) {
-                    e.stopPropagation();
-                    var newIdentityId = parseInt(sel.value);
+                function applyIdentity(newIdentityId) {
                     state.session.assignIdentityToGroup(g, newIdentityId);
                     // Propagate forward for all cameras in the group.
                     // Use assignTrackToIdentity (swap-aware) for the global
@@ -1376,7 +1455,20 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     }
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
-                    if (timeline) timeline.refreshTracks(state.session);
+                    if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                }
+                sel.addEventListener('change', function (e) {
+                    e.stopPropagation();
+                    if (sel.value === '__new__') {
+                        startInlineNameEntry(sel, 'identity_' + state.session.identities.length, function (name) {
+                            var existing = state.session.identities.find(function (id) { return id.name === name; });
+                            var identity = existing || state.session.addIdentity(name);
+                            applyIdentity(identity.id);
+                            populateTimelineVisibility(state.session);
+                        });
+                        return;
+                    }
+                    applyIdentity(parseInt(sel.value));
                 });
                 sel.addEventListener('click', function (e) { e.stopPropagation(); });
                 sel.addEventListener('mousedown', function (e) { e.stopPropagation(); });
@@ -1623,10 +1715,31 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     tOpt.textContent = state.session.tracks[ti];
                     trackSelect.appendChild(tOpt);
                 }
+                var newTrackOptUl = document.createElement('option');
+                newTrackOptUl.value = '__new__';
+                newTrackOptUl.textContent = '(+) New Track';
+                trackSelect.appendChild(newTrackOptUl);
                 trackSelect.value = ul.instance.trackIdx != null ? String(ul.instance.trackIdx) : '-1';
                 (function (ulObj, inst, sel, camNameForUl) {
+                    function applyTrack(newTrack) {
+                        var propagated = swapAssignTrack(state.currentFrame, camNameForUl, inst, newTrack, state.session);
+                        setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl +
+                            (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
+                        drawAllOverlays(state.currentFrame);
+                        updateInfoPanel();
+                        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                    }
                     sel.addEventListener('change', function (ev) {
                         ev.stopPropagation();
+                        if (sel.value === '__new__') {
+                            startInlineNameEntry(sel, 'track_' + state.session.tracks.length, function (name) {
+                                var idx = state.session.tracks.indexOf(name);
+                                if (idx < 0) { state.session.tracks.push(name); idx = state.session.tracks.length - 1; }
+                                applyTrack(idx);
+                                populateTimelineVisibility(state.session);
+                            });
+                            return;
+                        }
                         var newTrack = parseInt(sel.value);
                         if (newTrack < 0) {
                             // User explicitly chose "None" — leave trackless.
@@ -1635,16 +1748,11 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             setStatus('Track → — on ' + camNameForUl, 'success');
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
-                            if (timeline) timeline.refreshTracks(state.session);
+                            if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
                             return;
                         }
                         if (newTrack === inst.trackIdx) return;
-                        var propagated = swapAssignTrack(state.currentFrame, camNameForUl, inst, newTrack, state.session);
-                        setStatus('Track → ' + (state.session.tracks[newTrack] || newTrack) + ' on ' + camNameForUl +
-                            (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
-                        drawAllOverlays(state.currentFrame);
-                        updateInfoPanel();
-                        if (timeline) timeline.refreshTracks(state.session);
+                        applyTrack(newTrack);
                     });
                     sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                     sel.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
@@ -1666,13 +1774,15 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     idOpt.textContent = state.session.identities[idi].name;
                     idSelectUl.appendChild(idOpt);
                 }
+                var newIdOptUl = document.createElement('option');
+                newIdOptUl.value = '__new__';
+                newIdOptUl.textContent = '(+) New ID';
+                idSelectUl.appendChild(newIdOptUl);
                 // Pre-select based on the per-frame identity for this track.
                 var currentIdForTrack = state.session.getIdentityIdForTrack(cam.name, ul.instance.trackIdx, state.currentFrame);
                 idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
                 (function (inst, sel, camNameForId) {
-                    sel.addEventListener('change', function (ev) {
-                        ev.stopPropagation();
-                        var newIdVal = parseInt(sel.value);
+                    function applyIdentity(newIdVal) {
                         if (newIdVal >= 0) {
                             state.session.assignTrackToIdentity(inst.trackIdx, newIdVal, camNameForId);
                             markDirty();
@@ -1683,7 +1793,20 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                         }
                         drawAllOverlays(state.currentFrame);
                         updateInfoPanel();
-                        if (timeline) timeline.refreshTracks(state.session);
+                        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                    }
+                    sel.addEventListener('change', function (ev) {
+                        ev.stopPropagation();
+                        if (sel.value === '__new__') {
+                            startInlineNameEntry(sel, 'identity_' + state.session.identities.length, function (name) {
+                                var existing = state.session.identities.find(function (id) { return id.name === name; });
+                                var identity = existing || state.session.addIdentity(name);
+                                applyIdentity(identity.id);
+                                populateTimelineVisibility(state.session);
+                            });
+                            return;
+                        }
+                        applyIdentity(parseInt(sel.value));
                     });
                     sel.addEventListener('click', function (ev) { ev.stopPropagation(); });
                     sel.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });

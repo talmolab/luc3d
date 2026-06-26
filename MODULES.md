@@ -114,7 +114,12 @@ session graph that holds them.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups. **Identity is stored ONLY per-frame** in
+  frameGroups, instanceGroups. **Tracks and identities are per-session.** The
+  constructor copies the incoming `tracks` array (`tracks.slice()`) so two
+  sessions never share one — otherwise deleting/adding/renaming a track in one
+  session would mutate the others (the multi-session SLP loader used to pass the
+  same `slpData.tracks` reference to every session). **Identity is stored ONLY
+  per-frame** in
   `frameIdentityMap` ("frameIdx:cam:trackIdx" → identityId; negative = explicit
   "no identity"). There is deliberately no global "cam:trackIdx" default map
   (the removed `trackIdentityMap`) — a global fallback painted stale duplicate
@@ -133,14 +138,15 @@ session graph that holds them.
   IDs→Tracks — overwrites each instance's `trackIdx` with its identity and
   rewrites `tracks` to one unique, non-empty name per used identity so the
   exported SLP has clean identity-named tracks, rewriting `frameIdentityMap`
-  under the new keys; instances explicitly marked "no identity" are collected
-  onto a single dedicated "No ID" track with their per-frame entry kept
-  negative, so the NULL identity survives propagation and stays visible in
-  both the Track panel and the ID panel — only entry-less instances go
-  trackless), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  under the new keys; instances with no identity — whether entry-less OR
+  explicitly marked "no identity" (negative sentinel) — become trackless
+  (`trackIdx = null`): a null identity propagates to a null track, and no
+  dedicated "No ID" track is created), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
-  group editing (`createGroupFromUnlinked`,
-  `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
+  group editing (`createGroupFromUnlinked` — when no identity is passed it
+  derives one from the first member's track, but only if that member HAS a
+  track: grouping trackless instances yields a group with NO identity (-1), not
+  a fabricated "id_null"; `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
   (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
   `_promoteIfMixed`), skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
@@ -332,9 +338,13 @@ projects 3D targets with distortion before measuring distance to raw detections.
 `triangulateAndReproject` reports the reprojection error in **both** spaces:
 `meanError`/`errors` (distorted — what is drawn and broken down per view/node)
 and `meanErrorUndistorted`/`errorsUndistorted` (ideal pinhole — the space BA
-actually minimizes). The info panel shows the two headline averages side by side
-(labelled "Distorted" / "Undistorted"); the per-view and per-node breakdowns
-remain distorted-space.
+actually minimizes). The info panel shows the distorted value as the headline
+("N.NN px", colour-coded) with the undistorted value as a small subtitle below
+it ("undist N.NN px"); the per-view and per-node breakdowns remain
+distorted-space. Both error spaces are recomputed on project load — `.slp`
+projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
+(`_restoreProjectV2`) — mirroring this dual computation so the undistorted
+subtitle is populated for loaded projects, not just freshly triangulated ones.
 
 **Key exports.**
 - BA math: `triangulatePointBA(observations, projMatrices, initial?, options?)`,
@@ -575,6 +585,23 @@ multi-frame triangulation modals, track-swap dialogs.
 Skeleton, Sessions, and Frame Info tables; hosts the skeleton editor and
 the per-frame instance-group / unlinked-instance tables.
 
+**Instance-panel track/identity dropdowns.** Each grouped/unlinked instance
+row has a track `<select>` and an identity `<select>`. Both selects include a
+`(none)` option (value `-1`) and a `(+) New Track` / `(+) New ID` option (value
+`__new__`). The track select defaults to `(none)` for a trackless instance/group
+(trackIdx == null) — it does NOT snap to the first track (index 0); selecting
+`(none)` sets the instance(s) trackless (the group path also unassigns its
+identity). Choosing `(+) New …` replaces the select with an inline text box
+(`startInlineNameEntry`) where the user types a name and presses Enter to create
++ assign it (Esc or blur cancels); tracks are deduped by name, identities reuse
+an existing same-named identity. This replaces
+the removed Tracks-menu "Assign Track" / "Assign Identity" submenus; the reusable
+`assignTrackToSelected` / `assignIdentityToSelected` helpers remain exported from
+`ui/identity-assignment.js`. These assignment/create handlers (and the
+`assign*ToSelected` helpers) refresh the timeline with `{ keepSize: true }` so a
+track/identity edit never regrows the bottom timeline panel — it rebuilds +
+repaints at the user's current height instead of growing to fit all rows.
+
 **Key exports.**
 - Tab control: `setupPanelTabs`.
 - Tables: `populateVideosTable`, `populateCamerasTable`,
@@ -680,6 +707,15 @@ edit-group mode, keyboard shortcuts.
 keypoints, double-click to convert predicted → user, shift-drag to add
 to manual-assignment selection, right-click to null/restore nodes,
 keyboard shortcuts (delete, alt-drag clone, etc.).
+
+**Grouping/ungrouping shortcuts.** `onKeyDown` handles only the legacy `c`
+confirm-group alias (creates a group from a ready ≥2 assignment selection).
+The primary group (`Shift+G`) and ungroup (`Shift+U`) shortcuts are
+**catalog-dispatched** and wired in `ui/ui-wiring.js` (`setHandler`); ungroup
+delegates to that module's `unlinkGroup` (the complete path: data-model
+`Session.unlinkGroup` + triangulation purge + overlay/3D/timeline/info-panel
+refresh). The old incomplete `InteractionManager._unlinkSelectedGroup` helper
+was **removed** (it had no production callers).
 
 ---
 
@@ -1323,6 +1359,47 @@ still see which camera has its content collapsed.
 
 ---
 
+### ui/track-identity-ops.js
+
+**Purpose.** Pure, DOM-free operations backing the Tracks-menu New / Rename /
+Delete modals (which live in `ui/ui-wiring.js`). Extracted so the substantive
+logic is unit-testable headlessly — `ui/ui-wiring.js` itself can't be loaded in
+the test runner (app.js import graph).
+
+**Key exports.**
+- `nameExists(session, kind, name)` — duplicate-name guard (`kind` =
+  `'track' | 'identity'`).
+- `countNulledByCamera(session, kind, idx)` → `{ perCamera, total }` — the
+  Delete modal's per-camera breakdown of instances that will be nulled. Identity
+  counting uses the **canonical per-frame identity source**
+  (`session.getIdentityIdForTrack(cam, trackIdx, frameIdx)`), NOT
+  `group.identityId` (which is only populated after triangulation — reading it
+  left the Delete-Identity table empty/stale).
+- `deleteTrackAt(session, idx)` — first **ungroups** any GroupedInstance that
+  uses the deleted track (`session.unlinkGroup`, members return to the unlinked
+  pool); then splices the track, nulls every instance on it (`trackIdx = null`,
+  the app-wide trackless sentinel — NOT -1, which crashes the overlay renderer),
+  and shifts higher `trackIdx` down. Covers frameGroups (linked + unlinked) AND
+  any remaining GroupedInstances explicitly, with a `seen` set so shared instance
+  refs aren't double-decremented. Also remaps the `frameIdentityMap` keys
+  ("frame:cam:trackIdx") in lockstep — deleted-track entries move to the
+  trackless (`null`) key, higher ones shift down — so an instance keeps its
+  identity when it loses its track (instead of the per-frame entries orphaning
+  or misattributing). Returns the name.
+- `deleteIdentityAt(session, idx)` — **ungroups** every GroupedInstance carrying
+  the id (matched via `group.identityId` OR, pre-triangulation, via the per-frame
+  `getIdentityIdForTrack`; falls back to nulling `group.identityId` in sessions
+  without `unlinkGroup`), clears the per-frame `frameIdentityMap` entries pointing
+  at it (so instances resolve to "no identity"), splices the identity, and drops
+  the hidden-identities entry. Returns the name.
+
+**Imports from project modules.** None (operates on the passed `session`).
+
+**Imported by.** `ui/ui-wiring.js`. Bridged into `tests/test-runner.html` and
+covered by `tests/test-track-identity-modals.js`.
+
+---
+
 ### ui/ui-wiring.js
 
 **Purpose.** Top-level UI wiring. Builds the menu bar, transport controls,
@@ -1340,8 +1417,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 
 **Key exports.**
 - Menu / setup: `setupMenus`, `setupUI`. The Tracks menu hosts both
-  identity↔track propagation actions (one-shot, under "Assign Identity"):
-  `Propagate Tracks → IDs` (`menuPropagateTracksToIds` — creates an identity
+  identity↔track propagation actions (one-shot): `Propagate Tracks → IDs`
+  (`menuPropagateTracksToIds` — creates an identity
   per track and assigns it to every group; sets `session.trustTracks`; was the
   old Edit-menu "Trust Track Labels" toggle) and `Propagate IDs → Tracks`
   (`menuPropagateIdsToTracks` — calls `Session.propagateIdentitiesToTracks`).
@@ -1361,7 +1438,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
 - File ▸ "Export 3D Video" (`menuExportVideo3d`) is wired to
   `showExport3DVideoModal()` (export-modals.js).
-- Group ops: `unlinkGroup`, `showGroupContextMenu`, `hideGroupContextMenu`.
+- Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
+  Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
+  `showGroupContextMenu`, `hideGroupContextMenu`.
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
 - Toggles: `toggleInfoPanel`, `updateInfoPanelToggleBtn`,
@@ -1401,26 +1480,61 @@ snapshot that drives Settings ▸ Keyboard Shortcuts — so it stays in sync wit
 catalog and any user rebindings (grouped by category; Esc closes it).
 
 **Triangulate dropdowns + default method.** The toolbar `Triangulate` /
-`Triangulate All` buttons are **hover-only** split dropdowns (no click action);
-`wireTriDropdown` wires only the menu items (DLT / BA explicit picks). Implicit
-triangulation — the `t` shortcut, the Edit ▸ Triangulate menu item, and the
-auto-assign flow in `identity-assignment.js` — uses the user's default method
-from `getDefaultTriangulationMethod()` (`ui/settings.js`).
+`Triangulate All` are **split buttons**: clicking the button itself runs the
+user's default method (`getDefaultTriangulationMethod()` from `ui/settings.js`),
+while hovering reveals a menu for picking DLT / BA explicitly. `wireTriDropdown`
+wires both the button click (default method) and the menu items (explicit
+picks). Implicit triangulation — the `t` shortcut, the Edit ▸ Triangulate menu
+item, and the auto-assign flow in `identity-assignment.js` — also uses the
+default method.
+
+**Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
+actions for both tracks and identities open shared private modal helpers in
+`ui/ui-wiring.js`, each taking `kind = 'track' | 'identity'` (selecting data
+source, title, and apply binding). All share the `.rename-list` scrollable list
+styling (yellow selection via `.rename-list-item.selected`) and the
+`.multi-frame-modal` shell; all close on Esc (replacing the old `prompt()`
+chains):
+- `showCreateModal(kind)` — New Track / New Identity: read-only
+  (`.rename-list.readonly`) reference list of current entries + a "New name"
+  text entry. Cancel / Create; Enter creates. Validates non-empty + duplicate.
+- `showRenameModal(kind)` — Rename Track / Rename Identity: single-select list +
+  "New name for …" entry. Apply renames `session.tracks` /
+  `session.identities[].name`, migrates hidden-set membership
+  (`renameHiddenTrack` / `renameHiddenIdentity`). Enter applies.
+- `showDeleteModal(kind)` — Delete Track / Delete Identity: single-select list, a
+  red `.delete-warning` line ("Current track/identity "X" instances will have
+  null …"), and — in place of a text entry — a per-camera table of instances
+  that will be nulled with a `.delete-total-row` Total. Cancel / Delete (`.danger`
+  button); deletion is an explicit click (NOT bound to Enter, since destructive).
+The count + delete logic lives in `ui/track-identity-ops.js`
+(`countNulledByCamera` / `deleteTrackAt` / `deleteIdentityAt`): both delete paths
+first ungroup any GroupedInstance bound to the deleted track/identity, then track
+delete nulls the trackIdx (remapping `frameIdentityMap` so identities follow) and
+shifts higher indices down, while identity delete clears the per-frame
+`frameIdentityMap`; both the count and delete use the per-frame identity source
+(`getIdentityIdForTrack`), not `group.identityId`.
+All apply paths refresh overlays / info panel / timeline (`keepSize`) /
+visibility.
 
 **Catalog-driven keyboard shortcuts.** Every **standard single-action** shortcut
 is now dispatched: it attaches a runtime handler via `setHandler(id, fn)` (from
 `ui/settings.js`) and is resolved by a single dedicated `keydown` listener
 calling `dispatchEvent(e)`, so it is **editable and rebindable** (chords or
 multi-key sequences) from the Settings panel. This covers the plain-key toggles
-(`u`/`p`/`r`/`e`, `v`, `g`, `t`, `n`, `i` info, `\` 3D, `?`, `Shift+U` ungroup,
-`f` find), the track actions (`Shift+T`, `Mod+Shift+T`), the wizard (`Mod+Shift+I`),
-smart-add new instance (`Mod+I`), settings
-(`Mod+,`) and load-session (`Mod+O`). Bindings live in `ACTION_CATALOG` (the
+(`u`/`p`/`r`/`e`, `v`, `g`, `t`, `n`, `i` info, `\` 3D, `?`, `Shift+G` group,
+`Shift+U` ungroup, `f` find), the track actions (`Shift+T`, `Mod+Shift+T`),
+the wizard (`Mod+Shift+I`), smart-add new instance (`Mod+I`), settings
+(`Mod+,`) and load-session (`Mod+O`). `Shift+G` (`group`) is wired to the **same** shared
+`performGroupButtonAction()` as the toolbar Group button, so the key does exactly
+what the button does: ungroup a selected group, create the group once ≥2 are
+picked in assignment mode, or otherwise toggle assignment mode. Bindings live in `ACTION_CATALOG` (the
 single source of truth for the Settings panel). The remaining shortcuts keep
 their own dedicated handlers and appear as **fixed** reference entries (not
 rebindable): `Mod+S` Save (works while typing), transport (`←/→`, `Space`,
 `Home`/`End`, `Opt+←/→`), the `1–9` identity / `Shift+1–9` track digit ranges,
-zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete`/`c` (canvas-context ops in
+zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete` plus the legacy `c`
+confirm-group alias (`groupConfirmLegacy`, canvas-context ops in
 `interaction.js`), and `Mod+J`/`Mod+Shift+J` (timeline-controller).
 `Enter`/`Escape` remain hard-coded modal-button special cases.
 
@@ -1519,12 +1633,21 @@ filesystem enumeration, decoder rebuild.
 - Video assignment: `autoAssignVideosToCameras`, `forceVideoSelection`,
   `forceVideoSelectionWithFolder`, `matchSessionFolder`,
   `pickParentDirectoryForSessions`, `showParentDirMatchSummary`.
+- `isCalibrationVideoFile(file)` — true for per-camera calibration clips
+  (`<cam>/calibration_images/<date>-<cam>-calibration.mp4`). The folder scans
+  recurse into camera subfolders, so these clips would otherwise be collected
+  and substring-matched to a camera (their filename embeds the camera name).
+  Applied in the parent-directory pick (both FSA + webkitdirectory branches),
+  the "Select Session Folder" scan, and the SLP-import video filter so the
+  calibration video never loads as a session view.
 - View/grid: `createViewForVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
   `rebuildVideoController`, `updateTotalFrames`.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
-- Misc: `resolveImportTrackIdx`.
+- Misc: `resolveImportTrackIdx` — re-exported from
+  `import-export/import-track-resolve.js` (moved there so it's unit-testable;
+  session-loader pulls app.js and can't be bridged into the test runner).
 
 **Imports from project modules.**
 - `../ui/app-state.js`, `../pose/pose-data.js`, `./video.js`,
@@ -1667,6 +1790,11 @@ layer.
   a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`.
+- `buildSlpLabelsAllViews` writes each session's identity list into that
+  session's `metadata.lucid.identities` (in `session.identities` order, so
+  `identity_idx` stays valid). The file-level `identities_json` dataset is a
+  cross-session concatenation kept only for SLEAP/headless compatibility — it
+  is NOT the per-session source of truth on reload (see slp-import.js).
 - Skeleton validation: `findSkeletonMismatch(selections)` — returns `null` when
   all selected sessions share a skeleton (node count + names, in order),
   otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
@@ -1699,8 +1827,26 @@ loading-overlay/status-text UI helpers.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
   is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject`.
+- `buildSlpBytes` (internal) assembles the multi-session SLP. Each session's
+  `sessions_json` payload carries per-session `metadata.lucid.identities`
+  (alongside `frameIdentityMap`/`tracks`), keeping identities scoped per
+  session across save/load. The file-level `identities_json` remains a
+  cross-session concatenation for SLEAP compatibility only. The file-level
+  `allTracks` is a name-deduped union across sessions; after it is built,
+  `buildSlpBytes` **re-points every instance's `track` to the canonical (first-
+  seen) Track object for its name** so sleap-io's object-identity
+  `tracks.indexOf(instance.track)` resolves it to the right global slot.
+  Otherwise a later session's instance on a shared-name track (its own SIO.Track
+  object was discarded by the dedup) serialized as `-1` (trackless), dropping the
+  track. (On load, the global slot is re-localized to the session's own track
+  index by name — see `slp-import.js` / `remapGlobalTrackToSession`.)
 - Status / overlay: `showLoading(msg)`, `hideLoading`,
   `setStatus(text, type)`.
+
+**Trackless (null track) preservation.** `_restoreProjectV2` restores grouped
+and unlinked instances with `trackIdx = null` when the saved `trackIdx` is null
+(it no longer defaults to `0`), so a trackless instance stays trackless across a
+project save/reload — matching the SLP import path in `slp-import.js`.
 - 3D-import guard: `confirmDiscardImported3D()` (two-button warning modal,
   Promise<boolean>) and `ensureNo3dImportBlockingLoad()` — called at the top of
   the session-load entry points (`handleLoadProject`, `handleLoadSlpFile`,
@@ -1735,6 +1881,42 @@ the status bar at the bottom.
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
 
+On load, identities are restored **per session**: each session prefers its
+own `metadata.lucid.identities` (from `sessions_json`) and only falls back to
+the file-level global `identities_json` for legacy/non-lucid SLPs. This keeps
+IDs from leaking across sessions and keeps each session's `identity_idx`
+references aligned with its own identity list.
+
+**Tracks are likewise per-session.** Each session takes a fresh **copy** of its
+track list — `metadata.lucid.tracks.slice()` when present, else
+`slpData.tracks.slice()`. Without the copy, every session in a non-lucid SLP
+shared the one `slpData.tracks` array (and the per-session maxTrack padding
+mutated it), so deleting a track in one session hit all of them. (The `Session`
+constructor also copies defensively — see `pose/pose-data.js`.)
+
+**Global→per-session track-index remap (critical).** The worker reads each
+instance's track column as an index into the file-level GLOBAL track union
+(`slpData.tracks`). For a lucid multi-session project (`hasPerSessionTracks`),
+pass-1 translates that global index to THIS session's track index by NAME via
+`remapGlobalTrackToSession` (in `import-track-resolve.js`), and the `maxTrack`
+padding is SKIPPED. Using the raw global index as a per-session index — plus the
+padding — was the `global_0` → `track_3` corruption: deleting `global_0` in one
+session reorders the saved global union, pushing another session's `global_0` to
+a higher global index that then padded phantom `track_N` names on reload.
+Verified by `verify/roundtrip-tracks-multisession-harness.html` (distinct names)
+and `verify/ms-delete-track-roundtrip-harness.html` (real shared-name fixture,
+delete → save → reload, comparing fixed vs. old loader).
+
+**Trackless (null track) preservation.** A trackless instance is exported with
+`track=null` (sleap-io writes it as `-1` in the SLP `instances` table — a valid
+"no track" value that SLEAP GUI also supports). On re-import a null/`-1` track
+stays trackless (`trackIdx = null`) for **both user and predicted** instances:
+the raw-instance path uses `resolveImportTrackIdx`
+(`import-export/import-track-resolve.js`), and the lucid grouped-reconstruction
+path keeps `instMeta.trackIdx` null instead of defaulting to `0`. Defaulting to
+`0` (the former predicted-instance behavior) snapped a deleted-track instance
+onto the first track label (e.g. `global_0`) after an export/reload round-trip.
+
 **Key exports.**
 - `handleLoadSlpFile(slpFile)` — replace-current-state load. Drives the
   two-level LoadingProgressModal: all N session groups are pre-allocated
@@ -1766,6 +1948,17 @@ current session, overlay reprojected points3d from H5.
   progress modal. Sessions load SEQUENTIALLY; videos within a session load
   IN PARALLEL via the private `_loadSessionVideosParallel` helper. Skip-
   and-continue at the session level. Also attached to `window` / `globalThis`.
+- `reconstructInstanceGroupsFromDicts(session, fgDicts, camKeyToName, nodeNames, opts)`
+  — async; rebuilds one session's `InstanceGroup`s + member `Instance`s from its
+  saved `frame_group_dicts` (lucid grouping metadata in `sessions_json`),
+  removing the matching pass-1 raw-SLP duplicates and restoring `points3d`.
+  Extracted from `handleLoadSlpFile` (which now calls it) so the SLP grouped-
+  reconstruction path is headlessly round-trip testable — it preserves trackless
+  (`trackIdx` null) and identity-less (`identity_idx` -1) instances rather than
+  defaulting them to track/identity 0. `opts.onProgress(msg)` receives batch
+  progress; `opts.batch` (default 20000) sets the yield interval. Returns
+  `{ restoredGroups, restoredWith3d }`. Exercised by
+  `verify/roundtrip-null3d-harness.html`.
 
 **Private helpers (not exported).**
 - `_loadSessionVideosParallel({ sessionIdx, session, state, modal, groupId, decoderFactory })`
@@ -1793,6 +1986,43 @@ File menu Load Points3D H5.
 
 ---
 
+### import-export/import-track-resolve.js
+
+**Purpose.** One pure (dependency-free) helper, `resolveImportTrackIdx(session,
+rawTrackIdx, instType)`, that maps an imported instance's raw track index to
+LUCID's internal representation. A trackless instance (`track = -1` or `null`)
+stays trackless (`trackIdx = null`) for **both** user and predicted instances;
+real track indices pass through. Defensively normalizes an unsigned-int32
+readback of `-1` (`0xFFFFFFFF`) back to `-1`.
+
+Extracted from `loading/session-loader.js` (which transitively imports `app.js`
+and so can't be bridged into the test runner) specifically so it can be unit
+tested. `session`/`instType` are retained in the signature but no longer
+consulted. The former predicted-instance "coerce trackless → 0" behavior caused
+a deleted-track instance to reappear on the first track (`global_0`) after an
+export → reimport round trip.
+
+Also exports `remapGlobalTrackToSession(rawTrackIdx, globalTrackNames,
+sessionTrackNames)` — maps a per-instance track index from the file-level
+(GLOBAL) track list to a SPECIFIC session's track index, **by name**. A
+multi-session SLP stores ONE global track list (`tracks_json`) and writes each
+instance's track column as an index into it, but tracks are per-session. Without
+this remap, deleting a track in one session reorders the global union and
+silently remaps another session's instances (the `global_0` → `track_3` bug).
+Trackless stays trackless; a global track absent from the session returns `-1`.
+`slp-import.js` calls it in pass-1 for lucid multi-session projects; the
+save-side counterpart (re-pointing instances to canonical Track objects so they
+serialize to the right global slot) lives in `save-load.js` `buildSlpBytes`.
+
+**Key exports.** `resolveImportTrackIdx`, `remapGlobalTrackToSession`.
+
+**Imported by.** `loading/session-loader.js` (re-exports `resolveImportTrackIdx`;
+the three import paths keep importing it from there),
+`import-export/slp-import.js` (both functions). Bridged into
+`tests/test-runner.html`; covered by `tests/test-import-track-resolve.js`.
+
+---
+
 ### import-export/slp-merge.js
 
 **Purpose.** Pure helpers for additive multi-SLP loading — skeleton
@@ -1803,8 +2033,10 @@ compatibility check, track merging, frame merging, group rebuild.
   `{error, reorderMap}`.
 - `mergeTracksIntoSession(session, incomingTracks)`.
 - `mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName,
-  cameras, trackRemap, nodeReorderMap)`.
-- `rebuildInstanceGroupsForFrames(session, frameIndices)`.
+  cameras, trackRemap, nodeReorderMap)` — trackless instances (track=-1/null),
+  user OR predicted, keep `trackIdx = null` (no longer coerce predictions to 0).
+- `rebuildInstanceGroupsForFrames(session, frameIndices)` — groups by `trackIdx`;
+  trackless instances of any type are skipped (not bucketed into track 0).
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Instance`,

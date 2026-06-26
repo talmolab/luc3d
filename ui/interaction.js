@@ -1275,7 +1275,9 @@ export class InteractionManager {
                 break;
             }
 
-
+            // Legacy 'c' confirm-group key. The primary grouping shortcut is the
+            // catalog-dispatched Shift+G (wired in ui-wiring.js); 'c' is kept as a
+            // secondary alias that confirms a ready assignment selection.
             case 'c':
             case 'C': {
                 if (!e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -1922,33 +1924,6 @@ export class InteractionManager {
         if (this.callbacks.onAssignmentGroupCreated) {
             this.callbacks.onAssignmentGroupCreated(group);
         }
-    }
-
-    /**
-     * Unlink the currently selected InstanceGroup: break it apart and
-     * return its instances to the unlinked pool.
-     * @private
-     */
-    _unlinkSelectedGroup() {
-        const state = this._getState();
-        if (!state || !state.session) return;
-        if (!this.selectedInstanceGroup) return;
-
-        const frameIdx = state.currentFrame;
-        const group = this.selectedInstanceGroup;
-
-        // Clear selection before modifying data
-        this.clearSelection();
-
-        // Unlink the group (instances go back to unlinked pool)
-        state.session.unlinkGroup(frameIdx, group);
-
-        // Notify the application (no views deleted — instances moved to unlinked pool)
-        if (this.callbacks.onInstanceDeleted) {
-            this.callbacks.onInstanceDeleted(frameIdx, group, []);
-        }
-
-        this._requestRedraw();
     }
 
     /**
