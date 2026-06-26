@@ -1388,11 +1388,28 @@ body {
 
 /* Export SLEAP File Per Session: active session → one file per camera dir. */
 .slp-export-persession-modal {
-  min-width: 560px;
+  min-width: 720px;
 }
 
 .slp-export-persession-modal .slp-export-table {
   table-layout: auto;
+  width: 100%;
+}
+
+/* Camera + Directory columns shrink to fit so the Output Filename column
+   (last) absorbs the remaining width and the input reads its full name. */
+.slp-export-persession-modal .slp-export-table th:nth-child(1),
+.slp-export-persession-modal .slp-export-table td:nth-child(1),
+.slp-export-persession-modal .slp-export-table th:nth-child(2),
+.slp-export-persession-modal .slp-export-table td:nth-child(2) {
+  width: 1%;
+  white-space: nowrap;
+  padding-right: 16px;
+}
+
+.slp-export-persession-modal .slp-export-table th:last-child,
+.slp-export-persession-modal .slp-export-table td:last-child {
+  width: auto;
 }
 
 .slp-export-persession-modal .slp-ps-dir {
@@ -1404,6 +1421,7 @@ body {
 
 .slp-export-persession-modal .slp-ps-filename {
   width: 100%;
+  min-width: 340px;
   box-sizing: border-box;
 }
 
