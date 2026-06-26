@@ -1386,6 +1386,27 @@ body {
   min-width: 700px;
 }
 
+/* Export SLEAP File Per Session: active session → one file per camera dir. */
+.slp-export-persession-modal {
+  min-width: 560px;
+}
+
+.slp-export-persession-modal .slp-export-table {
+  table-layout: auto;
+}
+
+.slp-export-persession-modal .slp-ps-dir {
+  color: var(--text-muted);
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.slp-export-persession-modal .slp-ps-filename {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .slp-export-all-modal .slp-export-table {
   table-layout: auto;
 }
@@ -1527,7 +1548,7 @@ body {
 .slp-bycam-cam-head,
 .slp-bycam-cell,
 .slp-bycam-missing,
-.slp-bycam-dl-cell {
+.slp-bycam-incl-cell {
   width: 92px;
   min-width: 92px;
   max-width: 92px;
@@ -1632,23 +1653,63 @@ body {
   user-select: none;
 }
 
-.slp-bycam-dl-cell {
+.slp-bycam-incl-cell {
+  text-align: center;
   padding: 2px 3px;
 }
 
-/* Scoped under .slp-bycam-modal so these beat the generic
-   `.multi-frame-modal button` rule (0,1,1) on specificity (0,2,0) —
-   otherwise its 6px 16px padding / 13px font overflow the 92px column
-   and push the "Download" label off-center. */
-.slp-bycam-modal .slp-bycam-dl-btn {
-  width: 100%;
-  padding: 3px 2px;
-  font-size: 11px;
-  cursor: pointer;
+/* Per-column include toggle for "Download All". Mirrors the presence-cell
+   ✓/✗ look so the footer reads as one more selectable row. */
+.slp-bycam-incl {
+  display: inline-block;
+  min-width: 22px;
   text-align: center;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 4px;
 }
 
-.slp-bycam-modal .slp-bycam-dl-btn:disabled {
+.slp-bycam-incl.on {
+  background: rgba(250, 204, 21, 0.25);
+  color: #eab308;
+}
+
+.slp-bycam-incl.off {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.slp-bycam-incl:not(.disabled):hover {
+  outline: 1px solid rgba(250, 204, 21, 0.6);
+  outline-offset: -1px;
+}
+
+/* Blocked (skeleton mismatch) or permanently-empty column — red ✗, not selectable. */
+.slp-bycam-incl.disabled {
+  background: none;
+  color: #ef4444;
+  opacity: 0.85;
+  cursor: not-allowed;
+}
+
+/* Full-width Download All row beneath the table. */
+.slp-bycam-all-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 10px 0 0;
+}
+
+.slp-bycam-modal .slp-bycam-all-btn {
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.slp-bycam-modal .slp-bycam-all-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }

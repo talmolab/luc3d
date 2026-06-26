@@ -977,59 +977,6 @@ export function showSlpExportModal() {
 // ============================================
 
 /**
- * Modal warning popup for a skeleton mismatch during a per-camera download.
- * Styled after showCalibrationRequiredPopup.
- */
-function showSkeletonMismatchPopup(detail) {
-    var overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10001;display:flex;align-items:center;justify-content:center;';
-
-    var card = document.createElement('div');
-    card.style.cssText = 'background:var(--bg-secondary,#1e1e1e);border-radius:8px;padding:24px;max-width:460px;width:90%;text-align:center;';
-
-    var icon = document.createElement('div');
-    icon.style.cssText = 'font-size:36px;margin-bottom:12px;';
-    icon.textContent = '⚠';
-    card.appendChild(icon);
-
-    var title = document.createElement('div');
-    title.style.cssText = 'color:#fff;font-size:16px;font-weight:600;margin-bottom:8px;';
-    title.textContent = 'Cannot Export — Skeletons Differ';
-    card.appendChild(title);
-
-    var msg = document.createElement('div');
-    msg.style.cssText = 'color:#aaa;font-size:13px;margin-bottom:16px;line-height:1.5;';
-    msg.textContent = 'The selected views belong to sessions with different skeletons. '
-        + 'A single SLEAP file requires one shared skeleton, so these views cannot be exported together. '
-        + 'Deselect the mismatched sessions and try again.';
-    card.appendChild(msg);
-
-    if (detail) {
-        var det = document.createElement('div');
-        det.style.cssText = 'color:#888;font-size:11px;margin-bottom:16px;font-family:monospace;word-break:break-word;';
-        det.textContent = detail;
-        card.appendChild(det);
-    }
-
-    var btn = document.createElement('button');
-    btn.style.cssText = 'padding:8px 24px;font-size:14px;font-weight:600;cursor:pointer;background:var(--accent,#4a9eff);color:#fff;border:none;border-radius:6px;';
-    btn.textContent = 'OK';
-    function dismiss() {
-        overlay.remove();
-        document.removeEventListener('keydown', onKey);
-    }
-    btn.addEventListener('click', dismiss);
-    function onKey(e) {
-        if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); dismiss(); }
-    }
-    document.addEventListener('keydown', onKey);
-
-    card.appendChild(btn);
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-}
-
-/**
  * Build the camera matrix for the "Export SLEAP by Camera" modal.
  *
  * Columns are camera-view names found across ALL sessions, ordered left→right by:
@@ -1143,6 +1090,20 @@ export function showSlpExportByCamModal() {
         }
     }
 
+    // Per-column include state for "Download All", keyed by camName. Default ON
+    // for columns that have at least one present cell. `colEmpty` marks columns
+    // with no present cells at all — permanently non-exportable.
+    var colInclude = {};
+    var colEmpty = {};
+    for (var ci1 = 0; ci1 < camNames.length; ci1++) {
+        var cHas = false;
+        for (var si1 = 0; si1 < sessions.length; si1++) {
+            if (cellLookup[si1][camNames[ci1]]) { cHas = true; break; }
+        }
+        colInclude[camNames[ci1]] = cHas;
+        colEmpty[camNames[ci1]] = !cHas;
+    }
+
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
     var modal = document.createElement('div');
@@ -1192,10 +1153,24 @@ export function showSlpExportByCamModal() {
     }
     camBody += '</tbody>';
 
+    // Footer = per-column include toggle for "Download All". A column with at
+    // least one present cell defaults ON (✓); a column with no present cells is
+    // permanently off/disabled (nothing to export).
     var camFoot = '<tfoot><tr>';
     for (var fc = 0; fc < camNames.length; fc++) {
-        camFoot += '<td class="slp-bycam-dl-cell">'
-            + '<button class="slp-bycam-dl-btn" data-cam="' + fc + '">Download</button></td>';
+        var colHasData = false;
+        for (var fcs = 0; fcs < sessions.length; fcs++) {
+            if (cellLookup[fcs][camNames[fc]]) { colHasData = true; break; }
+        }
+        if (colHasData) {
+            camFoot += '<td class="slp-bycam-incl-cell">'
+                + '<span class="slp-bycam-incl on" data-cam="' + fc + '" '
+                + 'title="Include this camera in Download All">✓</span></td>';
+        } else {
+            camFoot += '<td class="slp-bycam-incl-cell">'
+                + '<span class="slp-bycam-incl disabled" data-cam="' + fc + '" '
+                + 'title="No sessions have this camera">✗</span></td>';
+        }
     }
     camFoot += '</tr></tfoot>';
 
@@ -1207,8 +1182,9 @@ export function showSlpExportByCamModal() {
         '<h3>Export SLEAP by Camera</h3>' +
         '<div class="slp-export-note">Each column is a camera view found across sessions. '
         + 'A green ✓ marks a session that has that view (toggle on/off); a red ✗ marks a session '
-        + 'where the view does not exist. Download a column to export that camera across every '
-        + 'selected session into one SLEAP file.</div>' +
+        + 'where the view does not exist. The footer toggle decides whether a camera is included '
+        + 'in <b>Download All</b>, which exports each included camera (across its selected sessions) '
+        + 'as one SLEAP file into a folder you choose.</div>' +
         emptyNote +
         '<div class="slp-bycam-body">' +
         '<div class="slp-bycam-scroll slp-bycam-sess-scroll">' + sessHtml + '</div>' +
@@ -1223,6 +1199,9 @@ export function showSlpExportByCamModal() {
         '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
         '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
         '</span>' +
+        '</div>' +
+        '<div class="slp-bycam-all-row">' +
+        '<button id="slpByCamDownloadAll" class="slp-bycam-all-btn">Download All</button>' +
         '</div>' +
         '<div class="slp-export-error" id="slpByCamError"></div>' +
         '<div class="modal-actions">' +
@@ -1279,24 +1258,54 @@ export function showSlpExportByCamModal() {
         });
     });
 
-    // Proactively enable/disable per-column download buttons based on whether
-    // the currently toggled-on sessions for a column have compatible skeletons.
-    // Hoisted declaration so the cell-toggle handlers above can call it.
+    // Per-column skeleton-mismatch reasons, keyed by camName. A blocked column
+    // is forced out of the Download All set and its include toggle is disabled.
+    var colBlocked = {};
+
+    // Recompute blocked columns from the currently toggled-on sessions, refresh
+    // the include toggles, and enable/disable Download All. Hoisted so the
+    // cell-toggle handlers above can call it.
     function updateDownloadStates() {
         var blocked = [];
-        modal.querySelectorAll('.slp-bycam-dl-btn').forEach(function (btn) {
-            // Don't clobber the transient state of an in-progress export.
-            if (btn.textContent === 'Exporting...') return;
-            var camName = camNames[parseInt(btn.getAttribute('data-cam'))];
+        colBlocked = {};
+        for (var c = 0; c < camNames.length; c++) {
+            var camName = camNames[c];
             var selections = buildColumnSelections(camName);
             var mismatch = selections.length >= 2 ? findSkeletonMismatch(selections) : null;
             if (mismatch) {
-                btn.disabled = true;
-                btn.title = mismatch;
+                colBlocked[camName] = mismatch;
                 blocked.push({ cam: camName, detail: mismatch });
+            }
+        }
+
+        // Reflect block state onto the include toggles. A blocked toggle is
+        // disabled and visually off; permanently-empty columns are left as-is.
+        modal.querySelectorAll('.slp-bycam-incl').forEach(function (tog) {
+            var camName = camNames[parseInt(tog.getAttribute('data-cam'))];
+            if (colEmpty[camName]) return; // nothing to export here, ever
+            if (colBlocked[camName]) {
+                tog.classList.add('disabled');
+                tog.classList.remove('on'); tog.classList.add('off');
+                tog.textContent = '✗';
+                tog.title = colBlocked[camName];
             } else {
-                btn.disabled = false;
-                btn.removeAttribute('title');
+                tog.classList.remove('disabled');
+                // Show ✓ only when the column is included AND has at least one
+                // selected session — otherwise Download All silently skips it,
+                // so reflect that as a visual ✗ (without clearing the user's
+                // include intent, so it returns once sessions are picked).
+                var hasSel = buildColumnSelections(camName).length > 0;
+                if (colInclude[camName] && hasSel) {
+                    tog.title = 'Include this camera in Download All';
+                    tog.classList.add('on'); tog.classList.remove('off');
+                    tog.textContent = '✓';
+                } else {
+                    tog.title = hasSel
+                        ? 'Excluded from Download All'
+                        : 'No sessions selected for this camera';
+                    tog.classList.remove('on'); tog.classList.add('off');
+                    tog.textContent = '✗';
+                }
             }
         });
 
@@ -1304,14 +1313,45 @@ export function showSlpExportByCamModal() {
         var warn = document.getElementById('slpByCamSkelWarning');
         if (warn) {
             if (blocked.length) {
-                warn.textContent = 'Skeleton Mismatch Across Sessions. Download Blocked';
+                warn.textContent = 'Skeleton Mismatch Across Sessions. Blocked columns are excluded from Download All.';
                 warn.style.display = '';
             } else {
                 warn.textContent = '';
                 warn.style.display = 'none';
             }
         }
+
+        // Disable Download All when no exportable column remains.
+        var dlAll = document.getElementById('slpByCamDownloadAll');
+        if (dlAll && dlAll.textContent.indexOf('Downloading') === -1) {
+            dlAll.disabled = exportableColumns().length === 0;
+        }
     }
+
+    // Camera names currently included, not blocked, and with ≥1 selected session.
+    function exportableColumns() {
+        var out = [];
+        for (var c = 0; c < camNames.length; c++) {
+            var camName = camNames[c];
+            if (!colInclude[camName]) continue;
+            if (colBlocked[camName]) continue;
+            if (buildColumnSelections(camName).length === 0) continue;
+            out.push(camName);
+        }
+        return out;
+    }
+
+    // ---- Include-toggle clicking ----
+    modal.querySelectorAll('.slp-bycam-incl').forEach(function (tog) {
+        tog.addEventListener('click', function () {
+            var camName = camNames[parseInt(tog.getAttribute('data-cam'))];
+            // Blocked or permanently-empty columns aren't togglable.
+            if (tog.classList.contains('disabled')) return;
+            colInclude[camName] = !colInclude[camName];
+            clearError();
+            updateDownloadStates();
+        });
+    });
 
     // ---- Reprojection toggle (mirrors showSlpExportModal) ----
     var reprojCheckbox = document.getElementById('slpByCamReproj');
@@ -1353,54 +1393,325 @@ export function showSlpExportByCamModal() {
         return (base || 'view') + '.slp';
     }
 
-    // ---- Per-column download ----
-    modal.querySelectorAll('.slp-bycam-dl-btn').forEach(function (btn) {
-        btn.addEventListener('click', async function () {
-            clearError();
-            var camName = camNames[parseInt(btn.getAttribute('data-cam'))];
-            var selections = buildColumnSelections(camName);
-            if (selections.length === 0) {
-                showError('No sessions selected for "' + camName + '".');
-                return;
-            }
+    // ---- Download All (folder export) ----
+    // `cancelled` lets Esc abort an in-progress export between files.
+    var exporting = false;
+    var cancelled = false;
+    var dlAllBtn = document.getElementById('slpByCamDownloadAll');
+    dlAllBtn.addEventListener('click', async function () {
+        clearError();
+        var cols = exportableColumns();
+        if (cols.length === 0) {
+            showError('No cameras selected to export.');
+            return;
+        }
 
-            // Pre-flight skeleton compatibility — pop up on mismatch.
-            var mismatch = findSkeletonMismatch(selections);
-            if (mismatch) {
-                showSkeletonMismatchPopup(mismatch);
-                return;
-            }
+        var saveReproj = reprojCheckbox.checked;
+        var activeToggle = reprojToggle.querySelector('.slp-toggle-active');
+        var reprojAsUser = saveReproj
+            ? (activeToggle && activeToggle.getAttribute('data-value') === 'user')
+            : null;
 
-            var saveReproj = reprojCheckbox.checked;
-            var activeToggle = reprojToggle.querySelector('.slp-toggle-active');
-            var reprojAsUser = saveReproj
-                ? (activeToggle && activeToggle.getAttribute('data-value') === 'user')
-                : null;
-
-            var outName = sanitizeFilename(camName);
-            var origText = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = 'Exporting...';
+        // Resolve a destination folder up front. Fall back to per-file browser
+        // downloads when the File System Access API is unavailable.
+        var dirHandle = null;
+        var useDirectory = !!window.showDirectoryPicker;
+        if (useDirectory) {
             try {
-                var blob = await exportSlpMultiSession(selections, reprojAsUser);
-                downloadBlob(blob, outName);
-                setStatus('Exported ' + outName + ' (' + selections.length + ' session'
-                    + (selections.length === 1 ? '' : 's') + ')', 'success');
-            } catch (err) {
-                console.error('[slp-export-bycam]', err);
-                showError(err.message || String(err));
-            } finally {
-                btn.disabled = false;
-                btn.textContent = origText;
+                dirHandle = state.exportDirHandle;
+                if (!dirHandle) {
+                    dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                    state.exportDirHandle = dirHandle;
+                }
+            } catch (pickErr) {
+                if (pickErr && pickErr.name === 'AbortError') return; // user cancelled
+                console.error('[slp-export-bycam] folder pick failed:', pickErr);
+                showError(pickErr.message || String(pickErr));
+                return;
             }
+        }
+
+        exporting = true;
+        cancelled = false;
+        dlAllBtn.disabled = true;
+        var exported = 0;
+        try {
+            for (var i = 0; i < cols.length; i++) {
+                if (cancelled) break;
+                var camName = cols[i];
+                dlAllBtn.textContent = 'Downloading... (' + (i + 1) + '/' + cols.length + ')';
+                var selections = buildColumnSelections(camName);
+                var outName = sanitizeFilename(camName);
+                var blob = await exportSlpMultiSession(selections, reprojAsUser);
+                if (cancelled) break;
+                if (useDirectory) {
+                    var fh = await dirHandle.getFileHandle(outName, { create: true });
+                    var writable = await fh.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                } else {
+                    downloadBlob(blob, outName);
+                }
+                exported++;
+            }
+            if (cancelled) {
+                setStatus('Download All cancelled (' + exported + ' of ' + cols.length + ' written)', 'warning');
+            } else {
+                setStatus('Exported ' + exported + ' SLP file'
+                    + (exported === 1 ? '' : 's'), 'success');
+            }
+        } catch (err) {
+            console.error('[slp-export-bycam]', err);
+            showError(err.message || String(err));
+        } finally {
+            exporting = false;
+            dlAllBtn.textContent = 'Download All';
+            updateDownloadStates();
+        }
+    });
+
+    // Set initial toggle/button states.
+    updateDownloadStates();
+
+    // ---- Close (button + Esc convention) ----
+    function closeModal() {
+        document.removeEventListener('keydown', onKeydown);
+        overlay.remove();
+    }
+    function onKeydown(e) {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        // Mid-export, Esc cancels the run rather than tearing down the modal.
+        if (exporting) { cancelled = true; return; }
+        closeModal();
+    }
+    document.addEventListener('keydown', onKeydown);
+    document.getElementById('slpByCamClose').addEventListener('click', closeModal);
+}
+
+// ============================================
+// Export SLEAP File Per Session Modal
+// ============================================
+
+/**
+ * Per-session bulk SLP export. For the OPEN/ACTIVE session, writes one 2D SLEAP
+ * file per camera into that camera's associated directory (`state.cameraDirMap`)
+ * inside a folder the user picks. Output names are versioned (`_vN`) so source
+ * `.slp` files are never overwritten. A small options modal lets the user choose
+ * whether to include Predicted instances and Reprojections (and, for the latter,
+ * whether they are emitted as UserInstance or PredictedInstance); user labels are
+ * always included. Mirrors showSlpExportAllModal's directory-writing flow but
+ * scoped to a single session with no per-session grouping subfolder. Falls back
+ * to flat browser downloads when the File System Access API is unavailable.
+ */
+export function showSlpExportPerSessionModal() {
+    if (!state.sessions || state.sessions.length === 0) {
+        setStatus('No sessions to export', 'warning');
+        return;
+    }
+    var activeIdx = (typeof state.activeSessionIdx === 'number' && state.activeSessionIdx >= 0)
+        ? state.activeSessionIdx : 0;
+    var session = state.sessions[activeIdx];
+    if (!session) { setStatus('No active session to export', 'warning'); return; }
+    var sessName = session.name || ('Session ' + (activeIdx + 1));
+
+    // Build one entry per assigned-camera video file in the ACTIVE session.
+    var entries = [];
+    for (var i = 0; i < state.videoFiles.length; i++) {
+        var vf = state.videoFiles[i];
+        if (!vf.assignedCamera) continue;
+        // `sessionIdx` is unset for videos loaded via "Load Videos + Load
+        // Calibration" (autoAssignVideosToCameras never sets it) — treat as 0.
+        var vfSessIdx = (typeof vf.sessionIdx === 'number') ? vf.sessionIdx : 0;
+        if (vfSessIdx !== activeIdx) continue;
+        var camName = vf.assignedCamera || vf.name;
+        // Versioned output name (same convention as showSlpExportAllModal).
+        var outputName;
+        if (vf.slpFilename) {
+            var stem = vf.slpFilename.replace(/\.[^.]+$/, '');
+            var vm = stem.match(/_(?:3D_)?v(\d+)$/);
+            var nv = vm ? parseInt(vm[1]) + 1 : 1;
+            var bs = vm ? stem.replace(/_(?:3D_)?v\d+$/, '') : stem;
+            outputName = bs + '_v' + nv + '.slp';
+        } else {
+            var vn = (vf.file && vf.file.name) ? vf.file.name : (vf.name || 'video');
+            outputName = vn.replace(/\.[^.]+$/, '') + '_v1.slp';
+        }
+        entries.push({
+            camName: camName,
+            videoFile: vf,
+            outputName: outputName,
+            dirName: state.cameraDirMap[camName] || camName,
+        });
+    }
+
+    if (entries.length === 0) {
+        setStatus('Active session has no camera views to export', 'warning');
+        return;
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal slp-export-modal slp-export-persession-modal';
+
+    var rowsHtml = '';
+    for (var ri = 0; ri < entries.length; ri++) {
+        var en = entries[ri];
+        rowsHtml +=
+            '<tr>' +
+            '<td>' + en.camName + '</td>' +
+            '<td class="slp-ps-dir" title="' + en.dirName + '">' + en.dirName + '/</td>' +
+            '<td><input type="text" class="slp-ps-filename" data-idx="' + ri + '" value="' + en.outputName + '"></td>' +
+            '</tr>';
+    }
+
+    modal.innerHTML =
+        '<h3>Export SLEAP File Per Session</h3>' +
+        '<div class="slp-export-note">Writes one 2D SLEAP file per camera in <b>' + sessName + '</b> '
+        + 'into each camera\'s associated directory inside a folder you choose.</div>' +
+        '<div class="slp-export-table-container">' +
+        '<table class="data-table slp-export-table">' +
+        '<thead><tr><th>Camera</th><th>Directory</th><th>Output Filename</th></tr></thead>' +
+        '<tbody>' + rowsHtml + '</tbody>' +
+        '</table>' +
+        '</div>' +
+        '<div class="slp-export-options" style="margin-top:10px;">' +
+        '<label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);display:block;margin-bottom:6px;">Include</label>' +
+        '<label style="margin-right:14px;cursor:pointer;"><input type="checkbox" id="slpPsIncPred" checked> Predicted Instances</label>' +
+        '<label style="margin-right:8px;cursor:pointer;"><input type="checkbox" id="slpPsIncReproj"> Reprojections</label>' +
+        '<span class="slp-reproj-toggle" id="slpPsReprojToggle">' +
+        '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
+        '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
+        '</span>' +
+        '</div>' +
+        '<div class="slp-export-error" id="slpPsError"></div>' +
+        '<div class="modal-actions">' +
+        '<button id="slpPsCancel">Cancel</button>' +
+        '<button class="primary" id="slpPsExport">Export</button>' +
+        '</div>';
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    var errorDiv = document.getElementById('slpPsError');
+    function clearError() { errorDiv.textContent = ''; }
+    function showError(msg) { errorDiv.textContent = msg; }
+
+    // Editable per-camera output filenames.
+    modal.querySelectorAll('.slp-ps-filename').forEach(function (input) {
+        input.addEventListener('change', function () {
+            var idx = parseInt(input.getAttribute('data-idx'));
+            entries[idx].outputName = input.value.trim() || entries[idx].outputName;
         });
     });
 
-    // Set initial disabled state for all download buttons.
-    updateDownloadStates();
+    // Reprojection emit-mode toggle is only active when Reprojections is checked.
+    var reprojCheckbox = document.getElementById('slpPsIncReproj');
+    var reprojToggle = document.getElementById('slpPsReprojToggle');
+    var reprojOpts = reprojToggle.querySelectorAll('.slp-toggle-option');
+    function updateReprojToggleState() {
+        if (reprojCheckbox.checked) reprojToggle.classList.remove('slp-toggle-disabled');
+        else reprojToggle.classList.add('slp-toggle-disabled');
+    }
+    reprojCheckbox.addEventListener('change', updateReprojToggleState);
+    updateReprojToggleState();
+    reprojOpts.forEach(function (opt) {
+        opt.addEventListener('click', function () {
+            if (!reprojCheckbox.checked) return;
+            reprojOpts.forEach(function (o) { o.classList.remove('slp-toggle-active'); });
+            opt.classList.add('slp-toggle-active');
+        });
+    });
 
-    document.getElementById('slpByCamClose').addEventListener('click', function () {
+    function closeModal() {
+        document.removeEventListener('keydown', onKeydown);
         overlay.remove();
+    }
+    function onKeydown(e) {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        closeModal();
+    }
+    document.addEventListener('keydown', onKeydown);
+    document.getElementById('slpPsCancel').addEventListener('click', closeModal);
+
+    // ---- Export ----
+    var exportBtn = document.getElementById('slpPsExport');
+    exportBtn.addEventListener('click', async function () {
+        clearError();
+        if (!window.SleapIO) { showError('sleap-io.js not loaded yet'); return; }
+
+        var includePred = document.getElementById('slpPsIncPred').checked;
+        var includeReproj = reprojCheckbox.checked;
+        var activeToggle = reprojToggle.querySelector('.slp-toggle-active');
+        var reprojAsUser = includeReproj
+            ? (activeToggle && activeToggle.getAttribute('data-value') === 'user')
+            : null;
+        // User labels always included; predicted/reprojected per the checkboxes.
+        var instanceFilter = { user: true, predicted: includePred, reprojected: includeReproj };
+
+        // Resolve a destination folder; fall back to flat browser downloads when
+        // the File System Access API is unavailable (can't nest into cam dirs).
+        var useDirectory = !!window.showDirectoryPicker;
+        var dirHandle = null;
+        if (useDirectory) {
+            try {
+                dirHandle = state.exportDirHandle;
+                if (!dirHandle) {
+                    dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                    state.exportDirHandle = dirHandle;
+                }
+            } catch (pickErr) {
+                if (pickErr && pickErr.name === 'AbortError') return; // cancelled
+                console.error('[slp-export-persession] folder pick failed:', pickErr);
+                showError(pickErr.message || String(pickErr));
+                return;
+            }
+        }
+
+        exportBtn.disabled = true;
+        var origText = exportBtn.textContent;
+        var exported = 0;
+        try {
+            for (var k = 0; k < entries.length; k++) {
+                var en2 = entries[k];
+                exportBtn.textContent = 'Exporting... (' + (k + 1) + '/' + entries.length + ')';
+                var slpFilename = en2.outputName;
+                if (!slpFilename.endsWith('.slp')) slpFilename += '.slp';
+
+                var blob = await exportSlpClientSide(
+                    session, en2.camName, reprojAsUser, en2.videoFile, slpFilename, instanceFilter
+                );
+
+                if (useDirectory) {
+                    var subDirName = state.cameraDirMap[en2.camName] || en2.camName;
+                    var subDir;
+                    try {
+                        subDir = await dirHandle.getDirectoryHandle(subDirName, { create: true });
+                    } catch (e) {
+                        console.warn('[export-persession] cannot access/create dir ' + subDirName + ':', e);
+                        setStatus('Cannot write to ' + subDirName + '/ — skipping ' + en2.camName, 'warning');
+                        continue;
+                    }
+                    var fileHandle = await subDir.getFileHandle(slpFilename, { create: true });
+                    var writable = await fileHandle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                } else {
+                    downloadBlob(blob, slpFilename);
+                }
+                exported++;
+            }
+            setStatus('Exported ' + exported + ' SLP file' + (exported === 1 ? '' : 's')
+                + ' for ' + sessName, 'success');
+            closeModal();
+        } catch (err) {
+            console.error('[slp-export-persession]', err);
+            showError(err.message || String(err));
+            exportBtn.disabled = false;
+            exportBtn.textContent = origText;
+        }
     });
 }
 
