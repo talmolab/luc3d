@@ -64,6 +64,7 @@ import {
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
     showSlpExportModal, showSlpExportAllModal, showSlpExportByCamModal,
+    showSlpExportPerSessionModal,
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
 } from './export-modals.js';
@@ -1009,10 +1010,13 @@ export function setupMenus() {
     //     showSlpExportAllModal();
     // });
 
-    document.getElementById('menuExportSlpPerCam').addEventListener('click', function () {
+    // "Export SLEAP File" (single-camera modal, showSlpExportModal) was replaced
+    // in the File menu by "Export SLEAP File Per Session". showSlpExportModal is
+    // retained (still exported) but no longer wired.
+    document.getElementById('menuExportSlpPerSession').addEventListener('click', function () {
         closeMenus();
         if (!state.sessions || state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
-        showSlpExportModal();
+        showSlpExportPerSessionModal();
     });
 
     document.getElementById('menuExportSlpByCam').addEventListener('click', function () {
