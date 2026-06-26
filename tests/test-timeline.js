@@ -189,6 +189,51 @@
         });
     });
 
+    describe('Timeline - wheel zoom (plain mouse wheel)', function () {
+        var container, tl;
+
+        function wheel(deltaY, shiftKey) {
+            return {
+                deltaX: 0, deltaY: deltaY, offsetX: 400,
+                ctrlKey: false, shiftKey: !!shiftKey,
+                preventDefault: function () {},
+            };
+        }
+
+        beforeEach(function () {
+            if (tl) cleanup(tl, container);
+            container = createContainer(800, 80);
+            tl = new Timeline(container, { totalFrames: 1000 });
+            tl._cssWidth = 800; // make content math well-defined headless
+        });
+
+        it('plain wheel up zooms in', function () {
+            var before = tl._zoom;
+            tl._handleWheel(wheel(-100, false));
+            assertGreaterThan(tl._zoom, before, 'scroll up should zoom in');
+            cleanup(tl, container);
+            tl = null;
+        });
+
+        it('plain wheel down zooms out', function () {
+            tl.setZoom(5);
+            var before = tl._zoom;
+            tl._handleWheel(wheel(100, false));
+            assertLessThan(tl._zoom, before, 'scroll down should zoom out');
+            cleanup(tl, container);
+            tl = null;
+        });
+
+        it('Shift+wheel does not zoom (reserved for row scroll)', function () {
+            tl.setZoom(3);
+            var before = tl._zoom;
+            tl._handleWheel(wheel(-100, true));
+            assertEqual(tl._zoom, before, 'Shift+wheel should not change zoom');
+            cleanup(tl, container);
+            tl = null;
+        });
+    });
+
     describe('Timeline - Coordinate Conversion', function () {
         var container, tl;
 

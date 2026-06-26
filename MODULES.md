@@ -1105,20 +1105,21 @@ reachable via Tracks ▸ Tracking Wizard).
 
 **Purpose.** SLEAP-like canvas timeline showing track occupancy bars,
 frame markers, and current-frame indicator. Click-to-seek, drag-scrub,
-shift-drag range select, pinch / Ctrl+wheel zoom, middle-click pan. Block 1 (Prompt 4)
+shift-drag range select, mouse-wheel / pinch zoom, middle-click pan. Block 1 (Prompt 4)
 adds tree-grouped per-camera labels, an inner scrollable track-area
 wrapper, and an empty-camera placeholder row per camera without tracks.
 
-**Trackpad / wheel semantics.** `_handleWheel` intercepts events where
-`e.ctrlKey === true` for zoom (covers macOS trackpad pinch — browsers
-translate pinch into `wheel` with `ctrlKey: true` — and explicit
-Ctrl/Cmd+wheel). It also intercepts horizontal-dominant scroll
-(`|deltaX| > |deltaY|`), panning `_scrollFrame` left/right (same axis as
-middle/right-drag pan and the scrollbar thumb) and calling
-`preventDefault()` only when the pan actually moved. Every other wheel
-event (vertical-dominant two-finger scroll, plain mouse wheel) returns
-without `preventDefault()`, so the event bubbles to `_trackScrollEl` and
-its `overflow-y: auto` produces native vertical scrolling. macOS's overlay
+**Trackpad / wheel semantics.** `_handleWheel` maps wheel input as:
+horizontal-dominant scroll (`|deltaX| > |deltaY|`) pans `_scrollFrame`
+left/right (same axis as middle/right-drag pan and the scrollbar thumb),
+`preventDefault()`-ing only when the pan actually moved; **Shift+wheel**
+scrolls the track rows vertically via `_trackScrollEl.scrollTop`; and a
+**plain wheel** — or Ctrl/Cmd+wheel, or trackpad pinch (browsers translate
+pinch into `wheel` with `ctrlKey: true`) — zooms the time axis anchored on
+the frame under the cursor (scroll up / pinch-out = zoom in, down = out).
+The plain-wheel zoom is the requested mouse behavior; row scrolling moved to
+Shift+wheel so it isn't lost. `_trackScrollEl`'s `overflow-y: auto` still
+provides native scrolling via the scrollbar thumb. macOS's overlay
 scrollbar is defeated via `-webkit-appearance: none` on the
 `.timeline-track-area::-webkit-scrollbar` rule in `styles.css` so the
 bar is always visible (not just on idle-fade) while the content

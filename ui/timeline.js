@@ -2443,22 +2443,20 @@ export class Timeline {
     }
 
     /**
-     * Pinch-to-zoom + trackpad/wheel vertical scroll handler.
+     * Wheel handler: time-axis zoom + horizontal pan + row scroll.
      *
-     * Browsers translate macOS trackpad pinch gestures into `wheel` events
-     * with `ctrlKey: true` (a long-standing Chrome/Safari convention that
-     * Firefox now mirrors). Ctrl+wheel on a regular mouse produces the
-     * same event, so a single branch covers both inputs:
+     * Mapping (deltaX-dominant horizontal swipe is handled first, then):
+     *   • horizontal swipe (no Ctrl, |deltaX| > |deltaY|) → pan the frame window.
+     *   • Shift+wheel → scroll the track rows vertically (`_trackScrollEl`),
+     *     preserving row navigation now that a plain wheel zooms.
+     *   • plain wheel, or Ctrl+wheel, or trackpad pinch (`ctrlKey: true`, the
+     *     long-standing Chrome/Safari convention Firefox mirrors) → zoom the
+     *     time axis anchored on the frame under the cursor. Scroll up /
+     *     pinch-out zooms in; scroll down zooms out.
      *
-     *   • `ctrlKey === true`  → zoom the time axis (pinch / Ctrl+wheel).
-     *   • `ctrlKey === false` → fall through. The wheel event bubbles to
-     *     `_trackScrollEl`, whose `overflow-y: auto` produces native
-     *     vertical scrolling. This is what two-finger trackpad scrolling
-     *     and a regular mouse wheel both land on.
-     *
-     * We deliberately do NOT call `preventDefault()` on the non-zoom path —
-     * native overflow scrolling only happens when the browser receives
-     * the wheel event uncancelled.
+     * The zoom and row-scroll paths call `preventDefault()` so the page does
+     * not also scroll; the horizontal-pan path only does so when it actually
+     * moves the window.
      *
      * @param {WheelEvent} e
      * @private
@@ -2491,11 +2489,21 @@ export class Timeline {
             return;
         }
 
-        // Non-pinch wheel events delegate to the scroll wrapper. Returning
-        // without preventDefault lets `_trackScrollEl` scroll naturally
-        // (macOS two-finger scroll, mouse wheel, etc.).
-        if (!e.ctrlKey) return;
+        // Shift+wheel scrolls the track rows vertically. A plain wheel now
+        // zooms the time axis (below), so this preserves row navigation when
+        // there are more tracks than fit in view.
+        if (!e.ctrlKey && e.shiftKey) {
+            if (this._trackScrollEl) {
+                var beforeTop = this._trackScrollEl.scrollTop;
+                this._trackScrollEl.scrollTop += e.deltaY;
+                if (this._trackScrollEl.scrollTop !== beforeTop) e.preventDefault();
+            }
+            return;
+        }
 
+        // Plain wheel (and Ctrl+wheel / trackpad pinch) zoom the time axis:
+        // scroll up / pinch-out = zoom in, scroll down = zoom out, anchored on
+        // the frame under the cursor.
         var mouseX = e.offsetX;
         var contentRight = this._cssWidth - this.RIGHT_PADDING;
         // Pinching over the label gutter or right padding still zooms,
