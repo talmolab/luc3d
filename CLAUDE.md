@@ -42,6 +42,10 @@ Browser-based tests in `tests/test-runner.html`. Open in browser to run.
 - `scripts/json_to_slp.py` — Convert JSON export to SLEAP .slp format
 - `scripts/json_to_h5.py` — Convert JSON export to HDF5 format
 - Require: h5py, numpy
+- `scripts/validate_slp_sleap_compat.py` — Assert LUCID-exported `.slp` files are
+  SLEAP-GUI compatible (load via `sleap_io`, non-empty tracks, optional
+  `--compare` against a native SLEAP-GUI export). Headless half of `lucid-e2e`
+  Stage 4; run via `uv run python` from the SLEAP repo.
 
 ## Maintenance
 **When modifying any module, always update the corresponding entry in `MODULES.md` to reflect the change — including exports, dependencies, and purpose.**
