@@ -1396,12 +1396,14 @@ body {
   width: 100%;
 }
 
-/* Camera + Directory columns shrink to fit so the Output Filename column
-   (last) absorbs the remaining width and the input reads its full name. */
+/* Download + Camera + Directory columns shrink to fit so the Output Filename
+   column (last) absorbs the remaining width and the input reads its full name. */
 .slp-export-persession-modal .slp-export-table th:nth-child(1),
 .slp-export-persession-modal .slp-export-table td:nth-child(1),
 .slp-export-persession-modal .slp-export-table th:nth-child(2),
-.slp-export-persession-modal .slp-export-table td:nth-child(2) {
+.slp-export-persession-modal .slp-export-table td:nth-child(2),
+.slp-export-persession-modal .slp-export-table th:nth-child(3),
+.slp-export-persession-modal .slp-export-table td:nth-child(3) {
   width: 1%;
   white-space: nowrap;
   padding-right: 16px;
@@ -1410,6 +1412,17 @@ body {
 .slp-export-persession-modal .slp-export-table th:last-child,
 .slp-export-persession-modal .slp-export-table td:last-child {
   width: auto;
+}
+
+/* Download checkbox column — compact and centered. */
+.slp-export-persession-modal .slp-ps-dl-cell {
+  text-align: center;
+  padding-right: 12px;
+}
+
+.slp-export-persession-modal .slp-ps-dl {
+  cursor: pointer;
+  margin: 0;
 }
 
 .slp-export-persession-modal .slp-ps-dir {

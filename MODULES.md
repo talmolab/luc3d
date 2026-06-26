@@ -468,8 +468,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   Session" (`showSlpExportPerSessionModal`).
 - `showSlpExportPerSessionModal()` — "Export SLEAP File Per Session": bulk export
   for the **open/active session only**. Lists every assigned-camera view in that
-  session (camera, target directory, versioned output filename `<stem>_vN.slp`),
-  with Include options — **Predicted Instances** (checkbox), **Reprojections**
+  session with a per-row **Download** checkbox (default ON; only checked rows are
+  exported), camera, target directory, and versioned output filename
+  `<stem>_vN.slp`, with Include options — **Predicted Instances** (checkbox), **Reprojections**
   (checkbox) emitted as UserInstance/PredictedInstance via a toggle; user labels
   always included. On Export it prompts for a folder (`window.showDirectoryPicker`,
   handle cached on `state.exportDirHandle`) and writes one 2D `.slp` per camera
