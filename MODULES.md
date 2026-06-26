@@ -602,6 +602,16 @@ the removed Tracks-menu "Assign Track" / "Assign Identity" submenus; the reusabl
 track/identity edit never regrows the bottom timeline panel — it rebuilds +
 repaints at the user's current height instead of growing to fit all rows.
 
+**Responsive panel tabs.** `setupPanelTabs` makes the tab bar (Instances,
+Visibility, Videos, Cameras, Skeleton, Session) width-aware. Each tab sizes to
+its full name (never ellipsis-truncated); a `ResizeObserver` on `.panel-tabs`
+runs `layoutPanelTabs()`, which greedily keeps the leading tabs whose names fit
+the panel's current width and demotes the rest into an auto-built **"More ▾"**
+dropdown (`.panel-tab-more*` in styles.css). Widening the panel promotes tabs
+back into the bar one at a time. At least the first tab always stays in the bar.
+The dropdown closes on outside-click or `Esc`; the More button shows the active
+highlight when the selected tab currently lives inside it.
+
 **Key exports.**
 - Tab control: `setupPanelTabs`.
 - Tables: `populateVideosTable`, `populateCamerasTable`,
