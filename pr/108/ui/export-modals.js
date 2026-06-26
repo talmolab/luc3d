@@ -972,6 +972,41 @@ export function showSlpExportModal() {
     });
 }
 
+/**
+ * Quick result popup shown after an SLP export — a small centered card with a
+ * ✓/✗ and a short message. Auto-dismisses (faster on success), and also closes
+ * on click / Esc / Enter. Used by the By-Cam and per-session export flows.
+ */
+function showExportResultPopup(message, ok) {
+    var overlay = document.createElement('div');
+    overlay.className = 'export-result-overlay';
+    var card = document.createElement('div');
+    card.className = 'export-result-card ' + (ok ? 'success' : 'failure');
+    var icon = document.createElement('div');
+    icon.className = 'export-result-icon';
+    icon.textContent = ok ? '✓' : '✗';
+    var msg = document.createElement('div');
+    msg.className = 'export-result-msg';
+    msg.textContent = message;
+    card.appendChild(icon);
+    card.appendChild(msg);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    var timer = null;
+    function dismiss() {
+        if (timer) { clearTimeout(timer); timer = null; }
+        document.removeEventListener('keydown', onKey);
+        if (overlay.parentNode) overlay.remove();
+    }
+    function onKey(e) {
+        if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); dismiss(); }
+    }
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', dismiss);
+    timer = setTimeout(dismiss, ok ? 1800 : 4500);
+}
+
 // ============================================
 // Export SLEAP by Camera Modal
 // ============================================
@@ -1468,6 +1503,8 @@ export function showSlpExportByCamModal() {
         cancelled = false;
         dlAllBtn.disabled = true;
         var exported = 0;
+        var succeeded = false;
+        var failure = null;
         try {
             for (var i = 0; i < cols.length; i++) {
                 if (cancelled) break;
@@ -1492,14 +1529,24 @@ export function showSlpExportByCamModal() {
             } else {
                 setStatus('Exported ' + exported + ' SLP file'
                     + (exported === 1 ? '' : 's'), 'success');
+                succeeded = true;
             }
         } catch (err) {
             console.error('[slp-export-bycam]', err);
             showError(err.message || String(err));
+            failure = err;
         } finally {
             exporting = false;
             dlAllBtn.textContent = 'Download All';
             updateDownloadStates();
+        }
+        // On full success, close the modal and show a quick confirmation; on
+        // failure leave the modal open (so the user can retry) and pop an error.
+        if (succeeded) {
+            closeModal();
+            showExportResultPopup('Download Successful', true);
+        } else if (failure) {
+            showExportResultPopup('Download Failed: ' + (failure.message || String(failure)), false);
         }
     });
 
@@ -1754,9 +1801,11 @@ export function showSlpExportPerSessionModal() {
             setStatus('Exported ' + exported + ' SLP file' + (exported === 1 ? '' : 's')
                 + ' for ' + sessName, 'success');
             closeModal();
+            showExportResultPopup('Download Successful', true);
         } catch (err) {
             console.error('[slp-export-persession]', err);
             showError(err.message || String(err));
+            showExportResultPopup('Download Failed: ' + (err.message || String(err)), false);
             exportBtn.disabled = false;
             exportBtn.textContent = origText;
         }
