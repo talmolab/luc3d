@@ -82,6 +82,7 @@
 
     <!-- Test files -->
     <script src="test-pose-data.js"></script>
+    <script src="test-skeleton-json.js"></script>
     <script src="test-triangulation.js"></script>
     <script src="test-file-io.js"></script>
     <script src="test-interaction.js"></script>
@@ -231,6 +232,8 @@
          (deferred) guarantees that ordering. -->
     <script type="module">
         import * as __PoseData from '../pose/pose-data.js';
+        // Pure (DOM-free) standalone .skeleton.json (de)serialization.
+        import * as __SkeletonJSON from '../import-export/skeleton-json.js';
         import * as __Triangulation from '../pose/triangulation.js';
         import * as __Overlays from '../ui/overlays.js';
         import * as __Viewport3D from '../ui/viewport3d.js';
@@ -251,7 +254,7 @@
         // Pure (DOM-free) import-trackIdx resolver. Extracted from
         // session-loader.js (which pulls app.js) precisely so it's bridgeable.
         import * as __ImportTrackResolve from '../import-export/import-track-resolve.js';
-        Object.assign(window, __PoseData, __Triangulation, __Overlays,
+        Object.assign(window, __PoseData, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
                               __LoadingProgressModal,

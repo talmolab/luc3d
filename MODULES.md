@@ -30,8 +30,11 @@ the old `app.js` entry point.
 - `hideWelcomeOverlay()` — hides the dock empty-state overlay.
 - `loadDemoSession()` — File menu "Load Demo Session" handler. Loads
   `sample_session/*.mp4` and synthetic data from `demo-data.js`.
-- `addNewInstanceSmart()` — adds a new user instance to the focused view,
-  copying topology from cached/predicted/cursor.
+- `addNewInstanceSmart()` — adds a new user instance to the focused view.
+  Pose source priority: cached `lastUserPoints` → user instance on the current
+  frame → user instance on the nearest **prior** frame (so ctrl+i inherits a
+  labeled pose without first nudging a node) → nearest predicted instance →
+  default BFS spread layout at the cursor.
 - `setupInteraction()` — instantiates `InteractionManager` with all callback
   wiring (selection, drag, double-click, edit-group, etc.).
 - `setup3DViewport()` — instantiates `Viewport3D` and wires the
@@ -95,7 +98,12 @@ session graph that holds them.
 
 **Key exports.**
 - `Skeleton` — node names + edge list. Methods: `addNode`, `removeNode`,
-  `addEdge`, `removeEdge`, static `defaultMouse()`.
+  `addEdge`, `removeEdge`, `clone()` (deep copy with fresh nodes/edges arrays;
+  used to cache/seed a remembered skeleton without aliasing a live session),
+  `compatibilityKey()` (order-independent canonical string of node names + edges
+  as unordered name pairs; two skeletons share a key iff an instance copied from
+  one can be pasted onto the other — see instance copy/paste in `ui-wiring.js`),
+  static `defaultMouse()`.
 - `Camera` — intrinsics (`matrix`), distortion, rvec/tvec, image size.
   Cached getters `rotationMatrix`, `extrinsicMatrix`, `projectionMatrix`;
   methods `project`, `projectPoints` (ideal pinhole, no distortion),
@@ -435,6 +443,18 @@ Exports `state` (mutable shared bag) plus five live-binding controllers
   the keyboard handler so play/pause + stepping work without video).
 - `VIEW_NAMES` — `['back', 'mid', 'side', 'top']`.
 - `getActiveSession()`, `setActiveSession(session)`.
+- `rememberSkeleton(skeleton)` / `buildRememberedSkeleton()` — in-memory cache of
+  the last non-empty skeleton the user built or loaded, so newly loaded
+  videos/sessions inherit it instead of starting blank. `rememberSkeleton` stores
+  a `clone()` and ignores empty skeletons; `buildRememberedSkeleton` returns a
+  fresh clone (or null). Module-level state: carries across video loads within one
+  app session, resets on a full page reload (no persistence).
+- `setInstanceClipboard(data)` / `getInstanceClipboard()` — in-memory clipboard
+  for the instance copy/paste feature (Cmd/Ctrl+C / Cmd/Ctrl+V). Holds a copied
+  UserInstance as `{ compatKey, pointsByName: { name -> {point, occluded} },
+  sourceView, sourceFrame }`, so paste can remap points by node name onto a
+  matching skeleton. Same lifetime model as the remembered skeleton (app session
+  only). Filled/read by `copySelectedInstance`/`pasteInstance` in `ui-wiring.js`.
 
 **Imports from project modules.** None.
 
@@ -653,11 +673,20 @@ highlight when the selected tab currently lives inside it.
   `populateSkeletonTable`, `populateSessionAssignTable`,
   `populateUnassignedVideos`.
 - Detail dialogs: `showVideoFileDetail`, `showCameraDetail`.
-- Skeleton editor: `setupSkeletonEditing`, `parseSkeletonJSON`,
-  `exportSkeletonJSON`.
+- Skeleton editor: `setupSkeletonEditing`, `exportSkeletonJSON` (download wrapper
+  around `buildSkeletonJSON`). `parseSkeletonJSON` now lives in
+  `import-export/skeleton-json.js`.
 - Per-frame data: `updateInfoPanel`, `updateFrameInfo`,
   `updateTriangulationBadge`.
-- Session: `ensureSession`.
+- Session: `ensureSession` (seeds new sessions from `buildRememberedSkeleton`).
+
+**Skeleton persistence.** `populateSkeletonTable` calls `rememberSkeleton` on every
+refresh — the central point after any editor mutation (add/remove node or edge,
+Load Skeleton) or loaded project — so the current non-empty skeleton is cached for
+the app session. `ensureSession` (and the session-loader fresh-session sites) seed
+new sessions from `buildRememberedSkeleton`, so an imported/built skeleton carries
+over to subsequently loaded videos (no re-import). Cache is in-memory only (resets
+on reload); see `ui/app-state.js`.
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Session`.
@@ -665,8 +694,10 @@ highlight when the selected tab currently lives inside it.
 - `./overlays.js` — `REPROJECTION_COLOR`.
 - `./rendering.js` — `drawAllOverlays`, `updateFrameCounters`.
 - `./interaction.js` — `isInteractiveClickTarget`.
-- `./app-state.js` — `state`, `timeline`, `interactionManager`.
+- `./app-state.js` — `state`, `timeline`, `interactionManager`,
+  `rememberSkeleton`, `buildRememberedSkeleton`.
 - `../import-export/save-load.js` — `setStatus`, `markDirty`.
+- `../import-export/skeleton-json.js` — `buildSkeletonJSON`, `parseSkeletonJSON`.
 - `../loading/session-loader.js` — `handleLoadVideos`,
   `handleLoadCalibration`, `autoAssignVideosToCameras`,
   `createViewForVideoFile`, `rebuildVideoController`,
@@ -739,9 +770,18 @@ edit-group mode, keyboard shortcuts.
   `findNearestNode`, `findNearestUnlinkedNode`, `setAssignmentMode`,
   `setEditGroupMode`, `addToAssignmentSelection`,
   `getAssignmentSelectedIds`, `onMouseDown`/`onMouseMove`/`onMouseUp`/
-  `onMouseLeave`, `onKeyDown`, `_addNewInstance` (used by smart-add).
+  `onMouseLeave`, `onKeyDown`, `_addNewInstance` (used by smart-add; lays out a
+  new skeleton via an inline BFS fan-out from the highest-degree root, with a
+  vertical-line fallback when there are no edges).
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
+
+**Zoom-aware thresholds.** `_displayToVideo(state, viewName)` returns how many
+video pixels span one CSS pixel on screen given the view's current `zoom.scale`.
+Hit-test padding (`findNearestNode`/`findNearestUnlinkedNode`) and the drag-start
+deadzone (`_onDragMove`, ~3 CSS px) multiply by it so they stay constant on screen
+— previously the deadzone was a fixed 3 video px, which forced a large on-screen
+drag at high zoom and blocked fine node adjustments.
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Instance`.
@@ -1118,20 +1158,21 @@ reachable via Tracks ▸ Tracking Wizard).
 
 **Purpose.** SLEAP-like canvas timeline showing track occupancy bars,
 frame markers, and current-frame indicator. Click-to-seek, drag-scrub,
-shift-drag range select, pinch / Ctrl+wheel zoom, middle-click pan. Block 1 (Prompt 4)
+shift-drag range select, mouse-wheel / pinch zoom, middle-click pan. Block 1 (Prompt 4)
 adds tree-grouped per-camera labels, an inner scrollable track-area
 wrapper, and an empty-camera placeholder row per camera without tracks.
 
-**Trackpad / wheel semantics.** `_handleWheel` intercepts events where
-`e.ctrlKey === true` for zoom (covers macOS trackpad pinch — browsers
-translate pinch into `wheel` with `ctrlKey: true` — and explicit
-Ctrl/Cmd+wheel). It also intercepts horizontal-dominant scroll
-(`|deltaX| > |deltaY|`), panning `_scrollFrame` left/right (same axis as
-middle/right-drag pan and the scrollbar thumb) and calling
-`preventDefault()` only when the pan actually moved. Every other wheel
-event (vertical-dominant two-finger scroll, plain mouse wheel) returns
-without `preventDefault()`, so the event bubbles to `_trackScrollEl` and
-its `overflow-y: auto` produces native vertical scrolling. macOS's overlay
+**Trackpad / wheel semantics.** `_handleWheel` maps wheel input as:
+horizontal-dominant scroll (`|deltaX| > |deltaY|`) pans `_scrollFrame`
+left/right (same axis as middle/right-drag pan and the scrollbar thumb),
+`preventDefault()`-ing only when the pan actually moved; **Shift+wheel**
+scrolls the track rows vertically via `_trackScrollEl.scrollTop`; and a
+**plain wheel** — or Ctrl/Cmd+wheel, or trackpad pinch (browsers translate
+pinch into `wheel` with `ctrlKey: true`) — zooms the time axis anchored on
+the frame under the cursor (scroll up / pinch-out = zoom in, down = out).
+The plain-wheel zoom is the requested mouse behavior; row scrolling moved to
+Shift+wheel so it isn't lost. `_trackScrollEl`'s `overflow-y: auto` still
+provides native scrolling via the scrollbar thumb. macOS's overlay
 scrollbar is defeated via `-webkit-appearance: none` on the
 `.timeline-track-area::-webkit-scrollbar` rule in `styles.css` so the
 bar is always visible (not just on idle-fade) while the content
@@ -1486,6 +1527,20 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 - Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
   Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
   `showGroupContextMenu`, `hideGroupContextMenu`.
+- Instance copy/paste (`copySelectedInstance` / `pasteInstance`, wired via
+  `setHandler` to catalog ids `copyInstance` (Mod+C) / `pasteInstance` (Mod+V)).
+  Copy snapshots the selected UserInstance in the focused view (a grouped
+  selection's instance in `lastInteractedView`, or `selectedUnlinked`) into the
+  app-state instance clipboard as a node-name→point map plus the source
+  skeleton's `compatibilityKey()`. Paste validates the target session skeleton's
+  key matches, remaps the points into the target node order **by name** (so node
+  ordering may differ across sessions), and reuses
+  `interactionManager._addNewInstance(points)` to drop a `user` instance into the
+  focused video at the current frame at the **exact copied coordinates** (allowed
+  to land out-of-bounds when video sizes differ). Status strip reports
+  `UserInstance copied/pasted in Video <v> Frame <n>` or
+  `Paste not supported for different skeletons!`. Occlusion flags are not carried
+  (coordinates + per-node visibility are).
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
 - Toggles: `toggleInfoPanel`, `updateInfoPanelToggleBtn`,
@@ -1694,6 +1749,20 @@ filesystem enumeration, decoder rebuild.
   `import-export/import-track-resolve.js` (moved there so it's unit-testable;
   session-loader pulls app.js and can't be bridged into the test runner).
 
+Fresh-session creation sites (video-only, calibration-only, multi-cam directory)
+seed the skeleton from `buildRememberedSkeleton()` (falling back to an empty
+skeleton), so a skeleton built/imported earlier in the app session carries over to
+newly loaded videos. SLP/project load paths keep parsing their own embedded
+skeleton via `parseSkeletonJSON`.
+
+`handleLoadVideos` only uses `paneManager.addAllViewsAsGrid()` on the **first**
+load (nothing docked yet); subsequent loads add just the newly created views via
+the dedup-aware `paneManager.addVideoPanel(name, { direction: 'right' })`. This
+avoids re-docking already-loaded videos as duplicate (non-interactable mirror)
+panels — `addAllViewsAsGrid` intentionally bypasses the duplicate guard, so
+calling it on every load duplicated prior videos and let the newest panel steal
+each `view.canvas` reference.
+
 **Per-camera `.slp` selection.** `handleLoadSessionFolderPerCamera` loads only
 **one** `.slp` per camera directory — the highest `_vN` version (first-wins on a
 tie / when unversioned). A camera dir accumulates successive exports
@@ -1703,11 +1772,12 @@ instances into the same (frame, camera) slot — the Instances tab then showed t
 same tracks repeated N times. Skipped files are logged.
 
 **Imports from project modules.**
-- `../ui/app-state.js`, `../pose/pose-data.js`, `./video.js`,
-  `../import-export/file-io.js`, `../pose/triangulation.js`,
+- `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
+  `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`,
   `../import-export/save-load.js`, `../ui/rendering.js`,
-  `../ui/info-panel.js`, `../pose/initialization.js`,
-  `../ui/sessions-panes.js`, `../ui/ui-wiring.js`.
+  `../ui/info-panel.js` (`updateInfoPanel`),
+  `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
+  `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`.
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `ui/info-panel.js`,
@@ -1791,6 +1861,12 @@ tolerance (half a frame period, `0.5/_fps`) so high-fps recordings
 (e.g. 400 fps) step every frame instead of freezing under a fixed
 constant (issue #89).
 
+**Zoom/pan resize anchoring.** Zoom pan offset (`view.zoom.offsetX/offsetY`) is
+screen-space px relative to the wrapper's base display size, which `applyZoom`
+records as `zoom.baseW/baseH`. When a cell is resized, `reapplyZoom` rescales the
+offset by the base-size ratio (`offset *= newBase/oldBase`) before re-clamping, so
+a zoomed-in image keeps the same region centered instead of jumping.
+
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
@@ -1819,6 +1895,28 @@ keyboard transport.
 ---
 
 ## import-export/
+
+### import-export/skeleton-json.js
+
+**Purpose.** Pure, DOM-free (de)serialization for standalone `.skeleton.json`
+files in the SLEAP jsonpickle node-link format. Split out of `ui/info-panel.js`
+(which keeps only the download / file-picker wrappers) so the round-trip logic is
+unit-testable without a browser.
+
+**Key exports.**
+- `buildSkeletonJSON(skeleton)` — returns the skeleton-JSON object (no I/O). Emits
+  each node's full `py/object` (carrying its name) exactly once at first
+  occurrence: in `links` if the node has an edge, otherwise in the `nodes` array.
+  This fixes the prior bug where **edgeless nodes** (typically the trailing ones)
+  lost their names on re-import and came back as `node_<i>`.
+- `parseSkeletonJSON(jsonText)` — parses jsonpickle Format 1, plus the simpler
+  `{skeleton:{…}}` and direct node/edge-array formats; returns a `Skeleton` or
+  null.
+
+**Imports from project modules.** `../pose/pose-data.js` — `Skeleton`.
+
+**Imported by.** `ui/info-panel.js`, `loading/session-loader.js`. Tested by
+`tests/test-skeleton-json.js`.
 
 ### import-export/file-io.js
 

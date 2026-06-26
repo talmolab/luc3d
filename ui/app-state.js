@@ -80,6 +80,44 @@ export function setActiveSession(session) {
     state.session = session;
 }
 
+// --- Remembered skeleton (current app session only, no persistence) ----------
+// Holds a clone of the last non-empty skeleton the user built or loaded, so a
+// newly loaded video/session can inherit it instead of starting blank. Lives in
+// module memory: it carries across video loads within one app session and resets
+// on a full page reload (by design).
+let _rememberedSkeleton = null;
+
+// Snapshot `skeleton` as the remembered default. Ignores null/empty skeletons so
+// that viewing a blank session never clobbers a previously remembered one.
+export function rememberSkeleton(skeleton) {
+    if (skeleton && skeleton.nodes && skeleton.nodes.length > 0) {
+        _rememberedSkeleton = skeleton.clone();
+    }
+}
+
+// A fresh clone of the remembered skeleton (independent arrays so each session
+// owns its own), or null if nothing has been remembered yet.
+export function buildRememberedSkeleton() {
+    return _rememberedSkeleton ? _rememberedSkeleton.clone() : null;
+}
+
+// --- Instance clipboard (Cmd/Ctrl+C / Cmd/Ctrl+V) ----------------------------
+// Holds a single copied UserInstance as a skeleton-agnostic snapshot:
+//   { compatKey, pointsByName: { name -> {point:[x,y]|null, occluded} },
+//     sourceView, sourceFrame }
+// Lives in module memory so copy/paste works across frames, videos, and sessions
+// within one app session (and resets on a full page reload). `compatKey` is the
+// source skeleton's compatibilityKey() so paste can require a matching skeleton.
+let _instanceClipboard = null;
+
+export function setInstanceClipboard(data) {
+    _instanceClipboard = data;
+}
+
+export function getInstanceClipboard() {
+    return _instanceClipboard;
+}
+
 // Debug accessor — DevTools console can inspect via `__lucid.state` etc.
 // Module-scoped bindings aren't reachable from the console after the Pass 2 ESM split.
 if (typeof window !== 'undefined') {
