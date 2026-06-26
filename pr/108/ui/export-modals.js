@@ -1542,6 +1542,7 @@ export function showSlpExportPerSessionModal() {
             videoFile: vf,
             outputName: outputName,
             dirName: state.cameraDirMap[camName] || camName,
+            download: true,   // per-row Download toggle; defaults ON
         });
     }
 
@@ -1560,6 +1561,7 @@ export function showSlpExportPerSessionModal() {
         var en = entries[ri];
         rowsHtml +=
             '<tr>' +
+            '<td class="slp-ps-dl-cell"><input type="checkbox" class="slp-ps-dl" data-idx="' + ri + '" checked></td>' +
             '<td>' + en.camName + '</td>' +
             '<td class="slp-ps-dir" title="' + en.dirName + '">' + en.dirName + '/</td>' +
             '<td><input type="text" class="slp-ps-filename" data-idx="' + ri + '" value="' + en.outputName + '"></td>' +
@@ -1572,7 +1574,7 @@ export function showSlpExportPerSessionModal() {
         + 'into each camera\'s associated directory inside a folder you choose.</div>' +
         '<div class="slp-export-table-container">' +
         '<table class="data-table slp-export-table">' +
-        '<thead><tr><th>Camera</th><th>Directory</th><th>Output Filename</th></tr></thead>' +
+        '<thead><tr><th class="slp-ps-dl-cell">Download</th><th>Camera</th><th>Directory</th><th>Output Filename</th></tr></thead>' +
         '<tbody>' + rowsHtml + '</tbody>' +
         '</table>' +
         '</div>' +
@@ -1603,6 +1605,15 @@ export function showSlpExportPerSessionModal() {
         input.addEventListener('change', function () {
             var idx = parseInt(input.getAttribute('data-idx'));
             entries[idx].outputName = input.value.trim() || entries[idx].outputName;
+        });
+    });
+
+    // Per-row Download toggle — only checked rows are exported.
+    modal.querySelectorAll('.slp-ps-dl').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+            var idx = parseInt(cb.getAttribute('data-idx'));
+            entries[idx].download = cb.checked;
+            clearError();
         });
     });
 
@@ -1642,6 +1653,12 @@ export function showSlpExportPerSessionModal() {
         clearError();
         if (!window.SleapIO) { showError('sleap-io.js not loaded yet'); return; }
 
+        var selected = entries.filter(function (e) { return e.download; });
+        if (selected.length === 0) {
+            showError('No views selected to download — check at least one row.');
+            return;
+        }
+
         var includePred = document.getElementById('slpPsIncPred').checked;
         var includeReproj = reprojCheckbox.checked;
         var activeToggle = reprojToggle.querySelector('.slp-toggle-active');
@@ -1674,9 +1691,9 @@ export function showSlpExportPerSessionModal() {
         var origText = exportBtn.textContent;
         var exported = 0;
         try {
-            for (var k = 0; k < entries.length; k++) {
-                var en2 = entries[k];
-                exportBtn.textContent = 'Exporting... (' + (k + 1) + '/' + entries.length + ')';
+            for (var k = 0; k < selected.length; k++) {
+                var en2 = selected[k];
+                exportBtn.textContent = 'Exporting... (' + (k + 1) + '/' + selected.length + ')';
                 var slpFilename = en2.outputName;
                 if (!slpFilename.endsWith('.slp')) slpFilename += '.slp';
 
