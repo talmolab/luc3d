@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession, hasRealVideo } from './app-state.js';
+         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -1169,6 +1169,84 @@ function toggleNoVideoPlayback() {
     startNoVideoPlayback();
 }
 
+// --- Instance copy / paste (Cmd/Ctrl+C / Cmd/Ctrl+V) -------------------------
+// Copy the selected UserInstance in the focused view to the in-app clipboard as
+// a skeleton-agnostic, name-keyed snapshot. Works on either a grouped selection
+// (the instance in the last-interacted view) or a selected unlinked instance.
+function copySelectedInstance() {
+    if (!interactionManager || !state.session || !state.session.skeleton) {
+        setStatus('No instance selected to copy', 'warning');
+        return;
+    }
+    var inst = null;
+    var viewName = null;
+    if (interactionManager.selectedUnlinked) {
+        inst = interactionManager.selectedUnlinked.instance;
+        viewName = interactionManager.selectedUnlinked.cameraName;
+    } else if (interactionManager.selectedInstanceGroup) {
+        var grp = interactionManager.selectedInstanceGroup;
+        viewName = interactionManager.lastInteractedView;
+        inst = viewName ? grp.getInstance(viewName) : null;
+        if (!inst) {
+            // Focused view has no instance in this group — fall back to any view.
+            var cams = grp.cameraNames;
+            if (cams.length) { viewName = cams[0]; inst = grp.getInstance(viewName); }
+        }
+    }
+    if (!inst || !viewName) {
+        setStatus('No instance selected to copy', 'warning');
+        return;
+    }
+
+    var skel = state.session.skeleton;
+    var pointsByName = {};
+    for (var i = 0; i < skel.nodes.length; i++) {
+        var p = inst.points[i];
+        pointsByName[skel.nodes[i]] = {
+            point: p ? [p[0], p[1]] : null,
+            occluded: !!(inst.occluded && inst.occluded[i])
+        };
+    }
+    setInstanceClipboard({
+        compatKey: skel.compatibilityKey(),
+        pointsByName: pointsByName,
+        sourceView: viewName,
+        sourceFrame: state.currentFrame
+    });
+    setStatus('UserInstance copied in Video ' + viewName + ' Frame ' + (state.currentFrame + 1), 'success');
+}
+
+// Paste the clipboard instance into the focused video at the current frame,
+// reusing the exact copied coordinates (may land out-of-bounds if the target
+// video has different dimensions). Only allowed when the target session's
+// skeleton matches the copied one (same node names + edges, any ordering);
+// points are remapped into the target skeleton's node order by name.
+function pasteInstance() {
+    if (!interactionManager || !state.session || !state.session.skeleton) return;
+    var clip = getInstanceClipboard();
+    if (!clip) { setStatus('Nothing to paste', 'warning'); return; }
+
+    var skel = state.session.skeleton;
+    if (skel.compatibilityKey() !== clip.compatKey) {
+        setStatus('Paste not supported for different skeletons!', 'error');
+        return;
+    }
+
+    var targetView = interactionManager.lastInteractedView;
+    if (!targetView && state.views && state.views.length) targetView = state.views[0].name;
+    if (!targetView) { setStatus('No video to paste into', 'warning'); return; }
+
+    var points = skel.nodes.map(function (name) {
+        var entry = clip.pointsByName[name];
+        return (entry && entry.point) ? [entry.point[0], entry.point[1]] : null;
+    });
+
+    // Reuse the smart-add path: targets lastInteractedView at the current frame,
+    // creates a 'user' instance, fires onUserInstanceCreated, and redraws.
+    interactionManager._addNewInstance(points);
+    setStatus('UserInstance pasted in Video ' + targetView + ' Frame ' + (state.currentFrame + 1), 'success');
+}
+
 export function setupUI() {
     // Transport controls
     document.getElementById('btnFirst').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(0); });
@@ -1484,6 +1562,8 @@ export function setupUI() {
     setHandler('openTrackingWizard', function () { showSettingsModal('wizard'); });
     setHandler('loadSession', function () { loadSingleSessionFromCache(); });
     setHandler('addInstanceSmart', function () { addNewInstanceSmart(); });
+    setHandler('copyInstance', copySelectedInstance);
+    setHandler('pasteInstance', pasteInstance);
     setHandler('trackFrame', function () { trackCurrentFrame(); });
     setHandler('trackAll', function () { trackAll(); });
     setHandler('findMatch', function () {

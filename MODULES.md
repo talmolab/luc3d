@@ -100,6 +100,9 @@ session graph that holds them.
 - `Skeleton` — node names + edge list. Methods: `addNode`, `removeNode`,
   `addEdge`, `removeEdge`, `clone()` (deep copy with fresh nodes/edges arrays;
   used to cache/seed a remembered skeleton without aliasing a live session),
+  `compatibilityKey()` (order-independent canonical string of node names + edges
+  as unordered name pairs; two skeletons share a key iff an instance copied from
+  one can be pasted onto the other — see instance copy/paste in `ui-wiring.js`),
   static `defaultMouse()`.
 - `Camera` — intrinsics (`matrix`), distortion, rvec/tvec, image size.
   Cached getters `rotationMatrix`, `extrinsicMatrix`, `projectionMatrix`;
@@ -446,6 +449,12 @@ Exports `state` (mutable shared bag) plus five live-binding controllers
   a `clone()` and ignores empty skeletons; `buildRememberedSkeleton` returns a
   fresh clone (or null). Module-level state: carries across video loads within one
   app session, resets on a full page reload (no persistence).
+- `setInstanceClipboard(data)` / `getInstanceClipboard()` — in-memory clipboard
+  for the instance copy/paste feature (Cmd/Ctrl+C / Cmd/Ctrl+V). Holds a copied
+  UserInstance as `{ compatKey, pointsByName: { name -> {point, occluded} },
+  sourceView, sourceFrame }`, so paste can remap points by node name onto a
+  matching skeleton. Same lifetime model as the remembered skeleton (app session
+  only). Filled/read by `copySelectedInstance`/`pasteInstance` in `ui-wiring.js`.
 
 **Imports from project modules.** None.
 
@@ -1473,6 +1482,20 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 - Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
   Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
   `showGroupContextMenu`, `hideGroupContextMenu`.
+- Instance copy/paste (`copySelectedInstance` / `pasteInstance`, wired via
+  `setHandler` to catalog ids `copyInstance` (Mod+C) / `pasteInstance` (Mod+V)).
+  Copy snapshots the selected UserInstance in the focused view (a grouped
+  selection's instance in `lastInteractedView`, or `selectedUnlinked`) into the
+  app-state instance clipboard as a node-name→point map plus the source
+  skeleton's `compatibilityKey()`. Paste validates the target session skeleton's
+  key matches, remaps the points into the target node order **by name** (so node
+  ordering may differ across sessions), and reuses
+  `interactionManager._addNewInstance(points)` to drop a `user` instance into the
+  focused video at the current frame at the **exact copied coordinates** (allowed
+  to land out-of-bounds when video sizes differ). Status strip reports
+  `UserInstance copied/pasted in Video <v> Frame <n>` or
+  `Paste not supported for different skeletons!`. Occlusion flags are not carried
+  (coordinates + per-node visibility are).
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
 - Toggles: `toggleInfoPanel`, `updateInfoPanelToggleBtn`,
