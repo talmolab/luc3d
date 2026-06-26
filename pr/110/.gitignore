@@ -45,10 +45,3 @@ lib/yaml/
 
 # Bench driver node deps (not part of the served app)
 scripts/bench/node_modules/
-
-# Playwright e2e (node deps + run artifacts; the specs/config ARE committed)
-node_modules/
-/test-results/
-/playwright-report/
-/blob-report/
-/.playwright/
