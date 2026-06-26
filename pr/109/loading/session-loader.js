@@ -308,14 +308,14 @@ export async function handleLoadVideos() {
         }
 
         // Create views for assigned videos that don't have views yet
-        var newViewsCreated = false;
+        var newViewNames = [];
         for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
             var vf2 = state.videoFiles[vi2];
             if (vf2.assignedCamera) {
                 var hasView = state.views.some(function (v) { return v.name === vf2.assignedCamera; });
                 if (!hasView) {
                     createViewForVideoFile(vf2);
-                    newViewsCreated = true;
+                    newViewNames.push(vf2.assignedCamera);
                 }
             }
         }
@@ -323,10 +323,25 @@ export async function handleLoadVideos() {
         // Update total frames before rebuilding controller so seekToFrame works correctly
         updateTotalFrames();
 
-        if (newViewsCreated) {
+        if (newViewNames.length > 0) {
             populateViewStrip();
             populateSessionStrip();
-            paneManager.addAllViewsAsGrid();
+            // First load (nothing docked yet): lay out a fresh grid of all views.
+            // Subsequent load: panels for previously-loaded videos already exist.
+            // Re-running addAllViewsAsGrid would add a SECOND, non-interactable
+            // panel for each existing view (it deliberately bypasses the
+            // duplicate guard for grid init), and that new panel would steal the
+            // `view.canvas` reference — leaving the original panel as a
+            // non-interactable mirror. Add only the NEW views via the
+            // dedup-aware addVideoPanel so existing videos aren't duplicated.
+            var alreadyDocked = paneManager.dockedViews && paneManager.dockedViews.size > 0;
+            if (alreadyDocked) {
+                for (var nv = 0; nv < newViewNames.length; nv++) {
+                    paneManager.addVideoPanel(newViewNames[nv], { direction: 'right' });
+                }
+            } else {
+                paneManager.addAllViewsAsGrid();
+            }
             rebuildVideoController();
             fitCanvasesToCells();
         }
@@ -2068,24 +2083,36 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         for (var cdi = 0; cdi < matchedCameraDirs.length; cdi++) {
             var camDir = matchedCameraDirs[cdi];
             if (camDir.slps.length > 0) {
+                // Pick exactly ONE .slp per camera — the highest `_vN` version
+                // (first-wins on a tie / when none are versioned). A camera dir
+                // accumulates successive exports (e.g. `<stem>_v1.slp`,
+                // `<stem>_v2.slp`, …); only the latest reflects current state.
+                // Parsing every file here stacked all versions' instances into
+                // the same (frame, camera) slot — the same two tracks repeated N
+                // times in the Instances tab.
                 var bestVersion = -1;
+                var bestSlp = camDir.slps[0];
                 for (var sli = 0; sli < camDir.slps.length; sli++) {
                     var slStem = camDir.slps[sli].name.replace(/\.[^.]+$/, '');
                     var slVer = slStem.match(/_(?:3D_)?v(\d+)$/);
                     var ver = slVer ? parseInt(slVer[1]) : 0;
-                    if (ver > bestVersion) bestVersion = ver;
+                    if (ver > bestVersion) { bestVersion = ver; bestSlp = camDir.slps[sli]; }
                 }
                 slpVersionsLoaded[camDir.camName] = bestVersion;
-                for (var sli2 = 0; sli2 < camDir.slps.length; sli2++) {
-                    if (shouldUseLazyH5(camDir.slps[sli2])) {
-                        lazyJobs.push({ camName: camDir.camName, file: camDir.slps[sli2] });
-                    } else {
-                        parseJobs.push({
-                            camName: camDir.camName,
-                            file: camDir.slps[sli2],
-                            promise: parseSlpH5(camDir.slps[sli2]).catch(function (e) { return null; }),
-                        });
-                    }
+                if (camDir.slps.length > 1) {
+                    console.log('[session-folder] ' + camDir.camName + ': '
+                        + camDir.slps.length + ' .slp files found — loading only "'
+                        + bestSlp.name + '" (highest version), skipping '
+                        + (camDir.slps.length - 1) + ' older file(s).');
+                }
+                if (shouldUseLazyH5(bestSlp)) {
+                    lazyJobs.push({ camName: camDir.camName, file: bestSlp });
+                } else {
+                    parseJobs.push({
+                        camName: camDir.camName,
+                        file: bestSlp,
+                        promise: parseSlpH5(bestSlp).catch(function (e) { return null; }),
+                    });
                 }
             }
         }

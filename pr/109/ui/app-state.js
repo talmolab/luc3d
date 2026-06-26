@@ -101,6 +101,23 @@ export function buildRememberedSkeleton() {
     return _rememberedSkeleton ? _rememberedSkeleton.clone() : null;
 }
 
+// --- Instance clipboard (Cmd/Ctrl+C / Cmd/Ctrl+V) ----------------------------
+// Holds a single copied UserInstance as a skeleton-agnostic snapshot:
+//   { compatKey, pointsByName: { name -> {point:[x,y]|null, occluded} },
+//     sourceView, sourceFrame }
+// Lives in module memory so copy/paste works across frames, videos, and sessions
+// within one app session (and resets on a full page reload). `compatKey` is the
+// source skeleton's compatibilityKey() so paste can require a matching skeleton.
+let _instanceClipboard = null;
+
+export function setInstanceClipboard(data) {
+    _instanceClipboard = data;
+}
+
+export function getInstanceClipboard() {
+    return _instanceClipboard;
+}
+
 // Debug accessor — DevTools console can inspect via `__lucid.state` etc.
 // Module-scoped bindings aren't reachable from the console after the Pass 2 ESM split.
 if (typeof window !== 'undefined') {
