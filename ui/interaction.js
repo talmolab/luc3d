@@ -1965,76 +1965,20 @@ export class InteractionManager {
         if (initialPoints && initialPoints.length === numNodes) {
             points = initialPoints;
         } else {
-            // Topology-based layout using skeleton edges
-            // Center at cursor position if available and within view bounds, else view center
+            // Topology-aware default layout (see Skeleton.defaultLayout).
+            // Center at cursor position if available and within view bounds, else view center.
             let cx = vw / 2, cy = vh / 2;
             if (cursorPos && cursorPos[0] >= 0 && cursorPos[0] <= vw && cursorPos[1] >= 0 && cursorPos[1] <= vh) {
                 cx = cursorPos[0];
                 cy = cursorPos[1];
             }
-            const spacing = Math.min(vw, vh) * 0.04;
-            points = new Array(numNodes);
-
-            if (skeleton && skeleton.edges && skeleton.edges.length > 0 && numNodes > 0) {
-                // Build adjacency list
-                const adj = new Array(numNodes);
-                const degree = new Array(numNodes).fill(0);
-                for (let i = 0; i < numNodes; i++) adj[i] = [];
-                for (const edge of skeleton.edges) {
-                    adj[edge[0]].push(edge[1]);
-                    adj[edge[1]].push(edge[0]);
-                    degree[edge[0]]++;
-                    degree[edge[1]]++;
-                }
-
-                // Find root: node with most connections
-                let root = 0;
-                for (let i = 1; i < numNodes; i++) {
-                    if (degree[i] > degree[root]) root = i;
-                }
-
-                // BFS from root, placing children at evenly distributed angles
-                const visited = new Array(numNodes).fill(false);
-                const queue = [root];
-                visited[root] = true;
-                points[root] = [cx, cy];
-                let parentAngle = new Array(numNodes).fill(-Math.PI / 2); // default upward
-
-                while (queue.length > 0) {
-                    const node = queue.shift();
-                    const children = adj[node].filter(c => !visited[c]);
-                    const baseAngle = parentAngle[node];
-                    const spread = Math.PI; // spread children over 180 degrees
-                    for (let i = 0; i < children.length; i++) {
-                        const child = children[i];
-                        visited[child] = true;
-                        let angle;
-                        if (children.length === 1) {
-                            angle = baseAngle;
-                        } else {
-                            angle = baseAngle - spread / 2 + (spread * i) / (children.length - 1);
-                        }
-                        points[child] = [
-                            points[node][0] + Math.cos(angle) * spacing * 2,
-                            points[node][1] + Math.sin(angle) * spacing * 2
-                        ];
-                        parentAngle[child] = angle;
-                        queue.push(child);
-                    }
-                }
-
-                // Handle any disconnected nodes
-                for (let i = 0; i < numNodes; i++) {
-                    if (!visited[i]) {
-                        const offset = i - (numNodes - 1) / 2;
-                        points[i] = [cx + offset * spacing * 0.3, cy + offset * spacing];
-                    }
-                }
+            const step = Math.min(vw, vh) * 0.03;
+            if (skeleton && numNodes > 0) {
+                points = skeleton.defaultLayout(cx, cy, step);
             } else {
-                // Fallback: simple vertical line
+                points = new Array(numNodes);
                 for (let n = 0; n < numNodes; n++) {
-                    const offset = n - (numNodes - 1) / 2;
-                    points[n] = [cx + offset * spacing * 0.3, cy + offset * spacing];
+                    points[n] = [cx, cy + (n - (numNodes - 1) / 2) * step];
                 }
             }
         }

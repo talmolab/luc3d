@@ -30,8 +30,11 @@ the old `app.js` entry point.
 - `hideWelcomeOverlay()` — hides the dock empty-state overlay.
 - `loadDemoSession()` — File menu "Load Demo Session" handler. Loads
   `sample_session/*.mp4` and synthetic data from `demo-data.js`.
-- `addNewInstanceSmart()` — adds a new user instance to the focused view,
-  copying topology from cached/predicted/cursor.
+- `addNewInstanceSmart()` — adds a new user instance to the focused view.
+  Pose source priority: cached `lastUserPoints` → user instance on the current
+  frame → user instance on the nearest **prior** frame (so ctrl+i inherits a
+  labeled pose without first nudging a node) → nearest predicted instance →
+  `Skeleton.defaultLayout` topology layout at the cursor.
 - `setupInteraction()` — instantiates `InteractionManager` with all callback
   wiring (selection, drag, double-click, edit-group, etc.).
 - `setup3DViewport()` — instantiates `Viewport3D` and wires the
@@ -95,7 +98,11 @@ session graph that holds them.
 
 **Key exports.**
 - `Skeleton` — node names + edge list. Methods: `addNode`, `removeNode`,
-  `addEdge`, `removeEdge`, static `defaultMouse()`.
+  `addEdge`, `removeEdge`, `clone()` (deep copy with fresh nodes/edges arrays;
+  used to cache/seed a remembered skeleton without aliasing a live session),
+  `defaultLayout(cx, cy, step)` (pure topology-based 2D node placement —
+  longest-path spine laid straight with branches fanning off, centered at
+  `(cx,cy)`; used for smart-add's default skeleton), static `defaultMouse()`.
 - `Camera` — intrinsics (`matrix`), distortion, rvec/tvec, image size.
   Cached getters `rotationMatrix`, `extrinsicMatrix`, `projectionMatrix`;
   methods `project`, `projectPoints` (ideal pinhole, no distortion),
@@ -435,6 +442,12 @@ Exports `state` (mutable shared bag) plus five live-binding controllers
   the keyboard handler so play/pause + stepping work without video).
 - `VIEW_NAMES` — `['back', 'mid', 'side', 'top']`.
 - `getActiveSession()`, `setActiveSession(session)`.
+- `rememberSkeleton(skeleton)` / `buildRememberedSkeleton()` — in-memory cache of
+  the last non-empty skeleton the user built or loaded, so newly loaded
+  videos/sessions inherit it instead of starting blank. `rememberSkeleton` stores
+  a `clone()` and ignores empty skeletons; `buildRememberedSkeleton` returns a
+  fresh clone (or null). Module-level state: carries across video loads within one
+  app session, resets on a full page reload (no persistence).
 
 **Imports from project modules.** None.
 
@@ -608,11 +621,20 @@ repaints at the user's current height instead of growing to fit all rows.
   `populateSkeletonTable`, `populateSessionAssignTable`,
   `populateUnassignedVideos`.
 - Detail dialogs: `showVideoFileDetail`, `showCameraDetail`.
-- Skeleton editor: `setupSkeletonEditing`, `parseSkeletonJSON`,
-  `exportSkeletonJSON`.
+- Skeleton editor: `setupSkeletonEditing`, `exportSkeletonJSON` (download wrapper
+  around `buildSkeletonJSON`). `parseSkeletonJSON` now lives in
+  `import-export/skeleton-json.js`.
 - Per-frame data: `updateInfoPanel`, `updateFrameInfo`,
   `updateTriangulationBadge`.
-- Session: `ensureSession`.
+- Session: `ensureSession` (seeds new sessions from `buildRememberedSkeleton`).
+
+**Skeleton persistence.** `populateSkeletonTable` calls `rememberSkeleton` on every
+refresh — the central point after any editor mutation (add/remove node or edge,
+Load Skeleton) or loaded project — so the current non-empty skeleton is cached for
+the app session. `ensureSession` (and the session-loader fresh-session sites) seed
+new sessions from `buildRememberedSkeleton`, so an imported/built skeleton carries
+over to subsequently loaded videos (no re-import). Cache is in-memory only (resets
+on reload); see `ui/app-state.js`.
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Session`.
@@ -620,8 +642,10 @@ repaints at the user's current height instead of growing to fit all rows.
 - `./overlays.js` — `REPROJECTION_COLOR`.
 - `./rendering.js` — `drawAllOverlays`, `updateFrameCounters`.
 - `./interaction.js` — `isInteractiveClickTarget`.
-- `./app-state.js` — `state`, `timeline`, `interactionManager`.
+- `./app-state.js` — `state`, `timeline`, `interactionManager`,
+  `rememberSkeleton`, `buildRememberedSkeleton`.
 - `../import-export/save-load.js` — `setStatus`, `markDirty`.
+- `../import-export/skeleton-json.js` — `buildSkeletonJSON`, `parseSkeletonJSON`.
 - `../loading/session-loader.js` — `handleLoadVideos`,
   `handleLoadCalibration`, `autoAssignVideosToCameras`,
   `createViewForVideoFile`, `rebuildVideoController`,
@@ -694,7 +718,8 @@ edit-group mode, keyboard shortcuts.
   `findNearestNode`, `findNearestUnlinkedNode`, `setAssignmentMode`,
   `setEditGroupMode`, `addToAssignmentSelection`,
   `getAssignmentSelectedIds`, `onMouseDown`/`onMouseMove`/`onMouseUp`/
-  `onMouseLeave`, `onKeyDown`, `_addNewInstance` (used by smart-add).
+  `onMouseLeave`, `onKeyDown`, `_addNewInstance` (used by smart-add; delegates
+  default node placement to `Skeleton.defaultLayout`).
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
@@ -1649,12 +1674,19 @@ filesystem enumeration, decoder rebuild.
   `import-export/import-track-resolve.js` (moved there so it's unit-testable;
   session-loader pulls app.js and can't be bridged into the test runner).
 
+Fresh-session creation sites (video-only, calibration-only, multi-cam directory)
+seed the skeleton from `buildRememberedSkeleton()` (falling back to an empty
+skeleton), so a skeleton built/imported earlier in the app session carries over to
+newly loaded videos. SLP/project load paths keep parsing their own embedded
+skeleton via `parseSkeletonJSON`.
+
 **Imports from project modules.**
-- `../ui/app-state.js`, `../pose/pose-data.js`, `./video.js`,
-  `../import-export/file-io.js`, `../pose/triangulation.js`,
+- `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
+  `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`,
   `../import-export/save-load.js`, `../ui/rendering.js`,
-  `../ui/info-panel.js`, `../pose/initialization.js`,
-  `../ui/sessions-panes.js`, `../ui/ui-wiring.js`.
+  `../ui/info-panel.js` (`updateInfoPanel`),
+  `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
+  `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`.
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `ui/info-panel.js`,
@@ -1766,6 +1798,28 @@ keyboard transport.
 ---
 
 ## import-export/
+
+### import-export/skeleton-json.js
+
+**Purpose.** Pure, DOM-free (de)serialization for standalone `.skeleton.json`
+files in the SLEAP jsonpickle node-link format. Split out of `ui/info-panel.js`
+(which keeps only the download / file-picker wrappers) so the round-trip logic is
+unit-testable without a browser.
+
+**Key exports.**
+- `buildSkeletonJSON(skeleton)` — returns the skeleton-JSON object (no I/O). Emits
+  each node's full `py/object` (carrying its name) exactly once at first
+  occurrence: in `links` if the node has an edge, otherwise in the `nodes` array.
+  This fixes the prior bug where **edgeless nodes** (typically the trailing ones)
+  lost their names on re-import and came back as `node_<i>`.
+- `parseSkeletonJSON(jsonText)` — parses jsonpickle Format 1, plus the simpler
+  `{skeleton:{…}}` and direct node/edge-array formats; returns a `Skeleton` or
+  null.
+
+**Imports from project modules.** `../pose/pose-data.js` — `Skeleton`.
+
+**Imported by.** `ui/info-panel.js`, `loading/session-loader.js`. Tested by
+`tests/test-skeleton-json.js`.
 
 ### import-export/file-io.js
 

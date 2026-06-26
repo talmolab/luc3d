@@ -28,7 +28,7 @@ import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, ev
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
-         setupPanelTabs, setupSkeletonEditing, parseSkeletonJSON, exportSkeletonJSON,
+         setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track

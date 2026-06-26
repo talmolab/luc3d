@@ -20,7 +20,7 @@
 
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
-    setVideoController, VIEW_NAMES,
+    setVideoController, VIEW_NAMES, buildRememberedSkeleton,
 } from '../ui/app-state.js';
 
 import {
@@ -50,7 +50,8 @@ import {
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
 import { drawAllOverlays } from '../ui/rendering.js';
-import { updateInfoPanel, parseSkeletonJSON } from '../ui/info-panel.js';
+import { updateInfoPanel } from '../ui/info-panel.js';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
@@ -106,7 +107,7 @@ export async function handleLoadCalibration() {
         if (state.session) {
             state.session.cameras = cameras;
         } else {
-            const skeleton = new Skeleton('skeleton', [], []);
+            const skeleton = buildRememberedSkeleton() || new Skeleton('skeleton', [], []);
             var sessionName = calibResult.fileName
                 ? calibResult.fileName.replace(/\.[^.]+$/, '')
                 : ('Session ' + (state.sessions.length + 1));
@@ -277,7 +278,7 @@ export async function handleLoadVideos() {
                 return new Camera(vf.name, [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
                     [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
             });
-            var skeleton = new Skeleton('skeleton', [], []);
+            var skeleton = buildRememberedSkeleton() || new Skeleton('skeleton', [], []);
             state.session = new Session(cameras, skeleton, ['track_0']);
             if (state.sessions.indexOf(state.session) < 0) {
                 state.sessions.push(state.session);
@@ -2220,7 +2221,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
                 if (!state.session) {
                     var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
-                    state.session = new Session(cameras.length > 0 ? cameras : [], new Skeleton('skeleton', [], []), ['track_0'], sessionName);
+                    state.session = new Session(cameras.length > 0 ? cameras : [], buildRememberedSkeleton() || new Skeleton('skeleton', [], []), ['track_0'], sessionName);
                     if (state.sessions.indexOf(state.session) < 0) {
                         state.sessions.push(state.session);
                         state.activeSessionIdx = state.sessions.length - 1;

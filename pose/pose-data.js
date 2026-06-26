@@ -99,6 +99,160 @@ export class Skeleton {
             [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]]
         );
     }
+
+    /**
+     * Deep copy with fresh nodes/edges arrays so the clone shares no mutable
+     * state with this skeleton (used to seed new sessions without aliasing).
+     * @returns {Skeleton}
+     */
+    clone() {
+        return new Skeleton(
+            this.name,
+            this.nodes.slice(),
+            this.edges.map(function (e) { return [e[0], e[1]]; })
+        );
+    }
+
+    /**
+     * Compute a convenient default 2D layout for this skeleton's nodes, derived
+     * purely from its topology so it is consistent within a session and never
+     * persisted. The longest path (graph diameter) becomes a straight vertical
+     * "spine"; side branches fan off it. A pure chain (e.g. an arm
+     * shoulder→elbow→wrist) therefore lays out as a straight line, while a
+     * branching skeleton gets a straight spine with limbs spreading away.
+     *
+     * @param {number} cx - Center x (the laid-out skeleton's bbox is centered here)
+     * @param {number} cy - Center y
+     * @param {number} step - Distance between adjacent nodes
+     * @returns {[number, number][]} points, one [x, y] per node (index-aligned)
+     */
+    defaultLayout(cx, cy, step) {
+        const N = this.nodes.length;
+        if (N === 0) return [];
+        if (!isFinite(step) || step <= 0) step = 20;
+
+        // Build undirected adjacency list from edges.
+        const adj = new Array(N);
+        for (let i = 0; i < N; i++) adj[i] = [];
+        const edges = this.edges || [];
+        for (const e of edges) {
+            const a = e[0], b = e[1];
+            if (a < 0 || a >= N || b < 0 || b >= N || a === b) continue;
+            adj[a].push(b);
+            adj[b].push(a);
+        }
+
+        // No edges: simple vertical line, centered at (cx, cy).
+        if (edges.length === 0) {
+            const pts = new Array(N);
+            for (let i = 0; i < N; i++) {
+                pts[i] = [cx, cy + (i - (N - 1) / 2) * step];
+            }
+            return pts;
+        }
+
+        // BFS from `src` over the connected component; returns { dist, parent }.
+        const bfs = (src) => {
+            const dist = new Array(N).fill(-1);
+            const parent = new Array(N).fill(-1);
+            const queue = [src];
+            dist[src] = 0;
+            for (let qi = 0; qi < queue.length; qi++) {
+                const u = queue[qi];
+                for (const v of adj[u]) {
+                    if (dist[v] === -1) {
+                        dist[v] = dist[u] + 1;
+                        parent[v] = u;
+                        queue.push(v);
+                    }
+                }
+            }
+            return { dist, parent };
+        };
+        const farthest = (dist) => {
+            let best = 0;
+            for (let i = 0; i < N; i++) {
+                if (dist[i] > dist[best]) best = i;
+            }
+            return best;
+        };
+
+        // Double-BFS to find the longest path (diameter) of the main component.
+        const a = farthest(bfs(0).dist);
+        const fromA = bfs(a);
+        const b = farthest(fromA.dist);
+        // Reconstruct spine path a..b via parent pointers from the BFS rooted at a.
+        const spine = [];
+        for (let n = b; n !== -1; n = fromA.parent[n]) spine.push(n);
+        spine.reverse(); // now ordered a → b
+
+        const points = new Array(N).fill(null);
+        const onSpine = new Array(N).fill(false);
+
+        // Lay the spine as a straight vertical line, top → bottom.
+        for (let i = 0; i < spine.length; i++) {
+            const node = spine[i];
+            onSpine[node] = true;
+            points[node] = [cx, cy + i * step];
+        }
+
+        // Attach branches: BFS outward from spine nodes into off-spine nodes.
+        // Each branch root grows away from the spine (horizontally), alternating
+        // sides per branch to reduce overlap; single children continue straight,
+        // multiple children fan over ≤90°.
+        let branchCount = 0;
+        const queue = spine.slice();
+        const angleOf = new Array(N).fill(0); // outgoing direction (radians)
+        for (let qi = 0; qi < queue.length; qi++) {
+            const node = queue[qi];
+            const children = adj[node].filter((c) => points[c] === null);
+            for (let ci = 0; ci < children.length; ci++) {
+                const child = children[ci];
+                if (points[child] !== null) continue;
+                let angle;
+                if (onSpine[node]) {
+                    // First hop off the spine: go horizontal, alternating sides.
+                    const side = (branchCount % 2 === 0) ? 1 : -1;
+                    branchCount++;
+                    angle = (side > 0) ? 0 : Math.PI; // +x or -x
+                } else if (children.length === 1) {
+                    angle = angleOf[node]; // continue straight
+                } else {
+                    // Fan multiple children over 90° centered on the parent dir.
+                    const spread = Math.PI / 2;
+                    angle = angleOf[node] - spread / 2 +
+                        (children.length === 1 ? 0 : (spread * ci) / (children.length - 1));
+                }
+                points[child] = [
+                    points[node][0] + Math.cos(angle) * step,
+                    points[node][1] + Math.sin(angle) * step,
+                ];
+                angleOf[child] = angle;
+                queue.push(child);
+            }
+        }
+
+        // Safety net: any node not reached (disconnected) stacks near (cx, cy).
+        for (let i = 0; i < N; i++) {
+            if (points[i] === null) {
+                points[i] = [cx + (i - (N - 1) / 2) * step * 0.3, cy + (i - (N - 1) / 2) * step];
+            }
+        }
+
+        // Recenter so the layout's bounding box is centered on (cx, cy).
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const p of points) {
+            if (p[0] < minX) minX = p[0];
+            if (p[0] > maxX) maxX = p[0];
+            if (p[1] < minY) minY = p[1];
+            if (p[1] > maxY) maxY = p[1];
+        }
+        const dx = cx - (minX + maxX) / 2;
+        const dy = cy - (minY + maxY) / 2;
+        for (const p of points) { p[0] += dx; p[1] += dy; }
+
+        return points;
+    }
 }
 
 
