@@ -462,7 +462,7 @@ for (var h = 0; h < helperNames.length; h++) {
 
 // Load source files
 var srcDir = path.join(__dirname, '..');
-var srcFiles = ['pose/pose-data.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'ui/timeline-visibility.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js', 'ui/app-state.js', 'ui/timeline-controller.js'];
+var srcFiles = ['pose/pose-data.js', 'import-export/skeleton-json.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'ui/timeline-visibility.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js', 'ui/app-state.js', 'ui/timeline-controller.js'];
 for (var i = 0; i < srcFiles.length; i++) {
     try { loadScript(path.join(srcDir, srcFiles[i])); }
     catch(e) { console.log(srcFiles[i] + ': ' + e.message.substring(0, 120)); }
@@ -498,6 +498,7 @@ for (var __wi = 0; __wi < __toExposeOnWindow.length; __wi++) {
 // Load all test files
 var testFiles = [
     'test-pose-data.js',
+    'test-skeleton-json.js',
     'test-triangulation.js',
     'test-file-io.js',
     'test-interaction.js',

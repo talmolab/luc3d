@@ -807,4 +807,46 @@
             assertDeepEqual(s2.tracks, ['t0', 't1']);
         });
     });
+
+    // ---- Skeleton.compatibilityKey (instance copy/paste) ----
+
+    describe('Skeleton.compatibilityKey', function () {
+        it('is identical for skeletons with the same names and edges', function () {
+            const a = new Skeleton('a', ['head', 'thorax', 'abdomen'], [[0, 1], [1, 2]]);
+            const b = new Skeleton('b', ['head', 'thorax', 'abdomen'], [[0, 1], [1, 2]]);
+            assertEqual(a.compatibilityKey(), b.compatibilityKey());
+        });
+
+        it('ignores node ordering as long as names and edges match', function () {
+            // Same shape, different node order: edges reference the same NAME pairs.
+            const a = new Skeleton('a', ['head', 'thorax', 'abdomen'], [[0, 1], [1, 2]]);
+            // order: abdomen, head, thorax → edges head-thorax [1,2], thorax-abdomen [2,0]
+            const b = new Skeleton('b', ['abdomen', 'head', 'thorax'], [[1, 2], [2, 0]]);
+            assertEqual(a.compatibilityKey(), b.compatibilityKey());
+        });
+
+        it('treats edges as undirected (source/target swap is equal)', function () {
+            const a = new Skeleton('a', ['x', 'y'], [[0, 1]]);
+            const b = new Skeleton('b', ['x', 'y'], [[1, 0]]);
+            assertEqual(a.compatibilityKey(), b.compatibilityKey());
+        });
+
+        it('differs when node names differ', function () {
+            const a = new Skeleton('a', ['head', 'thorax'], [[0, 1]]);
+            const b = new Skeleton('b', ['head', 'tail'], [[0, 1]]);
+            assertTrue(a.compatibilityKey() !== b.compatibilityKey());
+        });
+
+        it('differs when edges differ', function () {
+            const a = new Skeleton('a', ['a', 'b', 'c'], [[0, 1], [1, 2]]);
+            const b = new Skeleton('b', ['a', 'b', 'c'], [[0, 1]]);
+            assertTrue(a.compatibilityKey() !== b.compatibilityKey());
+        });
+
+        it('differs when an edge connects a different pair of the same names', function () {
+            const a = new Skeleton('a', ['a', 'b', 'c'], [[0, 1]]); // a-b
+            const b = new Skeleton('b', ['a', 'b', 'c'], [[0, 2]]); // a-c
+            assertTrue(a.compatibilityKey() !== b.compatibilityKey());
+        });
+    });
 })();

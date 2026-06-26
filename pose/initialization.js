@@ -265,6 +265,34 @@ export function addNewInstanceSmart() {
             }
         }
     }
+    // Priority 1b: Nearest PRIOR frame with a UserInstance in this view.
+    // Lets "navigate to a labeled frame → ctrl+i into the next frame" inherit the
+    // pose without first nudging a node (which is the only thing that would have
+    // populated state.lastUserPoints). Stops at the first labeled frame found.
+    if (!cached) {
+        for (var pf = frameIdx - 1; pf >= 0 && !cached; pf--) {
+            var fgPrev = state.session.getFrameGroup(pf);
+            if (!fgPrev) continue; // no labels on this frame
+            var prevGroups = getInstanceGroupsForFrame(pf);
+            for (var pg = 0; pg < prevGroups.length && !cached; pg++) {
+                var pInst = prevGroups[pg].getInstance(viewName);
+                if (pInst && pInst.type === 'user' && pInst.points) {
+                    recordUserPoints(viewName, pInst.points);
+                    cached = state.lastUserPoints.get(viewName);
+                }
+            }
+            if (!cached) {
+                var prevUl = fgPrev.getUnlinkedInstances(viewName) || [];
+                for (var pu = 0; pu < prevUl.length && !cached; pu++) {
+                    if (prevUl[pu].instance.type === 'user' && prevUl[pu].instance.points) {
+                        recordUserPoints(viewName, prevUl[pu].instance.points);
+                        cached = state.lastUserPoints.get(viewName);
+                    }
+                }
+            }
+        }
+    }
+
     if (cached) {
         points = cached.map(function(p) { return p ? [p[0], p[1]] : null; });
     }

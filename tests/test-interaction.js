@@ -274,4 +274,38 @@
             assertEqual(manager.assignmentSelection.length, 2);
         });
     });
+
+    describe('InteractionManager - displayToVideo (zoom-aware thresholds)', function () {
+        const assertApprox = TestFramework.assertApprox;
+        let manager, mockState;
+
+        beforeEach(function () {
+            cleanupCanvases();
+            mockState = createMockState();
+            manager = new InteractionManager({
+                getState: function () { return mockState; },
+                getInstanceGroups: function () { return []; },
+                requestRedraw: function () {},
+            });
+            // Plain overlayCanvas mock so the scale math is harness-independent:
+            // css display width 320px, native/video width 640px.
+            mockState.views[0].overlayCanvas = { style: { width: '320px' }, offsetWidth: 320, width: 640 };
+            mockState.views[0].videoWidth = 640;
+        });
+
+        it('returns video-px-per-CSS-px (no zoom): 640 / 320 = 2', function () {
+            mockState.views[0].zoom = { scale: 1 };
+            assertApprox(manager._displayToVideo(mockState, 'cam1'), 2, 1e-6);
+        });
+
+        it('shrinks inversely with zoom so the threshold stays constant on screen', function () {
+            mockState.views[0].zoom = { scale: 4 };
+            // 640 / (320 * 4) = 0.5 → a 3 CSS-px deadzone becomes 1.5 video px.
+            assertApprox(manager._displayToVideo(mockState, 'cam1'), 0.5, 1e-6);
+        });
+
+        it('defaults to 1 for an unresolvable view', function () {
+            assertEqual(manager._displayToVideo(mockState, 'nope'), 1);
+        });
+    });
 })();

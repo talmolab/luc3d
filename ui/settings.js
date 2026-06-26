@@ -49,6 +49,8 @@ const ACTION_CATALOG = [
     // --- Editing ---
     { id: 'addInstanceSmart', label: 'Add instance (smart init)', category: 'Editing', binding: 'Mod+I', editable: true, dispatched: true },
     { id: 'addInstance', label: 'Add instance', category: 'Editing', binding: 'n', editable: true, dispatched: true },
+    { id: 'copyInstance', label: 'Copy selected instance', category: 'Editing', binding: 'Mod+C', editable: true, dispatched: true },
+    { id: 'pasteInstance', label: 'Paste instance into focused video', category: 'Editing', binding: 'Mod+V', editable: true, dispatched: true },
     { id: 'deleteInstance', label: 'Delete selected (Shift: cascade)', category: 'Editing', binding: 'Delete', editable: false, dispatched: false },
     { id: 'ungroup', label: 'Ungroup selected', category: 'Editing', binding: 'Shift+u', editable: true, dispatched: true },
     { id: 'group', label: 'Group selected (assignment mode)', category: 'Editing', binding: 'Shift+g', editable: true, dispatched: true },

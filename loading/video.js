@@ -1375,6 +1375,8 @@ export class VideoController {
             scale: 1.0,
             offsetX: 0,
             offsetY: 0,
+            baseW: 0,   // wrapper base display size the offsets are valid for;
+            baseH: 0,   // set by applyZoom, used by reapplyZoom to anchor on resize
         };
     }
 
@@ -1414,6 +1416,16 @@ export class VideoController {
             cell.classList.toggle('zoomed', isZoomed);
             var unzoomBtn = cell.querySelector('.unzoom-btn');
             if (unzoomBtn) unzoomBtn.style.display = isZoomed ? '' : 'none';
+        }
+
+        // Record the base display size the current offsets are valid for, so the
+        // next reapplyZoom (after a cell resize) can rescale the pan offset to keep
+        // the same region centered. Transform changes don't dirty layout, so this
+        // offsetWidth read stays cheap except right after an actual resize.
+        if (wrapper) {
+            var bw = wrapper.offsetWidth;
+            var bh = wrapper.offsetHeight;
+            if (bw > 0 && bh > 0) { z.baseW = bw; z.baseH = bh; }
         }
     }
 
@@ -1594,7 +1606,22 @@ export class VideoController {
 
     reapplyZoom(view) {
         if (!view.zoom) return;
-        this._constrainOffsets(view.zoom, view);
+        var z = view.zoom;
+        // If the wrapper's base display size changed (the cell was resized),
+        // rescale the pan offset proportionally so the same image region stays
+        // centered. Preserving the centered content point across a base-size
+        // change of wW -> wW' (scale fixed) works out to offset *= wW'/wW, so a
+        // zoomed image no longer jumps when the camera view is resized.
+        var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
+        if (wrapper && z.baseW > 0 && z.baseH > 0) {
+            var newW = wrapper.offsetWidth;
+            var newH = wrapper.offsetHeight;
+            if (newW > 0 && newH > 0 && (newW !== z.baseW || newH !== z.baseH)) {
+                z.offsetX *= newW / z.baseW;
+                z.offsetY *= newH / z.baseH;
+            }
+        }
+        this._constrainOffsets(z, view);
         this.applyZoom(view);
     }
 
