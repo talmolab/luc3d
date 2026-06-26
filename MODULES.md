@@ -462,23 +462,58 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
   the current frame (this is the path "Triangulate All" takes when identities
   exist; previously it refreshed only the 2D overlays, leaving 3D empty).
-- `showSlpExportModal()` — per-session SLP export modal ("Export SLEAP File":
-  pick one camera per session, export to one file).
-- `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid;
-  download one camera column across all selected sessions into one SLEAP file.
-  A cell is a green ✓ (toggle on/off) only where the camera VIEW exists in that
-  session — derived from `state.videoFiles` (real loaded views), plus cameras
-  with labeled data for SLP-only projects; NOT from `session.cameras`, which is
-  the full calibration list and would falsely imply existence. Sessions missing
-  the view show a red ✗ (not selectable). A column's Download button is
-  proactively disabled (with an explanatory `title`) whenever its toggled-on
-  sessions have incompatible skeletons — checked set-based / order-insensitively
-  via `findSkeletonMismatch`, re-evaluated on every cell toggle; the in-click
-  check + mismatch popup remains as a fallback. A red warning under the tables
-  (`#slpByCamSkelWarning`) names the blocked column(s) and describes the
-  mismatch whenever any download is disabled. Columns ordered by
-  session frequency, then within-session name order, then session recency for
-  session-unique views.
+- `showExportResultPopup(message, ok)` — small centered ✓/✗ confirmation card
+  shown after an SLP export (auto-dismisses, faster on success; also closes on
+  click/Esc/Enter). Used by the By-Cam and per-session flows: on success they
+  close their modal and pop "Download Successful"; on error they pop "Download
+  Failed: …".
+- `showSlpExportModal()` — single-camera SLP export modal (pick one camera per
+  session, export to one file). **Retained but no longer wired to the File menu**
+  — its old "Export SLEAP File" item was replaced by "Export SLEAP File Per
+  Session" (`showSlpExportPerSessionModal`).
+- `showSlpExportPerSessionModal()` — "Export SLEAP File Per Session": bulk export
+  for the **open/active session only**. Lists every assigned-camera view in that
+  session with a per-row **Download** checkbox (default ON; only checked rows are
+  exported), camera, target directory, and versioned output filename
+  `<stem>_vN.slp`, with Include options — **Predicted Instances** (checkbox), **Reprojections**
+  (checkbox) emitted as UserInstance/PredictedInstance via a toggle; user labels
+  always included. On Export it **always prompts** for a folder
+  (`window.showDirectoryPicker` — it does not silently reuse a cached
+  `state.exportDirHandle`) and writes one 2D `.slp` per camera
+  into that camera's associated subdirectory (`state.cameraDirMap[cam] || cam`),
+  via `exportSlpClientSide(...)`. Versioned names mean source `.slp` files are
+  never overwritten. Falls back to flat `downloadBlob` downloads when the File
+  System Access API is unavailable. Esc closes the modal.
+- `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid.
+  Each camera column exports across all its selected sessions into one SLEAP
+  file; the modal **bulk-exports every included column at once** via
+  **Download All**, which **always prompts** for a destination folder
+  (`window.showDirectoryPicker` — it does not silently reuse a cached
+  `state.exportDirHandle`) and
+  writes each included camera as a flat `<CamName>.slp` into it (falling back to
+  per-file `downloadBlob` browser downloads when the File System Access API is
+  unavailable). A cell is a green ✓ (toggle on/off) only where the camera VIEW
+  exists in that session — derived from `state.videoFiles` (real loaded views),
+  plus cameras with labeled data for SLP-only projects; NOT from
+  `session.cameras`, which is the full calibration list and would falsely imply
+  existence. Sessions missing the view show a red ✗ (not selectable). The table
+  **footer holds a per-column include toggle** (`.slp-bycam-incl`, ✓/✗) deciding
+  whether that camera is part of Download All; a column whose toggled-on sessions
+  have incompatible skeletons is **blocked** — its toggle is disabled (with an
+  explanatory `title`) and excluded from the export — checked set-based /
+  order-insensitively via `findSkeletonMismatch` and re-evaluated on every cell
+  toggle (`updateDownloadStates`). A red warning under the tables
+  (`#slpByCamSkelWarning`) flags blocked columns. Include options (stacked) —
+  **Save PredictedInstances** (checkbox, default on) and, beneath it, **Save
+  Reprojections** (checkbox, emitted as UserInstance/PredictedInstance via a
+  toggle) — are passed to `exportSlpMultiSession` as an `instanceFilter`
+  (`{user:true, predicted, reprojected}`); user labels are always included. The
+  Save Reprojections row is **disabled unless at least one session has
+  reprojections** (any `InstanceGroup.reprojectedInstances` populated, i.e.
+  triangulation/tracking has run). Download All shows per-file
+  progress; **Esc closes the modal**, or cancels an in-progress export mid-run.
+  Columns ordered by session frequency, then within-session name order, then
+  session recency for session-unique views.
 - `showSlpExportAllModal()` — multi-session SLP export. **Deprecated**: no longer
   wired to a File-menu item (the "Export 2D SLP (All Views)" entry was removed);
   retained for reference.
@@ -1658,6 +1693,14 @@ filesystem enumeration, decoder rebuild.
 - Misc: `resolveImportTrackIdx` — re-exported from
   `import-export/import-track-resolve.js` (moved there so it's unit-testable;
   session-loader pulls app.js and can't be bridged into the test runner).
+
+**Per-camera `.slp` selection.** `handleLoadSessionFolderPerCamera` loads only
+**one** `.slp` per camera directory — the highest `_vN` version (first-wins on a
+tie / when unversioned). A camera dir accumulates successive exports
+(`<stem>_v1.slp`, `_v2.slp`, …, e.g. from "Export SLEAP File Per Session"); only
+the latest reflects current state. Parsing every file stacked all versions'
+instances into the same (frame, camera) slot — the Instances tab then showed the
+same tracks repeated N times. Skipped files are logged.
 
 **Imports from project modules.**
 - `../ui/app-state.js`, `../pose/pose-data.js`, `./video.js`,

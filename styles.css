@@ -1306,6 +1306,29 @@ body {
   gap: 12px;
 }
 
+/* Stacked variant: each option on its own row (e.g. By-Cam modal — Save
+   Reprojections sits beneath Save PredictedInstances). */
+.slp-export-options.slp-export-options-stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.slp-export-options-stacked .slp-opt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Disabled option row (e.g. no reprojections available to save). */
+.slp-export-options-stacked .slp-opt-disabled {
+  opacity: 0.5;
+}
+
+.slp-export-options-stacked .slp-opt-disabled label {
+  cursor: not-allowed;
+}
+
 .slp-reproj-toggle {
   display: inline-flex;
   border: 1px solid var(--border-color);
@@ -1384,6 +1407,105 @@ body {
 /* Export All Views modal */
 .slp-export-all-modal {
   min-width: 700px;
+}
+
+/* Quick post-export result popup (Download Successful / Failed). Sits above the
+   export modals (z 20000) so it shows on top / after they close. */
+.export-result-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.export-result-card {
+  min-width: 240px;
+  max-width: 70vw;
+  padding: 20px 28px;
+  border-radius: 10px;
+  background: var(--bg-secondary, #1e1e1e);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.export-result-icon {
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+  border-radius: 50%;
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.export-result-card.success .export-result-icon { background: #22c55e; }
+.export-result-card.failure .export-result-icon { background: #ef4444; }
+
+.export-result-msg {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* Export SLEAP File Per Session: active session → one file per camera dir. */
+.slp-export-persession-modal {
+  min-width: 720px;
+}
+
+.slp-export-persession-modal .slp-export-table {
+  table-layout: auto;
+  width: 100%;
+}
+
+/* Download + Camera + Directory columns shrink to fit so the Output Filename
+   column (last) absorbs the remaining width and the input reads its full name. */
+.slp-export-persession-modal .slp-export-table th:nth-child(1),
+.slp-export-persession-modal .slp-export-table td:nth-child(1),
+.slp-export-persession-modal .slp-export-table th:nth-child(2),
+.slp-export-persession-modal .slp-export-table td:nth-child(2),
+.slp-export-persession-modal .slp-export-table th:nth-child(3),
+.slp-export-persession-modal .slp-export-table td:nth-child(3) {
+  width: 1%;
+  white-space: nowrap;
+  padding-right: 16px;
+}
+
+.slp-export-persession-modal .slp-export-table th:last-child,
+.slp-export-persession-modal .slp-export-table td:last-child {
+  width: auto;
+}
+
+/* Download checkbox column — compact and centered. */
+.slp-export-persession-modal .slp-ps-dl-cell {
+  text-align: center;
+  padding-right: 12px;
+}
+
+.slp-export-persession-modal .slp-ps-dl {
+  cursor: pointer;
+  margin: 0;
+}
+
+.slp-export-persession-modal .slp-ps-dir {
+  color: var(--text-muted);
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.slp-export-persession-modal .slp-ps-filename {
+  width: 100%;
+  min-width: 340px;
+  box-sizing: border-box;
 }
 
 .slp-export-all-modal .slp-export-table {
@@ -1527,7 +1649,7 @@ body {
 .slp-bycam-cam-head,
 .slp-bycam-cell,
 .slp-bycam-missing,
-.slp-bycam-dl-cell {
+.slp-bycam-incl-cell {
   width: 92px;
   min-width: 92px;
   max-width: 92px;
@@ -1632,23 +1754,63 @@ body {
   user-select: none;
 }
 
-.slp-bycam-dl-cell {
+.slp-bycam-incl-cell {
+  text-align: center;
   padding: 2px 3px;
 }
 
-/* Scoped under .slp-bycam-modal so these beat the generic
-   `.multi-frame-modal button` rule (0,1,1) on specificity (0,2,0) —
-   otherwise its 6px 16px padding / 13px font overflow the 92px column
-   and push the "Download" label off-center. */
-.slp-bycam-modal .slp-bycam-dl-btn {
-  width: 100%;
-  padding: 3px 2px;
-  font-size: 11px;
-  cursor: pointer;
+/* Per-column include toggle for "Download All". Mirrors the presence-cell
+   ✓/✗ look so the footer reads as one more selectable row. */
+.slp-bycam-incl {
+  display: inline-block;
+  min-width: 22px;
   text-align: center;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 4px;
 }
 
-.slp-bycam-modal .slp-bycam-dl-btn:disabled {
+.slp-bycam-incl.on {
+  background: rgba(250, 204, 21, 0.25);
+  color: #eab308;
+}
+
+.slp-bycam-incl.off {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.slp-bycam-incl:not(.disabled):hover {
+  outline: 1px solid rgba(250, 204, 21, 0.6);
+  outline-offset: -1px;
+}
+
+/* Blocked (skeleton mismatch) or permanently-empty column — red ✗, not selectable. */
+.slp-bycam-incl.disabled {
+  background: none;
+  color: #ef4444;
+  opacity: 0.85;
+  cursor: not-allowed;
+}
+
+/* Full-width Download All row beneath the table. */
+.slp-bycam-all-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 10px 0 0;
+}
+
+.slp-bycam-modal .slp-bycam-all-btn {
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.slp-bycam-modal .slp-bycam-all-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
