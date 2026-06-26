@@ -496,7 +496,11 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   explanatory `title`) and excluded from the export — checked set-based /
   order-insensitively via `findSkeletonMismatch` and re-evaluated on every cell
   toggle (`updateDownloadStates`). A red warning under the tables
-  (`#slpByCamSkelWarning`) flags blocked columns. Download All shows per-file
+  (`#slpByCamSkelWarning`) flags blocked columns. Include options — **Predicted
+  Instances** (checkbox, default on) and **Save Reprojections** (checkbox, emitted
+  as UserInstance/PredictedInstance via a toggle) — are passed to
+  `exportSlpMultiSession` as an `instanceFilter` (`{user:true, predicted, reprojected}`);
+  user labels are always included. Download All shows per-file
   progress; **Esc closes the modal**, or cancels an in-progress export mid-run.
   Columns ordered by session frequency, then within-session name order, then
   session recency for session-unique views.
