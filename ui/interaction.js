@@ -244,6 +244,28 @@ export class InteractionManager {
     }
 
     /**
+     * Display-to-video scale: how many video pixels span one CSS pixel on screen
+     * for `viewName`, accounting for the view's current zoom. Multiply a
+     * screen-space (CSS px) threshold by this to keep it constant on screen
+     * regardless of zoom level / display size. Returns 1 if the view can't be
+     * resolved.
+     * @private
+     */
+    _displayToVideo(state, viewName) {
+        if (!state) return 1;
+        const view = this._findView(state, viewName);
+        if (view && view.overlayCanvas) {
+            const cssW = parseFloat(view.overlayCanvas.style.width) || view.overlayCanvas.offsetWidth;
+            const zoom = view.zoom ? view.zoom.scale : 1;
+            const displayW = cssW * zoom;
+            if (displayW > 0) {
+                return (view.videoWidth || view.overlayCanvas.width) / displayW;
+            }
+        }
+        return 1;
+    }
+
+    /**
      * Find the nearest visible node or edge to the given video-space position
      * in a specific camera view at a given frame.
      *
@@ -269,19 +291,8 @@ export class InteractionManager {
 
         // Compute a display-to-video scale factor so thresholds feel consistent
         // regardless of display size and zoom level.
-        let displayToVideo = 1;
         const state = this._getState();
-        if (state) {
-            const view = this._findView(state, viewName);
-            if (view && view.overlayCanvas) {
-                const cssW = parseFloat(view.overlayCanvas.style.width) || view.overlayCanvas.offsetWidth;
-                const zoom = view.zoom ? view.zoom.scale : 1;
-                const displayW = cssW * zoom;
-                if (displayW > 0) {
-                    displayToVideo = (view.videoWidth || view.overlayCanvas.width) / displayW;
-                }
-            }
-        }
+        const displayToVideo = this._displayToVideo(state, viewName);
 
         // Node threshold = visual node size (video px) + screen-space padding (3 CSS px → video px)
         const sliderEl = document.getElementById('visUserNodeSize');
@@ -418,16 +429,7 @@ export class InteractionManager {
         if (!unlinkedList || unlinkedList.length === 0) return null;
 
         // Compute display-to-video scale factor
-        let displayToVideo = 1;
-        const view = this._findView(state, viewName);
-        if (view && view.overlayCanvas) {
-            const cssW = parseFloat(view.overlayCanvas.style.width) || view.overlayCanvas.offsetWidth;
-            const zoom = view.zoom ? view.zoom.scale : 1;
-            const displayW = cssW * zoom;
-            if (displayW > 0) {
-                displayToVideo = (view.videoWidth || view.overlayCanvas.width) / displayW;
-            }
-        }
+        const displayToVideo = this._displayToVideo(state, viewName);
 
         // Node threshold = visual node size (video px) + screen-space padding (3 CSS px → video px)
         const sliderEl = document.getElementById('visUserNodeSize');
@@ -1534,11 +1536,15 @@ export class InteractionManager {
 
         info.currentPos = [vx, vy];
 
-        // Require minimum movement before committing to a drag
+        // Require minimum movement before committing to a drag. The deadzone is a
+        // constant ~3 CSS px on screen — converted to video px via displayToVideo
+        // so it shrinks as you zoom in (otherwise a fixed 3 video-px deadzone
+        // forces a large on-screen drag at high zoom, blocking fine adjustments).
         if (!info.thresholdMet) {
             var tdx = vx - info.startPos[0];
             var tdy = vy - info.startPos[1];
-            if (Math.sqrt(tdx * tdx + tdy * tdy) < 3) {
+            var dragDeadzone = 3 * this._displayToVideo(state, info.viewName);
+            if (Math.sqrt(tdx * tdx + tdy * tdy) < dragDeadzone) {
                 return; // Don't update position yet
             }
             info.thresholdMet = true;

@@ -723,6 +723,13 @@ edit-group mode, keyboard shortcuts.
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
+**Zoom-aware thresholds.** `_displayToVideo(state, viewName)` returns how many
+video pixels span one CSS pixel on screen given the view's current `zoom.scale`.
+Hit-test padding (`findNearestNode`/`findNearestUnlinkedNode`) and the drag-start
+deadzone (`_onDragMove`, ~3 CSS px) multiply by it so they stay constant on screen
+— previously the deadzone was a fixed 3 video px, which forced a large on-screen
+drag at high zoom and blocked fine node adjustments.
+
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Instance`.
 
@@ -1769,6 +1776,12 @@ mismatches. `_getFrameHTML5`'s seek guard uses a frame-rate-aware
 tolerance (half a frame period, `0.5/_fps`) so high-fps recordings
 (e.g. 400 fps) step every frame instead of freezing under a fixed
 constant (issue #89).
+
+**Zoom/pan resize anchoring.** Zoom pan offset (`view.zoom.offsetX/offsetY`) is
+screen-space px relative to the wrapper's base display size, which `applyZoom`
+records as `zoom.baseW/baseH`. When a cell is resized, `reapplyZoom` rescales the
+offset by the base-size ratio (`offset *= newBase/oldBase`) before re-clamping, so
+a zoomed-in image keeps the same region centered instead of jumping.
 
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
