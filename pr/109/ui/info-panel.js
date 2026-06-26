@@ -85,20 +85,129 @@ function startInlineNameEntry(selectEl, defaultName, onCommit) {
 // ============================================
 
 export function setupPanelTabs() {
-    const tabs = document.querySelectorAll('.panel-tab');
+    const tabBar = document.querySelector('.panel-tabs');
+    if (!tabBar) return;
+    // The real tab buttons (Instances, Visibility, Videos, …). The overflow
+    // "More" control is appended after these and excluded from the list.
+    const tabs = Array.from(tabBar.querySelectorAll('.panel-tab'));
+
+    // --- Build the "More ▾" overflow dropdown (once) -------------------
+    // Tabs that don't fit the panel's current width are demoted into this
+    // dropdown. As the panel widens, layoutPanelTabs() promotes them back
+    // into the bar one at a time — but only when the full name fits, never
+    // truncated. See styles.css `.panel-tab-more*`.
+    const moreWrap = document.createElement('div');
+    moreWrap.className = 'panel-tab-more';
+    const moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = 'panel-tab panel-tab-more-btn';
+    moreBtn.innerHTML = 'More <span class="more-caret">▾</span>';
+    const moreMenu = document.createElement('div');
+    moreMenu.className = 'panel-tab-more-menu';
+    moreWrap.appendChild(moreBtn);
+    moreWrap.appendChild(moreMenu);
+    tabBar.appendChild(moreWrap);
+
+    moreBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        moreWrap.classList.toggle('open');
+    });
+    // Click anywhere else (or Esc) closes the dropdown.
+    document.addEventListener('click', function () {
+        moreWrap.classList.remove('open');
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') moreWrap.classList.remove('open');
+    });
+
+    // --- Tab selection -------------------------------------------------
+    function selectTab(tabId) {
+        tabs.forEach(function (t) { t.classList.remove('active'); });
+        document.querySelectorAll('.panel-tab-content').forEach(function (c) {
+            c.classList.remove('active');
+        });
+        const btn = tabs.find(function (t) { return t.getAttribute('data-tab') === tabId; });
+        if (btn) btn.classList.add('active');
+        const target = document.getElementById(tabId);
+        if (target) target.classList.add('active');
+        // Re-run layout so the active-state highlight on "More" stays correct.
+        layoutPanelTabs();
+    }
+
     tabs.forEach(function (tab) {
         tab.addEventListener('click', function () {
-            // Deactivate all
-            tabs.forEach(function (t) { t.classList.remove('active'); });
-            document.querySelectorAll('.panel-tab-content').forEach(function (c) {
-                c.classList.remove('active');
-            });
-            // Activate clicked
-            tab.classList.add('active');
-            const target = document.getElementById(tab.getAttribute('data-tab'));
-            if (target) target.classList.add('active');
+            selectTab(tab.getAttribute('data-tab'));
         });
     });
+
+    // --- Responsive overflow -------------------------------------------
+    function buildMoreMenu(overflow) {
+        moreMenu.innerHTML = '';
+        overflow.forEach(function (t) {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'panel-tab-more-item';
+            item.textContent = t.textContent;
+            if (t.classList.contains('active')) item.classList.add('active');
+            item.addEventListener('click', function (e) {
+                e.stopPropagation();
+                moreWrap.classList.remove('open');
+                selectTab(t.getAttribute('data-tab'));
+            });
+            moreMenu.appendChild(item);
+        });
+    }
+
+    function layoutPanelTabs() {
+        // Reveal every tab so we can measure its natural (full-name) width.
+        tabs.forEach(function (t) { t.style.display = ''; });
+        moreWrap.style.display = 'none';
+
+        const barWidth = tabBar.clientWidth;
+        if (barWidth === 0) return; // panel hidden/collapsed — nothing to do
+        const widths = tabs.map(function (t) { return t.offsetWidth; });
+        const total = widths.reduce(function (a, b) { return a + b; }, 0);
+
+        // Everything fits — no dropdown needed.
+        if (total <= barWidth) {
+            moreWrap.classList.remove('open');
+            moreBtn.classList.remove('active');
+            return;
+        }
+
+        // Otherwise reserve room for the "More" button and greedily keep the
+        // leading tabs whose full names fit.
+        moreWrap.style.display = '';
+        const budget = barWidth - moreWrap.offsetWidth;
+        let used = 0;
+        const overflow = [];
+        tabs.forEach(function (t, i) {
+            if (used + widths[i] <= budget) {
+                used += widths[i];
+                t.style.display = '';
+            } else {
+                t.style.display = 'none';
+                overflow.push(t);
+            }
+        });
+        // Always keep at least the first tab in the bar.
+        if (overflow.length === tabs.length && tabs.length) {
+            tabs[0].style.display = '';
+            overflow.shift();
+        }
+
+        buildMoreMenu(overflow);
+        moreBtn.classList.toggle(
+            'active',
+            overflow.some(function (t) { return t.classList.contains('active'); })
+        );
+    }
+
+    // Recompute whenever the panel (and thus the tab bar) is resized.
+    if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(function () { layoutPanelTabs(); }).observe(tabBar);
+    }
+    layoutPanelTabs();
 }
 
 // ============================================
