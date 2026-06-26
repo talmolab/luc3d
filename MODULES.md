@@ -1679,6 +1679,14 @@ filesystem enumeration, decoder rebuild.
   `import-export/import-track-resolve.js` (moved there so it's unit-testable;
   session-loader pulls app.js and can't be bridged into the test runner).
 
+**Per-camera `.slp` selection.** `handleLoadSessionFolderPerCamera` loads only
+**one** `.slp` per camera directory — the highest `_vN` version (first-wins on a
+tie / when unversioned). A camera dir accumulates successive exports
+(`<stem>_v1.slp`, `_v2.slp`, …, e.g. from "Export SLEAP File Per Session"); only
+the latest reflects current state. Parsing every file stacked all versions'
+instances into the same (frame, camera) slot — the Instances tab then showed the
+same tracks repeated N times. Skipped files are logged.
+
 **Imports from project modules.**
 - `../ui/app-state.js`, `../pose/pose-data.js`, `./video.js`,
   `../import-export/file-io.js`, `../pose/triangulation.js`,
