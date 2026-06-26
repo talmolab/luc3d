@@ -462,6 +462,11 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
   the current frame (this is the path "Triangulate All" takes when identities
   exist; previously it refreshed only the 2D overlays, leaving 3D empty).
+- `showExportResultPopup(message, ok)` — small centered ✓/✗ confirmation card
+  shown after an SLP export (auto-dismisses, faster on success; also closes on
+  click/Esc/Enter). Used by the By-Cam and per-session flows: on success they
+  close their modal and pop "Download Successful"; on error they pop "Download
+  Failed: …".
 - `showSlpExportModal()` — single-camera SLP export modal (pick one camera per
   session, export to one file). **Retained but no longer wired to the File menu**
   — its old "Export SLEAP File" item was replaced by "Export SLEAP File Per
