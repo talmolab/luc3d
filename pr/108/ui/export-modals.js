@@ -1194,6 +1194,7 @@ export function showSlpExportByCamModal() {
         '</div>' +
         '<div class="slp-bycam-skel-warning" id="slpByCamSkelWarning" style="display:none"></div>' +
         '<div class="slp-export-options">' +
+        '<label><input type="checkbox" id="slpByCamIncPred" checked> Predicted Instances</label>' +
         '<label><input type="checkbox" id="slpByCamReproj"> Save Reprojections</label>' +
         '<span class="slp-reproj-toggle" id="slpByCamReprojToggle">' +
         '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
@@ -1411,6 +1412,9 @@ export function showSlpExportByCamModal() {
         var reprojAsUser = saveReproj
             ? (activeToggle && activeToggle.getAttribute('data-value') === 'user')
             : null;
+        // User labels always included; predicted/reprojected per the checkboxes.
+        var includePred = document.getElementById('slpByCamIncPred').checked;
+        var instanceFilter = { user: true, predicted: includePred, reprojected: saveReproj };
 
         // Resolve a destination folder up front. Fall back to per-file browser
         // downloads when the File System Access API is unavailable.
@@ -1442,7 +1446,7 @@ export function showSlpExportByCamModal() {
                 dlAllBtn.textContent = 'Downloading... (' + (i + 1) + '/' + cols.length + ')';
                 var selections = buildColumnSelections(camName);
                 var outName = sanitizeFilename(camName);
-                var blob = await exportSlpMultiSession(selections, reprojAsUser);
+                var blob = await exportSlpMultiSession(selections, reprojAsUser, instanceFilter);
                 if (cancelled) break;
                 if (useDirectory) {
                     var fh = await dirHandle.getFileHandle(outName, { create: true });
