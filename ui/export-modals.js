@@ -1446,17 +1446,16 @@ export function showSlpExportByCamModal() {
         var includePred = document.getElementById('slpByCamIncPred').checked;
         var instanceFilter = { user: true, predicted: includePred, reprojected: saveReproj };
 
-        // Resolve a destination folder up front. Fall back to per-file browser
-        // downloads when the File System Access API is unavailable.
+        // Always prompt for a destination folder so the user picks where this
+        // download lands (don't silently reuse a handle cached by an earlier
+        // export). Fall back to per-file browser downloads when the File System
+        // Access API is unavailable.
         var dirHandle = null;
         var useDirectory = !!window.showDirectoryPicker;
         if (useDirectory) {
             try {
-                dirHandle = state.exportDirHandle;
-                if (!dirHandle) {
-                    dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-                    state.exportDirHandle = dirHandle;
-                }
+                dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                state.exportDirHandle = dirHandle;
             } catch (pickErr) {
                 if (pickErr && pickErr.name === 'AbortError') return; // user cancelled
                 console.error('[slp-export-bycam] folder pick failed:', pickErr);
@@ -1702,17 +1701,15 @@ export function showSlpExportPerSessionModal() {
         // User labels always included; predicted/reprojected per the checkboxes.
         var instanceFilter = { user: true, predicted: includePred, reprojected: includeReproj };
 
-        // Resolve a destination folder; fall back to flat browser downloads when
+        // Always prompt for a destination folder (don't silently reuse a handle
+        // cached by an earlier export). Fall back to flat browser downloads when
         // the File System Access API is unavailable (can't nest into cam dirs).
         var useDirectory = !!window.showDirectoryPicker;
         var dirHandle = null;
         if (useDirectory) {
             try {
-                dirHandle = state.exportDirHandle;
-                if (!dirHandle) {
-                    dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-                    state.exportDirHandle = dirHandle;
-                }
+                dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                state.exportDirHandle = dirHandle;
             } catch (pickErr) {
                 if (pickErr && pickErr.name === 'AbortError') return; // cancelled
                 console.error('[slp-export-persession] folder pick failed:', pickErr);

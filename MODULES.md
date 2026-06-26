@@ -472,8 +472,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   exported), camera, target directory, and versioned output filename
   `<stem>_vN.slp`, with Include options — **Predicted Instances** (checkbox), **Reprojections**
   (checkbox) emitted as UserInstance/PredictedInstance via a toggle; user labels
-  always included. On Export it prompts for a folder (`window.showDirectoryPicker`,
-  handle cached on `state.exportDirHandle`) and writes one 2D `.slp` per camera
+  always included. On Export it **always prompts** for a folder
+  (`window.showDirectoryPicker` — it does not silently reuse a cached
+  `state.exportDirHandle`) and writes one 2D `.slp` per camera
   into that camera's associated subdirectory (`state.cameraDirMap[cam] || cam`),
   via `exportSlpClientSide(...)`. Versioned names mean source `.slp` files are
   never overwritten. Falls back to flat `downloadBlob` downloads when the File
@@ -481,8 +482,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid.
   Each camera column exports across all its selected sessions into one SLEAP
   file; the modal **bulk-exports every included column at once** via
-  **Download All**, which prompts for a destination folder
-  (`window.showDirectoryPicker`, handle cached on `state.exportDirHandle`) and
+  **Download All**, which **always prompts** for a destination folder
+  (`window.showDirectoryPicker` — it does not silently reuse a cached
+  `state.exportDirHandle`) and
   writes each included camera as a flat `<CamName>.slp` into it (falling back to
   per-file `downloadBlob` browser downloads when the File System Access API is
   unavailable). A cell is a green ✓ (toggle on/off) only where the camera VIEW
