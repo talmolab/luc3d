@@ -189,6 +189,51 @@
         });
     });
 
+    describe('Timeline - wheel zoom (plain mouse wheel)', function () {
+        var container, tl;
+
+        function wheel(deltaY, shiftKey) {
+            return {
+                deltaX: 0, deltaY: deltaY, offsetX: 400,
+                ctrlKey: false, shiftKey: !!shiftKey,
+                preventDefault: function () {},
+            };
+        }
+
+        beforeEach(function () {
+            if (tl) cleanup(tl, container);
+            container = createContainer(800, 80);
+            tl = new Timeline(container, { totalFrames: 1000 });
+            tl._cssWidth = 800; // make content math well-defined headless
+        });
+
+        it('plain wheel up zooms in', function () {
+            var before = tl._zoom;
+            tl._handleWheel(wheel(-100, false));
+            assertGreaterThan(tl._zoom, before, 'scroll up should zoom in');
+            cleanup(tl, container);
+            tl = null;
+        });
+
+        it('plain wheel down zooms out', function () {
+            tl.setZoom(5);
+            var before = tl._zoom;
+            tl._handleWheel(wheel(100, false));
+            assertLessThan(tl._zoom, before, 'scroll down should zoom out');
+            cleanup(tl, container);
+            tl = null;
+        });
+
+        it('Shift+wheel does not zoom (reserved for row scroll)', function () {
+            tl.setZoom(3);
+            var before = tl._zoom;
+            tl._handleWheel(wheel(-100, true));
+            assertEqual(tl._zoom, before, 'Shift+wheel should not change zoom');
+            cleanup(tl, container);
+            tl = null;
+        });
+    });
+
     describe('Timeline - Coordinate Conversion', function () {
         var container, tl;
 
@@ -394,6 +439,84 @@
             tl.destroy();
             assertEqual(container.querySelectorAll('canvas').length, 0, 'Canvas should be removed');
             container.remove();
+        });
+    });
+
+    // ---- Mouse interaction regressions: right-click pan + mouseup-only seek ----
+    describe('Timeline - mouse interaction', function () {
+        var container, tl;
+
+        function ev(button, x) {
+            return {
+                button: button, offsetX: x, offsetY: 20,
+                clientX: x, clientY: 20,
+                preventDefault: function () {}, shiftKey: false,
+            };
+        }
+
+        beforeEach(function () {
+            if (tl) cleanup(tl, container);
+            container = createContainer(800, 80);
+            tl = new Timeline(container, { totalFrames: 100 });
+        });
+
+        it('right-click + drag scrolls the timeline; right-click release alone is a no-op', function () {
+            // Zoom so there's scrollable range.
+            var bigContainer = createContainer(800, 80);
+            var bigTl = new Timeline(bigContainer, { totalFrames: 10000 });
+            bigTl.setZoom(10);
+            var scrollBefore = bigTl._scrollFrame;
+            bigTl._handleMouseDown(ev(2, 300));
+            assertTrue(!!bigTl._isPanning, 'right-click enters pan mode');
+            bigTl._handleMouseMove(ev(2, 100));
+            assertTrue(bigTl._scrollFrame !== scrollBefore,
+                'drag updates _scrollFrame');
+            bigTl._handleMouseUp(ev(2, 100));
+            assertFalse(!!bigTl._isPanning, 'mouseup ends the pan');
+            cleanup(bigTl, bigContainer);
+
+            // Right-click release without drag changes nothing.
+            var prevFrame = tl._currentFrame;
+            var prevScroll = tl._scrollFrame;
+            tl._handleMouseDown(ev(2, 300));
+            tl._handleMouseUp(ev(2, 300));
+            assertEqual(tl._scrollFrame, prevScroll);
+            assertEqual(tl._currentFrame, prevFrame);
+            cleanup(tl, container); tl = null;
+        });
+
+        it('left-click drag does not emit during drag; one seek fires on mouseup', function () {
+            var frameChanges = [];
+            var dragEnds = [];
+            tl._onFrameChange = function (f) { frameChanges.push(f); };
+            tl._onDragEnd = function (f) { dragEnds.push(f); };
+            var before = tl._currentFrame;
+
+            tl._handleMouseDown(ev(0, 300));
+            tl._handleMouseMove(ev(0, 400));
+            tl._handleMouseMove(ev(0, 500));
+            assertEqual(frameChanges.length, 0,
+                'no intermediate frame loads during drag');
+            assertEqual(tl._currentFrame, before,
+                'playhead pinned during drag');
+
+            tl._handleMouseUp(ev(0, 500));
+            assertEqual(frameChanges.length, 1, 'one onFrameChange per gesture');
+            assertEqual(dragEnds.length, 1, 'one onDragEnd per gesture');
+            assertEqual(frameChanges[0], dragEnds[0],
+                'both emissions target the same final frame');
+            assertTrue(tl._currentFrame !== before,
+                'playhead jumps to the release frame');
+            cleanup(tl, container); tl = null;
+        });
+
+        it('release outside the content area does not seek', function () {
+            var dragEnds = [];
+            tl._onDragEnd = function (f) { dragEnds.push(f); };
+            tl._handleMouseDown(ev(0, 300));
+            tl._handleMouseUp(ev(0, 10));  // inside LEFT_MARGIN (label area)
+            assertEqual(dragEnds.length, 0);
+            cleanup(tl, container); tl = null;
         });
     });
 

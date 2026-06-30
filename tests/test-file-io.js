@@ -4,7 +4,7 @@
 
 (function () {
     const { describe, it, assertEqual, assertDeepEqual, assertNotNull, assertTrue,
-        assertGreaterThan, assertThrows } = TestFramework;
+        assertFalse, assertGreaterThan, assertThrows } = TestFramework;
 
     // ---- TOML Parsing ----
 
@@ -232,7 +232,7 @@
             // Create an instance group with 3D points
             const group = new InstanceGroup(1, 0);
             group.points3d = [[10, 20, 30], [40, 50, 60]];
-            session.instanceGroups.set(5, new Map([[0, [group]]]));
+            session.instanceGroups.set(5, [group]);
 
             const data = buildPoints3dExportData(session);
             assertEqual(data.frame_indices.length, 1);
@@ -287,6 +287,78 @@
             ];
             const matched = matchVideosToCameras(files, cameras);
             assertEqual(matched.size, 0);
+        });
+    });
+
+    // ---- instancePointsMatch + SLP load de-duplication ----
+    describe('instancePointsMatch (SLP pass-1/pass-2 dedup)', function () {
+        it('matches positions within tolerance, skipping null gaps; rejects mismatches and length changes', function () {
+            // Happy path: equal-length arrays with a matching non-null pair.
+            assertTrue(instancePointsMatch([null, [10, 20]], [null, [10.001, 20.002]]));
+            // Partial overlap: pass-1 and pass-2 may null different nodes;
+            // any both-non-null pair that agrees within tolerance is enough.
+            assertTrue(instancePointsMatch([null, [10, 10], [20, 20]],
+                                           [[0, 0], null, [20, 20]]));
+            // Beyond tolerance => reject.
+            assertFalse(instancePointsMatch([[10, 20]], [[12, 20]]));
+            // All-null arrays have no shared evidence => reject.
+            assertFalse(instancePointsMatch([null, null], [null, null]));
+            // Length mismatch => reject.
+            assertFalse(instancePointsMatch([[1, 2]], [[1, 2], [3, 4]]));
+            // Null / undefined inputs => reject.
+            assertFalse(instancePointsMatch(null, [[1, 2]]));
+            assertFalse(instancePointsMatch([[1, 2]], undefined));
+        });
+
+        it('SLP loader dedup replaces pass-1 with pass-2 and leaves unlinked clean', function () {
+            // Pass 1 adds a raw SLP instance at track 0. Pass 2 then
+            // creates a metadata-driven instance at the SAME position
+            // with the user-proofread track 1 AND a nulled middle node
+            // (to exercise the partial-overlap match). The in-loop dedup
+            // must remove the pass-1 reference, and the belt-and-
+            // suspenders cleanup must drop any unlinked duplicate that
+            // slipped past.
+            var pass1 = new Instance([[10, 10], [15, 15], [20, 20]], 0, 'predicted', 0.9);
+            var pass2 = new Instance([[10, 10], null,     [20, 20]], 1, 'user', 1.0);
+            var fg = new FrameGroup(5);
+            fg.addInstance('cam1', pass1);
+
+            // In-loop dedup.
+            var camInsts = fg.instances.get('cam1');
+            for (var i = 0; i < camInsts.length; i++) {
+                if (instancePointsMatch(camInsts[i].points, pass2.points)) {
+                    camInsts.splice(i, 1);
+                    break;
+                }
+            }
+            fg.addInstance('cam1', pass2);
+            assertEqual(fg.instances.get('cam1').length, 1, 'only pass-2 remains');
+            assertTrue(fg.instances.get('cam1')[0] === pass2);
+            assertEqual(fg.instances.get('cam1')[0].trackIdx, 1,
+                'proofread trackIdx survives, not the raw SLP one');
+
+            // Belt-and-suspenders cleanup: unlinked pass-1 duplicate
+            // (simulates the case where the in-loop dedup missed one).
+            var leftover = new Instance([[10, 10], [15, 15], [20, 20]], 0, 'predicted', 0.9);
+            fg.addUnlinkedInstance('cam1', new UnlinkedInstance(leftover, 'cam1'));
+            var grp = new InstanceGroup(1, 1);
+            grp.addInstance('cam1', pass2);
+            var camGrouped = [];
+            for (var [, gInst] of grp.instances) camGrouped.push(gInst.points);
+            var ulList = fg.unlinkedInstances.get('cam1');
+            var kept = [];
+            for (var u = 0; u < ulList.length; u++) {
+                var dup = false;
+                for (var gi = 0; gi < camGrouped.length; gi++) {
+                    if (instancePointsMatch(ulList[u].instance.points, camGrouped[gi])) {
+                        dup = true; break;
+                    }
+                }
+                if (!dup) kept.push(ulList[u]);
+            }
+            fg.unlinkedInstances.set('cam1', kept);
+            assertEqual(fg.unlinkedInstances.get('cam1').length, 0,
+                'position-matching unlinked duplicate is dropped');
         });
     });
 })();

@@ -257,24 +257,51 @@ body {
 
 /* Session strip sidebar (far left) */
 .session-strip {
-    width: 48px;
+    width: 64px;
+    min-width: 40px;
     display: flex;
     flex-direction: column;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     flex-shrink: 0;
     overflow: hidden;
+    transition: width 0.15s ease, opacity 0.15s ease;
+    position: relative;
 }
 
-.session-strip-header {
-    padding: 6px 4px;
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-muted);
-    text-align: center;
-    border-bottom: 1px solid var(--border-color);
-    flex-shrink: 0;
+.session-strip-resize {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 4px;
+    height: 100%;
+    cursor: col-resize;
+    background: var(--border-color);
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 5;
+}
+
+.session-strip-resize:hover,
+.session-strip-resize.dragging {
+    opacity: 1;
+}
+
+.session-strip.session-strip-hidden {
+    width: 0;
+    min-width: 0;
+    border-right: none;
+    opacity: 0;
+    pointer-events: none;
+}
+
+#sessionHoverZone {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 6px;
+    height: 100%;
+    z-index: 9999;
 }
 
 .session-strip-list {
@@ -288,10 +315,10 @@ body {
     flex-direction: column;
     align-items: center;
     padding: 4px;
-    margin: 2px 4px;
+    margin: 4px 4px;
     cursor: pointer;
     border-radius: 4px;
-    border: 2px solid transparent;
+    border: 2px solid var(--border-color);
     transition: background var(--transition-fast), border-color var(--transition-fast);
     position: relative;
 }
@@ -413,6 +440,16 @@ body {
   outline: 1px solid var(--accent);
 }
 
+.view-strip-item.strip-selected {
+  outline: 2px solid rgba(255, 221, 68, 0.5);
+  background: rgba(255, 221, 68, 0.1);
+}
+
+.view-strip-item.strip-multi-selected {
+  outline: 2px solid rgba(100, 180, 255, 0.7);
+  background: rgba(100, 180, 255, 0.15);
+}
+
 .view-strip-item.dragging {
   opacity: 0.5;
 }
@@ -508,6 +545,24 @@ body {
   position: relative;
   overflow: hidden;
   transition: width var(--transition-normal);
+}
+
+.viewport3d-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.viewport3d-message.hidden {
+  display: none;
 }
 
 .viewport3d-container.collapsed {
@@ -750,6 +805,12 @@ body {
   color: var(--accent);
 }
 
+#tbSessions {
+  width: 64px;
+  padding: 0;
+  margin-left: -16px;
+}
+
 /* Toolbar dropdown menu (for Assign button) */
 .toolbar-dropdown-menu {
   background: var(--bg-secondary);
@@ -808,6 +869,73 @@ body {
   display: block;
 }
 
+/* Triangulate / Triangulate All split dropdowns (DLT vs Bundle Adjustment) */
+.tri-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+.tri-caret {
+  margin-left: 4px;
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.tri-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  z-index: 200;
+  /* Pure-CSS "hover intent": no display:none (keeps it out of layout via
+     position:absolute), flush under the button (margin-top:0) so the cursor
+     never crosses a gap, and a delayed visibility transition keeps the menu
+     up for a short grace period after the cursor leaves. */
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.12s ease, transform 0.12s ease,
+    visibility 0s linear 0.35s;
+}
+
+.tri-dropdown:hover .tri-dropdown-menu,
+.tri-dropdown.open .tri-dropdown-menu {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
+}
+
+.tri-dropdown-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-primary);
+  transition: background var(--transition-fast);
+}
+
+.tri-dropdown-item:hover {
+  background: var(--accent-dim);
+}
+
+.tri-dropdown-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 /* Multi-frame assignment modal */
 .multi-frame-modal-overlay {
   position: fixed;
@@ -848,6 +976,89 @@ body {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 20px;
+}
+
+/* Rename Track / Identity modal */
+.rename-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.rename-list-item {
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rename-list-item:last-child {
+  border-bottom: none;
+}
+
+.rename-list-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.rename-list-item.selected {
+  background: #ffd54a;
+  color: #1a1a1a;
+}
+
+.rename-name-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.rename-name-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+/* Read-only (reference) list, e.g. current tracks in the New modal */
+.rename-list.readonly .rename-list-item {
+  cursor: default;
+}
+
+.rename-list.readonly .rename-list-item:hover {
+  background: transparent;
+}
+
+/* Delete modal: red warning line + per-camera count total */
+.delete-warning {
+  color: #e5484d;
+  font-size: 12px;
+  margin: 0 0 12px;
+  min-height: 14px;
+}
+
+.delete-total-row td {
+  font-weight: 700;
+  border-top: 1px solid var(--border-color);
+}
+
+.multi-frame-modal button.danger {
+  background: #e5484d;
+  border-color: #e5484d;
+  color: #fff;
+}
+
+.multi-frame-modal button.danger:hover {
+  background: #d13b40;
+  border-color: #d13b40;
 }
 
 .multi-frame-modal button {
@@ -992,6 +1203,62 @@ body {
   min-width: 680px;
 }
 
+/* Multi-session (two-panel) SLP export layout */
+.slp-export-multi {
+  min-width: 820px;
+}
+
+.slp-export-multi-body {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.slp-export-multi-left {
+  flex: 0 0 260px;
+  min-width: 0;
+}
+
+.slp-export-multi-right {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.slp-export-panel-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.slp-session-row {
+  cursor: pointer;
+}
+
+.slp-session-row:hover {
+  background: var(--accent-dim);
+}
+
+.slp-session-row.slp-session-active {
+  background: rgba(100, 150, 255, 0.18);
+  outline: 2px solid rgba(100, 150, 255, 0.55);
+}
+
+.slp-session-selcam {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Restore right-align override for cam-view stats columns */
+.slp-cam-table th:nth-child(n+2),
+.slp-cam-table td:nth-child(n+2) {
+  text-align: right;
+  width: 80px;
+  font-variant-numeric: tabular-nums;
+}
+
 .slp-export-table-container {
   max-height: 250px;
   overflow-y: auto;
@@ -1037,6 +1304,29 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* Stacked variant: each option on its own row (e.g. By-Cam modal — Save
+   Reprojections sits beneath Save PredictedInstances). */
+.slp-export-options.slp-export-options-stacked {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.slp-export-options-stacked .slp-opt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Disabled option row (e.g. no reprojections available to save). */
+.slp-export-options-stacked .slp-opt-disabled {
+  opacity: 0.5;
+}
+
+.slp-export-options-stacked .slp-opt-disabled label {
+  cursor: not-allowed;
 }
 
 .slp-reproj-toggle {
@@ -1098,6 +1388,17 @@ body {
   border-radius: 4px;
 }
 
+.slp-export-error {
+  min-height: 18px;
+  margin: 4px 0 6px;
+  font-size: 12px;
+  color: #ef4444;
+}
+
+.slp-export-error:empty {
+  display: none;
+}
+
 .slp-export-note code {
   font-size: 11px;
   color: var(--text-primary);
@@ -1106,6 +1407,105 @@ body {
 /* Export All Views modal */
 .slp-export-all-modal {
   min-width: 700px;
+}
+
+/* Quick post-export result popup (Download Successful / Failed). Sits above the
+   export modals (z 20000) so it shows on top / after they close. */
+.export-result-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.export-result-card {
+  min-width: 240px;
+  max-width: 70vw;
+  padding: 20px 28px;
+  border-radius: 10px;
+  background: var(--bg-secondary, #1e1e1e);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.export-result-icon {
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+  border-radius: 50%;
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.export-result-card.success .export-result-icon { background: #22c55e; }
+.export-result-card.failure .export-result-icon { background: #ef4444; }
+
+.export-result-msg {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* Export SLEAP File Per Session: active session → one file per camera dir. */
+.slp-export-persession-modal {
+  min-width: 720px;
+}
+
+.slp-export-persession-modal .slp-export-table {
+  table-layout: auto;
+  width: 100%;
+}
+
+/* Download + Camera + Directory columns shrink to fit so the Output Filename
+   column (last) absorbs the remaining width and the input reads its full name. */
+.slp-export-persession-modal .slp-export-table th:nth-child(1),
+.slp-export-persession-modal .slp-export-table td:nth-child(1),
+.slp-export-persession-modal .slp-export-table th:nth-child(2),
+.slp-export-persession-modal .slp-export-table td:nth-child(2),
+.slp-export-persession-modal .slp-export-table th:nth-child(3),
+.slp-export-persession-modal .slp-export-table td:nth-child(3) {
+  width: 1%;
+  white-space: nowrap;
+  padding-right: 16px;
+}
+
+.slp-export-persession-modal .slp-export-table th:last-child,
+.slp-export-persession-modal .slp-export-table td:last-child {
+  width: auto;
+}
+
+/* Download checkbox column — compact and centered. */
+.slp-export-persession-modal .slp-ps-dl-cell {
+  text-align: center;
+  padding-right: 12px;
+}
+
+.slp-export-persession-modal .slp-ps-dl {
+  cursor: pointer;
+  margin: 0;
+}
+
+.slp-export-persession-modal .slp-ps-dir {
+  color: var(--text-muted);
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.slp-export-persession-modal .slp-ps-filename {
+  width: 100%;
+  min-width: 340px;
+  box-sizing: border-box;
 }
 
 .slp-export-all-modal .slp-export-table {
@@ -1155,6 +1555,277 @@ body {
 .slp-all-reproj .slp-toggle-option {
   padding: 2px 6px;
   font-size: 11px;
+}
+
+/* Export SLEAP by Camera modal — fixed width so many cameras scroll the camera
+   table horizontally rather than stretching the modal across the screen. */
+.slp-bycam-modal {
+  width: min(1040px, 92vw);
+  min-width: 520px;
+  max-width: 92vw;
+}
+
+/* Two separate, independently-scrollable tables (session names | camera grid)
+   with a small gap. Row heights are pinned so the two stay row-aligned. */
+.slp-bycam-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+/* Each table gets its own scroll container. overflow-x:scroll keeps a bottom
+   scrollbar always present (mouse users) and scrolls on a trackpad; the
+   horizontal extent of each is driven by its own content width. */
+.slp-bycam-scroll {
+  max-height: 360px;
+  overflow-x: scroll;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  scrollbar-width: thin; /* Firefox */
+}
+
+/* Definite width (not auto) so the session table can exceed it and scroll
+   horizontally for long names — auto + overflow:scroll collapses to min-content
+   and clips instead. */
+.slp-bycam-sess-scroll {
+  flex: 0 0 200px;
+  width: 200px;
+  max-width: 200px;
+}
+
+.slp-bycam-cam-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Always-visible, themed scrollbars (esp. the horizontal one). */
+.slp-bycam-scroll::-webkit-scrollbar {
+  height: 12px;
+  width: 10px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 6px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Scoped under .slp-bycam-scroll to outrank the generic `.data-table`
+   (width:100%; border-collapse:collapse) defined later in this file.
+   width:max-content lets each table grow to its content and scroll; a
+   percentage min-width here would clamp max-content, so the camera table's
+   "fill when narrow" is handled separately below. */
+.slp-bycam-scroll > .slp-bycam-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: auto;
+  font-size: 12px;
+}
+.slp-bycam-cam-scroll > .slp-bycam-cam-table {
+  min-width: 100%; /* fill the container when there are few cameras */
+}
+
+.slp-bycam-table th,
+.slp-bycam-table td {
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  padding: 2px 6px;
+  box-sizing: border-box;
+}
+
+/* Pinned row heights so the two tables line up row-for-row across the gap. */
+.slp-bycam-table thead th { height: 28px; }
+.slp-bycam-table tbody td { height: 26px; }
+.slp-bycam-table tfoot td { height: 34px; }
+
+/* Compact, fixed-width camera columns (header / cells / ✗ / Download). */
+.slp-bycam-cam-head,
+.slp-bycam-cell,
+.slp-bycam-missing,
+.slp-bycam-incl-cell {
+  width: 92px;
+  min-width: 92px;
+  max-width: 92px;
+}
+
+/* Sticky header row (camera names / "Session" label). */
+.slp-bycam-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Sticky footer row (Download buttons / spacer). */
+.slp-bycam-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  text-align: center;
+}
+
+/* Session panel: a div-list (not a table). width:max-content on the inner
+   wrapper grows it to the longest name so the container scrolls horizontally;
+   min-width:100% fills the container for short names. */
+.slp-bycam-sess-inner {
+  width: max-content;
+  min-width: 100%;
+}
+.slp-bycam-sess-cell-d {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-color);
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+}
+.slp-bycam-sess-h-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+.slp-bycam-sess-row {
+  height: 26px;
+  font-variant-numeric: tabular-nums;
+}
+.slp-bycam-sess-foot-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  height: 34px;
+  border-bottom: none;
+}
+
+/* Long camera names scroll horizontally inside the header cell. */
+.slp-bycam-cam-name {
+  max-width: 80px;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* Toggle-able presence cell. */
+.slp-bycam-cell {
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+}
+
+.slp-bycam-cell.on {
+  background: rgba(250, 204, 21, 0.25);
+  color: #eab308;
+}
+
+.slp-bycam-cell.off {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.slp-bycam-cell:hover {
+  outline: 1px solid rgba(250, 204, 21, 0.6);
+  outline-offset: -1px;
+}
+
+/* Session lacks this camera view — red ✗, not selectable. */
+.slp-bycam-missing {
+  text-align: center;
+  color: #ef4444;
+  font-weight: 700;
+  cursor: not-allowed;
+  user-select: none;
+}
+
+.slp-bycam-incl-cell {
+  text-align: center;
+  padding: 2px 3px;
+}
+
+/* Per-column include toggle for "Download All". Mirrors the presence-cell
+   ✓/✗ look so the footer reads as one more selectable row. */
+.slp-bycam-incl {
+  display: inline-block;
+  min-width: 22px;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.slp-bycam-incl.on {
+  background: rgba(250, 204, 21, 0.25);
+  color: #eab308;
+}
+
+.slp-bycam-incl.off {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.slp-bycam-incl:not(.disabled):hover {
+  outline: 1px solid rgba(250, 204, 21, 0.6);
+  outline-offset: -1px;
+}
+
+/* Blocked (skeleton mismatch) or permanently-empty column — red ✗, not selectable. */
+.slp-bycam-incl.disabled {
+  background: none;
+  color: #ef4444;
+  opacity: 0.85;
+  cursor: not-allowed;
+}
+
+/* Full-width Download All row beneath the table. */
+.slp-bycam-all-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 10px 0 0;
+}
+
+.slp-bycam-modal .slp-bycam-all-btn {
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.slp-bycam-modal .slp-bycam-all-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Red warning shown under the tables when a column's download is blocked
+   because the selected sessions have mismatched skeletons. */
+.slp-bycam-skel-warning {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 4px;
+  white-space: pre-line;
 }
 
 
@@ -1218,26 +1889,56 @@ body {
   background: var(--bg-tertiary);
   border-top: 1px solid var(--border-color);
   position: relative;
-  overflow-y: scroll;
-  overflow-x: hidden;
+  /* Block 1 (Prompt 4): vertical overflow now lives on the inner
+     `.timeline-track-area` wrapper — the container itself is a flex
+     column so the wrapper can absorb the remaining vertical space. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   flex-shrink: 0;
 }
 
-.timeline-container::-webkit-scrollbar {
-  width: 14px;
+.timeline-track-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Scrollbar appears only when the timeline is shortened enough that the
+     track rows overflow vertically. `scrollbar-gutter: stable` keeps the
+     canvas width steady when the bar appears/disappears so the playhead
+     doesn't jitter on resize. Combined with the explicit `::-webkit-scrollbar`
+     rules below (and `-webkit-appearance: none`), this defeats macOS's
+     overlay-scrollbar behavior so the bar is always *visible* while it
+     exists rather than fading on idle. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  scrollbar-gutter: stable;
+  /* Firefox: classic visible scrollbar at the platform's normal width. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--text-muted) var(--bg-tertiary);
 }
 
-.timeline-container::-webkit-scrollbar-track {
+/* Wider, always-visible vertical scrollbar on the timeline's track area.
+   Overrides the body-level 6px `::-webkit-scrollbar` rule so this scrollbar
+   reads as a deliberate UI element, and uses `-webkit-appearance: none` to
+   defeat macOS's overlay-scrollbar behavior. */
+.timeline-track-area::-webkit-scrollbar {
+  width: 12px;
+  -webkit-appearance: none;
+}
+
+.timeline-track-area::-webkit-scrollbar-track {
   background: var(--bg-tertiary);
+  border-left: 1px solid var(--border-color);
 }
 
-.timeline-container::-webkit-scrollbar-thumb {
+.timeline-track-area::-webkit-scrollbar-thumb {
   background: var(--text-muted);
-  border-radius: 7px;
-  border: 3px solid var(--bg-tertiary);
+  border-radius: 6px;
+  border: 2px solid var(--bg-tertiary);
+  min-height: 24px;
 }
 
-.timeline-container::-webkit-scrollbar-thumb:hover {
+.timeline-track-area::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
 
@@ -1248,8 +1949,17 @@ body {
 }
 
 .timeline-container.collapsed {
-  height: 0;
+  /* Fully hide the timeline — `height: 0` alone is not enough because
+     `.timeline-container` declares `min-height: 40px`, which would leave a
+     ~two-row strip visible. Override `min-height` and force `height: 0`
+     with !important so any inline-style height set by toggleTimeline /
+     fitTimelineToData is also defeated. The 8px `.split-handle.horizontal`
+     above the container remains visible and provides the click-and-drag
+     affordance the user can use to expand the timeline back up. */
+  height: 0 !important;
+  min-height: 0 !important;
   border-top: none;
+  overflow: hidden;
 }
 
 /* --------------------------------------------------------------------------
@@ -1506,8 +2216,10 @@ body {
 }
 
 .panel-tab {
-  flex: 1;
-  padding: 8px 4px;
+  /* Size to the tab's full name — never squished/truncated. Overflow tabs
+     are demoted into the "More" dropdown by layoutPanelTabs() instead. */
+  flex: 0 0 auto;
+  padding: 8px 12px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -1518,10 +2230,7 @@ body {
   border-bottom: 2px solid transparent;
   cursor: pointer;
   transition: color var(--transition-fast), border-color var(--transition-fast);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
 }
 
 .panel-tab:hover {
@@ -1531,6 +2240,68 @@ body {
 .panel-tab.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
+}
+
+/* ---- "More ▾" overflow dropdown for panel tabs ---- */
+.panel-tab-more {
+  position: relative;
+  margin-left: auto; /* anchor to the right edge of the tab bar */
+  flex: 0 0 auto;
+}
+
+.panel-tab-more-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.panel-tab-more-btn .more-caret {
+  font-size: 9px;
+  line-height: 1;
+}
+
+.panel-tab-more-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 100;
+  min-width: 130px;
+  padding: 4px 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.panel-tab-more.open .panel-tab-more-menu {
+  display: block;
+}
+
+.panel-tab-more-item {
+  display: block;
+  width: 100%;
+  padding: 7px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.panel-tab-more-item:hover {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.panel-tab-more-item.active {
+  color: var(--accent);
 }
 
 .panel-tab-content {
@@ -1668,7 +2439,31 @@ body {
   color: var(--text-muted);
 }
 
+/* Triangulation method label (under "Reprojection Error") */
+.error-method {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
 /* Reprojection error display */
+.error-display-undist {
+  text-align: center;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: -8px;
+  padding-bottom: 10px;
+}
+
+.error-display-undist:empty {
+  display: none;
+}
+
 .error-display {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 22px;
@@ -2311,6 +3106,53 @@ kbd {
     font-size: 11px;
     color: var(--text-secondary);
 }
+/* Block 2 (Prompt 4): per-session timeline visibility toggle lists. */
+.vis-timeline-toggles {
+    font-size: 11px;
+}
+.vis-toggle-list {
+    max-height: 160px;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle, #2a2a2a);
+    border-radius: 3px;
+    padding: 2px;
+    margin-bottom: 4px;
+}
+.vis-toggle-row:hover {
+    background: rgba(255,255,255,0.04);
+}
+/* Views list specifically: cameras are a small, finite count — drop the
+   scroll-clamped container and render as clean tabular rows with subtle
+   separators. Tracks and Identities keep .vis-toggle-list (scrollable). */
+#visTimelineCameras {
+    max-height: none;
+    overflow: visible;
+    border: none;
+    padding: 0;
+}
+#visTimelineCameras .vis-toggle-row {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border-subtle, #2a2a2a);
+}
+#visTimelineCameras .vis-toggle-row:last-child {
+    border-bottom: none;
+}
+/* Compact toggle-switch for the timeline visibility rows — the standard
+   40×22 size dominates the narrow Info Panel rows when many cameras /
+   tracks / identities are listed. */
+.vis-toggle-row .toggle-switch {
+    width: 28px;
+    height: 16px;
+}
+.vis-toggle-row .toggle-switch .slider::before {
+    width: 12px;
+    height: 12px;
+    left: 2px;
+    bottom: 2px;
+}
+.vis-toggle-row .toggle-switch input:checked + .slider::before {
+    transform: translateX(12px);
+}
 .vis-slider-row span:first-child {
     flex: 0 0 100px;
 }
@@ -2447,4 +3289,500 @@ kbd {
     background: #667eea;
     color: #fff;
     border-color: #667eea;
+}
+
+/* Hide number input spinner buttons */
+.no-spinner::-webkit-outer-spin-button,
+.no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* Custom stepper arrows for 3D viewer inputs */
+.vis3d-stepper {
+    display: inline-flex;
+    flex-direction: column;
+    vertical-align: middle;
+    margin-left: 2px;
+}
+.vis3d-stepper button {
+    display: block;
+    width: 14px;
+    height: 10px;
+    padding: 0;
+    border: 1px solid var(--border-color, #444);
+    background: var(--bg-tertiary, #2a2a2a);
+    color: var(--text-secondary, #aaa);
+    font-size: 7px;
+    line-height: 8px;
+    text-align: center;
+    cursor: pointer;
+}
+.vis3d-stepper button:first-child {
+    border-radius: 2px 2px 0 0;
+    border-bottom: none;
+}
+.vis3d-stepper button:last-child {
+    border-radius: 0 0 2px 2px;
+}
+.vis3d-stepper button:hover {
+    background: var(--bg-button-hover, #3a3a3a);
+    color: var(--text-primary, #e0e0e0);
+}
+
+/* Speed popover */
+.speed-popover {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 6px;
+    background: var(--bg-secondary, #1e1e1e);
+    border: 1px solid var(--border-color, #444);
+    border-radius: 8px;
+    padding: 12px 14px;
+    min-width: 240px;
+    z-index: 9000;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+.speed-popover .speed-label {
+    text-align: center;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary, #e0e0e0);
+    margin-bottom: 8px;
+}
+.speed-popover .speed-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+.speed-popover .speed-slider-row input[type=range] {
+    flex: 1;
+}
+.speed-popover .speed-slider-row button {
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--border-color, #444);
+    background: var(--bg-tertiary, #2a2a2a);
+    color: var(--text-primary, #e0e0e0);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+}
+.speed-popover .speed-presets {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+}
+.speed-popover .speed-presets button {
+    padding: 4px 10px;
+    font-size: 11px;
+    border: 1px solid var(--border-color, #444);
+    background: var(--bg-tertiary, #2a2a2a);
+    color: var(--text-primary, #e0e0e0);
+    border-radius: 4px;
+    cursor: pointer;
+}
+.speed-popover .speed-presets button.active {
+    border-color: var(--accent, #4a9eff);
+    background: rgba(74,158,255,0.15);
+}
+
+/* ===== Settings modal ===== */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  width: 880px;
+  max-width: 94vw;
+  height: 620px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--transition-fast);
+}
+
+.settings-modal-close:hover {
+  color: var(--text-primary);
+}
+
+.settings-modal-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-nav {
+  width: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color);
+  padding: 8px 0;
+  overflow-y: auto;
+  background: var(--bg-tertiary);
+}
+
+.settings-nav-item {
+  padding: 9px 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.settings-nav-item:hover {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+.settings-nav-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.settings-panel-container {
+  flex: 1;
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
+.settings-panel {
+  display: none;
+}
+
+.settings-panel.active {
+  display: block;
+}
+
+.settings-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.settings-radio-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.settings-radio-row:hover {
+  background: var(--bg-button);
+}
+
+.settings-radio {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--text-muted);
+  border-radius: 4px;
+  flex-shrink: 0;
+  position: relative;
+  transition: border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.settings-radio-row.checked .settings-radio {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.settings-radio-row.checked .settings-radio::after {
+  content: '\2713';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.settings-radio-row.checked {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.settings-radio-label {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-radio-title {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.settings-radio-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.settings-kbd-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-kbd-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.settings-kbd-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-width: 44px;
+  text-align: center;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.settings-kbd-key:hover {
+  border-color: var(--accent);
+}
+
+.settings-kbd-key.capturing {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* Fixed (non-rebindable) reference shortcuts: shown but not interactive. */
+.settings-kbd-key.fixed {
+  cursor: default;
+  color: var(--text-muted);
+  background: transparent;
+  border-style: dashed;
+}
+
+.settings-kbd-key.fixed:hover {
+  border-color: var(--border-color);
+}
+
+/* Category subheader within the Keyboard Shortcuts list. */
+.settings-kbd-category {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  margin: 16px 0 4px;
+  padding-bottom: 2px;
+}
+
+.settings-kbd-category:first-child {
+  margin-top: 0;
+}
+
+.settings-kbd-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 12px;
+}
+
+/* Tracking Wizard ▸ Node Weights: a scrollable, multi-column table of nodes so
+   long skeletons stay compact. */
+.settings-node-weight-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 2px 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  column-gap: 24px;
+}
+
+.settings-node-weight-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border-color);
+  min-width: 0;
+}
+
+.settings-node-weight-row .settings-kbd-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tracking Wizard ▸ Tracking Thresholds: label + description, value on the right. */
+.settings-threshold-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-threshold-label-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-threshold-title {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.settings-threshold-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Shared number field for node weights and tracking thresholds. */
+.settings-num-input {
+  width: 72px;
+  flex: 0 0 auto;
+  text-align: center;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.settings-num-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* No up/down spinner arrows on the number fields. */
+.settings-num-input::-webkit-outer-spin-button,
+.settings-num-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.settings-num-input {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.settings-docs-note {
+  margin-top: 14px;
+}
+
+.settings-docs-note a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.settings-docs-note a:hover {
+  text-decoration: underline;
+}
+
+.settings-coming-soon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 200px;
+  color: var(--text-muted);
+  font-size: 14px;
+  letter-spacing: 0.5px;
+}
+
+.settings-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-color);
+}
+
+.settings-btn {
+  padding: 7px 18px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  transition: background var(--transition-fast), color var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.settings-btn-cancel {
+  background: var(--bg-button);
+  color: var(--text-secondary);
+}
+
+.settings-btn-cancel:hover {
+  color: var(--text-primary);
+}
+
+.settings-btn-apply {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.settings-btn-apply:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }

@@ -435,12 +435,10 @@
             session.addFrameGroup(fg);
 
             // Create a linked InstanceGroup so findNearestNode can find it
-            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, new Map());
-            var trackMap = session.instanceGroups.get(0);
+            if (!session.instanceGroups.has(0)) session.instanceGroups.set(0, []);
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', linkedInst);
-            if (!trackMap.has(0)) trackMap.set(0, []);
-            trackMap.get(0).push(group);
+            session.instanceGroups.get(0).push(group);
 
             // Create an unlinked instance at (105, 105) - very close to linked
             var unlinkedInst = new Instance([[105, 105], [160, 160]], 0, 'user', 1.0);
@@ -526,8 +524,10 @@
         it('C key creates group from assignment selection', function () {
             var env = buildEnv();
             try {
+                // A group needs ≥2 instances by definition.
                 env.mgr.setAssignmentMode(true);
                 env.mgr.addToAssignmentSelection(env.unlinked1);
+                env.mgr.addToAssignmentSelection(env.unlinked2);
 
                 env.mgr.onKeyDown(makeKeyEvent('c'));
 
@@ -543,7 +543,7 @@
             var env = buildEnv();
             try {
                 env.mgr.setAssignmentMode(true);
-                // No selection — _createGroupFromAssignment requires >= 1
+                // No selection — _createGroupFromAssignment requires >= 2
                 env.mgr._createGroupFromAssignment();
 
                 // Mode should still be on (no group created)
@@ -836,7 +836,11 @@
             }
         });
 
-        it('_unlinkSelectedGroup clears selection', function () {
+        // The InteractionManager._unlinkSelectedGroup() method was removed (dead
+        // in production). The Shift+U shortcut/toolbar now delegate to ui-wiring's
+        // unlinkGroup(), which calls the data-model Session.unlinkGroup() below.
+        // These tests cover that surviving unlink behavior.
+        it('unlinkGroup clears selection and disbands group', function () {
             var env = buildEnv();
             try {
                 // Create a group
@@ -852,8 +856,9 @@
                 env.mgr.select(groups[0], -1);
                 assertNotNull(env.mgr.selectedInstanceGroup, 'group is selected');
 
-                // Unlink via interaction method
-                env.mgr._unlinkSelectedGroup();
+                // Unlink via the surviving path: clear selection + data-model op.
+                env.mgr.clearSelection();
+                env.session.unlinkGroup(0, groups[0]);
 
                 // Selection should be cleared
                 assertNull(env.mgr.selectedInstanceGroup, 'selection cleared after unlink');
@@ -871,36 +876,36 @@
             }
         });
 
-        it('_unlinkSelectedGroup unlinks when group is selected', function () {
+        it('unlinkGroup returns instances to the unlinked pool', function () {
             var env = buildEnv();
             try {
-                // Create a group
+                // Create a group (needs ≥2 instances)
                 env.mgr.setAssignmentMode(true);
                 env.mgr.addToAssignmentSelection(env.unlinked1);
-                env.mgr.onKeyDown(makeKeyEvent('c'));
+                env.mgr.addToAssignmentSelection(env.unlinked2);
+                env.mgr._createGroupFromAssignment();
 
                 var groups = env.session.getInstanceGroupsForFrame(0);
                 assertEqual(groups.length, 1, 'group created');
 
-                // Select the group
+                // Select then unlink
                 env.mgr.select(groups[0], -1);
-
-                // Press U to unlink
-                env.mgr._unlinkSelectedGroup();
+                env.mgr.clearSelection();
+                env.session.unlinkGroup(0, groups[0]);
 
                 // Group should be unlinked
                 var afterGroups = env.session.getInstanceGroupsForFrame(0);
-                assertEqual(afterGroups.length, 0, 'group removed by U key');
+                assertEqual(afterGroups.length, 0, 'group removed');
 
                 // Instance back in unlinked pool
                 var fg = env.session.getFrameGroup(0);
-                assertEqual(fg.getUnlinkedInstances('cam1').length, 1, 'cam1 unlinked restored by U');
+                assertEqual(fg.getUnlinkedInstances('cam1').length, 1, 'cam1 unlinked restored');
             } finally {
                 env.cleanup();
             }
         });
 
-        it('_unlinkSelectedGroup is no-op when no group selected', function () {
+        it('ungroup is a no-op when no group is selected', function () {
             var env = buildEnv();
             try {
                 // Create a group but don't select it
@@ -916,8 +921,11 @@
                 env.mgr.clearSelection();
                 assertNull(env.mgr.selectedInstanceGroup, 'nothing selected');
 
-                // Press U — should be no-op
-                env.mgr._unlinkSelectedGroup();
+                // The ungroup handler only unlinks when a group is selected;
+                // with nothing selected it does nothing.
+                if (env.mgr.selectedInstanceGroup) {
+                    env.session.unlinkGroup(0, env.mgr.selectedInstanceGroup);
+                }
 
                 var afterGroups = env.session.getInstanceGroupsForFrame(0);
                 assertEqual(afterGroups.length, 1, 'group still exists (no-op)');

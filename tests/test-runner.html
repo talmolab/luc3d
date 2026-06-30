@@ -80,25 +80,15 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 
-    <!-- Source files under test -->
-    <script src="../pose-data.js"></script>
-    <script src="../triangulation.js"></script>
-    <script src="../tracker.js"></script>
-    <script src="../viewport3d.js"></script>
-    <script src="../file-io.js"></script>
-    <script src="../slp-merge.js"></script>
-    <script src="../interaction.js"></script>
-    <script src="../overlays.js"></script>
-    <script src="../timeline.js"></script>
-    <script src="../video.js"></script>
-
     <!-- Test files -->
     <script src="test-pose-data.js"></script>
+    <script src="test-skeleton-json.js"></script>
     <script src="test-triangulation.js"></script>
     <script src="test-file-io.js"></script>
     <script src="test-interaction.js"></script>
     <script src="test-regressions.js"></script>
     <script src="test-overlays.js"></script>
+    <script src="test-node-shape.js"></script>
     <script src="test-integration.js"></script>
 
     <!-- Phase 5 test files -->
@@ -114,8 +104,22 @@
 
     <!-- Timeline and video controller tests -->
     <script src="test-timeline.js"></script>
+    <script src="test-timeline-bugs.js"></script>
+    <script src="test-timeline-height.js"></script>
+    <script src="test-grouped-track-dropdown.js"></script>
+    <script src="test-track-identity-modals.js"></script>
     <script src="test-video-controller.js"></script>
     <script src="test-multi-video.js"></script>
+
+    <!-- Prompt 4 / Block 1 (Timeline visual updates):
+         tree-grouped camera/track labels, scrollable track area, and
+         Ctrl/Cmd+J toggle with prior-height cache. Pre-implementation
+         these test files all FAIL — they assert APIs and DOM structure
+         the Block 1 implementation must introduce. -->
+    <script src="test-timeline-tree-grouping.js"></script>
+    <script src="test-timeline-3dpoints.js"></script>
+    <script src="test-timeline-scroll.js"></script>
+    <script src="test-timeline-toggle-shortcut.js"></script>
 
     <!-- Drag freeze regression tests -->
     <script src="test-drag-freeze.js"></script>
@@ -123,17 +127,32 @@
     <!-- Predicted group conversion tests -->
     <script src="test-predicted-conversion.js"></script>
 
+    <!-- Save/load JSON roundtrip tests -->
+    <script src="test-save-load-json.js"></script>
+
     <!-- Label rendering tests -->
     <script src="test-labels.js"></script>
 
     <!-- Assignment mode tests -->
     <script src="test-assignment.js"></script>
 
+    <!-- Predicted double-click → user instance: selection transfer + multi-select preservation -->
+    <script src="test-predicted-dblclick.js"></script>
+
+    <!-- Ungroup / unlink-group regression tests (Bug A) -->
+    <script src="test-ungroup-fix.js"></script>
+
+    <!-- Group selection rules (Bug C + D) regression tests -->
+    <script src="test-group-selection-rules.js"></script>
+
     <!-- Project loading and triangulation tests -->
     <script src="test-project-triangulation.js"></script>
 
     <!-- SLP merge tests -->
     <script src="test-slp-merge.js"></script>
+
+    <!-- Import trackIdx resolver (trackless user + predicted) tests -->
+    <script src="test-import-track-resolve.js"></script>
 
     <!-- Tempdata triangulation pipeline tests -->
     <script src="test-tempdata-triangulation.js"></script>
@@ -144,39 +163,137 @@
     <!-- Reprojection lifecycle tests -->
     <script src="test-reprojection-lifecycle.js"></script>
 
+    <!-- Predicted-visibility-on-load tests -->
+    <script src="test-predicted-visibility-on-load.js"></script>
+
+    <!-- Edit-group / per-view-delete fix regression tests -->
+    <script src="test-edit-group-fixes.js"></script>
+
+    <!-- Mixed-group predicted→user promotion (Session.unlinkGroup, createGroupFromUnlinked, Edit Group remove) -->
+    <script src="test-mixed-group-promotion.js"></script>
+
+    <!-- Per-view delete: size===1 auto-ungroup, full-group removal, mixed-group survivor promotion -->
+    <script src="test-delete-auto-ungroup.js"></script>
+
+    <!-- Cross-cutting integration: predicted dblclick + mixed group + per-view delete + Edit Group wasMixed snapshot -->
+    <script src="test-mixed-group-integration.js"></script>
+
     <!-- Identity tests -->
     <script src="test-identity.js"></script>
+    <script src="test-identity-none-label.js"></script>
 
     <!-- Session switching tests -->
     <script src="test-session-switching.js"></script>
 
+    <!-- Bug B regression: frame index leaks across session switches -->
+    <script src="test-session-switch-frame-reset.js"></script>
+
+    <!-- Bug A regression: switchSource must await _initMp4box -->
+    <script src="test-switchsource-mp4box-await.js"></script>
+
+    <!-- Issue #89: HTML5 seek tolerance must scale with frame rate (high-fps) -->
+    <script src="test-html5-seek-tolerance.js"></script>
+
+    <!-- QoL: switchSession parallel decoders + slot stability + early timeline.setData -->
+    <script src="test-switchsession-parallel-decoders.js"></script>
+
+    <!-- Per-decoder loading progress callback (feature: loading-progress-modal) -->
+    <script src="test-decoder-onprogress.js"></script>
+    <script src="test-switchsession-progress-wiring.js"></script>
+    <script src="test-loading-progress-modal-api.js"></script>
+
+    <!-- SLP project import progress modal feature (sequential sessions / parallel videos / two-level hierarchy) -->
+    <script src="test-slp-import-sequential.js"></script>
+    <script src="test-slp-import-parallel-videos.js"></script>
+    <script src="test-slp-import-modal-structure.js"></script>
+    <script src="test-decoder-pool-repeated-swap.js"></script>
+
     <!-- Tracker geometry tests -->
     <script src="test-tracker.js"></script>
 
-    <!-- Run all tests -->
-    <script>
-        (async function () {
-            try {
-                const results = await TestFramework.runAll();
-                TestFramework.renderResults(results, document.getElementById('results'));
+    <!-- Bottom bar tests -->
+    <script src="test-bottom-bar.js"></script>
 
-                // Also log to console for headless/CI use
-                console.log('Test results:', results.passed + '/' + results.total + ' passed');
-                if (results.failed > 0) {
-                    console.error(results.failed + ' test(s) failed:');
-                    for (const suite of results.suites) {
-                        for (const test of suite.tests) {
-                            if (test.status === 'failed') {
-                                console.error('  FAIL: ' + suite.name + ' > ' + test.name + ': ' + test.error);
-                            }
+    <!-- 2026-03-09 feature set: null-node graying, ungroup, reprojected null nodes, visibility deselect, per-view skeleton cache -->
+    <script src="test-2026-03-09-changes.js"></script>
+
+    <!-- Quick save tests -->
+    <script src="test-quick-save.js"></script>
+
+    <!-- Rotation tests -->
+    <script src="test-rotation.js"></script>
+
+    <!-- Pass 2 transitional bridge + test runner.
+         Loads ESM-converted modules (pose/, ui/) and exposes their exports on
+         window so the test files (loaded as classic scripts above) can find
+         Skeleton, Camera, Instance, getTrackColor, triangulatePointDLT, etc.
+         as globals when their describe/it callbacks run. The bridge MUST run
+         before TestFramework.runAll() is invoked — using a single module here
+         (deferred) guarantees that ordering. -->
+    <script type="module">
+        import * as __PoseData from '../pose/pose-data.js';
+        // Pure (DOM-free) standalone .skeleton.json (de)serialization.
+        import * as __SkeletonJSON from '../import-export/skeleton-json.js';
+        import * as __Triangulation from '../pose/triangulation.js';
+        import * as __Overlays from '../ui/overlays.js';
+        import * as __Viewport3D from '../ui/viewport3d.js';
+        import * as __Timeline from '../ui/timeline.js';
+        import * as __Interaction from '../ui/interaction.js';
+        import * as __SlpMerge from '../import-export/slp-merge.js';
+        import * as __FileIO from '../import-export/file-io.js';
+        import * as __Video from '../loading/video.js';
+        import * as __LoadingProgressModal from '../ui/loading-progress-modal.js';
+        // Block 1 (Prompt 4): the timeline toggle / fit-to-data / shortcut
+        // helpers live in `ui/timeline-controller.js`. The module only
+        // imports `ui/app-state.js` (no transitive app.js dependency), so
+        // it's safe to bridge into the test runner.
+        import * as __TimelineCtrl from '../ui/timeline-controller.js';
+        // Pure (DOM-free) ops backing the Track/Identity menu modals. No app.js
+        // in its import graph, so it's safe to bridge for unit tests.
+        import * as __TrackIdentityOps from '../ui/track-identity-ops.js';
+        // Pure (DOM-free) import-trackIdx resolver. Extracted from
+        // session-loader.js (which pulls app.js) precisely so it's bridgeable.
+        import * as __ImportTrackResolve from '../import-export/import-track-resolve.js';
+        Object.assign(window, __PoseData, __SkeletonJSON, __Triangulation, __Overlays,
+                              __Viewport3D, __Timeline, __Interaction,
+                              __SlpMerge, __FileIO, __Video,
+                              __LoadingProgressModal,
+                              __TimelineCtrl, __TrackIdentityOps,
+                              __ImportTrackResolve);
+        // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
+        // are intentionally NOT bridged here. All three transitively import app.js
+        // (circular, awaiting later passes), and app.js requires the full DOM +
+        // main page environment to load. The ui-fixes tests that exercise
+        // edit-group / mixed-group / track-assign behavior mirror the production
+        // logic in local test fixtures (e.g., finishEditGroupBranch,
+        // editGroupRemoveBranch) rather than calling the production functions,
+        // so no bridge is needed.
+
+        try {
+            const results = await TestFramework.runAll();
+            // Modal-API tests construct LoadingProgressModal directly and call
+            // show() without always calling dismiss() (each test asserts state
+            // mid-lifecycle). Once the run is over, sweep any orphaned modal
+            // elements so the test page isn't visually cluttered by them.
+            document.querySelectorAll('.lucid-loading-progress-modal').forEach(el => el.remove());
+            TestFramework.renderResults(results, document.getElementById('results'));
+
+            // Also log to console for headless/CI use
+            console.log('Test results:', results.passed + '/' + results.total + ' passed');
+            if (results.failed > 0) {
+                console.error(results.failed + ' test(s) failed:');
+                for (const suite of results.suites) {
+                    for (const test of suite.tests) {
+                        if (test.status === 'failed') {
+                            console.error('  FAIL: ' + suite.name + ' > ' + test.name + ': ' + test.error);
                         }
                     }
                 }
-            } catch (err) {
-                document.getElementById('results').textContent = 'Error running tests: ' + err.message;
-                console.error('Test runner error:', err);
             }
-        })();
+        } catch (err) {
+            document.getElementById('results').textContent = 'Error running tests: ' + err.message;
+            console.error('Test runner error:', err);
+        }
     </script>
 </body>
 </html>

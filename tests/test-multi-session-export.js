@@ -75,9 +75,8 @@
             // Add instanceGroup to session1 only
             var ig = new InstanceGroup(0);
             ig.addInstance('CamA', makeInstance(null, 0, 'user'));
-            if (!session1.instanceGroups.has(0)) session1.instanceGroups.set(0, new Map());
-            if (!session1.instanceGroups.get(0).has(0)) session1.instanceGroups.get(0).set(0, []);
-            session1.instanceGroups.get(0).get(0).push(ig);
+            if (!session1.instanceGroups.has(0)) session1.instanceGroups.set(0, []);
+            session1.instanceGroups.get(0).push(ig);
 
             assertGreaterThan(session1.instanceGroups.size, 0, 'session1 should have instanceGroups');
             assertEqual(session2.instanceGroups.size, 0, 'session2 should remain empty');
@@ -510,6 +509,29 @@
             var data = buildSlpExportData(session, views);
 
             assertEqual(data.instances.length, 2, 'should have both grouped and unlinked instances');
+        });
+
+        it('exports each instance\'s track — grouped AND ungrouped keep their trackIdx', function () {
+            // Regression: a flat 2D project (ungrouped/unlinked instances) must
+            // export tracks, not trackless. buildSlpExportData writes
+            // instance.track = trackIdx for both grouped and unlinked.
+            var session = makeSession(['CamA'], 'UngroupedTrackExport'); // tracks: track_0, track_1
+            var fg = new FrameGroup(0);
+
+            // Grouped instance on track 0.
+            fg.addInstance('CamA', makeInstance([[10, 20], [30, 40], [50, 60]], 0, 'user'));
+            // Unlinked instance on track 1 — must keep track 1, not -1.
+            var ul = makeInstance([[100, 200], [150, 250], [200, 300]], 1, 'user');
+            fg.addUnlinkedInstance('CamA', new UnlinkedInstance(ul, 'CamA'));
+            session.addFrameGroup(fg);
+
+            var views = [{ name: 'CamA', videoWidth: 640, videoHeight: 480, frameCount: 100 }];
+            var data = buildSlpExportData(session, views);
+
+            assertEqual(data.instances.length, 2, 'both instances exported');
+            var trackVals = data.instances.map(function (i) { return i.track; }).sort();
+            assertDeepEqual(trackVals, [0, 1], 'grouped → track 0, ungrouped → track 1 (no -1)');
+            assertFalse(trackVals.indexOf(-1) >= 0, 'no instance exported trackless');
         });
     });
 
@@ -1030,6 +1052,129 @@
             assertTrue(animalSkeleton.edges[0][0] !== envSkeleton.edges[3][0] ||
                 animalSkeleton.edges[0][1] !== envSkeleton.edges[3][1],
                 'different skeletons should have different edge definitions');
+        });
+    });
+
+    // ---- Export SLEAP by Camera: skeleton compatibility ----
+    //
+    // The "Export SLEAP File By Cam" modal downloads one camera across every
+    // selected session into a single SLEAP file. That requires a shared
+    // skeleton; findSkeletonMismatch() backs the warning popup that blocks a
+    // download when the selected sessions' skeletons differ.
+
+    describe('Export by camera — skeleton mismatch detection', function () {
+        function sel(skeleton) {
+            return { session: { skeleton: skeleton } };
+        }
+
+        it('compatible skeletons return null (no mismatch)', function () {
+            var a = new Skeleton('s', ['head', 'thorax', 'tail'], [[0, 1], [1, 2]]);
+            var b = new Skeleton('s', ['head', 'thorax', 'tail'], [[0, 1], [1, 2]]);
+            assertNull(findSkeletonMismatch([sel(a), sel(b)]), 'identical skeletons are compatible');
+        });
+
+        it('a single selection is always compatible', function () {
+            var a = new Skeleton('s', ['head', 'tail'], [[0, 1]]);
+            assertNull(findSkeletonMismatch([sel(a)]), 'one session cannot mismatch itself');
+        });
+
+        it('differing node counts are reported as a mismatch', function () {
+            var a = new Skeleton('s', ['head', 'thorax', 'tail'], [[0, 1], [1, 2]]);
+            var b = new Skeleton('s', ['head', 'tail'], [[0, 1]]);
+            var msg = findSkeletonMismatch([sel(a), sel(b)]);
+            assertNotNull(msg, 'different node counts should mismatch');
+            assertTrue(msg.indexOf('Skeleton mismatch') >= 0, 'message names the mismatch');
+        });
+
+        it('a missing/extra node name (same count) is a real mismatch', function () {
+            var a = new Skeleton('s', ['head', 'thorax', 'tail'], [[0, 1], [1, 2]]);
+            var b = new Skeleton('s', ['head', 'thorax', 'abdomen'], [[0, 1], [1, 2]]);
+            var msg = findSkeletonMismatch([sel(a), sel(b)]);
+            assertNotNull(msg, 'a differing node name (different set) should mismatch');
+            assertTrue(msg.indexOf('Skeleton mismatch') >= 0, 'message names the mismatch');
+        });
+
+        it('same node SET in a DIFFERENT order is compatible (real SLEAP case)', function () {
+            // Real externals .slp files in the multiview_test dataset all share
+            // the same 24 node names but store them in different per-file orders.
+            // An order-sensitive check would spuriously block a legitimate
+            // cross-session export, so findSkeletonMismatch is set-based.
+            var refOrder = ['Top_NE', 'Top_SE', 'FilterBot_NW', 'Bot_NW', 'Top_NNW', 'FilterTop_NW',
+                'Mid_NNW', 'SpoutMid_NE', 'SpoutBot_NW', 'Top_NNE', 'FilterTop_SE', 'FilterTop_NE',
+                'FilterBot_SE', 'Bot_NE', 'FilterBot_SW', 'FilterBot_NE', 'FilterTop_SW', 'SpoutMid_SE',
+                'Mid_NNE', 'SpoutBot_NE', 'SpoutMid_NW', 'Top_SW', 'SpoutMid_SW', 'Top_NW'];
+            var reordered = ['Bot_NE', 'SpoutMid_NW', 'Top_SW', 'SpoutMid_SW', 'Top_NE', 'Top_NW',
+                'Top_SE', 'Mid_NNE', 'Bot_NW', 'FilterBot_NW', 'Top_NNW', 'FilterTop_NW', 'SpoutBot_NW',
+                'Top_NNE', 'FilterTop_SE', 'Mid_NNW', 'FilterTop_NE', 'FilterBot_SE', 'FilterBot_SW',
+                'FilterBot_NE', 'FilterTop_SW', 'SpoutMid_NE', 'SpoutMid_SE', 'SpoutBot_NE'];
+            assertEqual(refOrder.length, 24, 'reference skeleton has 24 nodes');
+            assertEqual(reordered.length, 24, 'reordered skeleton has 24 nodes');
+            var a = new Skeleton('arena', refOrder, []);
+            var b = new Skeleton('arena', reordered, []);
+            assertNull(findSkeletonMismatch([sel(a), sel(b)]),
+                'same node set in a different order must be accepted (export remaps points)');
+        });
+
+        it('a column spanning two sessions with different skeletons mismatches', function () {
+            // Mirrors a per-camera download: same camera name, two sessions, two skeletons.
+            var s1 = makeSession(['SharedCam'], 'Session1');
+            var s2 = makeSession(['SharedCam'], 'Session2');
+            s2.skeleton = new Skeleton('other', ['a', 'b', 'c', 'd'], [[0, 1], [1, 2], [2, 3]]);
+
+            var selections = [
+                { session: s1, cameraName: 'SharedCam', videoFileInfo: { name: 'SharedCam' } },
+                { session: s2, cameraName: 'SharedCam', videoFileInfo: { name: 'SharedCam' } },
+            ];
+            assertNotNull(findSkeletonMismatch(selections), 'column with mixed skeletons must be blocked');
+        });
+
+        it('a column spanning sessions with matching skeletons is allowed', function () {
+            var s1 = makeSession(['SharedCam'], 'Session1');
+            var s2 = makeSession(['SharedCam'], 'Session2');
+            // makeSession gives both the same 3-node skeleton.
+            var selections = [
+                { session: s1, cameraName: 'SharedCam', videoFileInfo: { name: 'SharedCam' } },
+                { session: s2, cameraName: 'SharedCam', videoFileInfo: { name: 'SharedCam' } },
+            ];
+            assertNull(findSkeletonMismatch(selections), 'matching skeletons export together');
+        });
+
+        it('importing one session twice and changing one skeleton blocks EVERY camera download', function () {
+            // Reproduces the reported flow: the arm-reach-lucid-session fixture
+            // (cameras CamA/CamB/CamC, a 3-node skeleton) imported twice. With
+            // both copies sharing a skeleton, every camera column is exportable;
+            // changing one copy's skeleton must disable the download on every
+            // shared column — exactly what updateDownloadStates() does in the
+            // "Export SLEAP by Camera" modal (it disables a column's button
+            // whenever findSkeletonMismatch is non-null for its selections).
+            var cams = ['CamA', 'CamB', 'CamC'];
+            var s1 = makeSession(cams, 'arm-reach-lucid-session');
+            var s2 = makeSession(cams, 'arm-reach-lucid-session (copy)');
+
+            // Each camera column spans both sessions (the cell is ON for both).
+            function columnSelections(cam) {
+                return [
+                    { session: s1, cameraName: cam, videoFileInfo: { name: cam } },
+                    { session: s2, cameraName: cam, videoFileInfo: { name: cam } },
+                ];
+            }
+
+            // Both imports share the fixture skeleton -> nothing is blocked.
+            cams.forEach(function (cam) {
+                assertNull(findSkeletonMismatch(columnSelections(cam)),
+                    'duplicate import with identical skeletons leaves "' + cam + '" exportable');
+            });
+
+            // Change the skeleton on ONE of the two sessions (different node set).
+            s2.skeleton = new Skeleton('changed', ['head', 'thorax', 'wing'], [[0, 1], [1, 2]]);
+
+            // Now every shared camera column must be blocked.
+            cams.forEach(function (cam) {
+                var msg = findSkeletonMismatch(columnSelections(cam));
+                assertNotNull(msg, 'changed skeleton must block the "' + cam + '" download');
+                assertTrue(msg.indexOf('Skeleton mismatch') >= 0,
+                    'block reason for "' + cam + '" names the skeleton mismatch');
+            });
         });
     });
 

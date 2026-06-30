@@ -16,7 +16,9 @@ __pycache__/
 tempdata/
 sample_session/
 prompts/
+verify/
 .claude/
+*.md
 
 # Editor
 *.swp
@@ -24,6 +26,22 @@ prompts/
 *~
 .vscode/
 .idea/
+.worktreeinclude
 
 # Scratch
 scratch/
+
+# Local CDN fallback (NOT committed; kept on disk in case jsdelivr's +esm /
+# redirect endpoints loop again and hang init). To recover, repoint the CDN
+# imports at these local copies:
+#   index.html        dockview.css link  -> lib/dockview-core/dockview.css
+#   index.html        importmap "yaml"   -> ./lib/yaml/browser/index.js
+#   ui/sessions-panes.js  dockview +esm  -> ../lib/dockview-core/main.esm.mjs
+#   loading/frame-worker.js + slp-import-worker.js  h5wasm +esm -> ../lib/h5wasm/hdf5_hl.js
+# Re-fetch instructions live in each dir's PROVENANCE.txt. (lib/h5wasm and
+# lib/sleap-io are committed; only these two vendored fallbacks are ignored.)
+lib/dockview-core/
+lib/yaml/
+
+# Bench driver node deps (not part of the served app)
+scripts/bench/node_modules/
