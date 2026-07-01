@@ -58,6 +58,14 @@ export function getTrackingThresholds() {
     for (const id in THRESHOLD_DEFAULTS) out[id] = getTrackingThreshold(id);
     return out;
 }
+
+// Camera tracking-inclusion. The bench passes an explicit filtered camera list to
+// runCrossViewTracker, so this only needs to exist for tracker.js's import to
+// link; honor an optional __BENCH.excludedCameras set for completeness.
+export function isCameraTracked(name) {
+    const ex = (globalThis.__BENCH && globalThis.__BENCH.excludedCameras) || [];
+    return ex.indexOf(name) < 0;
+}
 `;
 
 // Generic no-op UI stubs. `state` is a plain mutable object; the core matching

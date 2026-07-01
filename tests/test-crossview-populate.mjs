@@ -120,5 +120,38 @@ group('runCrossViewTracker populates every data structure');
     ok(consistent, 'trackIdx → frameIdentityMap → identity round-trips for every instance');
 }
 
+// ===========================================================================
+group('runCrossViewTracker — maxTargets caps the identity count');
+{
+    const s = buildSession();   // two animals
+    const res = runCrossViewTracker(s, s.cameras, s.frameIndices, true, 1);   // cap at 1
+    ok(s.identities.length <= 1, `cap 1 → at most one identity (got ${s.identities.length})`);
+    eq(res.numIdentities, s.identities.length, 'return value matches session identity count');
+
+    const s2 = buildSession();
+    runCrossViewTracker(s2, s2.cameras, s2.frameIndices, true, 2);            // cap at 2
+    eq(s2.identities.length, 2, 'cap 2 → the two animals get two identities');
+}
+
+// ===========================================================================
+group('runCrossViewTracker — excluded cameras never enter the tracking');
+{
+    const s = buildSession();                       // rig has 3 cameras: c0, c1, c2
+    const included = s.cameras.filter(c => c.name !== 'c2');   // exclude c2
+    eq(included.length, 2, 'two of three cameras included');
+    runCrossViewTracker(s, included, s.frameIndices, false);
+
+    // No committed InstanceGroup references the excluded camera.
+    let sawExcluded = false, sawIncluded = false;
+    for (const [, groups] of s.instanceGroups) {
+        for (const g of groups) {
+            if (g.instances.has('c2')) sawExcluded = true;
+            if (g.instances.has('c0') || g.instances.has('c1')) sawIncluded = true;
+        }
+    }
+    ok(!sawExcluded, 'no group contains an instance from the excluded camera c2');
+    ok(sawIncluded, 'groups still form across the two included cameras');
+}
+
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }

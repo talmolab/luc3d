@@ -22,6 +22,7 @@ export function getTrackingThreshold(id) {
 export function getTrackingThresholds() {
     const out = {}; for (const id in DEFAULTS) out[id] = getTrackingThreshold(id); return out;
 }
+export function isCameraTracked() { return true; }
 `;
 
 // state + timeline are real, mutable spy objects the test can read/populate.
