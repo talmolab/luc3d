@@ -3667,6 +3667,16 @@ kbd {
   white-space: nowrap;
 }
 
+/* Tracking Wizard ▸ Camera Views: a view excluded from tracking (weight 0)
+   greys out to signal it won't take part in the association math. */
+.settings-node-weight-row.settings-view-excluded .settings-kbd-label {
+  color: var(--text-muted, #888);
+  opacity: 0.55;
+}
+.settings-node-weight-row.settings-view-excluded .settings-num-input {
+  opacity: 0.55;
+}
+
 /* Tracking Wizard ▸ Tracking Thresholds: label + description, value on the right. */
 .settings-threshold-row {
   display: flex;

@@ -1898,6 +1898,20 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         }
     }
 
+    // 7.5 Tracking-excluded grey-out. When this view is turned off in the
+    // Tracking Wizard (Camera Views → 0), recolor everything drawn so far to a
+    // flat grey so it's visually obvious the view won't take part in the
+    // association math. `source-atop` paints only where overlay pixels already
+    // exist, so the underlying video is untouched — just the nodes/edges/labels
+    // go grey. Done before the legend so the legend key stays readable.
+    if (options.trackingExcluded) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = 'rgba(140, 140, 140, 0.85)';
+        ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        ctx.restore();
+    }
+
     // 8. Legend
     if (showLegend) {
         drawLegend(ctx, {

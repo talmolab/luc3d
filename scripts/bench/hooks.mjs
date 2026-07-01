@@ -24,6 +24,14 @@ const THRESHOLD_DEFAULTS = {
     reprojGate2: 100,
     reprojGate3: 140,
     reprojGate4: 180,
+    track3dWeight: 1,
+    filterMinVisibleNodes: 0,
+    filterMinInstanceScore: 0,
+    corr2dWeight: 1,
+    corr3dWeight: 6,
+    velocityThreshold: 10,
+    distanceThreshold: 50,
+    timePenalty: 0.1,
 };
 
 const SETTINGS_STUB = `

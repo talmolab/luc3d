@@ -9,6 +9,7 @@
  */
 
 import { getTrackColor, NULL_ID_COLOR } from './overlays.js';
+import { isCameraTracked } from './settings.js';
 
 // ============================================================================
 // Timeline class
@@ -1721,7 +1722,12 @@ export class Timeline {
             const rowY = top + rowYPositions[t];
             const labelY = rowY + this.TRACK_ROW_HEIGHT / 2;
 
-            ctx.fillStyle = this.LABEL_COLOR;
+            // Tracking-excluded: this camera is turned off in the Tracking Wizard
+            // (Camera Views → 0). Grey the whole row — label text and segment
+            // bars — so it's obvious the view won't take part in tracking.
+            const _camExcluded = !!track.cameraName && !isCameraTracked(track.cameraName);
+
+            ctx.fillStyle = _camExcluded ? 'rgba(255,255,255,0.30)' : this.LABEL_COLOR;
             ctx.textBaseline = 'middle';
 
             // 1. Camera name (bold, right-aligned at X_CAM_RIGHT). Only
@@ -1770,7 +1776,7 @@ export class Timeline {
             // once, so segments widened by the min-width floor (long videos,
             // pxPerFrame < 1) that overlap in pixels no longer compound their
             // alpha into darker patches — the row stays a uniform shade.
-            ctx.fillStyle = track.color;
+            ctx.fillStyle = _camExcluded ? '#888888' : track.color;
             ctx.globalAlpha = 0.7;
             ctx.beginPath();
             for (let s = 0; s < track.segments.length; s++) {

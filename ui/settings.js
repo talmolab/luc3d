@@ -29,6 +29,12 @@ const DEFAULTS = {
 // name so they persist across reloads independently of node ordering.
 const DEFAULT_NODE_WEIGHT = 1;
 
+// Default tracking inclusion for any camera view not explicitly overridden. 1 =
+// the view participates in cross-view tracking; 0 = it is excluded from the
+// association math entirely (still visible/editable in the GUI). Stored overrides
+// are keyed by camera name so they persist across reloads.
+const DEFAULT_CAMERA_WEIGHT = 1;
+
 // Catalog of every shortcut. `binding` is a "+"-joined accelerator string for
 // dispatched entries (modifier tokens: Mod = Ctrl-or-Cmd, Ctrl, Cmd/Meta, Shift,
 // Alt/Option/Opt; last token is the key), or a free-form display string for
@@ -101,11 +107,12 @@ function loadSettings() {
                 triangulationMethod: parsed.triangulationMethod === 'ba' ? 'ba' : 'dlt',
                 keybindings: (parsed.keybindings && typeof parsed.keybindings === 'object') ? parsed.keybindings : {},
                 nodeWeights: (parsed.nodeWeights && typeof parsed.nodeWeights === 'object') ? parsed.nodeWeights : {},
+                cameraWeights: (parsed.cameraWeights && typeof parsed.cameraWeights === 'object') ? parsed.cameraWeights : {},
                 trackingThresholds: (parsed.trackingThresholds && typeof parsed.trackingThresholds === 'object') ? parsed.trackingThresholds : {},
             };
         }
     } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
-    return { triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {}, nodeWeights: {}, trackingThresholds: {} };
+    return { triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {}, nodeWeights: {}, cameraWeights: {}, trackingThresholds: {} };
 }
 
 function persist() {
@@ -174,6 +181,54 @@ export function setNodeWeights(map) {
     persist();
 }
 
+// --- Camera tracking inclusion ---------------------------------------------
+
+// Clamp an arbitrary value to a binary include/exclude weight (0 or 1), or null
+// if not a number. Any nonzero, finite value counts as "included" (1).
+function clampCameraWeight(v) {
+    var n = typeof v === 'number' ? v : parseFloat(v);
+    if (!isFinite(n)) return null;
+    return n === 0 ? 0 : 1;
+}
+
+// Effective tracking inclusion for a single camera name (stored override, else
+// default 1 = included).
+export function getCameraWeight(name) {
+    var w = clampCameraWeight(_settings.cameraWeights[name]);
+    return w == null ? DEFAULT_CAMERA_WEIGHT : w;
+}
+
+// True when the named camera should participate in tracking (weight !== 0).
+export function isCameraTracked(name) {
+    return getCameraWeight(name) !== 0;
+}
+
+// Snapshot of all stored camera-inclusion overrides (name → 0|1). Cameras without
+// an override are absent (they default to DEFAULT_CAMERA_WEIGHT = included).
+export function getCameraWeights() {
+    var out = {};
+    Object.keys(_settings.cameraWeights).forEach(function (k) {
+        var w = clampCameraWeight(_settings.cameraWeights[k]);
+        if (w != null) out[k] = w;
+    });
+    return out;
+}
+
+// Commit a name → weight override map (from the Tracking Wizard's Apply button).
+// Values are coerced to 0/1; entries equal to the default (1 = included) are
+// dropped so the stored set stays minimal (only excluded views are persisted).
+export function setCameraWeights(map) {
+    var next = {};
+    if (map && typeof map === 'object') {
+        Object.keys(map).forEach(function (name) {
+            var w = clampCameraWeight(map[name]);
+            if (w != null && w !== DEFAULT_CAMERA_WEIGHT) next[name] = w;
+        });
+    }
+    _settings.cameraWeights = next;
+    persist();
+}
+
 // --- Tracking thresholds ---------------------------------------------------
 
 // Catalog of user-editable cross-view-tracker thresholds (Tier A scoring knobs +
@@ -226,6 +281,47 @@ const TRACKING_THRESHOLDS = [
         id: 'reprojGate4', label: 'Reprojection gate — 4+ views (px)', default: 180,
         min: 1, max: 2000, step: 1,
         desc: 'Maximum reprojection distance (px) to attach an instance to a group of 4 or more views, where the triangulated 3D point is well constrained.',
+    },
+    {
+        id: 'track3dWeight', label: '3D continuity weight', default: 1,
+        min: 0, max: 20, step: 0.5,
+        desc: 'Weight on the 3D-position term in temporal identity linking (Liezl correspondence_weight_3d). Raise it to make 3D-position continuity dominate the per-identity cost and suppress sustained ID swaps. 1 = legacy equal weighting; 6 ≈ the benchmark champion.',
+    },
+    {
+        id: 'filterMinVisibleNodes', label: 'Min visible nodes (filter)', default: 0,
+        min: 0, max: 30, step: 1,
+        desc: 'Detection-pool filter: drop instances with fewer than this many present keypoints before cross-view matching (geometry half of the “liezl filter”). 0 = off; Liezl Stage-1 used 8 on a 15-node skeleton.',
+    },
+    {
+        id: 'filterMinInstanceScore', label: 'Min instance score (filter)', default: 0,
+        min: 0, max: 1, step: 0.05,
+        desc: 'Detection-pool filter: drop instances whose detection score is below this value (only applies when per-instance scores are available). 0 = off; Liezl Stage-1 used 0.85.',
+    },
+    // --- Liezl CrossViewTracker engine (pose/cross-view-tracker.js) ---
+    {
+        id: 'corr2dWeight', label: 'Liezl: 2D correspondence weight', default: 1,
+        min: 0, max: 20, step: 0.5,
+        desc: 'Weight on the 2D reprojection term of the Liezl cross-view tracker (correspondence_weight_2d). Reference default 1.',
+    },
+    {
+        id: 'corr3dWeight', label: 'Liezl: 3D correspondence weight', default: 6,
+        min: 0, max: 20, step: 0.5,
+        desc: 'Weight on the 3D point-to-ray term of the Liezl cross-view tracker (correspondence_weight_3d). 6 = the G_keeptrack_3d6 benchmark champion (fewest sustained ID switches).',
+    },
+    {
+        id: 'velocityThreshold', label: 'Liezl: velocity threshold', default: 10,
+        min: 0.1, max: 1000, step: 0.5,
+        desc: 'Normalizer for the 2D displacement term of the Liezl tracker (velocity_threshold, normalized image units). Bench value 10.',
+    },
+    {
+        id: 'distanceThreshold', label: 'Liezl: distance threshold (mm)', default: 50,
+        min: 0.1, max: 1000, step: 1,
+        desc: 'Normalizer for the 3D point-to-ray term of the Liezl tracker (distance_threshold, world units/mm). Bench value 50.',
+    },
+    {
+        id: 'timePenalty', label: 'Liezl: time penalty', default: 0.1,
+        min: 0, max: 10, step: 0.05,
+        desc: 'Exponential decay exp(-time_penalty·Δt) applied over frame gaps in the Liezl tracker (time_penalty). Bench value 0.1.',
     },
 ];
 
