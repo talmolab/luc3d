@@ -27,7 +27,10 @@
 import { OnDemandVideoDecoder } from './video.js';
 import { SleapVideoDecoder } from './sleap-video-adapter.js';
 
-/** Build-time default backend for the app. */
+/** Build-time default backend for the app.
+ *  'sleap' = adopt the sleap-io.js video backend (the integration goal).
+ *  If a video mis-decodes, flip to the proven decoder WITHOUT a code change:
+ *  `localStorage.LUCID_VIDEO_BACKEND='legacy'` in the console, then reload. */
 export const DEFAULT_VIDEO_BACKEND = 'sleap';
 
 function resolveBackend(opts) {

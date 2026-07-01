@@ -68,10 +68,9 @@ export class SleapVideoDecoder {
         // rely on a native <video> element the way OnDemandVideoDecoder does)
         this._videoEl = null; // intentionally null — VideoController guards on this
         this._playing = false;
-        this._playStartTime = 0;
-        this._playStartFrame = 0;
-        this._lastFrame = 0;
-        this._prefetchTimer = null;
+        this._lastFrame = 0;       // current frame while paused/scrubbing
+        this._playheadFrame = 0;   // decode-paced playhead during playback
+        this._playBitmap = null;   // latest decoded frame to draw during playback
 
         this.sourceType = null; // "file" | "url"
         this.url = null;
@@ -111,8 +110,18 @@ export class SleapVideoDecoder {
         // Range support (206) and streams; for Blobs it slices on demand.
         this.video = await SIO.loadVideo(source, { openBackend: true });
 
+        // IMPORTANT: createVideoBackend() returns the backend WITHOUT awaiting
+        // its async init() (the constructor just kicks off `this.ready =
+        // this.init()`). init() is what fills in shape/fps/the frame table, so
+        // we MUST await readiness before reading them — otherwise shape is
+        // undefined and the app sees 0 frames (frame 0/0, no video).
+        var backend = this.video.backend || this.video._backend || null;
+        if (backend && backend.ready && typeof backend.ready.then === 'function') {
+            await backend.ready;
+        }
+
         // shape: [frameCount, height, width, channels]
-        var shape = this.video.shape || [];
+        var shape = this.video.shape || (backend && backend.shape) || [];
         var frameCount = shape[0] || 0;
         var height = shape[1] || 0;
         var width = shape[2] || 0;
@@ -228,56 +237,87 @@ export class SleapVideoDecoder {
         return await p;
     }
 
-    // --- Playback: wall-clock playhead + async prefetch into cache ----------
-    // VideoController.onFrame() polls getCurrentFrameIndex() and draws via the
-    // synchronous drawCurrentFrame(); we decode ahead so the cache stays warm.
+    // --- Playback: DECODE-PACED playhead ------------------------------------
+    // WebCodecs decode (esp. for heavy/high-res video) is often slower than
+    // real time. A wall-clock playhead races ahead of the decoder, so every
+    // draw misses the cache and the screen "barely updates". Instead we advance
+    // the playhead one frame at a time AS FRAMES DECODE, throttled to at most
+    // real time — so playback shows every frame and smoothly slows down under
+    // load rather than skipping to undecoded frames.
+    // VideoController.onFrame() (RAF) reads getCurrentFrameIndex() + draws via
+    // drawCurrentFrame(); this async loop is what actually advances the playhead.
 
     seekNative(frameIndex) {
         this._lastFrame = frameIndex;
-        this._playStartFrame = frameIndex;
-        this._playStartTime = (typeof performance !== 'undefined' ? performance.now() : 0);
-        // Warm the cache around the seek target
-        this._prefetch(frameIndex);
+        this._playheadFrame = frameIndex;
+        this._prefetch(frameIndex); // warm the cache around the seek target
     }
 
     playNative() {
+        if (this._playing) return;
         this._playing = true;
-        this._playStartFrame = this._lastFrame;
-        this._playStartTime = (typeof performance !== 'undefined' ? performance.now() : 0);
-        this._schedulePrefetch();
+        this._playheadFrame = this._lastFrame;
+        this._runPlayLoop();
     }
 
     pauseNative() {
         this._playing = false;
-        if (this._prefetchTimer) {
-            clearTimeout(this._prefetchTimer);
-            this._prefetchTimer = null;
+    }
+
+    async _runPlayLoop() {
+        var self = this;
+        var fps = this._fps || 30;
+        var frameDurMs = 1000 / fps;
+        var now = function () { return (typeof performance !== 'undefined' ? performance.now() : Date.now()); };
+        var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+
+        var anchorTime = now();
+        var anchorFrame = this._playheadFrame;
+
+        while (this._playing) {
+            var next = this._playheadFrame + 1;
+            if (next >= this.samples.length) { this._playing = false; break; }
+
+            var bmp = await this.getFrame(next); // decodes; backend also reads ahead
+            if (!this._playing) break;
+            if (bmp) {
+                this._playBitmap = bmp;
+                this._playheadFrame = next;
+            }
+            this._prefetch(next + 1);
+
+            // Throttle to real time: don't run faster than fps. If decode is
+            // slower, we naturally fall behind and play at decode speed.
+            var targetMs = (next - anchorFrame) * frameDurMs;
+            var actualMs = now() - anchorTime;
+            var waitMs = targetMs - actualMs;
+            if (waitMs > 1) {
+                await sleep(waitMs);
+            } else if (waitMs < -500) {
+                // Falling behind — re-anchor so we don't try to "catch up" by racing.
+                anchorTime = now();
+                anchorFrame = this._playheadFrame;
+            }
         }
+        void self;
     }
 
     getCurrentFrameIndex() {
-        if (!this._playing) return this._lastFrame;
-        var now = (typeof performance !== 'undefined' ? performance.now() : 0);
-        var elapsedSec = (now - this._playStartTime) / 1000;
-        var idx = this._playStartFrame + Math.floor(elapsedSec * (this._fps || 30));
-        if (idx < 0) idx = 0;
-        if (idx >= this.samples.length) idx = this.samples.length - 1;
-        this._lastFrame = idx;
-        return idx;
+        return this._playing ? this._playheadFrame : this._lastFrame;
     }
 
     /**
-     * Synchronous draw for the RAF playback loop. Draws the cached frame for the
-     * current playhead if it's decoded; returns false if not yet available so the
-     * previous frame stays on screen (graceful degradation when decode-bound).
+     * Synchronous draw for the RAF loop. During playback the decode loop keeps
+     * `_playBitmap` pointing at the latest decoded frame, so this always has
+     * something to draw; while paused/scrubbing it draws the cached frame.
      */
     drawCurrentFrame(ctx, width, height) {
-        var idx = this.getCurrentFrameIndex();
-        var bmp = this._cacheGet(idx);
-        if (bmp === undefined) {
-            // Not decoded yet — kick a decode so it's ready soon, keep old frame.
-            this.getFrame(idx);
-            return false;
+        var bmp;
+        if (this._playing && this._playBitmap) {
+            bmp = this._playBitmap;
+        } else {
+            bmp = this._cacheGet(this._lastFrame);
+            if (bmp === undefined) { this.getFrame(this._lastFrame); return false; }
         }
         try {
             ctx.drawImage(bmp, 0, 0, width, height);
@@ -285,13 +325,6 @@ export class SleapVideoDecoder {
         } catch (e) {
             return false;
         }
-    }
-
-    _schedulePrefetch() {
-        if (!this._playing) return;
-        var self = this;
-        this._prefetch(this.getCurrentFrameIndex());
-        this._prefetchTimer = setTimeout(function () { self._schedulePrefetch(); }, 100);
     }
 
     _prefetch(fromFrame) {

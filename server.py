@@ -23,7 +23,7 @@ import json
 import os
 import re
 import sys
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 # Try to import h5py for legacy /convert-slp endpoint
 try:
@@ -182,7 +182,11 @@ class LucidHandler(SimpleHTTPRequestHandler):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    server = HTTPServer(("0.0.0.0", port), LucidHandler)
+    # Threaded: HTTP/1.1 keep-alive + parallel Range streams. A single-threaded
+    # HTTPServer would hold the first keep-alive connection open and stall the
+    # browser's other parallel connections (page never finishes loading).
+    server = ThreadingHTTPServer(("0.0.0.0", port), LucidHandler)
+    server.daemon_threads = True
     print(f"LUCID server on http://0.0.0.0:{port}/")
     print("  SLP export: client-side via sleap-io.js (no server dependency)")
     if HAS_H5PY:
