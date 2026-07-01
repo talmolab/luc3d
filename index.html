@@ -61,6 +61,7 @@
                     <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Single Session Folder</div>
                     <div class="menu-dropdown-item" id="menuLoadMultiSessionFolder">Load Multi-Session Folder</div>
                     <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
+                    <div class="menu-dropdown-item" id="menuLoadVideosUrl">Load Videos from URL... (streaming)</div>
                     <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
                     <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
                     <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
@@ -843,14 +844,22 @@
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
             Camera as SioCamera, CameraGroup, RecordingSession,
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
-            Identity as SioIdentity, Instance3D, PredictedInstance3D
+            Identity as SioIdentity, Instance3D, PredictedInstance3D,
+            loadVideo, createVideoBackend, loadSlp, readSlpStreaming,
+            openStreamingH5, isStreamingSupported
         } from './lib/sleap-io/index.browser.js';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
             Camera: SioCamera, CameraGroup, RecordingSession,
             InstanceGroup: SioInstanceGroup, FrameGroup: SioFrameGroup,
-            Identity: SioIdentity, Instance3D, PredictedInstance3D
+            Identity: SioIdentity, Instance3D, PredictedInstance3D,
+            // Loading backends — video (mp4box/mediabunny/HDF5, HTTP Range streaming)
+            // and streaming SLP readers. See loading/sleap-video-adapter.js.
+            // NOTE: mediabunny is still stubbed (index.html import map) — MP4 uses the
+            // mp4box backend and does NOT need it; un-stub to enable webm/mkv/mov/ogg/ts.
+            loadVideo, createVideoBackend, loadSlp, readSlpStreaming,
+            openStreamingH5, isStreamingSupported
         };
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>

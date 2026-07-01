@@ -38,7 +38,7 @@ import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, s
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
 import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js';
-import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
+import { handleLoadCalibration, handleLoadVideos, handleLoadVideosFromUrl, handleLoadMultiSession,
          loadSingleSessionFromCache, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
 import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 
@@ -882,6 +882,11 @@ export function setupMenus() {
     document.getElementById('menuLoadVideos').addEventListener('click', function () {
         closeMenus();
         handleLoadVideos();
+    });
+
+    document.getElementById('menuLoadVideosUrl').addEventListener('click', function () {
+        closeMenus();
+        showLoadVideosUrlModal();
     });
 
     document.getElementById('menuLoadCalibration').addEventListener('click', function () {
@@ -2661,3 +2666,46 @@ state.speedMultiplier = 1.0;
         }
     });
 })();
+
+/**
+ * Modal to load one or more videos by http(s) URL, streamed via sleap-io.js
+ * (HTTP Range / 206). One URL per line. Esc closes/cancels (per CLAUDE.md).
+ */
+function showLoadVideosUrlModal() {
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.innerHTML =
+        '<h3>Load Videos from URL (streaming)</h3>' +
+        '<p style="margin:4px 0 8px;font-size:12px;opacity:0.8;">One http(s):// URL per line. ' +
+        'Videos stream over HTTP Range requests — the server must return 206 ' +
+        '(use LUCID\'s server.py, nginx, or Caddy).</p>' +
+        '<textarea id="loadUrlText" rows="5" style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:12px;" ' +
+        'placeholder="https://your-server/cam0.mp4&#10;https://your-server/cam1.mp4"></textarea>' +
+        '<div class="modal-actions">' +
+        '<button id="loadUrlCancel">Cancel</button>' +
+        '<button class="primary" id="loadUrlGo">Stream</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    var textEl = modal.querySelector('#loadUrlText');
+    textEl.focus();
+
+    function close() {
+        document.removeEventListener('keydown', onKey);
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+    }
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    modal.querySelector('#loadUrlCancel').addEventListener('click', close);
+    modal.querySelector('#loadUrlGo').addEventListener('click', function () {
+        var urls = textEl.value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+        close();
+        if (urls.length > 0) handleLoadVideosFromUrl(urls);
+    });
+}

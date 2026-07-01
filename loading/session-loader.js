@@ -27,7 +27,10 @@ import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
 } from '../pose/pose-data.js';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js';
+import { VideoController } from './video.js';
+import { createVideoDecoder } from './decoder-factory.js';
+// Re-export so existing importers (ui-wiring.js, etc.) keep working.
+export { createVideoDecoder };
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
@@ -240,7 +243,7 @@ export async function handleLoadVideos() {
                 };
             })(hlvTaskId);
             try {
-                const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: hlvOnProgress });
+                const decoder = createVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: hlvOnProgress });
                 await decoder.init(file);
 
                 const vw = decoder.videoTrack.video.width;
@@ -371,6 +374,162 @@ export async function handleLoadVideos() {
         console.error('Failed to load videos:', err);
         hideLoading();
         setStatus('Video error: ' + err.message, 'error');
+    }
+}
+
+// Video decoder backend selection is centralized in loading/decoder-factory.js
+// (`createVideoDecoder` + the DEFAULT_VIDEO_BACKEND flag), imported above and
+// re-exported here for existing callers.
+
+/**
+ * Load one or more videos from http(s) URLs, streaming via sleap-io.js's
+ * backends. Mirrors the assembly done by handleLoadVideos (session/camera/view
+ * creation) but sources decoders from URLs instead of picked files, so large
+ * server-hosted videos stream over HTTP Range requests instead of downloading
+ * whole. Requires the server to honour Range (206) — see server.py.
+ *
+ * @param {string[]} urls
+ */
+export async function handleLoadVideosFromUrl(urls) {
+    urls = (urls || []).map(function (u) { return String(u).trim(); }).filter(Boolean);
+    if (urls.length === 0) {
+        setStatus('No URLs given', 'warning');
+        return;
+    }
+    try {
+        showLoading('Loading videos from URL...');
+        var hlvModal = getLoadingProgressModal({ title: 'Streaming videos' });
+        hlvModal.reset();
+        hlvModal.show();
+
+        var failedVideos = [];
+        for (var i = 0; i < urls.length; i++) {
+            var url = urls[i];
+            // Derive a display name from the URL basename (strip query + ext).
+            var base = url.split('/').pop().split('?')[0].split('#')[0] || ('video_' + i);
+            var stem = base.replace(/\.[^.]+$/, '');
+
+            // Skip if already loaded
+            var isDup = state.videoFiles.some(function (vf) { return vf.name === stem; });
+            if (isDup) {
+                console.log('Skipping duplicate video: ' + stem);
+                continue;
+            }
+
+            showLoading('Streaming ' + base + '...');
+            var tid = hlvModal.addTask({ label: base });
+            var onProgress = (function (t) {
+                return function (ev) {
+                    if (ev && ev.error) hlvModal.failTask(t, ev.error);
+                    else hlvModal.updateTask(t, ev);
+                };
+            })(tid);
+
+            try {
+                var decoder = createVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: onProgress });
+                await decoder.init(url);
+
+                state.videoFiles.push({
+                    file: null,
+                    url: url,
+                    name: stem,
+                    decoder: decoder,
+                    videoWidth: decoder.videoTrack.video.width,
+                    videoHeight: decoder.videoTrack.video.height,
+                    frameCount: decoder.samples.length,
+                    assignedCamera: null,
+                    videoPath: url,
+                });
+                hlvModal.completeTask(tid);
+            } catch (videoErr) {
+                console.error('Failed to stream ' + url + ':', videoErr);
+                hlvModal.failTask(tid, videoErr);
+                failedVideos.push(stem + ': ' + (videoErr.message || String(videoErr)));
+            }
+        }
+
+        // --- Session/camera/view assembly (mirrors handleLoadVideos tail) ---
+        if (!state.session) {
+            var cameras = state.videoFiles.map(function (vf) {
+                return new Camera(vf.name, [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                    [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+            });
+            var skeleton = buildRememberedSkeleton() || new Skeleton('skeleton', [], []);
+            state.session = new Session(cameras, skeleton, ['track_0']);
+            if (state.sessions.indexOf(state.session) < 0) {
+                state.sessions.push(state.session);
+                state.activeSessionIdx = state.sessions.length - 1;
+            }
+        }
+
+        if (state.session.cameras.length > 0) {
+            autoAssignVideosToCameras();
+        }
+
+        for (var vi = 0; vi < state.videoFiles.length; vi++) {
+            var vf = state.videoFiles[vi];
+            if (!vf.assignedCamera) {
+                var cameraExists = state.session.cameras.some(function (c) { return c.name === vf.name; });
+                if (!cameraExists) {
+                    state.session.cameras.push(
+                        new Camera(vf.name, [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                            [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480])
+                    );
+                }
+                vf.assignedCamera = vf.name;
+            }
+        }
+
+        var newViewNames = [];
+        for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
+            var vf2 = state.videoFiles[vi2];
+            if (vf2.assignedCamera) {
+                var hasView = state.views.some(function (v) { return v.name === vf2.assignedCamera; });
+                if (!hasView) {
+                    createViewForVideoFile(vf2);
+                    newViewNames.push(vf2.assignedCamera);
+                }
+            }
+        }
+
+        updateTotalFrames();
+
+        if (newViewNames.length > 0) {
+            populateViewStrip();
+            populateSessionStrip();
+            var alreadyDocked = paneManager.dockedViews && paneManager.dockedViews.size > 0;
+            if (alreadyDocked) {
+                for (var nv = 0; nv < newViewNames.length; nv++) {
+                    paneManager.addVideoPanel(newViewNames[nv], { direction: 'right' });
+                }
+            } else {
+                paneManager.addAllViewsAsGrid();
+            }
+            rebuildVideoController();
+            fitCanvasesToCells();
+        }
+
+        if (videoController && state.views.length > 0) {
+            await videoController.seekToFrame(0);
+        }
+
+        recomputeUploadedCameras(state.session, state);
+        if (timeline) timeline.refreshTracks(state.session);
+
+        hideLoading();
+        updateInfoPanel();
+
+        if (failedVideos.length > 0 && state.views.length === 0) {
+            setStatus('All videos failed to load: ' + failedVideos.join('; '), 'error');
+        } else if (failedVideos.length > 0) {
+            setStatus('Streamed ' + state.views.length + ' view(s), ' + failedVideos.length + ' failed: ' + failedVideos.join('; '), 'warning');
+        } else {
+            setStatus('Streaming ' + urls.length + ' video(s), ' + state.views.length + ' views active', 'success');
+        }
+    } catch (err) {
+        console.error('Failed to load videos from URL:', err);
+        hideLoading();
+        setStatus('Video URL error: ' + err.message, 'error');
     }
 }
 
@@ -839,7 +998,7 @@ export function createVideoPromptCell(cameraName, referencedFilename) {
 
             var vf = files[0];
             showLoading('Loading ' + vf.name + '...');
-            var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+            var decoder = createVideoDecoder({ cacheSize: 60, lookahead: 10 });
             await decoder.init(vf);
 
             var videoFileEntry = {
@@ -1729,7 +1888,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             var viewName = matchedCam || vStemName;
 
             try {
-                var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                var decoder = createVideoDecoder({ cacheSize: 60, lookahead: 10 });
                 await decoder.init(vFile);
                 var vw = decoder.videoTrack.video.width;
                 var vh = decoder.videoTrack.video.height;
@@ -2280,7 +2439,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 } else {
                     showLoading('Loading video: ' + videoFile.name + '...');
                     try {
-                        var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                        var decoder = createVideoDecoder({ cacheSize: 60, lookahead: 10 });
                         await decoder.init(videoFile);
                         state.decoderPool.push(decoder);
                         var vw = decoder.videoTrack.video.width;

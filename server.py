@@ -2,16 +2,26 @@
 """
 LUCID development server.
 
-Serves static files. SLP export is now handled client-side via sleap-io.js.
-A legacy /convert-slp endpoint is still available if h5py is installed.
+Serves static files WITH HTTP Range (206 Partial Content) support, so large
+videos and .slp files stream to the browser via sleap-io.js instead of being
+downloaded whole into memory (which crashes the tab on multi-GB videos).
+
+NOTE: plain `python3 -m http.server` does NOT support Range requests — it
+returns the entire file for every request. Use THIS server (or nginx / Caddy /
+`npx http-server`) when serving videos/SLPs to LUCID, otherwise sleap-io.js
+streaming falls back to a full download.
+
+SLP export is handled client-side via sleap-io.js. A legacy /convert-slp
+endpoint is still available if h5py is installed.
 
 Usage:
     python server.py [port]
-    # or simply: python3 -m http.server 8080
 """
 
 import io
 import json
+import os
+import re
 import sys
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
@@ -28,6 +38,98 @@ except ImportError:
 
 
 class LucidHandler(SimpleHTTPRequestHandler):
+    # HTTP/1.1 so Range/keep-alive behave; every response sets Content-Length.
+    protocol_version = "HTTP/1.1"
+
+    # Byte offsets for the current single-range GET, set by send_head().
+    _range = None
+
+    def end_headers(self):
+        # Advertise Range support + allow cross-origin streaming (sleap-io fetch
+        # from a different origin needs these exposed to read Content-Range).
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header(
+            "Access-Control-Expose-Headers",
+            "Content-Range, Accept-Ranges, Content-Length",
+        )
+        super().end_headers()
+
+    def send_head(self):
+        """Serve 206 Partial Content for a single `Range: bytes=` request.
+
+        Falls back to the stdlib full-file 200 path for directory listings,
+        missing files, or requests without a (simple, single) Range header.
+        """
+        self._range = None
+        range_header = self.headers.get("Range")
+        if not range_header:
+            return super().send_head()
+
+        path = self.translate_path(self.path)
+        if os.path.isdir(path):
+            return super().send_head()
+
+        m = re.match(r"bytes=(\d*)-(\d*)\s*$", range_header.strip())
+        if not m or (m.group(1) == "" and m.group(2) == ""):
+            # Unsatisfiable / multi-range / malformed → serve the whole file.
+            return super().send_head()
+
+        try:
+            f = open(path, "rb")
+        except OSError:
+            self.send_error(404, "File not found")
+            return None
+
+        try:
+            file_len = os.fstat(f.fileno()).st_size
+            start_s, end_s = m.group(1), m.group(2)
+            if start_s == "":
+                # Suffix range: last N bytes.
+                length = min(int(end_s), file_len)
+                start = file_len - length
+                end = file_len - 1
+            else:
+                start = int(start_s)
+                end = int(end_s) if end_s != "" else file_len - 1
+                end = min(end, file_len - 1)
+
+            if start >= file_len or start > end:
+                self.send_response(416, "Requested Range Not Satisfiable")
+                self.send_header("Content-Range", f"bytes */{file_len}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                f.close()
+                return None
+
+            self.send_response(206, "Partial Content")
+            self.send_header("Content-Type", self.guess_type(path))
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_len}")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header(
+                "Last-Modified", self.date_time_string(os.fstat(f.fileno()).st_mtime)
+            )
+            self.end_headers()
+            self._range = (start, end)
+            return f
+        except Exception:
+            f.close()
+            raise
+
+    def copyfile(self, source, outputfile):
+        """Copy only the requested byte range when serving a 206."""
+        if not self._range:
+            return super().copyfile(source, outputfile)
+        start, end = self._range
+        source.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            chunk = source.read(min(64 * 1024, remaining))
+            if not chunk:
+                break
+            outputfile.write(chunk)
+            remaining -= len(chunk)
+
     def do_POST(self):
         if self.path == "/convert-slp":
             self._handle_convert_slp()
@@ -65,19 +167,17 @@ class LucidHandler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/x-hdf5")
         self.send_header("Content-Length", str(len(slp_bytes)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # Access-Control-Allow-Origin is added globally in end_headers().
         self.end_headers()
         self.wfile.write(slp_bytes)
 
     def do_OPTIONS(self):
-        if self.path == "/convert-slp":
-            self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.end_headers()
-        else:
-            super().do_OPTIONS()
+        # Access-Control-Allow-Origin is added globally in end_headers().
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Range")
+        self.end_headers()
 
 
 def main():

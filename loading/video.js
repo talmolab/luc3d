@@ -69,16 +69,26 @@ export class OnDemandVideoDecoder {
         this._videoEl = document.createElement("video");
         this._videoEl.muted = true;
         this._videoEl.playsInline = true;
-        this._videoEl.preload = "auto";
+        // "metadata" (not "auto"): with a blob URL over a network-mounted drive,
+        // preload="auto" makes the browser eagerly buffer the ENTIRE multi-GB
+        // file into memory, which OOM-crashes the tab when loading a session
+        // folder with large videos across several views. We only need metadata
+        // here; frames are fetched on demand via seek (_getFrameHTML5) and 1 MB
+        // slice reads (readChunk), so "metadata" is sufficient.
+        this._videoEl.preload = "metadata";
 
         // Set up event listeners BEFORE setting src to avoid race condition.
         // Wait for 'canplay' (not just 'loadedmetadata') so the first frame is available to draw.
         var self = this;
         var metadataPromise = new Promise(function (resolve, reject) {
-            if (self._videoEl.readyState >= 3) {
+            // HAVE_METADATA (1) is enough: width/height/duration are known, and
+            // we no longer wait for a fully-buffered frame ("canplay"), which
+            // under preload="metadata" may not fire until the user seeks.
+            if (self._videoEl.readyState >= 1) {
                 resolve();
                 return;
             }
+            self._videoEl.addEventListener("loadedmetadata", function () { resolve(); }, { once: true });
             self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
             self._videoEl.addEventListener("error", function () {
                 var err = self._videoEl.error;

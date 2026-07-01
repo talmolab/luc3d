@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>LUCID — sleap-io.js streaming test harness</title>
+    <!-- h5wasm for streaming HDF5 / .slp -->
+    <script src="https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/dist/iife/h5wasm.js"></script>
+    <!-- Import map mirrors index.html (paths adjusted for /tests/). mediabunny is
+         stubbed: MP4 uses the mp4box backend and does not need it. -->
+    <script type="importmap">
+    {
+        "imports": {
+            "h5wasm": "../lib/h5wasm/hdf5_hl.js",
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
+            "mediabunny": "../lib/sleap-io/mediabunny-stub.js"
+        }
+    }
+    </script>
+    <style>
+        body { font: 13px/1.5 -apple-system, system-ui, sans-serif; margin: 16px; background:#111; color:#ddd; }
+        h1 { font-size: 16px; }
+        canvas { background:#000; max-width: 100%; border:1px solid #333; display:block; margin:8px 0; }
+        input[type=text] { width: 520px; max-width: 90%; padding:4px; background:#1c1c1c; color:#eee; border:1px solid #444; }
+        input[type=range] { width: 520px; max-width: 90%; }
+        button { padding:5px 10px; margin-right:6px; background:#254; color:#eee; border:1px solid #476; cursor:pointer; }
+        #log { white-space: pre-wrap; background:#0a0a0a; border:1px solid #333; padding:8px; height:220px; overflow:auto; font-family: ui-monospace, monospace; font-size:12px; }
+        .row { margin:8px 0; }
+        .ok { color:#5c5; } .warn { color:#dd5; } .err { color:#f66; }
+        .stat { display:inline-block; min-width:150px; color:#9cf; }
+    </style>
+</head>
+<body>
+    <h1>sleap-io.js backend test harness</h1>
+    <p>Runs a video through the real sleap-io.js backend (via LUCID's
+    <code>SleapVideoDecoder</code> adapter) and scrubs it, while showing JS heap
+    memory. Two ways to load — <b>use option A for your mounted-drive files</b>:</p>
+
+    <div class="row" style="border:1px solid #476; padding:10px; background:#141c16;">
+        <b>A) Pick a file from your computer / mounted server drive</b> (no URL needed):<br>
+        <input id="videoFile" type="file" accept="video/*,.mp4,.avi,.mov,.mkv,.webm" style="margin-top:6px;">
+        <div style="font-size:12px; opacity:0.8; margin-top:4px;">
+            Browse to your mounted drive, pick the big video, and watch the
+            <b>JS heap</b> below as you scrub. This is exactly what the app does
+            with a mounted file — if this stays flat and doesn't crash, the
+            sleap-io backend fixes your case.
+        </div>
+    </div>
+
+    <div class="row" style="border:1px solid #444; padding:10px; margin-top:8px;">
+        <b>B) Load by URL</b> (only if you serve files over HTTP with Range/206):<br>
+        Video URL: <input id="videoUrl" type="text" value="../sample_session/mid.mp4"><br>
+        SLP URL: <input id="slpUrl" type="text" placeholder="https://your-server/labels.slp" style="margin-top:4px;">
+        <div style="margin-top:6px;">
+            <button id="loadBtn">Load URL</button>
+            <button id="slpBtn">Stream .slp only</button>
+        </div>
+    </div>
+
+    <div class="row" style="margin-top:8px;">
+        <button id="playBtn" disabled>Play</button>
+    </div>
+    <div class="row">
+        <span class="stat">frame: <b id="frameNo">–</b></span>
+        <span class="stat">size: <b id="dims">–</b></span>
+        <span class="stat">fps: <b id="fps">–</b></span>
+        <span class="stat">JS heap: <b id="heap">–</b></span>
+    </div>
+    <input id="scrub" type="range" min="0" max="0" value="0" step="1" disabled>
+    <canvas id="canvas" width="640" height="360"></canvas>
+    <div id="log"></div>
+
+    <script type="module">
+        // --- Bring up the sleap-io.js bridge exactly like index.html does ---
+        import {
+            loadVideo, readSlpStreaming, isStreamingSupported
+        } from '../lib/sleap-io/index.browser.js';
+        window.SleapIO = { loadVideo, readSlpStreaming, isStreamingSupported };
+
+        import { SleapVideoDecoder } from '../loading/sleap-video-adapter.js';
+
+        const $ = (id) => document.getElementById(id);
+        const logEl = $('log');
+        function log(msg, cls) {
+            const t = new Date().toISOString().substr(11, 12);
+            logEl.innerHTML += `<span class="${cls || ''}">[${t}] ${msg}</span>\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        function heap() {
+            if (performance && performance.memory) {
+                return (performance.memory.usedJSHeapSize / 1048576).toFixed(0) + ' MB';
+            }
+            return 'n/a (Chrome only)';
+        }
+        function refreshHeap() { $('heap').textContent = heap(); }
+        setInterval(refreshHeap, 500);
+
+        const canvas = $('canvas');
+        const ctx = canvas.getContext('2d');
+        let decoder = null;
+
+        // Allow ?video=…&slp=… to point at the user's own server
+        const params = new URLSearchParams(location.search);
+        if (params.get('video')) $('videoUrl').value = params.get('video');
+        if (params.get('slp')) $('slpUrl').value = params.get('slp');
+
+        log('streaming supported (Worker/Blob/URL): ' + isStreamingSupported(),
+            isStreamingSupported() ? 'ok' : 'err');
+
+        async function drawFrame(i) {
+            const bmp = await decoder.getFrame(i);
+            if (bmp) {
+                canvas.width = decoder.videoTrack.video.width;
+                canvas.height = decoder.videoTrack.video.height;
+                ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+            }
+            $('frameNo').textContent = i;
+        }
+
+        // Shared loader for both a picked File (mounted drive) and a URL.
+        async function loadFromSource(source, label) {
+            if (decoder) { decoder.close(); decoder = null; }
+            log('loading video: ' + label + ' …');
+            const t0 = performance.now();
+            try {
+                decoder = new SleapVideoDecoder({ cacheSize: 30 });
+                await decoder.init(source);
+                const n = decoder.samples.length;
+                const w = decoder.videoTrack.video.width;
+                const h = decoder.videoTrack.video.height;
+                log(`ready in ${(performance.now() - t0).toFixed(0)} ms — ${n} frames, ${w}x${h}, ${decoder._fps.toFixed(2)} fps — sleap-io backend`, 'ok');
+                $('dims').textContent = w + 'x' + h;
+                $('fps').textContent = decoder._fps.toFixed(2);
+                const scrub = $('scrub');
+                scrub.max = Math.max(0, n - 1);
+                scrub.value = 0;
+                scrub.disabled = false;
+                $('playBtn').disabled = false;
+                await drawFrame(0);
+                log('first frame drawn. Scrub the slider and watch the JS heap above.', 'ok');
+            } catch (e) {
+                log('LOAD FAILED: ' + (e && e.message || e), 'err');
+                console.error(e);
+            }
+        }
+
+        // A) Mounted-drive / local file — the workflow that matters for you.
+        $('videoFile').addEventListener('change', (e) => {
+            const f = e.target.files && e.target.files[0];
+            if (f) loadFromSource(f, f.name + ' (' + (f.size / 1048576).toFixed(0) + ' MB, local File)');
+        });
+
+        // B) URL (only works when served with Range/206). sleep-io needs an
+        // absolute URL, so resolve relative paths against the page.
+        $('loadBtn').addEventListener('click', () => {
+            const raw = $('videoUrl').value.trim();
+            if (!raw) return;
+            const url = new URL(raw, location.href).href;
+            loadFromSource(url, url);
+        });
+
+        $('scrub').addEventListener('input', async (e) => {
+            if (!decoder) return;
+            await drawFrame(parseInt(e.target.value, 10));
+        });
+
+        let playing = false, raf = null;
+        $('playBtn').addEventListener('click', () => {
+            if (!decoder) return;
+            playing = !playing;
+            $('playBtn').textContent = playing ? 'Pause' : 'Play';
+            if (playing) {
+                decoder.seekNative(parseInt($('scrub').value, 10));
+                decoder.playNative();
+                const tick = () => {
+                    if (!playing) return;
+                    const idx = decoder.getCurrentFrameIndex();
+                    if (idx >= decoder.samples.length - 1) { playing = false; $('playBtn').textContent = 'Play'; decoder.pauseNative(); return; }
+                    decoder.drawCurrentFrame(ctx, canvas.width, canvas.height);
+                    $('frameNo').textContent = idx;
+                    $('scrub').value = idx;
+                    raf = requestAnimationFrame(tick);
+                };
+                raf = requestAnimationFrame(tick);
+            } else {
+                decoder.pauseNative();
+                if (raf) cancelAnimationFrame(raf);
+            }
+        });
+
+        $('slpBtn').addEventListener('click', async () => {
+            const url = $('slpUrl').value.trim();
+            if (!url) { log('enter an SLP URL first', 'warn'); return; }
+            log('streaming .slp via readSlpStreaming: ' + url + ' …');
+            const t0 = performance.now();
+            try {
+                const labels = await readSlpStreaming(url, { openVideos: false });
+                const nFrames = labels.labeledFrames ? labels.labeledFrames.length : (labels.labeled_frames || []).length;
+                log(`.slp streamed in ${(performance.now() - t0).toFixed(0)} ms — ` +
+                    `${(labels.videos || []).length} videos, ${(labels.tracks || []).length} tracks, ${nFrames} labeled frames`, 'ok');
+            } catch (e) {
+                log('SLP STREAM FAILED: ' + (e && e.message || e), 'err');
+                console.error(e);
+            }
+        });
+
+        log('Serve this repo with:  python3 server.py 8080   (NOT `python3 -m http.server` — no Range support)', 'warn');
+    </script>
+</body>
+</html>

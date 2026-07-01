@@ -1733,6 +1733,16 @@ filesystem enumeration, decoder rebuild.
 - Video assignment: `autoAssignVideosToCameras`, `forceVideoSelection`,
   `forceVideoSelectionWithFolder`, `matchSessionFolder`,
   `pickParentDirectoryForSessions`, `showParentDirMatchSummary`.
+- URL/streaming load: `handleLoadVideosFromUrl(urls)` — load videos from
+  http(s) URLs, streamed via sleap-io.js over HTTP Range requests; mirrors
+  `handleLoadVideos`' session/camera/view assembly. Wired to the **File ▸ Load
+  Videos from URL…** menu (Esc-closable modal in `ui/ui-wiring.js`). Streaming
+  requires the server to honour Range (206) — see `server.py`.
+- **All video-load sites here go through `createVideoDecoder(opts)`**
+  (re-exported from [`loading/decoder-factory.js`](#loadingdecoder-factoryjs));
+  the app's default backend is now sleap-io.js. This covers the session-folder
+  loaders (`handleLoadSessionFolderSingleSlp`, `handleLoadSessionFolderPerCamera`),
+  plain `handleLoadVideos`, and the URL loader.
 - `isCalibrationVideoFile(file)` — true for per-camera calibration clips
   (`<cam>/calibration_images/<date>-<cam>-calibration.mp4`). The folder scans
   recurse into camera subfolders, so these clips would otherwise be collected
@@ -1773,7 +1783,8 @@ same tracks repeated N times. Skipped files are logged.
 
 **Imports from project modules.**
 - `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
-  `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`,
+  `./video.js` (`VideoController`), `./decoder-factory.js` (`createVideoDecoder`),
+  `../import-export/file-io.js`, `../pose/triangulation.js`,
   `../import-export/save-load.js`, `../ui/rendering.js`,
   `../ui/info-panel.js` (`updateInfoPanel`),
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
@@ -1847,6 +1858,75 @@ loaded over the network or from disk.
 
 ---
 
+### loading/decoder-factory.js
+
+**Purpose.** Single decision point for which video-decoder backend the app uses,
+so switching between the legacy decoder and the sleap-io.js backend is one
+setting instead of ~10 scattered `new`s.
+
+**Key exports.**
+- `createVideoDecoder(opts)` — returns a `SleapVideoDecoder` or an
+  `OnDemandVideoDecoder`; both share the same interface, so callers are
+  backend-agnostic. `opts` also accepts `backend: 'sleap'|'legacy'` /
+  `forceSleap` / `forceLegacy` per-call overrides plus the usual
+  `cacheSize`/`lookahead`/`onProgress`.
+- `DEFAULT_VIDEO_BACKEND` — build default (`'sleap'`).
+
+**Backend selection (first match wins).** per-call `backend` → `forceSleap`/
+`forceLegacy` → `localStorage.LUCID_VIDEO_BACKEND` (runtime override — flip
+without editing code, then reload) → `DEFAULT_VIDEO_BACKEND`. To revert the
+whole app to the old HTML5 decoder: set `DEFAULT_VIDEO_BACKEND = 'legacy'` (or
+`localStorage.LUCID_VIDEO_BACKEND='legacy'`).
+
+**Imports from project modules.** `./video.js` (`OnDemandVideoDecoder`),
+`./sleap-video-adapter.js` (`SleapVideoDecoder`).
+
+**Imported by.** `loading/session-loader.js` (re-exports `createVideoDecoder`;
+all its video-load sites go through it). **Phase 2b (not yet routed):**
+`import-export/save-load.js`, `import-export/slp-import.js`,
+`ui/sessions-panes.js`, `pose/initialization.js` still build
+`OnDemandVideoDecoder` directly — migrate them through this factory once the
+sleap-io File decode path is browser-verified.
+
+---
+
+### loading/sleap-video-adapter.js
+
+**Purpose.** `SleapVideoDecoder` — wraps sleap-io.js's video backends (via the
+bridge `window.SleapIO.loadVideo`) behind the exact interface
+`OnDemandVideoDecoder` exposes, so it is a drop-in decoder. Its reason to exist:
+sleap-io.js's backends stream over **HTTP Range requests (206)** for remote
+URLs, fetching only the bytes each frame needs instead of downloading the whole
+file into memory — the fix for "load a large server-hosted video without
+crashing Chrome." Backend choice is sleap-io's (`createVideoBackend`): MP4 →
+`Mp4BoxVideoBackend` (Range streaming), webm/mkv/mov/ogg/ts →
+`MediaBunnyVideoBackend` (needs real mediabunny — currently **stubbed** in the
+`index.html` import map; MP4 does not need it), embedded `.slp` frames →
+HDF5 backends.
+
+**Key export.** `SleapVideoDecoder` — `async init(source)` (File|Blob|URL),
+`async getFrame(i) → ImageBitmap` (normalises VideoFrame/ImageData/encoded
+bytes; LRU cache), `.samples`(`.length`), `.videoTrack.video.{width,height}`,
+`._fps`, `.keyframeIndices`, `.fileSize`, `.onProgress`. Playback (sleap decode
+is async, so there is no native `<video>`): `playNative`/`pauseNative` run a
+wall-clock playhead + async prefetch; `getCurrentFrameIndex()` is wall-clock
+based; `drawCurrentFrame(ctx,w,h)` draws the cached frame for the playhead
+(false if not yet decoded, so the RAF loop keeps the previous frame). `close()`
+disposes bitmaps + the sleap-io `Video`.
+
+**Imports from project modules.** `./video.js` (`videoLog`).
+
+**Imported by.** `loading/session-loader.js` (`createVideoDecoder`,
+`handleLoadVideosFromUrl`). Exercised standalone by
+`tests/sleap-streaming-test.html`.
+
+**Requires.** The sleap-io.js bridge in `index.html` must expose `loadVideo`
+(and `readSlpStreaming`/`isStreamingSupported` for streaming SLP). Remote
+streaming needs a Range-capable server (`server.py` now returns 206; plain
+`python3 -m http.server` does **not**).
+
+---
+
 ### loading/video.js
 
 **Purpose.** Video decoding and multi-view playback. Hybrid HTML5
@@ -1860,6 +1940,17 @@ mismatches. `_getFrameHTML5`'s seek guard uses a frame-rate-aware
 tolerance (half a frame period, `0.5/_fps`) so high-fps recordings
 (e.g. 400 fps) step every frame instead of freezing under a fixed
 constant (issue #89).
+
+The `<video>` element uses `preload="metadata"` (not `"auto"`): with a blob
+URL over a network-mounted drive, `preload="auto"` made the browser eagerly
+buffer the entire multi-GB file into memory, OOM-crashing the tab when a
+**session folder** with large videos loaded across several views. `init()`'s
+metadata wait resolves at `HAVE_METADATA`/`loadedmetadata` (dimensions +
+duration) rather than waiting for a buffered frame (`canplay`), since under
+`preload="metadata"` `canplay` may not fire until the first seek. Frames are
+still fetched on demand (seek + 1 MB `readChunk` slices). For a fully
+sleap-io.js-backed, `<video>`-less decoder see
+[`loading/sleap-video-adapter.js`](#loadingsleap-video-adapterjs).
 
 **Zoom/pan resize anchoring.** Zoom pan offset (`view.zoom.offsetX/offsetY`) is
 screen-space px relative to the wrapper's base display size, which `applyZoom`
