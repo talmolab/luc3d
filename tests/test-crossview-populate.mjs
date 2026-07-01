@@ -1,12 +1,12 @@
 /**
- * test-liezl-populate.mjs — verifies that running the Liezl tracker (the branch
- * default engine) populates ALL the data structures the GUI and SLP export read:
+ * test-crossview-populate.mjs — verifies that running the CrossViewTracker (the app's
+ * only tracker) populates ALL the data structures the GUI and SLP export read:
  * identities, per-frame identity map, InstanceGroups (with identityId + members
  * + points3d), and — after propagation — per-instance trackIdx + session.tracks
- * (the native-SLP path). Drives the REAL runLiezlTracker() from pose/tracker.js
+ * (the native-SLP path). Drives the REAL runCrossViewTracker() from pose/tracker.js
  * headlessly (UI stubbed via scripts/bench/hooks.mjs).
  *
- * Run:  node tests/test-liezl-populate.mjs
+ * Run:  node tests/test-crossview-populate.mjs
  */
 import { register } from 'node:module';
 import path from 'node:path';
@@ -28,7 +28,7 @@ globalThis.window = globalThis;
 register(pathToFileURL(path.join(ROOT, 'scripts', 'bench', 'hooks.mjs')).href);
 const { Camera, Instance, FrameGroup, Session } =
     await import(pathToFileURL(path.join(POSE_DIR, 'pose-data.js')).href);
-const { runLiezlTracker, getTrackerEngine } =
+const { runCrossViewTracker } =
     await import(pathToFileURL(path.join(POSE_DIR, 'tracker.js')).href);
 
 // --- synthetic non-degenerate rig (no camera at [I|0]) ---
@@ -42,7 +42,7 @@ const nodes3d = c => OFF.map(o => [c[0] + o[0], c[1] + o[1], c[2] + o[2]]);
 
 // Two animals across 4 frames, drifting but staying separated.
 function buildSession() {
-    const s = new Session(CAMS, { nodes: NODES }, [], 'liezl-pop');
+    const s = new Session(CAMS, { nodes: NODES }, [], 'crossview-pop');
     const paths = [
         [[-7, 0, 8], [7, 0, 8]],
         [[-6, 0, 8], [6, 0, 8]],
@@ -61,15 +61,11 @@ function buildSession() {
 }
 
 // ===========================================================================
-group('Default engine is Liezl');
-eq(getTrackerEngine(), 'liezl', 'branch default tracker engine is "liezl"');
-
-// ===========================================================================
-group('runLiezlTracker populates every data structure');
+group('runCrossViewTracker populates every data structure');
 {
     const s = buildSession();
     const frames = s.frameIndices;
-    const res = runLiezlTracker(s, s.cameras, frames, true);   // propagate = full Track All
+    const res = runCrossViewTracker(s, s.cameras, frames, true);   // propagate = full Track All
 
     // 1. Identities.
     eq(s.identities.length, 2, 'two identities created');

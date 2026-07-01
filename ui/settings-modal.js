@@ -82,9 +82,10 @@ export function showSettingsModal(initialPanel) {
     // Only editable actions are user-rebindable; the working map tracks those.
     actions.forEach(function (a) { if (a.editable) working.keyMap[a.id] = a.binding; });
 
+    const activeSession = getActiveSession();
+
     // Seed the working node-weight map from the active session's skeleton, if any.
     // Keyed by node name; values are the current effective weight (default 1).
-    const activeSession = getActiveSession();
     const skeletonNodes = (activeSession && activeSession.skeleton && Array.isArray(activeSession.skeleton.nodes))
         ? activeSession.skeleton.nodes.slice()
         : [];
@@ -368,9 +369,10 @@ export function showSettingsModal(initialPanel) {
     wizPanel.appendChild(wizTitle);
 
     // --- Node Weights section --------------------------------------------
-    // Each skeleton node gets a 0–1 weight controlling how much it counts in the
-    // tracking cost (epipolar, reprojection, instance distance). 1 = full weight,
-    // 0 = ignored entirely. Edits mutate working.nodeWeights; committed on Apply.
+    // Each skeleton node gets a 0–1 weight scaling how much it counts in the
+    // CrossViewTracker's association cost (2D reprojection + 3D point-to-ray).
+    // 1 = full weight, 0 = the node is dropped from matching. Edits mutate
+    // working.nodeWeights; committed on Apply.
     const nwCategory = document.createElement('div');
     nwCategory.className = 'settings-kbd-category';
     nwCategory.textContent = 'Node Weights';
@@ -380,8 +382,9 @@ export function showSettingsModal(initialPanel) {
     nwHint.className = 'settings-kbd-hint';
     nwHint.style.marginTop = '0';
     nwHint.style.marginBottom = '8px';
-    nwHint.textContent = 'Weight of each skeleton node in the tracking algorithm (0–1). ' +
-        '1 = fully considered (epipolar cost, reprojection, …); 0 = ignored. Changes apply when you click Apply.';
+    nwHint.textContent = 'Weight of each skeleton node in the cross-view matching cost (0–1). ' +
+        '1 = fully considered (2D reprojection + 3D point-to-ray); 0 = ignored during tracking. ' +
+        'Changes apply when you click Apply.';
     wizPanel.appendChild(nwHint);
 
     if (skeletonNodes.length === 0) {
@@ -391,7 +394,7 @@ export function showSettingsModal(initialPanel) {
         wizPanel.appendChild(nwEmpty);
     } else {
         // Compact, scrollable multi-column table so long skeletons don't push the
-        // Tracking Thresholds section off-screen.
+        // rest of the wizard off-screen.
         const nwList = document.createElement('div');
         nwList.className = 'settings-node-weight-list';
         wizPanel.appendChild(nwList);
@@ -413,11 +416,17 @@ export function showSettingsModal(initialPanel) {
             input.value = String(working.nodeWeights[name]);
             input.setAttribute('aria-label', 'Weight for node ' + name);
 
+            // Grey the row out when the node is dropped (weight 0).
+            function reflectDropped() {
+                row.classList.toggle('settings-view-excluded', working.nodeWeights[name] === 0);
+            }
+
             // Keep the working map in sync as the user types. Empty/invalid input
             // is tolerated mid-edit; clamping to [0,1] happens on blur and on Apply.
             input.addEventListener('input', function () {
                 const v = parseFloat(input.value);
                 if (isFinite(v)) working.nodeWeights[name] = v;
+                reflectDropped();
             });
             input.addEventListener('blur', function () {
                 let v = parseFloat(input.value);
@@ -426,8 +435,10 @@ export function showSettingsModal(initialPanel) {
                 if (v > 1) v = 1;
                 working.nodeWeights[name] = v;
                 input.value = String(v);
+                reflectDropped();
             });
 
+            reflectDropped();
             row.appendChild(label);
             row.appendChild(input);
             nwList.appendChild(row);

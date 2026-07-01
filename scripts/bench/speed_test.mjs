@@ -1,6 +1,6 @@
 /**
- * speed_test.mjs — head-to-head timing of the LUC3D tracker (matchFrameInstances)
- * vs the ported Liezl CrossViewTracker (runLiezlTracker) on REAL benchmark
+ * speed_test.mjs — head-to-head timing of the legacy LUC3D tracker (matchFrameInstances)
+ * vs the CrossViewTracker (runCrossViewTracker) on REAL benchmark
  * detections from luc3d-bench (the sleep-nn FILTER+TRACK pool). Loads one real
  * multi-animal session once, then times both engines on the identical frames.
  *
@@ -68,7 +68,7 @@ globalThis.document = { getElementById: () => null };
 globalThis.window = globalThis;
 register(pathToFileURL(path.join(HERE, 'hooks.mjs')).href);
 const { Camera, Instance, FrameGroup, Session } = await import(pathToFileURL(path.join(POSE_DIR, 'pose-data.js')).href);
-const { matchFrameInstances, runLiezlTracker } = await import(pathToFileURL(path.join(POSE_DIR, 'tracker.js')).href);
+const { matchFrameInstances, runCrossViewTracker } = await import(pathToFileURL(path.join(POSE_DIR, 'tracker.js')).href);
 
 await h5.ready;
 const allCams = parseCalibrationTOML(fs.readFileSync(CALIB, 'utf8'), Camera);
@@ -123,19 +123,19 @@ function timeLuc3d() {
     }
     return { ms: performance.now() - t0, ids: s.identities.length };
 }
-function timeLiezl() {
+function timeCrossView() {
     const s = buildSession(); s.identities = []; s.frameIdentityMap = new Map(); s.instanceGroups = new Map();
     const t0 = performance.now();
-    const r = runLiezlTracker(s, s.cameras, s.frameIndices, true);
+    const r = runCrossViewTracker(s, s.cameras, s.frameIndices, true);
     return { ms: performance.now() - t0, ids: r.numIdentities };
 }
 
 // warmup (JIT) on a small slice
-timeLuc3d(); timeLiezl();
-const L = timeLuc3d(), Z = timeLiezl();
+timeLuc3d(); timeCrossView();
+const L = timeLuc3d(), Z = timeCrossView();
 const F = usedFrames.length;
 console.log(`\nsession-idx ${SESSION_IDX} (10072022131531)  cameras=${CAM_NAMES.length}  animals(cap)=${nAnimals}  nodes=${nNodes}`);
 console.log(`frames with detections: ${F}   total detections: ${totalDets}  (~${(totalDets / F).toFixed(1)} dets/frame across ${CAM_NAMES.length} cams)`);
-console.log(`\nLUC3D  (matchFrameInstances): ${L.ms.toFixed(0)} ms  →  ${(F / (L.ms / 1000)).toFixed(1)} fps   (${(L.ms / F).toFixed(2)} ms/frame)  [${L.ids} identities]`);
-console.log(`Liezl  (runLiezlTracker):     ${Z.ms.toFixed(0)} ms  →  ${(F / (Z.ms / 1000)).toFixed(1)} fps   (${(Z.ms / F).toFixed(2)} ms/frame)  [${Z.ids} identities]`);
-console.log(`\nratio (Liezl / LUC3D time): ${(Z.ms / L.ms).toFixed(2)}x  ${Z.ms < L.ms ? '(Liezl faster)' : '(Liezl slower)'}`);
+console.log(`\nLUC3D      (matchFrameInstances):  ${L.ms.toFixed(0)} ms  →  ${(F / (L.ms / 1000)).toFixed(1)} fps   (${(L.ms / F).toFixed(2)} ms/frame)  [${L.ids} identities]`);
+console.log(`CrossView  (runCrossViewTracker):  ${Z.ms.toFixed(0)} ms  →  ${(F / (Z.ms / 1000)).toFixed(1)} fps   (${(Z.ms / F).toFixed(2)} ms/frame)  [${Z.ids} identities]`);
+console.log(`\nratio (CrossView / LUC3D time): ${(Z.ms / L.ms).toFixed(2)}x  ${Z.ms < L.ms ? '(CrossView faster)' : '(CrossView slower)'}`);

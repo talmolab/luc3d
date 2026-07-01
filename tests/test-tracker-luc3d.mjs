@@ -1,6 +1,6 @@
 /**
- * test-tracker-liezl.mjs — Node tests for the two "liezl"-derived tracker levers
- * ported into LUCID's own cross-view tracker (pose/tracker.js):
+ * test-tracker-luc3d.mjs — Node tests for the two reference-derived levers on the
+ * legacy bench-only luc3d matcher (matchFrameInstances in pose/tracker.js):
  *
  *   Lever A — detection-pool filter (filterMinVisibleNodes / filterMinInstanceScore)
  *             gate in collectInstances().
@@ -9,11 +9,11 @@
  *
  * These drive the REAL, unmodified pose/tracker.js headlessly via the same
  * UI-stubbing loader the benchmark uses (scripts/bench/hooks.mjs), so the tests
- * exercise the exact track/identity-assignment path the app runs — and prove the
- * new knobs default to a no-op (i.e. behave "just like the current luc3d tracker"
- * until set).
+ * exercise the exact matchFrameInstances path the bench runs — and prove the
+ * knobs default to a no-op (i.e. behave "just like the original luc3d tracker"
+ * until set). The app itself no longer uses this matcher (see the CrossViewTracker).
  *
- * Run:  node tests/test-tracker-liezl.mjs
+ * Run:  node tests/test-tracker-luc3d.mjs
  */
 import { register } from 'node:module';
 import path from 'node:path';

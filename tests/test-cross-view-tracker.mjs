@@ -1,5 +1,5 @@
 /**
- * test-cross-view-tracker.mjs — algorithm tests for the ported Liezl
+ * test-cross-view-tracker.mjs — algorithm tests for the
  * `CrossViewTracker` (pose/cross-view-tracker.js). Drives the real class
  * headlessly (UI stubbed via scripts/bench/hooks.mjs) on a synthetic
  * multi-animal × multi-view scene and checks births, 3D fusion, and identity

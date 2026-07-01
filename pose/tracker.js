@@ -168,7 +168,7 @@ function crossViewScore(instA, camA, instB, camB) {
 // ============================================
 
 // Number of present (non-null) keypoints in an instance — the geometry half of
-// the "liezl filter". Missing keypoints are stored as null (see getUndistortedPoints).
+// the detection filter. Missing keypoints are stored as null (see getUndistortedPoints).
 function countVisibleNodes(points) {
     if (!points) return 0;
     var n = 0;
@@ -176,11 +176,11 @@ function countVisibleNodes(points) {
     return n;
 }
 
-// Detection-pool gate ("liezl filter"): drop garbage/low-confidence instances
-// before they enter cross-view matching. Both gates default to 0 (no-op), so
-// behavior is unchanged unless the Tracking Wizard / bench sets them.
-//   filterMinVisibleNodes — geometry gate, needs no per-detection score (Liezl Stage-1 = 8)
-//   filterMinInstanceScore — confidence gate, only applies when inst.score is available (Liezl = 0.85)
+// Detection-pool gate: drop garbage/low-confidence instances before they enter
+// cross-view matching. Both gates default to 0 (no-op), so behavior is unchanged
+// unless the Tracking Wizard / bench sets them.
+//   filterMinVisibleNodes — geometry gate, needs no per-detection score (sleap-3d Stage-1 = 8)
+//   filterMinInstanceScore — confidence gate, only applies when inst.score is available (sleap-3d = 0.85)
 function passesDetectionFilter(inst, minVis, minScore) {
     if (minVis > 0 && countVisibleNodes(inst.points) < minVis) return false;
     if (minScore > 0 && inst.score != null && inst.score < minScore) return false;
@@ -217,11 +217,21 @@ function collectInstances(frameGroup, cameras) {
 
 
 // ============================================
-// Single-frame matching
+// Single-frame matching — LEGACY "luc3d" matcher (BENCH-ONLY)
 // ============================================
+//
+// NOTE: This per-frame matcher + 4-signal reorder is the original LUC3D tracker.
+// The app no longer uses it — trackCurrentFrame/trackAll drive the
+// CrossViewTracker exclusively. It is retained ONLY so the head-to-head
+// benchmark harness (scripts/bench/speed_test.mjs, bench_driver.mjs) and its
+// tests (tests/test-tracker-*.mjs) can compare engines. Do not wire it back into
+// the GUI. The thresholds it reads (epipolarDecay, reprojSigma, reprojWeight,
+// minMatchScore, prevIdentityBonus, reprojGate*, track3dWeight) are hidden from
+// the Tracking Wizard (see `wizard:false` in ui/settings.js) but still resolve
+// to their defaults here.
 
 /**
- * Match instances across views for one frame.
+ * Match instances across views for one frame. (Bench-only; see banner above.)
  */
 export function matchFrameInstances(frameGroup, cameras, session, opts) {
     opts = opts || {};
@@ -371,7 +381,7 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
     if (nTargets === 0 || nGroups === 0) return groups;
 
     // Weight on the 3D-position continuity term (Signal 2) relative to the other
-    // temporal signals — the LUCID analog of Liezl's correspondence_weight_3d.
+    // temporal signals — the LUCID analog of the reference correspondence_weight_3d.
     // 1 = equal weight (legacy); 6 ≈ the G_keeptrack_3d6 benchmark champion.
     var trackWeight3d = thr('track3dWeight');
 
@@ -799,21 +809,14 @@ function promptNumAnimals() {
 }
 
 // ============================================
-// Liezl CrossViewTracker engine (branch default)
+// CrossViewTracker engine — the app's only temporal tracker
+// (pose/cross-view-tracker.js). trackCurrentFrame/trackAll drive it.
 // ============================================
-
-// Which temporal engine trackCurrentFrame/trackAll use:
-//   'liezl' — the ported sleap_3d CrossViewTracker (pose/cross-view-tracker.js),
-//             the default on this branch.
-//   'luc3d' — the original per-frame matcher + 4-signal reorder (matchFrameInstances).
-var _trackerEngine = 'liezl';
-export function setTrackerEngine(e) { _trackerEngine = (e === 'luc3d') ? 'luc3d' : 'liezl'; }
-export function getTrackerEngine() { return _trackerEngine; }
 
 var _groupIdCounter = 1;
 function nextGroupId() { return _groupIdCounter++; }
 
-function liezlHyperparams() {
+function crossViewHyperparams() {
     return {
         corr2dWeight: thr('corr2dWeight'),
         corr3dWeight: thr('corr3dWeight'),
@@ -826,7 +829,7 @@ function liezlHyperparams() {
 // Build Map(camName -> Detection[]) for one frame from linked + unlinked
 // instances (honoring the detection filter). Each Detection records whether it
 // came from the unlinked pool so commit can promote it into a group.
-function buildLiezlDetections(frameGroup, cameras, frameIdx) {
+function buildTrackerDetections(frameGroup, cameras, frameIdx) {
     var minVis = thr('filterMinVisibleNodes');
     var minScore = thr('filterMinInstanceScore');
     var detsByCam = new Map();
@@ -856,7 +859,7 @@ function buildLiezlDetections(frameGroup, cameras, frameIdx) {
 // Persist a tracked frame: for each live target with a cross-view bundle THIS
 // frame, create an InstanceGroup, map the target's stable trackId to a session
 // Identity, write the per-frame identity entries, and promote unlinked members.
-function commitLiezlFrame(session, trk, frameIdx, trackToIdentity) {
+function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
     var fg = session.getFrameGroup(frameIdx);
     if (!fg) return;
     for (var ti = 0; ti < trk.targets.length; ti++) {
@@ -892,25 +895,28 @@ function commitLiezlFrame(session, trk, frameIdx, trackToIdentity) {
     }
 }
 
-// Drive the Liezl CrossViewTracker over `frameIndices`, populating identities,
-// the per-frame identity map, and InstanceGroups. When `propagate` is set (a
-// full Track All), rewrite per-instance trackIdx + session.tracks so track
-// colors AND native SLP export carry the identities.
-export function runLiezlTracker(session, cameras, frameIndices, propagate, maxTargets) {
+// Drive the CrossViewTracker over `frameIndices`, populating identities, the
+// per-frame identity map, and InstanceGroups. When `propagate` is set (a full
+// Track All), rewrite per-instance trackIdx + session.tracks so track colors AND
+// native SLP export carry the identities.
+export function runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets) {
     _thresholds = getTrackingThresholds();     // snapshot for thr()
-    var hp = liezlHyperparams();
+    var hp = crossViewHyperparams();
     // LUCID extension: cap live targets at the user's animal count when provided
     // (null/undefined leaves the tracker faithful/uncapped). See CrossViewTracker.
     if (maxTargets != null) hp.maxTargets = maxTargets;
+    // LUCID extension: per-node association weights from the Tracking Wizard
+    // (indexed to the session skeleton). null ⇒ every node weighted 1.
+    hp.nodeWeights = getNodeWeightArray(session.skeleton && session.skeleton.nodes);
     var trk = new CrossViewTracker(hp);
     var trackToIdentity = new Map();
     for (var f = 0; f < frameIndices.length; f++) {
         var fi = frameIndices[f];
         var fg = session.getFrameGroup(fi);
         if (!fg) continue;
-        var detsByCam = buildLiezlDetections(fg, cameras, fi);
+        var detsByCam = buildTrackerDetections(fg, cameras, fi);
         trk.trackFrame(detsByCam, cameras);
-        commitLiezlFrame(session, trk, fi, trackToIdentity);
+        commitTrackedFrame(session, trk, fi, trackToIdentity);
     }
     if (propagate) session.propagateIdentitiesToTracks();
     return { numIdentities: session.identities.length, numTargets: trk.targets.length };
@@ -944,36 +950,18 @@ export function trackCurrentFrame() {
     }
 
     try {
-        if (_trackerEngine === 'liezl') {
-            // Single-frame Liezl pass (births only — no cross-frame history).
-            // Populates identities + per-frame map + InstanceGroups for this
-            // frame; trackIdx/session.tracks are only rewritten by Track All.
-            // Drop this frame's prior tracker groups so repeated runs don't stack.
-            session.instanceGroups.set(state.currentFrame, []);
-            var lr = runLiezlTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals);
-            drawAllOverlays(state.currentFrame);
-            updateInfoPanel();
-            if (timeline) timeline.refreshTracks(state.session, { cap: true });
-            if (lr.numTargets > 0) {
-                setStatus('Frame ' + state.currentFrame + ': ' + lr.numIdentities +
-                    ' identities / ' + lr.numTargets + ' cross-view targets (Liezl)', 'success');
-            } else {
-                setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
-            }
-            return;
-        }
-        var result = matchFrameInstances(fg, trackedCameras, session, {
-            numAnimals: effectiveNumAnimals
-        });
-        var nullNodes = countNullNodesInTargets(result.targets3d);
-        setNullNodesStatus(nullNodes);
+        // Single-frame pass (births only — no cross-frame history). Populates
+        // identities + per-frame map + InstanceGroups for this frame;
+        // trackIdx/session.tracks are only rewritten by Track All. Drop this
+        // frame's prior tracker groups so repeated runs don't stack.
+        session.instanceGroups.set(state.currentFrame, []);
+        var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals);
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
-        if (result.numIdentities > 0) {
-            setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
-                (effectiveNumAnimals ? ' (capped at ' + effectiveNumAnimals + ')' : '') +
-                ', ' + nullNodes + ' null nodes', 'success');
+        if (lr.numTargets > 0) {
+            setStatus('Frame ' + state.currentFrame + ': ' + lr.numIdentities +
+                ' identities / ' + lr.numTargets + ' cross-view targets', 'success');
         } else {
             setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
         }
@@ -1079,85 +1067,28 @@ export async function trackAll() {
 
     showLoading('Assigning identities: 0/' + frameIndices.length + ' frames...');
 
-    // Liezl engine (branch default): drive the ported CrossViewTracker across
-    // all frames and populate identities + per-frame map + InstanceGroups +
-    // per-instance tracks (via propagate) so both the GUI and native SLP export
-    // carry the result.
-    if (_trackerEngine === 'liezl') {
-        try {
-            // The Liezl pass is one synchronous loop, so a per-frame counter can
-            // never repaint mid-run — show an honest indeterminate message
-            // instead of a frozen "0/N". The setTimeout(0) yield lets it paint
-            // before the blocking run begins.
-            showLoading('Assigning identities across ' + frameIndices.length + ' frames…');
-            await new Promise(function (r) { setTimeout(r, 0); });
-            var lres = runLiezlTracker(session, cameras, frameIndices, true, effectiveNumAnimals);
-            hideLoading();
-            drawAllOverlays(state.currentFrame);
-            updateInfoPanel();
-            if (timeline) timeline.refreshTracks(state.session, { cap: true });
-            console.timeEnd('[TrackAll] total');
-            setStatus('Tracked ' + frameIndices.length + ' frames, ' +
-                lres.numIdentities + ' identities (Liezl)', 'success');
-        } catch (e) {
-            hideLoading();
-            console.error('[TrackAll][liezl] error:', e, e.stack);
-            setStatus('Track All error: ' + e.message, 'error');
-        }
-        return;
-    }
-
-    var YIELD_EVERY = 50;
-
-    var prevAssignments = null;
-    var prevTargets3d = null;
-    var totalNullNodes = 0;
+    // Drive the CrossViewTracker across all frames and populate identities +
+    // per-frame map + InstanceGroups + per-instance tracks (via propagate) so
+    // both the GUI and native SLP export carry the result.
     try {
-        for (var f = 0; f < frameIndices.length; f++) {
-            var fi = frameIndices[f];
-            var fg = session.getFrameGroup(fi);
-            if (fg) {
-                try {
-                    var result = matchFrameInstances(fg, cameras, session, {
-                        numAnimals: effectiveNumAnimals,
-                        perFrame: true,
-                        prevAssignments: prevAssignments,
-                        prevTargets3d: prevTargets3d
-                    });
-                    totalNullNodes += countNullNodesInTargets(result.targets3d);
-                    if (result.assignments && result.assignments.size > 0) {
-                        prevAssignments = result.assignments;
-                    }
-                    if (result.targets3d && result.targets3d.length > 0) {
-                        prevTargets3d = result.targets3d;
-                    }
-                } catch (frameErr) {
-                    console.error('[TrackAll] Error at frame ' + fi + ':', frameErr);
-                    // Continue to next frame instead of aborting
-                }
-            }
-
-            if (f % YIELD_EVERY === 0) {
-                document.getElementById('loadingStatus').textContent =
-                    'Assigning identities: ' + (f + 1) + '/' + frameIndices.length + ' frames...';
-                await new Promise(function (r) { setTimeout(r, 0); });
-            }
-        }
-
+        // The tracker runs as one synchronous loop, so a per-frame counter can
+        // never repaint mid-run — show an honest indeterminate message instead
+        // of a frozen "0/N". The setTimeout(0) yield lets it paint before the
+        // blocking run begins.
+        showLoading('Assigning identities across ' + frameIndices.length + ' frames…');
+        await new Promise(function (r) { setTimeout(r, 0); });
+        var lres = runCrossViewTracker(session, cameras, frameIndices, true, effectiveNumAnimals);
         hideLoading();
-        setNullNodesStatus(totalNullNodes);
         drawAllOverlays(state.currentFrame);
-        console.timeEnd('[TrackAll] total');
-        console.log('[TrackAll] total null nodes:', totalNullNodes);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
+        console.timeEnd('[TrackAll] total');
         setStatus('Tracked ' + frameIndices.length + ' frames, ' +
-            session.identities.length + ' identities, ' +
-            totalNullNodes + ' null nodes', 'success');
+            lres.numIdentities + ' identities', 'success');
     } catch (e) {
         hideLoading();
         console.error('[TrackAll] error:', e, e.stack);
-        setStatus('Track All error: ' + e.message + ' | ' + (e.stack ? e.stack.split('\n')[1] : ''), 'error');
+        setStatus('Track All error: ' + e.message, 'error');
     }
 }
 

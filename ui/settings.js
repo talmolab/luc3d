@@ -285,48 +285,58 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'track3dWeight', label: '3D continuity weight', default: 1,
         min: 0, max: 20, step: 0.5,
-        desc: 'Weight on the 3D-position term in temporal identity linking (Liezl correspondence_weight_3d). Raise it to make 3D-position continuity dominate the per-identity cost and suppress sustained ID swaps. 1 = legacy equal weighting; 6 ≈ the benchmark champion.',
+        desc: 'Weight on the 3D-position term in temporal identity linking (reference correspondence_weight_3d). Raise it to make 3D-position continuity dominate the per-identity cost and suppress sustained ID swaps. 1 = legacy equal weighting; 6 ≈ the benchmark champion.',
     },
     {
         id: 'filterMinVisibleNodes', label: 'Min visible nodes (filter)', default: 0,
         min: 0, max: 30, step: 1,
-        desc: 'Detection-pool filter: drop instances with fewer than this many present keypoints before cross-view matching (geometry half of the “liezl filter”). 0 = off; Liezl Stage-1 used 8 on a 15-node skeleton.',
+        desc: 'Detection-pool filter: drop instances with fewer than this many present keypoints before cross-view matching (geometry half of the detection filter). 0 = off; the sleap-3d reference used 8 on a 15-node skeleton.',
     },
     {
         id: 'filterMinInstanceScore', label: 'Min instance score (filter)', default: 0,
         min: 0, max: 1, step: 0.05,
-        desc: 'Detection-pool filter: drop instances whose detection score is below this value (only applies when per-instance scores are available). 0 = off; Liezl Stage-1 used 0.85.',
+        desc: 'Detection-pool filter: drop instances whose detection score is below this value (only applies when per-instance scores are available). 0 = off; the sleap-3d reference used 0.85.',
     },
-    // --- Liezl CrossViewTracker engine (pose/cross-view-tracker.js) ---
+    // --- CrossViewTracker engine (pose/cross-view-tracker.js) ---
     {
-        id: 'corr2dWeight', label: 'Liezl: 2D correspondence weight', default: 1,
+        id: 'corr2dWeight', label: '2D correspondence weight', default: 1,
         min: 0, max: 20, step: 0.5,
-        desc: 'Weight on the 2D reprojection term of the Liezl cross-view tracker (correspondence_weight_2d). Reference default 1.',
+        desc: 'Weight on the 2D reprojection term of the cross-view tracker (correspondence_weight_2d). Reference default 1.',
     },
     {
-        id: 'corr3dWeight', label: 'Liezl: 3D correspondence weight', default: 6,
+        id: 'corr3dWeight', label: '3D correspondence weight', default: 6,
         min: 0, max: 20, step: 0.5,
-        desc: 'Weight on the 3D point-to-ray term of the Liezl cross-view tracker (correspondence_weight_3d). 6 = the G_keeptrack_3d6 benchmark champion (fewest sustained ID switches).',
+        desc: 'Weight on the 3D point-to-ray term of the cross-view tracker (correspondence_weight_3d). 6 = the benchmark champion (fewest sustained ID switches).',
     },
     {
-        id: 'velocityThreshold', label: 'Liezl: velocity threshold', default: 10,
+        id: 'velocityThreshold', label: 'Velocity threshold', default: 10,
         min: 0.1, max: 1000, step: 0.5,
-        desc: 'Normalizer for the 2D displacement term of the Liezl tracker (velocity_threshold, normalized image units). Bench value 10.',
+        desc: 'Normalizer for the 2D displacement term of the cross-view tracker (velocity_threshold, normalized image units). Bench value 10.',
     },
     {
-        id: 'distanceThreshold', label: 'Liezl: distance threshold (mm)', default: 50,
+        id: 'distanceThreshold', label: 'Distance threshold (mm)', default: 50,
         min: 0.1, max: 1000, step: 1,
-        desc: 'Normalizer for the 3D point-to-ray term of the Liezl tracker (distance_threshold, world units/mm). Bench value 50.',
+        desc: 'Normalizer for the 3D point-to-ray term of the cross-view tracker (distance_threshold, world units/mm). Bench value 50.',
     },
     {
-        id: 'timePenalty', label: 'Liezl: time penalty', default: 0.1,
+        id: 'timePenalty', label: 'Time penalty', default: 0.1,
         min: 0, max: 10, step: 0.05,
-        desc: 'Exponential decay exp(-time_penalty·Δt) applied over frame gaps in the Liezl tracker (time_penalty). Bench value 0.1.',
+        desc: 'Exponential decay exp(-time_penalty·Δt) applied over frame gaps in the cross-view tracker (time_penalty). Bench value 0.1.',
     },
 ];
 
 const _thrById = new Map();
 TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
+
+// Threshold ids surfaced in the Tracking Wizard — the CrossViewTracker's free
+// parameters (detection filter + the five cross-view cost knobs). The remaining
+// catalog entries drive the legacy bench-only luc3d matcher (pose/tracker.js)
+// and are intentionally hidden from the UI; they still resolve to their defaults
+// for the benchmark harness.
+const WIZARD_THRESHOLD_IDS = new Set([
+    'filterMinVisibleNodes', 'filterMinInstanceScore',
+    'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
+]);
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.
 function clampThreshold(def, v) {
@@ -339,8 +349,10 @@ function clampThreshold(def, v) {
 
 // Catalog snapshot for the Tracking Wizard: [{ id, label, default, value, min,
 // max, step, desc }] with the effective value resolved (override or default).
+// Only the CrossViewTracker's wizard-visible parameters are returned; legacy
+// bench-only luc3d thresholds are filtered out.
 export function getTrackingThresholdDefs() {
-    return TRACKING_THRESHOLDS.map(function (t) {
+    return TRACKING_THRESHOLDS.filter(function (t) { return WIZARD_THRESHOLD_IDS.has(t.id); }).map(function (t) {
         return {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),

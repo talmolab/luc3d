@@ -1,5 +1,8 @@
 /**
- * cross-view-tracker.js — JS port of Liezl's `CrossViewTracker` (sleap_3d).
+ * cross-view-tracker.js — `CrossViewTracker`, LUCID's cross-view 3D tracker.
+ *
+ * Adapted from the `CrossViewTracker` written by Liezl Maree in the
+ * talmolab/sleap-3d repository (Python) and reimplemented here in JavaScript.
  *
  * A faithful re-implementation of the cross-view 3D multi-target tracker from
  * `/root/vast/eric/sleap-3d/sleap_3d/tracker.py` (`CrossViewTracker`, L1158).
@@ -127,6 +130,11 @@ export class CrossViewTracker {
      *   opt-in caps the number of live targets so "Track All" can honor a
      *   user-supplied animal count. null (default) == faithful reference
      *   behavior; a positive integer stops births once that many targets exist.
+     *   nodeWeights (null) — DIVERGENCE FROM REFERENCE. Per-node weight array
+     *   (indexed to match `Instance.points`) from the Tracking Wizard. Each
+     *   node's contribution to the 2D + 3D association cost is scaled by its
+     *   weight; a weight of 0 drops the node from matching entirely. null
+     *   (default) == every node weighted 1 (faithful reference behavior).
      */
     constructor(hp) {
         hp = hp || {};
@@ -138,6 +146,9 @@ export class CrossViewTracker {
         // LUCID extension (not in reference): cap live targets. null = uncapped.
         this.maxTargets = (typeof hp.maxTargets === 'number' && isFinite(hp.maxTargets)
             && hp.maxTargets > 0) ? Math.floor(hp.maxTargets) : null;
+        // LUCID extension (not in reference): per-node association weights.
+        // null = every node weighted 1.
+        this.nodeWeights = Array.isArray(hp.nodeWeights) ? hp.nodeWeights : null;
 
         this.targets = [];                 // list of live Target
         this.unmatchedByCam = new Map();   // camName -> Detection[] (births buffer)
@@ -200,6 +211,14 @@ export class CrossViewTracker {
         return this._adjacency2d(target, det, dt) + this._adjacency3d(target, det, cam);
     }
 
+    // Per-node association weight (LUCID extension). null weights ⇒ 1 for every
+    // node; a missing/out-of-range entry also defaults to 1.
+    _nodeWeight(k) {
+        if (this.nodeWeights == null) return 1;
+        var w = this.nodeWeights[k];
+        return (typeof w === 'number' && isFinite(w)) ? w : 1;
+    }
+
     // 2D term (reference Eq.2). prev = target projected into this view (normalized).
     _adjacency2d(target, det, dt) {
         if (target.points3d == null) return 0;
@@ -208,6 +227,8 @@ export class CrossViewTracker {
         var sum = 0;
         var n = Math.min(target.points3d.length, det.pointsNorm.length);
         for (var k = 0; k < n; k++) {
+            var w = this._nodeWeight(k);
+            if (w === 0) continue;                               // node dropped from matching
             var tp = target.points3d[k], dp = det.pointsNorm[k];
             if (tp == null || dp == null) continue;             // np.nansum skips NaN
             var proj = projectNorm(tp, ext);
@@ -216,7 +237,7 @@ export class CrossViewTracker {
             if (!isFinite(distance)) continue;                   // np.nansum: skip degenerate
             var velocity = distance / (this.velThresh * (1 + dt));
             var correspondence = this.corr2d * (1 - velocity);   // may go negative
-            sum += correspondence * decay;
+            sum += w * correspondence * decay;
         }
         return sum;
     }
@@ -230,10 +251,12 @@ export class CrossViewTracker {
         var dists = pointsToRayDistances(target.points3d, ray.origin, ray.directions);
         var sum = 0;
         for (var k = 0; k < dists.length; k++) {
+            var w = this._nodeWeight(k);
+            if (w === 0) continue;                               // node dropped from matching
             if (dists[k] == null || !isFinite(dists[k])) continue;  // np.nansum: skip NaN/degenerate
             var distanceWeight = dists[k] / this.distThresh;
             var correspondence = this.corr3d * (1 - distanceWeight);  // may go negative
-            sum += correspondence;                               // decay factor exp(0)=1
+            sum += w * correspondence;                           // decay factor exp(0)=1
         }
         return sum;
     }
