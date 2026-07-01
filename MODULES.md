@@ -1162,6 +1162,14 @@ shift-drag range select, mouse-wheel / pinch zoom, middle-click pan. Block 1 (Pr
 adds tree-grouped per-camera labels, an inner scrollable track-area
 wrapper, and an empty-camera placeholder row per camera without tracks.
 
+**Canvas backing-store cap.** `resize()` clamps the canvas backing store to
+`MAX_CANVAS` (32000px/side). A tall timeline (e.g. 8 views × their tracks/
+identities) makes `getPreferredHeight() * devicePixelRatio` exceed the browser's
+~32767px `<canvas>` limit, which fails to allocate and renders as the broken-
+canvas "sad face" over just the timeline region. When that would happen the
+effective device-pixel ratio is scaled down (CSS size + scroll unchanged; only
+backing resolution drops) so the canvas always allocates.
+
 **Trackpad / wheel semantics.** `_handleWheel` maps wheel input as:
 horizontal-dominant scroll (`|deltaX| > |deltaY|`) pans `_scrollFrame`
 left/right (same axis as middle/right-drag pan and the scrollbar thumb),
