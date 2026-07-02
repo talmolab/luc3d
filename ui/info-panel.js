@@ -10,7 +10,8 @@ import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
 import { REPROJECTION_COLOR, getTrackColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
-import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton } from './app-state.js';
+import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js';
 import {
@@ -600,6 +601,7 @@ export function populateSkeletonTable() {
             const newName = nameInput.value.trim();
             if (!newName) { nameInput.value = sk.nodes[i]; return; }
             sk.nodes[i] = newName;
+            setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
             populateSkeletonTable();
             drawAllOverlays(state.currentFrame);
         });
@@ -613,6 +615,10 @@ export function populateSkeletonTable() {
         delBtn.title = 'Remove node';
         delBtn.addEventListener('click', function () {
             sk.removeNode(i);
+            // One skeleton per project: unify + drop the node's point from every
+            // session's instances.
+            setProjectSkeleton(sk);
+            propagateNodeRemovedAllSessions(i);
             populateSkeletonTable();
             drawAllOverlays(state.currentFrame);
         });
@@ -642,6 +648,7 @@ export function populateSkeletonTable() {
         delBtn.title = 'Remove edge';
         delBtn.addEventListener('click', function () {
             sk.removeEdge(edgeIdx);
+            setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
             populateSkeletonTable();
             drawAllOverlays(state.currentFrame);
         });
@@ -685,6 +692,66 @@ export function ensureSession() {
     }
 }
 
+// --- One-skeleton-per-project helpers ---------------------------------------
+
+// Apply `sk` as the single project skeleton (shared by every session). If a
+// non-empty skeleton already exists, warn first — it overwrites all sessions.
+export function applyProjectSkeleton(sk, onDone) {
+    var existing = getProjectSkeleton();
+    var hasExisting = existing && existing.nodes && existing.nodes.length > 0;
+    var apply = function () {
+        setProjectSkeleton(sk);
+        populateSkeletonTable();
+        drawAllOverlays(state.currentFrame);
+        updateInfoPanel();
+        if (onDone) onDone();
+    };
+    if (hasExisting && existing !== sk) showOneSkeletonWarning(apply);
+    else apply();
+}
+
+// Esc-closable modal: loading a skeleton overwrites the single project skeleton
+// for every session. Runs onConfirm() on "Overwrite".
+function showOneSkeletonWarning(onConfirm) {
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.innerHTML =
+        '<h3>One skeleton per project</h3>' +
+        '<p style="margin:6px 0 12px;">A project can only have <b>one skeleton</b>, shared by every ' +
+        'session. Loading this will <b>overwrite the current skeleton for all sessions</b>.</p>' +
+        '<div class="modal-actions">' +
+        '<button id="oneSkelCancel">Cancel</button>' +
+        '<button class="primary" id="oneSkelConfirm">Overwrite all sessions</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    function close() {
+        document.removeEventListener('keydown', onKey);
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); close(); } }
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    modal.querySelector('#oneSkelCancel').addEventListener('click', close);
+    modal.querySelector('#oneSkelConfirm').addEventListener('click', function () {
+        close();
+        if (onConfirm) onConfirm();
+    });
+}
+
+// After the shared project skeleton gains/loses a node, keep every session's
+// per-session instance point-arrays in sync.
+function propagateNodeAddedAllSessions() {
+    var ss = state.sessions || [];
+    for (var i = 0; i < ss.length; i++) if (ss[i] && ss[i].propagateNodeAdded) ss[i].propagateNodeAdded();
+}
+function propagateNodeRemovedAllSessions(nodeIdx) {
+    var ss = state.sessions || [];
+    for (var i = 0; i < ss.length; i++) if (ss[i] && ss[i].propagateNodeRemoved) ss[i].propagateNodeRemoved(nodeIdx);
+}
+
 export function setupSkeletonEditing() {
     // Add Node button
     document.getElementById('btnAddNode').addEventListener('click', function () {
@@ -698,6 +765,10 @@ export function setupSkeletonEditing() {
             return;
         }
         state.session.skeleton.addNode(name);
+        // One skeleton per project: unify the reference across all sessions and
+        // extend every session's instance point-arrays for the new node.
+        setProjectSkeleton(state.session.skeleton);
+        propagateNodeAddedAllSessions();
         input.value = '';
         populateSkeletonTable();
         drawAllOverlays(state.currentFrame);
@@ -721,6 +792,7 @@ export function setupSkeletonEditing() {
             setStatus('Cannot add edge: duplicate or same node', 'warning');
             return;
         }
+        setProjectSkeleton(state.session.skeleton); // one skeleton per project
         populateSkeletonTable();
         drawAllOverlays(state.currentFrame);
     });
@@ -755,11 +827,11 @@ export function setupSkeletonEditing() {
                         return;
                     }
                     ensureSession();
-                    state.session.skeleton = sk;
-                    populateSkeletonTable();
-                    drawAllOverlays(state.currentFrame);
-                    updateInfoPanel();
-                    setStatus('Loaded skeleton: ' + sk.nodes.length + ' nodes, ' + sk.edges.length + ' edges', 'success');
+                    // One skeleton per project: applies to ALL sessions (warns
+                    // first if a skeleton already exists — it overwrites all).
+                    applyProjectSkeleton(sk, function () {
+                        setStatus('Loaded skeleton for all sessions: ' + sk.nodes.length + ' nodes, ' + sk.edges.length + ' edges', 'success');
+                    });
                 } catch (err) {
                     console.error('Failed to load skeleton:', err);
                     setStatus('Skeleton load error: ' + err.message, 'error');

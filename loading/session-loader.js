@@ -20,7 +20,7 @@
 
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
-    setVideoController, VIEW_NAMES, buildRememberedSkeleton,
+    setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
 } from '../ui/app-state.js';
 
 import {
@@ -2346,13 +2346,14 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
-        // 4. Apply skeleton from SLP if session has empty skeleton
+        // 4. Apply skeleton from SLP if session has empty skeleton.
+        // One skeleton per project: propagate to ALL sessions (shared reference).
         if (state.session && skeletonFromSlp && state.session.skeleton.nodes.length === 0) {
-            state.session.skeleton = new Skeleton(
+            setProjectSkeleton(new Skeleton(
                 skeletonFromSlp.name || 'skeleton',
                 skeletonFromSlp.nodes || [],
                 skeletonFromSlp.edges || []
-            );
+            ));
         }
 
         // 5. Move all loaded instances to the unlinked pool.
@@ -2383,7 +2384,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 var skelText = await skeletonFile.text();
                 var loadedSkeleton = parseSkeletonJSON(skelText);
                 if (loadedSkeleton && loadedSkeleton.nodes.length > 0) {
-                    state.session.skeleton = loadedSkeleton;
+                    setProjectSkeleton(loadedSkeleton); // one skeleton per project
                     console.log('[session-folder] Overrode skeleton from ' + skeletonFile.name +
                         ': ' + loadedSkeleton.nodes.length + ' nodes, ' + loadedSkeleton.edges.length + ' edges');
                     setStatus('Loaded skeleton from ' + skeletonFile.name, 'success');

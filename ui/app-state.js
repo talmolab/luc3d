@@ -81,24 +81,52 @@ export function setActiveSession(session) {
 }
 
 // --- Remembered skeleton (current app session only, no persistence) ----------
-// Holds a clone of the last non-empty skeleton the user built or loaded, so a
-// newly loaded video/session can inherit it instead of starting blank. Lives in
-// module memory: it carries across video loads within one app session and resets
-// on a full page reload (by design).
+// The single PROJECT skeleton, shared BY REFERENCE across every session in the
+// project (state.sessions[*].skeleton === this object). "One skeleton per
+// project": loading/editing a skeleton on one session applies to all, and the
+// exported .slp always carries exactly one skeleton (no duplicates for sleap-io/
+// sleap-nn to trip on). Calibration stays per-session; this is skeleton-only.
+// Lives in module memory: carries across loads within one app session, resets on
+// a full page reload (by design).
 let _rememberedSkeleton = null;
 
-// Snapshot `skeleton` as the remembered default. Ignores null/empty skeletons so
-// that viewing a blank session never clobbers a previously remembered one.
+// The current project skeleton (the object all sessions share), or null.
+export function getProjectSkeleton() {
+    if (_rememberedSkeleton) return _rememberedSkeleton;
+    if (state.session && state.session.skeleton) return state.session.skeleton;
+    return null;
+}
+
+// Make `skeleton` the single project skeleton: point every session's `.skeleton`
+// at this same object and store it as the default new sessions inherit. Because
+// the skeleton editor mutates the object in place, all sessions then stay in sync
+// automatically. Node add/remove still needs per-session instance propagation
+// (see propagateSkeletonNodeChange in info-panel.js).
+export function setProjectSkeleton(skeleton) {
+    if (!skeleton) return;
+    _rememberedSkeleton = skeleton;
+    if (state.sessions && state.sessions.length) {
+        for (var i = 0; i < state.sessions.length; i++) {
+            if (state.sessions[i]) state.sessions[i].skeleton = skeleton;
+        }
+    }
+    if (state.session) state.session.skeleton = skeleton;
+}
+
+// Back-compat shim: snapshot `skeleton` as the project default. Now stores the
+// reference (not a clone) so new sessions SHARE it rather than diverging.
 export function rememberSkeleton(skeleton) {
     if (skeleton && skeleton.nodes && skeleton.nodes.length > 0) {
-        _rememberedSkeleton = skeleton.clone();
+        _rememberedSkeleton = skeleton;
     }
 }
 
-// A fresh clone of the remembered skeleton (independent arrays so each session
-// owns its own), or null if nothing has been remembered yet.
+// The project skeleton for seeding a newly created session. Returns the SHARED
+// reference (one skeleton per project), or null if none has been set yet — in
+// which case the caller's fresh `new Skeleton()` should be registered via
+// setProjectSkeleton so subsequent sessions share it.
 export function buildRememberedSkeleton() {
-    return _rememberedSkeleton ? _rememberedSkeleton.clone() : null;
+    return _rememberedSkeleton;
 }
 
 // --- Instance clipboard (Cmd/Ctrl+C / Cmd/Ctrl+V) ----------------------------

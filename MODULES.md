@@ -428,6 +428,18 @@ Exports `state` (mutable shared bag) plus five live-binding controllers
 `paneManager`) updated through setter functions. Exposes
 `window.__lucid` for DevTools inspection.
 
+**One skeleton per project.** The pose skeleton is project-level: every
+`state.sessions[*].skeleton` points at ONE shared object, so it can't diverge
+across sessions and the exported `.slp` always carries a single skeleton (no
+duplicates for sleap-io/sleap-nn). `setProjectSkeleton(sk)` points all sessions
+at `sk` and stores it as the default new sessions inherit; `getProjectSkeleton()`
+returns it; `buildRememberedSkeleton()` now returns that SHARED reference (not an
+independent clone). The editor mutates the shared object in place so edits
+propagate for free; node add/remove additionally fan out via
+`propagateNode{Added,Removed}` across each session's instances (see
+`ui/info-panel.js` → `applyProjectSkeleton` / warn-on-overwrite modal).
+Calibration and `envSkeleton` remain per-session.
+
 **Key exports.**
 - `state` — mutable application state (current frame, sessions, dirty
   flag, view list, color mode, etc.).
