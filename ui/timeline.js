@@ -420,11 +420,22 @@ export class Timeline {
         var h = Math.max(natural, availableH);
         if (h < 0) h = 0;
 
-        this._canvas.width = w * dpr;
-        this._canvas.height = h * dpr;
+        // Browsers cap a <canvas> backing store at ~32767px per side; setting a
+        // canvas larger fails to allocate and the element renders as the broken-
+        // canvas "sad face". A tall timeline (e.g. 8 views × their tracks/
+        // identities) makes h*dpr exceed that. Scale the backing-store device
+        // ratio down just enough to stay under the cap — CSS size (style.width/
+        // height) and scroll are unchanged, so only backing resolution drops,
+        // and only when the timeline is extremely tall.
+        var MAX_CANVAS = 32000;
+        var effDpr = dpr;
+        if (w > 0 && w * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / w;
+        if (h > 0 && h * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / h;
+        this._canvas.width = Math.max(1, Math.floor(w * effDpr));
+        this._canvas.height = Math.max(1, Math.floor(h * effDpr));
         this._canvas.style.width = w + 'px';
         this._canvas.style.height = h + 'px';
-        this._ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        this._ctx.setTransform(effDpr, 0, 0, effDpr, 0, 0);
         this._cssWidth = w;
         this._cssHeight = h;
         this._clampScroll();
