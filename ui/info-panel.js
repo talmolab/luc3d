@@ -752,6 +752,65 @@ function propagateNodeRemovedAllSessions(nodeIdx) {
     for (var i = 0; i < ss.length; i++) if (ss[i] && ss[i].propagateNodeRemoved) ss[i].propagateNodeRemoved(nodeIdx);
 }
 
+// After a MULTI-SESSION project loads, ask the user to import ONE skeleton file
+// to apply to all sessions (one skeleton per project). Esc/Skip leaves the
+// per-session skeletons as loaded. `onDone()` runs when the prompt closes.
+export function promptImportSkeletonForAllSessions(onDone) {
+    var nSessions = (state.sessions && state.sessions.length) || 0;
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.innerHTML =
+        '<h3>Import skeleton for all sessions</h3>' +
+        '<p style="margin:6px 0 12px;">This project has <b>' + nSessions + ' sessions</b>. ' +
+        'A project uses <b>one skeleton</b> shared across every session. Import a skeleton ' +
+        'file (.json) to apply it to <b>all</b> sessions.</p>' +
+        '<div class="modal-actions">' +
+        '<button id="msSkelSkip">Skip</button>' +
+        '<button class="primary" id="msSkelChoose">Choose Skeleton File…</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    var done = false;
+    function close() {
+        document.removeEventListener('keydown', onKey);
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        if (!done) { done = true; if (onDone) onDone(); }
+    }
+    function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); close(); } }
+    document.addEventListener('keydown', onKey);
+    modal.querySelector('#msSkelSkip').addEventListener('click', close);
+    modal.querySelector('#msSkelChoose').addEventListener('click', function () {
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = function () {
+            if (!input.files || input.files.length === 0) return;
+            var reader = new FileReader();
+            reader.onload = function (ev) {
+                try {
+                    var sk = parseSkeletonJSON(ev.target.result);
+                    if (!sk) { setStatus('Could not parse skeleton file', 'error'); return; }
+                    setProjectSkeleton(sk); // one skeleton for every session
+                    populateSkeletonTable();
+                    drawAllOverlays(state.currentFrame);
+                    updateInfoPanel();
+                    setStatus('Applied skeleton to all ' + nSessions + ' sessions: ' +
+                        sk.nodes.length + ' nodes, ' + sk.edges.length + ' edges', 'success');
+                } catch (err) {
+                    console.error('Failed to load skeleton:', err);
+                    setStatus('Skeleton load error: ' + err.message, 'error');
+                } finally {
+                    close();
+                }
+            };
+            reader.readAsText(input.files[0]);
+        };
+        input.click();
+    });
+}
+
 export function setupSkeletonEditing() {
     // Add Node button
     document.getElementById('btnAddNode').addEventListener('click', function () {

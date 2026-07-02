@@ -50,7 +50,7 @@ import {
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
 import { drawAllOverlays } from '../ui/rendering.js';
-import { updateInfoPanel } from '../ui/info-panel.js';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
 import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
@@ -1071,8 +1071,11 @@ export async function handleLoadMultiSession() {
 
         showLoading('Scanning for sessions...');
 
-        // Find session subdirectories (directories that contain calibration or camera subdirs)
+        // Find session subdirectories (directories that contain calibration or
+        // camera subdirs), and a parent-level skeleton .json (e.g. skeleton.json)
+        // that unifies all sessions (one skeleton per project).
         var sessionDirs = [];  // { name, handle }
+        var parentSkeletonHandle = null;
         for await (var [name, handle] of parentHandle) {
             if (handle.kind === 'directory') {
                 // Quick check: does this look like a session?
@@ -1090,6 +1093,10 @@ export async function handleLoadMultiSession() {
                 if (isSession) {
                     sessionDirs.push({ name: name, handle: handle });
                 }
+            } else if (handle.kind === 'file'
+                && name.toLowerCase().indexOf('skeleton') >= 0
+                && name.toLowerCase().endsWith('.json')) {
+                parentSkeletonHandle = handle; // e.g. skeleton.json / handSkeleton.json
             }
         }
 
@@ -1129,6 +1136,31 @@ export async function handleLoadMultiSession() {
         }
 
         populateSessionStrip();
+
+        // One skeleton per project. If the parent folder contains a skeleton
+        // .json, auto-load it for every session; otherwise prompt the user for a
+        // unifying skeleton file. (Multi-session projects otherwise carry a
+        // per-session skeleton each → duplicate-skeleton errors downstream.)
+        if (state.sessions.length > 1) {
+            var autoLoadedSkeleton = false;
+            if (parentSkeletonHandle) {
+                try {
+                    var skFile = await parentSkeletonHandle.getFile();
+                    var parentSk = parseSkeletonJSON(await skFile.text());
+                    if (parentSk && parentSk.nodes.length > 0) {
+                        setProjectSkeleton(parentSk);
+                        autoLoadedSkeleton = true;
+                        drawAllOverlays(state.currentFrame);
+                        updateInfoPanel();
+                        setStatus('Loaded skeleton from ' + parentSkeletonHandle.name +
+                            ' for all ' + state.sessions.length + ' sessions', 'success');
+                    }
+                } catch (e) {
+                    console.warn('[multi-session] parent skeleton auto-load failed:', e);
+                }
+            }
+            if (!autoLoadedSkeleton) promptImportSkeletonForAllSessions();
+        }
 
     } catch (err) {
         console.error('[multi-session] Error:', err);
@@ -1319,7 +1351,7 @@ export function showSessionModeModal(showAllOptions) {
         var perCameraOpt = makeOption(
             'Per-Camera SLP',
             'One SLP + one video per camera.',
-            '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} video.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} video.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
+            '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} skeleton.json\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} video.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} video.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
             'per-camera'
         );
         // Recommended highlight
@@ -1343,7 +1375,7 @@ export function showSessionModeModal(showAllOptions) {
         leftOptions.appendChild(makeOption(
             'Single SLP',
             'One SLP in root. Videos in videos/ folder.',
-            '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
+            '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} skeleton.json\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
             'single-slp'
         ));
 
@@ -1364,8 +1396,8 @@ export function showSessionModeModal(showAllOptions) {
 
         var parentOpt = makeOption(
             'Parent Folder',
-            'Parent directory with Per-Camera SLP subdirectories.',
-            '\u{1F4C1} parent/\n\u251C\u2500\u2500 \u{1F4C1} sess1/\n\u2502   \u251C\u2500\u2500 \u{1F4C4} calib.toml\n\u2502   \u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u2514\u2500\u2500 \u{1F4C1} cam2/\n\u2514\u2500\u2500 \u{1F4C1} sess2/\n    \u251C\u2500\u2500 \u{1F4C4} calib.toml\n    \u251C\u2500\u2500 \u{1F4C1} cam1/\n    \u2514\u2500\u2500 \u{1F4C1} cam2/',
+            'Session subfolders + optional skeleton.json (one skeleton for all sessions).',
+            '\u{1F4C1} parent/\n\u251C\u2500\u2500 \u{1F4C4} skeleton.json  \u2190 one skeleton for all\n\u251C\u2500\u2500 \u{1F4C1} sess1/\n\u2502   \u251C\u2500\u2500 \u{1F4C4} calib.toml\n\u2502   \u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u2514\u2500\u2500 \u{1F4C1} cam2/\n\u2514\u2500\u2500 \u{1F4C1} sess2/\n    \u251C\u2500\u2500 \u{1F4C4} calib.toml\n    \u251C\u2500\u2500 \u{1F4C1} cam1/\n    \u2514\u2500\u2500 \u{1F4C1} cam2/',
             'multi-session'
         );
         // Not selectable from wizard (use Load Multi-Session Folder instead)
@@ -1608,12 +1640,17 @@ export async function handleLoadSessionFolderSingleSlp() {
         var skelData = slpData.skeleton || { name: 'skeleton', nodes: [], edges: [] };
         var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
 
-        // Override skeleton if skeleton.json is present
+        // Override skeleton if skeleton.json is present (same folder as
+        // calibration.toml). One skeleton per project — register it so it
+        // propagates to every session.
         if (skeletonFile) {
             try {
                 var skelText = await skeletonFile.text();
                 var loadedSkel = parseSkeletonJSON(skelText);
-                if (loadedSkel && loadedSkel.nodes.length > 0) skeleton = loadedSkel;
+                if (loadedSkel && loadedSkel.nodes.length > 0) {
+                    skeleton = loadedSkel;
+                    setProjectSkeleton(loadedSkel);
+                }
             } catch (e) { /* ignore */ }
         }
 
