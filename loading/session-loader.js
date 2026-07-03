@@ -218,8 +218,16 @@ export async function handleLoadVideos() {
         hlvModal.reset();
         hlvModal.show();
 
-        // Append new files to state.videoFiles (skip duplicates)
+        // Append new files to state.videoFiles (skip duplicates). Track the
+        // entries created by THIS call in `newVideoFiles` so camera/view
+        // creation below is scoped to the active session — `state.videoFiles`
+        // is global across all sessions, so iterating it would re-create other
+        // sessions' videos as views in (and skip cameras for) the current
+        // session. That left a manually-populated session with a view but no
+        // matching `session.cameras` entry, so the timeline (which builds rows
+        // from `session.cameras`) drew nothing for instances added there.
         var failedVideos = [];
+        var newVideoFiles = [];
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
             const stem = file.name.replace(/\.[^.]+$/, '');
@@ -247,7 +255,7 @@ export async function handleLoadVideos() {
                 const vh = decoder.videoTrack.video.height;
                 const frameCount = decoder.samples.length;
 
-                state.videoFiles.push({
+                var newVf = {
                     file: file,
                     name: stem,
                     decoder: decoder,
@@ -256,7 +264,9 @@ export async function handleLoadVideos() {
                     frameCount: frameCount,
                     assignedCamera: null,
                     videoPath: file.webkitRelativePath || file.name,
-                });
+                };
+                state.videoFiles.push(newVf);
+                newVideoFiles.push(newVf);
                 hlvModal.completeTask(hlvTaskId);
             } catch (videoErr) {
                 console.error('Failed to load ' + file.name + ':', videoErr);
@@ -286,14 +296,24 @@ export async function handleLoadVideos() {
             }
         }
 
+        // Tag the freshly-loaded videos with the active session so
+        // switchSession's `videoFileIndices` fallback (matching on
+        // `vf.sessionIdx`) can re-associate them after a session swap.
+        for (var ti = 0; ti < newVideoFiles.length; ti++) {
+            newVideoFiles[ti].sessionIdx = state.activeSessionIdx;
+        }
+
         // Auto-assign videos to existing calibration cameras first
         if (state.session.cameras.length > 0) {
             autoAssignVideosToCameras();
         }
 
-        // For any still-unassigned video, create a dummy camera and assign it
-        for (var vi = 0; vi < state.videoFiles.length; vi++) {
-            var vf = state.videoFiles[vi];
+        // For any still-unassigned NEW video, create a dummy camera and assign
+        // it. Scoped to `newVideoFiles`, not global `state.videoFiles`, so we
+        // never skip a camera for the active session just because another
+        // session already owns a same-named (already-assigned) video.
+        for (var vi = 0; vi < newVideoFiles.length; vi++) {
+            var vf = newVideoFiles[vi];
             if (!vf.assignedCamera) {
                 // Check if a camera with this name already exists
                 var cameraExists = state.session.cameras.some(function (c) { return c.name === vf.name; });
@@ -307,10 +327,12 @@ export async function handleLoadVideos() {
             }
         }
 
-        // Create views for assigned videos that don't have views yet
+        // Create views for the newly-assigned videos that don't have views yet.
+        // Iterating `newVideoFiles` (not global `state.videoFiles`) keeps other
+        // sessions' videos from being re-created as views in this session.
         var newViewNames = [];
-        for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
-            var vf2 = state.videoFiles[vi2];
+        for (var vi2 = 0; vi2 < newVideoFiles.length; vi2++) {
+            var vf2 = newVideoFiles[vi2];
             if (vf2.assignedCamera) {
                 var hasView = state.views.some(function (v) { return v.name === vf2.assignedCamera; });
                 if (!hasView) {

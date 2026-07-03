@@ -1796,6 +1796,16 @@ panels — `addAllViewsAsGrid` intentionally bypasses the duplicate guard, so
 calling it on every load duplicated prior videos and let the newest panel steal
 each `view.canvas` reference.
 
+`handleLoadVideos` scopes camera + view creation to the videos it loaded **this
+call** (`newVideoFiles`), not the global `state.videoFiles`, and tags each with
+`vf.sessionIdx = state.activeSessionIdx`. This matters when loading videos into a
+pre-existing (e.g. manually-created empty) session while another session's videos
+already exist globally: iterating the global list would skip a `session.cameras`
+entry for the loaded view (its dummy-camera loop skips already-assigned videos)
+and re-create other sessions' videos as views here. A session with a view but no
+matching `session.cameras` entry made the timeline draw no rows (it builds rows
+from `session.cameras`), so instances added there never appeared on the timeline.
+
 **Per-camera `.slp` selection.** `handleLoadSessionFolderPerCamera` loads only
 **one** `.slp` per camera directory — the highest `_vN` version (first-wins on a
 tie / when unversioned). A camera dir accumulates successive exports
