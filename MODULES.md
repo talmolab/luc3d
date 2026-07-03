@@ -1544,6 +1544,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
 - File ▸ "Export 3D Video" (`menuExportVideo3d`) is wired to
   `showExport3DVideoModal()` (export-modals.js).
+- Session strip: the **"+"** button (`btnAddSession`) calls
+  `handleEmptySession()` to create a fresh empty session directly (inheriting the
+  shared project skeleton — the user then adds video via File ▸ Load Videos);
+  the **"−"** button (`btnRemoveSession`) calls `removeSession`. Folder-based
+  session loading stays on the File menu (`menuLoadSessionFolder` →
+  `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`).
 - Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
   Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
   `showGroupContextMenu`, `hideGroupContextMenu`.
@@ -1750,6 +1756,13 @@ filesystem enumeration, decoder rebuild.
   `handleLoadSessionFolder`, `handleEmptySession`,
   `handleLoadSessionFolderSingleSlp`,
   `handleLoadSessionFolderPerCamera`.
+  `handleEmptySession()` creates a blank, video-less session and makes it
+  active (the session-strip **"+"** button calls it directly — see
+  `ui/ui-wiring.js`). It **inherits the shared project skeleton** via
+  `buildRememberedSkeleton()` so a manually-created empty session stays in sync
+  with the others (one skeleton per project); only when it is the very first
+  session does it mint a fresh blank `Skeleton` and register it with
+  `setProjectSkeleton`. The user then populates it via File ▸ Load Videos.
 - Video assignment: `autoAssignVideosToCameras`, `forceVideoSelection`,
   `forceVideoSelectionWithFolder`, `matchSessionFolder`,
   `pickParentDirectoryForSessions`, `showParentDirMatchSummary`.
