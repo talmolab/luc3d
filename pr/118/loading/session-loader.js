@@ -1523,7 +1523,16 @@ export function handleEmptySession() {
     }
 
     var sessionName = 'Session ' + (state.sessions.length + 1);
-    var skeleton = new Skeleton('skeleton', [], []);
+    // One skeleton per project: inherit the shared project skeleton so a
+    // manually-created empty session stays in sync with the others (matches
+    // handleLoadVideos / handleLoadCalibration). Only mint a fresh blank
+    // skeleton when this is the very first session, and register it via
+    // setProjectSkeleton so subsequent sessions share it.
+    var skeleton = buildRememberedSkeleton();
+    if (!skeleton) {
+        skeleton = new Skeleton('skeleton', [], []);
+        if (state.sessions.length === 0) setProjectSkeleton(skeleton);
+    }
     var session = new Session([], skeleton, ['track_0'], sessionName);
 
     state.sessions.push(session);
