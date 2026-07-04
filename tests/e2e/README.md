@@ -41,3 +41,14 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   session, across `+`-new-session, boot-session, and session-switch flows.
   (Fails against the pre-fix `handleLoadVideos`; passes against the scoped
   `newVideoFiles` version.)
+
+- **`sleap-video-streaming.mjs`** — crash-fix proof for the sleap-io.js video
+  loader. Drives `SleapVideoDecoder` against a URL and asserts the memory-safe
+  behavior that fixes the "Aw Snap" OOM on large / server-mounted videos: it
+  streams over **HTTP Range (206)**, creates **no HTML5 `<video>` element**, and
+  decodes a frame via WebCodecs. **Requires a Range-capable server** — run
+  `python server.py 8085` (NOT `python -m http.server`, which ignores Range):
+  ```bash
+  python server.py 8085                                   # repo root
+  BASE=http://localhost:8085 node tests/e2e/sleap-video-streaming.mjs
+  ```
