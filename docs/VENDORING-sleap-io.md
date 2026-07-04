@@ -11,33 +11,47 @@ recipe** for rebuilding it when bumping the version.
 
 Currently pinned to the released tag **`v0.4.1`** (`talmolab/sleap-io.js`, 2026-06-18).
 
+> ⚠️ **EXPERIMENTAL PIN.** Currently pinned to **unreleased `main`** (commit `0254a6e`,
+> whose HEAD is PR #196 "perf: SLP read path") to exercise the read-path perf work on
+> large data. `main` is a **moving ref** — this is a reproducibility/supply-chain
+> tradeoff. **Revert to a released tag once #196 ships (v0.4.2+).** The prior committed
+> pin was released tag **`v0.4.1`** (see History); revert with
+> `scripts/revendor-sleap-io.sh v0.4.1`.
+
 | | |
 |---|---|
 | Source repo | `talmolab/sleap-io.js` |
-| Source ref | **`v0.4.1`** (commit `8427072`) |
+| Source ref | **`main`** (commit `0254a6e`, PR #196) — *experimental, unreleased* |
 | Build toolchain | `tsup` (esbuild) — `npm run build` |
 | Runtime deps aliased | `h5wasm` → local, `yaml` → CDN, `mediabunny` → local stub, **`pako` → local** |
 
-### SHA-256 manifest (current bundle, built from `v0.4.1`)
+### SHA-256 manifest (current bundle, built from `main` @ `0254a6e`)
 
 ```
-e5bc304d97e43da2ee8f020689aa64063c0354643735efe8dd9e5ee3a9bb6eb7  index.browser.js
+c025e3614d81b396d82402920e48c329503731e96553d5874e20ffa25b74cb3d  index.browser.js
 69b11e7e19670394961334c0e1049fa7369d2ce3cc314c7e3ef1f2b1d919c072  chunk-KIMQQ2HE.js
+9461cf151dd672cf2020f092c934800b0a0d801cb51732775562896bba930368  chunk-NIFGJKOL.js
 4c1015f305209bdb90e5f91f8f8fceeccf1c18d4594e4fd614552be570bfd922  chunk-VJKU6LLW.js
+a23a221bb11db68fe1fdbd1d6bbdf650f9084aa1afd0df3a2050cbfe6920eff3  chunk-XMK3JNEP.js
+e3b10f994ee279f993a043b3a57f9fa7596f6f472eec2a33b6f642aad0dbd65b  chunk-YS7Q6CO6.js
 ```
 
 `mediabunny-stub.js` is **hand-written** (not emitted by the build). `lib/pako/` is a
-locally-vendored copy of `pako` (see below). A fresh `npm install && npm run build` at
-`v0.4.1` reproduces the bundle (chunk hash names are esbuild-content-derived).
+locally-vendored copy of `pako` (see below). The static bare-import set on `main` is
+unchanged from v0.4.1 (`mediabunny`, `pako`, `yaml`), so the importmap needs no new
+entries. (`main` bumps sleap-io's *internal* h5wasm to 0.10.2, but that only affects its
+own reader — a dynamic import LUCID never reaches; LUCID keeps its own h5wasm 0.8.8.)
 
 ### History
 
-- **`bdd1897`** (≈ v0.2.3 + the PR #81 3D-standardization branch, before v0.3.0) was the
-  original pin — a custom pre-release build carrying the 3D data model
+- **`v0.4.1`** (tag `8427072`) — the last *released* pin, and the recommended revert
+  target. SHA-256: `e5bc304…` index.browser.js / `69b11e7…` chunk-KIMQQ2HE.js /
+  `4c1015f…` chunk-VJKU6LLW.js.
+- **`bdd1897`** (≈ v0.2.3 + the PR #81 3D-standardization branch, before v0.3.0) — the
+  original pin, a custom pre-release build carrying the 3D data model
   (`Instance3D`/`InstanceGroup`/`FrameGroup`/`RecordingSession`/`Identity`/`Camera.size`)
-  ahead of its v0.3.0 squash-merge. SHA-256 of that bundle:
-  `6058275…` index.browser.js / `4676003…` chunk-KE5NBER6.js / `16bd70c…` chunk-NWJVKWIL.js.
-  A fresh build at `bdd1897` reproduced it byte-identical.
+  ahead of its v0.3.0 squash-merge. SHA-256: `6058275…` index.browser.js /
+  `4676003…` chunk-KE5NBER6.js / `16bd70c…` chunk-NWJVKWIL.js. Reproduced byte-identical.
 
 ## How LUCID loads it
 
