@@ -61,7 +61,7 @@ Three coordinated pieces:
 1. **Importmap** (`index.html`) — aliases the bundle's *static* bare imports:
    ```html
    <script type="importmap">{ "imports": {
-     "h5wasm":     "./lib/h5wasm/hdf5_hl.js",              // LUCID's local h5wasm 0.8.8
+     "h5wasm":     "./lib/h5wasm/hdf5_hl.js",              // LUCID's local h5wasm (unlabeled; newer than the 0.8.8 CDN copy — exposes create_compound_dataset + get_dataset_data)
      "yaml":       "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
      "mediabunny": "./lib/sleap-io/mediabunny-stub.js"      // no-op stub (see below)
    }}</script>
