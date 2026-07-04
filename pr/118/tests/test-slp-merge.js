@@ -4,6 +4,10 @@
  *         mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames
  */
 
+(function () {
+    const { describe, it, beforeEach, assert, assertEqual, assertDeepEqual,
+        assertNotNull, assertNull, assertTrue, assertFalse } = TestFramework;
+
 describe('SLP Merge Helpers', function () {
 
     // --- validateSkeletonCompatibility ---
@@ -377,3 +381,5 @@ describe('SLP Merge Helpers', function () {
         });
     });
 });
+
+})();
