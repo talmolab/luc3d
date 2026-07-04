@@ -159,6 +159,7 @@
 
     <!-- Multi-session export/import tests -->
     <script src="test-multi-session-export.js"></script>
+    <script src="test-multisession-scoping.js"></script>
 
     <!-- Reprojection lifecycle tests -->
     <script src="test-reprojection-lifecycle.js"></script>
@@ -232,6 +233,12 @@
          (deferred) guarantees that ordering. -->
     <script type="module">
         import * as __PoseData from '../pose/pose-data.js';
+        // ui/app-state.js is dependency-free (imports NO project modules — it is
+        // the state/controller registry everything else imports). Safe to bridge,
+        // and required by the "One skeleton per project" tests which reference
+        // `state`, `setProjectSkeleton`, `getProjectSkeleton`,
+        // `buildRememberedSkeleton` as globals.
+        import * as __AppState from '../ui/app-state.js';
         // Pure (DOM-free) standalone .skeleton.json (de)serialization.
         import * as __SkeletonJSON from '../import-export/skeleton-json.js';
         import * as __Triangulation from '../pose/triangulation.js';
@@ -254,7 +261,7 @@
         // Pure (DOM-free) import-trackIdx resolver. Extracted from
         // session-loader.js (which pulls app.js) precisely so it's bridgeable.
         import * as __ImportTrackResolve from '../import-export/import-track-resolve.js';
-        Object.assign(window, __PoseData, __SkeletonJSON, __Triangulation, __Overlays,
+        Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
                               __LoadingProgressModal,

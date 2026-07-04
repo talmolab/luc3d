@@ -208,6 +208,86 @@
         });
     });
 
+    describe('Multi-Video - Session-Scoped View Creation', function () {
+        // Regression: loading videos into a pre-existing (e.g. manually-created
+        // empty) session must create views only for the videos loaded THIS call,
+        // not for every entry in the global `state.videoFiles`. The old loop
+        // walked the global list and checked the ACTIVE session's (empty)
+        // `views`, so another session's already-loaded video reported "no view
+        // yet" and got re-created here — leaving session 2 showing both videos.
+        // The fix iterates `newVideoFiles` (the videos loaded this call).
+
+        // Faithful port of the fixed create-views loop in handleLoadVideos.
+        function createViewsScoped(newVideoFiles, views, session) {
+            for (var i = 0; i < newVideoFiles.length; i++) {
+                var vf = newVideoFiles[i];
+                if (!vf.assignedCamera) continue;
+                var hasView = views.some(function (v) { return v.name === vf.assignedCamera; });
+                if (!hasView) {
+                    views.push({ name: vf.assignedCamera });
+                    if (session) session.videoFileIndices.push(vf._globalIdx);
+                }
+            }
+        }
+
+        it('loading a video into an empty 2nd session adds only that video', function () {
+            var skeleton = new Skeleton('test', ['a'], []);
+
+            // Session 1 already owns video1 (loaded earlier).
+            var video1 = makeVideoFile('cam1');
+            video1.assignedCamera = 'cam1';
+            video1._globalIdx = 0;
+            video1.sessionIdx = 0;
+
+            // Global list is shared across sessions; session 2 starts empty.
+            var globalVideoFiles = [video1];
+            var session2 = new Session([], skeleton, ['track_0'], 'Session 2');
+            var session2Views = [];
+
+            // Load video2 into session 2. Only the new file is in newVideoFiles.
+            var video2 = makeVideoFile('cam2');
+            video2._globalIdx = 1;
+            globalVideoFiles.push(video2);
+            var newVideoFiles = [video2];
+
+            // Dummy-camera assignment (scoped to newVideoFiles) + view creation.
+            for (var k = 0; k < newVideoFiles.length; k++) {
+                var vf = newVideoFiles[k];
+                if (!vf.assignedCamera) {
+                    session2.cameras.push(new Camera(vf.name,
+                        [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                        [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]));
+                    vf.assignedCamera = vf.name;
+                }
+            }
+            createViewsScoped(newVideoFiles, session2Views, session2);
+
+            assertEqual(session2Views.length, 1, 'Session 2 should have exactly 1 view');
+            assertEqual(session2Views[0].name, 'cam2', 'Session 2 view should be cam2');
+            assertEqual(session2.videoFileIndices.length, 1, 'Session 2 owns exactly 1 video index');
+            assertEqual(session2.videoFileIndices[0], 1, 'Session 2 owns the video2 index');
+            assertEqual(session2.cameras.length, 1, 'Session 2 has exactly 1 camera');
+            assertEqual(session2.cameras[0].name, 'cam2', 'Session 2 camera matches its view');
+        });
+
+        it('the pre-fix global-iteration would have leaked video1 into session 2', function () {
+            // Documents the old bug: iterating the GLOBAL list against session
+            // 2's empty views re-creates every video as a view here.
+            var video1 = makeVideoFile('cam1'); video1.assignedCamera = 'cam1';
+            var video2 = makeVideoFile('cam2'); video2.assignedCamera = 'cam2';
+            var globalVideoFiles = [video1, video2];
+            var session2Views = []; // empty (session 2 just created)
+
+            for (var i = 0; i < globalVideoFiles.length; i++) {
+                var vf = globalVideoFiles[i];
+                var hasView = session2Views.some(function (v) { return v.name === vf.assignedCamera; });
+                if (!hasView) session2Views.push({ name: vf.assignedCamera });
+            }
+
+            assertEqual(session2Views.length, 2, 'Pre-fix: both videos leak into session 2 (the bug)');
+        });
+    });
+
     describe('Multi-Video - Grid Layout', function () {
         it('1 video = 1 column', function () {
             var cols = Math.ceil(Math.sqrt(1));
