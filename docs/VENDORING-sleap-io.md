@@ -9,27 +9,35 @@ recipe** for rebuilding it when bumping the version.
 
 ## What is pinned
 
-The committed bundle is **not a published npm release.** It is a custom build off
-the PR #81 (“3d standardization”) feature branch:
+Currently pinned to the released tag **`v0.4.1`** (`talmolab/sleap-io.js`, 2026-06-18).
 
 | | |
 |---|---|
 | Source repo | `talmolab/sleap-io.js` |
-| Source commit | **`bdd1897`** (`package.json` says `0.2.3`; ≈ v0.2.3 + PR #78/#79 + the first 11 PR-#81 commits) |
+| Source ref | **`v0.4.1`** (commit `8427072`) |
 | Build toolchain | `tsup` (esbuild) — `npm run build` |
-| Why not a tag | The 3D data model (`Instance3D`, `InstanceGroup`, `FrameGroup`, `RecordingSession`, `Identity`, `Camera.size`) shipped on the PR #81 branch **before** it was squash-merged for v0.3.0. The vendored build predates the v0.3.0 annotation-architecture overhaul. |
+| Runtime deps aliased | `h5wasm` → local, `yaml` → CDN, `mediabunny` → local stub, **`pako` → local** |
 
-### SHA-256 manifest (current bundle, built from `bdd1897`)
+### SHA-256 manifest (current bundle, built from `v0.4.1`)
 
 ```
-605827528d4acedc17ab47444789b33c33edc1344674e460b8d905e5d09423d2  index.browser.js
-4676003618ed18c888fd2f4f3d5a4382063d298cebeab8711d1bdec7ffa720b4  chunk-KE5NBER6.js
-16bd70c24a61dc1e70f8c2a74248fe94abcada3899a6f10a8beb22eccdedc597  chunk-NWJVKWIL.js
+e5bc304d97e43da2ee8f020689aa64063c0354643735efe8dd9e5ee3a9bb6eb7  index.browser.js
+69b11e7e19670394961334c0e1049fa7369d2ce3cc314c7e3ef1f2b1d919c072  chunk-KIMQQ2HE.js
+4c1015f305209bdb90e5f91f8f8fceeccf1c18d4594e4fd614552be570bfd922  chunk-VJKU6LLW.js
 ```
 
-`mediabunny-stub.js` is **hand-written** (not emitted by the build) — see below.
-A fresh `npm install && npm run build` at `bdd1897` reproduces the three files above
-**byte-identical** (same esbuild content-hash chunk names).
+`mediabunny-stub.js` is **hand-written** (not emitted by the build). `lib/pako/` is a
+locally-vendored copy of `pako` (see below). A fresh `npm install && npm run build` at
+`v0.4.1` reproduces the bundle (chunk hash names are esbuild-content-derived).
+
+### History
+
+- **`bdd1897`** (≈ v0.2.3 + the PR #81 3D-standardization branch, before v0.3.0) was the
+  original pin — a custom pre-release build carrying the 3D data model
+  (`Instance3D`/`InstanceGroup`/`FrameGroup`/`RecordingSession`/`Identity`/`Camera.size`)
+  ahead of its v0.3.0 squash-merge. SHA-256 of that bundle:
+  `6058275…` index.browser.js / `4676003…` chunk-KE5NBER6.js / `16bd70c…` chunk-NWJVKWIL.js.
+  A fresh build at `bdd1897` reproduced it byte-identical.
 
 ## How LUCID loads it
 
@@ -101,16 +109,23 @@ sha256sum <luc3d>/lib/sleap-io/index.browser.js <luc3d>/lib/sleap-io/chunk-*.js
 
 `scripts/revendor-sleap-io.sh <ref>` wraps steps 0–6.
 
-### Importmap deltas expected when bumping to ≥ v0.3.0 / main
+### Importmap deltas (observed at v0.4.1)
 
-The bundle grows and adds **static** bare imports (tsup externalizes all
-`dependencies`). Expect at least **`pako`** (label-image zlib) and likely
-**`jsfive`** in addition to `yaml`/`mediabunny`. LUCID keeps runtime deps local
-(offline/CSP), so vendor local copies (e.g. `lib/pako/…`, `lib/jsfive/…`) and alias
-them in the importmap rather than pointing at a CDN. `main` also bumps sleap-io's
-internal `h5wasm` to `0.10.2` and adds `--external tiff`, but those only affect
-sleap-io's own reader (dynamic imports LUCID doesn't reach) — **always re-derive the
-static-import list with step 4; do not assume.**
+The bundle's **static** bare imports at `v0.4.1` are `mediabunny`, `pako`, `yaml`
+(tsup externalizes all `dependencies`; `h5wasm`, `mp4box`, `jsfive`, `tiff` are
+imported *dynamically* inside sleap-io's own reader/video backends, which LUCID never
+triggers, so they need no importmap entry). The delta from the old `bdd1897` pin is
+**`pako`** — imported as `{ deflate }` / `{ inflate }` for label-image/mask zlib in the
+SLP writer. LUCID writes no masks/label-images, so pako is never *executed*, but the
+static import must still *resolve* at load. It is vendored locally at
+`lib/pako/pako.esm.mjs` (see `lib/pako/PROVENANCE.txt`) and aliased
+`"pako" → ./lib/pako/pako.esm.mjs`, matching how `h5wasm` is kept local for offline/CSP.
+
+When bumping to **`main`** (or a future release), re-run step 4: `main` bumps sleap-io's
+internal `h5wasm` to `0.10.2` and adds `--external tiff`, and may surface additional
+static imports — **always re-derive the list from the freshly-built bundle; do not
+assume.** The same importmap must be mirrored in `tests/test-runner.html` (paths
+relative to `tests/`) so the SLP export post-pass test can load `window.SleapIO`.
 
 Chunk hash filenames are cosmetic (referenced only through `index.browser.js`, which
 is copied alongside), so a differing local esbuild is functionally fine even if the
