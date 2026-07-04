@@ -26,8 +26,10 @@ python3 -m http.server 8080
 - mp4box.js
 - h5wasm 0.8.8 (WebAssembly HDF5)
 - sleap-io.js — vendored browser bundle in `lib/sleap-io/` (client-side SLP export),
-  pinned to **unreleased `main`** (commit `0254a6e`, PR #196 read-path perf) — an
-  **experimental** pin; revert to tag `v0.4.1` once #196 releases (v0.4.2+). Its `pako`
+  pinned to **unreleased `main`** (commit `07b0830`, PR #196 read-path perf + PR #198
+  lazy-native session model) — an **experimental** pin; switch to a tagged release once
+  one with #196 + #198 ships (v0.4.2+), after the PR 5 import/export migration is tested.
+  Its `pako`
   dep is vendored at `lib/pako/` and `mediabunny`
   is stubbed (`lib/sleap-io/mediabunny-stub.js`); both are aliased in the `index.html`
   importmap. LUCID uses sleap-io.js on the **write path only** (`saveSlpToBytes` +

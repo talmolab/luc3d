@@ -9,28 +9,29 @@ recipe** for rebuilding it when bumping the version.
 
 ## What is pinned
 
-Currently pinned to the released tag **`v0.4.1`** (`talmolab/sleap-io.js`, 2026-06-18).
-
-> ⚠️ **EXPERIMENTAL PIN.** Currently pinned to **unreleased `main`** (commit `0254a6e`,
-> whose HEAD is PR #196 "perf: SLP read path") to exercise the read-path perf work on
-> large data. `main` is a **moving ref** — this is a reproducibility/supply-chain
-> tradeoff. **Revert to a released tag once #196 ships (v0.4.2+).** The prior committed
-> pin was released tag **`v0.4.1`** (see History); revert with
-> `scripts/revendor-sleap-io.sh v0.4.1`.
+> ⚠️ **EXPERIMENTAL PIN.** Currently pinned to **unreleased `main`** (commit `07b0830`),
+> which contains **PR #196** ("perf: SLP read path") **and PR #198** ("faithful
+> lazy-native recording-session model" — the session API LUCID needs to route
+> import/export through the sleap-io.js reader; see `scratch/.../11-pr5-plan.md` /
+> [luc3d#121](https://github.com/talmolab/luc3d/issues/121)). `main` is a **moving ref**
+> — reproducibility/supply-chain tradeoff. **Switch to a tagged release once one
+> containing #196 + #198 ships (v0.4.2+)**, after the PR 5 migration is tested in the
+> LUCID stack. Revert to the last released tag with `scripts/revendor-sleap-io.sh v0.4.1`.
 
 | | |
 |---|---|
 | Source repo | `talmolab/sleap-io.js` |
-| Source ref | **`main`** (commit `0254a6e`, PR #196) — *experimental, unreleased* |
+| Source ref | **`main`** (commit `07b0830`, PR #196 + #198) — *experimental, unreleased* |
 | Build toolchain | `tsup` (esbuild) — `npm run build` |
 | Runtime deps aliased | `h5wasm` → local, `yaml` → CDN, `mediabunny` → local stub, **`pako` → local** |
 
-### SHA-256 manifest (current bundle, built from `main` @ `0254a6e`)
+### SHA-256 manifest (current bundle, built from `main` @ `07b0830`)
 
 ```
-c025e3614d81b396d82402920e48c329503731e96553d5874e20ffa25b74cb3d  index.browser.js
+79b40e15fd97c71cc70dfd7fc0d1ad9e17eebff85c4172eb26879bbd5b4a2a49  index.browser.js
 69b11e7e19670394961334c0e1049fa7369d2ce3cc314c7e3ef1f2b1d919c072  chunk-KIMQQ2HE.js
 9461cf151dd672cf2020f092c934800b0a0d801cb51732775562896bba930368  chunk-NIFGJKOL.js
+895cf7d8b2d0aed67d3ff4cb7b94488355547b0d4d7ca8efde7ce72c41be38db  chunk-P3K3Y4YO.js
 4c1015f305209bdb90e5f91f8f8fceeccf1c18d4594e4fd614552be570bfd922  chunk-VJKU6LLW.js
 a23a221bb11db68fe1fdbd1d6bbdf650f9084aa1afd0df3a2050cbfe6920eff3  chunk-XMK3JNEP.js
 e3b10f994ee279f993a043b3a57f9fa7596f6f472eec2a33b6f642aad0dbd65b  chunk-YS7Q6CO6.js
