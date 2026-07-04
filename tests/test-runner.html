@@ -67,6 +67,17 @@
             padding: 20px;
         }
     </style>
+    <!-- Export runtime for the SLP post-pass test: resolve sleap-io.js's bare
+         imports (paths are relative to tests/). Must precede the module script. -->
+    <script type="importmap">
+    {
+        "imports": {
+            "h5wasm": "../lib/h5wasm/hdf5_hl.js",
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
+            "mediabunny": "../lib/sleap-io/mediabunny-stub.js"
+        }
+    }
+    </script>
 </head>
 <body>
     <h1>mv-gui Test Suite</h1>
@@ -221,6 +232,9 @@
     <!-- Quick save tests -->
     <script src="test-quick-save.js"></script>
 
+    <!-- SLP export byte-path guard (saveSlpToBytes -> convertSlpToV06Compatible) -->
+    <script src="test-slp-export-postpass.js"></script>
+
     <!-- Rotation tests -->
     <script src="test-rotation.js"></script>
 
@@ -267,6 +281,23 @@
                               __LoadingProgressModal,
                               __TimelineCtrl, __TrackIdentityOps,
                               __ImportTrackResolve);
+
+        // sleap-io.js bridge for the SLP export post-pass test — mirrors the
+        // window.SleapIO bridge in index.html so test-slp-export-postpass.js can
+        // build model objects + call saveSlpToBytes. Kept under window.SleapIO
+        // (NOT spread onto window) so it never shadows the app's own Skeleton/
+        // Instance/Camera/... globals used by the other tests.
+        const __SIO = await import('../lib/sleap-io/index.browser.js');
+        window.SleapIO = {
+            Labels: __SIO.Labels, LabeledFrame: __SIO.LabeledFrame,
+            Instance: __SIO.Instance, PredictedInstance: __SIO.PredictedInstance,
+            Skeleton: __SIO.Skeleton, Node: __SIO.Node, Edge: __SIO.Edge,
+            Video: __SIO.Video, Track: __SIO.Track, saveSlpToBytes: __SIO.saveSlpToBytes,
+            Camera: __SIO.Camera, CameraGroup: __SIO.CameraGroup,
+            RecordingSession: __SIO.RecordingSession, InstanceGroup: __SIO.InstanceGroup,
+            FrameGroup: __SIO.FrameGroup, Identity: __SIO.Identity,
+            Instance3D: __SIO.Instance3D, PredictedInstance3D: __SIO.PredictedInstance3D,
+        };
         // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
         // are intentionally NOT bridged here. All three transitively import app.js
         // (circular, awaiting later passes), and app.js requires the full DOM +
