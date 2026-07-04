@@ -6,7 +6,8 @@
   "scripts": {
     "postinstall": "playwright install chromium",
     "test:scoping": "node session-video-scoping.mjs",
-    "test:sleap-streaming": "node sleap-video-streaming.mjs"
+    "test:sleap-streaming": "node sleap-video-streaming.mjs",
+    "test:playback": "node video-playback.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

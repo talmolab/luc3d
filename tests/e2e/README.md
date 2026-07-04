@@ -52,3 +52,14 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   python server.py 8085                                   # repo root
   BASE=http://localhost:8085 node tests/e2e/sleap-video-streaming.mjs
   ```
+
+- **`video-playback.mjs`** — integration test for **seek / scrub / play**. Loads a
+  video and asserts `seekToFrame(N)` moves `state.currentFrame`, the frame is
+  decodable, and `startPlayback()` advances through multiple frames **and
+  terminates on its own** at end-of-stream. Catches the sleap-backend playback
+  regression (its `getCurrentFrameIndex` capped at `totalFrames-1`, so
+  VideoController never stopped). Runs against the app default backend; override
+  with `BACKEND=sleap|legacy`. Needs the Range server (`python server.py 8085`).
+  ```bash
+  BASE=http://localhost:8085 node tests/e2e/video-playback.mjs
+  ```

@@ -17,6 +17,7 @@ import {
     reTriangulateGroup, sessionHasCalibration,
 } from './triangulation.js';
 import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
+import { createVideoDecoder } from '../loading/decoder-factory.js';
 import { rebuildVideoController } from '../loading/session-loader.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { createDemoSession } from '../demo-data.js';
@@ -145,7 +146,7 @@ export async function loadDemoSession() {
             const url = basePath + name + '.mp4';
             showLoading('Loading ' + name + '.mp4...');
 
-            const decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+            const decoder = createVideoDecoder({ cacheSize: 60, lookahead: 10 });
             await decoder.init(url);
 
             const vw = decoder.videoTrack.video.width;

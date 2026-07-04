@@ -13,6 +13,7 @@ import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
 } from '../pose/triangulation.js';
 import { OnDemandVideoDecoder } from '../loading/video.js';
+import { createVideoDecoder } from '../loading/decoder-factory.js';
 import { createDemoSkeleton } from '../demo-data.js';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
@@ -1027,7 +1028,7 @@ export async function handleLoadProject(prePickedFile) {
                             };
                         })(v3TaskId);
                         try {
-                            var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: v3OnProgress });
+                            var decoder = createVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: v3OnProgress });
                             await decoder.init(file);
                             var vw = decoder.videoTrack.video.width;
                             var vh = decoder.videoTrack.video.height;
@@ -1090,7 +1091,7 @@ export async function handleLoadProject(prePickedFile) {
 
                     showLoading('Loading ' + file2.name + ' (' + (i + 1) + '/' + videoFiles.length + ')...');
                     try {
-                        var decoder2 = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                        var decoder2 = createVideoDecoder({ cacheSize: 60, lookahead: 10 });
                         await decoder2.init(file2);
                         state.videoFiles.push({
                             file: file2,

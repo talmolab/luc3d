@@ -20,6 +20,7 @@ import {
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
 } from './slp-merge.js';
 import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js';
+import { createVideoDecoder } from '../loading/decoder-factory.js';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
@@ -1480,7 +1481,7 @@ export async function handleAddSlp() {
                     var amvStem = amvFile.name.replace(/\.[^.]+$/, '');
                     showLoading('Loading ' + amvFile.name + ' (' + (amvi + 1) + '/' + addVideoFiles.length + ')...');
                     try {
-                        var amvDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+                        var amvDec = createVideoDecoder({ cacheSize: 60, lookahead: 10 });
                         await amvDec.init(amvFile);
 
                         // Match to SLP video reference by filename
@@ -1856,7 +1857,7 @@ async function _loadSessionVideosParallel(args) {
             }
         } else {
             // Production path uses real decoder.
-            dec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: onProgress });
+            dec = createVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: onProgress });
             await dec.init(vf.file);
         }
 

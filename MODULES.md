@@ -1924,12 +1924,14 @@ whole app to the old HTML5 decoder: set `DEFAULT_VIDEO_BACKEND = 'legacy'` (or
 **Imports from project modules.** `./video.js` (`OnDemandVideoDecoder`),
 `./sleap-video-adapter.js` (`SleapVideoDecoder`).
 
-**Imported by.** `loading/session-loader.js` (re-exports `createVideoDecoder`;
-all its video-load sites go through it). **Phase 2b (not yet routed):**
-`import-export/save-load.js`, `import-export/slp-import.js`,
-`ui/sessions-panes.js`, `pose/initialization.js` still build
-`OnDemandVideoDecoder` directly — migrate them through this factory once the
-sleap-io File decode path is browser-verified.
+**Imported by.** `loading/session-loader.js` (re-exports `createVideoDecoder`),
+`pose/initialization.js` (demo load), `ui/sessions-panes.js` (session-switch
+decoder rebuild), `import-export/save-load.js` (V3 project load),
+`import-export/slp-import.js` (SLP import). **Every** video-decoder construction
+in the app now goes through this factory (the only remaining `new
+OnDemandVideoDecoder` is inside the factory's `'legacy'` branch), so the one
+`DEFAULT_VIDEO_BACKEND` / `LUCID_VIDEO_BACKEND` setting controls the whole app —
+flipping to `'legacy'` reverts every load+playback path uniformly.
 
 ---
 
@@ -1952,10 +1954,17 @@ HDF5 backends.
 bytes; LRU cache), `.samples`(`.length`), `.videoTrack.video.{width,height}`,
 `._fps`, `.keyframeIndices`, `.fileSize`, `.onProgress`. Playback (sleap decode
 is async, so there is no native `<video>`): `playNative`/`pauseNative` run a
-wall-clock playhead + async prefetch; `getCurrentFrameIndex()` is wall-clock
-based; `drawCurrentFrame(ctx,w,h)` draws the cached frame for the playhead
-(false if not yet decoded, so the RAF loop keeps the previous frame). `close()`
-disposes bitmaps + the sleap-io `Video`.
+**decode-paced** playhead (`_runPlayLoop` advances one frame per decode,
+throttled to at most real time) + async prefetch. The playhead advances **even
+when a frame fails to decode** (keeps the last good bitmap on screen) so one bad
+frame can't wedge playback in a retry loop. At end-of-stream `_runPlayLoop` sets
+`_endReached`, and `getCurrentFrameIndex()` then reports past-end
+(`samples.length`) so `VideoController`'s `frameIdx >= totalFrames` stop fires
+(parity with the legacy decoder, whose `currentTime` overshoots the duration) —
+without this, playback hung on the last frame with `isPlaying` stuck true.
+`drawCurrentFrame(ctx,w,h)` draws the cached frame for the playhead (false if not
+yet decoded, so the RAF loop keeps the previous frame). `close()` disposes
+bitmaps + the sleap-io `Video`.
 
 **Imports from project modules.** `./video.js` (`videoLog`).
 

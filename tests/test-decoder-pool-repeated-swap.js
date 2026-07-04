@@ -148,7 +148,7 @@
     function buildSwitchSession(stubs) {
         var fn = new Function(
             'state', 'timeline', 'viewport3d', 'videoController', 'paneManager',
-            'setVideoController', 'OnDemandVideoDecoder', 'createViewForVideoFile',
+            'setVideoController', 'OnDemandVideoDecoder', 'createVideoDecoder', 'createViewForVideoFile',
             'updateTotalFrames', 'rebuildVideoController', 'fitCanvasesToCells',
             'refreshPaneInteractions', 'drawAllOverlays', 'populateViewStrip',
             'populateSessionStrip', 'sessionHasCalibration', 'getInstanceGroupsForFrame',
@@ -161,6 +161,7 @@
             return fn(
                 stubs.state, stubs.timeline, stubs.viewport3d, stubs.videoController,
                 stubs.paneManager, stubs.setVideoController, stubs.OnDemandVideoDecoder,
+                stubs.createVideoDecoder,
                 stubs.createViewForVideoFile, stubs.updateTotalFrames,
                 stubs.rebuildVideoController, stubs.fitCanvasesToCells,
                 stubs.refreshPaneInteractions, stubs.drawAllOverlays,
@@ -273,6 +274,14 @@
                 this.mp4boxFile = dec.mp4boxFile;
             }
 
+            // switchSession now constructs decoders via the decoder-factory
+            // (createVideoDecoder(opts), called WITHOUT `new`) instead of
+            // `new OnDemandVideoDecoder`. Mirror that: the factory stub returns a
+            // constructed mock (same constructedCount accounting).
+            function createVideoDecoderStub(opts) {
+                return new OnDemandVideoDecoderStub(opts);
+            }
+
             var stubs = {
                 state: state,
                 timeline: timeline,
@@ -281,6 +290,7 @@
                 paneManager: makeStubPaneManager(),
                 setVideoController: function () {},
                 OnDemandVideoDecoder: OnDemandVideoDecoderStub,
+                createVideoDecoder: createVideoDecoderStub,
                 createViewForVideoFile: function () {},
                 updateTotalFrames: function () {},
                 rebuildVideoController: function () {},

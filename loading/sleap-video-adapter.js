@@ -68,6 +68,9 @@ export class SleapVideoDecoder {
         // rely on a native <video> element the way OnDemandVideoDecoder does)
         this._videoEl = null; // intentionally null — VideoController guards on this
         this._playing = false;
+        this._endReached = false;  // set when the play loop consumes the last frame,
+                                   // so getCurrentFrameIndex() reports past-end and
+                                   // VideoController's `frameIdx >= totalFrames` stop fires
         this._lastFrame = 0;       // current frame while paused/scrubbing
         this._playheadFrame = 0;   // decode-paced playhead during playback
         this._playBitmap = null;   // latest decoded frame to draw during playback
@@ -250,12 +253,14 @@ export class SleapVideoDecoder {
     seekNative(frameIndex) {
         this._lastFrame = frameIndex;
         this._playheadFrame = frameIndex;
+        this._endReached = false;   // a seek re-arms playback past a prior end-of-stream
         this._prefetch(frameIndex); // warm the cache around the seek target
     }
 
     playNative() {
         if (this._playing) return;
         this._playing = true;
+        this._endReached = false;
         this._playheadFrame = this._lastFrame;
         this._runPlayLoop();
     }
@@ -276,14 +281,24 @@ export class SleapVideoDecoder {
 
         while (this._playing) {
             var next = this._playheadFrame + 1;
-            if (next >= this.samples.length) { this._playing = false; break; }
+            if (next >= this.samples.length) {
+                // Consumed the last frame — end of stream. Flag it so
+                // getCurrentFrameIndex() reports past-end and VideoController stops.
+                this._playing = false;
+                this._endReached = true;
+                break;
+            }
 
             var bmp = await this.getFrame(next); // decodes; backend also reads ahead
             if (!this._playing) break;
             if (bmp) {
                 this._playBitmap = bmp;
-                this._playheadFrame = next;
             }
+            // Advance the playhead even when a frame fails to decode, so a single
+            // undecodable frame can't wedge playback in a tight retry loop
+            // (the "video won't play at all" symptom). The last good bitmap stays
+            // on screen until the next decodable frame arrives.
+            this._playheadFrame = next;
             this._prefetch(next + 1);
 
             // Throttle to real time: don't run faster than fps. If decode is
@@ -303,6 +318,10 @@ export class SleapVideoDecoder {
     }
 
     getCurrentFrameIndex() {
+        // Report past-end once the play loop finished so the VideoController RAF
+        // loop's `frameIdx >= totalFrames` check stops playback (parity with the
+        // legacy decoder, whose currentTime overshoots the duration at end).
+        if (this._endReached) return this.samples.length;
         return this._playing ? this._playheadFrame : this._lastFrame;
     }
 

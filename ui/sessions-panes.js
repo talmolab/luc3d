@@ -38,6 +38,7 @@ import {
     updateTotalFrames,
 } from '../loading/session-loader.js';
 import { OnDemandVideoDecoder } from '../loading/video.js';
+import { createVideoDecoder } from '../loading/decoder-factory.js';
 import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
@@ -1629,7 +1630,7 @@ export async function switchSession(newIdx) {
                     // No pool decoder for this slot — create one and assign by index.
                     // Indexed assignment (not push) keeps slot order deterministic
                     // when multiple inits resolve out of order.
-                    var newDec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: onProgress });
+                    var newDec = createVideoDecoder({ cacheSize: 60, lookahead: 10, onProgress: onProgress });
                     await newDec.init(vf.file);
                     vf.decoder = newDec;
                     state.decoderPool[vi] = newDec;
