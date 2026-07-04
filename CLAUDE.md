@@ -25,7 +25,12 @@ python3 -m http.server 8080
 - Three.js 0.147
 - mp4box.js
 - h5wasm 0.8.8 (WebAssembly HDF5)
-- sleap-io.js 0.2.1 (local copy in `lib/sleap-io/`, client-side SLP export)
+- sleap-io.js — vendored browser bundle in `lib/sleap-io/` (client-side SLP export).
+  **Pinned to a custom pre-release build, commit `bdd1897` (≈ v0.2.3 + the PR #81
+  3D-standardization branch), _not_ a published npm version.** LUCID uses it on the
+  **write path only** (`saveSlpToBytes` + data-model classes); SLP import is
+  hand-rolled on raw h5wasm. To rebuild/bump the bundle, follow
+  `docs/VENDORING-sleap-io.md` (recipe + SHA-256 manifest + importmap derivation).
 - All loaded via script tags / import maps in index.html
 
 ## UI Conventions
