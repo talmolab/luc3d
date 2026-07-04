@@ -40,7 +40,7 @@ import {
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
-import { updateInfoPanel } from '../ui/info-panel.js';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
@@ -1186,6 +1186,12 @@ export async function handleLoadSlpFile(slpFile) {
         if (state.session) statusParts.push(state.session.numFrames + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
         setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
+
+        // One skeleton per project: a multi-session .slp otherwise carries a
+        // per-session skeleton each. Prompt for a single unifying skeleton file.
+        if (state.sessions.length > 1) {
+            promptImportSkeletonForAllSessions();
+        }
     } catch (err) {
         console.error('[load-slp] FATAL:', err);
         hideLoading();

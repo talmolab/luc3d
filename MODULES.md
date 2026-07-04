@@ -428,6 +428,18 @@ Exports `state` (mutable shared bag) plus five live-binding controllers
 `paneManager`) updated through setter functions. Exposes
 `window.__lucid` for DevTools inspection.
 
+**One skeleton per project.** The pose skeleton is project-level: every
+`state.sessions[*].skeleton` points at ONE shared object, so it can't diverge
+across sessions and the exported `.slp` always carries a single skeleton (no
+duplicates for sleap-io/sleap-nn). `setProjectSkeleton(sk)` points all sessions
+at `sk` and stores it as the default new sessions inherit; `getProjectSkeleton()`
+returns it; `buildRememberedSkeleton()` now returns that SHARED reference (not an
+independent clone). The editor mutates the shared object in place so edits
+propagate for free; node add/remove additionally fan out via
+`propagateNode{Added,Removed}` across each session's instances (see
+`ui/info-panel.js` → `applyProjectSkeleton` / warn-on-overwrite modal).
+Calibration and `envSkeleton` remain per-session.
+
 **Key exports.**
 - `state` — mutable application state (current frame, sessions, dirty
   flag, view list, color mode, etc.).
@@ -1162,6 +1174,14 @@ shift-drag range select, mouse-wheel / pinch zoom, middle-click pan. Block 1 (Pr
 adds tree-grouped per-camera labels, an inner scrollable track-area
 wrapper, and an empty-camera placeholder row per camera without tracks.
 
+**Canvas backing-store cap.** `resize()` clamps the canvas backing store to
+`MAX_CANVAS` (32000px/side). A tall timeline (e.g. 8 views × their tracks/
+identities) makes `getPreferredHeight() * devicePixelRatio` exceed the browser's
+~32767px `<canvas>` limit, which fails to allocate and renders as the broken-
+canvas "sad face" over just the timeline region. When that would happen the
+effective device-pixel ratio is scaled down (CSS size + scroll unchanged; only
+backing resolution drops) so the canvas always allocates.
+
 **Trackpad / wheel semantics.** `_handleWheel` maps wheel input as:
 horizontal-dominant scroll (`|deltaX| > |deltaY|`) pans `_scrollFrame`
 left/right (same axis as middle/right-drag pan and the scrollbar thumb),
@@ -1524,6 +1544,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
 - File ▸ "Export 3D Video" (`menuExportVideo3d`) is wired to
   `showExport3DVideoModal()` (export-modals.js).
+- Session strip: the **"+"** button (`btnAddSession`) calls
+  `handleEmptySession()` to create a fresh empty session directly (inheriting the
+  shared project skeleton — the user then adds video via File ▸ Load Videos);
+  the **"−"** button (`btnRemoveSession`) calls `removeSession`. Folder-based
+  session loading stays on the File menu (`menuLoadSessionFolder` →
+  `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`).
 - Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
   Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
   `showGroupContextMenu`, `hideGroupContextMenu`.
@@ -1730,6 +1756,13 @@ filesystem enumeration, decoder rebuild.
   `handleLoadSessionFolder`, `handleEmptySession`,
   `handleLoadSessionFolderSingleSlp`,
   `handleLoadSessionFolderPerCamera`.
+  `handleEmptySession()` creates a blank, video-less session and makes it
+  active (the session-strip **"+"** button calls it directly — see
+  `ui/ui-wiring.js`). It **inherits the shared project skeleton** via
+  `buildRememberedSkeleton()` so a manually-created empty session stays in sync
+  with the others (one skeleton per project); only when it is the very first
+  session does it mint a fresh blank `Skeleton` and register it with
+  `setProjectSkeleton`. The user then populates it via File ▸ Load Videos.
 - Video assignment: `autoAssignVideosToCameras`, `forceVideoSelection`,
   `forceVideoSelectionWithFolder`, `matchSessionFolder`,
   `pickParentDirectoryForSessions`, `showParentDirMatchSummary`.
@@ -1772,6 +1805,16 @@ avoids re-docking already-loaded videos as duplicate (non-interactable mirror)
 panels — `addAllViewsAsGrid` intentionally bypasses the duplicate guard, so
 calling it on every load duplicated prior videos and let the newest panel steal
 each `view.canvas` reference.
+
+`handleLoadVideos` scopes camera + view creation to the videos it loaded **this
+call** (`newVideoFiles`), not the global `state.videoFiles`, and tags each with
+`vf.sessionIdx = state.activeSessionIdx`. This matters when loading videos into a
+pre-existing (e.g. manually-created empty) session while another session's videos
+already exist globally: iterating the global list would skip a `session.cameras`
+entry for the loaded view (its dummy-camera loop skips already-assigned videos)
+and re-create other sessions' videos as views here. A session with a view but no
+matching `session.cameras` entry made the timeline draw no rows (it builds rows
+from `session.cameras`), so instances added there never appeared on the timeline.
 
 **Per-camera `.slp` selection.** `handleLoadSessionFolderPerCamera` loads only
 **one** `.slp` per camera directory — the highest `_vN` version (first-wins on a

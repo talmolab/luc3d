@@ -39,7 +39,7 @@ import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, s
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
 import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js';
 import { handleLoadCalibration, handleLoadVideos, handleLoadVideosFromUrl, handleLoadMultiSession,
-         loadSingleSessionFromCache, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
+         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js';
 import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
@@ -2134,9 +2134,12 @@ export function setupUI() {
         }
     });
 
-    // Add session button
+    // Add session button — create a fresh empty session directly (inherits the
+    // shared project skeleton). The user then loads videos into it via
+    // File ▸ Load Videos. Folder-based loading lives on the File menu
+    // (Load Single/Multi-Session Folder).
     document.getElementById('btnAddSession').addEventListener('click', function() {
-        loadSingleSessionFromCache();
+        handleEmptySession();
     });
     // Remove session button
     document.getElementById('btnRemoveSession').addEventListener('click', function() {
