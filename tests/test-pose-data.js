@@ -849,4 +849,35 @@
             assertTrue(a.compatibilityKey() !== b.compatibilityKey());
         });
     });
+
+    describe('One skeleton per project (app-state)', function () {
+        function cam(name) {
+            return new Camera(name, [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+        }
+
+        it('setProjectSkeleton shares ONE skeleton object across all sessions', function () {
+            var sk = new Skeleton('proj', ['a', 'b'], [[0, 1]]);
+            var s1 = new Session([cam('c')], new Skeleton('s1', [], []), ['t0']);
+            var s2 = new Session([cam('c')], new Skeleton('s2', ['x'], []), ['t0']);
+            var savedSessions = state.sessions, savedSession = state.session;
+            try {
+                state.sessions = [s1, s2];
+                state.session = s1;
+                setProjectSkeleton(sk);
+                assertTrue(s1.skeleton === sk, 'session 1 points at the project skeleton');
+                assertTrue(s2.skeleton === sk, 'session 2 points at the SAME object');
+                assertTrue(getProjectSkeleton() === sk, 'getProjectSkeleton returns it');
+                // New sessions inherit the shared reference (not an independent clone).
+                assertTrue(buildRememberedSkeleton() === sk, 'buildRememberedSkeleton returns the shared object');
+                // Editing the shared skeleton is visible in every session (one object).
+                sk.addNode('c');
+                assertEqual(s1.skeleton.nodes.length, 3);
+                assertEqual(s2.skeleton.nodes.length, 3, 'skeleton edits propagate to all sessions');
+            } finally {
+                state.sessions = savedSessions;
+                state.session = savedSession;
+            }
+        });
+    });
 })();
