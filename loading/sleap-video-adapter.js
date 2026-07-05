@@ -41,6 +41,10 @@ function getSleapIO() {
     return SIO;
 }
 
+// Sentinel returned by the play loop's per-frame timeout race — distinct from a
+// null/undefined decode result so we can tell "backend stalled" from "no bitmap".
+var SLEAP_FRAME_STALL = {};
+
 export class SleapVideoDecoder {
     constructor(options) {
         options = options || {};
@@ -289,15 +293,28 @@ export class SleapVideoDecoder {
                 break;
             }
 
-            var bmp = await this.getFrame(next); // decodes; backend also reads ahead
+            // Never block the loop forever on a single frame. Some codecs/streams
+            // wedge the backend at internal decode-window boundaries, so
+            // `await getFrame(next)` can hang indefinitely — that is the "plays the
+            // first N frames then stops and never advances" symptom. Race the
+            // decode against a stall timeout and skip the frame if it doesn't
+            // arrive, so playback keeps moving. The pending decode stays cached and
+            // may still resolve for a later draw.
+            var stallTimer = null;
+            var stallP = new Promise(function (r) {
+                stallTimer = setTimeout(function () { r(SLEAP_FRAME_STALL); }, Math.max(1200, frameDurMs * 8));
+            });
+            var bmp = await Promise.race([this.getFrame(next), stallP]);
+            if (stallTimer) clearTimeout(stallTimer);
             if (!this._playing) break;
-            if (bmp) {
+            if (bmp === SLEAP_FRAME_STALL) {
+                videoLog('sleap playback: frame ' + next + ' stalled — skipping to keep playback moving', 'warn');
+            } else if (bmp) {
                 this._playBitmap = bmp;
             }
-            // Advance the playhead even when a frame fails to decode, so a single
-            // undecodable frame can't wedge playback in a tight retry loop
-            // (the "video won't play at all" symptom). The last good bitmap stays
-            // on screen until the next decodable frame arrives.
+            // Advance the playhead even when a frame fails/stalls, so one bad frame
+            // can't wedge playback. The last good bitmap stays on screen until the
+            // next decodable frame arrives.
             this._playheadFrame = next;
             this._prefetch(next + 1);
 
