@@ -32,16 +32,26 @@ python3 -m http.server 8080
   Its `pako`
   dep is vendored at `lib/pako/` and `mediabunny`
   is stubbed (`lib/sleap-io/mediabunny-stub.js`); both are aliased in the `index.html`
-  importmap. LUCID uses sleap-io.js on the **write path** (`saveSlpToBytes` +
-  data-model classes) and, as of PR 5.1, on the **`.slp` read path** too:
-  `parseSlpViaSleapIO` (`import-export/file-io.js`) drives `readSlpStreaming`
-  (PR #196) and adapts the typed `Labels` into the same `slpData` shape the old
-  raw-h5wasm worker produced — grouping/sessions come **verbatim** from
-  `labels.rawSessionsJson` (Option A), so `reconstructInstanceGroupsFromDicts` is
-  unchanged. The raw worker (`parseSlpH5`) stays for SLEAP analysis `.h5` and as a
-  fallback (`parseSlpForImport` dispatches). The reader's HDF5 I/O worker loads
-  h5wasm from a CDN default (`0.10.2` IIFE, via `importScripts`); wiring a local
-  IIFE h5wasm is deferred to PR 5.2's h5wasm consolidation. To rebuild/bump the
+  importmap. LUCID uses sleap-io.js on **both** the read and write paths (PR 5.1/5.2):
+  - **Read** (`parseSlpViaSleapIO`, `import-export/file-io.js`): drives
+    `readSlpStreaming` (#196) and adapts the typed `Labels` into LUCID's `slpData`
+    shape. Grouping is rebuilt from the **typed `RecordingSession`** by
+    `reconstructInstanceGroupsFromSession` (`slp-import.js`) — reads both LUCID's
+    legacy and the new canonical `sessions_json`. The raw worker (`parseSlpH5`) stays
+    for SLEAP analysis `.h5` and as a fallback (`parseSlpForImport` dispatches; that
+    path still uses `reconstructInstanceGroupsFromDicts`).
+  - **Write** (PR 5.2): export is **raw `saveSlpToBytes(labels)`** — the old
+    `convertSlpToV06Compatible` v0.6-compat post-pass is **deleted**. The typed graph
+    `buildSlpLabelsAllViews` builds carries all LUCID state (RecordingSession /
+    FrameGroup / InstanceGroup with `instance3d`, `identity`, and `metadata.lucid`
+    incl. per-session `identityId`), so `saveSlpToBytes` emits a canonical
+    `sessions_json` the typed reader round-trips. Reads back natively in SLEAP >= 1.6
+    (sleap-io >= 0.7, flat-matrix `field_names` interop). *Interop gate:
+    `scripts/validate_slp_sleap_compat.py` (needs a SLEAP Python env).*
+
+  The reader's HDF5 I/O worker still loads h5wasm from a CDN default (`0.10.2` IIFE,
+  via `importScripts`); wiring a local IIFE h5wasm is the remaining h5wasm-consolidation
+  step. To rebuild/bump the
   bundle, follow `docs/VENDORING-sleap-io.md` (recipe + SHA-256 manifest + importmap
   derivation + `scripts/revendor-sleap-io.sh`).
 - All loaded via script tags / import maps in index.html

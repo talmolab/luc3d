@@ -16,7 +16,6 @@ import { OnDemandVideoDecoder } from '../loading/video.js';
 import { createDemoSkeleton } from '../demo-data.js';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-    convertSlpToV06Compatible,
 } from './file-io.js';
 import {
     state,
@@ -338,8 +337,6 @@ async function buildSlpBytes() {
     var seenTrackNames = new Set();
 
     var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
-    var calibSessions = []; // main-format sessions_json entries, injected by post-pass
-    var videoOffset = 0;    // cumulative video count across prior sessions
     for (var si = 0; si < sessionsToExport.length; si++) {
         var sess = sessionsToExport[si];
 
@@ -364,140 +361,6 @@ async function buildSlpBytes() {
         });
 
         var sessLabels = buildSlpLabelsAllViews(sess, sessViews, sessVideoFiles);
-
-        // Build sessions_json payload for this session. Written into
-        // sessions_json by the v0.6 post-pass so the saved SLP
-        // round-trips calibration, InstanceGroup/points3d, and lucid
-        // session metadata through load. Camera keys are stringified
-        // integer indices ("0", "1", ...) because sleap-io v0.6.5's
-        // `make_session` calls `int(cam_idx)` on camcorder_to_*_idx_map
-        // keys — "camera_0" raises ValueError and aborts the SLEAP GUI
-        // load. LUCID's loader handles both camera names and numeric
-        // indices, so this stays round-trip-compatible.
-        var calibration = {};
-        var camcorderMap = {};
-        var camNameToKey = {};
-        for (var ci = 0; ci < sess.cameras.length; ci++) {
-            var cam = sess.cameras[ci];
-            var camKey = String(ci);
-            calibration[camKey] = {
-                name: cam.name,
-                matrix: cam.matrix,
-                distortions: cam.dist,
-                rotation: cam.rvec,
-                translation: cam.tvec,
-                size: cam.size,
-            };
-            camcorderMap[camKey] = videoOffset + ci;
-            camNameToKey[cam.name] = camKey;
-        }
-
-        // Serialize InstanceGroups + 3D points per frame. The load path
-        // at handleLoadSlpFile (~index.html:13084+) expects:
-        //   instance_groups[i] = {
-        //     identity_idx?, points: [[x,y,z]|null, ...],
-        //     instances: {camera_N: {nodeName: [x,y] | [x,y,0 if occluded]}},
-        //     metadata: {lucid: {instanceMeta: {camName: {trackIdx,type,score,modified,nulledNodes?}}}}
-        //   }
-        var sessNodeNames = sess.skeleton.nodes.map(function (n) {
-            return typeof n === 'string' ? n : (n.name || '');
-        });
-        var sessNumNodes = sessNodeNames.length;
-        var frameGroupDicts = [];
-        for (var [fgFrameIdx, fgGroups] of sess.instanceGroups) {
-            if (!fgGroups || fgGroups.length === 0) continue;
-            var igDicts = [];
-            for (var fgi = 0; fgi < fgGroups.length; fgi++) {
-                var grp = fgGroups[fgi];
-                var igDict = {};
-                if (grp.identityId != null && grp.identityId >= 0) {
-                    igDict.identity_idx = grp.identityId;
-                }
-                if (grp.points3d && grp.points3d.length > 0) {
-                    igDict.points = grp.points3d;
-                }
-                var igInstances = {};
-                var igInstanceMeta = {};
-                // Stub required by sleap-io v0.6.5 make_instance_group —
-                // the loader pops this key unconditionally and int-casts
-                // both the outer key and lf_idx/inst_idx. LUCID itself
-                // does not use this map (it reads `instances` + metadata
-                // below instead), so pointing all cameras at
-                // labeled_frames[0].instances[0] is a safe no-op; the
-                // file is guaranteed to have at least one labeled frame
-                // with one instance whenever it has InstanceGroups.
-                var lfAndInstMap = {};
-                for (var [grpCamName, grpInst] of grp.instances) {
-                    var grpCamKey = camNameToKey[grpCamName];
-                    if (!grpCamKey) continue;
-                    var pointDict = {};
-                    var pts = grpInst.points || [];
-                    for (var ni = 0; ni < sessNumNodes && ni < pts.length; ni++) {
-                        var pt = pts[ni];
-                        if (!pt || pt[0] == null || pt[1] == null || !isFinite(pt[0])) continue;
-                        var isOcc = Array.isArray(grpInst.occluded) && grpInst.occluded[ni];
-                        pointDict[sessNodeNames[ni]] = isOcc ? [pt[0], pt[1], 0] : [pt[0], pt[1]];
-                    }
-                    igInstances[grpCamKey] = pointDict;
-                    lfAndInstMap[grpCamKey] = [0, 0];
-                    var meta = {
-                        trackIdx: grpInst.trackIdx,
-                        type: grpInst.type || 'user',
-                        score: grpInst.score || 0,
-                        modified: grpInst.modified || false,
-                    };
-                    if (grpInst.nulledNodes && grpInst.nulledNodes.size > 0) {
-                        meta.nulledNodes = Array.from(grpInst.nulledNodes);
-                    }
-                    igInstanceMeta[grpCamName] = meta;
-                }
-                igDict.instances = igInstances;
-                igDict.camcorder_to_lf_and_inst_idx_map = lfAndInstMap;
-                igDict.metadata = { lucid: { instanceMeta: igInstanceMeta } };
-                igDicts.push(igDict);
-            }
-            if (igDicts.length > 0) {
-                frameGroupDicts.push({ frame_idx: fgFrameIdx, instance_groups: igDicts });
-            }
-        }
-
-        // Per-session identities. The file-level identities_json dataset is a
-        // concatenation across all sessions (kept for SLEAP/headless compat),
-        // so it cannot be the source of truth on reload — every session would
-        // inherit every other session's IDs and the per-session identity_idx
-        // values would point into the wrong slice. Persist each session's own
-        // identity list (in session.identities order, so identity_idx stays
-        // valid) here and prefer it on import.
-        var sessIdentitiesJson = [];
-        if (sess.identities && sess.identities.length > 0) {
-            for (var sidi = 0; sidi < sess.identities.length; sidi++) {
-                var sIdent = sess.identities[sidi];
-                var sIdentObj = { name: sIdent.name };
-                if (sIdent.color) sIdentObj.color = sIdent.color;
-                sessIdentitiesJson.push(sIdentObj);
-            }
-        }
-
-        calibSessions.push({
-            calibration: calibration,
-            camcorder_to_video_idx_map: camcorderMap,
-            frame_group_dicts: frameGroupDicts,
-            metadata: {
-                lucid: {
-                    sessionName: sess.name || null,
-                    trustTracks: sess.trustTracks || false,
-                    frameIdentityMap: sess.frameIdentityMap ? Array.from(sess.frameIdentityMap.entries()) : [],
-                    identities: sessIdentitiesJson,
-                    skeleton: {
-                        name: sess.skeleton.name || 'skeleton',
-                        nodes: sess.skeleton.nodes,
-                        edges: sess.skeleton.edges,
-                    },
-                    tracks: sess.tracks,
-                },
-            },
-        });
-        videoOffset += (sessLabels.videos || []).length;
 
         // Merge into combined Labels
         allLabeledFrames = allLabeledFrames.concat(sessLabels.labeledFrames || []);
@@ -554,8 +417,14 @@ async function buildSlpBytes() {
         provenance: { source: 'lucid', exported_at: new Date().toISOString() },
     });
 
-    var rawBytes = await SIO.saveSlpToBytes(labels);
-    return await convertSlpToV06Compatible(rawBytes, calibSessions);
+    // PR 5.2: export sleap-io.js's canonical bytes directly. The typed graph
+    // built by buildSlpLabelsAllViews already carries all LUCID state
+    // (RecordingSession + FrameGroup + InstanceGroup with instance3d, identity,
+    // and metadata.lucid), so saveSlpToBytes emits a canonical sessions_json the
+    // typed importer round-trips. The old v0.6-compat post-pass (hand-rolled
+    // sessions_json + flat→compound rewrite + format_id 1.4) is gone; SLEAP >=
+    // 1.6 (sleap-io >= 0.7) reads the raw flat-matrix output natively.
+    return await SIO.saveSlpToBytes(labels);
 }
 
 export async function quickSave() {

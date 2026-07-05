@@ -81,21 +81,24 @@ Three coordinated pieces:
 3. **Lazy fallback** — `import-export/save-load.js` `ensureSleapIO()` dynamic-imports
    the same module.
 
-**Write path.** LUCID builds model objects (`Labels`, `LabeledFrame`,
+**Write path (PR 5.2).** LUCID builds model objects (`Labels`, `LabeledFrame`,
 `Instance`/`PredictedInstance`, `Skeleton`/`Node`/`Edge`, `Video`, `Track`, and the
-3D/multi-view classes) and calls `saveSlpToBytes`, then rewrites the bytes in
-`import-export/file-io.js:convertSlpToV06Compatible` (a Python-`sleap_io`-v0.6.5
-compatible downgrade + `sessions_json` in `make_session` shape).
+3D/multi-view classes — `buildSlpLabelsAllViews` assembles the full typed
+RecordingSession graph with `metadata.lucid`) and calls **`saveSlpToBytes`
+directly**. The old `convertSlpToV06Compatible` v0.6-compat post-pass is **deleted**:
+SLEAP >= 1.6 (sleap-io >= 0.7) reads sleap-io.js's raw flat-matrix `field_names`
+output natively (#378), and #198 serializes a canonical `sessions_json` from the typed
+graph. (Interop gate: `scripts/validate_slp_sleap_compat.py`, needs a SLEAP Python env.)
 
-**Read path (PR 5.1).** `.slp` **import** now also goes through sleap-io.js:
+**Read path (PR 5.1/5.2).** `.slp` **import** goes through sleap-io.js:
 `parseSlpViaSleapIO` (`import-export/file-io.js`) drives `readSlpStreaming(file,
-{rawSessions:true})` (PR #196) and adapts the typed `Labels` into the same `slpData`
-shape the raw worker produced — pose via a columnar `_xy`/`_visible` transform,
-sessions/grouping **verbatim** from `labels.rawSessionsJson` (so
-`reconstructInstanceGroupsFromDicts` is unchanged). The raw-h5wasm worker
+{rawSessions:true})` (PR #196) and adapts the typed `Labels` into LUCID's `slpData`
+shape — pose via a columnar `_xy`/`_visible` transform, grouping rebuilt from the typed
+`RecordingSession` by `reconstructInstanceGroupsFromSession` (reads both LUCID's legacy
+and the new canonical `sessions_json`). The raw-h5wasm worker
 (`loading/slp-import-worker.js`, via `parseSlpH5`) is kept for SLEAP analysis `.h5` and
-as a fallback (`parseSlpForImport` dispatches). Byte-parity between the two paths is
-verified in-browser on real + generated multi-view `.slp`.
+as a fallback (`parseSlpForImport` dispatches). Verified in-browser: pose parity vs the
+raw worker + full canonical export→import round-trip.
 
 ### The `mediabunny` stub
 
