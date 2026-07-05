@@ -1913,13 +1913,17 @@ setting instead of ~10 scattered `new`s.
   backend-agnostic. `opts` also accepts `backend: 'sleap'|'legacy'` /
   `forceSleap` / `forceLegacy` per-call overrides plus the usual
   `cacheSize`/`lookahead`/`onProgress`.
-- `DEFAULT_VIDEO_BACKEND` — build default (`'sleap'`).
+- `DEFAULT_VIDEO_BACKEND` — build default (**`'legacy'`**). The proven HTML5
+  `<video>` + mp4box decoder gives reliable playback; the sleap-io streaming
+  backend is **opt-in** because its decode-paced playback still stalls on some
+  real-video codecs/streams (loading + seeking via sleap are memory-safe and
+  fine — it's continuous playback that's not production-ready yet).
 
 **Backend selection (first match wins).** per-call `backend` → `forceSleap`/
 `forceLegacy` → `localStorage.LUCID_VIDEO_BACKEND` (runtime override — flip
-without editing code, then reload) → `DEFAULT_VIDEO_BACKEND`. To revert the
-whole app to the old HTML5 decoder: set `DEFAULT_VIDEO_BACKEND = 'legacy'` (or
-`localStorage.LUCID_VIDEO_BACKEND='legacy'`).
+without editing code, then reload) → `DEFAULT_VIDEO_BACKEND`. To enable the
+memory-safe sleap-io streaming loader app-wide: `localStorage
+.LUCID_VIDEO_BACKEND='sleap'` (or set `DEFAULT_VIDEO_BACKEND = 'sleap'`).
 
 **Imports from project modules.** `./video.js` (`OnDemandVideoDecoder`),
 `./sleap-video-adapter.js` (`SleapVideoDecoder`).

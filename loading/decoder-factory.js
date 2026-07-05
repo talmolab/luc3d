@@ -28,10 +28,16 @@ import { OnDemandVideoDecoder } from './video.js';
 import { SleapVideoDecoder } from './sleap-video-adapter.js';
 
 /** Build-time default backend for the app.
- *  'sleap' = adopt the sleap-io.js video backend (the integration goal).
- *  If a video mis-decodes, flip to the proven decoder WITHOUT a code change:
- *  `localStorage.LUCID_VIDEO_BACKEND='legacy'` in the console, then reload. */
-export const DEFAULT_VIDEO_BACKEND = 'sleap';
+ *  'legacy' = the proven HTML5 <video> + mp4box decoder (smooth playback).
+ *  'sleap'  = the sleap-io.js streaming backend (memory-safe load of large /
+ *             server-hosted videos — the crash fix — but its decode-paced
+ *             playback still stalls on some real-video codecs/streams, so it is
+ *             OPT-IN until that's fixed).
+ *  Default is 'legacy' so playback is reliable for everyone. To use the
+ *  memory-safe streaming loader WITHOUT a code change:
+ *  `localStorage.LUCID_VIDEO_BACKEND='sleap'` in the console, then reload
+ *  (or set this constant to 'sleap' to make it the app-wide default). */
+export const DEFAULT_VIDEO_BACKEND = 'legacy';
 
 function resolveBackend(opts) {
     if (opts.backend === 'sleap' || opts.backend === 'legacy') return opts.backend;

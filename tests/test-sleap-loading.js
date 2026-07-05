@@ -27,10 +27,10 @@
     describe('Sleap loading — decoder-factory backend selection', function () {
         beforeEach(function () { clearOverride(); });
 
-        it('default backend is "sleap" (the integration goal)', function () {
-            assertEqual(DEFAULT_VIDEO_BACKEND, 'sleap', 'build default is sleap');
-            assertTrue(createVideoDecoder({}) instanceof SleapVideoDecoder,
-                'no opts + no override → sleap decoder');
+        it('default backend is "legacy" (reliable playback; sleap is opt-in until its playback is fixed)', function () {
+            assertEqual(DEFAULT_VIDEO_BACKEND, 'legacy', 'build default is legacy');
+            assertTrue(createVideoDecoder({}) instanceof OnDemandVideoDecoder,
+                'no opts + no override → legacy decoder');
             clearOverride();
         });
 
@@ -61,7 +61,7 @@
 
         it('an invalid override is ignored (falls back to the default)', function () {
             setOverride('banana');
-            assertTrue(createVideoDecoder({}) instanceof SleapVideoDecoder, 'garbage override → default sleap');
+            assertTrue(createVideoDecoder({}) instanceof OnDemandVideoDecoder, 'garbage override → default legacy');
             clearOverride();
         });
     });
