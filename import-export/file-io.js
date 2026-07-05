@@ -2498,6 +2498,189 @@ export function parseSlpH5(file, onProgress) {
     });
 }
 
+/**
+ * Parse a SLEAP .slp file through sleap-io.js's streaming reader
+ * (`readSlpStreaming`, PR #196) and adapt the typed `Labels` into the SAME
+ * `slpData` shape that `parseSlpH5` (the raw-h5wasm worker) resolves to, so the
+ * downstream importers (`slp-import.js`, `slp-merge.js`) are unchanged.
+ *
+ * This is the read-path half of the sleap-io.js migration (PR 5.1). The heavy
+ * pose datasets (`points`/`pred_points`/`instances`/`frames`) are read by the
+ * reader's own worker (off-thread) and materialized here via a single transform
+ * (typed `Instance._xy`/`_visible` → LUCID `points[]` + parallel `occluded[]`,
+ * NOT `numpy()` which zeroes invisible points to NaN — see
+ * scratch/.../12-import-consumer-spec.md §3).
+ *
+ * The `sessions[]` payload (LUCID's calibration + InstanceGroup grouping +
+ * `metadata.lucid`) is taken **verbatim** from `labels.rawSessionsJson`
+ * (Option A): the reader deep-clones each session's on-disk `sessions_json`
+ * entry, which is byte-identical to what the raw worker produced, so
+ * `reconstructInstanceGroupsFromDicts` consumes it 1:1 with guaranteed parity.
+ * (The typed session model drops LUCID's per-session `identity_idx`, so the raw
+ * dict remains the authoritative grouping source — see 13-pr51-probe-findings.md.)
+ *
+ * The reader's own HDF5 I/O worker loads `h5wasm` via `importScripts`, so it
+ * needs an **IIFE** build and falls back to its baked-in CDN default
+ * (`h5wasm@0.10.2/dist/iife/`) — LUCID's local `lib/h5wasm/hdf5_hl.js` is an ESM
+ * and can't satisfy `importScripts`. Wiring a LOCAL IIFE h5wasm (via `h5wasmUrl`)
+ * is deferred to PR 5.2's h5wasm consolidation; for 5.1 the CDN default is
+ * consistent with LUCID's existing CDN `h5wasm@0.8.8` (index.html) dependency.
+ * Passing the `File` directly lets the reader stream (range reads) instead of
+ * buffering the whole file. Runs on the calling (main) thread — the reader spins
+ * its OWN worker for HDF5 I/O, so this must NOT be called from inside another
+ * worker (nested workers are unsupported on older Safari).
+ *
+ * NOTE: `loadAnalysisH5` (SLEAP `.analysis.h5`) and embedded-frame extraction
+ * are NOT covered by `readSlpStreaming`; callers keep `parseSlpH5` for those
+ * (this adapter is SLP-only, additive).
+ *
+ * @param {File} file - The .slp file
+ * @param {Function} [onProgress] - Optional progress callback `(msg) => void`
+ * @returns {Promise<Object>} `slpData` matching parseSlpH5's result shape
+ */
+export async function parseSlpViaSleapIO(file, onProgress) {
+    var SIO = window.SleapIO;
+    if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
+        throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
+    }
+    var PredictedInstance = SIO.PredictedInstance;
+
+    var report = function (msg) { if (onProgress) onProgress(msg); };
+    report('Reading SLP (streaming)...');
+
+    var labels = await SIO.readSlpStreaming(file, {
+        openVideos: false,
+        rawSessions: true, // capture verbatim sessions_json (Option A grouping source)
+        onProgress: function (n, total, message) {
+            report((message || ('Reading SLP ' + n + '/' + total)) + '...');
+        },
+    });
+
+    // --- skeleton ---
+    var skel = (labels.skeletons && labels.skeletons[0]) || null;
+    var skeleton = skel
+        ? { name: skel.name || 'skeleton', nodes: skel.nodeNames, edges: skel.edgeIndices }
+        : { name: 'skeleton', nodes: [], edges: [] };
+    var numNodes = skeleton.nodes.length;
+
+    // --- tracks ---
+    var typedTracks = labels.tracks || [];
+    var tracks = typedTracks.map(function (t) { return t.name; });
+
+    // --- frames[] (pose transform) ---
+    // Only frames that carry at least one pose instance, matching the worker
+    // (SI-worker only emits frames with >=1 instance).
+    var frames = [];
+    var lfs = labels.labeledFrames || [];
+    for (var li = 0; li < lfs.length; li++) {
+        var lf = lfs[li];
+        var lfInsts = lf.instances || [];
+        if (lfInsts.length === 0) continue;
+        var videoIdx = labels.videos.indexOf(lf.video);
+        var instances = [];
+        for (var ii = 0; ii < lfInsts.length; ii++) {
+            instances.push(_typedInstanceToSlpData(lfInsts[ii], typedTracks, numNodes, PredictedInstance));
+        }
+        frames.push({ frameIdx: lf.frameIdx, videoIdx: videoIdx, instances: instances });
+    }
+
+    // --- videos[] ---
+    var videos = (labels.videos || []).map(function (v, i) {
+        var srcName = null;
+        if (v.sourceVideo && v.sourceVideo.filename) srcName = v.sourceVideo.filename;
+        else if (v.backendMetadata && v.backendMetadata.source_filename) srcName = v.backendMetadata.source_filename;
+        var embedded = !!v.hasEmbeddedImages;
+        return {
+            index: i,
+            filename: v.filename != null ? v.filename : null,
+            sourceFilename: srcName,
+            backendType: embedded ? 'HDF5Video' : 'MediaVideo',
+            shape: v.shape != null ? v.shape : null,
+            embedded: embedded,
+            dataset: (v.backendMetadata && v.backendMetadata.dataset) != null ? v.backendMetadata.dataset : null,
+        };
+    });
+
+    // --- sessions[] (Option A: verbatim rawSessionsJson) ---
+    // Each entry is the exact on-disk `sessions_json` dict (calibration +
+    // camcorder_to_video_idx_map + frame_group_dicts + metadata.lucid), byte-
+    // identical to what the raw worker produced — consumed 1:1 by
+    // reconstructInstanceGroupsFromDicts. The worker also flattens any entry
+    // that is itself an array into separate sessions; mirror that here.
+    var rawSessions = labels.rawSessionsJson || [];
+    var sessions = [];
+    for (var si = 0; si < rawSessions.length; si++) {
+        var rs = rawSessions[si];
+        if (rs == null) continue;
+        if (Array.isArray(rs)) {
+            for (var ri = 0; ri < rs.length; ri++) {
+                if (rs[ri] != null) sessions.push(rs[ri]);
+            }
+        } else {
+            sessions.push(rs);
+        }
+    }
+
+    // --- identities[] (file-level fallback; per-session lives in
+    // sessions[].metadata.lucid.identities, which the importer prefers) ---
+    var identities = (labels.identities || []).map(function (id) {
+        return { name: id.name, color: id.color != null ? id.color : undefined };
+    });
+
+    return {
+        skeleton: skeleton,
+        tracks: tracks,
+        frames: frames,
+        videos: videos,
+        sessions: sessions,
+        identities: identities,
+    };
+}
+
+/**
+ * Adapt one typed sleap-io.js `Instance`/`PredictedInstance` into the flat
+ * instance dict shape the importer expects. Reads columnar `_xy`/`_visible`
+ * directly (NOT `numpy()`, which zeroes invisible points to NaN and would drop
+ * occluded-but-placed keypoints LUCID must keep). Occlusion = coords present but
+ * visible flag false — matching the raw worker's `!visible && finite`.
+ *
+ * @param {Object} inst - typed Instance or PredictedInstance
+ * @param {Array} typedTracks - labels.tracks (typed Track objects) for indexOf
+ * @param {number} numNodes - skeleton node count (output point-array length)
+ * @param {Function} PredictedInstance - the class, for the instanceof type test
+ * @returns {{trackIdx:number, score:number, type:string, points:Array, occluded:boolean[]}}
+ */
+function _typedInstanceToSlpData(inst, typedTracks, numNodes, PredictedInstance) {
+    var isPred = PredictedInstance && (inst instanceof PredictedInstance);
+    // inst.track === null → indexOf returns -1, the worker's trackless sentinel
+    // (do NOT coerce to null here; downstream treats a number <0 as trackless).
+    var trackIdx = inst.track ? typedTracks.indexOf(inst.track) : -1;
+    var score = isPred ? (inst.score || 0) : 0;
+
+    var xy = inst._xy;
+    var vis = inst._visible;
+    var points = new Array(numNodes);
+    var occluded = new Array(numNodes);
+    for (var k = 0; k < numNodes; k++) {
+        var x = (xy && 2 * k + 1 < xy.length) ? xy[2 * k] : NaN;
+        var y = (xy && 2 * k + 1 < xy.length) ? xy[2 * k + 1] : NaN;
+        if (isFinite(x) && isFinite(y)) {
+            points[k] = [x, y];
+            occluded[k] = !(vis && vis[k]);
+        } else {
+            points[k] = null;
+            occluded[k] = false;
+        }
+    }
+    return {
+        trackIdx: trackIdx,
+        score: score,
+        type: isPred ? 'predicted' : 'user',
+        points: points,
+        occluded: occluded,
+    };
+}
+
 // ============================================
 // Points3d HDF5 import (in-browser)
 // ============================================

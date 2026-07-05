@@ -1993,7 +1993,18 @@ layer.
   all selected sessions share a skeleton (node count + names, in order),
   otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
   guard `buildSlpLabelsMultiSession` and to pre-flight the per-camera download.
-- SLP parse: `parseSlpH5(file, onProgress)` — spawns worker.
+- SLP parse (raw worker): `parseSlpH5(file, onProgress)` — spawns
+  `slp-import-worker.js`. Kept for SLEAP analysis `.h5` and as the
+  `parseSlpViaSleapIO` fallback.
+- SLP parse (sleap-io.js, PR 5.1): `parseSlpViaSleapIO(file, onProgress)` —
+  drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` (PR #196)
+  and adapts the typed `Labels` into the identical `slpData` shape via the
+  private `_typedInstanceToSlpData` pose transform (columnar `_xy`/`_visible` →
+  `points[]` + parallel `occluded[]`, NOT `numpy()`). `sessions[]` come verbatim
+  from `labels.rawSessionsJson` (Option A) so `reconstructInstanceGroupsFromDicts`
+  is unchanged. Streams via a `File` source; reader loads h5wasm from its CDN
+  default (local IIFE wiring deferred to PR 5.2). Byte-parity with `parseSlpH5`
+  verified on real + generated multi-view `.slp`.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`.
 - Misc: `downloadJSON`, `instancePointsMatch`.
@@ -2074,6 +2085,13 @@ the status bar at the bottom.
 **Purpose.** SLP/H5 project import + 3D-points-overlay import. Three
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
+
+The `.slp` parse is dispatched by the private `parseSlpForImport(file,
+onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
+streaming reader, PR 5.1), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
+analysis `.h5` and as a fallback on any typed-read error. Both yield the same
+`slpData`, so `reconstructInstanceGroupsFromDicts` + the rest of
+`handleLoadSlpFile`/`handleAddSlp` are unchanged.
 
 On load, identities are restored **per session**: each session prefers its
 own `metadata.lucid.identities` (from `sessions_json`) and only falls back to

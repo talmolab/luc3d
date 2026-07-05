@@ -13,7 +13,7 @@ import {
     storeReprojectedInstances, getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
 import {
-    parseSlpH5, instancePointsMatch, parsePoints3dH5, pickFiles,
+    parseSlpH5, parseSlpViaSleapIO, instancePointsMatch, parsePoints3dH5, pickFiles,
 } from './file-io.js';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
@@ -52,6 +52,29 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+
+/**
+ * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
+ * sleap-io.js's streaming reader (`parseSlpViaSleapIO` — lands PR #196's read
+ * speedup + a typed pose transform) and keeps the raw-h5wasm worker
+ * (`parseSlpH5`) for SLEAP analysis `.h5` files and as a fallback if the typed
+ * reader throws (e.g. a non-standard split-field export it cannot read). Both
+ * resolve to the identical `slpData` shape, so every consumer below is unchanged.
+ *
+ * @param {File} file
+ * @param {(msg:string)=>void} onProgress
+ * @returns {Promise<Object>} slpData
+ */
+async function parseSlpForImport(file, onProgress) {
+    if (/\.slp$/i.test(file.name || '')) {
+        try {
+            return await parseSlpViaSleapIO(file, onProgress);
+        } catch (err) {
+            console.warn('[slp-import] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
+        }
+    }
+    return await parseSlpH5(file, onProgress);
+}
 
 /**
  * Reconstruct InstanceGroups (and their member Instances) for one session from
@@ -211,10 +234,11 @@ export async function handleLoadSlpFile(slpFile) {
         showLoading('Reading SLP file (' + (slpFile.size / 1024 / 1024).toFixed(1) + ' MB)...');
         console.log('[load-slp] SLP:', slpFile.name);
 
-        // Parse in Web Worker (non-blocking)
+        // Parse via sleap-io.js streaming reader (raw worker for analysis .h5 /
+        // as fallback) — both yield the identical slpData shape.
         var slpData;
         try {
-            slpData = await parseSlpH5(slpFile, function (msg) {
+            slpData = await parseSlpForImport(slpFile, function (msg) {
                 showLoading(msg);
             });
         } catch (parseErr) {
@@ -1220,7 +1244,7 @@ export async function handleAddSlp() {
 
         var slpData;
         try {
-            slpData = await parseSlpH5(slpFile, function (msg) {
+            slpData = await parseSlpForImport(slpFile, function (msg) {
                 showLoading(msg);
             });
         } catch (parseErr) {

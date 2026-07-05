@@ -25,15 +25,23 @@ python3 -m http.server 8080
 - Three.js 0.147
 - mp4box.js
 - h5wasm 0.8.8 (WebAssembly HDF5)
-- sleap-io.js — vendored browser bundle in `lib/sleap-io/` (client-side SLP export),
-  pinned to **unreleased `main`** (commit `07b0830`, PR #196 read-path perf + PR #198
-  lazy-native session model) — an **experimental** pin; switch to a tagged release once
-  one with #196 + #198 ships (v0.4.2+), after the PR 5 import/export migration is tested.
+- sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to the
+  **released npm package `@talmolab/sleap-io.js@0.5.0`** (gitHead `1918f9e`),
+  which contains PR #196 (read-path perf) + PR #198 (lazy-native session model).
+  A tagged release — no longer the experimental moving-`main` pin.
   Its `pako`
   dep is vendored at `lib/pako/` and `mediabunny`
   is stubbed (`lib/sleap-io/mediabunny-stub.js`); both are aliased in the `index.html`
-  importmap. LUCID uses sleap-io.js on the **write path only** (`saveSlpToBytes` +
-  data-model classes); SLP import is hand-rolled on raw h5wasm. To rebuild/bump the
+  importmap. LUCID uses sleap-io.js on the **write path** (`saveSlpToBytes` +
+  data-model classes) and, as of PR 5.1, on the **`.slp` read path** too:
+  `parseSlpViaSleapIO` (`import-export/file-io.js`) drives `readSlpStreaming`
+  (PR #196) and adapts the typed `Labels` into the same `slpData` shape the old
+  raw-h5wasm worker produced — grouping/sessions come **verbatim** from
+  `labels.rawSessionsJson` (Option A), so `reconstructInstanceGroupsFromDicts` is
+  unchanged. The raw worker (`parseSlpH5`) stays for SLEAP analysis `.h5` and as a
+  fallback (`parseSlpForImport` dispatches). The reader's HDF5 I/O worker loads
+  h5wasm from a CDN default (`0.10.2` IIFE, via `importScripts`); wiring a local
+  IIFE h5wasm is deferred to PR 5.2's h5wasm consolidation. To rebuild/bump the
   bundle, follow `docs/VENDORING-sleap-io.md` (recipe + SHA-256 manifest + importmap
   derivation + `scripts/revendor-sleap-io.sh`).
 - All loaded via script tags / import maps in index.html

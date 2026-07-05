@@ -9,45 +9,52 @@ recipe** for rebuilding it when bumping the version.
 
 ## What is pinned
 
-> ⚠️ **EXPERIMENTAL PIN.** Currently pinned to **unreleased `main`** (commit `07b0830`),
-> which contains **PR #196** ("perf: SLP read path") **and PR #198** ("faithful
-> lazy-native recording-session model" — the session API LUCID needs to route
-> import/export through the sleap-io.js reader; see `scratch/.../11-pr5-plan.md` /
-> [luc3d#121](https://github.com/talmolab/luc3d/issues/121)). `main` is a **moving ref**
-> — reproducibility/supply-chain tradeoff. **Switch to a tagged release once one
-> containing #196 + #198 ships (v0.4.2+)**, after the PR 5 migration is tested in the
-> LUCID stack. Revert to the last released tag with `scripts/revendor-sleap-io.sh v0.4.1`.
+Pinned to the **released npm package [`@talmolab/sleap-io.js@0.5.0`](https://www.npmjs.com/package/@talmolab/sleap-io.js)**
+(gitHead `1918f9e`), which contains **PR #196** ("perf: SLP read path") **and PR #198**
+("faithful lazy-native recording-session model"). This is a **tagged release** — it
+retires the earlier experimental moving-`main` pin (`07b0830`). Revert to a prior version
+with `npm pack @talmolab/sleap-io.js@<version>` (see recipe below).
 
 | | |
 |---|---|
-| Source repo | `talmolab/sleap-io.js` |
-| Source ref | **`main`** (commit `07b0830`, PR #196 + #198) — *experimental, unreleased* |
-| Build toolchain | `tsup` (esbuild) — `npm run build` |
+| Source package | `@talmolab/sleap-io.js` (npm) |
+| Version | **`0.5.0`** (gitHead `1918f9e`) — released, from npm |
+| Build toolchain | `tsup` (esbuild) — prebuilt in the npm tarball's `dist/` |
 | Runtime deps aliased | `h5wasm` → local, `yaml` → CDN, `mediabunny` → local stub, **`pako` → local** |
 
-### SHA-256 manifest (current bundle, built from `main` @ `07b0830`)
+### Vendored browser closure (5 files)
+
+The npm `dist/` ships node + browser + lite builds; LUCID vendors only the **browser
+entry and its transitive closure**: `index.browser.js` imports `chunk-NIFGJKOL.js`,
+`chunk-PPF2ABAO.js`, `chunk-YS7Q6CO6.js`; two of those reference `gdrive-6DDSPUUK.js`
+(a dynamic Google-Drive chunk LUCID never triggers, kept so the dynamic import resolves).
+The node-only chunks (`index.js`, `lite.js`, and 0.4.x's `chunk-KIMQQ2HE/VJKU6LLW/XMK3JNEP`)
+are **not** vendored.
+
+### SHA-256 manifest (0.5.0, from the npm tarball)
 
 ```
-79b40e15fd97c71cc70dfd7fc0d1ad9e17eebff85c4172eb26879bbd5b4a2a49  index.browser.js
-69b11e7e19670394961334c0e1049fa7369d2ce3cc314c7e3ef1f2b1d919c072  chunk-KIMQQ2HE.js
+09dba915b34880fbe17309e9034692f3db8f5483d96ee96043a34167b2c0bc64  index.browser.js
 9461cf151dd672cf2020f092c934800b0a0d801cb51732775562896bba930368  chunk-NIFGJKOL.js
-895cf7d8b2d0aed67d3ff4cb7b94488355547b0d4d7ca8efde7ce72c41be38db  chunk-P3K3Y4YO.js
-4c1015f305209bdb90e5f91f8f8fceeccf1c18d4594e4fd614552be570bfd922  chunk-VJKU6LLW.js
-a23a221bb11db68fe1fdbd1d6bbdf650f9084aa1afd0df3a2050cbfe6920eff3  chunk-XMK3JNEP.js
+bcd2b4b951004579d88f6486041d8413fc58be2adfa4bf14e77a4a0945045e05  chunk-PPF2ABAO.js
 e3b10f994ee279f993a043b3a57f9fa7596f6f472eec2a33b6f642aad0dbd65b  chunk-YS7Q6CO6.js
+d2525cde72767bc6f4d55435d88efde54c93fe73be3e3ffd669f5c9d2fe48d46  gdrive-6DDSPUUK.js
 ```
 
 `mediabunny-stub.js` is **hand-written** (not emitted by the build). `lib/pako/` is a
-locally-vendored copy of `pako` (see below). The static bare-import set on `main` is
-unchanged from v0.4.1 (`mediabunny`, `pako`, `yaml`), so the importmap needs no new
-entries. (`main` bumps sleap-io's *internal* h5wasm to 0.10.2, but that only affects its
-own reader — a dynamic import LUCID never reaches; LUCID keeps its own h5wasm 0.8.8.)
+locally-vendored copy of `pako` (see below). The static bare-import set is unchanged
+(`mediabunny`, `pako`, `yaml`), so the importmap needs no new entries. (`chunk-NIFGJKOL.js`
+and `chunk-YS7Q6CO6.js` keep the same hash-names — and the same bytes — as the 0.4.x/`main`
+builds; only the big container chunk changed, `P3K3Y4YO` → `PPF2ABAO`.) sleap-io's
+*internal* reader h5wasm (`0.10.2`) is a dynamic import inside its own worker; LUCID keeps
+its own h5wasm 0.8.8/local ESM.
 
 ### History
 
-- **`v0.4.1`** (tag `8427072`) — the last *released* pin, and the recommended revert
-  target. SHA-256: `e5bc304…` index.browser.js / `69b11e7…` chunk-KIMQQ2HE.js /
-  `4c1015f…` chunk-VJKU6LLW.js.
+- **`07b0830`** (unreleased `main`, PR #196 + #198) — the experimental pin superseded by
+  0.5.0. SHA-256: `79b40e1…` index.browser.js / `895cf7d…` chunk-P3K3Y4YO.js.
+- **`v0.4.1`** (tag `8427072`) — the last *released* pin before 0.5.0.
+  SHA-256: `e5bc304…` index.browser.js / `69b11e7…` chunk-KIMQQ2HE.js.
 - **`bdd1897`** (≈ v0.2.3 + the PR #81 3D-standardization branch, before v0.3.0) — the
   original pin, a custom pre-release build carrying the 3D data model
   (`Instance3D`/`InstanceGroup`/`FrameGroup`/`RecordingSession`/`Identity`/`Camera.size`)
@@ -74,13 +81,21 @@ Three coordinated pieces:
 3. **Lazy fallback** — `import-export/save-load.js` `ensureSleapIO()` dynamic-imports
    the same module.
 
-**Usage is write-only.** LUCID builds model objects (`Labels`, `LabeledFrame`,
+**Write path.** LUCID builds model objects (`Labels`, `LabeledFrame`,
 `Instance`/`PredictedInstance`, `Skeleton`/`Node`/`Edge`, `Video`, `Track`, and the
 3D/multi-view classes) and calls `saveSlpToBytes`, then rewrites the bytes in
 `import-export/file-io.js:convertSlpToV06Compatible` (a Python-`sleap_io`-v0.6.5
-compatible downgrade + `sessions_json` in `make_session` shape). SLP **import** is
-hand-rolled on raw h5wasm (`loading/slp-import-worker.js`) and does **not** use
-sleap-io.js.
+compatible downgrade + `sessions_json` in `make_session` shape).
+
+**Read path (PR 5.1).** `.slp` **import** now also goes through sleap-io.js:
+`parseSlpViaSleapIO` (`import-export/file-io.js`) drives `readSlpStreaming(file,
+{rawSessions:true})` (PR #196) and adapts the typed `Labels` into the same `slpData`
+shape the raw worker produced — pose via a columnar `_xy`/`_visible` transform,
+sessions/grouping **verbatim** from `labels.rawSessionsJson` (so
+`reconstructInstanceGroupsFromDicts` is unchanged). The raw-h5wasm worker
+(`loading/slp-import-worker.js`, via `parseSlpH5`) is kept for SLEAP analysis `.h5` and
+as a fallback (`parseSlpForImport` dispatches). Byte-parity between the two paths is
+verified in-browser on real + generated multi-view `.slp`.
 
 ### The `mediabunny` stub
 
@@ -90,7 +105,40 @@ LUCID doesn't use. `lib/sleap-io/mediabunny-stub.js` is a hand-written no-op tha
 exports those 6 symbols; the importmap aliases `mediabunny` → the stub. Only
 regenerate the stub if the bundle's `mediabunny` import list changes.
 
-## Reproducible re-vendor recipe
+## Re-vendor from a released npm version (preferred)
+
+For a tagged release, pull the prebuilt bundle straight from npm — no clone/build:
+
+```bash
+# 1) Download + extract the published tarball (no install)
+npm pack @talmolab/sleap-io.js@0.5.0
+tar -xzf talmolab-sleap-io.js-0.5.0.tgz          # -> package/dist/
+
+# 2) Identify the browser closure: index.browser.js + the chunks it (transitively)
+#    references. List them:
+grep -rhoE '"\./[A-Za-z0-9_-]+\.js"' package/dist/index.browser.js \
+     package/dist/chunk-*.js | sort -u
+#    -> index.browser.js imports 3 chunks; 2 of those reference gdrive-*.js.
+
+# 3) Replace the vendored bundle with exactly that closure (NOT the node chunks)
+rm -f <luc3d>/lib/sleap-io/chunk-*.js <luc3d>/lib/sleap-io/gdrive-*.js
+cp package/dist/index.browser.js \
+   package/dist/chunk-NIFGJKOL.js package/dist/chunk-PPF2ABAO.js \
+   package/dist/chunk-YS7Q6CO6.js package/dist/gdrive-6DDSPUUK.js \
+   <luc3d>/lib/sleap-io/
+
+# 4) Re-derive the importmap (static bare imports) + verify the mediabunny stub:
+grep -hoE 'from "[^./][^"]*"' package/dist/index.browser.js package/dist/chunk-*.js | sort -u
+#    (0.5.0: mediabunny, pako, yaml — unchanged, no importmap edits needed)
+
+# 5) Refresh the SHA-256 manifest in this doc + the CLAUDE.md version pin, then
+#    re-run tests/test-runner.html (esp. the SLP export post-pass guard) and an
+#    import parity check.
+```
+
+`npm view @talmolab/sleap-io.js@<version> version gitHead` records the provenance.
+
+## Reproducible re-vendor recipe (build from source — for unreleased refs)
 
 ```bash
 # 0) Clone (once)
