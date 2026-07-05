@@ -1494,6 +1494,21 @@ export function shouldUseLazyH5(file) {
     return isH5 && file.size > 20 * 1024 * 1024;
 }
 
+// Large prediction `.slp` files (many 10k+ frames, 100k+ instances) must not be
+// parsed eagerly — the full object graph OOMs the tab. Above this size they load
+// via the sleap-io.js streaming lazy reader (SioLazyLoader). Small hand-labeled
+// `.slp` stay on the eager path so their instances keep the grouped display.
+export var LAZY_SLP_THRESHOLD = 150 * 1024 * 1024;
+
+/**
+ * Check if a `.slp` is large enough to require lazy loading via sleap-io.js's
+ * streaming lazy reader (as opposed to the eager `parseSlpH5` path).
+ */
+export function shouldUseLazySlp(file) {
+    var name = file.name.toLowerCase();
+    return name.endsWith('.slp') && file.size > LAZY_SLP_THRESHOLD;
+}
+
 export function getInstanceGroupsForFrame(frameIdx) {
     return state.session ? (state.session.instanceGroups.get(frameIdx) || []) : [];
 }
@@ -1618,6 +1633,19 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
         }
     }
     if (needStart < 0) return 0;
+
+    // Main-thread lazy loaders (SioLazyLoader) have no workers — materialize the
+    // range synchronously via buildLazyFrameGroupSync (getFrameSync builds on
+    // demand). Keeps the same FrameGroup/unlinked-instance shape as the worker path.
+    if (loader.isSync) {
+        var syncLoaded = 0;
+        for (var syncFi = needStart; syncFi < needEnd; syncFi++) {
+            if (session.frameGroups.has(syncFi)) continue;
+            if (buildLazyFrameGroupSync(syncFi)) syncLoaded++;
+            if (onProgress && syncLoaded % 100 === 0) onProgress(syncLoaded, needEnd - needStart);
+        }
+        return syncLoaded;
+    }
 
     var cameraNames = Array.from(loader.workers.keys());
     var batchPromises = cameraNames.map(function (camName) {
