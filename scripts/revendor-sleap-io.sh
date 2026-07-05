@@ -7,9 +7,9 @@
 #
 # Rebuilds the bundle at <git-ref>, copies index.browser.js + chunk-*.js into
 # lib/sleap-io/, then prints (a) the static bare-import list you must alias in
-# index.html's importmap and (b) the SHA-256 manifest to paste into
-# docs/VENDORING-sleap-io.md. It does NOT edit index.html or the mediabunny stub —
-# those are reviewed/applied by hand. See docs/VENDORING-sleap-io.md.
+# index.html's importmap and (b) the SHA-256 manifest for the vendoring notes
+# (archived untracked at scratch/VENDORING-sleap-io.md). It does NOT edit
+# index.html or the mediabunny stub — those are reviewed/applied by hand.
 set -euo pipefail
 
 REF="${1:?usage: revendor-sleap-io.sh <git-ref> [work-dir]}"
@@ -48,7 +48,7 @@ echo ""
 echo "2) mediabunny import surface (regenerate lib/sleap-io/mediabunny-stub.js only if this changed):"
 grep -hA8 'from "mediabunny"' dist/chunk-*.js | sed 's/^/     /' || echo "     (no mediabunny import found)"
 echo ""
-echo "3) SHA-256 manifest for docs/VENDORING-sleap-io.md:"
+echo "3) SHA-256 manifest (for the vendoring notes, scratch/VENDORING-sleap-io.md):"
 ( cd "$DEST" && sha256sum index.browser.js chunk-*.js | sed 's/^/     /' )
 echo "================================================="
 echo ">> done. Review importmap + stub, run tests/test-runner.html, then commit."

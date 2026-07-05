@@ -58,8 +58,9 @@ python3 -m http.server 8080
   → local ESM, the `index.html` `<script>` global + `readSlpStreaming`'s `h5wasmUrl`
   → local IIFE, and the module workers import the local ESM — no CDN h5wasm fetch on
   any path. To rebuild/bump the sleap-io.js
-  bundle, follow `docs/VENDORING-sleap-io.md` (recipe + SHA-256 manifest + importmap
-  derivation + `scripts/revendor-sleap-io.sh`).
+  bundle, run `scripts/revendor-sleap-io.sh <ref>` (it prints the importmap
+  bare-import list + SHA-256 manifest; the detailed recipe is archived in the
+  untracked `scratch/VENDORING-sleap-io.md`).
 - All loaded via script tags / import maps in index.html
 
 ## UI Conventions
