@@ -26,16 +26,19 @@ python3 -m http.server 8080
 - mp4box.js
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
-- sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to the
-  **released npm package `@talmolab/sleap-io.js@0.5.2`** (gitHead `af9cbd6`),
-  a patch on 0.5.1 that fixes the lazy readers to apply the video-id remap
-  (sleap-io.js PR #205, closes #204) — so lazy materialization matches the eager
-  readers frame-for-frame on files with non-contiguous video group ids. 0.5.1
-  added `readSlpStreaming({ lazy })` — a columnar/on-demand mode of the streaming
-  reader (sleap-io.js PR #203) — on top of 0.5.0's PR #196 (read-path perf) +
-  PR #198 (lazy-native session model). The vendored bytes are byte-identical to
-  the published npm `dist/`. The lazy streaming reader backs `SioLazyLoader`
-  (`loading/sio-lazy-loader.js`) for large prediction `.slp` session loads.
+- sleap-io.js — vendored browser bundle in `lib/sleap-io/`, currently pinned to an
+  **EXPERIMENTAL unreleased pin: sleap-io.js PR #208 head `c7e0cbd`** (the streaming
+  SLP **writer** — write-side companion to `readSlpStreaming({ lazy })`). Built from
+  source via `scripts/revendor-sleap-io.sh <ref>` (not npm). Adds `openSlpWriter`
+  (`appendStore`/`appendFrames`/`close`/`writeToSink`), `saveSlpMergedFromStores` /
+  `saveSlpMergedToSink`, and the public lazy frame-release API
+  (`labels.frameCacheLimit` / `releaseFrame` / `releaseFrameWindow`) — the memory-
+  bounded write path for large lazy sessions (streaming export/save). **Finalize to
+  the tagged release once PR #208 merges + publishes** (was released `0.5.2`,
+  gitHead `af9cbd6`, PR #205 lazy video-id remap; on 0.5.1's `readSlpStreaming({
+  lazy })` (PR #203) + 0.5.0's #196 read-perf + #198 session model). The lazy
+  streaming reader backs `SioLazyLoader` (`loading/sio-lazy-loader.js`) for large
+  prediction `.slp` session loads; the writer backs streaming export/save.
   Its `pako`
   dep is vendored at `lib/pako/` and `mediabunny`
   is stubbed (`lib/sleap-io/mediabunny-stub.js`); both are aliased in the `index.html`
