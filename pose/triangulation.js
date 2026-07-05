@@ -1718,6 +1718,17 @@ export function evictLazyFrames(currentFrame) {
     var session = state.session;
     if (!session || !session.lazyLoader) return;
 
+    // Bound the loader's internal typed-frame caches too — the frameGroups
+    // eviction below only prunes LUCID's layer, while the sleap-io.js
+    // LazyFrameList caches grow with every visited frame even while frameGroups
+    // stays capped. Throttled independently of the frameGroups-size early return.
+    if (typeof session.lazyLoader.capInternalCaches === 'function') {
+        if (!evictLazyFrames._capCounter) evictLazyFrames._capCounter = 0;
+        if (++evictLazyFrames._capCounter % 50 === 0) {
+            session.lazyLoader.capInternalCaches(currentFrame, 1000);
+        }
+    }
+
     var maxKeep = 500;
     var keys = Array.from(session.frameGroups.keys());
     if (keys.length <= maxKeep) return;

@@ -159,6 +159,8 @@
 
     <!-- Project loading and triangulation tests -->
     <script src="test-project-triangulation.js"></script>
+    <!-- Phase-5 lazy .slp: memory-bounding release primitives + numFrames -->
+    <script src="test-lazy-release.js"></script>
 
     <!-- SLP merge tests -->
     <script src="test-slp-merge.js"></script>
@@ -276,12 +278,15 @@
         // Pure (DOM-free) import-trackIdx resolver. Extracted from
         // session-loader.js (which pulls app.js) precisely so it's bridgeable.
         import * as __ImportTrackResolve from '../import-export/import-track-resolve.js';
+        // Dependency-free (no app.js in its import graph; uses window.SleapIO +
+        // document.baseURI only inside open()). Bridged for the lazy-release tests.
+        import * as __SioLazy from '../loading/sio-lazy-loader.js';
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
                               __LoadingProgressModal,
                               __TimelineCtrl, __TrackIdentityOps,
-                              __ImportTrackResolve);
+                              __ImportTrackResolve, __SioLazy);
 
         // sleap-io.js bridge for the SLP export post-pass test — mirrors the
         // window.SleapIO bridge in index.html so test-slp-export-postpass.js can

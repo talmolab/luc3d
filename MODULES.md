@@ -122,7 +122,10 @@ session graph that holds them.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups. **Tracks and identities are per-session.** The
+  frameGroups, instanceGroups. The `numFrames` getter returns
+  `lazyLoader.nFrames` on a lazy session (`frameGroups` there holds only the
+  visited/resident window, badly understating the project) and `frameGroups.size`
+  otherwise. **Tracks and identities are per-session.** The
   constructor copies the incoming `tracks` array (`tracks.slice()`) so two
   sessions never share one — otherwise deleting/adding/renaming a track in one
   session would mutate the others (the multi-session SLP loader used to pass the
@@ -380,7 +383,10 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   large prediction `.slp` to the main-thread `SioLazyLoader`
   (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
   `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
-  for worker-free loaders), `loadAllLazyFrames`, `evictLazyFrames`.
+  for worker-free loaders), `loadAllLazyFrames`, `evictLazyFrames` (prunes
+  `session.frameGroups`, and on its throttled tick also calls
+  `SioLazyLoader.capInternalCaches` to bound the loader's internal typed-frame
+  caches — which `frameGroups` eviction alone leaks).
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
@@ -498,6 +504,17 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
   the current frame (this is the path "Triangulate All" takes when identities
   exist; previously it refreshed only the 2D overlays, leaving 3D empty).
+- `sweepTriangulationFrames(session, onFrame, opts)` (module-private) +
+  `frameGroupHasUserInstances(fg)` — memory-bounded driver both bulk-triangulate
+  paths (identity + track) now use. On a windowing-capable lazy session
+  (`SioLazyLoader`) it walks `0..nFrames` in windows: materialize a window
+  (`batchLoadLazyFrames`) → run `onFrame` per resident frame → **release** the
+  window (delete predicted-only `frameGroups` + `loader.releaseWindow`), keeping
+  peak at one window instead of the whole ~108k×3 graph. This replaces the old
+  `loadAllLazyFrames`-then-iterate path (which re-OOMed) and fixes the silent-drop
+  bug where only visited frames were processed. Non-lazy / worker-lazy sessions
+  iterate resident `frameGroups` exactly as before. Compact 3D results persist in
+  `session.instanceGroups`; user-edited frames are never released.
 - `showExportResultPopup(message, ok)` — small centered ✓/✗ confirmation card
   shown after an SLP export (auto-dismisses, faster on success; also closes on
   click/Esc/Enter). Used by the By-Cam and per-session flows: on success they
@@ -1867,6 +1884,19 @@ type, points, occluded}`, LRU-cached), `prefetch`, `close`; fields `nFrames`,
 `skeleton`, `trackNames`, `videos`, `trackOccupancy` (left empty in the load+view
 scope — timeline track bars are deferred), and `isSync = true` (so
 `batchLoadLazyFrames` takes its worker-free path).
+
+Memory-bounding primitives (phase-5 full pipeline): `releaseFrame(frameIdx)` /
+`releaseWindow(start, end)` drop a frame (or half-open range) from BOTH the
+loader's own adapted-dict LRU AND each camera's underlying sleap-io.js
+`Labels._lazyFrameList.cache` — the otherwise-unbounded typed-frame Map that
+`frameAt(row)` fills and that has no upstream release API (`store.materializeFrame`
+rebuilds on next access, so dropping is safe). `capInternalCaches(currentFrame,
+maxKeep)` prunes those internal caches to frames near the current one (the internal
+analog of `evictLazyFrames`, which only prunes `session.frameGroups`); called on the
+eviction tick. `close()` now also clears the internal caches. These back the
+windowed triangulate-all sweep (`sweepTriangulationFrames`, `ui/export-modals.js`)
+and future streaming export. All reach the `_lazyFrameList` private field
+defensively (existence-guarded) so a bundle bump can't throw.
 
 **Imports.** `window.SleapIO.readSlpStreaming` (via the index.html bridge) and the
 local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).
