@@ -45,3 +45,6 @@ lib/yaml/
 
 # Bench driver node deps (not part of the served app)
 scripts/bench/node_modules/
+
+# sleap-io.js re-vendor build dir (scripts/revendor-sleap-io.sh default work-dir)
+.sleap-io-build/

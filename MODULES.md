@@ -1975,8 +1975,10 @@ layer.
 - Video matching: `matchVideosToCameras`, `buildVideoGrid`.
 - SLP build: `buildSlpExportData`, `buildPerCameraSlpJson`,
   `buildSlpLabels`, `buildSlpLabelsAllViews`,
-  `buildSlpLabelsMultiSession`, `serializeSkeleton`,
-  `convertSlpToV06Compatible`. On 2D export both `buildSlpLabels` and
+  `buildSlpLabelsMultiSession`, `serializeSkeleton`.
+  (PR 5.2 deleted `convertSlpToV06Compatible` — export is now raw
+  `saveSlpToBytes`; SLEAP >= 1.6 / sleap-io >= 0.7 reads the flat-matrix
+  `field_names` layout natively.) On 2D export both `buildSlpLabels` and
   `buildSlpLabelsMultiSession` keep each instance's own track — grouped
   AND ungrouped/unlinked — so a flat 2D project's tracks survive; an
   ungrouped instance only drops its track if a grouped instance already
@@ -1984,16 +1986,33 @@ layer.
   a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`.
-- `buildSlpLabelsAllViews` writes each session's identity list into that
-  session's `metadata.lucid.identities` (in `session.identities` order, so
-  `identity_idx` stays valid). The file-level `identities_json` dataset is a
-  cross-session concatenation kept only for SLEAP/headless compatibility — it
-  is NOT the per-session source of truth on reload (see slp-import.js).
+- `buildSlpLabelsAllViews` builds the full typed graph (RecordingSession /
+  FrameGroup / InstanceGroup with `instance3d`, `identity`, and `metadata.lucid`)
+  that `saveSlpToBytes` serializes to the canonical `sessions_json`. It writes each
+  session's identity list into `metadata.lucid.identities` AND each group's
+  per-session index into `InstanceGroup.metadata.lucid.identityId` (authoritative on
+  reload — the canonical `identity_idx`/`ig.identity` resolve against the file-level
+  concat and mis-scope for multi-session files). The file-level `identities_json` is
+  a cross-session concatenation, NOT the per-session source of truth on reload.
 - Skeleton validation: `findSkeletonMismatch(selections)` — returns `null` when
   all selected sessions share a skeleton (node count + names, in order),
   otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
   guard `buildSlpLabelsMultiSession` and to pre-flight the per-camera download.
-- SLP parse: `parseSlpH5(file, onProgress)` — spawns worker.
+- SLP parse (raw worker): `parseSlpH5(file, onProgress)` — spawns
+  `slp-import-worker.js`. Kept for SLEAP analysis `.h5` and as the
+  `parseSlpViaSleapIO` fallback.
+- SLP parse (sleap-io.js, PR 5.1/5.2): `parseSlpViaSleapIO(file, onProgress)` —
+  drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` (PR #196)
+  and adapts the typed `Labels` into the `slpData` shape via the private
+  `_typedInstanceToSlpData` pose transform (columnar `_xy`/`_visible` →
+  `points[]` + parallel `occluded[]`, NOT `numpy()`). Each `sessions[]` entry is
+  the verbatim on-disk dict (for the direct calibration/video-map/metadata reads)
+  PLUS a `_typedSession` ref (the typed RecordingSession) used by
+  `reconstructInstanceGroupsFromSession` for grouping — which reads both LUCID's
+  legacy and the new canonical `sessions_json`. Streams via a `File` source;
+  reader loads h5wasm from its CDN default (local IIFE wiring is the remaining
+  h5wasm step). Pose byte-parity with `parseSlpH5` + full canonical round-trip
+  verified in-browser.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`.
 - Misc: `downloadJSON`, `instancePointsMatch`.
@@ -2075,6 +2094,13 @@ the status bar at the bottom.
 workflows: load fresh SLP (replaces state), additive merge SLP into
 current session, overlay reprojected points3d from H5.
 
+The `.slp` parse is dispatched by the private `parseSlpForImport(file,
+onProgress)`: real `.slp` files go through `parseSlpViaSleapIO` (sleap-io.js
+streaming reader, PR 5.1), with `parseSlpH5` (raw h5wasm worker) kept for SLEAP
+analysis `.h5` and as a fallback on any typed-read error. Both yield the same
+`slpData`, so `reconstructInstanceGroupsFromDicts` + the rest of
+`handleLoadSlpFile`/`handleAddSlp` are unchanged.
+
 On load, identities are restored **per session**: each session prefers its
 own `metadata.lucid.identities` (from `sessions_json`) and only falls back to
 the file-level global `identities_json` for legacy/non-lucid SLPs. This keeps
@@ -2151,8 +2177,20 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   (`trackIdx` null) and identity-less (`identity_idx` -1) instances rather than
   defaulting them to track/identity 0. `opts.onProgress(msg)` receives batch
   progress; `opts.batch` (default 20000) sets the yield interval. Returns
-  `{ restoredGroups, restoredWith3d }`. Exercised by
-  `verify/roundtrip-null3d-harness.html`.
+  `{ restoredGroups, restoredWith3d }`. Now used only for the raw-worker
+  fallback path (files parsed by `parseSlpH5`).
+- `reconstructInstanceGroupsFromSession(session, typedSession, rawSession, nodeNames, opts)`
+  — async; the typed analog (PR 5.2) used for `.slp` files read via
+  `parseSlpViaSleapIO`. Rebuilds `InstanceGroup`s from the typed
+  `RecordingSession` (`frameGroups → instanceGroups → instanceByCamera`): 2D
+  points/occlusion from each typed `Instance._xy`/`_visible`, per-instance
+  metadata from `ig.metadata.lucid.instanceMeta`, 3D from `ig.instance3d.points`,
+  and per-session identity from `ig.metadata.lucid.identityId` (falling back to
+  the raw dict's `identity_idx` for legacy files). Reads both LUCID's legacy and
+  the new canonical `sessions_json`. Same pass-1 dedup + trackless/identity-less
+  handling as the dict version. Returns `{ restoredGroups, restoredWith3d }`.
+- `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
+  `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
 
 **Private helpers (not exported).**
 - `_loadSessionVideosParallel({ sessionIdx, session, state, modal, groupId, decoderFactory })`
