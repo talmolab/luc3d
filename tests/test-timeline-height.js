@@ -284,4 +284,49 @@
             tl.destroy();
         });
     });
+
+    describe('Timeline - canvas backing-store clamp (broken-canvas crash guard)', function () {
+        // Regression for the timeline "sad face" crash: browsers cap a <canvas>
+        // backing store at ~32767px per side; allocating larger fails and the
+        // element renders as the broken-canvas glyph. resize() must clamp the
+        // backing store so it always allocates, while keeping the CSS size (and
+        // therefore scroll) intact. See ui/timeline.js resize().
+        var MAX_CANVAS = 32000;
+
+        it('clamps an over-tall timeline canvas to within the browser limit', function () {
+            var container = createContainer(800, 200);
+            var tl = new Timeline(container, { totalFrames: 100 });
+            // Simulate a pathologically tall timeline (as if thousands of rows).
+            tl.getPreferredHeight = function () { return 200000; };
+            tl.resize();
+
+            assertLessThan(tl._canvas.height, MAX_CANVAS + 1,
+                'canvas backing height stays within the browser <canvas> limit');
+            assertLessThan(tl._canvas.width, MAX_CANVAS + 1,
+                'canvas backing width stays within the browser <canvas> limit');
+            assertGreaterThan(tl._canvas.height, 0, 'canvas still has a positive height');
+            assertGreaterThan(tl._canvas.width, 0, 'canvas still has a positive width');
+            // CSS height preserves the full logical content so scrolling works;
+            // only the backing store was reduced.
+            assertEqual(tl._canvas.style.height, '200000px',
+                'CSS height preserves the full content height (scroll intact)');
+            assertLessThan(tl._canvas.height, parseFloat(tl._canvas.style.height),
+                'backing height was reduced below the (over-limit) CSS height');
+            cleanup(tl, container);
+        });
+
+        it('does NOT reduce backing resolution for normal-height timelines', function () {
+            var container = createContainer(800, 200);
+            var tl = new Timeline(container, { totalFrames: 100 });
+            tl.getPreferredHeight = function () { return 300; }; // well under the cap
+            tl.resize();
+
+            var dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+            var cssH = parseFloat(tl._canvas.style.height);
+            assertEqual(tl._canvas.height, Math.floor(cssH * dpr),
+                'backing height == CSS height × dpr (no clamp) for normal timelines');
+            assertLessThan(tl._canvas.height, MAX_CANVAS + 1);
+            cleanup(tl, container);
+        });
+    });
 })();

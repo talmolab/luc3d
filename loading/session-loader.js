@@ -20,7 +20,7 @@
 
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
-    setVideoController, VIEW_NAMES, buildRememberedSkeleton,
+    setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
 } from '../ui/app-state.js';
 
 import {
@@ -50,7 +50,7 @@ import {
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
 import { drawAllOverlays } from '../ui/rendering.js';
-import { updateInfoPanel } from '../ui/info-panel.js';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
 import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
@@ -218,8 +218,16 @@ export async function handleLoadVideos() {
         hlvModal.reset();
         hlvModal.show();
 
-        // Append new files to state.videoFiles (skip duplicates)
+        // Append new files to state.videoFiles (skip duplicates). Track the
+        // entries created by THIS call in `newVideoFiles` so camera/view
+        // creation below is scoped to the active session — `state.videoFiles`
+        // is global across all sessions, so iterating it would re-create other
+        // sessions' videos as views in (and skip cameras for) the current
+        // session. That left a manually-populated session with a view but no
+        // matching `session.cameras` entry, so the timeline (which builds rows
+        // from `session.cameras`) drew nothing for instances added there.
         var failedVideos = [];
+        var newVideoFiles = [];
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
             const stem = file.name.replace(/\.[^.]+$/, '');
@@ -247,7 +255,7 @@ export async function handleLoadVideos() {
                 const vh = decoder.videoTrack.video.height;
                 const frameCount = decoder.samples.length;
 
-                state.videoFiles.push({
+                var newVf = {
                     file: file,
                     name: stem,
                     decoder: decoder,
@@ -256,7 +264,9 @@ export async function handleLoadVideos() {
                     frameCount: frameCount,
                     assignedCamera: null,
                     videoPath: file.webkitRelativePath || file.name,
-                });
+                };
+                state.videoFiles.push(newVf);
+                newVideoFiles.push(newVf);
                 hlvModal.completeTask(hlvTaskId);
             } catch (videoErr) {
                 console.error('Failed to load ' + file.name + ':', videoErr);
@@ -286,14 +296,24 @@ export async function handleLoadVideos() {
             }
         }
 
+        // Tag the freshly-loaded videos with the active session so
+        // switchSession's `videoFileIndices` fallback (matching on
+        // `vf.sessionIdx`) can re-associate them after a session swap.
+        for (var ti = 0; ti < newVideoFiles.length; ti++) {
+            newVideoFiles[ti].sessionIdx = state.activeSessionIdx;
+        }
+
         // Auto-assign videos to existing calibration cameras first
         if (state.session.cameras.length > 0) {
             autoAssignVideosToCameras();
         }
 
-        // For any still-unassigned video, create a dummy camera and assign it
-        for (var vi = 0; vi < state.videoFiles.length; vi++) {
-            var vf = state.videoFiles[vi];
+        // For any still-unassigned NEW video, create a dummy camera and assign
+        // it. Scoped to `newVideoFiles`, not global `state.videoFiles`, so we
+        // never skip a camera for the active session just because another
+        // session already owns a same-named (already-assigned) video.
+        for (var vi = 0; vi < newVideoFiles.length; vi++) {
+            var vf = newVideoFiles[vi];
             if (!vf.assignedCamera) {
                 // Check if a camera with this name already exists
                 var cameraExists = state.session.cameras.some(function (c) { return c.name === vf.name; });
@@ -307,10 +327,12 @@ export async function handleLoadVideos() {
             }
         }
 
-        // Create views for assigned videos that don't have views yet
+        // Create views for the newly-assigned videos that don't have views yet.
+        // Iterating `newVideoFiles` (not global `state.videoFiles`) keeps other
+        // sessions' videos from being re-created as views in this session.
         var newViewNames = [];
-        for (var vi2 = 0; vi2 < state.videoFiles.length; vi2++) {
-            var vf2 = state.videoFiles[vi2];
+        for (var vi2 = 0; vi2 < newVideoFiles.length; vi2++) {
+            var vf2 = newVideoFiles[vi2];
             if (vf2.assignedCamera) {
                 var hasView = state.views.some(function (v) { return v.name === vf2.assignedCamera; });
                 if (!hasView) {
@@ -1071,8 +1093,11 @@ export async function handleLoadMultiSession() {
 
         showLoading('Scanning for sessions...');
 
-        // Find session subdirectories (directories that contain calibration or camera subdirs)
+        // Find session subdirectories (directories that contain calibration or
+        // camera subdirs), and a parent-level skeleton .json (e.g. skeleton.json)
+        // that unifies all sessions (one skeleton per project).
         var sessionDirs = [];  // { name, handle }
+        var parentSkeletonHandle = null;
         for await (var [name, handle] of parentHandle) {
             if (handle.kind === 'directory') {
                 // Quick check: does this look like a session?
@@ -1090,6 +1115,10 @@ export async function handleLoadMultiSession() {
                 if (isSession) {
                     sessionDirs.push({ name: name, handle: handle });
                 }
+            } else if (handle.kind === 'file'
+                && name.toLowerCase().indexOf('skeleton') >= 0
+                && name.toLowerCase().endsWith('.json')) {
+                parentSkeletonHandle = handle; // e.g. skeleton.json / handSkeleton.json
             }
         }
 
@@ -1129,6 +1158,31 @@ export async function handleLoadMultiSession() {
         }
 
         populateSessionStrip();
+
+        // One skeleton per project. If the parent folder contains a skeleton
+        // .json, auto-load it for every session; otherwise prompt the user for a
+        // unifying skeleton file. (Multi-session projects otherwise carry a
+        // per-session skeleton each → duplicate-skeleton errors downstream.)
+        if (state.sessions.length > 1) {
+            var autoLoadedSkeleton = false;
+            if (parentSkeletonHandle) {
+                try {
+                    var skFile = await parentSkeletonHandle.getFile();
+                    var parentSk = parseSkeletonJSON(await skFile.text());
+                    if (parentSk && parentSk.nodes.length > 0) {
+                        setProjectSkeleton(parentSk);
+                        autoLoadedSkeleton = true;
+                        drawAllOverlays(state.currentFrame);
+                        updateInfoPanel();
+                        setStatus('Loaded skeleton from ' + parentSkeletonHandle.name +
+                            ' for all ' + state.sessions.length + ' sessions', 'success');
+                    }
+                } catch (e) {
+                    console.warn('[multi-session] parent skeleton auto-load failed:', e);
+                }
+            }
+            if (!autoLoadedSkeleton) promptImportSkeletonForAllSessions();
+        }
 
     } catch (err) {
         console.error('[multi-session] Error:', err);
@@ -1319,7 +1373,7 @@ export function showSessionModeModal(showAllOptions) {
         var perCameraOpt = makeOption(
             'Per-Camera SLP',
             'One SLP + one video per camera.',
-            '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} video.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} video.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
+            '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} skeleton.json\n\u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u251C\u2500\u2500 \u{1F3AC} video.mp4\n\u2502   \u2514\u2500\u2500 \u{1F4C4} cam1.slp\n\u2514\u2500\u2500 \u{1F4C1} cam2/\n    \u251C\u2500\u2500 \u{1F3AC} video.mp4\n    \u2514\u2500\u2500 \u{1F4C4} cam2.slp',
             'per-camera'
         );
         // Recommended highlight
@@ -1343,7 +1397,7 @@ export function showSessionModeModal(showAllOptions) {
         leftOptions.appendChild(makeOption(
             'Single SLP',
             'One SLP in root. Videos in videos/ folder.',
-            '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
+            '\u{1F4C1} session/\n\u251C\u2500\u2500 \u{1F4C4} calibration.toml\n\u251C\u2500\u2500 \u{1F4C4} skeleton.json\n\u251C\u2500\u2500 \u{1F4C4} labels.slp\n\u2514\u2500\u2500 \u{1F4C1} videos/\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s1.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam1_s2.mp4\n    \u251C\u2500\u2500 \u{1F3AC} cam2_s1.mp4\n    \u2514\u2500\u2500 \u{1F3AC} cam2_s2.mp4',
             'single-slp'
         ));
 
@@ -1364,8 +1418,8 @@ export function showSessionModeModal(showAllOptions) {
 
         var parentOpt = makeOption(
             'Parent Folder',
-            'Parent directory with Per-Camera SLP subdirectories.',
-            '\u{1F4C1} parent/\n\u251C\u2500\u2500 \u{1F4C1} sess1/\n\u2502   \u251C\u2500\u2500 \u{1F4C4} calib.toml\n\u2502   \u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u2514\u2500\u2500 \u{1F4C1} cam2/\n\u2514\u2500\u2500 \u{1F4C1} sess2/\n    \u251C\u2500\u2500 \u{1F4C4} calib.toml\n    \u251C\u2500\u2500 \u{1F4C1} cam1/\n    \u2514\u2500\u2500 \u{1F4C1} cam2/',
+            'Session subfolders + optional skeleton.json (one skeleton for all sessions).',
+            '\u{1F4C1} parent/\n\u251C\u2500\u2500 \u{1F4C4} skeleton.json  \u2190 one skeleton for all\n\u251C\u2500\u2500 \u{1F4C1} sess1/\n\u2502   \u251C\u2500\u2500 \u{1F4C4} calib.toml\n\u2502   \u251C\u2500\u2500 \u{1F4C1} cam1/\n\u2502   \u2514\u2500\u2500 \u{1F4C1} cam2/\n\u2514\u2500\u2500 \u{1F4C1} sess2/\n    \u251C\u2500\u2500 \u{1F4C4} calib.toml\n    \u251C\u2500\u2500 \u{1F4C1} cam1/\n    \u2514\u2500\u2500 \u{1F4C1} cam2/',
             'multi-session'
         );
         // Not selectable from wizard (use Load Multi-Session Folder instead)
@@ -1491,7 +1545,16 @@ export function handleEmptySession() {
     }
 
     var sessionName = 'Session ' + (state.sessions.length + 1);
-    var skeleton = new Skeleton('skeleton', [], []);
+    // One skeleton per project: inherit the shared project skeleton so a
+    // manually-created empty session stays in sync with the others (matches
+    // handleLoadVideos / handleLoadCalibration). Only mint a fresh blank
+    // skeleton when this is the very first session, and register it via
+    // setProjectSkeleton so subsequent sessions share it.
+    var skeleton = buildRememberedSkeleton();
+    if (!skeleton) {
+        skeleton = new Skeleton('skeleton', [], []);
+        if (state.sessions.length === 0) setProjectSkeleton(skeleton);
+    }
     var session = new Session([], skeleton, ['track_0'], sessionName);
 
     state.sessions.push(session);
@@ -1608,12 +1671,17 @@ export async function handleLoadSessionFolderSingleSlp() {
         var skelData = slpData.skeleton || { name: 'skeleton', nodes: [], edges: [] };
         var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
 
-        // Override skeleton if skeleton.json is present
+        // Override skeleton if skeleton.json is present (same folder as
+        // calibration.toml). One skeleton per project — register it so it
+        // propagates to every session.
         if (skeletonFile) {
             try {
                 var skelText = await skeletonFile.text();
                 var loadedSkel = parseSkeletonJSON(skelText);
-                if (loadedSkel && loadedSkel.nodes.length > 0) skeleton = loadedSkel;
+                if (loadedSkel && loadedSkel.nodes.length > 0) {
+                    skeleton = loadedSkel;
+                    setProjectSkeleton(loadedSkel);
+                }
             } catch (e) { /* ignore */ }
         }
 
@@ -2346,13 +2414,14 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
-        // 4. Apply skeleton from SLP if session has empty skeleton
+        // 4. Apply skeleton from SLP if session has empty skeleton.
+        // One skeleton per project: propagate to ALL sessions (shared reference).
         if (state.session && skeletonFromSlp && state.session.skeleton.nodes.length === 0) {
-            state.session.skeleton = new Skeleton(
+            setProjectSkeleton(new Skeleton(
                 skeletonFromSlp.name || 'skeleton',
                 skeletonFromSlp.nodes || [],
                 skeletonFromSlp.edges || []
-            );
+            ));
         }
 
         // 5. Move all loaded instances to the unlinked pool.
@@ -2383,7 +2452,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 var skelText = await skeletonFile.text();
                 var loadedSkeleton = parseSkeletonJSON(skelText);
                 if (loadedSkeleton && loadedSkeleton.nodes.length > 0) {
-                    state.session.skeleton = loadedSkeleton;
+                    setProjectSkeleton(loadedSkeleton); // one skeleton per project
                     console.log('[session-folder] Overrode skeleton from ' + skeletonFile.name +
                         ': ' + loadedSkeleton.nodes.length + ' nodes, ' + loadedSkeleton.edges.length + ' edges');
                     setStatus('Loaded skeleton from ' + skeletonFile.name, 'success');

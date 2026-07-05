@@ -11,8 +11,15 @@ This is the headless half of `lucid-e2e` Stage 4. The browser produces the
 `.slp` files (LUCID's sleap-io.js serializer only runs in the browser); this
 script is what confirms the bytes are GUI-compatible afterwards.
 
-`sleap_io` is usually NOT on the default python path. Run it from the SLEAP repo
-via uv, which provisions the pinned sleap-io:
+`sleap_io` is usually NOT on the default python path. Two ways to provision it:
+
+Standalone (no SLEAP repo — pins the same sleap-io SLEAP 1.6.3 ships, 0.7.x):
+
+    uv run --with 'sleap-io>=0.7.0,<0.8.0' --with numpy python \
+        <luc3d>/scripts/validate_slp_sleap_compat.py \
+        /path/export_camA.slp /path/export_camB.slp
+
+Or from the SLEAP repo, which provisions its pinned sleap-io:
 
     cd <sleap-repo>          # e.g. /root/vast/joshua/sleap
     uv run python <luc3d>/scripts/validate_slp_sleap_compat.py \

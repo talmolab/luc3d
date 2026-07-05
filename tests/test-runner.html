@@ -67,6 +67,18 @@
             padding: 20px;
         }
     </style>
+    <!-- Export runtime for the SLP post-pass test: resolve sleap-io.js's bare
+         imports (paths are relative to tests/). Must precede the module script. -->
+    <script type="importmap">
+    {
+        "imports": {
+            "h5wasm": "../lib/h5wasm/hdf5_hl.js",
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
+            "mediabunny": "../lib/sleap-io/mediabunny-stub.js",
+            "pako": "../lib/pako/pako.esm.mjs"
+        }
+    }
+    </script>
 </head>
 <body>
     <h1>mv-gui Test Suite</h1>
@@ -159,6 +171,7 @@
 
     <!-- Multi-session export/import tests -->
     <script src="test-multi-session-export.js"></script>
+    <script src="test-multisession-scoping.js"></script>
 
     <!-- Reprojection lifecycle tests -->
     <script src="test-reprojection-lifecycle.js"></script>
@@ -220,6 +233,9 @@
     <!-- Quick save tests -->
     <script src="test-quick-save.js"></script>
 
+    <!-- SLP canonical export guard (raw saveSlpToBytes, post-5.2) -->
+    <script src="test-slp-export-canonical.js"></script>
+
     <!-- Rotation tests -->
     <script src="test-rotation.js"></script>
 
@@ -232,6 +248,12 @@
          (deferred) guarantees that ordering. -->
     <script type="module">
         import * as __PoseData from '../pose/pose-data.js';
+        // ui/app-state.js is dependency-free (imports NO project modules — it is
+        // the state/controller registry everything else imports). Safe to bridge,
+        // and required by the "One skeleton per project" tests which reference
+        // `state`, `setProjectSkeleton`, `getProjectSkeleton`,
+        // `buildRememberedSkeleton` as globals.
+        import * as __AppState from '../ui/app-state.js';
         // Pure (DOM-free) standalone .skeleton.json (de)serialization.
         import * as __SkeletonJSON from '../import-export/skeleton-json.js';
         import * as __Triangulation from '../pose/triangulation.js';
@@ -254,12 +276,30 @@
         // Pure (DOM-free) import-trackIdx resolver. Extracted from
         // session-loader.js (which pulls app.js) precisely so it's bridgeable.
         import * as __ImportTrackResolve from '../import-export/import-track-resolve.js';
-        Object.assign(window, __PoseData, __SkeletonJSON, __Triangulation, __Overlays,
+        Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
                               __LoadingProgressModal,
                               __TimelineCtrl, __TrackIdentityOps,
                               __ImportTrackResolve);
+
+        // sleap-io.js bridge for the SLP export post-pass test — mirrors the
+        // window.SleapIO bridge in index.html so test-slp-export-postpass.js can
+        // build model objects + call saveSlpToBytes. Kept under window.SleapIO
+        // (NOT spread onto window) so it never shadows the app's own Skeleton/
+        // Instance/Camera/... globals used by the other tests.
+        const __SIO = await import('../lib/sleap-io/index.browser.js');
+        window.SleapIO = {
+            Labels: __SIO.Labels, LabeledFrame: __SIO.LabeledFrame,
+            Instance: __SIO.Instance, PredictedInstance: __SIO.PredictedInstance,
+            Skeleton: __SIO.Skeleton, Node: __SIO.Node, Edge: __SIO.Edge,
+            Video: __SIO.Video, Track: __SIO.Track, saveSlpToBytes: __SIO.saveSlpToBytes,
+            readSlpStreaming: __SIO.readSlpStreaming,
+            Camera: __SIO.Camera, CameraGroup: __SIO.CameraGroup,
+            RecordingSession: __SIO.RecordingSession, InstanceGroup: __SIO.InstanceGroup,
+            FrameGroup: __SIO.FrameGroup, Identity: __SIO.Identity,
+            Instance3D: __SIO.Instance3D, PredictedInstance3D: __SIO.PredictedInstance3D,
+        };
         // Note: ui/ui-wiring.js, ui/identity-assignment.js, and ui/export-modals.js
         // are intentionally NOT bridged here. All three transitively import app.js
         // (circular, awaiting later passes), and app.js requires the full DOM +
