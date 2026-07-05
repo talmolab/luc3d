@@ -46,8 +46,9 @@ locally-vendored copy of `pako` (see below). The static bare-import set is uncha
 (`mediabunny`, `pako`, `yaml`), so the importmap needs no new entries. (`chunk-NIFGJKOL.js`
 and `chunk-YS7Q6CO6.js` keep the same hash-names — and the same bytes — as the 0.4.x/`main`
 builds; only the big container chunk changed, `P3K3Y4YO` → `PPF2ABAO`.) sleap-io's
-*internal* reader h5wasm (`0.10.2`) is a dynamic import inside its own worker; LUCID keeps
-its own h5wasm 0.8.8/local ESM.
+*internal* reader h5wasm is loaded by its own worker; LUCID points it (via
+`readSlpStreaming`'s `h5wasmUrl`) at its **local vendored h5wasm 0.10.3** IIFE — the same
+build the whole app uses (see `lib/h5wasm/PROVENANCE.txt`). No CDN h5wasm on any path.
 
 ### History
 
@@ -68,7 +69,7 @@ Three coordinated pieces:
 1. **Importmap** (`index.html`) — aliases the bundle's *static* bare imports:
    ```html
    <script type="importmap">{ "imports": {
-     "h5wasm":     "./lib/h5wasm/hdf5_hl.js",              // LUCID's local h5wasm (unlabeled; newer than the 0.8.8 CDN copy — exposes create_compound_dataset + get_dataset_data)
+     "h5wasm":     "./lib/h5wasm/hdf5_hl.js",              // LUCID's local vendored h5wasm 0.10.3 ESM (see lib/h5wasm/PROVENANCE.txt)
      "yaml":       "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
      "mediabunny": "./lib/sleap-io/mediabunny-stub.js"      // no-op stub (see below)
    }}</script>

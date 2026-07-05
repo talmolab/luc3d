@@ -24,7 +24,8 @@ python3 -m http.server 8080
 ## Dependencies (CDN only)
 - Three.js 0.147
 - mp4box.js
-- h5wasm 0.8.8 (WebAssembly HDF5)
+- h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
+  (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
 - sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to the
   **released npm package `@talmolab/sleap-io.js@0.5.0`** (gitHead `1918f9e`),
   which contains PR #196 (read-path perf) + PR #198 (lazy-native session model).
@@ -49,9 +50,10 @@ python3 -m http.server 8080
     (sleap-io >= 0.7, flat-matrix `field_names` interop). *Interop gate:
     `scripts/validate_slp_sleap_compat.py` (needs a SLEAP Python env).*
 
-  The reader's HDF5 I/O worker still loads h5wasm from a CDN default (`0.10.2` IIFE,
-  via `importScripts`); wiring a local IIFE h5wasm is the remaining h5wasm-consolidation
-  step. To rebuild/bump the
+  All h5wasm is now LUCID's local vendored 0.10.3 (PR 5.2b): the importmap `h5wasm`
+  → local ESM, the `index.html` `<script>` global + `readSlpStreaming`'s `h5wasmUrl`
+  → local IIFE, and the module workers import the local ESM — no CDN h5wasm fetch on
+  any path. To rebuild/bump the sleap-io.js
   bundle, follow `docs/VENDORING-sleap-io.md` (recipe + SHA-256 manifest + importmap
   derivation + `scripts/revendor-sleap-io.sh`).
 - All loaded via script tags / import maps in index.html

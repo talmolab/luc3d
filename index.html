@@ -13,8 +13,8 @@
     <!-- Three.js for 3D viewport (v0.147 is the last version with examples/js/) -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-    <!-- h5wasm for in-browser HDF5 read/write (pinned to 0.8.8, matching slp-viewer) -->
-    <script src="https://cdn.jsdelivr.net/npm/h5wasm@0.8.8/dist/iife/h5wasm.js"></script>
+    <!-- h5wasm for in-browser HDF5 read/write — local vendored 0.10.3 IIFE (global `h5wasm`); see lib/h5wasm/PROVENANCE.txt -->
+    <script src="./lib/h5wasm/h5wasm.iife.js"></script>
     <!-- mp4-muxer: muxes WebCodecs-encoded H.264 frames into .mp4 (3D video export). Local copy, exposes global Mp4Muxer. -->
     <script src="./lib/mp4-muxer/mp4-muxer.js"></script>
     <!-- Import map for sleap-io.js ESM dependencies -->

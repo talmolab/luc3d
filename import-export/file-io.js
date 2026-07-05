@@ -2227,24 +2227,20 @@ export function parseSlpH5(file, onProgress) {
  * NOT `numpy()` which zeroes invisible points to NaN — see
  * scratch/.../12-import-consumer-spec.md §3).
  *
- * The `sessions[]` payload (LUCID's calibration + InstanceGroup grouping +
- * `metadata.lucid`) is taken **verbatim** from `labels.rawSessionsJson`
- * (Option A): the reader deep-clones each session's on-disk `sessions_json`
- * entry, which is byte-identical to what the raw worker produced, so
- * `reconstructInstanceGroupsFromDicts` consumes it 1:1 with guaranteed parity.
- * (The typed session model drops LUCID's per-session `identity_idx`, so the raw
- * dict remains the authoritative grouping source — see 13-pr51-probe-findings.md.)
+ * Each `sessions[]` entry is the verbatim on-disk `sessions_json` dict (for the
+ * direct calibration / video-map / `metadata.lucid` reads in handleLoadSlpFile)
+ * PLUS a `_typedSession` ref (the typed `RecordingSession`). Grouping is rebuilt
+ * from that typed session by `reconstructInstanceGroupsFromSession`, which reads
+ * both LUCID's legacy and the new canonical `sessions_json` (the raw dict is kept
+ * for the legacy per-group `identity_idx` fallback — see 13-pr51-probe-findings.md).
  *
  * The reader's own HDF5 I/O worker loads `h5wasm` via `importScripts`, so it
- * needs an **IIFE** build and falls back to its baked-in CDN default
- * (`h5wasm@0.10.2/dist/iife/`) — LUCID's local `lib/h5wasm/hdf5_hl.js` is an ESM
- * and can't satisfy `importScripts`. Wiring a LOCAL IIFE h5wasm (via `h5wasmUrl`)
- * is deferred to PR 5.2's h5wasm consolidation; for 5.1 the CDN default is
- * consistent with LUCID's existing CDN `h5wasm@0.8.8` (index.html) dependency.
- * Passing the `File` directly lets the reader stream (range reads) instead of
- * buffering the whole file. Runs on the calling (main) thread — the reader spins
- * its OWN worker for HDF5 I/O, so this must NOT be called from inside another
- * worker (nested workers are unsupported on older Safari).
+ * needs an **IIFE** build — pointed at LUCID's LOCAL vendored `h5wasm.iife.js`
+ * (0.10.3) via `h5wasmUrl`, so no h5wasm is fetched from a CDN (PR 5.2b h5wasm
+ * consolidation). Passing the `File` directly lets the reader stream (range
+ * reads) instead of buffering the whole file. Runs on the calling (main) thread —
+ * the reader spins its OWN worker for HDF5 I/O, so this must NOT be called from
+ * inside another worker (nested workers are unsupported on older Safari).
  *
  * NOTE: `loadAnalysisH5` (SLEAP `.analysis.h5`) and embedded-frame extraction
  * are NOT covered by `readSlpStreaming`; callers keep `parseSlpH5` for those
@@ -2266,7 +2262,11 @@ export async function parseSlpViaSleapIO(file, onProgress) {
 
     var labels = await SIO.readSlpStreaming(file, {
         openVideos: false,
-        rawSessions: true, // capture verbatim sessions_json (Option A grouping source)
+        rawSessions: true, // capture verbatim sessions_json (legacy-identity fallback)
+        // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
+        // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
+        // this correct on sub-path deployments (GitHub Pages /luc3d/...).
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
