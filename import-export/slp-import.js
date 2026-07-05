@@ -13,7 +13,7 @@ import {
     storeReprojectedInstances, getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
 import {
-    parseSlpH5, instancePointsMatch, parsePoints3dH5, pickFiles,
+    parseSlpH5, parseSlpViaSleapIO, instancePointsMatch, parsePoints3dH5, pickFiles,
 } from './file-io.js';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
@@ -52,6 +52,29 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+
+/**
+ * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
+ * sleap-io.js's streaming reader (`parseSlpViaSleapIO` — lands PR #196's read
+ * speedup + a typed pose transform) and keeps the raw-h5wasm worker
+ * (`parseSlpH5`) for SLEAP analysis `.h5` files and as a fallback if the typed
+ * reader throws (e.g. a non-standard split-field export it cannot read). Both
+ * resolve to the identical `slpData` shape, so every consumer below is unchanged.
+ *
+ * @param {File} file
+ * @param {(msg:string)=>void} onProgress
+ * @returns {Promise<Object>} slpData
+ */
+async function parseSlpForImport(file, onProgress) {
+    if (/\.slp$/i.test(file.name || '')) {
+        try {
+            return await parseSlpViaSleapIO(file, onProgress);
+        } catch (err) {
+            console.warn('[slp-import] sleap-io.js streaming read failed — falling back to the raw h5wasm worker:', err);
+        }
+    }
+    return await parseSlpH5(file, onProgress);
+}
 
 /**
  * Reconstruct InstanceGroups (and their member Instances) for one session from
@@ -197,6 +220,160 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
     return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
 }
 
+/**
+ * Typed analog of `reconstructInstanceGroupsFromDicts` (PR 5.2). Rebuilds a
+ * session's InstanceGroups from sleap-io.js's TYPED `RecordingSession` instead of
+ * the raw `frame_group_dicts`. Required because the canonical `sessions_json`
+ * LUCID writes post-5.2 (calibration keyed `cam_N`, 4-element points) is NOT
+ * readable by the dict reconstructor — but the typed model normalizes both the
+ * old LUCID shape AND the new canonical shape into `InstanceGroup.instanceByCamera`
+ * (verified: 13-pr51-probe-findings.md).
+ *
+ * Sources, per group:
+ * - per-camera 2D from `InstanceGroup.instanceByCamera` (Camera→typed Instance):
+ *   points from `inst._xy` (null when non-finite), occlusion from `inst._visible`
+ *   (NOT `numpy()`), keyed by `camera.name` (== the LUCID session camera name).
+ * - authoritative per-instance metadata (trackIdx/type/score/modified/nulledNodes)
+ *   from `ig.metadata.lucid.instanceMeta[camName]`.
+ * - 3D from `ig.instance3d.points`.
+ * - per-session `identityId` from `ig.metadata.lucid.identityId` (5.2+, authoritative
+ *   per-session), falling back to the matching raw dict's `identity_idx` for legacy
+ *   files (both are per-session; the canonical file-level `ig.identity`/`identity_idx`
+ *   are NOT used — they resolve against the cross-session concat and mis-scope).
+ *
+ * @param {Session} session - LUCID session whose frameGroups hold pass-1 raw instances
+ * @param {Object} typedSession - sleap-io.js RecordingSession (with frameGroups Map)
+ * @param {Object|null} rawSession - the verbatim sessions_json dict (legacy identity fallback)
+ * @param {string[]} nodeNames - skeleton node names (point-array length)
+ * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
+ * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
+ */
+export async function reconstructInstanceGroupsFromSession(session, typedSession, rawSession, nodeNames, opts) {
+    opts = opts || {};
+    var numNodes = nodeNames.length;
+    var BATCH = opts.batch || 20000;
+    var onProgress = opts.onProgress || function () {};
+    var restoredGroups = 0, restoredWith3d = 0;
+
+    // Index the legacy raw frame_group_dicts by frame index for the identity
+    // fallback (only consulted when metadata.lucid.identityId is absent).
+    var rawFgByFrame = new Map();
+    var rawFgds = (rawSession && rawSession.frame_group_dicts) || [];
+    for (var rfi = 0; rfi < rawFgds.length; rfi++) {
+        var rfd = rawFgds[rfi];
+        var rfIdx = rfd.frame_idx != null ? rfd.frame_idx : (rfd.frameIdx != null ? rfd.frameIdx : null);
+        if (rfIdx != null) rawFgByFrame.set(rfIdx, rfd);
+    }
+
+    var fgEntries = Array.from(typedSession.frameGroups.entries());
+    for (var fei = 0; fei < fgEntries.length; fei++) {
+        var typedFg = fgEntries[fei][1];
+        var fgFrameIdx = typedFg.frameIdx != null ? typedFg.frameIdx : fgEntries[fei][0];
+        var typedIGs = typedFg.instanceGroups || [];
+        if (typedIGs.length === 0) continue;
+
+        var fg3 = session.frameGroups.get(fgFrameIdx);
+        if (!fg3) {
+            fg3 = new FrameGroup(fgFrameIdx);
+            session.addFrameGroup(fg3);
+        }
+        var rawFg = rawFgByFrame.get(fgFrameIdx) || null;
+
+        var groups = [];
+        for (var igi = 0; igi < typedIGs.length; igi++) {
+            var typedIG = typedIGs[igi];
+            var igLucid = (typedIG.metadata && typedIG.metadata.lucid) || {};
+            var instanceMetaMap = igLucid.instanceMeta || {};
+
+            // Per-session identity: prefer metadata.lucid.identityId (5.2+),
+            // else the legacy raw dict's identity_idx (both per-session).
+            var identityId = -1;
+            if (igLucid.identityId != null) {
+                identityId = igLucid.identityId;
+            } else {
+                var rawIG = rawFg && rawFg.instance_groups && rawFg.instance_groups[igi];
+                if (rawIG && rawIG.identity_idx != null) identityId = rawIG.identity_idx;
+            }
+            if (identityId >= 0 && identityId >= session.identities.length) {
+                console.warn('[load-slp] identity_idx ' + identityId + ' is out of bounds (only ' + session.identities.length + ' identities loaded) — dropping identity assignment');
+                identityId = -1;
+            }
+
+            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
+
+            for (var camEntry of typedIG.instanceByCamera) {
+                var typedCam = camEntry[0];
+                var typedInst = camEntry[1];
+                var igCamName = (typedCam && typedCam.name) || '';
+
+                // Points from typed columnar _xy; occlusion from _visible. NOT
+                // numpy() (which zeroes invisible points to NaN and would drop
+                // occluded-but-placed keypoints).
+                var xy = typedInst._xy;
+                var vis = typedInst._visible;
+                var points = new Array(numNodes);
+                var occluded = new Array(numNodes);
+                for (var ni = 0; ni < numNodes; ni++) {
+                    var x = (xy && 2 * ni + 1 < xy.length) ? xy[2 * ni] : NaN;
+                    var y = (xy && 2 * ni + 1 < xy.length) ? xy[2 * ni + 1] : NaN;
+                    if (isFinite(x) && isFinite(y)) {
+                        points[ni] = [x, y];
+                        occluded[ni] = !(vis && vis[ni]);
+                    } else {
+                        points[ni] = null;
+                        occluded[ni] = false;
+                    }
+                }
+
+                var instMeta = instanceMetaMap[igCamName] || {};
+                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : null;
+                var instType = instMeta.type || 'predicted';
+                var instScore = instMeta.score || 0;
+
+                var inst = new Instance(points, instTrackIdx, instType, instScore);
+                inst.occluded = occluded;
+                inst.modified = instMeta.modified || false;
+                if (instMeta.nulledNodes) {
+                    inst.nulledNodes = new Set(instMeta.nulledNodes);
+                }
+
+                // Remove the matching pass-1 raw-SLP duplicate for this
+                // frame/cam (same rationale as reconstructInstanceGroupsFromDicts).
+                var _dupCamInsts = fg3.instances.get(igCamName);
+                if (_dupCamInsts && _dupCamInsts.length > 0) {
+                    for (var _dpi = 0; _dpi < _dupCamInsts.length; _dpi++) {
+                        if (instancePointsMatch(_dupCamInsts[_dpi].points, points)) {
+                            _dupCamInsts.splice(_dpi, 1);
+                            break;
+                        }
+                    }
+                }
+
+                group.addInstance(igCamName, inst);
+                fg3.addInstance(igCamName, inst);
+            }
+
+            // Restore 3D points from the typed Instance3D.
+            var i3d = typedIG.instance3d;
+            if (i3d && Array.isArray(i3d.points) && i3d.points.length > 0) {
+                group.points3d = i3d.points;
+                restoredWith3d++;
+            }
+
+            groups.push(group);
+            restoredGroups++;
+        }
+
+        session.instanceGroups.set(fgFrameIdx, groups);
+
+        if (fei > 0 && fei % BATCH === 0) {
+            onProgress('Rebuilding instance groups (' + fei + '/' + fgEntries.length + ')...');
+            await new Promise(function (r) { setTimeout(r, 0); });
+        }
+    }
+    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
+}
+
 export async function handleLoadSlpFile(slpFile) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
@@ -211,10 +388,11 @@ export async function handleLoadSlpFile(slpFile) {
         showLoading('Reading SLP file (' + (slpFile.size / 1024 / 1024).toFixed(1) + ' MB)...');
         console.log('[load-slp] SLP:', slpFile.name);
 
-        // Parse in Web Worker (non-blocking)
+        // Parse via sleap-io.js streaming reader (raw worker for analysis .h5 /
+        // as fallback) — both yield the identical slpData shape.
         var slpData;
         try {
-            slpData = await parseSlpH5(slpFile, function (msg) {
+            slpData = await parseSlpForImport(slpFile, function (msg) {
                 showLoading(msg);
             });
         } catch (parseErr) {
@@ -508,11 +686,17 @@ export async function handleLoadSlpFile(slpFile) {
                     ? '(per-session metadata)' : '(global fallback)');
         }
 
-        // Build InstanceGroups from sessions_json if available (preserves
-        // identity-based grouping), otherwise fall back to track-based grouping
-        var hasSessionData = slpData.sessions && slpData.sessions.length > slpSessIdx
-            && slpData.sessions[slpSessIdx].frame_group_dicts
-            && slpData.sessions[slpSessIdx].frame_group_dicts.length > 0;
+        // Build InstanceGroups from session data if available (preserves
+        // identity-based grouping), otherwise fall back to track-based grouping.
+        // The sleap-io.js streaming path attaches a typed RecordingSession
+        // (`_typedSession`) and reconstructs grouping from it (reads both LUCID's
+        // legacy and the new canonical sessions_json); the raw-worker fallback
+        // has only `frame_group_dicts` and uses the dict reconstructor.
+        var _sessData2 = (slpData.sessions && slpData.sessions.length > slpSessIdx)
+            ? slpData.sessions[slpSessIdx] : null;
+        var hasTypedSession = !!(_sessData2 && _sessData2._typedSession);
+        var hasSessionData = hasTypedSession
+            || !!(_sessData2 && _sessData2.frame_group_dicts && _sessData2.frame_group_dicts.length > 0);
 
         if (hasSessionData) {
             // === Reconstruct InstanceGroups from sessions_json ===
@@ -546,9 +730,16 @@ export async function handleLoadSlpFile(slpFile) {
                 return typeof n === 'string' ? n : (n.name || '');
             });
 
-            var _recon = await reconstructInstanceGroupsFromDicts(
-                session, fgDicts, camKeyToName, nodeNames,
-                { onProgress: function (msg) { showLoading(msg); } });
+            var _recon;
+            if (hasTypedSession) {
+                _recon = await reconstructInstanceGroupsFromSession(
+                    session, sessData2._typedSession, sessData2, nodeNames,
+                    { onProgress: function (msg) { showLoading(msg); } });
+            } else {
+                _recon = await reconstructInstanceGroupsFromDicts(
+                    session, fgDicts, camKeyToName, nodeNames,
+                    { onProgress: function (msg) { showLoading(msg); } });
+            }
             console.log('[load-slp] Rebuilt', _recon.restoredGroups, 'instance groups from session data,', _recon.restoredWith3d, 'with 3D points');
 
             // Migrate legacy global identities to per-frame now that groups exist.
@@ -1220,7 +1411,7 @@ export async function handleAddSlp() {
 
         var slpData;
         try {
-            slpData = await parseSlpH5(slpFile, function (msg) {
+            slpData = await parseSlpForImport(slpFile, function (msg) {
                 showLoading(msg);
             });
         } catch (parseErr) {
