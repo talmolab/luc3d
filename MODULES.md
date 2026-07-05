@@ -1885,18 +1885,18 @@ type, points, occluded}`, LRU-cached), `prefetch`, `close`; fields `nFrames`,
 scope — timeline track bars are deferred), and `isSync = true` (so
 `batchLoadLazyFrames` takes its worker-free path).
 
-Memory-bounding primitives (phase-5 full pipeline): `releaseFrame(frameIdx)` /
-`releaseWindow(start, end)` drop a frame (or half-open range) from BOTH the
-loader's own adapted-dict LRU AND each camera's underlying sleap-io.js
-`Labels._lazyFrameList.cache` — the otherwise-unbounded typed-frame Map that
-`frameAt(row)` fills and that has no upstream release API (`store.materializeFrame`
-rebuilds on next access, so dropping is safe). `capInternalCaches(currentFrame,
-maxKeep)` prunes those internal caches to frames near the current one (the internal
-analog of `evictLazyFrames`, which only prunes `session.frameGroups`); called on the
-eviction tick. `close()` now also clears the internal caches. These back the
-windowed triangulate-all sweep (`sweepTriangulationFrames`, `ui/export-modals.js`)
-and future streaming export. All reach the `_lazyFrameList` private field
-defensively (existence-guarded) so a bundle bump can't throw.
+Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
+`labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds
+its internal typed-frame cache automatically. `releaseFrame(frameIdx)` /
+`releaseWindow(start, end)` explicitly drop a frame (or half-open range) from BOTH
+the loader's adapted-dict LRU AND each camera's lazy `Labels` — via the **public**
+`labels.releaseFrame(row)` API (row = the camera's videoFrameIdx→store-row), the
+prompt release used by the windowed triangulate-all / streaming-export sweeps
+(`sweepTriangulationFrames`, `ui/export-modals.js`). `store.materializeFrame`
+rebuilds a dropped frame on next access, so release is safe. These use the public
+frame-release API from sleap-io.js PR #208 — replacing the earlier private
+`_lazyFrameList.cache` reach-in and manual `capInternalCaches` (now redundant, so
+`evictLazyFrames` no longer calls it).
 
 **Imports.** `window.SleapIO.readSlpStreaming` (via the index.html bridge) and the
 local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).
