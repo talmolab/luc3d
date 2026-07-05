@@ -26,14 +26,14 @@ python3 -m http.server 8080
 - mp4box.js
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
-- sleap-io.js — vendored browser bundle in `lib/sleap-io/`, currently at
-  **`@talmolab/sleap-io.js@0.5.1`** (adds `readSlpStreaming({ lazy })` — a
-  columnar/on-demand mode of the streaming reader; see sleap-io.js PR #203). This
-  is a **pre-release vendor built from that PR branch**; finalize the pin
-  (gitHead + SHA-256 manifest) after 0.5.1 is published and re-vendored from npm.
-  0.5.0 (gitHead `1918f9e`) contained PR #196 (read-path perf) + PR #198
-  (lazy-native session model). The lazy streaming reader backs `SioLazyLoader`
-  (`loading/sio-lazy-loader.js`) for large prediction `.slp` session loads.
+- sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to the
+  **released npm package `@talmolab/sleap-io.js@0.5.1`** (gitHead `bd12bcc`),
+  which adds `readSlpStreaming({ lazy })` — a columnar/on-demand mode of the
+  streaming reader (sleap-io.js PR #203) — on top of 0.5.0's PR #196 (read-path
+  perf) + PR #198 (lazy-native session model). The vendored bytes are
+  byte-identical to the published npm `dist/`. The lazy streaming reader backs
+  `SioLazyLoader` (`loading/sio-lazy-loader.js`) for large prediction `.slp`
+  session loads.
   Its `pako`
   dep is vendored at `lib/pako/` and `mediabunny`
   is stubbed (`lib/sleap-io/mediabunny-stub.js`); both are aliased in the `index.html`

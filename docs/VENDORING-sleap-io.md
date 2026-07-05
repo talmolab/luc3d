@@ -9,16 +9,17 @@ recipe** for rebuilding it when bumping the version.
 
 ## What is pinned
 
-Pinned to the **released npm package [`@talmolab/sleap-io.js@0.5.0`](https://www.npmjs.com/package/@talmolab/sleap-io.js)**
-(gitHead `1918f9e`), which contains **PR #196** ("perf: SLP read path") **and PR #198**
-("faithful lazy-native recording-session model"). This is a **tagged release** — it
-retires the earlier experimental moving-`main` pin (`07b0830`). Revert to a prior version
-with `npm pack @talmolab/sleap-io.js@<version>` (see recipe below).
+Pinned to the **released npm package [`@talmolab/sleap-io.js@0.5.1`](https://www.npmjs.com/package/@talmolab/sleap-io.js)**
+(gitHead `bd12bcc`), which adds **PR #203** ("lazy mode for the streaming reader",
+`readSlpStreaming({ lazy })`) on top of 0.5.0's **PR #196** ("perf: SLP read path")
+**and PR #198** ("faithful lazy-native recording-session model"). This is a **tagged
+release**; the vendored bytes are byte-identical to the published npm `dist/`. Revert to
+a prior version with `npm pack @talmolab/sleap-io.js@<version>` (see recipe below).
 
 | | |
 |---|---|
 | Source package | `@talmolab/sleap-io.js` (npm) |
-| Version | **`0.5.0`** (gitHead `1918f9e`) — released, from npm |
+| Version | **`0.5.1`** (gitHead `bd12bcc`) — released, from npm |
 | Build toolchain | `tsup` (esbuild) — prebuilt in the npm tarball's `dist/` |
 | Runtime deps aliased | `h5wasm` → local, `yaml` → CDN, `mediabunny` → local stub, **`pako` → local** |
 
@@ -26,17 +27,17 @@ with `npm pack @talmolab/sleap-io.js@<version>` (see recipe below).
 
 The npm `dist/` ships node + browser + lite builds; LUCID vendors only the **browser
 entry and its transitive closure**: `index.browser.js` imports `chunk-NIFGJKOL.js`,
-`chunk-PPF2ABAO.js`, `chunk-YS7Q6CO6.js`; two of those reference `gdrive-6DDSPUUK.js`
+`chunk-DX7RZTFP.js`, `chunk-YS7Q6CO6.js`; two of those reference `gdrive-6DDSPUUK.js`
 (a dynamic Google-Drive chunk LUCID never triggers, kept so the dynamic import resolves).
 The node-only chunks (`index.js`, `lite.js`, and 0.4.x's `chunk-KIMQQ2HE/VJKU6LLW/XMK3JNEP`)
 are **not** vendored.
 
-### SHA-256 manifest (0.5.0, from the npm tarball)
+### SHA-256 manifest (0.5.1, from the npm tarball)
 
 ```
-09dba915b34880fbe17309e9034692f3db8f5483d96ee96043a34167b2c0bc64  index.browser.js
+527e734e3897b50c883407409214f1ab20354bbaaac1000e9158faadcce3688a  index.browser.js
+4b647d54e7a32b8d1c278f74396fe945573cc71e0d284a28e0070997b00416fd  chunk-DX7RZTFP.js
 9461cf151dd672cf2020f092c934800b0a0d801cb51732775562896bba930368  chunk-NIFGJKOL.js
-bcd2b4b951004579d88f6486041d8413fc58be2adfa4bf14e77a4a0945045e05  chunk-PPF2ABAO.js
 e3b10f994ee279f993a043b3a57f9fa7596f6f472eec2a33b6f642aad0dbd65b  chunk-YS7Q6CO6.js
 d2525cde72767bc6f4d55435d88efde54c93fe73be3e3ffd669f5c9d2fe48d46  gdrive-6DDSPUUK.js
 ```
@@ -44,14 +45,19 @@ d2525cde72767bc6f4d55435d88efde54c93fe73be3e3ffd669f5c9d2fe48d46  gdrive-6DDSPUU
 `mediabunny-stub.js` is **hand-written** (not emitted by the build). `lib/pako/` is a
 locally-vendored copy of `pako` (see below). The static bare-import set is unchanged
 (`mediabunny`, `pako`, `yaml`), so the importmap needs no new entries. (`chunk-NIFGJKOL.js`
-and `chunk-YS7Q6CO6.js` keep the same hash-names — and the same bytes — as the 0.4.x/`main`
-builds; only the big container chunk changed, `P3K3Y4YO` → `PPF2ABAO`.) sleap-io's
+and `chunk-YS7Q6CO6.js` keep the same hash-names — and the same bytes — across 0.5.0/0.5.1;
+only the big container chunk changed, `PPF2ABAO` → `DX7RZTFP` for the `readSlpStreaming({ lazy })`
+addition.) sleap-io's
 *internal* reader h5wasm is loaded by its own worker; LUCID points it (via
 `readSlpStreaming`'s `h5wasmUrl`) at its **local vendored h5wasm 0.10.3** IIFE — the same
 build the whole app uses (see `lib/h5wasm/PROVENANCE.txt`). No CDN h5wasm on any path.
 
 ### History
 
+- **`0.5.0`** (tag `1918f9e`) — the pin before 0.5.1; PR #196 + #198, before the
+  `readSlpStreaming({ lazy })` addition. SHA-256: `09dba91…` index.browser.js /
+  `bcd2b4b…` chunk-PPF2ABAO.js (`chunk-NIFGJKOL.js`/`chunk-YS7Q6CO6.js` bytes carried
+  forward unchanged into 0.5.1).
 - **`07b0830`** (unreleased `main`, PR #196 + #198) — the experimental pin superseded by
   0.5.0. SHA-256: `79b40e1…` index.browser.js / `895cf7d…` chunk-P3K3Y4YO.js.
 - **`v0.4.1`** (tag `8427072`) — the last *released* pin before 0.5.0.
