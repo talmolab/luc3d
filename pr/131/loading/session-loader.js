@@ -38,8 +38,9 @@ import {
 import { resolveImportTrackIdx } from '../import-export/import-track-resolve.js';
 
 import {
-    LazyFrameLoader, shouldUseLazyH5, getInstanceGroupsForFrame,
+    LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
+import { SioLazyLoader } from './sio-lazy-loader.js';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
@@ -2173,7 +2174,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         + bestSlp.name + '" (highest version), skipping '
                         + (camDir.slps.length - 1) + ' older file(s).');
                 }
-                if (shouldUseLazyH5(bestSlp)) {
+                if (shouldUseLazyH5(bestSlp) || shouldUseLazySlp(bestSlp)) {
                     lazyJobs.push({ camName: camDir.camName, file: bestSlp });
                 } else {
                     parseJobs.push({
@@ -2185,14 +2186,30 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
-        // Open lazy H5 files (metadata only — fast)
+        // Open lazy files (metadata only — fast). Large `.slp` predictions use the
+        // sleap-io.js streaming lazy reader (SioLazyLoader); SLEAP analysis `.h5`
+        // use the worker-backed LazyFrameLoader. A session folder is normally
+        // homogeneous; pick the reader by the lazy jobs' extension.
         var lazyLoader = null;
         if (lazyJobs.length > 0) {
-            lazyLoader = new LazyFrameLoader();
-            showLoading('Opening ' + lazyJobs.length + ' large H5 files (lazy mode)...');
-            await Promise.all(lazyJobs.map(function (job) {
-                return lazyLoader.open(job.camName, job.file);
-            }));
+            var lazyAreSlp = lazyJobs.every(function (job) {
+                return /\.slp$/i.test(job.file.name);
+            });
+            lazyLoader = lazyAreSlp ? new SioLazyLoader() : new LazyFrameLoader();
+            showLoading('Opening ' + lazyJobs.length + ' large '
+                + (lazyAreSlp ? 'SLP' : 'H5') + ' file(s) (lazy mode)...');
+            try {
+                await Promise.all(lazyJobs.map(function (job) {
+                    return lazyLoader.open(job.camName, job.file);
+                }));
+            } catch (lazyErr) {
+                // Do NOT fall back to eager parseSlpH5 — a 100+ MB file would OOM
+                // the tab (the very thing lazy mode avoids). Surface the error.
+                console.error('[session-folder] Lazy load failed:', lazyErr);
+                hideLoading();
+                setStatus('Failed to load annotations (lazy): ' + (lazyErr && lazyErr.message || lazyErr), 'error');
+                return;
+            }
         }
 
         var parseResults = await Promise.all(parseJobs.map(function (j) { return j.promise; }));
