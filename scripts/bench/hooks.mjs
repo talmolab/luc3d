@@ -24,6 +24,14 @@ const THRESHOLD_DEFAULTS = {
     reprojGate2: 100,
     reprojGate3: 140,
     reprojGate4: 180,
+    track3dWeight: 1,
+    filterMinVisibleNodes: 0,
+    filterMinInstanceScore: 0,
+    corr2dWeight: 1,
+    corr3dWeight: 6,
+    velocityThreshold: 10,
+    distanceThreshold: 50,
+    timePenalty: 0.1,
 };
 
 const SETTINGS_STUB = `
@@ -49,6 +57,14 @@ export function getTrackingThresholds() {
     const out = {};
     for (const id in THRESHOLD_DEFAULTS) out[id] = getTrackingThreshold(id);
     return out;
+}
+
+// Camera tracking-inclusion. The bench passes an explicit filtered camera list to
+// runCrossViewTracker, so this only needs to exist for tracker.js's import to
+// link; honor an optional __BENCH.excludedCameras set for completeness.
+export function isCameraTracked(name) {
+    const ex = (globalThis.__BENCH && globalThis.__BENCH.excludedCameras) || [];
+    return ex.indexOf(name) < 0;
 }
 `;
 

@@ -53,7 +53,14 @@
 
             // 8. Triangulate (if available)
             if (typeof triangulateAndReproject === 'function') {
-                const result = triangulateAndReproject(group, [cam1, cam2]);
+                // Pass explicit options so this test is deterministic regardless of
+                // persisted Tracking Wizard state: triangulateAndReproject now honors
+                // the Camera-Views exclusion (isCameraTracked, backed by localStorage)
+                // and the reprojection-error threshold. Force all views in + RPE off
+                // so a saved exclusion of a same-named camera ('back'/'side') can't
+                // drop a view and null a point here.
+                const result = triangulateAndReproject(group, [cam1, cam2],
+                    { includedCameras: ['back', 'side'], reprojErrorThreshold: 0 });
                 assertNotNull(result.points3d, 'Should produce 3D points');
                 assertEqual(result.points3d.length, 3, 'Should have 3 keypoints');
 

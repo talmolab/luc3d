@@ -18,10 +18,13 @@ import {
     formatBinding,
     getNodeWeight,
     setNodeWeights,
+    getCameraWeight,
+    setCameraWeights,
     getTrackingThresholdDefs,
     setTrackingThresholds,
 } from './settings.js';
-import { getActiveSession } from './app-state.js';
+import { getActiveSession, state, timeline } from './app-state.js';
+import { drawAllOverlays } from './rendering.js';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -72,19 +75,29 @@ export function showSettingsModal(initialPanel) {
         method: getDefaultTriangulationMethod(),
         keyMap: {},
         nodeWeights: {},
+        cameraWeights: {},
         thresholds: {},
     };
     const actions = getActions();
     // Only editable actions are user-rebindable; the working map tracks those.
     actions.forEach(function (a) { if (a.editable) working.keyMap[a.id] = a.binding; });
 
+    const activeSession = getActiveSession();
+
     // Seed the working node-weight map from the active session's skeleton, if any.
     // Keyed by node name; values are the current effective weight (default 1).
-    const activeSession = getActiveSession();
     const skeletonNodes = (activeSession && activeSession.skeleton && Array.isArray(activeSession.skeleton.nodes))
         ? activeSession.skeleton.nodes.slice()
         : [];
     skeletonNodes.forEach(function (name) { working.nodeWeights[name] = getNodeWeight(name); });
+
+    // Seed the working camera-inclusion map from the active session's cameras, if
+    // any. Keyed by camera name; values are 0 (excluded from tracking) or 1
+    // (included, the default).
+    const cameraNames = (activeSession && Array.isArray(activeSession.cameras))
+        ? activeSession.cameras.map(function (c) { return c.name; })
+        : [];
+    cameraNames.forEach(function (name) { working.cameraWeights[name] = getCameraWeight(name); });
 
     // Seed the working tracking-threshold map from the catalog's effective values.
     const thresholdDefs = getTrackingThresholdDefs();
@@ -356,9 +369,10 @@ export function showSettingsModal(initialPanel) {
     wizPanel.appendChild(wizTitle);
 
     // --- Node Weights section --------------------------------------------
-    // Each skeleton node gets a 0–1 weight controlling how much it counts in the
-    // tracking cost (epipolar, reprojection, instance distance). 1 = full weight,
-    // 0 = ignored entirely. Edits mutate working.nodeWeights; committed on Apply.
+    // Each skeleton node gets a 0–1 weight scaling how much it counts in the
+    // CrossViewTracker's association cost (2D reprojection + 3D point-to-ray).
+    // 1 = full weight, 0 = the node is dropped from matching. Edits mutate
+    // working.nodeWeights; committed on Apply.
     const nwCategory = document.createElement('div');
     nwCategory.className = 'settings-kbd-category';
     nwCategory.textContent = 'Node Weights';
@@ -368,8 +382,9 @@ export function showSettingsModal(initialPanel) {
     nwHint.className = 'settings-kbd-hint';
     nwHint.style.marginTop = '0';
     nwHint.style.marginBottom = '8px';
-    nwHint.textContent = 'Weight of each skeleton node in the tracking algorithm (0–1). ' +
-        '1 = fully considered (epipolar cost, reprojection, …); 0 = ignored. Changes apply when you click Apply.';
+    nwHint.textContent = 'Weight of each skeleton node in the cross-view matching cost (0–1). ' +
+        '1 = fully considered (2D reprojection + 3D point-to-ray); 0 = ignored during tracking. ' +
+        'Changes apply when you click Apply.';
     wizPanel.appendChild(nwHint);
 
     if (skeletonNodes.length === 0) {
@@ -379,7 +394,7 @@ export function showSettingsModal(initialPanel) {
         wizPanel.appendChild(nwEmpty);
     } else {
         // Compact, scrollable multi-column table so long skeletons don't push the
-        // Tracking Thresholds section off-screen.
+        // rest of the wizard off-screen.
         const nwList = document.createElement('div');
         nwList.className = 'settings-node-weight-list';
         wizPanel.appendChild(nwList);
@@ -401,11 +416,17 @@ export function showSettingsModal(initialPanel) {
             input.value = String(working.nodeWeights[name]);
             input.setAttribute('aria-label', 'Weight for node ' + name);
 
+            // Grey the row out when the node is dropped (weight 0).
+            function reflectDropped() {
+                row.classList.toggle('settings-view-excluded', working.nodeWeights[name] === 0);
+            }
+
             // Keep the working map in sync as the user types. Empty/invalid input
             // is tolerated mid-edit; clamping to [0,1] happens on blur and on Apply.
             input.addEventListener('input', function () {
                 const v = parseFloat(input.value);
                 if (isFinite(v)) working.nodeWeights[name] = v;
+                reflectDropped();
             });
             input.addEventListener('blur', function () {
                 let v = parseFloat(input.value);
@@ -414,11 +435,86 @@ export function showSettingsModal(initialPanel) {
                 if (v > 1) v = 1;
                 working.nodeWeights[name] = v;
                 input.value = String(v);
+                reflectDropped();
             });
 
+            reflectDropped();
             row.appendChild(label);
             row.appendChild(input);
             nwList.appendChild(row);
+        });
+    }
+
+    // --- Camera Views section --------------------------------------------
+    // Each camera view gets a binary 0/1 weight controlling whether it takes part
+    // in cross-view tracking. 1 = included; 0 = excluded from the association math
+    // (the view stays visible/editable in the GUI). Excluded rows are greyed out.
+    // Edits mutate working.cameraWeights; committed on Apply.
+    const cvCategory = document.createElement('div');
+    cvCategory.className = 'settings-kbd-category';
+    cvCategory.textContent = 'Camera Views';
+    wizPanel.appendChild(cvCategory);
+
+    const cvHint = document.createElement('div');
+    cvHint.className = 'settings-kbd-hint';
+    cvHint.style.marginTop = '0';
+    cvHint.style.marginBottom = '8px';
+    cvHint.textContent = 'Whether each camera view is used in tracking (1 = included, 0 = excluded). ' +
+        'Excluded views are dropped from the association math but stay visible in the GUI. ' +
+        'At least 2 views must stay included. Changes apply when you click Apply.';
+    wizPanel.appendChild(cvHint);
+
+    if (cameraNames.length === 0) {
+        const cvEmpty = document.createElement('div');
+        cvEmpty.className = 'settings-kbd-hint';
+        cvEmpty.textContent = 'Load a session with cameras to choose which views are tracked.';
+        wizPanel.appendChild(cvEmpty);
+    } else {
+        const cvList = document.createElement('div');
+        cvList.className = 'settings-node-weight-list';
+        wizPanel.appendChild(cvList);
+
+        cameraNames.forEach(function (name) {
+            const row = document.createElement('div');
+            row.className = 'settings-node-weight-row';
+
+            const label = document.createElement('div');
+            label.className = 'settings-kbd-label';
+            label.textContent = name;
+
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.className = 'settings-num-input';
+            input.min = '0';
+            input.max = '1';
+            input.step = '1';
+            input.value = String(working.cameraWeights[name]);
+            input.setAttribute('aria-label', 'Include view ' + name + ' in tracking (0 or 1)');
+
+            // Grey the row out when the view is excluded (weight 0).
+            function reflectExcluded() {
+                row.classList.toggle('settings-view-excluded', working.cameraWeights[name] === 0);
+            }
+
+            // Any nonzero value is treated as included (1); only an explicit 0
+            // excludes. Coerce on input so the row greys live; normalize on blur.
+            input.addEventListener('input', function () {
+                const v = parseFloat(input.value);
+                if (isFinite(v)) working.cameraWeights[name] = v === 0 ? 0 : 1;
+                reflectExcluded();
+            });
+            input.addEventListener('blur', function () {
+                let v = parseFloat(input.value);
+                if (!isFinite(v)) v = working.cameraWeights[name];
+                working.cameraWeights[name] = v === 0 ? 0 : 1;
+                input.value = String(working.cameraWeights[name]);
+                reflectExcluded();
+            });
+
+            reflectExcluded();
+            row.appendChild(label);
+            row.appendChild(input);
+            cvList.appendChild(row);
         });
     }
 
@@ -540,8 +636,13 @@ export function showSettingsModal(initialPanel) {
         setDefaultTriangulationMethod(working.method);
         applyBindings(working.keyMap);
         setNodeWeights(working.nodeWeights);
+        setCameraWeights(working.cameraWeights);
         setTrackingThresholds(working.thresholds);
         teardown();
+        // Reflect committed camera-inclusion changes immediately: excluded views
+        // grey out in both the video overlays and the timeline.
+        try { drawAllOverlays(state.currentFrame); } catch (e) { /* no active render yet */ }
+        if (timeline && typeof timeline.redraw === 'function') timeline.redraw();
     }
 
     function onDocKeyDown(e) {

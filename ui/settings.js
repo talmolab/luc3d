@@ -29,6 +29,12 @@ const DEFAULTS = {
 // name so they persist across reloads independently of node ordering.
 const DEFAULT_NODE_WEIGHT = 1;
 
+// Default tracking inclusion for any camera view not explicitly overridden. 1 =
+// the view participates in cross-view tracking; 0 = it is excluded from the
+// association math entirely (still visible/editable in the GUI). Stored overrides
+// are keyed by camera name so they persist across reloads.
+const DEFAULT_CAMERA_WEIGHT = 1;
+
 // Catalog of every shortcut. `binding` is a "+"-joined accelerator string for
 // dispatched entries (modifier tokens: Mod = Ctrl-or-Cmd, Ctrl, Cmd/Meta, Shift,
 // Alt/Option/Opt; last token is the key), or a free-form display string for
@@ -101,11 +107,12 @@ function loadSettings() {
                 triangulationMethod: parsed.triangulationMethod === 'ba' ? 'ba' : 'dlt',
                 keybindings: (parsed.keybindings && typeof parsed.keybindings === 'object') ? parsed.keybindings : {},
                 nodeWeights: (parsed.nodeWeights && typeof parsed.nodeWeights === 'object') ? parsed.nodeWeights : {},
+                cameraWeights: (parsed.cameraWeights && typeof parsed.cameraWeights === 'object') ? parsed.cameraWeights : {},
                 trackingThresholds: (parsed.trackingThresholds && typeof parsed.trackingThresholds === 'object') ? parsed.trackingThresholds : {},
             };
         }
     } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
-    return { triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {}, nodeWeights: {}, trackingThresholds: {} };
+    return { triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {}, nodeWeights: {}, cameraWeights: {}, trackingThresholds: {} };
 }
 
 function persist() {
@@ -174,6 +181,54 @@ export function setNodeWeights(map) {
     persist();
 }
 
+// --- Camera tracking inclusion ---------------------------------------------
+
+// Clamp an arbitrary value to a binary include/exclude weight (0 or 1), or null
+// if not a number. Any nonzero, finite value counts as "included" (1).
+function clampCameraWeight(v) {
+    var n = typeof v === 'number' ? v : parseFloat(v);
+    if (!isFinite(n)) return null;
+    return n === 0 ? 0 : 1;
+}
+
+// Effective tracking inclusion for a single camera name (stored override, else
+// default 1 = included).
+export function getCameraWeight(name) {
+    var w = clampCameraWeight(_settings.cameraWeights[name]);
+    return w == null ? DEFAULT_CAMERA_WEIGHT : w;
+}
+
+// True when the named camera should participate in tracking (weight !== 0).
+export function isCameraTracked(name) {
+    return getCameraWeight(name) !== 0;
+}
+
+// Snapshot of all stored camera-inclusion overrides (name → 0|1). Cameras without
+// an override are absent (they default to DEFAULT_CAMERA_WEIGHT = included).
+export function getCameraWeights() {
+    var out = {};
+    Object.keys(_settings.cameraWeights).forEach(function (k) {
+        var w = clampCameraWeight(_settings.cameraWeights[k]);
+        if (w != null) out[k] = w;
+    });
+    return out;
+}
+
+// Commit a name → weight override map (from the Tracking Wizard's Apply button).
+// Values are coerced to 0/1; entries equal to the default (1 = included) are
+// dropped so the stored set stays minimal (only excluded views are persisted).
+export function setCameraWeights(map) {
+    var next = {};
+    if (map && typeof map === 'object') {
+        Object.keys(map).forEach(function (name) {
+            var w = clampCameraWeight(map[name]);
+            if (w != null && w !== DEFAULT_CAMERA_WEIGHT) next[name] = w;
+        });
+    }
+    _settings.cameraWeights = next;
+    persist();
+}
+
 // --- Tracking thresholds ---------------------------------------------------
 
 // Catalog of user-editable cross-view-tracker thresholds (Tier A scoring knobs +
@@ -227,10 +282,67 @@ const TRACKING_THRESHOLDS = [
         min: 1, max: 2000, step: 1,
         desc: 'Maximum reprojection distance (px) to attach an instance to a group of 4 or more views, where the triangulated 3D point is well constrained.',
     },
+    {
+        id: 'track3dWeight', label: '3D continuity weight', default: 1,
+        min: 0, max: 20, step: 0.5,
+        desc: 'Weight on the 3D-position term in temporal identity linking (reference correspondence_weight_3d). Raise it to make 3D-position continuity dominate the per-identity cost and suppress sustained ID swaps. 1 = legacy equal weighting; 6 ≈ the benchmark champion.',
+    },
+    {
+        id: 'filterMinVisibleNodes', label: 'Min visible nodes (filter)', default: 0,
+        min: 0, max: 30, step: 1,
+        desc: 'Detection-pool filter: drop instances with fewer than this many present keypoints before cross-view matching (geometry half of the detection filter). 0 = off; the sleap-3d reference used 8 on a 15-node skeleton.',
+    },
+    {
+        id: 'filterMinInstanceScore', label: 'Min instance score (filter)', default: 0,
+        min: 0, max: 1, step: 0.05,
+        desc: 'Detection-pool filter: drop instances whose detection score is below this value (only applies when per-instance scores are available). 0 = off; the sleap-3d reference used 0.85.',
+    },
+    // --- CrossViewTracker engine (pose/cross-view-tracker.js) ---
+    {
+        id: 'corr2dWeight', label: '2D correspondence weight', default: 1,
+        min: 0, max: 20, step: 0.5,
+        desc: 'Weight on the 2D reprojection term of the cross-view tracker (correspondence_weight_2d). Reference default 1.',
+    },
+    {
+        id: 'corr3dWeight', label: '3D correspondence weight', default: 6,
+        min: 0, max: 20, step: 0.5,
+        desc: 'Weight on the 3D point-to-ray term of the cross-view tracker (correspondence_weight_3d). 6 = the benchmark champion (fewest sustained ID switches).',
+    },
+    {
+        id: 'velocityThreshold', label: 'Velocity threshold', default: 10,
+        min: 0.1, max: 1000, step: 0.5,
+        desc: 'Normalizer for the 2D displacement term of the cross-view tracker (velocity_threshold, normalized image units). Bench value 10.',
+    },
+    {
+        id: 'distanceThreshold', label: 'Distance threshold (mm)', default: 50,
+        min: 0.1, max: 1000, step: 1,
+        desc: 'Normalizer for the 3D point-to-ray term of the cross-view tracker (distance_threshold, world units/mm). Bench value 50.',
+    },
+    {
+        id: 'timePenalty', label: 'Time penalty', default: 0.1,
+        min: 0, max: 10, step: 0.05,
+        desc: 'Exponential decay exp(-time_penalty·Δt) applied over frame gaps in the cross-view tracker (time_penalty). Bench value 0.1.',
+    },
+    {
+        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
+        min: 0, max: 500, step: 1,
+        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+    },
 ];
 
 const _thrById = new Map();
 TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
+
+// Threshold ids surfaced in the Tracking Wizard — the CrossViewTracker's free
+// parameters (detection filter + the five cross-view cost knobs). The remaining
+// catalog entries drive the legacy bench-only luc3d matcher (pose/tracker.js)
+// and are intentionally hidden from the UI; they still resolve to their defaults
+// for the benchmark harness.
+const WIZARD_THRESHOLD_IDS = new Set([
+    'filterMinVisibleNodes', 'filterMinInstanceScore',
+    'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
+    'reprojErrorThreshold',
+]);
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.
 function clampThreshold(def, v) {
@@ -243,8 +355,10 @@ function clampThreshold(def, v) {
 
 // Catalog snapshot for the Tracking Wizard: [{ id, label, default, value, min,
 // max, step, desc }] with the effective value resolved (override or default).
+// Only the CrossViewTracker's wizard-visible parameters are returned; legacy
+// bench-only luc3d thresholds are filtered out.
 export function getTrackingThresholdDefs() {
-    return TRACKING_THRESHOLDS.map(function (t) {
+    return TRACKING_THRESHOLDS.filter(function (t) { return WIZARD_THRESHOLD_IDS.has(t.id); }).map(function (t) {
         return {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),

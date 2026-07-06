@@ -580,6 +580,36 @@ export function setupMenus() {
         setStatus('Coloring by Identity', 'success');
     });
 
+    // Node Trails presets (Tracks menu) — issue #102. A single active length;
+    // the checkmark tracks state.trailLength, and picking one repaints.
+    var trailPresets = [
+        { id: 'menuTrailsOff', len: 0 },
+        { id: 'menuTrails10', len: 10 },
+        { id: 'menuTrails50', len: 50 },
+        { id: 'menuTrails100', len: 100 },
+        { id: 'menuTrails250', len: 250 },
+        { id: 'menuTrails500', len: 500 },
+    ];
+    function updateTrailChecks() {
+        trailPresets.forEach(function (p) {
+            var el = document.getElementById(p.id);
+            var chk = el && el.querySelector('.trail-check');
+            if (chk) chk.textContent = (state.trailLength === p.len) ? '✓' : '';
+        });
+    }
+    updateTrailChecks();
+    trailPresets.forEach(function (p) {
+        var el = document.getElementById(p.id);
+        if (!el) return;
+        el.addEventListener('click', function () {
+            state.trailLength = p.len;
+            updateTrailChecks();
+            closeMenus();
+            drawAllOverlays(state.currentFrame);
+            setStatus(p.len > 0 ? ('Node trails: ' + p.len + ' frames') : 'Node trails off', 'success');
+        });
+    });
+
     // ============================================
     // Tracks Menu Handlers
     // ============================================

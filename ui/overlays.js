@@ -1616,6 +1616,124 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
  * @param {number[]}    [options.assignmentSelectedIds]  - IDs of unlinked instances selected for assignment
  * @param {boolean}     [options.assignmentMode]         - Whether assignment mode is active
  */
+// All instances visible in `viewName` at a frame, LINKED and UNLINKED. Trails must
+// cover unlinked instances: identities are inspected BEFORE cross-view linking, so
+// pre-link (ungrouped) detections need trails too. Unlinked entries wrap the real
+// Instance in `.instance`.
+function trailViewInstances(fg, viewName) {
+    var out = [];
+    if (!fg) return out;
+    var linked = fg.instances instanceof Map ? fg.instances.get(viewName)
+        : (fg.instances ? fg.instances[viewName] : null);
+    if (linked) for (var i = 0; i < linked.length; i++) out.push(linked[i]);
+    var ul = fg.getUnlinkedInstances ? fg.getUnlinkedInstances(viewName) : null;
+    if (ul) for (var j = 0; j < ul.length; j++) {
+        var inst = ul[j] && ul[j].instance ? ul[j].instance : ul[j];
+        if (inst) out.push(inst);
+    }
+    return out;
+}
+
+// Draw fading, shrinking node trails (issue #102 — mirrors SLEAP's
+// TrackTrailOverlay). The trail window is the last `trailLength`+1 PRESENT frames
+// up to and including `frameIdx` — like SLEAP's `labels.find(video,
+// range(0,frame_idx+1))[-trail_length:]`: sparse-aware, and only reads frames
+// already in `session.frameGroups` (no lazy-H5 fetch — the perf concern in #102).
+// Trails are drawn for EVERY track (linked+unlinked, by per-view `trackIdx`) that
+// appears anywhere in the window — including tracks that have already VANISHED
+// from the current frame, so a track's trail lingers and fades out over the window
+// instead of disappearing the instant its instance is gone. Each node's positions
+// join into a polyline that, toward the past, thins, fades, and darkens; each
+// segment is colored by the instance's color AT that frame, so an identity/color
+// switch shows up as a color change along the trail.
+export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
+    options = options || {};
+    var trailLength = options.trailLength || 0;
+    if (trailLength <= 0 || !session || frameIdx == null || !session.frameGroups) return;
+
+    // Window frames: present frames <= current, nearest first, capped so there are
+    // up to `trailLength` segments back from the current frame.
+    var windowIdx = [];
+    session.frameGroups.forEach(function (fg, idx) { if (idx <= frameIdx) windowIdx.push(idx); });
+    windowIdx.sort(function (a, b) { return b - a; });
+    windowIdx = windowIdx.slice(0, trailLength + 1);
+    if (windowIdx.length < 2) return;                 // need at least one segment
+    var W = windowIdx.length;
+
+    // Per window frame (index 0 = current): trackIdx -> instance (linked+unlinked).
+    var byFrame = windowIdx.map(function (idx) {
+        var m = new Map();
+        var insts = trailViewInstances(session.frameGroups.get(idx), viewName);
+        for (var k = 0; k < insts.length; k++) {
+            if (insts[k].trackIdx != null) m.set(insts[k].trackIdx, insts[k]);
+        }
+        return m;
+    });
+
+    // Union of every track present anywhere in the window (so vanished tracks keep
+    // a trail until they age out).
+    var tracks = new Set();
+    byFrame.forEach(function (m) { m.forEach(function (_v, tk) { tracks.add(tk); }); });
+    if (tracks.size === 0) return;
+
+    var toCanvas = makeVideoToCanvasTransform(
+        options.videoWidth, options.videoHeight, options.canvasWidth, options.canvasHeight);
+    var colorByIdentity = !!options.colorByIdentity;
+    // Trails are thicker than the skeleton edges by default so they read at a glance.
+    var baseWidth = (options.lineWidth != null ? options.lineWidth : 2) * 2;
+
+    // Style ramp per window index (0 = current). Older → thinner, more
+    // transparent, slightly darker. `t` runs 1 (near) → ~0 (far).
+    var stepAlpha = [], stepWidth = [], stepBright = [];
+    for (var k0 = 0; k0 < W; k0++) {
+        var t0 = 1 - k0 / (W + 1);
+        stepAlpha.push(Math.max(0.1, 0.9 * t0));
+        stepWidth.push(Math.max(0.8, baseWidth * t0));
+        stepBright.push(0.55 + 0.45 * t0);   // 1.0 near → 0.55 far (V in HSV)
+    }
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    tracks.forEach(function (tk) {
+        // Historical, age-darkened color per window frame for this track (reused
+        // across nodes). null where the track is absent in that frame.
+        var colAtK = [];
+        var sample = null;
+        for (var k = 0; k < W; k++) {
+            var inst = byFrame[k].get(tk);
+            if (inst && !sample) sample = inst;
+            colAtK.push(inst
+                ? adjustColorBrightness(getInstanceColor(inst, session, viewName, colorByIdentity, windowIdx[k]), stepBright[k])
+                : null);
+        }
+        if (!sample || !sample.points) return;
+
+        for (var n = 0; n < sample.points.length; n++) {
+            var prev = null;
+            for (var k2 = 0; k2 < W; k2++) {
+                var inst2 = byFrame[k2].get(tk);
+                var pt = inst2 && inst2.points ? inst2.points[n] : null;
+                if (pt == null) { prev = null; continue; }   // gap — break the line
+                var cp = toCanvas(pt[0], pt[1]);
+                // Segment prev(newer) → cp(older) is styled/colored by its older
+                // endpoint (index k2), so older segments fade and keep their color.
+                if (prev && colAtK[k2]) {
+                    ctx.globalAlpha = stepAlpha[k2];
+                    ctx.strokeStyle = colAtK[k2];
+                    ctx.lineWidth = stepWidth[k2];
+                    ctx.beginPath();
+                    ctx.moveTo(prev.x, prev.y);
+                    ctx.lineTo(cp.x, cp.y);
+                    ctx.stroke();
+                }
+                prev = cp;
+            }
+        }
+    });
+    ctx.restore();
+}
+
 export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, options) {
     options = options || {};
     var _frameIdx = frameGroup ? frameGroup.frameIdx : null;
@@ -1673,6 +1791,21 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
 
     // 1. Clear overlay
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // 1b. Node trails (issue #102) — behind everything, so live skeletons draw
+    // on top. Uses the real `session.frameGroups` to walk loaded history.
+    if (options.trailLength > 0 && session) {
+        drawNodeTrails(ctx, viewName, session, _frameIdx, {
+            trailLength: options.trailLength,
+            colorByIdentity: colorByIdentity,
+            videoWidth: videoW,
+            videoHeight: videoH,
+            canvasWidth: canvasW,
+            canvasHeight: canvasH,
+            nodeSize: (userOpts && userOpts.nodeSize) || 3,
+            lineWidth: (userOpts && userOpts.lineWidth) || 2,
+        });
+    }
 
     // Gather view instances once for both passes
     let viewInstances = null;
@@ -1774,6 +1907,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
 
     // 3. Linked predicted instances — drawn OVER reprojections so they're visible
     if (viewInstances && showPredicted) {
+        var predictedInstances = [];
         for (let i = 0; i < viewInstances.length; i++) {
             const inst = viewInstances[i];
             const instType = inst.type || 'user';
@@ -1792,6 +1926,30 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                 alpha: drawAlpha,
                 lineStyle: predictedOpts.postLineStyle || 'solid',
                 nodeShape: predictedOpts.nodeStyle || 'x',
+            }));
+
+            predictedInstances.push(inst);
+        }
+
+        // 3a. ID overlays — label predicted instances with their identity in ID
+        // mode. The cross-view tracker emits PREDICTED instances, so without this
+        // its identities are invisible as text (the user-label path only labels
+        // user instances). Gated on ID mode so Tracks mode stays uncluttered.
+        if (colorByIdentity && session && predictedInstances.length > 0) {
+            var pLabelNames = session.tracks ? session.tracks.slice() : [];
+            var pLabelColors = {};
+            for (var pl = 0; pl < predictedInstances.length; pl++) {
+                var pInst = predictedInstances[pl];
+                var pIdentity = session.getIdentityForTrack(pInst.trackIdx, viewName, _frameIdx);
+                if (pIdentity) {
+                    pLabelNames[pInst.trackIdx] = pIdentity.name;
+                    pLabelColors[pInst.trackIdx] = pIdentity.color;
+                }
+            }
+            drawInstanceLabels(ctx, predictedInstances, skeleton, viewName, Object.assign({}, predictedRender, {
+                trackNames: pLabelNames,
+                trackColors: pLabelColors,
+                labelSize: (userOpts && userOpts.labelSize) || 11,
             }));
         }
     }
@@ -1902,6 +2060,20 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             drawDragPreview(ctx, dragInst.points, dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
                 Object.assign({}, userRender, { color: '#ffffff' }));
         }
+    }
+
+    // 7.5 Tracking-excluded grey-out. When this view is turned off in the
+    // Tracking Wizard (Camera Views → 0), recolor everything drawn so far to a
+    // flat grey so it's visually obvious the view won't take part in the
+    // association math. `source-atop` paints only where overlay pixels already
+    // exist, so the underlying video is untouched — just the nodes/edges/labels
+    // go grey. Done before the legend so the legend key stays readable.
+    if (options.trackingExcluded) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = 'rgba(140, 140, 140, 0.85)';
+        ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        ctx.restore();
     }
 
     // 8. Legend
