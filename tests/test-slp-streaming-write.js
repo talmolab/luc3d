@@ -115,5 +115,32 @@
                 try { h5.FS.unlink(p); } catch (e) { /* ignore */ }
             }
         });
+
+        it('per-camera export of a lazy session writes all frames (Download-All path)', async function () {
+            const S = window.SleapIO;
+            assertTrue(typeof window.exportSlpClientSide === 'function', 'exportSlpClientSide not bridged');
+            const lab = await openLazy(S, await storeBytes(S, 'cam0.mp4', 5), 'c.slp');
+            const loader = new window.SioLazyLoader();
+            loader.labelsByCam.set('cam0', lab);
+            const st = lab._lazyDataStore;
+            const rm = new Map();
+            const fc = st.framesData.frame_idx;
+            for (let r = 0; r < fc.length; r++) rm.set(Number(fc[r]), r);
+            loader.frameRowByCam.set('cam0', rm);
+            loader.nFrames = 5;
+
+            const { Camera, Skeleton, Session } = window;
+            const sk = new Skeleton('sk', ['nose', 'tail'], [[0, 1]]);
+            const c0 = new Camera('cam0', [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+            const session = new Session([c0], sk, ['t0', 't1'], 'S1');
+            session.lazyLoader = loader;
+
+            // Plain export (no reproj / no filter) → lazy fast-path, all frames.
+            const blob = await window.exportSlpClientSide(session, 'cam0', null, null, null, undefined);
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            const rb = await openLazy(S, bytes, 'rb.slp');
+            assertEqual(rb._lazyDataStore.framesData.frame_idx.length, 5, 'per-camera export preserved all 5 frames');
+            assertEqual(rb._lazyDataStore.instancesData.track.length, 10, 'per-camera export preserved all instances');
+        });
     });
 })();

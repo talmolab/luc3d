@@ -2060,7 +2060,14 @@ layer.
   holds that track in the same frame (SLEAP forbids two instances sharing
   a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
-  `exportSlpMultiSession`.
+  `exportSlpMultiSession`. For a **lazy session** these route a plain
+  per-camera export (no reprojection/instance filter) through
+  `lazyCameraExportBytes` → `saveSlpToBytes` on the camera's already-lazy
+  `Labels` (the lazy fast-path — all frames, memory-bounded), instead of the
+  eager `buildSlpLabels*` which iterates only the resident `frameGroups`
+  (silent-drop) and would re-materialize. The multi-view project save uses the
+  streaming writer via `slp-streaming-write.js` (see `save-load.js` /
+  `buildSlpBytes`).
 - `buildSlpLabelsAllViews` builds the full typed graph (RecordingSession /
   FrameGroup / InstanceGroup with `instance3d`, `identity`, and `metadata.lucid`)
   that `saveSlpToBytes` serializes to the canonical `sessions_json`. It writes each
