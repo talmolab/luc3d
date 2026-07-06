@@ -26,10 +26,23 @@ python3 -m http.server 8080
 - mp4box.js
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
-- sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to the
-  **released npm package `@talmolab/sleap-io.js@0.5.0`** (gitHead `1918f9e`),
-  which contains PR #196 (read-path perf) + PR #198 (lazy-native session model).
-  A tagged release — no longer the experimental moving-`main` pin.
+- sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to the **released
+  tag `0.5.3`** (npm `@talmolab/sleap-io.js@0.5.3`, gitHead `5aa7869`) — vendored from
+  the published npm **dist** (not source-built; byte-parity with what users get). This
+  is the first release to contain the streaming SLP **writer** (PR #208, the write-side
+  companion to `readSlpStreaming({ lazy })`): `openSlpWriter`
+  (`appendStore`/`appendFrames`/`close`/`writeToSink`), `saveSlpMergedFromStores` /
+  `saveSlpMergedToSink`, and the public lazy frame-release API
+  (`labels.frameCacheLimit` / `releaseFrame` / `releaseFrameWindow`) — the memory-
+  bounded write path for large lazy sessions (streaming export/save). Supersedes the
+  earlier EXPERIMENTAL source-built pin `c7e0cbd` (#208 head); 0.5.3 is a superset with
+  an identical `index.browser.js` export set and identical importmap bare-imports, so
+  the swap was drop-in (only `index.browser.js` + the big chunk `MFLVNUYB`→`M65RB7KH`
+  changed; the small chunks + `gdrive` are byte-identical). Builds on 0.5.2's PR #205
+  lazy video-id remap, 0.5.1's `readSlpStreaming({ lazy })` (PR #203), and 0.5.0's #196
+  read-perf + #198 session model. The lazy streaming reader backs `SioLazyLoader`
+  (`loading/sio-lazy-loader.js`) for large prediction `.slp` session loads; the writer
+  backs streaming export/save.
   Its `pako`
   dep is vendored at `lib/pako/` and `mediabunny`
   is stubbed (`lib/sleap-io/mediabunny-stub.js`); both are aliased in the `index.html`
@@ -53,9 +66,14 @@ python3 -m http.server 8080
   All h5wasm is now LUCID's local vendored 0.10.3 (PR 5.2b): the importmap `h5wasm`
   → local ESM, the `index.html` `<script>` global + `readSlpStreaming`'s `h5wasmUrl`
   → local IIFE, and the module workers import the local ESM — no CDN h5wasm fetch on
-  any path. To rebuild/bump the sleap-io.js
-  bundle, follow `docs/VENDORING-sleap-io.md` (recipe + SHA-256 manifest + importmap
-  derivation + `scripts/revendor-sleap-io.sh`).
+  any path. To bump the sleap-io.js bundle to a **released** version, vendor from the
+  npm dist: `npm pack @talmolab/sleap-io.js@<ver>`, then copy `dist/index.browser.js`
+  + its chunk closure (trace `index.browser.js` imports; keep the `gdrive` chunk +
+  local `mediabunny-stub.js`) into `lib/sleap-io/`, dropping any orphaned old chunk.
+  Verify the `index.browser.js` export set + importmap bare-imports (h5wasm/mediabunny/
+  pako/yaml) are unchanged, then run the suite. `scripts/revendor-sleap-io.sh <ref>`
+  builds from source instead (for unreleased pins); the detailed recipe + SHA-256
+  manifest live in the untracked `scratch/VENDORING-sleap-io.md`.
 - All loaded via script tags / import maps in index.html
 
 ## UI Conventions
