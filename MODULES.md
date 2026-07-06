@@ -350,13 +350,14 @@ only tracker. The drive lives in
 synchronous loop over `frameIndices` (used by single-frame tracking + the
 bench/test harnesses, which read its return value). Its per-frame body is factored
 into `createTrackerRun`/`stepTrackerFrame`, reused by the async sibling
-`runCrossViewTrackerProgress(…, onProgress)`: identical association but it yields
-to the event loop on a **wall-clock throttle** (`PAINT_INTERVAL_MS`, ≤ ~2.5
-repaints/sec — NOT a per-frame stride) and awaits `onProgress(done, total)`, so
-**Track All** repaints a "done/total (pct%)" counter without the repaints
-dominating. Each yield lets the browser run a full render of the heavy multi-view
-app (the real cost), so a fast run yields only a handful of times and stays close
-to the old fully-synchronous speed; a long run still updates smoothly. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
+`runCrossViewTrackerProgress(…, onProgress)` (exported, currently unused by the
+app). **Track All runs the SYNCHRONOUS `runCrossViewTracker` in one blocking pass
+— no per-frame yields — for max speed.** A mid-run yield forces a full repaint of
+the heavy multi-view app, and doing that repeatedly for a live counter is what
+slowed Track All down; instead it shows a static "Assigning identities across N
+frames…" overlay + the compositor-animated spinner and the tab is busy until the
+run finishes. `runCrossViewTrackerProgress` (wall-clock-throttled yields for a live
+counter) is kept for a future off-main-thread/Worker progress path. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
 `commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
 (with `identityId` + `points3d`), maps each target's stable trackId to a session
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the

@@ -1128,7 +1128,7 @@ export async function trackAll() {
     session.frameIdentityMap = new Map();
     session.instanceGroups = new Map();
 
-    showLoading('Assigning identities: 0/' + frameIndices.length + ' frames…');
+    showLoading('Assigning identities across ' + frameIndices.length + ' frames…');
 
     // Drive the CrossViewTracker across all frames and populate IDENTITIES +
     // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
@@ -1137,18 +1137,13 @@ export async function trackAll() {
     // Tracks → IDs). Auto-rewriting Instance.trackIdx here would clobber the
     // imported track structure without consent.
     try {
-        // Yield once so the initial overlay paints before the run begins, then
-        // drive the async progress variant: it yields on a wall-clock throttle
-        // (a few repaints/sec, not per-frame) so the counter advances without the
-        // repaints dominating — a fast run stays close to fully-synchronous speed.
+        // Paint the overlay + spinner ONCE, then run the tracker in a SINGLE
+        // synchronous pass — no per-frame yields. Every mid-run yield forces a full
+        // repaint of the heavy multi-view app, which is what made Track All slow; a
+        // live counter isn't worth that cost. The CSS spinner is compositor-animated
+        // so it keeps spinning during the blocking run to show it's working.
         await new Promise(function (r) { setTimeout(r, 0); });
-        var lres = await runCrossViewTrackerProgress(
-            session, cameras, frameIndices, false, effectiveNumAnimals,
-            function (done, total) {
-                showLoading('Assigning identities: ' + done + '/' + total +
-                    ' frames (' + Math.round(done / total * 100) + '%)…');
-                return new Promise(function (r) { setTimeout(r, 0); });
-            });
+        var lres = runCrossViewTracker(session, cameras, frameIndices, false, effectiveNumAnimals);
         hideLoading();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
