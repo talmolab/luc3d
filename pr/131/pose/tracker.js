@@ -938,21 +938,27 @@ export function runCrossViewTracker(session, cameras, frameIndices, propagate, m
 }
 
 // Async sibling of runCrossViewTracker used by Track All: identical association,
-// but yields to the event loop periodically so the loading overlay can repaint a
-// live "done/total" counter — a synchronous loop can never paint mid-run. The
-// awaited `onProgress(done, total)` callback returns a macrotask-yielding promise
-// (setTimeout 0), which is what actually lets the browser render each update.
+// but yields to the event loop so the loading overlay can repaint a "done/total"
+// counter — a synchronous loop can never paint mid-run. Each yield lets the
+// browser run a FULL render of this heavy multi-view app, which is the dominant
+// cost, so we yield on a WALL-CLOCK throttle (a few times/sec) rather than a
+// per-frame-count stride: a fast run yields only a handful of times and stays
+// close to the old fully-synchronous speed, while a long run still updates
+// smoothly. `onProgress(done, total)` returns a setTimeout(0) promise (the actual
+// repaint yield).
 export async function runCrossViewTrackerProgress(session, cameras, frameIndices, propagate, maxTargets, onProgress) {
     var run = createTrackerRun(session, cameras, maxTargets);
     var total = frameIndices.length;
-    // Repaint ~every 5% of frames (≈20 updates total). Each update yields to the
-    // event loop for a browser repaint, which is expensive on a large run — so we
-    // update the counter infrequently to keep Track All fast, rather than smoothly.
-    var stride = Math.max(1, Math.ceil(total / 20));
+    var nowMs = function () {
+        return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    };
+    var PAINT_INTERVAL_MS = 400;   // ≤ ~2.5 repaints/sec regardless of frame count
+    var lastPaint = nowMs();
     for (var f = 0; f < total; f++) {
         stepTrackerFrame(session, run, frameIndices[f]);
-        if (onProgress && ((f + 1) % stride === 0 || f === total - 1)) {
+        if (onProgress && (f === total - 1 || nowMs() - lastPaint >= PAINT_INTERVAL_MS)) {
             await onProgress(f + 1, total);
+            lastPaint = nowMs();
         }
     }
     if (propagate) session.propagateIdentitiesToTracks();
@@ -1132,9 +1138,9 @@ export async function trackAll() {
     // imported track structure without consent.
     try {
         // Yield once so the initial overlay paints before the run begins, then
-        // drive the async progress variant: it yields ~every 5% of frames and
-        // calls back with (done, total) so the counter advances without freezing
-        // at 0/N (infrequent so the repaints don't slow the run).
+        // drive the async progress variant: it yields on a wall-clock throttle
+        // (a few repaints/sec, not per-frame) so the counter advances without the
+        // repaints dominating — a fast run stays close to fully-synchronous speed.
         await new Promise(function (r) { setTimeout(r, 0); });
         var lres = await runCrossViewTrackerProgress(
             session, cameras, frameIndices, false, effectiveNumAnimals,
