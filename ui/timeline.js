@@ -91,6 +91,10 @@ export class Timeline {
         /** Tooltip state */
         this._tooltip = { visible: false, x: 0, y: 0, text: '' };
 
+        /** Hitboxes (canvas CSS-px Y ranges) of "…" truncation rows, for the
+         *  hover tooltip. Rebuilt each redraw; empty when tracks are hidden. */
+        this._moreRowHitboxes = [];
+
         // --- Layout constants ------------------------------------------------
 
         /** @const {number} Height of each track bar row (px) */
@@ -579,6 +583,9 @@ export class Timeline {
         // --- Compute layout (applies collapse priority) ---
         const layout = this._computeLayout(H);
         this._layout = layout;
+
+        // Rebuilt by `_drawTrackBars` below; stays empty when tracks are hidden.
+        this._moreRowHitboxes = [];
 
         // Grid lines span the full visible canvas.
         this._drawGrid(ctx, W, H);
@@ -1856,6 +1863,13 @@ export class Timeline {
             const rowY = top + rowYPositions[t];
             const labelY = rowY + this.TRACK_ROW_HEIGHT / 2;
 
+            // Record the "…" truncation row's Y range for the hover tooltip.
+            if (track._isMoreIndicator && track._hiddenCount > 0) {
+                this._moreRowHitboxes.push({
+                    top: rowY, bottom: rowY + this.TRACK_ROW_HEIGHT, hidden: track._hiddenCount,
+                });
+            }
+
             ctx.fillStyle = this.LABEL_COLOR;
             ctx.textBaseline = 'middle';
 
@@ -2491,6 +2505,14 @@ export class Timeline {
         // below keeps tracking so the user can still see which frame
         // they would land on if they released.
 
+        // "… N more tracks" truncation row — takes precedence across the whole row
+        // (gutter + content) since that row carries no per-frame info anyway.
+        const moreCount = this._moreIndicatorHiddenAt(y);
+        if (moreCount > 0) {
+            this._showTooltip(x, y, moreCount + (moreCount === 1 ? ' more track' : ' more tracks'));
+            return;
+        }
+
         // Hover tooltip
         if (x >= this.LEFT_MARGIN && x <= this._cssWidth - this.RIGHT_PADDING) {
             const frame = this._clampFrame(this._xToFrame(x));
@@ -2507,6 +2529,21 @@ export class Timeline {
         } else {
             this._hideTooltip();
         }
+    }
+
+    /**
+     * If canvas-Y `y` falls on a "…" truncation row, return that camera's hidden
+     * track count; else 0. Backs the hover tooltip.
+     * @param {number} y - canvas CSS-px Y (e.offsetY)
+     * @returns {number}
+     * @private
+     */
+    _moreIndicatorHiddenAt(y) {
+        var boxes = this._moreRowHitboxes;
+        for (var i = 0; i < boxes.length; i++) {
+            if (y >= boxes[i].top && y < boxes[i].bottom) return boxes[i].hidden;
+        }
+        return 0;
     }
 
     /**

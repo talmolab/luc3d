@@ -190,5 +190,16 @@
 
             cleanup(tl, container); tl = null;
         });
+
+        it('hover hit-test maps a "…" row Y to its hidden-track count', function () {
+            var container = createContainer(400, 80);
+            var tl = new Timeline(container, { totalFrames: 100 });
+            // Exercise the hit-test directly (independent of render layout).
+            tl._moreRowHitboxes = [{ top: 100, bottom: 110, hidden: 36 }];
+            assertEqual(tl._moreIndicatorHiddenAt(104), 36, 'Y inside the row → hidden count');
+            assertEqual(tl._moreIndicatorHiddenAt(110), 0, 'bottom edge is exclusive → 0');
+            assertEqual(tl._moreIndicatorHiddenAt(50), 0, 'Y outside any row → 0');
+            cleanup(tl, container);
+        });
     });
 })();
