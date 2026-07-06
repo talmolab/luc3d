@@ -1689,11 +1689,17 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     for (var s = 0; s < seeds.length; s++) {
         var seed = seeds[s];
         if (seed.trackIdx == null || !seed.points) continue;
-        // Exact instance color (track color, or identity color in ID mode) — the
-        // same color the live skeleton uses, so the trail belongs to its animal.
-        var color = getInstanceColor(seed, session, viewName, colorByIdentity, frameIdx);
-        // Precompute the darkened color for each age once (reused across nodes).
-        var segColors = stepBright.map(function (b) { return adjustColorBrightness(color, b); });
+        // Color each segment by the instance's color AT that past frame (not the
+        // current seed): when an identity/color switches, the OLD trail keeps its
+        // OLD color, so a switch shows up as a color change along the trail —
+        // easier to spot. Age-darkened; precomputed per age (reused across nodes).
+        var segColors = [];
+        for (var a1 = 0; a1 < steps; a1++) {
+            var pm = pastByTrack[a1].get(seed.trackIdx);
+            segColors.push(pm
+                ? adjustColorBrightness(getInstanceColor(pm, session, viewName, colorByIdentity, pastIdx[a1]), stepBright[a1])
+                : null);
+        }
 
         for (var n = 0; n < seed.points.length; n++) {
             var cur = seed.points[n];
@@ -1704,7 +1710,7 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
                 var hp = match && match.points ? match.points[n] : null;
                 if (hp == null) { prev = null; continue; }   // node gap — break the line
                 var cp = toCanvas(hp[0], hp[1]);
-                if (prev) {
+                if (prev && segColors[a]) {
                     ctx.globalAlpha = stepAlpha[a];
                     ctx.strokeStyle = segColors[a];
                     ctx.lineWidth = stepWidth[a];
