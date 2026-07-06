@@ -156,7 +156,7 @@
     describe('Timeline sparse occupancy (lazy .slp) — row cap', function () {
         var container, tl;
 
-        it('keeps the first-N tracks by appearance (not occupancy) and adds a "…" row', function () {
+        it('keeps the first-N tracks by appearance (not occupancy) and adds a "+N more" row', function () {
             container = createContainer(800, 200);
             tl = new Timeline(container, { totalFrames: 300 });
             var session = makeSession(['cam1']);
@@ -183,23 +183,11 @@
             assertFalse(present.has(N - 1), 'dropped the last-appearing track despite its highest occupancy');
 
             var more = tl._trackSegments.filter(function (s) { return s.cameraName === 'cam1' && s._isMoreIndicator; });
-            assertEqual(more.length, 1, 'one truncation indicator row');
-            assertEqual(more[0].trackName, '…', 'indicator shows a "…" ellipsis');
-            assertEqual(more[0]._hiddenCount, N - cap, 'indicator retains the hidden-track count');
+            assertEqual(more.length, 1, 'one "+N more" indicator row');
+            assertEqual(more[0].trackName, '+' + (N - cap) + ' more', 'indicator shows the hidden-track count');
             assertEqual(more[0].segments.length, 0, 'indicator draws no bar');
 
             cleanup(tl, container); tl = null;
-        });
-
-        it('hover hit-test maps a "…" row Y to its hidden-track count', function () {
-            var container = createContainer(400, 80);
-            var tl = new Timeline(container, { totalFrames: 100 });
-            // Exercise the hit-test directly (independent of render layout).
-            tl._moreRowHitboxes = [{ top: 100, bottom: 110, hidden: 36 }];
-            assertEqual(tl._moreIndicatorHiddenAt(104), 36, 'Y inside the row → hidden count');
-            assertEqual(tl._moreIndicatorHiddenAt(110), 0, 'bottom edge is exclusive → 0');
-            assertEqual(tl._moreIndicatorHiddenAt(50), 0, 'Y outside any row → 0');
-            cleanup(tl, container);
         });
     });
 })();
