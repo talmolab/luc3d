@@ -938,27 +938,21 @@ export function runCrossViewTracker(session, cameras, frameIndices, propagate, m
 }
 
 // Async sibling of runCrossViewTracker used by Track All: identical association,
-// but yields to the event loop so the loading overlay can repaint a "done/total"
-// counter — a synchronous loop can never paint mid-run. Each yield lets the
-// browser run a FULL render of this heavy multi-view app, which is the dominant
-// cost, so we yield on a WALL-CLOCK throttle (a few times/sec) rather than a
-// per-frame-count stride: a fast run yields only a handful of times and stays
-// close to the old fully-synchronous speed, while a long run still updates
-// smoothly. `onProgress(done, total)` returns a setTimeout(0) promise (the actual
-// repaint yield).
+// but yields to the event loop periodically so the loading overlay can repaint a
+// live "done/total" counter — a synchronous loop can never paint mid-run. The
+// awaited `onProgress(done, total)` callback returns a macrotask-yielding promise
+// (setTimeout 0), which is what actually lets the browser render each update.
 export async function runCrossViewTrackerProgress(session, cameras, frameIndices, propagate, maxTargets, onProgress) {
     var run = createTrackerRun(session, cameras, maxTargets);
     var total = frameIndices.length;
-    var nowMs = function () {
-        return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    };
-    var PAINT_INTERVAL_MS = 400;   // ≤ ~2.5 repaints/sec regardless of frame count
-    var lastPaint = nowMs();
+    // Repaint ~every 5% of frames (≈20 updates total). Each update yields to the
+    // event loop for a browser repaint, which is expensive on a large run — so we
+    // update the counter infrequently to keep Track All fast, rather than smoothly.
+    var stride = Math.max(1, Math.ceil(total / 20));
     for (var f = 0; f < total; f++) {
         stepTrackerFrame(session, run, frameIndices[f]);
-        if (onProgress && (f === total - 1 || nowMs() - lastPaint >= PAINT_INTERVAL_MS)) {
+        if (onProgress && ((f + 1) % stride === 0 || f === total - 1)) {
             await onProgress(f + 1, total);
-            lastPaint = nowMs();
         }
     }
     if (propagate) session.propagateIdentitiesToTracks();
@@ -1128,7 +1122,7 @@ export async function trackAll() {
     session.frameIdentityMap = new Map();
     session.instanceGroups = new Map();
 
-    showLoading('Assigning identities across ' + frameIndices.length + ' frames…');
+    showLoading('Assigning identities: 0/' + frameIndices.length + ' frames…');
 
     // Drive the CrossViewTracker across all frames and populate IDENTITIES +
     // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
@@ -1137,13 +1131,18 @@ export async function trackAll() {
     // Tracks → IDs). Auto-rewriting Instance.trackIdx here would clobber the
     // imported track structure without consent.
     try {
-        // Paint the overlay + spinner ONCE, then run the tracker in a SINGLE
-        // synchronous pass — no per-frame yields. Every mid-run yield forces a full
-        // repaint of the heavy multi-view app, which is what made Track All slow; a
-        // live counter isn't worth that cost. The CSS spinner is compositor-animated
-        // so it keeps spinning during the blocking run to show it's working.
+        // Yield once so the initial overlay paints before the run begins, then
+        // drive the async progress variant: it yields ~every 5% of frames and
+        // calls back with (done, total) so the counter advances without freezing
+        // at 0/N (infrequent so the repaints don't slow the run).
         await new Promise(function (r) { setTimeout(r, 0); });
-        var lres = runCrossViewTracker(session, cameras, frameIndices, false, effectiveNumAnimals);
+        var lres = await runCrossViewTrackerProgress(
+            session, cameras, frameIndices, false, effectiveNumAnimals,
+            function (done, total) {
+                showLoading('Assigning identities: ' + done + '/' + total +
+                    ' frames (' + Math.round(done / total * 100) + '%)…');
+                return new Promise(function (r) { setTimeout(r, 0); });
+            });
         hideLoading();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
