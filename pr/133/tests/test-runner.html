@@ -161,6 +161,8 @@
     <script src="test-project-triangulation.js"></script>
     <!-- Phase-5 lazy .slp: memory-bounding release primitives + numFrames -->
     <script src="test-lazy-release.js"></script>
+    <!-- Phase-5 lazy .slp: memory-bounded streaming SLP save -->
+    <script src="test-slp-streaming-write.js"></script>
 
     <!-- SLP merge tests -->
     <script src="test-slp-merge.js"></script>
@@ -300,6 +302,8 @@
             Skeleton: __SIO.Skeleton, Node: __SIO.Node, Edge: __SIO.Edge,
             Video: __SIO.Video, Track: __SIO.Track, saveSlpToBytes: __SIO.saveSlpToBytes,
             readSlpStreaming: __SIO.readSlpStreaming,
+            openSlpWriter: __SIO.openSlpWriter, saveSlpMergedFromStores: __SIO.saveSlpMergedFromStores,
+            saveSlpMergedToSink: __SIO.saveSlpMergedToSink, SlpStreamWriter: __SIO.SlpStreamWriter,
             Camera: __SIO.Camera, CameraGroup: __SIO.CameraGroup,
             RecordingSession: __SIO.RecordingSession, InstanceGroup: __SIO.InstanceGroup,
             FrameGroup: __SIO.FrameGroup, Identity: __SIO.Identity,

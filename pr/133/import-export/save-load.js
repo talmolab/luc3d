@@ -36,6 +36,7 @@ import {
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { handleLoadSlpFile } from './slp-import.js';
+import { buildSessionSlpBytesStreaming } from './slp-streaming-write.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 
 /**
@@ -337,6 +338,26 @@ async function buildSlpBytes() {
     var seenTrackNames = new Set();
 
     var sessionsToExport = state.sessions.length > 0 ? state.sessions : [state.session];
+
+    // Large lazy prediction sessions: build the file INCREMENTALLY via sleap-io.js's
+    // streaming writer so the whole ~108k×N-frame graph is never resident and no
+    // unvisited frame is dropped (the eager path below iterates only the resident
+    // `frameGroups`). Single lazy session only for now; multi-session projects (rare
+    // for a large prediction folder) fall through to the eager path.
+    if (sessionsToExport.length === 1 && sessionsToExport[0].lazyLoader &&
+        SIO && typeof SIO.openSlpWriter === 'function') {
+        var lazySess = sessionsToExport[0];
+        var lazyViews = state.views.filter(function (v) {
+            return lazySess.cameras.some(function (c) { return c.name === v.name; });
+        });
+        var lazyVideoFiles = state.videoFiles.filter(function (vf) {
+            return lazySess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
+        });
+        console.log('[save-slp] lazy session → streaming writer (', lazySess.lazyLoader.nFrames, 'frames ×',
+            lazySess.cameras.length, 'cameras )');
+        return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles);
+    }
+
     for (var si = 0; si < sessionsToExport.length; si++) {
         var sess = sessionsToExport[si];
 

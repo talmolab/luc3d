@@ -81,6 +81,9 @@ export class SioLazyLoader {
         this.cacheOrder = [];
         this.maxCacheSize = 100;
         this.prefetchAhead = 20;
+        // FIFO cap applied to each camera's sleap-io.js lazy `Labels` internal
+        // typed-frame cache via the public `frameCacheLimit` (set in open()).
+        this.internalFrameCacheLimit = 512;
 
         this.nFrames = 0;
         this.skeleton = null;
@@ -112,6 +115,12 @@ export class SioLazyLoader {
                 : undefined,
         });
         this.labelsByCam.set(cameraName, labels);
+
+        // Bound the reader's internal typed-frame cache via the public API
+        // (`frameCacheLimit` FIFO-evicts beyond the cap) so long scrubbing and
+        // windowed export/triangulate sweeps don't accumulate every materialized
+        // frame. Replaces the old manual reach-in into `labels._lazyFrameList.cache`.
+        try { labels.frameCacheLimit = this.internalFrameCacheLimit; } catch (e) { /* older bundle */ }
 
         var skel = labels.skeletons && labels.skeletons[0];
         if (!this.skeleton && skel) {
@@ -228,12 +237,12 @@ export class SioLazyLoader {
      * Release one frame from BOTH retention layers so a bounded windowed sweep
      * (streaming export / triangulate-all) stays memory-bounded:
      *   1. this.cache — our adapted-dict LRU (already capped at maxCacheSize).
-     *   2. each camera's underlying sleap-io.js `Labels._lazyFrameList.cache` —
-     *      an UNBOUNDED plain Map that `frameAt(row)` populates permanently and
-     *      that has no public release API. `store.materializeFrame` rebuilds the
-     *      typed frame on next access, so dropping it is safe.
-     * Reaches into the `_lazyFrameList` private field defensively (existence
-     * guarded) so a future bundle bump can't throw.
+     *   2. each camera's underlying sleap-io.js lazy `Labels` typed-frame cache,
+     *      via the public `labels.releaseFrame(row)` API (frame row = this
+     *      camera's videoFrameIdx→store-row map). `store.materializeFrame` rebuilds
+     *      the typed frame on next access, so dropping it is safe.
+     * (`frameCacheLimit`, set in open(), also FIFO-bounds layer 2 automatically;
+     * releaseFrame is the explicit prompt-release used by windowed sweeps.)
      */
     releaseFrame(frameIdx) {
         if (this.cache.has(frameIdx)) {
@@ -243,12 +252,10 @@ export class SioLazyLoader {
         }
         for (var camName of this.labelsByCam.keys()) {
             var labels = this.labelsByCam.get(camName);
-            var lfl = labels && labels._lazyFrameList;
-            var lflCache = lfl && lfl.cache;
-            if (!lflCache) continue;
+            if (!labels || typeof labels.releaseFrame !== 'function') continue;
             var rowMap = this.frameRowByCam.get(camName);
             var row = rowMap ? rowMap.get(frameIdx) : undefined;
-            if (row !== undefined) lflCache.delete(row);
+            if (row !== undefined) labels.releaseFrame(row);
         }
     }
 
@@ -257,38 +264,9 @@ export class SioLazyLoader {
         for (var f = startFrameIdx; f < endFrameIdx; f++) this.releaseFrame(f);
     }
 
-    /**
-     * Cap the underlying per-camera `_lazyFrameList.cache` maps to frames near
-     * `currentFrame` — the internal analog of `evictLazyFrames` (which only prunes
-     * `session.frameGroups`). Cheap no-op unless a cache has grown past `maxKeep`.
-     * Called on the eviction tick during interactive scrubbing so long sessions
-     * don't accumulate every typed frame ever visited.
-     */
-    capInternalCaches(currentFrame, maxKeep) {
-        maxKeep = maxKeep || 1000;
-        for (var camName of this.labelsByCam.keys()) {
-            var labels = this.labelsByCam.get(camName);
-            var lfl = labels && labels._lazyFrameList;
-            var lflCache = lfl && lfl.cache;
-            if (!lflCache || lflCache.size <= maxKeep) continue;
-            var store = labels._lazyDataStore;
-            var frameCol = store && store.framesData && store.framesData.frame_idx;
-            var toDelete = [];
-            for (var row of lflCache.keys()) {
-                var f = frameCol ? Number(frameCol[row]) : row;
-                if (Math.abs(f - currentFrame) > maxKeep) toDelete.push(row);
-            }
-            for (var i = 0; i < toDelete.length; i++) lflCache.delete(toDelete[i]);
-        }
-    }
-
     close() {
-        // Also clear each camera's internal typed-frame cache (close() only cleared
-        // our own layer, leaking the sleap-io.js LazyFrameList caches).
-        for (var labels of this.labelsByCam.values()) {
-            var lfl = labels && labels._lazyFrameList;
-            if (lfl && lfl.cache) lfl.cache.clear();
-        }
+        // Dropping the labels refs lets each camera's lazy Labels (and its
+        // `frameCacheLimit`-bounded internal cache) be GC'd — no manual clear.
         this.labelsByCam.clear();
         this.frameRowByCam.clear();
         this.numNodesByCam.clear();
