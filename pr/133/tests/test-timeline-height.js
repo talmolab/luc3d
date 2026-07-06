@@ -166,7 +166,9 @@
             // uncapped refresh grows to preferred; the capped one clamps to 30%.
             var el = sized(40);
             var tl = new Timeline(el, { totalFrames: 500 });
-            tl.refreshTracks(buildSessionWithTracks(90, ['cam1']), { cap: true });
+            // 3 cameras × many tracks so the (capped) row count still makes
+            // getPreferredHeight far exceed 30% of any reasonable test window.
+            tl.refreshTracks(buildSessionWithTracks(90, ['cam1', 'cam2', 'cam3']), { cap: true });
             var cap = Math.floor(0.3 * window.innerHeight);
             var preferred = tl.getPreferredHeight();
             assertGreaterThan(preferred, cap, 'precondition: preferred height exceeds the 30% cap');

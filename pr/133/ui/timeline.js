@@ -104,7 +104,7 @@ export class Timeline {
          * (earliest segment start) are shown and a "+N more" indicator row is
          * appended. 0 disables the cap.
          */
-        this.MAX_TRACK_ROWS_PER_CAMERA = 64;
+        this.MAX_TRACK_ROWS_PER_CAMERA = 32;
 
         /** @const {number} Vertical gap between track rows (px) */
         this.TRACK_ROW_GAP = 1;
