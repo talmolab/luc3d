@@ -351,11 +351,12 @@ synchronous loop over `frameIndices` (used by single-frame tracking + the
 bench/test harnesses, which read its return value). Its per-frame body is factored
 into `createTrackerRun`/`stepTrackerFrame`, reused by the async sibling
 `runCrossViewTrackerProgress(…, onProgress)`: identical association but it yields
-to the event loop ~every 5% of frames (≈20 updates total) and awaits
-`onProgress(done, total)`, so **Track All** repaints a "done/total (pct%)" counter
-in the loading overlay instead of freezing at 0/N. Updates are deliberately
-infrequent — each yield forces a browser repaint, expensive on a large run — so
-the counter steps rather than streams, keeping Track All fast. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
+to the event loop on a **wall-clock throttle** (`PAINT_INTERVAL_MS`, ≤ ~2.5
+repaints/sec — NOT a per-frame stride) and awaits `onProgress(done, total)`, so
+**Track All** repaints a "done/total (pct%)" counter without the repaints
+dominating. Each yield lets the browser run a full render of the heavy multi-view
+app (the real cost), so a fast run yields only a handful of times and stays close
+to the old fully-synchronous speed; a long run still updates smoothly. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
 `commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
 (with `identityId` + `points3d`), maps each target's stable trackId to a session
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
