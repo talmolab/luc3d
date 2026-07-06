@@ -10,6 +10,7 @@ import { state, timeline, viewport3d } from '../ui/app-state.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js
 import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
 import { updateTriangulationBadge } from '../ui/info-panel.js';
+import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
@@ -705,6 +706,19 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         cameraMap[cameras[c].name] = cameras[c];
     }
 
+    // Feature: views excluded in the Tracking Wizard's Camera Views panel never
+    // CONTRIBUTE to the 3D solve — but we still reproject INTO them below, so an
+    // excluded view shows the reprojected skeleton (from the trusted views) and its
+    // own error without ever influencing the geometry. `included[c]` gates only the
+    // observation collection; reprojection/error steps still cover every camera.
+    // Source: `options.includedCameras` (explicit list, for tests) else the live
+    // Camera Views setting. `typeof` guard keeps this safe under the flat-script
+    // test harness where the ES import isn't resolved.
+    const included = cameraNames.map(function (n) {
+        if (options && options.includedCameras) return options.includedCameras.indexOf(n) >= 0;
+        return (typeof isCameraTracked === 'function') ? isCameraTracked(n) : true;
+    });
+
     // Determine number of keypoints from the first available instance
     let numKeypoints = 0;
     for (let c = 0; c < cameraNames.length; c++) {
@@ -735,7 +749,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             const inst = instanceGroup.getInstance(cameraNames[c]);
             // Skip nulled nodes — they are excluded from triangulation
             const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
-            if (inst && inst.points && inst.points[k] != null && !isNulled) {
+            if (included[c] && inst && inst.points && inst.points[k] != null && !isNulled) {
                 const cam = cameraMap[cameraNames[c]];
                 if (cam && cam.undistortPoint) {
                     obsForKeypoint.push(cam.undistortPoint(inst.points[k]));
@@ -754,12 +768,69 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     //   'ba'            — DLT to initialize, then non-linear bundle-adjustment
     //                     refinement minimizing geometric reprojection error.
     const method = (options && options.method === 'ba') ? 'ba' : 'dlt';
-    let points3d;
-    if (method === 'ba') {
-        const dltPoints = triangulatePoints(allObservations, projMatrices);
-        points3d = triangulatePointsBA(allObservations, projMatrices, dltPoints);
-    } else {
-        points3d = triangulatePoints(allObservations, projMatrices);
+    function triangulateFrom(obs) {
+        if (method === 'ba') {
+            const dltPoints = triangulatePoints(obs, projMatrices);
+            return triangulatePointsBA(obs, projMatrices, dltPoints);
+        }
+        return triangulatePoints(obs, projMatrices);
+    }
+    let points3d = triangulateFrom(allObservations);
+
+    // Robust triangulation (opt-in via the Tracking Wizard's "Reprojection error
+    // threshold (px)"): iteratively drop any 2D node whose reprojection error in a
+    // view exceeds the threshold, then re-triangulate that node from the remaining
+    // reliable views. A node left with <2 views triangulates to null (DLT returns
+    // null) — i.e. it is dropped from 3D rather than trusted to a bad fit.
+    const reprojThresh = (options && options.reprojErrorThreshold != null)
+        ? options.reprojErrorThreshold
+        : ((typeof getTrackingThreshold === 'function') ? getTrackingThreshold('reprojErrorThreshold') : 0);
+    if (reprojThresh > 0) {
+        // Per-(node, view) rejection. The threshold drops an individual high-error
+        // NODE observation FROM A VIEW (one 2D keypoint) and re-triangulates that
+        // node from its remaining views — it never drops a whole view (that is the
+        // Tracking Wizard's job) nor a node that still has ≥2 good views. Only when
+        // a node is left with <2 reliable views is it dropped from 3D (null).
+        function nodeError(k, c) {
+            if (allObservations[k][c] == null || points3d[k] == null) return -1;
+            const inst = instanceGroup.getInstance(cameraNames[c]);
+            const raw = inst && inst.points ? inst.points[k] : null;
+            if (raw == null) return -1;
+            const rep = reprojectPointCamera(points3d[k], cameraMap[cameraNames[c]]);
+            if (rep == null) return -1;
+            const dx = raw[0] - rep[0], dy = raw[1] - rep[1];
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+        // Drop the SINGLE worst node-observation per node per pass, re-triangulating
+        // between passes (never below 2 views). Dropping every over-threshold
+        // observation at once is wrong: one bad observation contaminates the initial
+        // fit, inflating the error of the good views so they'd be discarded too.
+        const maxPasses = Math.max(1, cameraNames.length);
+        for (let iter = 0; iter < maxPasses; iter++) {
+            let removedAny = false;
+            for (let k = 0; k < numKeypoints; k++) {
+                if (points3d[k] == null) continue;
+                let worstC = -1, worstErr = reprojThresh, inliers = 0;
+                for (let c = 0; c < cameraNames.length; c++) {
+                    if (!included[c] || allObservations[k][c] == null) continue;
+                    inliers++;
+                    const e = nodeError(k, c);
+                    if (e > worstErr) { worstErr = e; worstC = c; }
+                }
+                if (worstC >= 0 && inliers > 2) { allObservations[k][worstC] = null; removedAny = true; }
+            }
+            if (!removedAny) break;
+            points3d = triangulateFrom(allObservations);
+        }
+        // A node whose remaining views still exceed the threshold couldn't be made
+        // reliable without dropping below 2 views → drop it from 3D (null).
+        for (let k = 0; k < numKeypoints; k++) {
+            if (points3d[k] == null) continue;
+            for (let c = 0; c < cameraNames.length; c++) {
+                if (!included[c] || allObservations[k][c] == null) continue;
+                if (nodeError(k, c) > reprojThresh) { points3d[k] = null; break; }
+            }
+        }
     }
 
     // Fast path: skip reprojections/errors when only 3D points are needed (bulk ops)

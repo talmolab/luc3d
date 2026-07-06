@@ -359,12 +359,18 @@ the counter steps rather than streams, keeping Track All fast. `buildTrackerDete
 `commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
 (with `identityId` + `points3d`), maps each target's stable trackId to a session
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
-linked pool. Track All passes `propagate:true` so `propagateIdentitiesToTracks`
-rewrites `Instance.trackIdx` + rebuilds `session.tracks` — making the result
-visible in Color-by-Track AND carried into native SLEAP `.slp` export (Track
-Frame passes `false`: per-frame identities only). Both filter out views excluded
-in the Tracking Wizard (`isCameraTracked`) and abort if fewer than 2 views
-remain. Hyperparameters come from the
+linked pool. Both Track All and Track Frame pass `propagate:false`: the tracker
+assigns **identities only** (per-frame identity map + InstanceGroups). It does NOT
+rewrite `Instance.trackIdx` — propagation is a deliberate, user-chosen step via
+**Tracks ▸ Propagate IDs → Tracks** (`propagateIdentitiesToTracks`) or **Tracks →
+IDs**, so a run never silently clobbers the imported track structure. (Color-by-ID
+shows results immediately; Color-by-Track / native `.slp` track export reflect
+them once the user propagates.) Both filter out views excluded in the Tracking
+Wizard (`isCameraTracked`) and abort if fewer than 2 views remain. **Lazy
+sessions:** `session.frameIndices` returns only the resident window on a lazy
+`.slp` session (#132), so Track All first `await loadAllLazyFrames()` to
+materialize the whole project, then re-reads the full frame list — otherwise it
+would silently track only the visited frames. Hyperparameters come from the
 `corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`
 tracking thresholds (`ui/settings.js`; defaults are the `G_keeptrack_3d6`
 champion values). Track Frame/Track All pass the user's animal count as
@@ -500,6 +506,18 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
+  **Two robustness features:** (1) views excluded in the Tracking Wizard's Camera
+  Views panel (`isCameraTracked`, or `options.includedCameras` override) never
+  contribute to the 3D solve, but are still reprojected INTO — an excluded view
+  shows the reprojected skeleton + its error without influencing geometry. (2)
+  Reprojection-error rejection (Tracking Wizard threshold `reprojErrorThreshold`
+  px, opt-in / default 0 = off, or `options.reprojErrorThreshold`): drops
+  individual high-error **node-observations (a node in a single view)** and
+  re-triangulates that node from its remaining views — it never drops a whole view
+  (wizard's job) nor a node that still has ≥2 good views. Removes the single worst
+  observation per node per pass, re-triangulating between passes (avoids an outlier
+  contaminating the fit and taking good views with it); a node left with <2
+  reliable views is nulled. Covered by `tests/test-triangulation-robust.js`.
 - Lazy loading: class `LazyFrameLoader` (analysis `.h5`, worker-backed) +
   `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD` route
   large prediction `.slp` to the main-thread `SioLazyLoader`

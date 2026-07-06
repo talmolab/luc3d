@@ -323,6 +323,11 @@ const TRACKING_THRESHOLDS = [
         min: 0, max: 10, step: 0.05,
         desc: 'Exponential decay exp(-time_penalty·Δt) applied over frame gaps in the cross-view tracker (time_penalty). Bench value 0.1.',
     },
+    {
+        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
+        min: 0, max: 500, step: 1,
+        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+    },
 ];
 
 const _thrById = new Map();
@@ -336,6 +341,7 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
+    'reprojErrorThreshold',
 ]);
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.

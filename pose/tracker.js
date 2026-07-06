@@ -24,6 +24,7 @@ import { InstanceGroup } from './pose-data.js';
 import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
 import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
 import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
+import { loadAllLazyFrames } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 
@@ -1090,6 +1091,26 @@ export async function trackAll() {
     if (trackerNumAnimals == null) {
         if (!promptNumAnimals()) return;
     }
+
+    // Lazy sessions (large .slp session folders, #132) keep only a resident window
+    // in `frameGroups`, so `session.frameIndices` covers just the VISITED frames —
+    // but the cross-view tracker is sequential and needs EVERY frame in order.
+    // Materialize the whole project first, then re-read the full frame list.
+    // (Non-lazy sessions already have all frames resident — this is a no-op.)
+    if (session.lazyLoader) {
+        showLoading('Loading all ' + session.numFrames + ' frames for tracking…');
+        await new Promise(function (r) { setTimeout(r, 0); });
+        try {
+            await loadAllLazyFrames(function (msg) { showLoading(msg); });
+        } catch (e) {
+            hideLoading();
+            console.error('[TrackAll] failed to load all lazy frames:', e);
+            setStatus('Track All: could not load all frames — ' + e.message, 'error');
+            return;
+        }
+        frameIndices = session.frameIndices;   // now the full project, not the window
+    }
+
     var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
     console.log('[TrackAll] numAnimals:', effectiveNumAnimals,
         trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
@@ -1103,17 +1124,20 @@ export async function trackAll() {
 
     showLoading('Assigning identities: 0/' + frameIndices.length + ' frames…');
 
-    // Drive the CrossViewTracker across all frames and populate identities +
-    // per-frame map + InstanceGroups + per-instance tracks (via propagate) so
-    // both the GUI and native SLP export carry the result.
+    // Drive the CrossViewTracker across all frames and populate IDENTITIES +
+    // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
+    // to tracks (propagate=false): the tracker assigns IDs, and the user chooses
+    // when/which direction to propagate via Tracks ▸ Propagate IDs → Tracks (or
+    // Tracks → IDs). Auto-rewriting Instance.trackIdx here would clobber the
+    // imported track structure without consent.
     try {
         // Yield once so the initial overlay paints before the run begins, then
-        // drive the async progress variant: it yields every ~1% of frames and
-        // calls back with (done, total) so the counter advances live instead of
-        // freezing at 0/N.
+        // drive the async progress variant: it yields ~every 5% of frames and
+        // calls back with (done, total) so the counter advances without freezing
+        // at 0/N (infrequent so the repaints don't slow the run).
         await new Promise(function (r) { setTimeout(r, 0); });
         var lres = await runCrossViewTrackerProgress(
-            session, cameras, frameIndices, true, effectiveNumAnimals,
+            session, cameras, frameIndices, false, effectiveNumAnimals,
             function (done, total) {
                 showLoading('Assigning identities: ' + done + '/' + total +
                     ' frames (' + Math.round(done / total * 100) + '%)…');
@@ -1124,8 +1148,8 @@ export async function trackAll() {
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         console.timeEnd('[TrackAll] total');
-        setStatus('Tracked ' + frameIndices.length + ' frames, ' +
-            lres.numIdentities + ' identities', 'success');
+        setStatus('Assigned ' + lres.numIdentities + ' identities across ' +
+            frameIndices.length + ' frames — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
     } catch (e) {
         hideLoading();
         console.error('[TrackAll] error:', e, e.stack);
