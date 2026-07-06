@@ -1345,10 +1345,8 @@ branch uses those segments directly, subtracting materialized frames via
 ~1000s-track prediction dump from overflowing the canvas cap and being unreadable, the
 per-camera row build **caps** at `MAX_TRACK_ROWS_PER_CAMERA` (64): **per camera** it
 keeps the first-N tracks by **appearance** (earliest segment start — no extra I/O),
-preserving track-index display order, and appends a label-only `…` truncation row
-(hovering it shows a "N more tracks" tooltip — `_drawTrackBars` caches the row's
-Y-range in `_moreRowHitboxes`, hit-tested by `_moreIndicatorHiddenAt` in
-`_handleMouseMove`). The producer's per-track `counts`
+preserving track-index display order, and appends a label-only `+N more` truncation
+row. The producer's per-track `counts`
 (occupancy) is kept as metadata but no longer drives the cap. Normal (few-track)
 sessions are under the cap and render exactly as before. Covered by
 `tests/test-timeline-sparse-occupancy.js`.
