@@ -1343,7 +1343,7 @@ branch uses those segments directly, subtracting materialized frames via
 `_subtractFramesFromSegments` (binary-search split — for materialized frames the live
 `fg.instances` data wins) instead of expanding a 108k-frame grid. To keep a
 ~1000s-track prediction dump from overflowing the canvas cap and being unreadable, the
-per-camera row build **caps** at `MAX_TRACK_ROWS_PER_CAMERA` (64): **per camera** it
+per-camera row build **caps** at `MAX_TRACK_ROWS_PER_CAMERA` (32): **per camera** it
 keeps the first-N tracks by **appearance** (earliest segment start — no extra I/O),
 preserving track-index display order, and appends a label-only `+N more` truncation
 row. The producer's per-track `counts`
