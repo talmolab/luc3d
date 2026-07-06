@@ -1668,7 +1668,20 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     var toCanvas = makeVideoToCanvasTransform(
         options.videoWidth, options.videoHeight, options.canvasWidth, options.canvasHeight);
     var colorByIdentity = !!options.colorByIdentity;
-    var baseWidth = options.lineWidth != null ? options.lineWidth : 2;
+    // Trails are thicker than the skeleton edges by default so they read at a
+    // glance; taper from this width down toward the past.
+    var baseWidth = (options.lineWidth != null ? options.lineWidth : 2) * 2;
+
+    // Per-age style ramp (index = segment age, 0 = nearest current). Toward the
+    // past the trail gets thinner, more transparent, AND slightly darker. `t`
+    // runs 1 (near) → ~0 (far); darken brightness from 1.0 down to ~0.55.
+    var stepAlpha = [], stepWidth = [], stepBright = [];
+    for (var a0 = 0; a0 < steps; a0++) {
+        var t0 = 1 - a0 / (steps + 1);
+        stepAlpha.push(Math.max(0.1, 0.9 * t0));
+        stepWidth.push(Math.max(0.8, baseWidth * t0));
+        stepBright.push(0.55 + 0.45 * t0);   // 1.0 near → 0.55 far (V in HSV)
+    }
 
     ctx.save();
     ctx.lineCap = 'round';
@@ -1676,7 +1689,11 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     for (var s = 0; s < seeds.length; s++) {
         var seed = seeds[s];
         if (seed.trackIdx == null || !seed.points) continue;
-        var color = brightenColor(getInstanceColor(seed, session, viewName, colorByIdentity, frameIdx), 1.25);
+        // Exact instance color (track color, or identity color in ID mode) — the
+        // same color the live skeleton uses, so the trail belongs to its animal.
+        var color = getInstanceColor(seed, session, viewName, colorByIdentity, frameIdx);
+        // Precompute the darkened color for each age once (reused across nodes).
+        var segColors = stepBright.map(function (b) { return adjustColorBrightness(color, b); });
 
         for (var n = 0; n < seed.points.length; n++) {
             var cur = seed.points[n];
@@ -1688,11 +1705,9 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
                 if (hp == null) { prev = null; continue; }   // node gap — break the line
                 var cp = toCanvas(hp[0], hp[1]);
                 if (prev) {
-                    // t: 1 (near current) → ~0 (far past). Thin + fade with age.
-                    var t = 1 - a / (steps + 1);
-                    ctx.globalAlpha = Math.max(0.06, 0.85 * t);
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = Math.max(0.4, baseWidth * t);
+                    ctx.globalAlpha = stepAlpha[a];
+                    ctx.strokeStyle = segColors[a];
+                    ctx.lineWidth = stepWidth[a];
                     ctx.beginPath();
                     ctx.moveTo(prev.x, prev.y);
                     ctx.lineTo(cp.x, cp.y);
