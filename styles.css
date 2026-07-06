@@ -168,6 +168,36 @@ body {
   background: var(--accent-dim);
 }
 
+.menu-dropdown-item .trail-check {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent, #4ea1ff);
+  font-weight: bold;
+}
+
+/* Nested submenu (e.g. Tracks ▸ Node Trails ▸ Off/10/50/100). The submenu is a
+   .menu-dropdown, so the global menu-close handler stamps it with an inline
+   display:none — the :hover rule needs !important to win over that. */
+.menu-dropdown-item.has-submenu {
+  position: relative;
+}
+
+.menu-dropdown-item.has-submenu .submenu-arrow {
+  margin-left: 24px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.menu-dropdown .submenu {
+  top: -5px;                /* align first submenu item with the parent row */
+  left: 100%;
+  min-width: 140px;
+}
+
+.menu-dropdown-item.has-submenu:hover > .submenu {
+  display: block !important;
+}
+
 .menu-dropdown-item .shortcut {
   margin-left: 24px;
   font-size: 11px;
@@ -3665,6 +3695,16 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Tracking Wizard ▸ Camera Views: a view excluded from tracking (weight 0)
+   greys out to signal it won't take part in the association math. */
+.settings-node-weight-row.settings-view-excluded .settings-kbd-label {
+  color: var(--text-muted, #888);
+  opacity: 0.55;
+}
+.settings-node-weight-row.settings-view-excluded .settings-num-input {
+  opacity: 0.55;
 }
 
 /* Tracking Wizard ▸ Tracking Thresholds: label + description, value on the right. */

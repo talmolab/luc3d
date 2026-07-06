@@ -17,7 +17,11 @@
 (function () {
     const { describe, it, assertEqual, assertTrue, assertGreaterThan, assertDeepEqual } = TestFramework;
 
-    const h5wasmUrl = location.origin + '/lib/h5wasm/h5wasm.iife.js';
+    // Resolve against the test page (tests/test-runner.html), so `../lib/...` →
+    // <app base>/lib/... — correct on localhost (root) AND on the GitHub Pages
+    // sub-path preview (/luc3d/pr/<n>/). `location.origin + '/lib/...'` was
+    // origin-root-relative and 404'd the h5wasm worker script on the sub-path.
+    const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js', document.baseURI).href;
 
     function mkVideo(S, fn, n) {
         const v = new S.Video({ filename: fn, backendMetadata: { type: 'MediaVideo', shape: [n, 64, 48, 1], filename: fn }, openBackend: false });

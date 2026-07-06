@@ -11,6 +11,7 @@ import {
     triangulateAndReproject, storeReprojectedInstances,
 } from '../pose/triangulation.js';
 import { drawFrameOverlays } from './overlays.js';
+import { isCameraTracked } from './settings.js';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
 import { editGroupState, finishEditGroup } from './identity-assignment.js';
@@ -234,6 +235,7 @@ export function drawAllOverlays(frameIdx) {
 
         drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
+            trailLength: state.trailLength,
             showLegend: vis.showLegend,
             showUser: vis.showUser,
             showPredicted: vis.showPredicted,
@@ -257,6 +259,7 @@ export function drawAllOverlays(frameIdx) {
             assignmentMode: assignmentMode,
             selectedUnlinkedId: selectedUnlinked ? selectedUnlinked.id : null,
             editGroupTarget: editGroupTarget,
+            trackingExcluded: !isCameraTracked(view.name),
         });
     }
 

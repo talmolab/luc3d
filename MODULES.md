@@ -213,14 +213,14 @@ which was removed during the ESM migration).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
-**Node weights.** At the start of `matchFrameInstances`, the module resolves a
-per-node weight array (`_nodeWeights`) from the session skeleton via
-`getNodeWeightArray` (`ui/settings.js`, set in the Tracking Wizard). Every
-per-node cost — `epipolarScore`, `reprojectionScore`, the 3D-distance signal in
-`reorderGroupsByPrevTargets`, and each `computeInstanceDistance` call — scales a
-node's contribution by its weight and skips weight-0 nodes, so a node set to 0 is
-ignored by the tracker entirely. `null` weights ⇒ every node weighted 1
-(behaviorally identical to before this feature).
+**Node weights.** Both the app's CrossViewTracker and the bench-only
+`matchFrameInstances` honor per-node weights from the Tracking Wizard
+(`getNodeWeightArray`, `ui/settings.js`). `runCrossViewTracker` passes the
+resolved weight array into the tracker (`hp.nodeWeights`), where each node's
+contribution to the 2D + 3D association cost is scaled and weight-0 nodes are
+dropped. `matchFrameInstances` applies the same weights to `epipolarScore`,
+`reprojectionScore`, the 3D-distance signal in `reorderGroupsByPrevTargets`, and
+each `computeInstanceDistance`. `null` weights ⇒ every node weighted 1.
 
 **Tracking thresholds.** `matchFrameInstances` also snapshots the user-editable
 tracking thresholds (`_thresholds = getTrackingThresholds()`, `ui/settings.js`,
@@ -232,6 +232,31 @@ are no longer hard-coded: `epipolarScore` divides by `epipolarDecay`,
 `minMatchScore` and adds `prevIdentityBonus`, and `reprojectionGate(nViews)`
 returns `reprojGate2`/`reprojGate3`/`reprojGate4`. Defaults reproduce the prior
 constants exactly.
+
+**Benchmark-derived levers (LUC3D ↔ `sleap_3d` parity, bench-only).** Two
+thresholds on the legacy `matchFrameInstances` matcher port the two productive
+levers from the `G_keeptrack_3d6` benchmark champion; both default to a no-op.
+(The app no longer uses this matcher — see the CrossViewTracker above — so these
+are exercised only by the benchmark harness.)
+- *3D continuity weight (`track3dWeight`, default 1).* In
+  `reorderGroupsByPrevTargets`, Signal 2 (3D-position distance) contributes
+  `track3dWeight * exp(...)` and adds `track3dWeight` to the weighted-average
+  denominator. Raising it (≈6 ≈ champion) makes 3D-position continuity dominate
+  the temporal cost, suppressing sustained ID swaps — the analog of the
+  reference `correspondence_weight_3d`.
+- *Detection-pool filter (`filterMinVisibleNodes`/`filterMinInstanceScore`, both
+  default 0 = off).* `collectInstances` gates every instance through
+  `passesDetectionFilter` before matching: drop instances with fewer than
+  `filterMinVisibleNodes` present keypoints (`countVisibleNodes`), and — when a
+  per-instance `score` is available — below `filterMinInstanceScore`. This is the
+  geometry/confidence half of the detection filter; full parity (mean-node-score,
+  OKS dedup, gap recovery) needs per-detection scores plumbed through the H5
+  loader and is not yet implemented.
+
+Covered by `tests/test-tracker-luc3d.mjs` (filter + weight on the real
+`matchFrameInstances`) and `tests/test-tracker-gui.mjs` (track/identity
+assignment + GUI refresh contract); both run under Node via the bench-style
+UI-stubbing loaders (`scripts/bench/hooks.mjs`, `tests/tracker-gui-hooks.mjs`).
 
 **Note.** `reorderGroupsByPrevTargets` passes a true `nTargets × nGroups`
 rectangular cost matrix to `hungarianAlgorithm` (no pre-padding to square
@@ -306,7 +331,9 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getTrackingThresholds`,
-  `getTrackingThreshold`.
+  `getTrackingThreshold`, `isCameraTracked` (both `trackAll`/`trackCurrentFrame`
+  drop cameras where `isCameraTracked(name)` is false before tracking; abort with
+  a warning if fewer than 2 views remain included).
 - `../import-export/save-load.js` — `setStatus`, `showLoading`, `hideLoading`.
 - `../ui/rendering.js` — `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateInfoPanel`.
@@ -315,6 +342,107 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 
 **User-facing features.** "Track Frame" / "Track All" buttons, identity
 propagation across frames, find-match-for-selected.
+
+**Tracker engine.** `trackCurrentFrame` / `trackAll` drive the
+`CrossViewTracker` (`pose/cross-view-tracker.js`) exclusively — it is the app's
+only tracker. The drive lives in
+`runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets)` — a
+synchronous loop over `frameIndices` (used by single-frame tracking + the
+bench/test harnesses, which read its return value). Its per-frame body is factored
+into `createTrackerRun`/`stepTrackerFrame`, reused by the async sibling
+`runCrossViewTrackerProgress(…, onProgress)`: identical association but it yields
+to the event loop ~every 5% of frames (≈20 updates total) and awaits
+`onProgress(done, total)`, so **Track All** repaints a "done/total (pct%)" counter
+in the loading overlay instead of freezing at 0/N. Updates are deliberately
+infrequent — each yield forces a browser repaint, expensive on a large run — so
+the counter steps rather than streams, keeping Track All fast. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
+`commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
+(with `identityId` + `points3d`), maps each target's stable trackId to a session
+`Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
+linked pool. Both Track All and Track Frame pass `propagate:false`: the tracker
+assigns **identities only** (per-frame identity map + InstanceGroups). It does NOT
+rewrite `Instance.trackIdx` — propagation is a deliberate, user-chosen step via
+**Tracks ▸ Propagate IDs → Tracks** (`propagateIdentitiesToTracks`) or **Tracks →
+IDs**, so a run never silently clobbers the imported track structure. (Color-by-ID
+shows results immediately; Color-by-Track / native `.slp` track export reflect
+them once the user propagates.) Both filter out views excluded in the Tracking
+Wizard (`isCameraTracked`) and abort if fewer than 2 views remain. **Lazy
+sessions:** `session.frameIndices` returns only the resident window on a lazy
+`.slp` session (#132), so Track All first `await loadAllLazyFrames()` to
+materialize the whole project, then re-reads the full frame list — otherwise it
+would silently track only the visited frames. Hyperparameters come from the
+`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`
+tracking thresholds (`ui/settings.js`; defaults are the `G_keeptrack_3d6`
+champion values). Track Frame/Track All pass the user's animal count as
+`maxTargets` so the tracker caps live targets at that number (a LUCID divergence
+from the reference — see `pose/cross-view-tracker.js`; `null`/omitted =
+uncapped/faithful). Covered by `tests/test-crossview-populate.mjs` (data-structure
+population) and `tests/test-cross-view-tracker.mjs` (algorithm).
+
+**Legacy `matchFrameInstances` (bench-only).** The original per-frame matcher +
+4-signal reorder is retained and exported but **no longer used by the app** —
+only by the benchmark harness (`scripts/bench/speed_test.mjs`,
+`bench_driver.mjs`) and `tests/test-tracker-luc3d.mjs` for head-to-head engine
+comparison. Its thresholds (`epipolarDecay`, `reprojSigma`, `reprojWeight`,
+`minMatchScore`, `prevIdentityBonus`, `reprojGate*`, `track3dWeight`) are hidden
+from the Tracking Wizard.
+
+---
+
+### pose/cross-view-tracker.js
+
+**Purpose.** `CrossViewTracker` — LUCID's cross-view 3D tracker and the app's
+only temporal tracker. Adapted from the `CrossViewTracker` written by Liezl Maree
+in the talmolab/sleap-3d repo (Python) and reimplemented in JS; a faithful port
+of `/root/vast/eric/sleap-3d/sleap_3d/tracker.py`. A cross-view 3D
+multi-target tracker: associates per-camera 2D detections to a running list of 3D
+`Target`s, one camera-view at a time, via Hungarian assignment on a cost that
+sums a 2D reprojection term and a 3D point-to-ray term. No Kalman filter, no
+velocity model, no track aging (matches the reference).
+
+**Coordinate conventions (verified vs `sleap_3d/geometry.py`).** Works entirely
+in NORMALIZED camera coordinates: detections are undistorted + K⁻¹-applied on
+ingest (`normalizePoint` == `cv2.undistortPoints` with no `P`), and the
+"projection matrix" is the camera's bare 3×4 extrinsic `[R|t]`
+(`camera.extrinsicMatrix`). `distanceThreshold` is in world units (mm);
+`velocityThreshold` is in normalized image units (so the 2D term saturates and
+the 3D term dominates — hence `corr3dWeight` is the meaningful knob).
+
+**Exports.** `CrossViewTracker` (class: `trackFrame(detsByCam, camsOrder)`,
+maintains `.targets`), `Detection` (2D observation: `pointsNorm`/`pointsPixel` +
+`cam`/`frameIdx`/`slot`), `normalizePoint`.
+
+**Faithful-port quirks preserved (do NOT "fix").** Per-view-per-frame
+association; `velocity`/`distance` thresholds are SOFT (drive the cost negative,
+not hard gates) and negative matches are not filtered; the 3D term ignores the
+time gap; 3D velocity is zero; re-triangulation is plain DLT over all stored
+per-view detections. Adds a defensive `nansum`-style skip of non-finite cost
+terms (robust to a degenerate `[I|0]` camera).
+
+**LUCID divergence — `maxTargets` (opt-in target cap).** The reference has NO
+animal-count cap; births are unbounded and IDs stay bounded only via upstream
+detection filtering. The constructor accepts an optional `hp.maxTargets`: when a
+positive integer, `_initializeTargets` stops spawning births once that many live
+targets exist (leftover detections are dropped for the frame and re-acquired by
+matching next frame). `null`/omitted (the default) restores exact reference
+behavior, so bench/comparison runs stay faithful. Wired from Track All / Track
+Frame via the user's animal count.
+
+**LUCID divergence — `nodeWeights` (per-node association weights).** The reference
+weights every node equally. The constructor accepts an optional `hp.nodeWeights`
+array (indexed to `Instance.points`); `_adjacency2d`/`_adjacency3d` scale each
+node's cost contribution by its weight via `_nodeWeight(k)` and skip weight-0
+nodes entirely (dropping them from matching). `null`/omitted ⇒ every node weighted
+1 (faithful). Wired from `runCrossViewTracker` via the Tracking Wizard's Node
+Weights section (`getNodeWeightArray`).
+
+**Imports.** `pose/triangulation.js` (all geometry is coordinate-agnostic and
+reused by passing the bare extrinsic + normalized points:
+`triangulatePoints`, `reprojectPoint`, `backProjectToRays`,
+`pointsToRayDistances`, `hungarianAlgorithm`, `computeFundamentalMatrix`,
+`epipolarErrorMatrix`).
+
+**Imported by.** `pose/tracker.js`.
 
 ---
 
@@ -378,6 +506,19 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
+  **Two robustness features:** (1) views excluded in the Tracking Wizard's Camera
+  Views panel (`isCameraTracked`, or `options.includedCameras` override) never
+  contribute to the 3D solve, but are still reprojected INTO — an excluded view
+  shows the reprojected skeleton + its error without influencing geometry. (2)
+  Reprojection-error threshold (Tracking Wizard `reprojErrorThreshold` px, opt-in /
+  default 0 = off, or `options.reprojErrorThreshold`): does not include a
+  **node-in-a-view** (one 2D keypoint) whose reprojection error exceeds the
+  threshold, and re-triangulates that node from the remaining views. It acts per
+  node within a view — never on a whole view (wizard's job). Excludes the single
+  worst over-threshold observation per node per pass and re-triangulates between
+  passes (each exclusion shifts the remaining views' errors, so it re-checks); a
+  node left with <2 views under the threshold is nulled. Covered by
+  `tests/test-triangulation-robust.js`.
 - Lazy loading: class `LazyFrameLoader` (analysis `.h5`, worker-backed) +
   `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD` route
   large prediction `.slp` to the main-thread `SioLazyLoader`
@@ -944,8 +1085,33 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
   `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
+- Node trails (issue #102): `drawNodeTrails(ctx, viewName, session, frameIdx,
+  options)` — mirrors SLEAP's TrackTrailOverlay. The window is the last
+  `options.trailLength`+1 **present** frames up to and including `frameIdx`
+  (sparse-aware, like SLEAP's `labels.find(video,
+  range(0,frame_idx+1))[-trail_length:]`; only reads frames already in
+  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102). Draws a
+  trail for **every track that appears anywhere in the window** (linked AND
+  unlinked via `trailViewInstances`, matched by per-view `trackIdx`) — including
+  tracks that have **vanished** from the current frame, so a trail lingers and
+  fades out rather than disappearing the instant its instance is gone (unlinked
+  matters too: identities are inspected BEFORE cross-view linking). Each node's
+  positions join into a polyline that toward the past thins, fades, and darkens;
+  each segment is colored by the instance's color AT that frame (per-frame identity
+  lookup), so an identity/color **switch shows as a color change along the trail**.
+  `drawFrameOverlays` calls it right after the canvas clear (behind the live
+  skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
+  Node Trails** submenu (Off/10/50/100/250/500 → `state.trailLength`).
 - Composite: `drawFrameOverlays(ctx, viewName, frameGroup,
   instanceGroups, session, options)` — the main per-view draw entrypoint.
+  `options.trackingExcluded` (set by `rendering.js` from `isCameraTracked`)
+  recolors everything drawn for the view to a flat grey via a `source-atop`
+  wash (drawn before the legend), signalling a Tracking-Wizard-excluded view.
+  **ID overlays:** in identity color mode (`options.colorByIdentity`) it now
+  labels **predicted** instances with their identity name/color (step 3a), not
+  just user instances — so the cross-view tracker's output (predicted) shows its
+  IDs as text for proofreading. `options.trailLength` threads through to
+  `drawNodeTrails`. Covered by `tests/test-node-trails.mjs`.
 - Misc: `drawLegend`, `getFrameStats`.
 
 **Imports from project modules.** None.
@@ -976,7 +1142,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `'circle'` — reproj matches the 3D viewer marker (also `'circle'`) per
   issue #95. (`drawReprojectedSkeleton`'s own primitive fallback stays `'x'`
   for direct callers; the user-facing default comes from here.)
-- `drawAllOverlays(frameIdx)` — main per-frame redraw across every view.
+- `drawAllOverlays(frameIdx)` — main per-frame redraw across every view. Threads
+  `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
+  into each `drawFrameOverlays` call.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
 **Imports from project modules.**
@@ -985,6 +1153,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `storeReprojectedInstances`.
 - `./overlays.js` — `drawFrameOverlays`.
+- `./settings.js` — `isCameraTracked` (passed to `drawFrameOverlays` as
+  `trackingExcluded` so views excluded in the Tracking Wizard render grey).
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
 
@@ -1084,9 +1254,13 @@ the headless test runner doesn't crash on a missing `document`.
 
 **Purpose.** Central user-settings store: the default triangulation method
 (`'dlt'` | `'ba'`, default `'dlt'`), per-skeleton-node **tracking weights**
-(name → weight in `[0,1]`, default `1`), the cross-view **tracking thresholds**
-(`TRACKING_THRESHOLDS` catalog — Tier A scoring knobs + Tier B reprojection
-gates), plus a comprehensive **catalog of every keyboard shortcut**
+(name → weight in `[0,1]`, default `1`), per-camera **tracking inclusion**
+(name → `0|1`, default `1` = view participates in tracking; `0` = excluded from
+the association math but still shown in the GUI), the cross-view **tracking thresholds**
+(`TRACKING_THRESHOLDS` catalog — Tier A scoring knobs, Tier B reprojection gates,
+and the benchmark-derived levers `track3dWeight` / `filterMinVisibleNodes` /
+`filterMinInstanceScore`; see `pose/tracker.js`), plus a comprehensive **catalog
+of every keyboard shortcut**
 (`ACTION_CATALOG`). Settings persist to `localStorage` (`lucid.settings.v1`) and
 survive reloads. The catalog is the single source of truth for the Settings ▸
 Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
@@ -1107,15 +1281,25 @@ handler elsewhere and listed for reference only.
   `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
   resolves a parallel weight array for an ordered node-name list — the form the
   tracker consumes (indexed to match `Instance.points`).
+- `getCameraWeight(name)` / `isCameraTracked(name)` / `getCameraWeights()` /
+  `setCameraWeights(map)` — read/write per-camera tracking inclusion (coerced to
+  `0|1`; entries equal to the default `1` are dropped so only excluded views
+  persist). `isCameraTracked` is the boolean the tracker filters cameras by
+  (`pose/tracker.js` `trackAll`/`trackCurrentFrame`); at least 2 views must stay
+  included or tracking aborts with a warning.
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
-  cross-view tracker's user-editable thresholds. `getTrackingThresholdDefs`
-  returns the wizard's render catalog `[{ id, label, default, value, min, max,
-  step, desc }]`; `getTrackingThresholds` returns the effective `{ id: value }`
-  map the tracker snapshots per run. Values clamp to each threshold's range and
-  entries equal to the default are dropped. Ids: `epipolarDecay`, `reprojSigma`,
-  `epipolarWeight`, `reprojWeight`, `minMatchScore`, `prevIdentityBonus`,
-  `reprojGate2`, `reprojGate3`, `reprojGate4`.
+  tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
+  wizard's render catalog `[{ id, label, default, value, min, max, step, desc }]`,
+  **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
+  only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
+  `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`). The
+  remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
+  `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
+  `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
+  but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
+  the effective `{ id: value }` map the tracker snapshots per run; values clamp to
+  range and entries equal to the default are dropped.
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
@@ -1161,29 +1345,38 @@ entries get a click-to-capture key chip that records a **chord or a multi-key
 sequence**: keep pressing keys (the primary Ctrl/Cmd modifier is normalized to
 `Mod` via `chordFromEvent`) until you click anywhere to set, or Esc to cancel,
 with duplicate-binding rejection; fixed entries
-render a greyed, dashed reference chip), and **Tracking Wizard** (two sections:
+render a greyed, dashed reference chip), and **Tracking Wizard** (three sections:
 **Node Weights** — one row per node of the active session's skeleton with a
-number field, range `0–1`, step `0.01`, spinner arrows suppressed, seeded from
-`getNodeWeight(name)`, with a hint when no skeleton is loaded; and **Tracking
+number field, range `0–1`, step `0.01`, seeded from `getNodeWeight(name)`; a `0`
+drops the node from the CrossViewTracker's association cost and greys the row
+(`.settings-view-excluded`), with a hint when no skeleton is loaded; **Camera
+Views** — one row per camera of the active session with a binary `0/1` number
+field seeded from `getCameraWeight(name)`; a `0` excludes that view from tracking
+and greys the row, with a hint when no cameras are loaded; and **Tracking
 Thresholds** — one labelled+described number field per `getTrackingThresholdDefs()`
-entry, range/step from the catalog). All edits mutate a local `working` state
-only (only editable bindings are tracked); nothing commits until **Apply**
+entry (the CrossViewTracker's free parameters only; legacy luc3d thresholds are
+filtered out), range/step from the catalog). All edits mutate a local `working`
+state only (only editable bindings are tracked); nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
-`setTrackingThresholds`). Cancel / close `×` / backdrop click / Escape discard. A
+`setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
+timeline so excluded views grey immediately. Cancel / close `×` / backdrop click
+/ Escape discard. A
 capture-phase document keydown listener makes the modal fully capture the
 keyboard (background shortcuts don't fire while it's open) and is removed on
 teardown.
 
 **Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
 `setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`,
-`getNodeWeight`, `setNodeWeights`, `getTrackingThresholdDefs`,
-`setTrackingThresholds`); `./app-state.js` (`getActiveSession`).
+`getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
+`getTrackingThresholdDefs`, `setTrackingThresholds`); `./app-state.js`
+(`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
+for the post-Apply repaint).
 
 **Imported by.** `ui/ui-wiring.js`.
 
 **User-facing features.** Settings modal — choose default triangulation method,
-remap keyboard shortcuts, set per-node tracking weights (Tracking Wizard, also
-reachable via Tracks ▸ Tracking Wizard).
+remap keyboard shortcuts, set per-node tracking weights, and exclude camera views
+from tracking (Tracking Wizard, also reachable via Tracks ▸ Tracking Wizard).
 
 ---
 
@@ -1194,6 +1387,10 @@ frame markers, and current-frame indicator. Click-to-seek, drag-scrub,
 shift-drag range select, mouse-wheel / pinch zoom, middle-click pan. Block 1 (Prompt 4)
 adds tree-grouped per-camera labels, an inner scrollable track-area
 wrapper, and an empty-camera placeholder row per camera without tracks.
+Rows whose camera is excluded from tracking in the Tracking Wizard
+(`isCameraTracked(name)` false, imported from `./settings.js`) render grey —
+both the gutter label and the occupancy bars — distinct from the
+per-session visibility filter (`_hiddenCameras`), which drops the row entirely.
 
 **Canvas backing-store cap.** `resize()` clamps the canvas backing store to
 `MAX_CANVAS` (32000px/side). A tall timeline (e.g. 8 views × their tracks/

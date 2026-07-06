@@ -17,11 +17,14 @@ import {
     computeInstanceDistance,
     hungarianAlgorithm
 } from './triangulation.js';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js';
+import { InstanceGroup } from './pose-data.js';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
 import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold } from '../ui/settings.js';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
 import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
+import { loadAllLazyFrames } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 
@@ -165,19 +168,46 @@ function crossViewScore(instA, camA, instB, camB) {
 // Collect instances helper
 // ============================================
 
+// Number of present (non-null) keypoints in an instance — the geometry half of
+// the detection filter. Missing keypoints are stored as null (see getUndistortedPoints).
+function countVisibleNodes(points) {
+    if (!points) return 0;
+    var n = 0;
+    for (var k = 0; k < points.length; k++) if (points[k] != null) n++;
+    return n;
+}
+
+// Detection-pool gate: drop garbage/low-confidence instances before they enter
+// cross-view matching. Both gates default to 0 (no-op), so behavior is unchanged
+// unless the Tracking Wizard / bench sets them.
+//   filterMinVisibleNodes — geometry gate, needs no per-detection score (sleap-3d Stage-1 = 8)
+//   filterMinInstanceScore — confidence gate, only applies when inst.score is available (sleap-3d = 0.85)
+function passesDetectionFilter(inst, minVis, minScore) {
+    if (minVis > 0 && countVisibleNodes(inst.points) < minVis) return false;
+    if (minScore > 0 && inst.score != null && inst.score < minScore) return false;
+    return true;
+}
+
 function collectInstances(frameGroup, cameras) {
     var camInstances = {};
     var camMap = {};
     var activeCams = [];
+
+    var minVis = thr('filterMinVisibleNodes');
+    var minScore = thr('filterMinInstanceScore');
 
     for (var ci = 0; ci < cameras.length; ci++) {
         var cam = cameras[ci];
         camMap[cam.name] = cam;
         var all = [];
         var linked = frameGroup.getInstances(cam.name);
-        if (linked) for (var i = 0; i < linked.length; i++) all.push(linked[i]);
+        if (linked) for (var i = 0; i < linked.length; i++) {
+            if (passesDetectionFilter(linked[i], minVis, minScore)) all.push(linked[i]);
+        }
         var unlinked = frameGroup.getUnlinkedInstances(cam.name);
-        if (unlinked) for (var j = 0; j < unlinked.length; j++) all.push(unlinked[j].instance);
+        if (unlinked) for (var j = 0; j < unlinked.length; j++) {
+            if (passesDetectionFilter(unlinked[j].instance, minVis, minScore)) all.push(unlinked[j].instance);
+        }
         if (all.length > 0) {
             camInstances[cam.name] = all;
             activeCams.push(cam.name);
@@ -188,11 +218,21 @@ function collectInstances(frameGroup, cameras) {
 
 
 // ============================================
-// Single-frame matching
+// Single-frame matching — LEGACY "luc3d" matcher (BENCH-ONLY)
 // ============================================
+//
+// NOTE: This per-frame matcher + 4-signal reorder is the original LUC3D tracker.
+// The app no longer uses it — trackCurrentFrame/trackAll drive the
+// CrossViewTracker exclusively. It is retained ONLY so the head-to-head
+// benchmark harness (scripts/bench/speed_test.mjs, bench_driver.mjs) and its
+// tests (tests/test-tracker-*.mjs) can compare engines. Do not wire it back into
+// the GUI. The thresholds it reads (epipolarDecay, reprojSigma, reprojWeight,
+// minMatchScore, prevIdentityBonus, reprojGate*, track3dWeight) are hidden from
+// the Tracking Wizard (see `wizard:false` in ui/settings.js) but still resolve
+// to their defaults here.
 
 /**
- * Match instances across views for one frame.
+ * Match instances across views for one frame. (Bench-only; see banner above.)
  */
 export function matchFrameInstances(frameGroup, cameras, session, opts) {
     opts = opts || {};
@@ -341,6 +381,11 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
     var nGroups = groups.length;
     if (nTargets === 0 || nGroups === 0) return groups;
 
+    // Weight on the 3D-position continuity term (Signal 2) relative to the other
+    // temporal signals — the LUCID analog of the reference correspondence_weight_3d.
+    // 1 = equal weight (legacy); 6 ≈ the G_keeptrack_3d6 benchmark champion.
+    var trackWeight3d = thr('track3dWeight');
+
     // Pre-triangulate current groups
     var groupPts3d = [];
     for (var gi0 = 0; gi0 < nGroups; gi0++) {
@@ -391,8 +436,10 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     }
                 }
                 if (count3d > 0) {
-                    score += Math.exp(-(totalDist3d / count3d) / 30.0);
-                    scoreCount++;
+                    // Weighted-average normalization: scale this term's contribution
+                    // and its share of the denominator by trackWeight3d together.
+                    score += trackWeight3d * Math.exp(-(totalDist3d / count3d) / 30.0);
+                    scoreCount += trackWeight3d;
                 }
             }
 
@@ -762,6 +809,156 @@ function promptNumAnimals() {
     return true;
 }
 
+// ============================================
+// CrossViewTracker engine — the app's only temporal tracker
+// (pose/cross-view-tracker.js). trackCurrentFrame/trackAll drive it.
+// ============================================
+
+var _groupIdCounter = 1;
+function nextGroupId() { return _groupIdCounter++; }
+
+function crossViewHyperparams() {
+    return {
+        corr2dWeight: thr('corr2dWeight'),
+        corr3dWeight: thr('corr3dWeight'),
+        velocityThreshold: thr('velocityThreshold'),
+        distanceThreshold: thr('distanceThreshold'),
+        timePenalty: thr('timePenalty'),
+    };
+}
+
+// Build Map(camName -> Detection[]) for one frame from linked + unlinked
+// instances (honoring the detection filter). Each Detection records whether it
+// came from the unlinked pool so commit can promote it into a group.
+function buildTrackerDetections(frameGroup, cameras, frameIdx) {
+    var minVis = thr('filterMinVisibleNodes');
+    var minScore = thr('filterMinInstanceScore');
+    var detsByCam = new Map();
+    for (var ci = 0; ci < cameras.length; ci++) {
+        var cam = cameras[ci];
+        var dets = [];
+        var slot = 0;
+        var linked = frameGroup.getInstances(cam.name);
+        if (linked) for (var i = 0; i < linked.length; i++) {
+            if (!passesDetectionFilter(linked[i], minVis, minScore)) continue;
+            var dl = new Detection(linked[i], cam, frameIdx, slot++);
+            dl.unlinkedId = null;
+            dets.push(dl);
+        }
+        var unlinked = frameGroup.getUnlinkedInstances(cam.name);
+        if (unlinked) for (var j = 0; j < unlinked.length; j++) {
+            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore)) continue;
+            var du = new Detection(unlinked[j].instance, cam, frameIdx, slot++);
+            du.unlinkedId = unlinked[j].id;
+            dets.push(du);
+        }
+        detsByCam.set(cam.name, dets);
+    }
+    return detsByCam;
+}
+
+// Persist a tracked frame: for each live target with a cross-view bundle THIS
+// frame, create an InstanceGroup, map the target's stable trackId to a session
+// Identity, write the per-frame identity entries, and promote unlinked members.
+function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
+    var fg = session.getFrameGroup(frameIdx);
+    if (!fg) return;
+    for (var ti = 0; ti < trk.targets.length; ti++) {
+        var target = trk.targets[ti];
+        var members = [];
+        target.detsByCam.forEach(function (det, camName) {
+            if (det.frameIdx === frameIdx) members.push({ camName: camName, det: det });
+        });
+        if (members.length < 2) continue;   // need a genuine cross-view bundle
+
+        var identityId = trackToIdentity.get(target.trackId);
+        if (identityId == null) {
+            var ident = session.addIdentity('id_' + session.identities.length);
+            identityId = ident.id;
+            trackToIdentity.set(target.trackId, identityId);
+        }
+
+        var group = new InstanceGroup(nextGroupId(), identityId);
+        group.points3d = target.points3d;
+        for (var m = 0; m < members.length; m++) {
+            var camName = members[m].camName;
+            var det = members[m].det;
+            var inst = det.instance;
+            group.addInstance(camName, inst);
+            if (det.unlinkedId != null) {
+                fg.addInstance(camName, inst);          // promote into the linked pool
+                fg.removeUnlinkedById(det.unlinkedId);
+            }
+            session.setFrameIdentity(frameIdx, camName, inst.trackIdx, identityId);
+        }
+        if (!session.instanceGroups.has(frameIdx)) session.instanceGroups.set(frameIdx, []);
+        session.instanceGroups.get(frameIdx).push(group);
+    }
+}
+
+// Build a reusable tracking-run context shared across frames (the tracker
+// instance + the target→Identity map). Snapshots thresholds/hyperparams once.
+function createTrackerRun(session, cameras, maxTargets) {
+    _thresholds = getTrackingThresholds();     // snapshot for thr()
+    var hp = crossViewHyperparams();
+    // LUCID extension: cap live targets at the user's animal count when provided
+    // (null/undefined leaves the tracker faithful/uncapped). See CrossViewTracker.
+    if (maxTargets != null) hp.maxTargets = maxTargets;
+    // LUCID extension: per-node association weights from the Tracking Wizard
+    // (indexed to the session skeleton). null ⇒ every node weighted 1.
+    hp.nodeWeights = getNodeWeightArray(session.skeleton && session.skeleton.nodes);
+    return { trk: new CrossViewTracker(hp), trackToIdentity: new Map(), cameras: cameras };
+}
+
+// Advance a run by one frame: build detections, associate, and commit.
+function stepTrackerFrame(session, run, fi) {
+    var fg = session.getFrameGroup(fi);
+    if (!fg) return;
+    var detsByCam = buildTrackerDetections(fg, run.cameras, fi);
+    run.trk.trackFrame(detsByCam, run.cameras);
+    commitTrackedFrame(session, run.trk, fi, run.trackToIdentity);
+}
+
+// Drive the CrossViewTracker over `frameIndices`, populating identities, the
+// per-frame identity map, and InstanceGroups. When `propagate` is set (a full
+// Track All), rewrite per-instance trackIdx + session.tracks so track colors AND
+// native SLP export carry the identities.
+//
+// Synchronous: runs the whole loop in one blocking pass. Used by single-frame
+// tracking and by the bench/test harnesses that read the return value directly.
+// For a repaint-friendly Track All with a live counter, use
+// `runCrossViewTrackerProgress`.
+export function runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets) {
+    var run = createTrackerRun(session, cameras, maxTargets);
+    for (var f = 0; f < frameIndices.length; f++) {
+        stepTrackerFrame(session, run, frameIndices[f]);
+    }
+    if (propagate) session.propagateIdentitiesToTracks();
+    return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
+}
+
+// Async sibling of runCrossViewTracker used by Track All: identical association,
+// but yields to the event loop periodically so the loading overlay can repaint a
+// live "done/total" counter — a synchronous loop can never paint mid-run. The
+// awaited `onProgress(done, total)` callback returns a macrotask-yielding promise
+// (setTimeout 0), which is what actually lets the browser render each update.
+export async function runCrossViewTrackerProgress(session, cameras, frameIndices, propagate, maxTargets, onProgress) {
+    var run = createTrackerRun(session, cameras, maxTargets);
+    var total = frameIndices.length;
+    // Repaint ~every 5% of frames (≈20 updates total). Each update yields to the
+    // event loop for a browser repaint, which is expensive on a large run — so we
+    // update the counter infrequently to keep Track All fast, rather than smoothly.
+    var stride = Math.max(1, Math.ceil(total / 20));
+    for (var f = 0; f < total; f++) {
+        stepTrackerFrame(session, run, frameIndices[f]);
+        if (onProgress && ((f + 1) % stride === 0 || f === total - 1)) {
+            await onProgress(f + 1, total);
+        }
+    }
+    if (propagate) session.propagateIdentitiesToTracks();
+    return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
+}
+
 export function trackCurrentFrame() {
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
@@ -781,19 +978,27 @@ export function trackCurrentFrame() {
 
     var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
 
+    // Honor per-view tracking inclusion from the Tracking Wizard: excluded views
+    // are dropped from the association math entirely (still visible in the GUI).
+    var trackedCameras = session.cameras.filter(function (c) { return isCameraTracked(c.name); });
+    if (trackedCameras.length < 2) {
+        setStatus('Need at least 2 views included in tracking (check the Tracking Wizard ▸ Camera Views)', 'warning');
+        return;
+    }
+
     try {
-        var result = matchFrameInstances(fg, session.cameras, session, {
-            numAnimals: effectiveNumAnimals
-        });
-        var nullNodes = countNullNodesInTargets(result.targets3d);
-        setNullNodesStatus(nullNodes);
+        // Single-frame pass (births only — no cross-frame history). Populates
+        // identities + per-frame map + InstanceGroups for this frame;
+        // trackIdx/session.tracks are only rewritten by Track All. Drop this
+        // frame's prior tracker groups so repeated runs don't stack.
+        session.instanceGroups.set(state.currentFrame, []);
+        var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals);
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
-        if (result.numIdentities > 0) {
-            setStatus('Frame ' + state.currentFrame + ': ' + result.numIdentities + ' identities' +
-                (effectiveNumAnimals ? ' (capped at ' + effectiveNumAnimals + ')' : '') +
-                ', ' + nullNodes + ' null nodes', 'success');
+        if (lr.numTargets > 0) {
+            setStatus('Frame ' + state.currentFrame + ': ' + lr.numIdentities +
+                ' identities / ' + lr.numTargets + ' cross-view targets', 'success');
         } else {
             setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
         }
@@ -863,9 +1068,16 @@ export async function trackAll() {
         return;
     }
 
-    var cameras = session.cameras;
-    if (cameras.length < 2) {
+    if (session.cameras.length < 2) {
         setStatus('Need at least 2 cameras', 'warning');
+        return;
+    }
+
+    // Honor per-view tracking inclusion from the Tracking Wizard: excluded views
+    // are dropped from the association math entirely (still visible in the GUI).
+    var cameras = session.cameras.filter(function (c) { return isCameraTracked(c.name); });
+    if (cameras.length < 2) {
+        setStatus('Need at least 2 views included in tracking (check the Tracking Wizard ▸ Camera Views)', 'warning');
         return;
     }
 
@@ -879,69 +1091,69 @@ export async function trackAll() {
     if (trackerNumAnimals == null) {
         if (!promptNumAnimals()) return;
     }
+
+    // Lazy sessions (large .slp session folders, #132) keep only a resident window
+    // in `frameGroups`, so `session.frameIndices` covers just the VISITED frames —
+    // but the cross-view tracker is sequential and needs EVERY frame in order.
+    // Materialize the whole project first, then re-read the full frame list.
+    // (Non-lazy sessions already have all frames resident — this is a no-op.)
+    if (session.lazyLoader) {
+        showLoading('Loading all ' + session.numFrames + ' frames for tracking…');
+        await new Promise(function (r) { setTimeout(r, 0); });
+        try {
+            await loadAllLazyFrames(function (msg) { showLoading(msg); });
+        } catch (e) {
+            hideLoading();
+            console.error('[TrackAll] failed to load all lazy frames:', e);
+            setStatus('Track All: could not load all frames — ' + e.message, 'error');
+            return;
+        }
+        frameIndices = session.frameIndices;   // now the full project, not the window
+    }
+
     var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
     console.log('[TrackAll] numAnimals:', effectiveNumAnimals,
         trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
         'frames:', frameIndices.length);
     console.time('[TrackAll] total');
 
-    // Clear old identities for fresh run
+    // Clear old identities/groups for a fresh run
     session.identities = [];
     session.frameIdentityMap = new Map();
+    session.instanceGroups = new Map();
 
-    showLoading('Assigning identities: 0/' + frameIndices.length + ' frames...');
+    showLoading('Assigning identities: 0/' + frameIndices.length + ' frames…');
 
-    var YIELD_EVERY = 50;
-
-    var prevAssignments = null;
-    var prevTargets3d = null;
-    var totalNullNodes = 0;
+    // Drive the CrossViewTracker across all frames and populate IDENTITIES +
+    // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
+    // to tracks (propagate=false): the tracker assigns IDs, and the user chooses
+    // when/which direction to propagate via Tracks ▸ Propagate IDs → Tracks (or
+    // Tracks → IDs). Auto-rewriting Instance.trackIdx here would clobber the
+    // imported track structure without consent.
     try {
-        for (var f = 0; f < frameIndices.length; f++) {
-            var fi = frameIndices[f];
-            var fg = session.getFrameGroup(fi);
-            if (fg) {
-                try {
-                    var result = matchFrameInstances(fg, cameras, session, {
-                        numAnimals: effectiveNumAnimals,
-                        perFrame: true,
-                        prevAssignments: prevAssignments,
-                        prevTargets3d: prevTargets3d
-                    });
-                    totalNullNodes += countNullNodesInTargets(result.targets3d);
-                    if (result.assignments && result.assignments.size > 0) {
-                        prevAssignments = result.assignments;
-                    }
-                    if (result.targets3d && result.targets3d.length > 0) {
-                        prevTargets3d = result.targets3d;
-                    }
-                } catch (frameErr) {
-                    console.error('[TrackAll] Error at frame ' + fi + ':', frameErr);
-                    // Continue to next frame instead of aborting
-                }
-            }
-
-            if (f % YIELD_EVERY === 0) {
-                document.getElementById('loadingStatus').textContent =
-                    'Assigning identities: ' + (f + 1) + '/' + frameIndices.length + ' frames...';
-                await new Promise(function (r) { setTimeout(r, 0); });
-            }
-        }
-
+        // Yield once so the initial overlay paints before the run begins, then
+        // drive the async progress variant: it yields ~every 5% of frames and
+        // calls back with (done, total) so the counter advances without freezing
+        // at 0/N (infrequent so the repaints don't slow the run).
+        await new Promise(function (r) { setTimeout(r, 0); });
+        var lres = await runCrossViewTrackerProgress(
+            session, cameras, frameIndices, false, effectiveNumAnimals,
+            function (done, total) {
+                showLoading('Assigning identities: ' + done + '/' + total +
+                    ' frames (' + Math.round(done / total * 100) + '%)…');
+                return new Promise(function (r) { setTimeout(r, 0); });
+            });
         hideLoading();
-        setNullNodesStatus(totalNullNodes);
         drawAllOverlays(state.currentFrame);
-        console.timeEnd('[TrackAll] total');
-        console.log('[TrackAll] total null nodes:', totalNullNodes);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
-        setStatus('Tracked ' + frameIndices.length + ' frames, ' +
-            session.identities.length + ' identities, ' +
-            totalNullNodes + ' null nodes', 'success');
+        console.timeEnd('[TrackAll] total');
+        setStatus('Assigned ' + lres.numIdentities + ' identities across ' +
+            frameIndices.length + ' frames — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
     } catch (e) {
         hideLoading();
         console.error('[TrackAll] error:', e, e.stack);
-        setStatus('Track All error: ' + e.message + ' | ' + (e.stack ? e.stack.split('\n')[1] : ''), 'error');
+        setStatus('Track All error: ' + e.message, 'error');
     }
 }
 
