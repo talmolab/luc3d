@@ -2104,6 +2104,34 @@ Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.
 
 ---
 
+### import-export/slp-streaming-write.js
+
+**Purpose.** Memory-bounded SLP *save* for large lazy sessions (phase-5 full
+pipeline) — the write-side companion to `SioLazyLoader`. The eager builder
+(`buildSlpLabelsAllViews` + `saveSlpToBytes`) materializes one `Labels` with every
+frame; on a ~108k×N lazy prediction session that re-OOMs and silently drops every
+unvisited frame (it only iterates the resident `frameGroups`).
+
+**Key export.** `buildSessionSlpBytesStreaming(session, views, videoFiles, opts)` —
+builds the file incrementally: `openSlpWriter({skeletons, videos, tracks, sessions,
+provenance})` → `appendStore(perCameraLazyStore, {videoIndexOffset, trackOffset})`
+per camera (columnar, window-by-window, zero per-frame JS objects) → `close()` (or
+`writeToSink(opts.sink)`). The 2D pose streams straight from the loader's per-camera
+`_lazyDataStore`s. The triangulated grouping (`session.instanceGroups`) is carried
+as a **ref-based** `RecordingSession`: `FrameGroup`/`InstanceGroup` reference frames/
+instances by OUTPUT index (`labeledFrameRefsByCamera` / `instanceRefsByCamera`), not
+objects, so the session graph stays compact and `sessions_json` serializes with zero
+frame materialization (sleap-io.js #208). Output layout is deterministic
+(`appendStore` emits camera c's rows in order), so a grouped frame's output index is
+`cameraBase[c] + storeRow`, and a grouped instance's `instIndex` is its position in
+the store's per-frame instance range (matched by `track`) — both computed up front
+from the columnar store. Routed to by `buildSlpBytes` (`save-load.js`) for a single
+lazy session. **v1 scope:** predictions + full grouping (identities + 3D); per-frame
+2D user corrections are not yet overlaid (see the phase-5 plan).
+
+**Imports.** `window.SleapIO` (streaming writer API). **Imported by.**
+`import-export/save-load.js` (`buildSlpBytes`).
+
 ### import-export/save-load.js
 
 **Purpose.** Project lifecycle — newProject, save paths (quickSave,
@@ -2115,7 +2143,11 @@ loading-overlay/status-text UI helpers.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
   is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject`.
-- `buildSlpBytes` (internal) assembles the multi-session SLP. Each session's
+- `buildSlpBytes` (internal) assembles the multi-session SLP. **For a single
+  lazy session it routes to `buildSessionSlpBytesStreaming`
+  (`import-export/slp-streaming-write.js`)** — the memory-bounded streaming
+  writer path — instead of the eager `buildSlpLabelsAllViews` + `saveSlpToBytes`
+  (which would re-OOM and silently drop every unvisited frame). Each session's
   `sessions_json` payload carries per-session `metadata.lucid.identities`
   (alongside `frameIdentityMap`/`tracks`), keeping identities scoped per
   session across save/load. The file-level `identities_json` remains a
