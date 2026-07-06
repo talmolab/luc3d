@@ -1303,7 +1303,7 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
  * @param {number} numNodes
  * @returns {Array} Point array
  */
-function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
+export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
     // nodeOrder: optional. When set, nodeOrder[canonicalIdx] = this instance's
     // local point index, so points stored in a session's own skeleton node
     // order are emitted in the canonical (first-session) order. Used by
