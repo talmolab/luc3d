@@ -1610,6 +1610,91 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
  * @param {number[]}    [options.assignmentSelectedIds]  - IDs of unlinked instances selected for assignment
  * @param {boolean}     [options.assignmentMode]         - Whether assignment mode is active
  */
+// Draw fading, shrinking node trails (issue #102 — like SLEAP's TrackTrailOverlay).
+// For every instance present in `viewName` at `frameIdx`, walk back up to
+// `trailLength` frames — only frames already LOADED in `session.frameGroups`, so
+// this never triggers a lazy-H5 fetch or stalls playback (the perf concern in
+// #102) — matching each past instance by its per-view `trackIdx`. Each node's
+// past positions are connected into a polyline that fades toward transparent and
+// shrinks with age. Trail color follows the current color-by mode (identity color
+// when `colorByIdentity`, else track color), matching the live skeleton.
+export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
+    options = options || {};
+    var trailLength = options.trailLength || 0;
+    if (trailLength <= 0 || !session || frameIdx == null || !session.frameGroups) return;
+
+    var curFg = session.getFrameGroup ? session.getFrameGroup(frameIdx) : session.frameGroups.get(frameIdx);
+    if (!curFg || !curFg.instances) return;
+    var curInsts = curFg.instances instanceof Map ? curFg.instances.get(viewName)
+        : curFg.instances[viewName];
+    if (!curInsts || curInsts.length === 0) return;
+
+    var toCanvas = makeVideoToCanvasTransform(
+        options.videoWidth, options.videoHeight, options.canvasWidth, options.canvasHeight);
+    var colorByIdentity = !!options.colorByIdentity;
+    var baseWidth = options.lineWidth != null ? options.lineWidth : 2;
+    var baseNodeSize = options.nodeSize != null ? options.nodeSize : 3;
+
+    // Precompute each past frame's instance list for this view, keyed by trackIdx,
+    // so we look each frame up once rather than per seed instance.
+    var pastByAge = [];   // index = age-1 (age 1..trailLength); null = frame not loaded
+    for (var age = 1; age <= trailLength; age++) {
+        var pIdx = frameIdx - age;
+        if (pIdx < 0) break;
+        var pFg = session.frameGroups.has(pIdx) ? session.frameGroups.get(pIdx) : null;
+        if (!pFg || !pFg.instances) { pastByAge.push(null); continue; }
+        var pInsts = pFg.instances instanceof Map ? pFg.instances.get(viewName)
+            : pFg.instances[viewName];
+        var byTrack = new Map();
+        if (pInsts) {
+            for (var pi = 0; pi < pInsts.length; pi++) {
+                if (pInsts[pi].trackIdx != null) byTrack.set(pInsts[pi].trackIdx, pInsts[pi]);
+            }
+        }
+        pastByAge.push(byTrack);
+    }
+
+    ctx.save();
+    for (var s = 0; s < curInsts.length; s++) {
+        var seed = curInsts[s];
+        if (seed.trackIdx == null || !seed.points) continue;
+        var color = getInstanceColor(seed, session, viewName, colorByIdentity, frameIdx);
+
+        for (var n = 0; n < seed.points.length; n++) {
+            var cur = seed.points[n];
+            if (cur == null) continue;
+            var prev = toCanvas(cur[0], cur[1]);
+            for (var a = 0; a < pastByAge.length; a++) {
+                var byTrack2 = pastByAge[a];
+                if (!byTrack2) continue;            // frame not loaded — skip, keep continuity
+                var match = byTrack2.get(seed.trackIdx);
+                var hp = match && match.points ? match.points[n] : null;
+                if (hp == null) { prev = null; continue; } // node gap — break the line here
+                var cp = toCanvas(hp[0], hp[1]);
+                // t: 1 (near/newest) → ~0 (far/oldest)
+                var t = 1 - (a + 1) / (trailLength + 1);
+                var alpha = Math.max(0.04, 0.6 * t);
+                if (prev) {
+                    ctx.globalAlpha = alpha;
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = Math.max(0.5, baseWidth * t);
+                    ctx.beginPath();
+                    ctx.moveTo(prev.x, prev.y);
+                    ctx.lineTo(cp.x, cp.y);
+                    ctx.stroke();
+                }
+                ctx.globalAlpha = Math.max(0.06, alpha);
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(cp.x, cp.y, Math.max(0.5, baseNodeSize * t), 0, Math.PI * 2);
+                ctx.fill();
+                prev = cp;
+            }
+        }
+    }
+    ctx.restore();
+}
+
 export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, options) {
     options = options || {};
     var _frameIdx = frameGroup ? frameGroup.frameIdx : null;
@@ -1667,6 +1752,21 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
 
     // 1. Clear overlay
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // 1b. Node trails (issue #102) — behind everything, so live skeletons draw
+    // on top. Uses the real `session.frameGroups` to walk loaded history.
+    if (options.trailLength > 0 && session) {
+        drawNodeTrails(ctx, viewName, session, _frameIdx, {
+            trailLength: options.trailLength,
+            colorByIdentity: colorByIdentity,
+            videoWidth: videoW,
+            videoHeight: videoH,
+            canvasWidth: canvasW,
+            canvasHeight: canvasH,
+            nodeSize: (userOpts && userOpts.nodeSize) || 3,
+            lineWidth: (userOpts && userOpts.lineWidth) || 2,
+        });
+    }
 
     // Gather view instances once for both passes
     let viewInstances = null;
@@ -1768,6 +1868,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
 
     // 3. Linked predicted instances — drawn OVER reprojections so they're visible
     if (viewInstances && showPredicted) {
+        var predictedInstances = [];
         for (let i = 0; i < viewInstances.length; i++) {
             const inst = viewInstances[i];
             const instType = inst.type || 'user';
@@ -1786,6 +1887,30 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                 alpha: drawAlpha,
                 lineStyle: predictedOpts.postLineStyle || 'solid',
                 nodeShape: predictedOpts.nodeStyle || 'x',
+            }));
+
+            predictedInstances.push(inst);
+        }
+
+        // 3a. ID overlays — label predicted instances with their identity in ID
+        // mode. The cross-view tracker emits PREDICTED instances, so without this
+        // its identities are invisible as text (the user-label path only labels
+        // user instances). Gated on ID mode so Tracks mode stays uncluttered.
+        if (colorByIdentity && session && predictedInstances.length > 0) {
+            var pLabelNames = session.tracks ? session.tracks.slice() : [];
+            var pLabelColors = {};
+            for (var pl = 0; pl < predictedInstances.length; pl++) {
+                var pInst = predictedInstances[pl];
+                var pIdentity = session.getIdentityForTrack(pInst.trackIdx, viewName, _frameIdx);
+                if (pIdentity) {
+                    pLabelNames[pInst.trackIdx] = pIdentity.name;
+                    pLabelColors[pInst.trackIdx] = pIdentity.color;
+                }
+            }
+            drawInstanceLabels(ctx, predictedInstances, skeleton, viewName, Object.assign({}, predictedRender, {
+                trackNames: pLabelNames,
+                trackColors: pLabelColors,
+                labelSize: (userOpts && userOpts.labelSize) || 11,
             }));
         }
     }

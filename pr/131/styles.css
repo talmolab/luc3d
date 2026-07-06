@@ -168,6 +168,13 @@ body {
   background: var(--accent-dim);
 }
 
+.menu-dropdown-item .trail-check {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent, #4ea1ff);
+  font-weight: bold;
+}
+
 .menu-dropdown-item .shortcut {
   margin-left: 24px;
   font-size: 11px;
