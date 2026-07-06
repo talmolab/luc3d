@@ -96,6 +96,15 @@ export class Timeline {
         /** @const {number} Height of each track bar row (px) */
         this.TRACK_ROW_HEIGHT = 10;
 
+        /**
+         * @const {number} Max track rows drawn per camera. A lazy prediction `.slp`
+         * can carry ~1000s of track fragments per camera; rendering every one both
+         * blows past the ~32000px canvas cap and is unreadable. When a camera has
+         * more real track rows than this, only the top-N by occupancy are shown and
+         * a "+N more" indicator row is appended. 0 disables the cap.
+         */
+        this.MAX_TRACK_ROWS_PER_CAMERA = 64;
+
         /** @const {number} Vertical gap between track rows (px) */
         this.TRACK_ROW_GAP = 1;
 
@@ -731,18 +740,47 @@ export class Timeline {
             for (var [_mfIdx] of session.frameGroups) materializedFrames.add(_mfIdx);
         }
         var occSegmentMap = {};  // "trackIdx:camName" -> [{start, end}, ...]
+        var occCounts = {};      // "trackIdx:camName" -> occupied-frame count (for the row cap)
         if (session.trackOccupancy) {
+            // Sorted materialized-frame array (built once) for the sparse branch's
+            // segment splitting.
+            var sortedMat = null;
             for (var oci = 0; oci < cameraNames.length; oci++) {
                 var occCam = cameraNames[oci];
                 var occ = session.trackOccupancy.get(occCam);
                 if (!occ) continue;
+                if (occ.sparse) {
+                    // Sparse (lazy `.slp`): per-track run-segments are precomputed.
+                    // Subtract materialized frames — for those the live fg.instances
+                    // data below is authoritative (track may have been reassigned).
+                    if (sortedMat === null) {
+                        sortedMat = materializedFrames.size > 0
+                            ? Array.from(materializedFrames).sort(function (a, b) { return a - b; })
+                            : [];
+                    }
+                    if (occ.segments) {
+                        for (var occEnt of occ.segments) {
+                            var occTrS = occEnt[0];
+                            var segs = occEnt[1];
+                            if (!segs || segs.length === 0) continue;
+                            var subd = this._subtractFramesFromSegments(segs, sortedMat);
+                            if (subd.length > 0) {
+                                occSegmentMap[occTrS + ':' + occCam] = subd;
+                                occCounts[occTrS + ':' + occCam] = (occ.counts && occ.counts.get(occTrS)) || 0;
+                            }
+                        }
+                    }
+                    continue;
+                }
                 for (var occTr = 0; occTr < occ.nTracks; occTr++) {
                     var occSegments = [];
                     var occStart = -1;
+                    var occCount = 0;
                     for (var occFi = 0; occFi < occ.nFrames; occFi++) {
                         var present = occ.data[occFi * occ.nTracks + occTr]
                             && !materializedFrames.has(occFi);
                         if (present) {
+                            occCount++;
                             if (occStart < 0) occStart = occFi;
                         } else {
                             if (occStart >= 0) {
@@ -754,6 +792,7 @@ export class Timeline {
                     if (occStart >= 0) occSegments.push({ start: occStart, end: occ.nFrames - 1 });
                     if (occSegments.length > 0) {
                         occSegmentMap[occTr + ':' + occCam] = occSegments;
+                        occCounts[occTr + ':' + occCam] = occCount;
                     }
                 }
             }
@@ -825,8 +864,13 @@ export class Timeline {
         // For each camera, count how many real track rows it produces; if
         // zero, append a single empty-camera placeholder row so the camera
         // still appears in the label gutter (Block 1 requirement).
+        var rowCap = this.MAX_TRACK_ROWS_PER_CAMERA;
         for (var ci = 0; ci < cameraNames.length; ci++) {
             var camRowsBefore = this._trackSegments.length;
+
+            // 1. Collect every candidate track row for this camera (in track-index
+            //    order) with an occupancy score used only to rank for the cap.
+            var candidates = [];
             for (var ti = 0; ti < sortedTrackIndices.length; ti++) {
                 var t3 = sortedTrackIndices[ti];
                 var camKey = t3 + ':' + cameraNames[ci];
@@ -850,23 +894,68 @@ export class Timeline {
 
                 if (!segments || segments.length === 0) continue;
 
-                var trackName = session.tracks[t3] || ('track_' + t3);
+                // Rank score: prefer the producer's occupied-frame count; fall back
+                // to live frames / covered span so the dense + fg paths also rank.
+                var score = occCounts[camKey] || 0;
+                if (frameSet && frameSet.size > score) score = frameSet.size;
+                if (score === 0) score = this._segmentsFrameCount(segments);
+                candidates.push({ t3: t3, segments: segments, score: score });
+            }
+
+            // 2. Cap to the top-N most-occupied tracks (keeping track-index display
+            //    order); a lazy `.slp` can carry ~1000s of tracks per camera and
+            //    rendering them all overflows the canvas and is unreadable.
+            var hiddenCount = 0;
+            if (rowCap > 0 && candidates.length > rowCap) {
+                var byScore = candidates.slice().sort(function (a, b) {
+                    return (b.score - a.score) || (a.t3 - b.t3);
+                });
+                var keep = new Set();
+                for (var kk = 0; kk < rowCap; kk++) keep.add(byScore[kk].t3);
+                var kept = [];
+                for (var cc = 0; cc < candidates.length; cc++) {
+                    if (keep.has(candidates[cc].t3)) kept.push(candidates[cc]);
+                }
+                hiddenCount = candidates.length - kept.length;
+                candidates = kept;
+            }
+
+            // 3. Emit the (kept) track rows.
+            for (var pc = 0; pc < candidates.length; pc++) {
+                var ct = candidates[pc].t3;
+                var trackName = session.tracks[ct] || ('track_' + ct);
                 // The "No ID" track is the null track → same gray the ID panel
                 // uses for its "No ID" row.
-                var color = (session.isNoIdTrack && session.isNoIdTrack(t3))
-                    ? NULL_ID_COLOR : getTrackColor(t3);
+                var color = (session.isNoIdTrack && session.isNoIdTrack(ct))
+                    ? NULL_ID_COLOR : getTrackColor(ct);
 
                 this._trackSegments.push({
-                    trackIdx: t3,
+                    trackIdx: ct,
                     cameraName: cameraNames[ci],
                     color: color,
-                    segments: segments,
+                    segments: candidates[pc].segments,
                     trackName: trackName,
                     treeRole: 'middle', // assigned in finalizeTreeRoles pass
                     _isTrack: true,     // marker for visibility filter (Block 2)
                 });
                 this._trackNames.push(''); // placeholder, finalized below
             }
+
+            // 3b. Label-only "+N more" row when the cap dropped tracks.
+            if (hiddenCount > 0) {
+                this._trackSegments.push({
+                    trackIdx: -1,
+                    cameraName: cameraNames[ci],
+                    color: null,
+                    segments: [],
+                    trackName: '+' + hiddenCount + ' more',
+                    treeRole: 'middle',
+                    _isTrack: true,
+                    _isMoreIndicator: true,
+                });
+                this._trackNames.push('');
+            }
+
             // No tracks were produced for this camera → reserve an
             // empty-camera placeholder row so the camera name still
             // appears in the gutter.
@@ -883,6 +972,56 @@ export class Timeline {
                 this._trackNames.push('');
             }
         }
+    }
+
+    /**
+     * Split a sorted, non-overlapping segment list around a sorted array of
+     * frames to remove (each removed frame carves its run in two). Used by the
+     * sparse-occupancy branch to drop materialized frames — for those the live
+     * `fg.instances` data is authoritative — without expanding runs into a frame
+     * Set. O(|segments|·log|remove| + splits).
+     *
+     * @param {Array<{start:number,end:number}>} segments - sorted, non-overlapping
+     * @param {number[]} sortedRemove - ascending frame indices to remove
+     * @returns {Array<{start:number,end:number}>}
+     * @private
+     */
+    _subtractFramesFromSegments(segments, sortedRemove) {
+        if (!sortedRemove || sortedRemove.length === 0) return segments;
+        var out = [];
+        for (var i = 0; i < segments.length; i++) {
+            var s = segments[i].start, e = segments[i].end;
+            // First removed frame >= s (binary search).
+            var lo = 0, hi = sortedRemove.length;
+            while (lo < hi) {
+                var mid = (lo + hi) >> 1;
+                if (sortedRemove[mid] < s) lo = mid + 1; else hi = mid;
+            }
+            if (lo >= sortedRemove.length || sortedRemove[lo] > e) {
+                out.push({ start: s, end: e });
+                continue;
+            }
+            var cur = s;
+            for (var k = lo; k < sortedRemove.length && sortedRemove[k] <= e; k++) {
+                var m = sortedRemove[k];
+                if (m > cur) out.push({ start: cur, end: m - 1 });
+                cur = m + 1;
+            }
+            if (cur <= e) out.push({ start: cur, end: e });
+        }
+        return out;
+    }
+
+    /**
+     * Total frames covered by a sorted, non-overlapping segment list.
+     * @param {Array<{start:number,end:number}>} segments
+     * @returns {number}
+     * @private
+     */
+    _segmentsFrameCount(segments) {
+        var n = 0;
+        for (var i = 0; i < segments.length; i++) n += segments[i].end - segments[i].start + 1;
+        return n;
     }
 
     /**

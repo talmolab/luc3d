@@ -1334,6 +1334,21 @@ instead builds one row per track/identity directly from the InstanceGroups
 existing tree-grouping / draw / visibility paths work unchanged. Covered by
 `tests/test-timeline-3dpoints.js`.
 
+**Sparse occupancy + row cap (phase-5, lazy `.slp`).** `_buildTrackSegments` reads
+`session.trackOccupancy` two ways: the worker/analysis path supplies a **dense**
+`{ data, nTracks, nFrames }` grid (scanned per frame), while a lazy `.slp`
+(`SioLazyLoader._computeSparseOccupancy`) supplies **sparse** run-segments
+(`{ sparse:true, segments:Map<trackIdx,[{start,end}]>, counts }`). The `occ.sparse`
+branch uses those segments directly, subtracting materialized frames via
+`_subtractFramesFromSegments` (binary-search split — for materialized frames the live
+`fg.instances` data wins) instead of expanding a 108k-frame grid. To keep a
+~1000s-track prediction dump from overflowing the canvas cap and being unreadable, the
+per-camera row build **caps** at `MAX_TRACK_ROWS_PER_CAMERA` (64): it keeps the top-N
+tracks by occupancy (`counts`, falling back to `_segmentsFrameCount`), preserving
+track-index display order, and appends a label-only `+N more` indicator row. Normal
+(few-track) sessions are under the cap and render exactly as before. Covered by
+`tests/test-timeline-sparse-occupancy.js`.
+
 **Visibility panel row sizing (Phase-7 refinements).** `styles.css`
 scopes a **compact** 28×16 `.toggle-switch` (knob 12×12, travel 12px)
 to `.vis-toggle-row .toggle-switch` so the narrower toggles fit cleanly
@@ -1881,9 +1896,18 @@ worker. Frames are materialized on demand via `labels.frameAt(row)`, so
 metadata + builds a videoFrameIdx→store-row map, first camera's skeleton/tracks
 win), `getFrame` / `getFrameSync` (adapt typed instances → `{trackIdx, score,
 type, points, occluded}`, LRU-cached), `prefetch`, `close`; fields `nFrames`,
-`skeleton`, `trackNames`, `videos`, `trackOccupancy` (left empty in the load+view
-scope — timeline track bars are deferred), and `isSync = true` (so
+`skeleton`, `trackNames`, `videos`, `trackOccupancy`, and `isSync = true` (so
 `batchLoadLazyFrames` takes its worker-free path).
+
+`trackOccupancy` (phase-5) is populated per camera by `_computeSparseOccupancy(labels,
+nFrames)` — one O(nInstances) pass over the columnar store (`framesData.frame_idx` +
+`instance_id_start/end`, `instancesData.track`) emitting **sparse** per-track
+run-segments `{ sparse:true, nTracks, nFrames, segments:Map<trackIdx,[{start,end}]>,
+counts:Map<trackIdx,frameCount> }` — never a dense nFrames×nTracks grid (a ~108k×1000s
+prediction dump would be huge). Relies on the SLP on-disk frame ordering (same invariant
+`appendStore` assumes); zero frame materialization. `session.trackOccupancy` picks it up
+(`session-loader.js`); the timeline reads the `sparse` flag (`_buildTrackSegments`) and
+caps rendered rows (top-N per camera). See `ui/timeline.js`.
 
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds
