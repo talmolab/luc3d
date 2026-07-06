@@ -235,6 +235,7 @@ export function drawAllOverlays(frameIdx) {
 
         drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
+            trailLength: state.trailLength,
             showLegend: vis.showLegend,
             showUser: vis.showUser,
             showPredicted: vis.showPredicted,

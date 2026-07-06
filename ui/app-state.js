@@ -36,6 +36,7 @@ export const state = {
     exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
     cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
     colorByIdentity: false,     // false = color by track, true = color by identity
+    trailLength: 0,             // node-trail history length in frames (0 = off; presets 10/50/100). Set via Tracks menu.
     decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
     slpFileHandle: null,        // FileSystemFileHandle for quick save
     isDirty: false,             // true when unsaved annotation changes exist

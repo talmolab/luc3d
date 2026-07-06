@@ -895,11 +895,9 @@ function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
     }
 }
 
-// Drive the CrossViewTracker over `frameIndices`, populating identities, the
-// per-frame identity map, and InstanceGroups. When `propagate` is set (a full
-// Track All), rewrite per-instance trackIdx + session.tracks so track colors AND
-// native SLP export carry the identities.
-export function runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets) {
+// Build a reusable tracking-run context shared across frames (the tracker
+// instance + the target→Identity map). Snapshots thresholds/hyperparams once.
+function createTrackerRun(session, cameras, maxTargets) {
     _thresholds = getTrackingThresholds();     // snapshot for thr()
     var hp = crossViewHyperparams();
     // LUCID extension: cap live targets at the user's animal count when provided
@@ -908,18 +906,55 @@ export function runCrossViewTracker(session, cameras, frameIndices, propagate, m
     // LUCID extension: per-node association weights from the Tracking Wizard
     // (indexed to the session skeleton). null ⇒ every node weighted 1.
     hp.nodeWeights = getNodeWeightArray(session.skeleton && session.skeleton.nodes);
-    var trk = new CrossViewTracker(hp);
-    var trackToIdentity = new Map();
+    return { trk: new CrossViewTracker(hp), trackToIdentity: new Map(), cameras: cameras };
+}
+
+// Advance a run by one frame: build detections, associate, and commit.
+function stepTrackerFrame(session, run, fi) {
+    var fg = session.getFrameGroup(fi);
+    if (!fg) return;
+    var detsByCam = buildTrackerDetections(fg, run.cameras, fi);
+    run.trk.trackFrame(detsByCam, run.cameras);
+    commitTrackedFrame(session, run.trk, fi, run.trackToIdentity);
+}
+
+// Drive the CrossViewTracker over `frameIndices`, populating identities, the
+// per-frame identity map, and InstanceGroups. When `propagate` is set (a full
+// Track All), rewrite per-instance trackIdx + session.tracks so track colors AND
+// native SLP export carry the identities.
+//
+// Synchronous: runs the whole loop in one blocking pass. Used by single-frame
+// tracking and by the bench/test harnesses that read the return value directly.
+// For a repaint-friendly Track All with a live counter, use
+// `runCrossViewTrackerProgress`.
+export function runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets) {
+    var run = createTrackerRun(session, cameras, maxTargets);
     for (var f = 0; f < frameIndices.length; f++) {
-        var fi = frameIndices[f];
-        var fg = session.getFrameGroup(fi);
-        if (!fg) continue;
-        var detsByCam = buildTrackerDetections(fg, cameras, fi);
-        trk.trackFrame(detsByCam, cameras);
-        commitTrackedFrame(session, trk, fi, trackToIdentity);
+        stepTrackerFrame(session, run, frameIndices[f]);
     }
     if (propagate) session.propagateIdentitiesToTracks();
-    return { numIdentities: session.identities.length, numTargets: trk.targets.length };
+    return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
+}
+
+// Async sibling of runCrossViewTracker used by Track All: identical association,
+// but yields to the event loop periodically so the loading overlay can repaint a
+// live "done/total" counter — a synchronous loop can never paint mid-run. The
+// awaited `onProgress(done, total)` callback returns a macrotask-yielding promise
+// (setTimeout 0), which is what actually lets the browser render each update.
+export async function runCrossViewTrackerProgress(session, cameras, frameIndices, propagate, maxTargets, onProgress) {
+    var run = createTrackerRun(session, cameras, maxTargets);
+    var total = frameIndices.length;
+    // Repaint ~every 1% of frames (min 1) so large runs get a smooth counter
+    // without a setTimeout per frame; small runs update every frame.
+    var stride = Math.max(1, Math.floor(total / 100));
+    for (var f = 0; f < total; f++) {
+        stepTrackerFrame(session, run, frameIndices[f]);
+        if (onProgress && ((f + 1) % stride === 0 || f === total - 1)) {
+            await onProgress(f + 1, total);
+        }
+    }
+    if (propagate) session.propagateIdentitiesToTracks();
+    return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
 
 export function trackCurrentFrame() {
@@ -1065,19 +1100,24 @@ export async function trackAll() {
     session.frameIdentityMap = new Map();
     session.instanceGroups = new Map();
 
-    showLoading('Assigning identities: 0/' + frameIndices.length + ' frames...');
+    showLoading('Assigning identities: 0/' + frameIndices.length + ' frames…');
 
     // Drive the CrossViewTracker across all frames and populate identities +
     // per-frame map + InstanceGroups + per-instance tracks (via propagate) so
     // both the GUI and native SLP export carry the result.
     try {
-        // The tracker runs as one synchronous loop, so a per-frame counter can
-        // never repaint mid-run — show an honest indeterminate message instead
-        // of a frozen "0/N". The setTimeout(0) yield lets it paint before the
-        // blocking run begins.
-        showLoading('Assigning identities across ' + frameIndices.length + ' frames…');
+        // Yield once so the initial overlay paints before the run begins, then
+        // drive the async progress variant: it yields every ~1% of frames and
+        // calls back with (done, total) so the counter advances live instead of
+        // freezing at 0/N.
         await new Promise(function (r) { setTimeout(r, 0); });
-        var lres = runCrossViewTracker(session, cameras, frameIndices, true, effectiveNumAnimals);
+        var lres = await runCrossViewTrackerProgress(
+            session, cameras, frameIndices, true, effectiveNumAnimals,
+            function (done, total) {
+                showLoading('Assigning identities: ' + done + '/' + total +
+                    ' frames (' + Math.round(done / total * 100) + '%)…');
+                return new Promise(function (r) { setTimeout(r, 0); });
+            });
         hideLoading();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();

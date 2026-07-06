@@ -343,8 +343,14 @@ propagation across frames, find-match-for-selected.
 **Tracker engine.** `trackCurrentFrame` / `trackAll` drive the
 `CrossViewTracker` (`pose/cross-view-tracker.js`) exclusively — it is the app's
 only tracker. The drive lives in
-`runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets)`:
-`buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
+`runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets)` — a
+synchronous loop over `frameIndices` (used by single-frame tracking + the
+bench/test harnesses, which read its return value). Its per-frame body is factored
+into `createTrackerRun`/`stepTrackerFrame`, reused by the async sibling
+`runCrossViewTrackerProgress(…, onProgress)`: identical association but it yields
+to the event loop ~every 1% of frames and awaits `onProgress(done, total)`, so
+**Track All** repaints a live "done/total (pct%)" counter in the loading overlay
+instead of freezing at 0/N. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
 `commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
 (with `identityId` + `points3d`), maps each target's stable trackId to a session
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
@@ -1037,11 +1043,25 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
   `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
+- Node trails (issue #102): `drawNodeTrails(ctx, viewName, session, frameIdx,
+  options)` — SLEAP-style TrackTrailOverlay. For each instance present in the
+  view at `frameIdx`, walks back up to `options.trailLength` frames — only
+  frames already in `session.frameGroups` (never triggers a lazy-H5 fetch, the
+  perf concern in #102) — matching past instances by per-view `trackIdx`, and
+  draws each node's history as a polyline that fades toward transparent and
+  shrinks with age. Color follows the color-by mode (`options.colorByIdentity`).
+  `drawFrameOverlays` calls it right after the canvas clear (behind the live
+  skeletons) when `options.trailLength > 0`.
 - Composite: `drawFrameOverlays(ctx, viewName, frameGroup,
   instanceGroups, session, options)` — the main per-view draw entrypoint.
   `options.trackingExcluded` (set by `rendering.js` from `isCameraTracked`)
   recolors everything drawn for the view to a flat grey via a `source-atop`
   wash (drawn before the legend), signalling a Tracking-Wizard-excluded view.
+  **ID overlays:** in identity color mode (`options.colorByIdentity`) it now
+  labels **predicted** instances with their identity name/color (step 3a), not
+  just user instances — so the cross-view tracker's output (predicted) shows its
+  IDs as text for proofreading. `options.trailLength` threads through to
+  `drawNodeTrails`. Covered by `tests/test-node-trails.mjs`.
 - Misc: `drawLegend`, `getFrameStats`.
 
 **Imports from project modules.** None.
@@ -1072,7 +1092,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `'circle'` — reproj matches the 3D viewer marker (also `'circle'`) per
   issue #95. (`drawReprojectedSkeleton`'s own primitive fallback stays `'x'`
   for direct callers; the user-facing default comes from here.)
-- `drawAllOverlays(frameIdx)` — main per-frame redraw across every view.
+- `drawAllOverlays(frameIdx)` — main per-frame redraw across every view. Threads
+  `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
+  into each `drawFrameOverlays` call.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
 **Imports from project modules.**
