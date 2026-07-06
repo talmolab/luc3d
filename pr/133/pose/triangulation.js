@@ -1773,7 +1773,13 @@ export function evictLazyFrames(currentFrame) {
 export function updateTimelineForFrame(frameIdx) {
     if (!timeline) return;
     timeline.setFrameModified(frameIdx, frameHasGroupedUserInstances(frameIdx));
-    timeline.refreshTracks(state.session);
+    // `{ cap: true }`: group/link/track changes add track rows, and an uncapped
+    // refresh grows the container to getPreferredHeight() — which for a lazy
+    // prediction session (up to MAX_TRACK_ROWS_PER_CAMERA per camera) is thousands
+    // of px, ballooning the timeline over the camera views. Cap re-clamps to 30% of
+    // the window and scrolls the overflow. (triangulateCurrentFrame caps afterward,
+    // but grouping/linking/navigation callers relied on this being capped.)
+    timeline.refreshTracks(state.session, { cap: true });
 }
 
 // ============================================
