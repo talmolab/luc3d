@@ -1057,7 +1057,7 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   (`options.colorByIdentity`), brightened a shade to read apart from the live
   skeleton. `drawFrameOverlays` calls it right after the canvas clear (behind the
   live skeletons) when `options.trailLength > 0`. Length is chosen from the
-  **Tracks ▸ Node Trails** submenu (Off/10/50/100/500 → `state.trailLength`).
+  **Tracks ▸ Node Trails** submenu (Off/10/50/100/250/500 → `state.trailLength`).
 - Composite: `drawFrameOverlays(ctx, viewName, frameGroup,
   instanceGroups, session, options)` — the main per-view draw entrypoint.
   `options.trackingExcluded` (set by `rendering.js` from `isCameraTracked`)
