@@ -786,11 +786,10 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         ? options.reprojErrorThreshold
         : ((typeof getTrackingThreshold === 'function') ? getTrackingThreshold('reprojErrorThreshold') : 0);
     if (reprojThresh > 0) {
-        // Per-(node, view) rejection. The threshold drops an individual high-error
-        // NODE observation FROM A VIEW (one 2D keypoint) and re-triangulates that
-        // node from its remaining views — it never drops a whole view (that is the
-        // Tracking Wizard's job) nor a node that still has ≥2 good views. Only when
-        // a node is left with <2 reliable views is it dropped from 3D (null).
+        // Don't include a node-in-a-view (a single 2D keypoint) whose reprojection
+        // error exceeds the threshold — re-triangulate that node from the views that
+        // remain. This works PER NODE within a view; it never drops a whole view
+        // (that is the Tracking Wizard's job). A node left with <2 views is null.
         function nodeError(k, c) {
             if (allObservations[k][c] == null || points3d[k] == null) return -1;
             const inst = instanceGroup.getInstance(cameraNames[c]);
@@ -801,29 +800,29 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             const dx = raw[0] - rep[0], dy = raw[1] - rep[1];
             return Math.sqrt(dx * dx + dy * dy);
         }
-        // Drop the SINGLE worst node-observation per node per pass, re-triangulating
-        // between passes (never below 2 views). Dropping every over-threshold
-        // observation at once is wrong: one bad observation contaminates the initial
-        // fit, inflating the error of the good views so they'd be discarded too.
+        // Exclude the single worst over-threshold observation per node per pass and
+        // re-triangulate between passes (never below 2 views). Removing one at a
+        // time and re-checking is necessary because each exclusion re-triangulates
+        // the node, which shifts every remaining view's error.
         const maxPasses = Math.max(1, cameraNames.length);
         for (let iter = 0; iter < maxPasses; iter++) {
-            let removedAny = false;
+            let excludedAny = false;
             for (let k = 0; k < numKeypoints; k++) {
                 if (points3d[k] == null) continue;
-                let worstC = -1, worstErr = reprojThresh, inliers = 0;
+                let worstC = -1, worstErr = reprojThresh, kept = 0;
                 for (let c = 0; c < cameraNames.length; c++) {
                     if (!included[c] || allObservations[k][c] == null) continue;
-                    inliers++;
+                    kept++;
                     const e = nodeError(k, c);
                     if (e > worstErr) { worstErr = e; worstC = c; }
                 }
-                if (worstC >= 0 && inliers > 2) { allObservations[k][worstC] = null; removedAny = true; }
+                if (worstC >= 0 && kept > 2) { allObservations[k][worstC] = null; excludedAny = true; }
             }
-            if (!removedAny) break;
+            if (!excludedAny) break;
             points3d = triangulateFrom(allObservations);
         }
-        // A node whose remaining views still exceed the threshold couldn't be made
-        // reliable without dropping below 2 views → drop it from 3D (null).
+        // If a node's remaining views still exceed the threshold, it has <2 views
+        // under the threshold → drop it from 3D (null).
         for (let k = 0; k < numKeypoints; k++) {
             if (points3d[k] == null) continue;
             for (let c = 0; c < cameraNames.length; c++) {

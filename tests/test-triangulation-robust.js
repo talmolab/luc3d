@@ -58,18 +58,18 @@
     });
 
     describe('Robust triangulation - reprojection-error rejection', function () {
-        it('drops one high-error node observation from a view, keeps the rest of the view', function () {
+        it('excludes one over-threshold node-in-a-view, keeps the rest of the view', function () {
             if (typeof triangulateAndReproject !== 'function') return;
             const g = buildGroup();
-            // Corrupt ONLY node 0 in view c3 (a single 2D keypoint).
+            // Move ONLY node 0's observation in view c3 far past the threshold.
             const p = g._byCam['c3'].points[0];
             g._byCam['c3'].points[0] = [p[0] + 120, p[1] + 120];
 
             const robust = triangulateAndReproject(g, cams, { reprojErrorThreshold: 5 });
-            // node0's bad c3 observation is dropped; node0 re-triangulated from c1/c2.
+            // node0's c3 observation is excluded; node0 re-triangulated from c1/c2.
             assertLessThan(dist3(robust.points3d[0], TRUTH[0]), 2.0,
-                'node0 recovered after dropping its bad c3 observation');
-            // The WHOLE view c3 is NOT dropped — its OTHER nodes still triangulate fine.
+                'node0 recovered after excluding its over-threshold c3 observation');
+            // The rest of view c3 is untouched — its OTHER nodes still triangulate.
             assertLessThan(dist3(robust.points3d[1], TRUTH[1]), 2.0, 'node1 (present in c3) unaffected');
             assertLessThan(dist3(robust.points3d[2], TRUTH[2]), 2.0, 'node2 (present in c3) unaffected');
         });

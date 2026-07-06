@@ -510,14 +510,15 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   Views panel (`isCameraTracked`, or `options.includedCameras` override) never
   contribute to the 3D solve, but are still reprojected INTO — an excluded view
   shows the reprojected skeleton + its error without influencing geometry. (2)
-  Reprojection-error rejection (Tracking Wizard threshold `reprojErrorThreshold`
-  px, opt-in / default 0 = off, or `options.reprojErrorThreshold`): drops
-  individual high-error **node-observations (a node in a single view)** and
-  re-triangulates that node from its remaining views — it never drops a whole view
-  (wizard's job) nor a node that still has ≥2 good views. Removes the single worst
-  observation per node per pass, re-triangulating between passes (avoids an outlier
-  contaminating the fit and taking good views with it); a node left with <2
-  reliable views is nulled. Covered by `tests/test-triangulation-robust.js`.
+  Reprojection-error threshold (Tracking Wizard `reprojErrorThreshold` px, opt-in /
+  default 0 = off, or `options.reprojErrorThreshold`): does not include a
+  **node-in-a-view** (one 2D keypoint) whose reprojection error exceeds the
+  threshold, and re-triangulates that node from the remaining views. It acts per
+  node within a view — never on a whole view (wizard's job). Excludes the single
+  worst over-threshold observation per node per pass and re-triangulates between
+  passes (each exclusion shifts the remaining views' errors, so it re-checks); a
+  node left with <2 views under the threshold is nulled. Covered by
+  `tests/test-triangulation-robust.js`.
 - Lazy loading: class `LazyFrameLoader` (analysis `.h5`, worker-backed) +
   `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD` route
   large prediction `.slp` to the main-thread `SioLazyLoader`
