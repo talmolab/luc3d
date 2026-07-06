@@ -587,6 +587,8 @@ export function setupMenus() {
         { id: 'menuTrails10', len: 10 },
         { id: 'menuTrails50', len: 50 },
         { id: 'menuTrails100', len: 100 },
+        { id: 'menuTrails250', len: 250 },
+        { id: 'menuTrails500', len: 500 },
     ];
     function updateTrailChecks() {
         trailPresets.forEach(function (p) {
