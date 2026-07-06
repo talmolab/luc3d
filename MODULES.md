@@ -1044,14 +1044,20 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
   `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
 - Node trails (issue #102): `drawNodeTrails(ctx, viewName, session, frameIdx,
-  options)` — SLEAP-style TrackTrailOverlay. For each instance present in the
-  view at `frameIdx`, walks back up to `options.trailLength` frames — only
-  frames already in `session.frameGroups` (never triggers a lazy-H5 fetch, the
-  perf concern in #102) — matching past instances by per-view `trackIdx`, and
-  draws each node's history as a polyline that fades toward transparent and
-  shrinks with age. Color follows the color-by mode (`options.colorByIdentity`).
-  `drawFrameOverlays` calls it right after the canvas clear (behind the live
-  skeletons) when `options.trailLength > 0`.
+  options)` — mirrors SLEAP's TrackTrailOverlay. Seeds from every tracked instance
+  in the view at `frameIdx`, **linked AND unlinked** (`trailViewInstances` helper)
+  — unlinked matters because identities are inspected BEFORE cross-view linking.
+  History is the last `options.trailLength` **present** frames strictly before the
+  current one (sparse-aware, like SLEAP's `labels.find(video,
+  range(0,frame_idx+1))[-trail_length:]`; only reads frames already in
+  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102). Past
+  instances are matched by per-view `trackIdx`; each node's positions join into a
+  polyline that thins toward the past (SLEAP halves width) and also fades in
+  opacity (per request). Color follows the color-by mode
+  (`options.colorByIdentity`), brightened a shade to read apart from the live
+  skeleton. `drawFrameOverlays` calls it right after the canvas clear (behind the
+  live skeletons) when `options.trailLength > 0`. Length is chosen from the
+  **Tracks ▸ Node Trails** submenu (Off/10/50/100 → `state.trailLength`).
 - Composite: `drawFrameOverlays(ctx, viewName, frameGroup,
   instanceGroups, session, options)` — the main per-view draw entrypoint.
   `options.trackingExcluded` (set by `rendering.js` from `isCameraTracked`)

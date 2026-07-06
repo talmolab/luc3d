@@ -1,14 +1,15 @@
 /**
- * test-node-trails.mjs — unit coverage for drawNodeTrails (issue #102).
+ * test-node-trails.mjs — unit coverage for drawNodeTrails (issue #102), mirroring
+ * SLEAP's TrackTrailOverlay.
  *
- * Exercises the node-trail renderer (ui/overlays.js) against a mock canvas
- * context + fake session. overlays.js is self-contained (no imports), so it
- * loads directly under Node. Run: `node tests/test-node-trails.mjs`.
+ * overlays.js is self-contained (no imports), so it loads directly under Node.
+ * Run: `node tests/test-node-trails.mjs`.
  *
- * Verifies: length 0 is a no-op; trails match past instances by per-view
- * trackIdx and draw a fading dot+segment per node per loaded history frame;
- * unloaded/missing history frames are skipped without crashing (the perf-safe
- * "only walk loaded frames" contract).
+ * Verifies: length 0 is a no-op; trails seed from LINKED *and* UNLINKED instances
+ * (identities are inspected before cross-view linking); history is the last N
+ * PRESENT frames (sparse-aware, not contiguous frameIdx-1..N); past instances are
+ * matched by trackIdx; one polyline segment per node per available past frame;
+ * missing history / null trackIdx draw nothing without crashing.
  */
 import { pathToFileURL } from 'url';
 import path from 'path';
@@ -16,17 +17,19 @@ import path from 'path';
 const ov = await import(pathToFileURL(path.resolve('ui/overlays.js')).href);
 
 function mockCtx() {
-    const calls = { stroke: 0, arc: 0, fill: 0, moveTo: 0, lineTo: 0 };
+    const calls = { stroke: 0, moveTo: 0, lineTo: 0 };
     return {
-        calls, globalAlpha: 1, strokeStyle: '', fillStyle: '', lineWidth: 1,
+        calls, globalAlpha: 1, strokeStyle: '', lineWidth: 1, lineCap: '', lineJoin: '',
         save() {}, restore() {}, beginPath() {},
-        moveTo() { calls.moveTo++; }, lineTo() { calls.lineTo++; },
-        stroke() { calls.stroke++; }, arc() { calls.arc++; }, fill() { calls.fill++; },
+        moveTo() { calls.moveTo++; }, lineTo() { calls.lineTo++; }, stroke() { calls.stroke++; },
     };
 }
 
 function inst(trackIdx, x) { return { trackIdx, points: [[x, 10], [x + 1, 12]] }; }   // 2 nodes
-function fg(fi, x) { return { frameIdx: fi, instances: new Map([['camA', [inst(7, x)]]]) }; }
+
+// FrameGroup-like: linked instances in a Map; unlinked via getUnlinkedInstances.
+function fgLinked(x) { return { instances: new Map([['camA', [inst(7, x)]]]), getUnlinkedInstances() { return []; } }; }
+function fgUnlinked(x) { return { instances: new Map(), getUnlinkedInstances(v) { return v === 'camA' ? [{ instance: inst(7, x) }] : []; } }; }
 
 const GEO = { videoWidth: 640, videoHeight: 480, canvasWidth: 640, canvasHeight: 480 };
 
@@ -34,51 +37,45 @@ let passed = 0, failed = 0;
 const failures = [];
 function ok(cond, msg) { if (cond) passed++; else { failed++; failures.push(msg); } }
 
-// Track 7 present across frames 8,9,10.
-const frameGroups = new Map([[8, fg(8, 100)], [9, fg(9, 110)], [10, fg(10, 120)]]);
-const session = {
-    frameGroups,
-    getFrameGroup(i) { return frameGroups.get(i); },
-    tracks: ['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7'],
-};
+function sessionOf(map) { return { frameGroups: map, getFrameGroup(i) { return map.get(i); }, tracks: [] }; }
+
+// Track 7 present (LINKED) across frames 8,9,10.
+const linkedFG = new Map([[8, fgLinked(100)], [9, fgLinked(110)], [10, fgLinked(120)]]);
+const sLinked = sessionOf(linkedFG);
 
 // 1. trailLength 0 → nothing drawn.
 let ctx = mockCtx();
-ov.drawNodeTrails(ctx, 'camA', session, 10, Object.assign({ trailLength: 0, colorByIdentity: false }, GEO));
-ok(ctx.calls.stroke === 0 && ctx.calls.arc === 0, 'length 0 is a no-op');
+ov.drawNodeTrails(ctx, 'camA', sLinked, 10, Object.assign({ trailLength: 0 }, GEO));
+ok(ctx.calls.stroke === 0, 'length 0 is a no-op');
 
-// 2. trailLength 5 at frame 10 → 2 loaded history frames (9, 8) × 2 nodes = 4 dots.
+// 2. trailLength 5 at frame 10 → 2 present past frames (9,8) × 2 nodes = 4 segments.
 ctx = mockCtx();
-ov.drawNodeTrails(ctx, 'camA', session, 10, Object.assign({ trailLength: 5, colorByIdentity: false }, GEO));
-ok(ctx.calls.arc === 4, 'exactly 4 history dots (2 nodes × 2 frames), got ' + ctx.calls.arc);
-ok(ctx.calls.stroke === 4, 'exactly 4 trail segments, got ' + ctx.calls.stroke);
+ov.drawNodeTrails(ctx, 'camA', sLinked, 10, Object.assign({ trailLength: 5 }, GEO));
+ok(ctx.calls.stroke === 4, 'linked: 4 segments (2 nodes × 2 past frames), got ' + ctx.calls.stroke);
 
-// 3. Seed track matched across a single loaded history frame → 2 dots (2 nodes).
-const fgs2 = new Map([
-    [9, { frameIdx: 9, instances: new Map([['camA', [inst(99, 5)]]]) }],
-    [10, { frameIdx: 10, instances: new Map([['camA', [inst(99, 6)]]]) }],
-]);
-const s2 = { frameGroups: fgs2, getFrameGroup(i) { return fgs2.get(i); }, tracks: [] };
+// 3. UNLINKED instances get trails too (the key case: IDs before linking).
+const unlinkedFG = new Map([[8, fgUnlinked(100)], [9, fgUnlinked(110)], [10, fgUnlinked(120)]]);
 ctx = mockCtx();
-ov.drawNodeTrails(ctx, 'camA', s2, 10, Object.assign({ trailLength: 3, colorByIdentity: false }, GEO));
-ok(ctx.calls.arc === 2, 'matches trackIdx across 1 history frame (2 nodes → 2 dots), got ' + ctx.calls.arc);
+ov.drawNodeTrails(ctx, 'camA', sessionOf(unlinkedFG), 10, Object.assign({ trailLength: 5 }, GEO));
+ok(ctx.calls.stroke === 4, 'unlinked instances draw trails, got ' + ctx.calls.stroke);
 
-// 4. No loaded history (only current frame) → nothing drawn, no throw.
-const fgs3 = new Map([[10, fg(10, 120)]]);
-const s3 = { frameGroups: fgs3, getFrameGroup(i) { return fgs3.get(i); }, tracks: [] };
+// 4. Sparse frames: history uses last-N PRESENT frames, not contiguous indices.
+const sparseFG = new Map([[0, fgLinked(0)], [50, fgLinked(50)], [100, fgLinked(100)]]);
 ctx = mockCtx();
-ov.drawNodeTrails(ctx, 'camA', s3, 10, Object.assign({ trailLength: 50, colorByIdentity: false }, GEO));
-ok(ctx.calls.arc === 0 && ctx.calls.stroke === 0, 'no loaded history → nothing drawn, no crash');
+ov.drawNodeTrails(ctx, 'camA', sessionOf(sparseFG), 100, Object.assign({ trailLength: 3 }, GEO));
+ok(ctx.calls.stroke === 4, 'sparse frames (0,50 present <100) → 2 segments × 2 nodes = 4, got ' + ctx.calls.stroke);
 
-// 5. Seed with null trackIdx is ignored (no trail).
-const fgs4 = new Map([
-    [9, { frameIdx: 9, instances: new Map([['camA', [inst(null, 5)]]]) }],
-    [10, { frameIdx: 10, instances: new Map([['camA', [inst(null, 6)]]]) }],
-]);
-const s4 = { frameGroups: fgs4, getFrameGroup(i) { return fgs4.get(i); }, tracks: [] };
+// 5. Only current frame present → no history → nothing drawn, no crash.
 ctx = mockCtx();
-ov.drawNodeTrails(ctx, 'camA', s4, 10, Object.assign({ trailLength: 3, colorByIdentity: false }, GEO));
-ok(ctx.calls.arc === 0, 'null-trackIdx seed draws no trail');
+ov.drawNodeTrails(ctx, 'camA', sessionOf(new Map([[10, fgLinked(120)]])), 10, Object.assign({ trailLength: 50 }, GEO));
+ok(ctx.calls.stroke === 0, 'no history present → nothing drawn');
+
+// 6. null-trackIdx seed draws no trail.
+const nullFG = new Map([[9, { instances: new Map([['camA', [inst(null, 5)]]]), getUnlinkedInstances() { return []; } }],
+                        [10, { instances: new Map([['camA', [inst(null, 6)]]]), getUnlinkedInstances() { return []; } }]]);
+ctx = mockCtx();
+ov.drawNodeTrails(ctx, 'camA', sessionOf(nullFG), 10, Object.assign({ trailLength: 3 }, GEO));
+ok(ctx.calls.stroke === 0, 'null-trackIdx seed draws no trail');
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }

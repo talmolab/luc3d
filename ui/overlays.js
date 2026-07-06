@@ -1610,84 +1610,94 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
  * @param {number[]}    [options.assignmentSelectedIds]  - IDs of unlinked instances selected for assignment
  * @param {boolean}     [options.assignmentMode]         - Whether assignment mode is active
  */
-// Draw fading, shrinking node trails (issue #102 — like SLEAP's TrackTrailOverlay).
-// For every instance present in `viewName` at `frameIdx`, walk back up to
-// `trailLength` frames — only frames already LOADED in `session.frameGroups`, so
-// this never triggers a lazy-H5 fetch or stalls playback (the perf concern in
-// #102) — matching each past instance by its per-view `trackIdx`. Each node's
-// past positions are connected into a polyline that fades toward transparent and
-// shrinks with age. Trail color follows the current color-by mode (identity color
-// when `colorByIdentity`, else track color), matching the live skeleton.
+// All instances visible in `viewName` at a frame, LINKED and UNLINKED. Trails must
+// cover unlinked instances: identities are inspected BEFORE cross-view linking, so
+// pre-link (ungrouped) detections need trails too. Unlinked entries wrap the real
+// Instance in `.instance`.
+function trailViewInstances(fg, viewName) {
+    var out = [];
+    if (!fg) return out;
+    var linked = fg.instances instanceof Map ? fg.instances.get(viewName)
+        : (fg.instances ? fg.instances[viewName] : null);
+    if (linked) for (var i = 0; i < linked.length; i++) out.push(linked[i]);
+    var ul = fg.getUnlinkedInstances ? fg.getUnlinkedInstances(viewName) : null;
+    if (ul) for (var j = 0; j < ul.length; j++) {
+        var inst = ul[j] && ul[j].instance ? ul[j].instance : ul[j];
+        if (inst) out.push(inst);
+    }
+    return out;
+}
+
+// Draw fading, shrinking node trails (issue #102 — mirrors SLEAP's
+// TrackTrailOverlay). For every instance present in `viewName` at `frameIdx`
+// (linked AND unlinked), gather the last `trailLength` PRESENT frames — like
+// SLEAP's `labels.find(video, range(0, frame_idx+1))[-trail_length:]`, which is
+// sparse-aware, not contiguous, and only reads frames already in
+// `session.frameGroups` (no lazy-H5 fetch — the perf concern in #102). Past
+// instances are matched by per-view `trackIdx`; each node's positions are joined
+// into a polyline that thins toward the past (SLEAP halves width) and, per this
+// request, also fades in opacity. Trail color follows the color-by mode (identity
+// vs track), brightened a shade so the trail reads apart from the live skeleton.
 export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     options = options || {};
     var trailLength = options.trailLength || 0;
     if (trailLength <= 0 || !session || frameIdx == null || !session.frameGroups) return;
 
     var curFg = session.getFrameGroup ? session.getFrameGroup(frameIdx) : session.frameGroups.get(frameIdx);
-    if (!curFg || !curFg.instances) return;
-    var curInsts = curFg.instances instanceof Map ? curFg.instances.get(viewName)
-        : curFg.instances[viewName];
-    if (!curInsts || curInsts.length === 0) return;
+    var seeds = trailViewInstances(curFg, viewName);
+    if (seeds.length === 0) return;
+
+    // Last `trailLength` PRESENT frames strictly before the current one, nearest
+    // first. Sparse-aware: uses whatever frames are loaded, not frameIdx-1..N.
+    var pastIdx = [];
+    session.frameGroups.forEach(function (fg, idx) { if (idx < frameIdx) pastIdx.push(idx); });
+    pastIdx.sort(function (a, b) { return b - a; });
+    pastIdx = pastIdx.slice(0, trailLength);
+
+    // Per past frame (nearest→farthest), map trackIdx → instance (linked+unlinked).
+    var pastByTrack = pastIdx.map(function (idx) {
+        var byTrack = new Map();
+        var insts = trailViewInstances(session.frameGroups.get(idx), viewName);
+        for (var k = 0; k < insts.length; k++) {
+            if (insts[k].trackIdx != null) byTrack.set(insts[k].trackIdx, insts[k]);
+        }
+        return byTrack;
+    });
+    var steps = pastByTrack.length;   // trail segments actually available
 
     var toCanvas = makeVideoToCanvasTransform(
         options.videoWidth, options.videoHeight, options.canvasWidth, options.canvasHeight);
     var colorByIdentity = !!options.colorByIdentity;
     var baseWidth = options.lineWidth != null ? options.lineWidth : 2;
-    var baseNodeSize = options.nodeSize != null ? options.nodeSize : 3;
-
-    // Precompute each past frame's instance list for this view, keyed by trackIdx,
-    // so we look each frame up once rather than per seed instance.
-    var pastByAge = [];   // index = age-1 (age 1..trailLength); null = frame not loaded
-    for (var age = 1; age <= trailLength; age++) {
-        var pIdx = frameIdx - age;
-        if (pIdx < 0) break;
-        var pFg = session.frameGroups.has(pIdx) ? session.frameGroups.get(pIdx) : null;
-        if (!pFg || !pFg.instances) { pastByAge.push(null); continue; }
-        var pInsts = pFg.instances instanceof Map ? pFg.instances.get(viewName)
-            : pFg.instances[viewName];
-        var byTrack = new Map();
-        if (pInsts) {
-            for (var pi = 0; pi < pInsts.length; pi++) {
-                if (pInsts[pi].trackIdx != null) byTrack.set(pInsts[pi].trackIdx, pInsts[pi]);
-            }
-        }
-        pastByAge.push(byTrack);
-    }
 
     ctx.save();
-    for (var s = 0; s < curInsts.length; s++) {
-        var seed = curInsts[s];
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (var s = 0; s < seeds.length; s++) {
+        var seed = seeds[s];
         if (seed.trackIdx == null || !seed.points) continue;
-        var color = getInstanceColor(seed, session, viewName, colorByIdentity, frameIdx);
+        var color = brightenColor(getInstanceColor(seed, session, viewName, colorByIdentity, frameIdx), 1.25);
 
         for (var n = 0; n < seed.points.length; n++) {
             var cur = seed.points[n];
             if (cur == null) continue;
             var prev = toCanvas(cur[0], cur[1]);
-            for (var a = 0; a < pastByAge.length; a++) {
-                var byTrack2 = pastByAge[a];
-                if (!byTrack2) continue;            // frame not loaded — skip, keep continuity
-                var match = byTrack2.get(seed.trackIdx);
+            for (var a = 0; a < steps; a++) {
+                var match = pastByTrack[a].get(seed.trackIdx);
                 var hp = match && match.points ? match.points[n] : null;
-                if (hp == null) { prev = null; continue; } // node gap — break the line here
+                if (hp == null) { prev = null; continue; }   // node gap — break the line
                 var cp = toCanvas(hp[0], hp[1]);
-                // t: 1 (near/newest) → ~0 (far/oldest)
-                var t = 1 - (a + 1) / (trailLength + 1);
-                var alpha = Math.max(0.04, 0.6 * t);
                 if (prev) {
-                    ctx.globalAlpha = alpha;
+                    // t: 1 (near current) → ~0 (far past). Thin + fade with age.
+                    var t = 1 - a / (steps + 1);
+                    ctx.globalAlpha = Math.max(0.06, 0.85 * t);
                     ctx.strokeStyle = color;
-                    ctx.lineWidth = Math.max(0.5, baseWidth * t);
+                    ctx.lineWidth = Math.max(0.4, baseWidth * t);
                     ctx.beginPath();
                     ctx.moveTo(prev.x, prev.y);
                     ctx.lineTo(cp.x, cp.y);
                     ctx.stroke();
                 }
-                ctx.globalAlpha = Math.max(0.06, alpha);
-                ctx.fillStyle = color;
-                ctx.beginPath();
-                ctx.arc(cp.x, cp.y, Math.max(0.5, baseNodeSize * t), 0, Math.PI * 2);
-                ctx.fill();
                 prev = cp;
             }
         }
