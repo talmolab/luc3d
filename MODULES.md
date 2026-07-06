@@ -2050,7 +2050,10 @@ layer.
 - Video matching: `matchVideosToCameras`, `buildVideoGrid`.
 - SLP build: `buildSlpExportData`, `buildPerCameraSlpJson`,
   `buildSlpLabels`, `buildSlpLabelsAllViews`,
-  `buildSlpLabelsMultiSession`, `serializeSkeleton`.
+  `buildSlpLabelsMultiSession`, `serializeSkeleton`, `_buildSioPoints`
+  (per-node `[x,y,visible,complete]` builder — nulled/occluded/optional
+  per-point score; also reused by `slp-streaming-write.js` for edited-frame
+  overlays).
   (PR 5.2 deleted `convertSlpToV06Compatible` — export is now raw
   `saveSlpToBytes`; SLEAP >= 1.6 / sleap-io >= 0.7 reads the flat-matrix
   `field_names` layout natively.) On 2D export both `buildSlpLabels` and
@@ -2128,16 +2131,28 @@ per camera (columnar, window-by-window, zero per-frame JS objects) → `close()`
 as a **ref-based** `RecordingSession`: `FrameGroup`/`InstanceGroup` reference frames/
 instances by OUTPUT index (`labeledFrameRefsByCamera` / `instanceRefsByCamera`), not
 objects, so the session graph stays compact and `sessions_json` serializes with zero
-frame materialization (sleap-io.js #208). Output layout is deterministic
-(`appendStore` emits camera c's rows in order), so a grouped frame's output index is
-`cameraBase[c] + storeRow`, and a grouped instance's `instIndex` is its position in
-the store's per-frame instance range (matched by `track`) — both computed up front
-from the columnar store. Routed to by `buildSlpBytes` (`save-load.js`) for a single
-lazy session. **v1 scope:** predictions + full grouping (identities + 3D); per-frame
-2D user corrections are not yet overlaid (see the phase-5 plan).
+frame materialization (sleap-io.js #208). **2D user corrections are overlaid:**
+any resident frameGroup carrying a user instance in a camera is a corrected/added
+`(camera, frameIdx)`; those camera-frames are materialized (grouped + unlinked
+union, via the shared `_buildSioPoints` from `file-io.js`) and `appendFrames`d
+FIRST, so #208's first-write-wins dedup shadows the store's original predicted row.
+Because overlays occupy output frames `[0, E)` and each shadowed store row is
+skipped by `appendStore`, a grouped frame's output index is NOT `cameraBase[c] +
+storeRow` — it is recomputed in a per-camera `storeOutIndex` map (overlays first,
+then each camera's non-skipped rows in camera/row order), and `refFor` resolves an
+edited camera-frame to its overlay (instance position by object identity, then
+`track`) or otherwise to the shifted store row. Only edited camera-frames are
+materialized (minimal at prediction scale); every other frame streams from the
+columnar store. Routed to by `buildSlpBytes` (`save-load.js`) for a single lazy
+session. **Scope:** predictions + full grouping (identities + 3D) + 2D corrections.
+An overlaid frame's untouched predicted siblings are re-materialized too (the store
+row is skipped wholesale); they carry the instance-level score as a per-point score
+(the frameGroup keeps no per-point scores) so SLEAP's GUI doesn't hide them — mirrors
+the eager `buildSlpLabels` reproj export.
 
-**Imports.** `window.SleapIO` (streaming writer API). **Imported by.**
-`import-export/save-load.js` (`buildSlpBytes`).
+**Imports.** `window.SleapIO` (streaming writer API); `_buildSioPoints`
+(`import-export/file-io.js`). **Imported by.** `import-export/save-load.js`
+(`buildSlpBytes`).
 
 ### import-export/save-load.js
 

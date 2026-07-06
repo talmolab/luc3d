@@ -22,14 +22,22 @@
  * by output index (`labeledFrameRefsByCamera` / `instanceRefsByCamera`) rather than by
  * object, so the session graph stays compact (indices + `Instance3D` + metadata, no
  * frame objects) and `sessions_json` serializes with zero frame materialization
- * (sleap-io.js #208). The output layout is deterministic — `appendStore` emits camera
- * c's store rows in order — so a grouped frame's output index is
- * `cameraBase[c] + storeRow`, computed up front from the columnar store.
+ * (sleap-io.js #208). The output layout is deterministic — overlays (below) occupy
+ * output frames `[0, E)`, then `appendStore` emits each camera's non-skipped store
+ * rows in order — so a grouped frame's output index is computed up front from the
+ * columnar store into a per-camera `storeOutIndex` map (see `refFor`).
  *
- * v1 scope: predictions + full grouping (identities + 3D). Per-frame 2D user
- * *corrections* on visited frames are NOT yet overlaid here — see
- * `buildSessionSlpBytesStreaming` notes and the phase-5 plan.
+ * 2D user *corrections* on visited frames ARE overlaid: any resident frameGroup
+ * carrying a user instance in a camera is a corrected/added `(camera, frameIdx)`.
+ * Those camera-frames are materialized into `LabeledFrame`s and `appendFrames`d
+ * FIRST, so #208's first-write-wins dedup shadows the store's original predicted
+ * row; the grouping refs and every store frame's output index are then recomputed
+ * to account for the prepended overlays plus the skipped store rows. Only edited
+ * camera-frames are materialized (minimal at prediction scale); every other frame
+ * streams from the columnar store untouched.
  */
+
+import { _buildSioPoints } from './file-io.js';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -102,8 +110,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
     var sioVideos = [];
     var lucidCamToSioCam = new Map();
     var allTracks = [];
-    var cam = [];           // per-camera: { name, sioCam, store, framesData, instancesData, rowMap, nFrames, cameraBase, trackBase }
-    var runningFrameBase = 0;
+    var cam = [];           // per-camera: { name, sioCam, framesData, instancesData, rowMap, nFrames, trackBase, storeOutIndex }
     var runningTrackBase = 0;
 
     for (var ci = 0; ci < session.cameras.length; ci++) {
@@ -149,10 +156,9 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
 
         cam.push({
             name: c.name, sioCam: sioCam, framesData: framesData, instancesData: instancesData,
-            rowMap: rowMap, nFrames: nFrames, cameraBase: runningFrameBase, trackBase: runningTrackBase,
+            rowMap: rowMap, nFrames: nFrames, trackBase: runningTrackBase,
             _labels: labels,
         });
-        runningFrameBase += nFrames;
         runningTrackBase += camTracks.length;
     }
 
@@ -181,18 +187,121 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
 
     var camByName = new Map();
     for (var cbi = 0; cbi < cam.length; cbi++) camByName.set(cam[cbi].name, cam[cbi]);
+    var numNodes = session.skeleton.nodes.length;
 
-    // Find the output [lfIndex, instIndex] for a grouped LUCID instance in camera
-    // `camName` at `frameIdx`. Returns null if the frame/instance isn't in that
-    // camera's store (e.g. camera not labeled in that frame).
-    function refFor(camName, frameIdx, trackIdx) {
+    // ---- 2D user-correction overlay plan ----
+    // A resident frameGroup carrying a user instance in camera `c` means `(c,
+    // frameIdx)` was corrected or added after lazy-load, so its columnar store row
+    // (the original prediction) is stale. Materialize the current per-camera frame
+    // (grouped + unlinked instances, mirroring buildSlpLabelsAllViews) and append
+    // it FIRST; #208's first-write-wins dedup then skips the store row. Detection
+    // and materialization are per (camera, frameIdx) — only edited camera-frames
+    // are built; every other frame streams straight from the store.
+    var overlayLfs = [];           // SIO.LabeledFrame[], appended before the stores
+    var overlayByKey = new Map();  // "camName:frameIdx" -> { lfIndex, byInst, byTrack }
+    var overlaidKeys = new Set();  // "camName:frameIdx" a store row must skip
+
+    function camHasUserInstance(fg, camName) {
+        var linked = fg.getInstances(camName);
+        for (var li = 0; li < linked.length; li++) if (linked[li] && linked[li].type === 'user') return true;
+        var ul = fg.getUnlinkedInstances(camName);
+        for (var ui = 0; ui < ul.length; ui++) if (ul[ui] && ul[ui].instance && ul[ui].instance.type === 'user') return true;
+        return false;
+    }
+
+    // Build one overlay SIO instance, resolving its track into the combined header
+    // list (this camera's tracks start at `trackBase`) — mirrors _getOrCreateSioInst.
+    // The whole store row is skipped for an edited camera-frame, so its untouched
+    // PREDICTED siblings are re-materialized here too. Carry a per-point score on
+    // them (the frameGroup keeps only the instance-level score) so SLEAP's GUI —
+    // which hides predicted points below a small score threshold — still shows
+    // them; without it the streamed store row's real scores would be lost to 0 and
+    // those animals would vanish. Mirrors the eager per-camera export (buildSlpLabels).
+    function buildOverlayInstance(inst, trackBase) {
+        var isPredicted = inst.type !== 'user';
+        var perPointScore = isPredicted ? (inst.score != null ? inst.score : 1.0) : undefined;
+        var pts = _buildSioPoints(inst, numNodes, perPointScore);
+        var track = null;
+        if (inst.trackIdx != null && inst.trackIdx >= 0) {
+            var combinedIdx = trackBase + inst.trackIdx;
+            if (combinedIdx >= 0 && combinedIdx < allTracks.length) track = allTracks[combinedIdx];
+        }
+        if (isPredicted) {
+            return new SIO.PredictedInstance({ points: pts, skeleton: skeleton, track: track, score: inst.score || 0 });
+        }
+        return new SIO.Instance({ points: pts, skeleton: skeleton, track: track });
+    }
+
+    for (var [fgIdx, fg] of session.frameGroups) {
+        for (var oc = 0; oc < cam.length; oc++) {
+            var ocInfo = cam[oc];
+            if (!camHasUserInstance(fg, ocInfo.name)) continue;
+            // Full per-camera instance set: grouped first, then unlinked (matches
+            // buildSlpLabelsAllViews). The store row is skipped as a whole, so the
+            // overlay must also carry the frame's untouched predicted siblings.
+            var lucidInsts = [];
+            var grouped = fg.getInstances(ocInfo.name);
+            for (var gg = 0; gg < grouped.length; gg++) lucidInsts.push(grouped[gg]);
+            var uls = fg.getUnlinkedInstances(ocInfo.name);
+            for (var uu = 0; uu < uls.length; uu++) if (uls[uu] && uls[uu].instance) lucidInsts.push(uls[uu].instance);
+            if (lucidInsts.length === 0) continue;
+            var sioInsts = [];
+            var byInst = new Map();
+            var byTrack = new Map();
+            for (var lii = 0; lii < lucidInsts.length; lii++) {
+                var linst = lucidInsts[lii];
+                sioInsts.push(buildOverlayInstance(linst, ocInfo.trackBase));
+                byInst.set(linst, lii);
+                var lt = (linst.trackIdx != null && linst.trackIdx >= 0) ? linst.trackIdx : -1;
+                if (lt >= 0 && !byTrack.has(lt)) byTrack.set(lt, lii);
+            }
+            var okey = ocInfo.name + ':' + fgIdx;
+            overlayByKey.set(okey, { lfIndex: overlayLfs.length, byInst: byInst, byTrack: byTrack });
+            overlaidKeys.add(okey);
+            overlayLfs.push(new SIO.LabeledFrame({ video: sioVideos[oc], frameIdx: fgIdx, instances: sioInsts }));
+        }
+    }
+    var E = overlayLfs.length;
+
+    // Output frame index of each store row, accounting for the E prepended overlays
+    // and any store rows shadowed by an overlay (skipped by appendStore). Mirrors
+    // the writer's running frame counter: overlays occupy [0, E); then each camera's
+    // NON-skipped rows continue in camera/row order.
+    var runningOut = E;
+    for (var so = 0; so < cam.length; so++) {
+        var soInfo = cam[so];
+        soInfo.storeOutIndex = new Map();
+        var soFidx = soInfo.framesData.frame_idx || soInfo.framesData.frame_id || [];
+        for (var row = 0; row < soInfo.nFrames; row++) {
+            if (overlaidKeys.has(soInfo.name + ':' + numAt(soFidx, row))) continue;
+            soInfo.storeOutIndex.set(row, runningOut++);
+        }
+    }
+
+    // Find the output [lfIndex, instIndex] for a grouped LUCID instance `gInst` in
+    // camera `camName` at `frameIdx`. Resolves to the prepended overlay when that
+    // camera-frame was user-edited, else to the (shifted) store row. Returns null if
+    // the frame isn't present in that camera.
+    function refFor(camName, frameIdx, gInst) {
+        var ov = overlayByKey.get(camName + ':' + frameIdx);
+        if (ov) {
+            var oi = ov.byInst.get(gInst);
+            if (oi === undefined) {
+                var gt = (gInst && gInst.trackIdx != null && gInst.trackIdx >= 0) ? gInst.trackIdx : -1;
+                if (gt >= 0) oi = ov.byTrack.get(gt);
+            }
+            if (oi === undefined) oi = 0;
+            return [ov.lfIndex, oi];
+        }
         var ci = camByName.get(camName);
         if (!ci) return null;
         var row = ci.rowMap.get(frameIdx);
         if (row === undefined) return null;
-        var lfIndex = ci.cameraBase + row;
+        var lfIndex = ci.storeOutIndex ? ci.storeOutIndex.get(row) : undefined;
+        if (lfIndex === undefined) return null;
         var start = numAt(ci.framesData.instance_id_start, row);
         var end = numAt(ci.framesData.instance_id_end, row);
+        var trackIdx = (gInst && gInst.trackIdx != null) ? gInst.trackIdx : null;
         var instIndex = 0; // default: first instance in the frame
         if (trackIdx != null && trackIdx >= 0) {
             for (var j = start; j < end; j++) {
@@ -221,7 +330,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
                 var gInst = entry[1];
                 var sioCamRef = lucidCamToSioCam.get(gCamName);
                 if (!sioCamRef) continue;
-                var ref = refFor(gCamName, frameIdx, gInst.trackIdx);
+                var ref = refFor(gCamName, frameIdx, gInst);
                 if (!ref) continue;
                 instanceRefsByCamera.set(sioCamRef, ref);
                 labeledFrameRefsByCamera.set(sioCamRef, ref[0]);
@@ -276,6 +385,9 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         provenance: { source: 'lucid', exported_at: new Date().toISOString() },
     });
     try {
+        // Overlays FIRST — their (video, frameIdx) keys win #208's dedup so the
+        // matching store rows below are skipped (recomputed in storeOutIndex).
+        if (overlayLfs.length > 0) writer.appendFrames(overlayLfs);
         for (var ai = 0; ai < cam.length; ai++) {
             var camInfo = cam[ai];
             var camStore = loader.labelsByCam.get(camInfo.name)._lazyDataStore;
