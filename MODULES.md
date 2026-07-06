@@ -375,11 +375,15 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
-- Lazy H5 loader: class `LazyFrameLoader`, `shouldUseLazyH5(file)`,
-  `ensureLazyFrameData`, `buildLazyFrameGroupSync`, `batchLoadLazyFrames`,
-  `loadAllLazyFrames`, `evictLazyFrames`. Spawns
-  `loading/slp-import-worker.js` (resolved against `document.baseURI` so
-  sub-path deployments work — see ISSUES.md I-8) for HDF5 reads.
+- Lazy loading: class `LazyFrameLoader` (analysis `.h5`, worker-backed) +
+  `shouldUseLazyH5(file)`; `shouldUseLazySlp(file)` + `LAZY_SLP_THRESHOLD` route
+  large prediction `.slp` to the main-thread `SioLazyLoader`
+  (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
+  `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
+  for worker-free loaders), `loadAllLazyFrames`, `evictLazyFrames`.
+  `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
+  `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
+  reads.
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,
@@ -1814,9 +1818,20 @@ the latest reflects current state. Parsing every file stacked all versions'
 instances into the same (frame, camera) slot — the Instances tab then showed the
 same tracks repeated N times. Skipped files are logged.
 
+**Large `.slp` → lazy loading.** In `handleLoadSessionFolderPerCamera`, each
+camera's chosen `.slp` is routed by `shouldUseLazySlp(bestSlp)` (`> 150 MB`): large
+prediction files go to a `SioLazyLoader` (`./sio-lazy-loader.js`, sleap-io.js
+streaming lazy reader) instead of the eager `parseSlpH5` worker, which OOMs the tab
+on 100k-frame predictions. The lazy loader is chosen when all lazy jobs are `.slp`
+(analysis `.h5` folders still use `LazyFrameLoader`); a lazy-open failure surfaces
+an error rather than falling back to the OOM-prone eager path. It plugs into the
+existing `state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
+
 **Imports from project modules.**
 - `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
-  `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`,
+  `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
+  (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
+  `./sio-lazy-loader.js` (`SioLazyLoader`),
   `../import-export/save-load.js`, `../ui/rendering.js`,
   `../ui/info-panel.js` (`updateInfoPanel`),
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
@@ -1831,6 +1846,36 @@ Load Session Folder / Load Multi-Session, all video-to-camera
 auto-matching, session-folder mode chooser. `handleLoadSessionFolder` calls
 `ensureNo3dImportBlockingLoad()` first, so loading a session over a
 skeleton-only 3D-points import prompts before discarding it.
+
+---
+
+### loading/sio-lazy-loader.js
+
+**Purpose.** Main-thread lazy frame loader for large prediction `.slp` files,
+backed by sleap-io.js's streaming lazy reader (`readSlpStreaming({ lazy: true })`).
+Drop-in for `LazyFrameLoader`'s interface so it plugs into the
+`state.session.lazyLoader` seam unchanged — but holds one lazy sleap-io.js `Labels`
+per camera on the main thread (the reader's own internal worker does the HDF5 I/O
+off-thread and returns compact columnar arrays) rather than spawning a per-camera
+worker. Frames are materialized on demand via `labels.frameAt(row)`, so
+`getFrameSync` returns data synchronously.
+
+**Key export.** class `SioLazyLoader` — `open(camName, file, onProgress)` (reads
+metadata + builds a videoFrameIdx→store-row map, first camera's skeleton/tracks
+win), `getFrame` / `getFrameSync` (adapt typed instances → `{trackIdx, score,
+type, points, occluded}`, LRU-cached), `prefetch`, `close`; fields `nFrames`,
+`skeleton`, `trackNames`, `videos`, `trackOccupancy` (left empty in the load+view
+scope — timeline track bars are deferred), and `isSync = true` (so
+`batchLoadLazyFrames` takes its worker-free path).
+
+**Imports.** `window.SleapIO.readSlpStreaming` (via the index.html bridge) and the
+local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).
+
+**Imported by.** `loading/session-loader.js`
+(`handleLoadSessionFolderPerCamera` routing).
+
+**User-facing features.** Lets a session folder of large multi-camera prediction
+`.slp` files load and render without OOMing the tab.
 
 ---
 

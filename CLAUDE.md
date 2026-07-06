@@ -27,9 +27,15 @@ python3 -m http.server 8080
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
 - sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to the
-  **released npm package `@talmolab/sleap-io.js@0.5.0`** (gitHead `1918f9e`),
-  which contains PR #196 (read-path perf) + PR #198 (lazy-native session model).
-  A tagged release — no longer the experimental moving-`main` pin.
+  **released npm package `@talmolab/sleap-io.js@0.5.2`** (gitHead `af9cbd6`),
+  a patch on 0.5.1 that fixes the lazy readers to apply the video-id remap
+  (sleap-io.js PR #205, closes #204) — so lazy materialization matches the eager
+  readers frame-for-frame on files with non-contiguous video group ids. 0.5.1
+  added `readSlpStreaming({ lazy })` — a columnar/on-demand mode of the streaming
+  reader (sleap-io.js PR #203) — on top of 0.5.0's PR #196 (read-path perf) +
+  PR #198 (lazy-native session model). The vendored bytes are byte-identical to
+  the published npm `dist/`. The lazy streaming reader backs `SioLazyLoader`
+  (`loading/sio-lazy-loader.js`) for large prediction `.slp` session loads.
   Its `pako`
   dep is vendored at `lib/pako/` and `mediabunny`
   is stubbed (`lib/sleap-io/mediabunny-stub.js`); both are aliased in the `index.html`
@@ -54,8 +60,9 @@ python3 -m http.server 8080
   → local ESM, the `index.html` `<script>` global + `readSlpStreaming`'s `h5wasmUrl`
   → local IIFE, and the module workers import the local ESM — no CDN h5wasm fetch on
   any path. To rebuild/bump the sleap-io.js
-  bundle, follow `docs/VENDORING-sleap-io.md` (recipe + SHA-256 manifest + importmap
-  derivation + `scripts/revendor-sleap-io.sh`).
+  bundle, run `scripts/revendor-sleap-io.sh <ref>` (it prints the importmap
+  bare-import list + SHA-256 manifest; the detailed recipe is archived in the
+  untracked `scratch/VENDORING-sleap-io.md`).
 - All loaded via script tags / import maps in index.html
 
 ## UI Conventions
