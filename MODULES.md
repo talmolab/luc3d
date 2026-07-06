@@ -2157,7 +2157,14 @@ per camera (columnar, window-by-window, zero per-frame JS objects) → `close()`
 as a **ref-based** `RecordingSession`: `FrameGroup`/`InstanceGroup` reference frames/
 instances by OUTPUT index (`labeledFrameRefsByCamera` / `instanceRefsByCamera`), not
 objects, so the session graph stays compact and `sessions_json` serializes with zero
-frame materialization (sleap-io.js #208). **2D user corrections are overlaid:**
+frame materialization (sleap-io.js #208). **Calibration-only cameras** (in
+`session.cameras` but with no loaded lazy store — a calibration file defining more
+cameras than videos loaded) get a header `Camera`+`Video` (0-frame) and a cameraGroup
+slot so the calibration round-trips, but are skipped for `appendStore` — matching the
+eager builder (the old code hard-threw "lazy store missing"). Loaded cameras carry
+their full-list `videoIndex` (not their position among loaded cameras) into
+`appendStore`'s `videoIndexOffset` and the overlay's video ref, so video ids stay
+correct across the skipped cameras. **2D user corrections are overlaid:**
 any resident frameGroup carrying a user instance in a camera is a corrected/added
 `(camera, frameIdx)`; those camera-frames are materialized (grouped + unlinked
 union, via the shared `_buildSioPoints` from `file-io.js`) and `appendFrames`d
