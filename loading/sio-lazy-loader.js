@@ -23,8 +23,8 @@
  * [{start,end}]>, counts:Map<trackIdx,frameCount> }`), never a dense
  * nFrames×nTracks grid (which for ~1000s of track fragments would be huge). The
  * timeline reads the `sparse` flag to take a segment branch and caps the rows it
- * renders (top-N per camera by occupancy) so a pathological track count can't blow
- * up the canvas. See `ui/timeline.js:_buildTrackSegments`.
+ * renders (first-N per camera by appearance) so a pathological track count can't
+ * blow up the canvas. See `ui/timeline.js:_buildTrackSegments`.
  */
 
 /**
@@ -175,9 +175,10 @@ export class SioLazyLoader {
      * timeline's presence bars without a dense nFrames×nTracks grid. One pass over
      * the columnar instance table (`instancesData.track`) grouped by frame
      * (`framesData.frame_idx` + `instance_id_start/end`); builds contiguous
-     * run-segments per track and a per-track occupied-frame count (for the
-     * timeline's top-N row cap). Relies on the SLP on-disk frame ordering, the same
-     * invariant `appendStore` assumes. Zero frame materialization.
+     * run-segments per track plus a per-track occupied-frame count (occupancy
+     * metadata; the timeline's row cap keeps the earliest-appearing tracks, not the
+     * most-occupied). Relies on the SLP on-disk frame ordering, the same invariant
+     * `appendStore` assumes. Zero frame materialization.
      *
      * @param {Object} labels    lazy sleap-io.js Labels (with `_lazyDataStore`).
      * @param {number} nFrames   this camera's video frame span (maxFrameIdx + 1).

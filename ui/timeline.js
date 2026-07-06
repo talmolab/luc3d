@@ -740,7 +740,6 @@ export class Timeline {
             for (var [_mfIdx] of session.frameGroups) materializedFrames.add(_mfIdx);
         }
         var occSegmentMap = {};  // "trackIdx:camName" -> [{start, end}, ...]
-        var occCounts = {};      // "trackIdx:camName" -> occupied-frame count (for the row cap)
         if (session.trackOccupancy) {
             // Sorted materialized-frame array (built once) for the sparse branch's
             // segment splitting.
@@ -764,10 +763,7 @@ export class Timeline {
                             var segs = occEnt[1];
                             if (!segs || segs.length === 0) continue;
                             var subd = this._subtractFramesFromSegments(segs, sortedMat);
-                            if (subd.length > 0) {
-                                occSegmentMap[occTrS + ':' + occCam] = subd;
-                                occCounts[occTrS + ':' + occCam] = (occ.counts && occ.counts.get(occTrS)) || 0;
-                            }
+                            if (subd.length > 0) occSegmentMap[occTrS + ':' + occCam] = subd;
                         }
                     }
                     continue;
@@ -775,12 +771,10 @@ export class Timeline {
                 for (var occTr = 0; occTr < occ.nTracks; occTr++) {
                     var occSegments = [];
                     var occStart = -1;
-                    var occCount = 0;
                     for (var occFi = 0; occFi < occ.nFrames; occFi++) {
                         var present = occ.data[occFi * occ.nTracks + occTr]
                             && !materializedFrames.has(occFi);
                         if (present) {
-                            occCount++;
                             if (occStart < 0) occStart = occFi;
                         } else {
                             if (occStart >= 0) {
@@ -792,7 +786,6 @@ export class Timeline {
                     if (occStart >= 0) occSegments.push({ start: occStart, end: occ.nFrames - 1 });
                     if (occSegments.length > 0) {
                         occSegmentMap[occTr + ':' + occCam] = occSegments;
-                        occCounts[occTr + ':' + occCam] = occCount;
                     }
                 }
             }
@@ -869,7 +862,7 @@ export class Timeline {
             var camRowsBefore = this._trackSegments.length;
 
             // 1. Collect every candidate track row for this camera (in track-index
-            //    order) with an occupancy score used only to rank for the cap.
+            //    order) with its first-appearance frame, used only to rank for the cap.
             var candidates = [];
             for (var ti = 0; ti < sortedTrackIndices.length; ti++) {
                 var t3 = sortedTrackIndices[ti];
@@ -894,24 +887,25 @@ export class Timeline {
 
                 if (!segments || segments.length === 0) continue;
 
-                // Rank score: prefer the producer's occupied-frame count; fall back
-                // to live frames / covered span so the dense + fg paths also rank.
-                var score = occCounts[camKey] || 0;
-                if (frameSet && frameSet.size > score) score = frameSet.size;
-                if (score === 0) score = this._segmentsFrameCount(segments);
-                candidates.push({ t3: t3, segments: segments, score: score });
+                // First-appearance frame (earliest segment start) — the cap keeps the
+                // tracks that show up EARLIEST in the video, not the most-occupied.
+                var firstStart = Infinity;
+                for (var fsg = 0; fsg < segments.length; fsg++) {
+                    if (segments[fsg].start < firstStart) firstStart = segments[fsg].start;
+                }
+                candidates.push({ t3: t3, segments: segments, firstStart: firstStart });
             }
 
-            // 2. Cap to the top-N most-occupied tracks (keeping track-index display
+            // 2. Cap to the first-N tracks by appearance (keeping track-index display
             //    order); a lazy `.slp` can carry ~1000s of tracks per camera and
             //    rendering them all overflows the canvas and is unreadable.
             var hiddenCount = 0;
             if (rowCap > 0 && candidates.length > rowCap) {
-                var byScore = candidates.slice().sort(function (a, b) {
-                    return (b.score - a.score) || (a.t3 - b.t3);
+                var byStart = candidates.slice().sort(function (a, b) {
+                    return (a.firstStart - b.firstStart) || (a.t3 - b.t3);
                 });
                 var keep = new Set();
-                for (var kk = 0; kk < rowCap; kk++) keep.add(byScore[kk].t3);
+                for (var kk = 0; kk < rowCap; kk++) keep.add(byStart[kk].t3);
                 var kept = [];
                 for (var cc = 0; cc < candidates.length; cc++) {
                     if (keep.has(candidates[cc].t3)) kept.push(candidates[cc]);
@@ -941,17 +935,20 @@ export class Timeline {
                 this._trackNames.push(''); // placeholder, finalized below
             }
 
-            // 3b. Label-only "+N more" row when the cap dropped tracks.
+            // 3b. Label-only truncation row (a "…" under the camera's kept tracks)
+            // when the per-camera cap dropped some. `_hiddenCount` is retained for a
+            // possible hover tooltip; the gutter just shows the ellipsis.
             if (hiddenCount > 0) {
                 this._trackSegments.push({
                     trackIdx: -1,
                     cameraName: cameraNames[ci],
                     color: null,
                     segments: [],
-                    trackName: '+' + hiddenCount + ' more',
+                    trackName: '…',
                     treeRole: 'middle',
                     _isTrack: true,
                     _isMoreIndicator: true,
+                    _hiddenCount: hiddenCount,
                 });
                 this._trackNames.push('');
             }
@@ -1010,18 +1007,6 @@ export class Timeline {
             if (cur <= e) out.push({ start: cur, end: e });
         }
         return out;
-    }
-
-    /**
-     * Total frames covered by a sorted, non-overlapping segment list.
-     * @param {Array<{start:number,end:number}>} segments
-     * @returns {number}
-     * @private
-     */
-    _segmentsFrameCount(segments) {
-        var n = 0;
-        for (var i = 0; i < segments.length; i++) n += segments[i].end - segments[i].start + 1;
-        return n;
     }
 
     /**

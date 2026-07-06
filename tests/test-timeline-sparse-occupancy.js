@@ -156,15 +156,18 @@
     describe('Timeline sparse occupancy (lazy .slp) — row cap', function () {
         var container, tl;
 
-        it('keeps the top-N tracks by occupancy and adds a "+N more" row', function () {
+        it('keeps the first-N tracks by appearance (not occupancy) and adds a "…" row', function () {
             container = createContainer(800, 200);
             tl = new Timeline(container, { totalFrames: 300 });
             var session = makeSession(['cam1']);
             var N = 100;
+            // Track t first appears at frame t, but its occupancy INCREASES with t —
+            // so first-appearance (keep 0..63) and top-occupancy (keep 36..99) select
+            // opposite ends. The cap must keep the EARLIEST-appearing tracks.
             var segments = new Map(), counts = new Map();
             for (var t = 0; t < N; t++) {
                 segments.set(t, [{ start: t, end: t }]);
-                counts.set(t, N - t);   // track 0 most-occupied, track 99 least
+                counts.set(t, t);   // occupancy grows with t (would keep high indices)
             }
             session.trackOccupancy = new Map();
             session.trackOccupancy.set('cam1', { sparse: true, nTracks: N, nFrames: 300, segments: segments, counts: counts });
@@ -175,12 +178,14 @@
             assertEqual(rows.length, cap, 'capped to MAX_TRACK_ROWS_PER_CAMERA real rows');
 
             var present = new Set(rows.map(function (r) { return r.trackIdx; }));
-            assertTrue(present.has(0) && present.has(cap - 1), 'kept the most-occupied tracks');
-            assertFalse(present.has(cap), 'dropped the least-occupied tracks');
+            assertTrue(present.has(0) && present.has(cap - 1), 'kept the earliest-appearing tracks (0..cap-1)');
+            assertFalse(present.has(cap), 'dropped the track just past the cap');
+            assertFalse(present.has(N - 1), 'dropped the last-appearing track despite its highest occupancy');
 
             var more = tl._trackSegments.filter(function (s) { return s.cameraName === 'cam1' && s._isMoreIndicator; });
-            assertEqual(more.length, 1, 'one "+N more" indicator row');
-            assertEqual(more[0].trackName, '+' + (N - cap) + ' more', 'indicator counts hidden tracks');
+            assertEqual(more.length, 1, 'one truncation indicator row');
+            assertEqual(more[0].trackName, '…', 'indicator shows a "…" ellipsis');
+            assertEqual(more[0]._hiddenCount, N - cap, 'indicator retains the hidden-track count');
             assertEqual(more[0].segments.length, 0, 'indicator draws no bar');
 
             cleanup(tl, container); tl = null;

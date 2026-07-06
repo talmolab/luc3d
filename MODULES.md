@@ -1343,10 +1343,12 @@ branch uses those segments directly, subtracting materialized frames via
 `_subtractFramesFromSegments` (binary-search split — for materialized frames the live
 `fg.instances` data wins) instead of expanding a 108k-frame grid. To keep a
 ~1000s-track prediction dump from overflowing the canvas cap and being unreadable, the
-per-camera row build **caps** at `MAX_TRACK_ROWS_PER_CAMERA` (64): it keeps the top-N
-tracks by occupancy (`counts`, falling back to `_segmentsFrameCount`), preserving
-track-index display order, and appends a label-only `+N more` indicator row. Normal
-(few-track) sessions are under the cap and render exactly as before. Covered by
+per-camera row build **caps** at `MAX_TRACK_ROWS_PER_CAMERA` (64): **per camera** it
+keeps the first-N tracks by **appearance** (earliest segment start — no extra I/O),
+preserving track-index display order, and appends a label-only `…` truncation row
+(carrying `_hiddenCount` for a possible tooltip). The producer's per-track `counts`
+(occupancy) is kept as metadata but no longer drives the cap. Normal (few-track)
+sessions are under the cap and render exactly as before. Covered by
 `tests/test-timeline-sparse-occupancy.js`.
 
 **Visibility panel row sizing (Phase-7 refinements).** `styles.css`
@@ -1907,7 +1909,7 @@ counts:Map<trackIdx,frameCount> }` — never a dense nFrames×nTracks grid (a ~1
 prediction dump would be huge). Relies on the SLP on-disk frame ordering (same invariant
 `appendStore` assumes); zero frame materialization. `session.trackOccupancy` picks it up
 (`session-loader.js`); the timeline reads the `sparse` flag (`_buildTrackSegments`) and
-caps rendered rows (top-N per camera). See `ui/timeline.js`.
+caps rendered rows (first-N per camera by appearance). See `ui/timeline.js`.
 
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds
