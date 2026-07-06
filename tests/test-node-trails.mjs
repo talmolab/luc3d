@@ -17,11 +17,12 @@ import path from 'path';
 const ov = await import(pathToFileURL(path.resolve('ui/overlays.js')).href);
 
 function mockCtx() {
-    const calls = { stroke: 0, moveTo: 0, lineTo: 0 };
+    const calls = { stroke: 0, moveTo: 0, lineTo: 0, colors: [] };
     return {
         calls, globalAlpha: 1, strokeStyle: '', lineWidth: 1, lineCap: '', lineJoin: '',
         save() {}, restore() {}, beginPath() {},
-        moveTo() { calls.moveTo++; }, lineTo() { calls.lineTo++; }, stroke() { calls.stroke++; },
+        moveTo() { calls.moveTo++; }, lineTo() { calls.lineTo++; },
+        stroke() { calls.stroke++; this.calls.colors.push(this.strokeStyle); },
     };
 }
 
@@ -76,6 +77,22 @@ const nullFG = new Map([[9, { instances: new Map([['camA', [inst(null, 5)]]]), g
 ctx = mockCtx();
 ov.drawNodeTrails(ctx, 'camA', sessionOf(nullFG), 10, Object.assign({ trailLength: 3 }, GEO));
 ok(ctx.calls.stroke === 0, 'null-trackIdx seed draws no trail');
+
+// 7. Color history: on an identity/color switch, past segments keep the color
+// they had AT that frame (not the current seed's color). Track 7's identity color
+// differs between frame 8 and frame 9 → segment colors must not all be identical.
+const switchFG = new Map([[8, fgLinked(100)], [9, fgLinked(110)], [10, fgLinked(120)]]);
+const colorByFrame = { 8: '#00ff00', 9: '#ff0000', 10: '#ff0000' };  // switch between 8 and 9
+const sSwitch = {
+    frameGroups: switchFG,
+    getFrameGroup(i) { return switchFG.get(i); },
+    tracks: [],
+    getIdentityForTrack(trackIdx, cam, frameIdx) { return { color: colorByFrame[frameIdx] }; },
+};
+ctx = mockCtx();
+ov.drawNodeTrails(ctx, 'camA', sSwitch, 10, Object.assign({ trailLength: 5, colorByIdentity: true }, GEO));
+const uniqueHues = new Set(ctx.calls.colors.map(function (c) { return c.toLowerCase(); }));
+ok(uniqueHues.size >= 2, 'segments keep per-frame color across a switch (>=2 distinct), got ' + uniqueHues.size);
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }
