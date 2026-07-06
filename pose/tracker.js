@@ -944,9 +944,10 @@ export function runCrossViewTracker(session, cameras, frameIndices, propagate, m
 export async function runCrossViewTrackerProgress(session, cameras, frameIndices, propagate, maxTargets, onProgress) {
     var run = createTrackerRun(session, cameras, maxTargets);
     var total = frameIndices.length;
-    // Repaint ~every 1% of frames (min 1) so large runs get a smooth counter
-    // without a setTimeout per frame; small runs update every frame.
-    var stride = Math.max(1, Math.floor(total / 100));
+    // Repaint ~every 5% of frames (≈20 updates total). Each update yields to the
+    // event loop for a browser repaint, which is expensive on a large run — so we
+    // update the counter infrequently to keep Track All fast, rather than smoothly.
+    var stride = Math.max(1, Math.ceil(total / 20));
     for (var f = 0; f < total; f++) {
         stepTrackerFrame(session, run, frameIndices[f]);
         if (onProgress && ((f + 1) % stride === 0 || f === total - 1)) {
