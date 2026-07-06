@@ -8,14 +8,15 @@
  *   2. Consumer — timeline._buildTrackSegments' sparse branch turns those segments
  *      into track bars, and subtracts materialized frames (live fg data wins).
  *   3. Row cap — a camera with more tracks than MAX_TRACK_ROWS_PER_CAMERA keeps the
- *      top-N by occupancy and appends a "+N more" indicator row.
+ *      first-N tracks by appearance (earliest segment start) and appends a
+ *      "+N more" indicator row, per camera independently.
  *
  * Uses the test-runner bridges: window.SioLazyLoader, window.Timeline, and the
  * pose-data classes (Session/Camera/Skeleton/Instance).
  */
 
 (function () {
-    const { describe, it, assertEqual, assertTrue, assertFalse } = TestFramework;
+    const { describe, it, assertEqual, assertTrue, assertFalse, assertDeepEqual } = TestFramework;
 
     function createContainer(width, height) {
         var div = document.createElement('div');
@@ -102,6 +103,14 @@
             assertEqual(occ.counts.get(0), 2, 'two frames, not three instances');
             assertEqual(occ.segments.get(0)[0].end, 1, 'run spans frames 0-1');
         });
+
+        it('returns null when there is no store or no track segments', function () {
+            var loader = new window.SioLazyLoader();
+            assertEqual(loader._computeSparseOccupancy({ tracks: [] }, 10), null, 'no _lazyDataStore → null');
+            // A store whose only instances are trackless (track -1) yields no segments.
+            var store = makeStore([{ f: 0, tracks: [-1] }, { f: 1, tracks: [-1] }]);
+            assertEqual(loader._computeSparseOccupancy(makeLabels(store, 1), 2), null, 'no valid tracks → null');
+        });
     });
 
     describe('Timeline sparse occupancy (lazy .slp) — consumer', function () {
@@ -151,6 +160,30 @@
 
             cleanup(tl, container); tl = null;
         });
+
+        it('a fully-materialized track produces no phantom row (subd empty)', function () {
+            fresh();
+            var session = makeSession(['cam1']);
+            session.trackOccupancy = new Map();
+            // Track 0 occupies ONLY frame 7.
+            session.trackOccupancy.set('cam1', {
+                sparse: true, nTracks: 2, nFrames: 100,
+                segments: new Map([[0, [{ start: 7, end: 7 }]]]),
+                counts: new Map([[0, 1]]),
+            });
+            // Materialize frame 7 via a DIFFERENT track — track 0's only frame is now
+            // subtracted and not re-added, so track 0 should vanish (no row, no bar).
+            session.addUnlinkedInstance(7, 'cam1', new Instance([[1, 2], [3, 4]], 1, 'predicted', 0.9));
+            tl.setData(session);
+
+            var t0Rows = tl._trackSegments.filter(function (s) {
+                return s.cameraName === 'cam1' && s._isTrack && s.trackIdx === 0;
+            });
+            assertEqual(t0Rows.length, 0, 'fully-subtracted track 0 produces no row');
+            assertEqual(getSegmentFrames(tl, 'cam1', 0).size, 0, 'and no phantom bar');
+
+            cleanup(tl, container); tl = null;
+        });
     });
 
     describe('Timeline sparse occupancy (lazy .slp) — row cap', function () {
@@ -186,6 +219,52 @@
             assertEqual(more.length, 1, 'one "+N more" indicator row');
             assertEqual(more[0].trackName, '+' + (N - cap) + ' more', 'indicator shows the hidden-track count');
             assertEqual(more[0].segments.length, 0, 'indicator draws no bar');
+
+            cleanup(tl, container); tl = null;
+        });
+
+        it('caps each camera independently', function () {
+            container = createContainer(800, 200);
+            tl = new Timeline(container, { totalFrames: 300 });
+            var session = makeSession(['cam1', 'cam2']);
+            var cap = tl.MAX_TRACK_ROWS_PER_CAMERA;
+            var overCap = cap + 20;   // cam1: over the cap
+            var underCap = 5;         // cam2: under the cap
+            function tracks(n) {
+                var segs = new Map();
+                for (var t = 0; t < n; t++) segs.set(t, [{ start: t, end: t }]);
+                return { sparse: true, nTracks: n, nFrames: 300, segments: segs, counts: new Map() };
+            }
+            session.trackOccupancy = new Map();
+            session.trackOccupancy.set('cam1', tracks(overCap));
+            session.trackOccupancy.set('cam2', tracks(underCap));
+            tl.setData(session);
+
+            var rows1 = tl._trackSegments.filter(function (s) { return s.cameraName === 'cam1' && s._isTrack && s.trackIdx >= 0; });
+            var rows2 = tl._trackSegments.filter(function (s) { return s.cameraName === 'cam2' && s._isTrack && s.trackIdx >= 0; });
+            assertEqual(rows1.length, cap, 'cam1 capped to cap rows');
+            assertEqual(rows2.length, underCap, 'cam2 (under cap) keeps all its rows');
+
+            var more1 = tl._trackSegments.filter(function (s) { return s.cameraName === 'cam1' && s._isMoreIndicator; });
+            var more2 = tl._trackSegments.filter(function (s) { return s.cameraName === 'cam2' && s._isMoreIndicator; });
+            assertEqual(more1.length, 1, 'cam1 has a "+N more" row');
+            assertEqual(more1[0].trackName, '+' + (overCap - cap) + ' more', 'cam1 hidden count is its own');
+            assertEqual(more2.length, 0, 'cam2 (under cap) has NO indicator row');
+
+            cleanup(tl, container); tl = null;
+        });
+
+        it('_subtractFramesFromSegments splits at all boundaries', function () {
+            container = createContainer(400, 80);
+            tl = new Timeline(container, { totalFrames: 100 });
+            var sub = function (segs, rm) { return tl._subtractFramesFromSegments(segs, rm); };
+            var seg = [{ start: 5, end: 9 }];
+            assertDeepEqual(sub(seg, [5]), [{ start: 6, end: 9 }], 'remove at run start');
+            assertDeepEqual(sub(seg, [9]), [{ start: 5, end: 8 }], 'remove at run end');
+            assertDeepEqual(sub(seg, [6, 7]), [{ start: 5, end: 5 }, { start: 8, end: 9 }], 'two adjacent removals');
+            assertDeepEqual(sub(seg, [6, 8]), [{ start: 5, end: 5 }, { start: 7, end: 7 }, { start: 9, end: 9 }], 'carve into 3');
+            assertDeepEqual(sub(seg, [20]), [{ start: 5, end: 9 }], 'removal outside the run → unchanged');
+            assertDeepEqual(sub(seg, []), [{ start: 5, end: 9 }], 'empty remove list → unchanged');
 
             cleanup(tl, container); tl = null;
         });

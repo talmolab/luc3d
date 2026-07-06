@@ -100,8 +100,9 @@ export class Timeline {
          * @const {number} Max track rows drawn per camera. A lazy prediction `.slp`
          * can carry ~1000s of track fragments per camera; rendering every one both
          * blows past the ~32000px canvas cap and is unreadable. When a camera has
-         * more real track rows than this, only the top-N by occupancy are shown and
-         * a "+N more" indicator row is appended. 0 disables the cap.
+         * more real track rows than this, only the first-N tracks by appearance
+         * (earliest segment start) are shown and a "+N more" indicator row is
+         * appended. 0 disables the cap.
          */
         this.MAX_TRACK_ROWS_PER_CAMERA = 64;
 
