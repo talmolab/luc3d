@@ -15,6 +15,7 @@ import {
     storeReprojectedInstances,
     frameHasGroupedUserInstances,
     loadAllLazyFrames,
+    batchLoadLazyFrames,
     triangulateMultiFrameInstances,
     sessionHasCalibration,
     showCalibrationRequiredPopup,
@@ -47,6 +48,13 @@ import { update3DViewport } from '../pose/initialization.js';
  *   2. Group by trackIdx — same trackIdx from different cameras = same identity
  *   3. Replace existing InstanceGroups with the track-based groups
  *   4. Triangulate each group
+ *
+ * NOTE (cross-camera trackIdx): this ASSUMES `trackIdx` corresponds across cameras
+ * (step 2). That holds only when the per-camera tracks were produced by a cross-view
+ * tracker that wrote consistent ids across views. Per-camera prediction `.slp` files
+ * (the lazy `SioLazyLoader` case) are tracked INDEPENDENTLY, so their ids do NOT
+ * correspond and this would mis-group — use Group-by-Identity there instead. See
+ * `scratch/cross-camera-trackidx.md`.
  */
 export function showGroupByTrackModal() {
     if (!state.session) {
@@ -230,6 +238,97 @@ export function showGroupByTrackModal() {
  * For each frame, groups instances that share the same identity into InstanceGroups,
  * then triangulates each group.
  */
+/**
+ * True if a FrameGroup carries any user-authored instance (grouped or unlinked).
+ * Decides which frames a windowed triangulation sweep may release: a predicted-only
+ * frame's 2D data rebuilds on demand (its compact 3D result is kept in
+ * session.instanceGroups), whereas a user-edited frame must stay resident.
+ */
+function frameGroupHasUserInstances(fg) {
+    for (var [, insts] of fg.instances) {
+        for (var i = 0; i < insts.length; i++) {
+            if (insts[i] && insts[i].type === 'user') return true;
+        }
+    }
+    for (var [, uInsts] of fg.unlinkedInstances) {
+        for (var j = 0; j < uInsts.length; j++) {
+            if (uInsts[j] && uInsts[j].instance && uInsts[j].instance.type === 'user') return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Drive a bulk per-frame triangulation over an ENTIRE session — memory-bounded on
+ * large lazy `.slp` sessions.
+ *
+ * For a windowing-capable lazy loader (SioLazyLoader): walk 0..nFrames in windows,
+ * materialize each window into session.frameGroups (batchLoadLazyFrames), invoke
+ * `onFrame(frameIdx, fg)` per resident frame, then RELEASE the window — dropping
+ * predicted-only frameGroups (they rebuild on navigation; their compact 3D result
+ * lives in session.instanceGroups) and the loader's internal typed-frame caches via
+ * releaseWindow. Peak stays at one window instead of the whole ~108k×3 graph, so
+ * this no longer re-OOMs the way `loadAllLazyFrames` + full iteration did — and it
+ * fixes the silent-drop bug (only resident/visited frames were processed before).
+ *
+ * For non-lazy sessions (all frames resident) and worker-backed lazy sessions
+ * (small analysis `.h5`, materialized up front) it iterates the resident
+ * frameGroups exactly as before.
+ *
+ * @returns {Promise<number>} number of frames processed.
+ */
+async function sweepTriangulationFrames(session, onFrame, opts) {
+    opts = opts || {};
+    var loader = session.lazyLoader;
+    var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
+    var YIELD_EVERY = 100;
+    var processed = 0;
+
+    if (windowed) {
+        var W = opts.window || 2000;
+        var total = loader.nFrames;
+        for (var start = 0; start < total; start += W) {
+            var end = Math.min(start + W, total);
+            await batchLoadLazyFrames(start, end - start);
+            for (var fi = start; fi < end; fi++) {
+                var fg = session.frameGroups.get(fi);
+                if (!fg) continue;
+                onFrame(fi, fg);
+                processed++;
+                if (processed % YIELD_EVERY === 0) {
+                    if (opts.onProgress) opts.onProgress(processed, total);
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+            }
+            // Release the window. Keep the on-screen current frame and any
+            // user-edited frame; everything else is predicted-only and rebuildable.
+            for (var rf = start; rf < end; rf++) {
+                if (rf === state.currentFrame) continue;
+                var rfg = session.frameGroups.get(rf);
+                if (rfg && !frameGroupHasUserInstances(rfg)) session.frameGroups.delete(rf);
+            }
+            loader.releaseWindow(start, end);
+        }
+        return processed;
+    }
+
+    // Worker-backed lazy sessions (small analysis .h5) still materialize up front;
+    // non-lazy sessions already hold every frame.
+    if (loader) await loadAllLazyFrames(opts.onStatus);
+    var idxs = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
+    for (var j2 = 0; j2 < idxs.length; j2++) {
+        var fg2 = session.frameGroups.get(idxs[j2]);
+        if (!fg2) continue;
+        onFrame(idxs[j2], fg2);
+        processed++;
+        if (processed % YIELD_EVERY === 0) {
+            if (opts.onProgress) opts.onProgress(processed, idxs.length);
+            await new Promise(function (r) { setTimeout(r, 0); });
+        }
+    }
+    return processed;
+}
+
 export async function groupByIdentityAndTriangulateAll() {
     if (!sessionHasCalibration()) {
         showCalibrationRequiredPopup();
@@ -249,28 +348,21 @@ export async function groupByIdentityAndTriangulateAll() {
         return;
     }
 
-    // Lazy sessions: load all frames before bulk operation
-    if (session.lazyLoader) {
-        await loadAllLazyFrames(showLoading);
-    }
-
     var cameras = session.cameras;
-    var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
-    if (allFrameIndices.length === 0) {
+    var totalFrames = session.lazyLoader ? session.lazyLoader.nFrames : session.frameGroups.size;
+    if (totalFrames === 0) {
         setStatus('No frames', 'warning');
         return;
     }
 
-    showLoading('Grouping by identity & triangulating 0/' + allFrameIndices.length + ' frames...');
+    showLoading('Grouping by identity & triangulating 0/' + totalFrames + ' frames...');
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
-    var YIELD_EVERY = 100;
 
-    for (var fi = 0; fi < allFrameIndices.length; fi++) {
-        var frameIdx = allFrameIndices[fi];
-        var fg = session.frameGroups.get(frameIdx);
-        if (!fg) continue;
+    // Memory-bounded sweep over every frame (windows + release on lazy sessions),
+    // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
+    var processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
 
         // 1. Collect all instances, bucket by identityId
         //    identityId -> { camName -> Instance }
@@ -368,13 +460,13 @@ export async function groupByIdentityAndTriangulateAll() {
             totalTriangulated++;
         }
 
-        // Yield to UI
-        if (fi % YIELD_EVERY === 0) {
-            document.getElementById('loadingStatus').textContent =
-                'Grouping by identity & triangulating ' + (fi + 1) + '/' + allFrameIndices.length + ' frames...';
-            await new Promise(function (r) { setTimeout(r, 0); });
-        }
-    }
+    }, {
+        onProgress: function (done, total) {
+            var el = document.getElementById('loadingStatus');
+            if (el) el.textContent =
+                'Grouping by identity & triangulating ' + done + '/' + total + ' frames...';
+        },
+    });
 
     hideLoading();
     setReprojErrorVisible(true);
@@ -386,7 +478,7 @@ export async function groupByIdentityAndTriangulateAll() {
     update3DViewport(state.currentFrame);
     updateInfoPanel();
     setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
-        totalTriangulated + ' across ' + allFrameIndices.length + ' frames', 'success');
+        totalTriangulated + ' across ' + processedFrames + ' frames', 'success');
 }
 
 
@@ -411,24 +503,22 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     }
 
     var session = state.session;
-    var allFrameIndices = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
+    var totalFrames = session.lazyLoader ? session.lazyLoader.nFrames : session.frameGroups.size;
 
-    if (allFrameIndices.length === 0) {
+    if (totalFrames === 0) {
         setStatus('No frames with instances', 'warning');
         return;
     }
 
-    showLoading('Grouping & triangulating 0/' + allFrameIndices.length + ' frames...');
+    showLoading('Grouping & triangulating 0/' + totalFrames + ' frames...');
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
     var totalErrors = [];
-    var YIELD_EVERY = 100;
 
-    for (var fi = 0; fi < allFrameIndices.length; fi++) {
-        var frameIdx = allFrameIndices[fi];
-        var fg = session.frameGroups.get(frameIdx);
-        if (!fg) continue;
+    // Memory-bounded sweep over every frame (windows + release on lazy sessions);
+    // also fixes the prior silent-drop (only resident frames were grouped before).
+    await sweepTriangulationFrames(session, function (frameIdx, fg) {
 
         // 1. Collect ALL instances across all cameras, keyed by trackIdx
         //    trackIdx -> { camName -> Instance }
@@ -568,12 +658,11 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             totalTriangulated++;
         }
 
-        // Yield to UI periodically
-        if (fi % YIELD_EVERY === 0) {
-            showLoading('Triangulating... ' + (fi + 1) + '/' + allFrameIndices.length + ' frames');
-            await new Promise(function (r) { setTimeout(r, 0); });
-        }
-    }
+    }, {
+        onProgress: function (done, total) {
+            showLoading('Triangulating... ' + done + '/' + total + ' frames');
+        },
+    });
 
     // Post-triangulation updates — hide loading first so user sees results
     hideLoading();

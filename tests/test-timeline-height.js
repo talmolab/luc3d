@@ -159,6 +159,25 @@
             tl2.destroy();
         });
 
+        it('cap: clamps a many-row refresh to 30% of the window (no full-height balloon)', function () {
+            // Regression: updateTimelineForFrame (group/link/triangulate) must pass
+            // { cap: true } so a lazy session's many track rows don't grow the
+            // container to getPreferredHeight() and hide the camera views. An
+            // uncapped refresh grows to preferred; the capped one clamps to 30%.
+            var el = sized(40);
+            var tl = new Timeline(el, { totalFrames: 500 });
+            // 3 cameras × many tracks so the (capped) row count still makes
+            // getPreferredHeight far exceed 30% of any reasonable test window.
+            tl.refreshTracks(buildSessionWithTracks(90, ['cam1', 'cam2', 'cam3']), { cap: true });
+            var cap = Math.floor(0.3 * window.innerHeight);
+            var preferred = tl.getPreferredHeight();
+            assertGreaterThan(preferred, cap, 'precondition: preferred height exceeds the 30% cap');
+            var h = parseFloat(el.style.height);
+            assertTrue(h <= cap + 1, 'cap-mode clamps container to <= 30% of window (h=' + h + ', cap=' + cap + ')');
+            assertLessThan(h, preferred, 'cap-mode does NOT balloon to the preferred height');
+            tl.destroy();
+        });
+
         it('setData also grows a too-small container (callers without fitTimelineToData)', function () {
             // Several SLP-load call sites invoke timeline.setData without a
             // matching fitTimelineToData. Without grow-on-setData, the 96 px
