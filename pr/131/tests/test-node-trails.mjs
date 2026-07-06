@@ -94,5 +94,17 @@ ov.drawNodeTrails(ctx, 'camA', sSwitch, 10, Object.assign({ trailLength: 5, colo
 const uniqueHues = new Set(ctx.calls.colors.map(function (c) { return c.toLowerCase(); }));
 ok(uniqueHues.size >= 2, 'segments keep per-frame color across a switch (>=2 distinct), got ' + uniqueHues.size);
 
+// 8. A track that has VANISHED from the current frame still draws its lingering
+// trail (trails are seeded from the window union, not just the current frame).
+const vanishFG = new Map([
+    [8, fgLinked(100)],   // track 7
+    [9, fgLinked(110)],   // track 7
+    // current frame: only track 3 present — track 7 has vanished
+    [10, { instances: new Map([['camA', [inst(3, 120)]]]), getUnlinkedInstances() { return []; } }],
+]);
+ctx = mockCtx();
+ov.drawNodeTrails(ctx, 'camA', sessionOf(vanishFG), 10, Object.assign({ trailLength: 5 }, GEO));
+ok(ctx.calls.stroke === 2, 'vanished track (7) still trails (1 seg × 2 nodes), got ' + ctx.calls.stroke);
+
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }

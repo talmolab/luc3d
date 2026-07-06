@@ -1635,55 +1635,58 @@ function trailViewInstances(fg, viewName) {
 }
 
 // Draw fading, shrinking node trails (issue #102 — mirrors SLEAP's
-// TrackTrailOverlay). For every instance present in `viewName` at `frameIdx`
-// (linked AND unlinked), gather the last `trailLength` PRESENT frames — like
-// SLEAP's `labels.find(video, range(0, frame_idx+1))[-trail_length:]`, which is
-// sparse-aware, not contiguous, and only reads frames already in
-// `session.frameGroups` (no lazy-H5 fetch — the perf concern in #102). Past
-// instances are matched by per-view `trackIdx`; each node's positions are joined
-// into a polyline that thins toward the past (SLEAP halves width) and, per this
-// request, also fades in opacity. Trail color follows the color-by mode (identity
-// vs track), brightened a shade so the trail reads apart from the live skeleton.
+// TrackTrailOverlay). The trail window is the last `trailLength`+1 PRESENT frames
+// up to and including `frameIdx` — like SLEAP's `labels.find(video,
+// range(0,frame_idx+1))[-trail_length:]`: sparse-aware, and only reads frames
+// already in `session.frameGroups` (no lazy-H5 fetch — the perf concern in #102).
+// Trails are drawn for EVERY track (linked+unlinked, by per-view `trackIdx`) that
+// appears anywhere in the window — including tracks that have already VANISHED
+// from the current frame, so a track's trail lingers and fades out over the window
+// instead of disappearing the instant its instance is gone. Each node's positions
+// join into a polyline that, toward the past, thins, fades, and darkens; each
+// segment is colored by the instance's color AT that frame, so an identity/color
+// switch shows up as a color change along the trail.
 export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     options = options || {};
     var trailLength = options.trailLength || 0;
     if (trailLength <= 0 || !session || frameIdx == null || !session.frameGroups) return;
 
-    var curFg = session.getFrameGroup ? session.getFrameGroup(frameIdx) : session.frameGroups.get(frameIdx);
-    var seeds = trailViewInstances(curFg, viewName);
-    if (seeds.length === 0) return;
+    // Window frames: present frames <= current, nearest first, capped so there are
+    // up to `trailLength` segments back from the current frame.
+    var windowIdx = [];
+    session.frameGroups.forEach(function (fg, idx) { if (idx <= frameIdx) windowIdx.push(idx); });
+    windowIdx.sort(function (a, b) { return b - a; });
+    windowIdx = windowIdx.slice(0, trailLength + 1);
+    if (windowIdx.length < 2) return;                 // need at least one segment
+    var W = windowIdx.length;
 
-    // Last `trailLength` PRESENT frames strictly before the current one, nearest
-    // first. Sparse-aware: uses whatever frames are loaded, not frameIdx-1..N.
-    var pastIdx = [];
-    session.frameGroups.forEach(function (fg, idx) { if (idx < frameIdx) pastIdx.push(idx); });
-    pastIdx.sort(function (a, b) { return b - a; });
-    pastIdx = pastIdx.slice(0, trailLength);
-
-    // Per past frame (nearest→farthest), map trackIdx → instance (linked+unlinked).
-    var pastByTrack = pastIdx.map(function (idx) {
-        var byTrack = new Map();
+    // Per window frame (index 0 = current): trackIdx -> instance (linked+unlinked).
+    var byFrame = windowIdx.map(function (idx) {
+        var m = new Map();
         var insts = trailViewInstances(session.frameGroups.get(idx), viewName);
         for (var k = 0; k < insts.length; k++) {
-            if (insts[k].trackIdx != null) byTrack.set(insts[k].trackIdx, insts[k]);
+            if (insts[k].trackIdx != null) m.set(insts[k].trackIdx, insts[k]);
         }
-        return byTrack;
+        return m;
     });
-    var steps = pastByTrack.length;   // trail segments actually available
+
+    // Union of every track present anywhere in the window (so vanished tracks keep
+    // a trail until they age out).
+    var tracks = new Set();
+    byFrame.forEach(function (m) { m.forEach(function (_v, tk) { tracks.add(tk); }); });
+    if (tracks.size === 0) return;
 
     var toCanvas = makeVideoToCanvasTransform(
         options.videoWidth, options.videoHeight, options.canvasWidth, options.canvasHeight);
     var colorByIdentity = !!options.colorByIdentity;
-    // Trails are thicker than the skeleton edges by default so they read at a
-    // glance; taper from this width down toward the past.
+    // Trails are thicker than the skeleton edges by default so they read at a glance.
     var baseWidth = (options.lineWidth != null ? options.lineWidth : 2) * 2;
 
-    // Per-age style ramp (index = segment age, 0 = nearest current). Toward the
-    // past the trail gets thinner, more transparent, AND slightly darker. `t`
-    // runs 1 (near) → ~0 (far); darken brightness from 1.0 down to ~0.55.
+    // Style ramp per window index (0 = current). Older → thinner, more
+    // transparent, slightly darker. `t` runs 1 (near) → ~0 (far).
     var stepAlpha = [], stepWidth = [], stepBright = [];
-    for (var a0 = 0; a0 < steps; a0++) {
-        var t0 = 1 - a0 / (steps + 1);
+    for (var k0 = 0; k0 < W; k0++) {
+        var t0 = 1 - k0 / (W + 1);
         stepAlpha.push(Math.max(0.1, 0.9 * t0));
         stepWidth.push(Math.max(0.8, baseWidth * t0));
         stepBright.push(0.55 + 0.45 * t0);   // 1.0 near → 0.55 far (V in HSV)
@@ -1692,34 +1695,33 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    for (var s = 0; s < seeds.length; s++) {
-        var seed = seeds[s];
-        if (seed.trackIdx == null || !seed.points) continue;
-        // Color each segment by the instance's color AT that past frame (not the
-        // current seed): when an identity/color switches, the OLD trail keeps its
-        // OLD color, so a switch shows up as a color change along the trail —
-        // easier to spot. Age-darkened; precomputed per age (reused across nodes).
-        var segColors = [];
-        for (var a1 = 0; a1 < steps; a1++) {
-            var pm = pastByTrack[a1].get(seed.trackIdx);
-            segColors.push(pm
-                ? adjustColorBrightness(getInstanceColor(pm, session, viewName, colorByIdentity, pastIdx[a1]), stepBright[a1])
+    tracks.forEach(function (tk) {
+        // Historical, age-darkened color per window frame for this track (reused
+        // across nodes). null where the track is absent in that frame.
+        var colAtK = [];
+        var sample = null;
+        for (var k = 0; k < W; k++) {
+            var inst = byFrame[k].get(tk);
+            if (inst && !sample) sample = inst;
+            colAtK.push(inst
+                ? adjustColorBrightness(getInstanceColor(inst, session, viewName, colorByIdentity, windowIdx[k]), stepBright[k])
                 : null);
         }
+        if (!sample || !sample.points) return;
 
-        for (var n = 0; n < seed.points.length; n++) {
-            var cur = seed.points[n];
-            if (cur == null) continue;
-            var prev = toCanvas(cur[0], cur[1]);
-            for (var a = 0; a < steps; a++) {
-                var match = pastByTrack[a].get(seed.trackIdx);
-                var hp = match && match.points ? match.points[n] : null;
-                if (hp == null) { prev = null; continue; }   // node gap — break the line
-                var cp = toCanvas(hp[0], hp[1]);
-                if (prev && segColors[a]) {
-                    ctx.globalAlpha = stepAlpha[a];
-                    ctx.strokeStyle = segColors[a];
-                    ctx.lineWidth = stepWidth[a];
+        for (var n = 0; n < sample.points.length; n++) {
+            var prev = null;
+            for (var k2 = 0; k2 < W; k2++) {
+                var inst2 = byFrame[k2].get(tk);
+                var pt = inst2 && inst2.points ? inst2.points[n] : null;
+                if (pt == null) { prev = null; continue; }   // gap — break the line
+                var cp = toCanvas(pt[0], pt[1]);
+                // Segment prev(newer) → cp(older) is styled/colored by its older
+                // endpoint (index k2), so older segments fade and keep their color.
+                if (prev && colAtK[k2]) {
+                    ctx.globalAlpha = stepAlpha[k2];
+                    ctx.strokeStyle = colAtK[k2];
+                    ctx.lineWidth = stepWidth[k2];
                     ctx.beginPath();
                     ctx.moveTo(prev.x, prev.y);
                     ctx.lineTo(cp.x, cp.y);
@@ -1728,7 +1730,7 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
                 prev = cp;
             }
         }
-    }
+    });
     ctx.restore();
 }
 
