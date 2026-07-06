@@ -48,6 +48,13 @@ import { update3DViewport } from '../pose/initialization.js';
  *   2. Group by trackIdx — same trackIdx from different cameras = same identity
  *   3. Replace existing InstanceGroups with the track-based groups
  *   4. Triangulate each group
+ *
+ * NOTE (cross-camera trackIdx): this ASSUMES `trackIdx` corresponds across cameras
+ * (step 2). That holds only when the per-camera tracks were produced by a cross-view
+ * tracker that wrote consistent ids across views. Per-camera prediction `.slp` files
+ * (the lazy `SioLazyLoader` case) are tracked INDEPENDENTLY, so their ids do NOT
+ * correspond and this would mis-group — use Group-by-Identity there instead. See
+ * `scratch/cross-camera-trackidx.md`.
  */
 export function showGroupByTrackModal() {
     if (!state.session) {

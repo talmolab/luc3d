@@ -43,6 +43,12 @@ export const UNGROUPED_USER_COLOR = '#F8B195';
 export const NULL_ID_COLOR = '#a7adba';
 
 export function getTrackColor(trackIdx) {
+    // Color is keyed on the RAW trackIdx, so the same index in different cameras
+    // draws the same color. For per-camera prediction `.slp` files (lazy sessions)
+    // track ids are independent across cameras, so same-color ≠ same animal — this
+    // is cosmetic only (cross-camera correspondence is carried by identity, not
+    // trackIdx). See `scratch/cross-camera-trackidx.md`.
+    //
     // Guard against null / negative / non-finite indices: JS `-1 % n === -1`,
     // and TRACK_COLORS[-1] is undefined, which would crash the color helpers
     // (hexToRgb). Normalize into a valid, in-range slot.
