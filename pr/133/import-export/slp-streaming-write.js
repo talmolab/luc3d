@@ -104,24 +104,23 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
     }
 
     // ---- Per-camera stores, cameras, videos, and concatenated tracks ----
-    // Deterministic output layout: cameras in session.cameras order; each camera's
-    // store rows appended in order, so output lf-index = cameraBase[c] + storeRow.
+    // The header carries a Camera + Video for EVERY session camera (calibration
+    // round-trip), matching the eager `buildSlpLabelsAllViews` — including
+    // calibration-only cameras that have no loaded lazy store (they just contribute
+    // no frames). Only cameras WITH a store go into `cam[]` (the appendStore list),
+    // each tagged with its `videoIndex` (position in the full `sioVideos`) so the
+    // appendStore video offset + the overlay's video reference stay correct even
+    // when some cameras are skipped. Output frame layout: overlays first, then each
+    // `cam[]` camera's non-skipped store rows in order (see `storeOutIndex`/`refFor`).
     var sioCameras = [];
     var sioVideos = [];
     var lucidCamToSioCam = new Map();
     var allTracks = [];
-    var cam = [];           // per-camera: { name, sioCam, framesData, instancesData, rowMap, nFrames, trackBase, storeOutIndex }
+    var cam = [];           // loaded cameras only: { name, sioCam, videoIndex, framesData, instancesData, rowMap, nFrames, trackBase, storeOutIndex }
     var runningTrackBase = 0;
 
     for (var ci = 0; ci < session.cameras.length; ci++) {
         var c = session.cameras[ci];
-        var labels = loader.labelsByCam.get(c.name);
-        var store = labels && labels._lazyDataStore;
-        if (!store) throw new Error('lazy store missing for camera ' + c.name);
-        var framesData = store.framesData || {};
-        var instancesData = store.instancesData || {};
-        var rowMap = loader.frameRowByCam.get(c.name) || new Map();
-        var nFrames = (framesData.frame_idx || framesData.frame_id || []).length;
 
         var sioCam = new SIO.Camera({
             name: c.name, rvec: c.rvec || [0, 0, 0], tvec: c.tvec || [0, 0, 0],
@@ -146,6 +145,16 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         video.shape = [fc, vh, vw, 1];
         sioVideos.push(video);
 
+        // Calibration-only camera (no loaded lazy store): header entry only, no
+        // frames/tracks. The eager builder tolerates this; the streaming one must too.
+        var labels = loader.labelsByCam.get(c.name);
+        var store = labels && labels._lazyDataStore;
+        if (!store) continue;
+        var framesData = store.framesData || {};
+        var instancesData = store.instancesData || {};
+        var rowMap = loader.frameRowByCam.get(c.name) || new Map();
+        var nFrames = (framesData.frame_idx || framesData.frame_id || []).length;
+
         // Concatenate this camera's tracks into the combined header list. The store's
         // `instancesData.track` ids index into this camera's own tracks; appendStore's
         // trackOffset rebases them into the combined list.
@@ -155,7 +164,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         }
 
         cam.push({
-            name: c.name, sioCam: sioCam, framesData: framesData, instancesData: instancesData,
+            name: c.name, sioCam: sioCam, videoIndex: ci, framesData: framesData, instancesData: instancesData,
             rowMap: rowMap, nFrames: nFrames, trackBase: runningTrackBase,
             _labels: labels,
         });
@@ -183,7 +192,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         skeleton: { name: session.skeleton.name || 'skeleton', nodes: session.skeleton.nodes, edges: session.skeleton.edges },
         tracks: session.tracks,
     };
-    for (var av = 0; av < cam.length; av++) sioSession.addVideo(sioVideos[av], sioCameras[av]);
+    for (var av = 0; av < session.cameras.length; av++) sioSession.addVideo(sioVideos[av], sioCameras[av]);
 
     var camByName = new Map();
     for (var cbi = 0; cbi < cam.length; cbi++) camByName.set(cam[cbi].name, cam[cbi]);
@@ -258,7 +267,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
             var okey = ocInfo.name + ':' + fgIdx;
             overlayByKey.set(okey, { lfIndex: overlayLfs.length, byInst: byInst, byTrack: byTrack });
             overlaidKeys.add(okey);
-            overlayLfs.push(new SIO.LabeledFrame({ video: sioVideos[oc], frameIdx: fgIdx, instances: sioInsts }));
+            overlayLfs.push(new SIO.LabeledFrame({ video: sioVideos[ocInfo.videoIndex], frameIdx: fgIdx, instances: sioInsts }));
         }
     }
     var E = overlayLfs.length;
@@ -391,7 +400,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         for (var ai = 0; ai < cam.length; ai++) {
             var camInfo = cam[ai];
             var camStore = loader.labelsByCam.get(camInfo.name)._lazyDataStore;
-            writer.appendStore(camStore, { videoIndexOffset: ai, trackOffset: camInfo.trackBase });
+            writer.appendStore(camStore, { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase });
         }
         if (opts.sink) {
             await writer.writeToSink(opts.sink, { chunkBytes: opts.chunkBytes });

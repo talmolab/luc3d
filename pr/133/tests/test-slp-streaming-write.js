@@ -116,6 +116,67 @@
             }
         });
 
+        it('tolerates calibration-only cameras with no loaded store (video-id offset)', async function () {
+            // Real sessions calibrate N cameras but load videos for a subset. The
+            // builder must still emit a header camera+video for the unloaded ones
+            // (calibration round-trip) and offset the loaded cameras' video ids past
+            // them — NOT throw "lazy store missing".
+            const S = window.SleapIO;
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js');
+            const labA = await openLazy(S, await storeBytes(S, 'cam0.mp4', 4), 'ca.slp');
+            const labB = await openLazy(S, await storeBytes(S, 'cam1.mp4', 4), 'cb.slp');
+
+            const loader = new window.SioLazyLoader();
+            [['cam0', labA], ['cam1', labB]].forEach(function (pair) {
+                loader.labelsByCam.set(pair[0], pair[1]);
+                const st = pair[1]._lazyDataStore, rm = new Map(), fc = st.framesData.frame_idx;
+                for (let r = 0; r < fc.length; r++) rm.set(Number(fc[r]), r);
+                loader.frameRowByCam.set(pair[0], rm);
+            });
+            loader.nFrames = 4;
+
+            const { Camera, Skeleton, Session, Instance, InstanceGroup } = window;
+            const sk = new Skeleton('sk', ['nose', 'tail'], [[0, 1]]);
+            const mk = function (n, d) { return new Camera(n, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], d, [0, 0, 0], [0, 0, 0], [640, 480]); };
+            // Camera order: cam0 (loaded), camCalib (NOT loaded), cam1 (loaded).
+            const session = new Session([mk('cam0', [0, 0, 0, 0, 0]), mk('camCalib', [0, 0, 0, 0, 0]), mk('cam1', [0.1, 0, 0, 0, 0])], sk, ['t0', 't1'], 'S1');
+            session.lazyLoader = loader;
+            // Group track 0 across the two LOADED cameras on frame 0.
+            const g = new InstanceGroup(1, -1);
+            g.addInstance('cam0', new Instance([[1, 2], [3, 4]], 0, 'predicted', 0.9));
+            g.addInstance('cam1', new Instance([[5, 6], [7, 8]], 0, 'predicted', 0.9));
+            g.points3d = [[100, 200, 300], [110, 210, 310]];
+            session.instanceGroups.set(0, [g]);
+
+            const bytes = await buildSessionSlpBytesStreaming(session, [], []);
+            const h5 = await import('h5wasm');
+            await h5.ready;
+            const p = '/lucid-ss-calib-' + Math.floor(performance.now()) + '.h5';
+            h5.FS.writeFile(p, bytes);
+            const file = new h5.File(p, 'r');
+            try {
+                // Only the two loaded cameras contribute frames (4 + 4).
+                assertEqual(file.get('frames').shape[0], 8, 'loaded cameras preserved; calibration-only contributes none');
+                // Loaded cameras map to video ids 0 and 2 (camCalib occupies index 1).
+                const fv = file.get('frames').value;
+                const vids = {};
+                for (let i = 1; i < fv.length; i += 5) { const v = Number(fv[i]); vids[v] = (vids[v] || 0) + 1; }
+                assertDeepEqual(vids, { 0: 4, 2: 4 }, 'loaded cameras land at video ids 0 and 2 (skip calib camera 1)');
+                assertEqual(file.get('videos_json').value.length, 3, 'all 3 cameras get a header video (calibration round-trip)');
+
+                const sj = JSON.parse(file.get('sessions_json').value[0]);
+                assertEqual(Object.keys(sj.calibration).filter(function (k) { return k.startsWith('cam_'); }).length, 3, 'cameraGroup keeps all 3 cameras');
+                const fg0 = sj.frame_group_dicts.find(function (d) { return d.frame_idx === 0; });
+                // Camera keys: cam0 → '0', cam1 → '2' (session index). lf-indices are
+                // output frame positions: cam0 frame0 → 0, cam1 frame0 → 4.
+                assertDeepEqual(fg0.labeled_frame_by_camera, { '0': 0, '2': 4 }, 'refs use session camera keys 0 and 2');
+                assertDeepEqual(fg0.instance_groups[0].camcorder_to_lf_and_inst_idx_map, { '0': [0, 0], '2': [4, 0] }, 'instance refs resolve for both loaded cameras');
+            } finally {
+                try { file.close(); } catch (e) { /* ignore */ }
+                try { h5.FS.unlink(p); } catch (e) { /* ignore */ }
+            }
+        });
+
         it('overlays 2D user corrections and reshifts store refs (edited frame)', async function () {
             const S = window.SleapIO;
             assertTrue(S && typeof S.openSlpWriter === 'function', 'streaming writer API not bridged');
