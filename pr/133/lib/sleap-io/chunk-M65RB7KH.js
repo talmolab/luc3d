@@ -9755,8 +9755,6 @@ var LruCache = class {
     this.maxBytes = maxBytes;
     this.sizeOf = sizeOf;
   }
-  maxBytes;
-  sizeOf;
   map = /* @__PURE__ */ new Map();
   bytes = 0;
   get size() {
@@ -19360,14 +19358,6 @@ var RenderContext = class {
     this.scale = scale;
     this.offset = offset;
   }
-  canvas;
-  frameIdx;
-  frameSize;
-  instances;
-  skeletonEdges;
-  nodeNames;
-  scale;
-  offset;
   /**
    * Transform world coordinates to canvas coordinates.
    */
@@ -19391,16 +19381,6 @@ var InstanceContext = class {
     this.scale = scale;
     this.offset = offset;
   }
-  canvas;
-  instanceIdx;
-  points;
-  skeletonEdges;
-  nodeNames;
-  trackIdx;
-  trackName;
-  confidence;
-  scale;
-  offset;
   /**
    * Transform world coordinates to canvas coordinates.
    */
