@@ -1303,7 +1303,7 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
  * @param {number} numNodes
  * @returns {Array} Point array
  */
-function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
+export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
     // nodeOrder: optional. When set, nodeOrder[canonicalIdx] = this instance's
     // local point index, so points stored in a session's own skeleton node
     // order are emitted in the canonical (first-session) order. Used by
@@ -1346,9 +1346,34 @@ function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
  * @param {string} outputFilename
  * @returns {Promise<Blob>} SLP file as a Blob
  */
+/**
+ * If `session` is a lazy session with a materialized store for `cameraName`,
+ * re-emit that camera's predictions via `saveSlpToBytes`'s lazy fast-path
+ * (`writeSlpToFileLazy` — all frames, memory-bounded, zero per-frame objects).
+ * Returns the `Uint8Array`, or `null` when not applicable. The per-camera SLP
+ * exporters use this to avoid the eager `buildSlpLabels`/`buildSlpLabelsMultiSession`
+ * path, which iterates only the resident `frameGroups` (silent-drop on a lazy
+ * session) and would re-materialize the whole store.
+ */
+async function lazyCameraExportBytes(SIO, session, cameraName) {
+    var loader = session && session.lazyLoader;
+    if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return null;
+    var lazyLabels = loader.labelsByCam.get(cameraName);
+    if (!lazyLabels || !lazyLabels.isLazy || typeof SIO.saveSlpToBytes !== 'function') return null;
+    return await SIO.saveSlpToBytes(lazyLabels);
+}
+
 export async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
+
+    // Lazy session, plain predicted export → lazy fast-path (all frames, bounded).
+    // Skipped when a reprojection/instance transform is requested (the fast-path
+    // re-emits the store verbatim and can't apply those).
+    if (!reprojAsUser && !instanceFilter) {
+        var lazyBytes = await lazyCameraExportBytes(SIO, session, cameraName);
+        if (lazyBytes) return new Blob([lazyBytes], { type: 'application/x-hdf5' });
+    }
 
     var labels = buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter);
     // PR 5.2: export sleap-io.js's raw bytes directly. SLEAP >= 1.6.0 (sleap-io
@@ -1616,6 +1641,13 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
 export async function exportSlpMultiSession(selections, reprojAsUser, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
+
+    // Single lazy-session camera (the per-camera Download-All case), plain export →
+    // lazy fast-path (all frames, bounded) instead of the eager multi-session build.
+    if (selections && selections.length === 1 && !reprojAsUser && !instanceFilter) {
+        var lazyBytes = await lazyCameraExportBytes(SIO, selections[0].session, selections[0].cameraName);
+        if (lazyBytes) return new Blob([lazyBytes], { type: 'application/x-hdf5' });
+    }
 
     var labels = buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFilter);
     var bytes = await SIO.saveSlpToBytes(labels);   // PR 5.2: raw output (no v0.6 post-pass)

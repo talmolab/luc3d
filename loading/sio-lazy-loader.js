@@ -17,11 +17,14 @@
  *
  * Marked `isSync = true` so `batchLoadLazyFrames` takes the worker-free path.
  *
- * NOTE (Phase 4, load+view): `trackOccupancy` is intentionally left empty. The
- * timeline reads it to draw per-track presence bars; for prediction dumps with
- * ~1000s of track fragments a dense occupancy array is both large and a render
- * hazard. Populating it (sparsely) + a virtualized timeline is deferred to the
- * "full pipeline" work.
+ * `trackOccupancy` (phase-5): populated SPARSELY per camera by
+ * `_computeSparseOccupancy` — one O(nInstances) pass over the columnar store emits
+ * per-track run-segments (`{ sparse:true, nTracks, nFrames, segments:Map<trackIdx,
+ * [{start,end}]>, counts:Map<trackIdx,frameCount> }`), never a dense
+ * nFrames×nTracks grid (which for ~1000s of track fragments would be huge). The
+ * timeline reads the `sparse` flag to take a segment branch and caps the rows it
+ * renders (first-N per camera by appearance) so a pathological track count can't
+ * blow up the canvas. See `ui/timeline.js:_buildTrackSegments`.
  */
 
 /**
@@ -81,6 +84,9 @@ export class SioLazyLoader {
         this.cacheOrder = [];
         this.maxCacheSize = 100;
         this.prefetchAhead = 20;
+        // FIFO cap applied to each camera's sleap-io.js lazy `Labels` internal
+        // typed-frame cache via the public `frameCacheLimit` (set in open()).
+        this.internalFrameCacheLimit = 512;
 
         this.nFrames = 0;
         this.skeleton = null;
@@ -113,6 +119,12 @@ export class SioLazyLoader {
         });
         this.labelsByCam.set(cameraName, labels);
 
+        // Bound the reader's internal typed-frame cache via the public API
+        // (`frameCacheLimit` FIFO-evicts beyond the cap) so long scrubbing and
+        // windowed export/triangulate sweeps don't accumulate every materialized
+        // frame. Replaces the old manual reach-in into `labels._lazyFrameList.cache`.
+        try { labels.frameCacheLimit = this.internalFrameCacheLimit; } catch (e) { /* older bundle */ }
+
         var skel = labels.skeletons && labels.skeletons[0];
         if (!this.skeleton && skel) {
             this.skeleton = {
@@ -140,6 +152,13 @@ export class SioLazyLoader {
         this.frameRowByCam.set(cameraName, rowMap);
         if (maxFrameIdx + 1 > this.nFrames) this.nFrames = maxFrameIdx + 1;
 
+        // Sparse per-track occupancy for the timeline's presence bars. Best-effort:
+        // a cheap columnar pass, never blocking the load.
+        try {
+            var occ = this._computeSparseOccupancy(labels, maxFrameIdx + 1);
+            if (occ) this.trackOccupancy.set(cameraName, occ);
+        } catch (e) { /* occupancy is optional; ignore */ }
+
         var v = labels.videos && labels.videos[0];
         this.videos.set(cameraName, v ? { filename: v.filename, shape: v.shape } : null);
 
@@ -149,6 +168,73 @@ export class SioLazyLoader {
             nFrames: this.nFrames,
             videos: [this.videos.get(cameraName)],
         };
+    }
+
+    /**
+     * Compute sparse per-track occupancy for one camera's lazy store — the
+     * timeline's presence bars without a dense nFrames×nTracks grid. One pass over
+     * the columnar instance table (`instancesData.track`) grouped by frame
+     * (`framesData.frame_idx` + `instance_id_start/end`); builds contiguous
+     * run-segments per track plus a per-track occupied-frame count (occupancy
+     * metadata; the timeline's row cap keeps the earliest-appearing tracks, not the
+     * most-occupied). Relies on the SLP on-disk frame ordering, the same invariant
+     * `appendStore` assumes. Zero frame materialization.
+     *
+     * @param {Object} labels    lazy sleap-io.js Labels (with `_lazyDataStore`).
+     * @param {number} nFrames   this camera's video frame span (maxFrameIdx + 1).
+     * @returns {Object|null} `{ sparse, nTracks, nFrames, segments, counts }` or null.
+     */
+    _computeSparseOccupancy(labels, nFrames) {
+        var store = labels && labels._lazyDataStore;
+        if (!store || !store.framesData) return null;
+        var fd = store.framesData;
+        var idn = store.instancesData || {};
+        var frameIdxCol = fd.frame_idx || fd.frame_id || [];
+        var startCol = fd.instance_id_start || [];
+        var endCol = fd.instance_id_end || [];
+        var trackCol = idn.track || [];
+        var nRows = frameIdxCol.length;
+        var nTracks = (labels.tracks || []).length;
+
+        var segments = new Map();   // trackIdx -> [{start,end}]
+        var counts = new Map();     // trackIdx -> occupied-frame count
+        var open = new Map();       // trackIdx -> {start,last}: the run in progress
+
+        for (var r = 0; r < nRows; r++) {
+            var f = Number(frameIdxCol[r]);
+            if (!(f >= 0)) continue;
+            var s = Number(startCol[r]) || 0;
+            var e = Number(endCol[r]) || 0;
+            for (var j = s; j < e; j++) {
+                var trk = Number(trackCol[j]);
+                if (!(trk >= 0)) continue;
+                var o = open.get(trk);
+                if (o === undefined) {
+                    open.set(trk, { start: f, last: f });
+                    counts.set(trk, 1);
+                } else if (o.last === f) {
+                    // Same track twice in one frame — count the frame once.
+                } else if (f === o.last + 1) {
+                    o.last = f;
+                    counts.set(trk, counts.get(trk) + 1);
+                } else {
+                    // Gap: close the run in progress, open a new one at `f`.
+                    var arr = segments.get(trk);
+                    if (!arr) { arr = []; segments.set(trk, arr); }
+                    arr.push({ start: o.start, end: o.last });
+                    o.start = f; o.last = f;
+                    counts.set(trk, counts.get(trk) + 1);
+                }
+            }
+        }
+        for (var entry of open) {
+            var trkF = entry[0], oF = entry[1];
+            var arrF = segments.get(trkF);
+            if (!arrF) { arrF = []; segments.set(trkF, arrF); }
+            arrF.push({ start: oF.start, end: oF.last });
+        }
+        if (segments.size === 0) return null;
+        return { sparse: true, nTracks: nTracks, nFrames: nFrames, segments: segments, counts: counts };
     }
 
     /** Materialize one camera's instances for a video frame index (synchronous). */
@@ -224,7 +310,40 @@ export class SioLazyLoader {
         }
     }
 
+    /**
+     * Release one frame from BOTH retention layers so a bounded windowed sweep
+     * (streaming export / triangulate-all) stays memory-bounded:
+     *   1. this.cache — our adapted-dict LRU (already capped at maxCacheSize).
+     *   2. each camera's underlying sleap-io.js lazy `Labels` typed-frame cache,
+     *      via the public `labels.releaseFrame(row)` API (frame row = this
+     *      camera's videoFrameIdx→store-row map). `store.materializeFrame` rebuilds
+     *      the typed frame on next access, so dropping it is safe.
+     * (`frameCacheLimit`, set in open(), also FIFO-bounds layer 2 automatically;
+     * releaseFrame is the explicit prompt-release used by windowed sweeps.)
+     */
+    releaseFrame(frameIdx) {
+        if (this.cache.has(frameIdx)) {
+            this.cache.delete(frameIdx);
+            var oi = this.cacheOrder.indexOf(frameIdx);
+            if (oi >= 0) this.cacheOrder.splice(oi, 1);
+        }
+        for (var camName of this.labelsByCam.keys()) {
+            var labels = this.labelsByCam.get(camName);
+            if (!labels || typeof labels.releaseFrame !== 'function') continue;
+            var rowMap = this.frameRowByCam.get(camName);
+            var row = rowMap ? rowMap.get(frameIdx) : undefined;
+            if (row !== undefined) labels.releaseFrame(row);
+        }
+    }
+
+    /** Release a half-open window [startFrameIdx, endFrameIdx) of frames. */
+    releaseWindow(startFrameIdx, endFrameIdx) {
+        for (var f = startFrameIdx; f < endFrameIdx; f++) this.releaseFrame(f);
+    }
+
     close() {
+        // Dropping the labels refs lets each camera's lazy Labels (and its
+        // `frameCacheLimit`-bounded internal cache) be GC'd — no manual clear.
         this.labelsByCam.clear();
         this.frameRowByCam.clear();
         this.numNodesByCam.clear();
