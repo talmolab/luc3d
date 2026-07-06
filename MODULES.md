@@ -351,9 +351,11 @@ synchronous loop over `frameIndices` (used by single-frame tracking + the
 bench/test harnesses, which read its return value). Its per-frame body is factored
 into `createTrackerRun`/`stepTrackerFrame`, reused by the async sibling
 `runCrossViewTrackerProgress(…, onProgress)`: identical association but it yields
-to the event loop ~every 1% of frames and awaits `onProgress(done, total)`, so
-**Track All** repaints a live "done/total (pct%)" counter in the loading overlay
-instead of freezing at 0/N. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
+to the event loop ~every 5% of frames (≈20 updates total) and awaits
+`onProgress(done, total)`, so **Track All** repaints a "done/total (pct%)" counter
+in the loading overlay instead of freezing at 0/N. Updates are deliberately
+infrequent — each yield forces a browser repaint, expensive on a large run — so
+the counter steps rather than streams, keeping Track All fast. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
 `commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
 (with `identityId` + `points3d`), maps each target's stable trackId to a session
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
@@ -1065,20 +1067,22 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
   `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
 - Node trails (issue #102): `drawNodeTrails(ctx, viewName, session, frameIdx,
-  options)` — mirrors SLEAP's TrackTrailOverlay. Seeds from every tracked instance
-  in the view at `frameIdx`, **linked AND unlinked** (`trailViewInstances` helper)
-  — unlinked matters because identities are inspected BEFORE cross-view linking.
-  History is the last `options.trailLength` **present** frames strictly before the
-  current one (sparse-aware, like SLEAP's `labels.find(video,
+  options)` — mirrors SLEAP's TrackTrailOverlay. The window is the last
+  `options.trailLength`+1 **present** frames up to and including `frameIdx`
+  (sparse-aware, like SLEAP's `labels.find(video,
   range(0,frame_idx+1))[-trail_length:]`; only reads frames already in
-  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102). Past
-  instances are matched by per-view `trackIdx`; each node's positions join into a
-  polyline that thins toward the past (SLEAP halves width) and also fades in
-  opacity (per request). Color follows the color-by mode
-  (`options.colorByIdentity`), brightened a shade to read apart from the live
-  skeleton. `drawFrameOverlays` calls it right after the canvas clear (behind the
-  live skeletons) when `options.trailLength > 0`. Length is chosen from the
-  **Tracks ▸ Node Trails** submenu (Off/10/50/100/250/500 → `state.trailLength`).
+  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102). Draws a
+  trail for **every track that appears anywhere in the window** (linked AND
+  unlinked via `trailViewInstances`, matched by per-view `trackIdx`) — including
+  tracks that have **vanished** from the current frame, so a trail lingers and
+  fades out rather than disappearing the instant its instance is gone (unlinked
+  matters too: identities are inspected BEFORE cross-view linking). Each node's
+  positions join into a polyline that toward the past thins, fades, and darkens;
+  each segment is colored by the instance's color AT that frame (per-frame identity
+  lookup), so an identity/color **switch shows as a color change along the trail**.
+  `drawFrameOverlays` calls it right after the canvas clear (behind the live
+  skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
+  Node Trails** submenu (Off/10/50/100/250/500 → `state.trailLength`).
 - Composite: `drawFrameOverlays(ctx, viewName, frameGroup,
   instanceGroups, session, options)` — the main per-view draw entrypoint.
   `options.trackingExcluded` (set by `rendering.js` from `isCameraTracked`)
