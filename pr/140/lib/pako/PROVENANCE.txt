@@ -1,0 +1,13 @@
+pako — zlib port for JavaScript (deflate/inflate).
+
+Version:  2.2.0  (ESM build: dist/pako.esm.mjs)
+Source:   https://www.npmjs.com/package/pako  (npm: pako@2.2.0)
+Why here: sleap-io.js (>= v0.3.0) statically imports { deflate } / { inflate }
+          from "pako" for label-image / mask zlib in its SLP writer. LUCID does
+          not write those modalities, so the code is never executed — but the
+          static import must still RESOLVE at module load, so the real library
+          is vendored here and aliased in the index.html / tests importmap
+          ("pako" -> ./lib/pako/pako.esm.mjs). Kept local (not CDN) for
+          offline / CSP, matching lib/h5wasm.
+Re-fetch: npm pack pako@<ver> (or copy node_modules/pako/dist/pako.esm.mjs from
+          a sleap-io.js build) and update the importmap + this file.
