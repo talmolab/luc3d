@@ -178,6 +178,49 @@
             tl.destroy();
         });
 
+        it('issue #137: keepSize collapses the track area on a new occupied row; cap keeps it visible', function () {
+            // Reproduces "Adding a new track makes the timeline disappear".
+            // The Instances-panel "(+) New Track" flow CREATES a track AND
+            // assigns it to instances, so a new *occupied* row appears. It
+            // used to refresh with { keepSize: true }, which skips the
+            // grow/resize step — so the extra row overflows the fit-to-content
+            // canvas and _computeLayout collapses the ENTIRE track area
+            // (showTracks === false). The Tracks-menu path never hit this
+            // because it creates an *empty* track (no new row). The fix routes
+            // the assignment refresh through { cap: true } so the container
+            // grows/resizes to fit the new row and the tracks stay visible.
+
+            // Start fit-to-content: setData grows a too-small container so it
+            // fits exactly the 3 existing track rows and nothing more.
+            var el = sized(40);
+            var tl = new Timeline(el, { totalFrames: 50 });
+            tl.setData(buildSessionWithTracks(3, ['cam1']));
+            var hFit3 = parseFloat(el.style.height);
+            assertEqual(hFit3, tl.getPreferredHeight(),
+                'precondition: container is fit-to-content for 3 tracks');
+            assertTrue(tl._computeLayout(hFit3).showTracks,
+                'precondition: all 3 track rows are visible at the fit height');
+
+            // Simulate "(+) New Track" + assign → a 4th occupied row.
+            var session4 = buildSessionWithTracks(4, ['cam1']);
+
+            // BUG path: keepSize must NOT touch the container height, so the
+            // 4th row no longer fits and the whole track area collapses.
+            tl.refreshTracks(session4, { keepSize: true });
+            assertEqual(parseFloat(el.style.height), hFit3,
+                'keepSize leaves the container height fixed');
+            assertFalse(tl._computeLayout(parseFloat(el.style.height)).showTracks,
+                'keepSize: the new occupied row overflows the fixed canvas → track area collapses (the #137 bug)');
+
+            // FIX path: cap grows/resizes so the 4th row fits and tracks stay up.
+            tl.refreshTracks(session4, { cap: true });
+            assertGreaterThan(parseFloat(el.style.height), hFit3,
+                'cap grows the container to fit the newly assigned track row');
+            assertTrue(tl._computeLayout(parseFloat(el.style.height)).showTracks,
+                'cap: the timeline resizes so the track area stays visible (the #137 fix)');
+            tl.destroy();
+        });
+
         it('setData also grows a too-small container (callers without fitTimelineToData)', function () {
             // Several SLP-load call sites invoke timeline.setData without a
             // matching fitTimelineToData. Without grow-on-setData, the 96 px
