@@ -1457,7 +1457,15 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                         (totalProp > 0 ? ' (propagated ' + totalProp + ')' : ''), 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
-                    if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                    // `cap: true` (not `keepSize`): assigning a track — especially
+                    // a brand-new one from "(+) New Track" — can add an occupied
+                    // row, which grows the natural track block. With `keepSize`
+                    // the canvas height stays fixed, so `_computeLayout` collapses
+                    // the whole track area ("timeline disappears", issue #137).
+                    // `cap` grows/resizes to fit (clamped to 30%), matching the
+                    // Tracks-menu New Track path and the tracker/triangulation
+                    // refreshes.
+                    if (timeline) timeline.refreshTracks(state.session, { cap: true });
                 }
                 sel.addEventListener('change', function (ev) {
                     ev.stopPropagation();
@@ -1521,7 +1529,11 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     }
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
-                    if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                    // `cap: true` (not `keepSize`): assigning an identity — a new
+                    // one from "(+) New ID" in particular — can add an occupied
+                    // row in the ID/Both timeline modes; `keepSize` would collapse
+                    // the row area (the identity mirror of issue #137).
+                    if (timeline) timeline.refreshTracks(state.session, { cap: true });
                 }
                 sel.addEventListener('change', function (e) {
                     e.stopPropagation();
@@ -1793,7 +1805,10 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             (propagated > 0 ? ' (propagated ' + propagated + ')' : ''), 'success');
                         drawAllOverlays(state.currentFrame);
                         updateInfoPanel();
-                        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                        // `cap: true` (not `keepSize`) so a newly assigned track
+                        // row grows/resizes the timeline instead of collapsing the
+                        // track area (issue #137). See the group-level applyTrack.
+                        if (timeline) timeline.refreshTracks(state.session, { cap: true });
                     }
                     sel.addEventListener('change', function (ev) {
                         ev.stopPropagation();
@@ -1859,7 +1874,10 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                         }
                         drawAllOverlays(state.currentFrame);
                         updateInfoPanel();
-                        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+                        // `cap: true` (not `keepSize`) so assigning a new identity
+                        // grows/resizes the ID/Both timeline instead of collapsing
+                        // the row area (identity mirror of issue #137).
+                        if (timeline) timeline.refreshTracks(state.session, { cap: true });
                     }
                     sel.addEventListener('change', function (ev) {
                         ev.stopPropagation();
