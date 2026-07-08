@@ -44,9 +44,22 @@ python3 -m http.server 8080
   (`loading/sio-lazy-loader.js`) for large prediction `.slp` session loads; the writer
   backs streaming export/save.
   Its `pako`
-  dep is vendored at `lib/pako/` and `mediabunny`
-  is stubbed (`lib/sleap-io/mediabunny-stub.js`); both are aliased in the `index.html`
-  importmap. LUCID uses sleap-io.js on **both** the read and write paths (PR 5.1/5.2):
+  dep is vendored at `lib/pako/`; `mediabunny` is vendored at
+  `lib/mediabunny/mediabunny.min.mjs` (npm `mediabunny@1.30.0` browser ESM,
+  matching sleap-io.js's `^1.30.0`) — it was previously stubbed
+  (`lib/sleap-io/mediabunny-stub.js`, now unused) and is now the REAL library
+  so sleap-io.js's `MediaBunnyVideoBackend` can do frame-accurate video decode
+  (issue #115), wired into `loading/video.js` as the opt-in
+  `LUCID_VIDEO_BACKEND='mediabunny'` backend. Both `pako` and `mediabunny` are
+  aliased in the `index.html` importmap (and `tests/test-runner.html`). LUCID
+  uses sleap-io.js on **both** the read and write paths (PR 5.1/5.2).
+  **LOCAL PATCH (issue #115):** `lib/sleap-io/chunk-M65RB7KH.js`
+  `MediaBunnyVideoBackend.decodeSingleFrame`/`decodeRange` were patched to call
+  `sample.close()` after `sample.toVideoFrame()` — upstream leaks the VideoSample
+  ("A VideoSample was garbage collected without first being closed"), which can
+  exhaust the WebCodecs frame pool over a long session. Both patch lines are
+  marked `// LUCID local patch (#115)`. **Re-apply after any re-vendor** (grep the
+  marker) and report upstream to sleap-io. This is the read/write split:
   - **Read** (`parseSlpViaSleapIO`, `import-export/file-io.js`): drives
     `readSlpStreaming` (#196) and adapts the typed `Labels` into LUCID's `slpData`
     shape. Grouping is rebuilt from the **typed `RecordingSession`** by

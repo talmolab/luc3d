@@ -57,6 +57,7 @@ export class OnDemandVideoDecoder {
         this._mp4Initialized = false;
         this._mp4InitPromise = null;
         this._html5SeekLock = null; // Prevent concurrent HTML5 seeks
+        this._mbBackend = null; // Optional mediabunny frame-accurate backend (issue #115)
 
         // Source reference for mp4box lazy init
         this._source = null;
@@ -185,7 +186,76 @@ export class OnDemandVideoDecoder {
             this._emitProgress({ phase: 'mp4box', error: e });
         }
 
-        videoLog("Video loaded: " + width + "x" + height + " " + this.samples.length + " frames @ " + this._fps.toFixed(2) + "fps (" + (this.fileSize / 1048576).toFixed(1) + " MB)");
+        // Optional: frame-accurate mediabunny backend (issue #115). HTML5
+        // `<video>.currentTime` seeking is NOT frame-accurate — it can return a
+        // frame a whole GOP behind the one requested, so the pose overlay ends
+        // up drawn on a stale video frame. mediabunny (via sleap-io.js's
+        // MediaBunnyVideoBackend) seeks + decodes exact frames via WebCodecs.
+        // OPT-IN for now — it couldn't be validated headless (headless software
+        // decode is itself frame-inaccurate), so it needs real-hardware
+        // verification. Enable with:
+        //   localStorage.LUCID_VIDEO_BACKEND = 'mediabunny'   (then reload)
+        // or window.LUCID_VIDEO_BACKEND = 'mediabunny' before loading a session.
+        // Playback still uses the HTML5 element; only per-frame stepping/seeking
+        // (getFrame) goes through mediabunny, and any failure falls back to the
+        // HTML5 path transparently.
+        if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
+            try {
+                await this._initMediabunny(source);
+            } catch (e) {
+                videoLog("Mediabunny backend init failed (HTML5 seek will be used): " + e.message, "warn");
+                this._mbBackend = null;
+            }
+        }
+
+        videoLog("Video loaded: " + width + "x" + height + " " + this.samples.length + " frames @ " + this._fps.toFixed(2) + "fps (" + (this.fileSize / 1048576).toFixed(1) + " MB)"
+            + (this._mbBackend ? " [mediabunny frame-accurate]" : ""));
+    }
+
+    /** Whether the opt-in mediabunny video backend is requested (issue #115). */
+    _mediabunnyEnabled() {
+        try {
+            if (typeof window !== 'undefined' && window.LUCID_VIDEO_BACKEND) {
+                return String(window.LUCID_VIDEO_BACKEND).toLowerCase() === 'mediabunny';
+            }
+            if (typeof localStorage !== 'undefined') {
+                var v = localStorage.getItem('LUCID_VIDEO_BACKEND');
+                return v && v.toLowerCase() === 'mediabunny';
+            }
+        } catch (e) { /* localStorage may throw in some sandboxes */ }
+        return false;
+    }
+
+    /**
+     * Initialize the mediabunny frame-accurate backend for this source and adopt
+     * its authoritative frame count / fps. Leaves the HTML5 `<video>` element in
+     * place for playback + as the getFrame fallback.
+     */
+    async _initMediabunny(source) {
+        var SIO = (typeof window !== 'undefined') ? window.SleapIO : null;
+        var Backend = SIO && SIO.MediaBunnyVideoBackend;
+        if (!Backend || typeof Backend.fromBlob !== 'function') {
+            throw new Error('MediaBunnyVideoBackend unavailable (sleap-io.js not loaded)');
+        }
+        var name = (source && source.name) ? source.name : 'video.mp4';
+        this._mbBackend = await Backend.fromBlob(source, name, { cacheSize: this.cacheSize });
+
+        // Adopt mediabunny's authoritative frame count + fps. Keep `this.samples`
+        // as the frame-count carrier the rest of the class reads (`.length`),
+        // resizing it to match so bounds checks and the timeline agree.
+        var n = this._mbBackend.numFrames;
+        if (n && n !== this.samples.length) {
+            var resized = new Array(n);
+            for (var i = 0; i < n; i++) {
+                resized[i] = this.samples[i] || { index: i, is_sync: false, offset: 0, size: 0 };
+            }
+            this.samples = resized;
+        }
+        if (this._mbBackend.fps && this._mbBackend.fps > 0) {
+            this._fps = this._mbBackend.fps;
+        }
+        videoLog("Mediabunny ready: " + n + " frames, fps=" + (this._fps ? this._fps.toFixed(2) : '?')
+            + " (frame-accurate decode)");
     }
 
     _emitProgress(event) {
@@ -389,6 +459,19 @@ export class OnDemandVideoDecoder {
             this.cache.delete(frameIndex);
             this.cache.set(frameIndex, cached);
             return cached;
+        }
+
+        // Frame-accurate mediabunny backend (opt-in, issue #115). It owns its
+        // own cache; on any miss/error we fall through to the HTML5 seek path so
+        // a frame is always returned.
+        if (this._mbBackend) {
+            try {
+                var mbFrame = await this._mbBackend.getFrame(frameIndex);
+                if (mbFrame) return mbFrame;
+                videoLog("Mediabunny returned no frame for " + frameIndex + ", falling back to HTML5", "warn");
+            } catch (e) {
+                videoLog("Mediabunny decode failed for frame " + frameIndex + ": " + e.message + ", falling back to HTML5", "warn");
+            }
         }
 
         // Try WebCodecs path if mp4box is initialized
@@ -840,6 +923,12 @@ export class OnDemandVideoDecoder {
                 this.decoder.close();
             } catch (_) {}
             this.decoder = null;
+        }
+
+        // Release the mediabunny backend (frees its Input/decoder + cached frames)
+        if (this._mbBackend) {
+            try { this._mbBackend.close(); } catch (_) {}
+            this._mbBackend = null;
         }
 
         // Release HTML5 video element
