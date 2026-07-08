@@ -132,5 +132,85 @@
                 cleanupCanvases();
             }
         });
+
+        it('the created instance has NO null points (the null poison does not cascade)', function () {
+            if (typeof InteractionManager === 'undefined') return;
+            var env = buildManager();
+            try {
+                env.mgr._addNewInstance([[100, 100], null, [200, 200]], [150, 150]);
+                var inst = addedInstance(env.session);
+                assertTrue(!!inst, 'created');
+                // Because every slot is now filled, when this instance seeds the
+                // NEXT smart-add template (recordUserPoints), it carries no null —
+                // so the missing-node no longer propagates frame to frame.
+                for (var i = 0; i < inst.points.length; i++) {
+                    assertTrue(inst.points[i] != null, 'node ' + i + ' is placed (no null to re-inherit)');
+                }
+                // occluded array stays sized to the node count (Instance invariant).
+                assertEqual(inst.occluded.length, inst.points.length, 'occluded array matches node count');
+            } finally {
+                cleanupCanvases();
+            }
+        });
+
+        it('multiple null slots each get a distinct position and are all flagged', function () {
+            if (typeof InteractionManager === 'undefined') return;
+            var env = buildManager();
+            try {
+                // nodes 0 and 2 null, node 1 placed
+                env.mgr._addNewInstance([null, [300, 240], null], [300, 240]);
+                var inst = addedInstance(env.session);
+                assertTrue(!!inst, 'created');
+                assertTrue(inst.points[0] != null && inst.points[2] != null, 'both null slots placed');
+                assertTrue(inst.nulledNodes && inst.nulledNodes.has(0) && inst.nulledNodes.has(2),
+                    'both filled nodes flagged occluded');
+                // Fanned out from the centroid → the two placeholders are not identical.
+                assertTrue(inst.points[0][0] !== inst.points[2][0] || inst.points[0][1] !== inst.points[2][1],
+                    'the two placeholders do not overlap');
+            } finally {
+                cleanupCanvases();
+            }
+        });
+
+        it('an all-null template falls back to full topology (no crash, all placed)', function () {
+            if (typeof InteractionManager === 'undefined') return;
+            var env = buildManager();
+            try {
+                env.mgr._addNewInstance([null, null, null], [320, 240]);
+                var inst = addedInstance(env.session);
+                assertTrue(!!inst, 'created');
+                for (var i = 0; i < 3; i++) assertTrue(inst.points[i] != null, 'node ' + i + ' placed by topology');
+            } finally {
+                cleanupCanvases();
+            }
+        });
+    });
+
+    // The key "doesn't break triangulation" check: a filled-occluded node (flagged
+    // in nulledNodes) MUST be excluded from the 3D solve, so the fanned-out
+    // placeholder position can never pollute triangulation.
+    describe('Occlusion: a filled-occluded node is excluded from triangulation', function () {
+        function cam(n) {
+            return new Camera(n, [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [1, 2, 3], [640, 480]);
+        }
+        it('nulledNodes node → points3d null; the real node still triangulates', function () {
+            if (typeof triangulateAndReproject !== 'function' || typeof InstanceGroup === 'undefined') return;
+            var cams = [cam('CamA'), cam('CamB')];
+            var group = new InstanceGroup(0, 0);
+            // node 0 = real 2-view observation; node 1 = occluded placeholder,
+            // flagged in nulledNodes exactly as _addNewInstance now produces.
+            var instA = new Instance([[300, 240], [123, 111]], 0, 'user', 1); instA.nulledNodes = new Set([1]);
+            var instB = new Instance([[345, 250], [130, 120]], 0, 'user', 1); instB.nulledNodes = new Set([1]);
+            group.addInstance('CamA', instA);
+            group.addInstance('CamB', instB);
+
+            var res = triangulateAndReproject(group, cams, { includedCameras: ['CamA', 'CamB'] });
+            assertTrue(!!res && Array.isArray(res.points3d), 'triangulation ran');
+            assertTrue(res.points3d[1] == null,
+                'the occluded (nulledNodes) node is NOT triangulated from its placeholder');
+            assertTrue(res.points3d[0] != null,
+                'the real node still triangulates from its two observations');
+        });
     });
 })();
