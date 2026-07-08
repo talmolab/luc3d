@@ -813,13 +813,14 @@ export class Viewport3D {
     updateSkeleton(instanceGroups) {
         this._clearGroup(this._skeletonGroup);
 
+        var _dbg3d = (typeof window !== 'undefined' && window.LUCID_3D_DEBUG);
         if (!instanceGroups || instanceGroups.length === 0) {
-            console.log('[3D] updateSkeleton: no instance groups');
+            if (_dbg3d) console.log('[3D] updateSkeleton: no instance groups');
             return;
         }
 
         var groupsWithPts = instanceGroups.filter(function(g) { return g.points3d && g.points3d.length > 0; });
-        console.log('[3D] updateSkeleton:', instanceGroups.length, 'groups,', groupsWithPts.length, 'with points3d, sceneScale:', this._sceneScale);
+        if (_dbg3d) console.log('[3D] updateSkeleton:', instanceGroups.length, 'groups,', groupsWithPts.length, 'with points3d, sceneScale:', this._sceneScale);
 
         const ss = this._sceneScale || 1;
         const nodeRadius = this.skeletonNodeSize * ss;

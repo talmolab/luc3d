@@ -939,12 +939,16 @@ export function update3DViewport(frameIdx) {
         }
     }
     const groups = getInstanceGroupsForFrame(frameIdx);
-    const groupsWithPts = groups.filter(g => g.points3d && g.points3d.length > 0);
-    console.log('[3D] update3DViewport frame', frameIdx,
-        '| groups:', groups.length, '| with points3d:', groupsWithPts.length);
-    if (groupsWithPts.length > 0) {
-        var samplePt = groupsWithPts[0].points3d.find(function(p) { return p != null; });
-        console.log('[3D] Sample 3D point:', samplePt);
+    // Debug logs gated behind a flag — these ran on EVERY frame, so during
+    // playback they spammed the console (a real cost with DevTools open).
+    if (typeof window !== 'undefined' && window.LUCID_3D_DEBUG) {
+        const groupsWithPts = groups.filter(g => g.points3d && g.points3d.length > 0);
+        console.log('[3D] update3DViewport frame', frameIdx,
+            '| groups:', groups.length, '| with points3d:', groupsWithPts.length);
+        if (groupsWithPts.length > 0) {
+            var samplePt = groupsWithPts[0].points3d.find(function(p) { return p != null; });
+            console.log('[3D] Sample 3D point:', samplePt);
+        }
     }
     viewport3d.setFrame(groups);
 }

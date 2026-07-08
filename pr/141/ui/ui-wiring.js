@@ -1287,7 +1287,7 @@ export function setupUI() {
     document.getElementById('btnPrev').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); });
     document.getElementById('btnPlay').addEventListener('click', function () {
         if (!hasRealVideo()) { toggleNoVideoPlayback(); return; }
-        if (state.isPlaying) { videoController.stopPlayback(); return; }
+        if (state.isPlaying) { videoController.pausePlayback(); return; }
         // Pre-load frames before starting playback for lazy sessions
         if (state.session && state.session.lazyLoader) {
             showLoading('Loading frames...');
@@ -1478,7 +1478,7 @@ export function setupUI() {
                 break;
             case ' ':
                 e.preventDefault();
-                if (state.isPlaying) { videoController.stopPlayback(); }
+                if (state.isPlaying) { videoController.pausePlayback(); }
                 else if (state.session && state.session.lazyLoader) {
                     batchLoadLazyFrames(state.currentFrame, 5000).then(function () {
                         if (videoController) videoController.startPlayback();
@@ -2188,13 +2188,27 @@ export function setupUI() {
 // UI Updates
 // ============================================
 
+// Throttle window (ms) for the 3D viewport update during playback.
+let _last3DUpdate = 0;
+const VIEWPORT3D_PLAYBACK_MS = 100;
+
 export function updateSeekbar(frameIdx) {
     if (frameIdx === undefined) frameIdx = state.currentFrame;
     updateSeekbarVisual(frameIdx);
     document.getElementById('currentFrame').textContent = frameIdx + 1;
 
-    // Update 3D viewport on frame change
-    update3DViewport(frameIdx);
+    // Update the 3D viewport on frame change. `update3DViewport` rebuilds the
+    // Three.js skeleton scene and renders it — a major per-frame cost that ran
+    // on EVERY playback frame. During playback it's throttled to ~10 Hz (same
+    // rationale as the info-panel/timeline throttle in rendering.js); the 2D
+    // video + skeleton overlays still update every frame, and the 3D view isn't
+    // legible per-frame at playback speed anyway. Paused (seek/step) it runs
+    // every call; VideoController.stopPlayback fires a final unthrottled update.
+    var now3d = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (!state.isPlaying || (now3d - _last3DUpdate) >= VIEWPORT3D_PLAYBACK_MS) {
+        _last3DUpdate = now3d;
+        update3DViewport(frameIdx);
+    }
 }
 
 export function updateSeekbarVisual(frameIdx) {
