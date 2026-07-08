@@ -49,8 +49,8 @@ python3 -m http.server 8080
   matching sleap-io.js's `^1.30.0`) — it was previously stubbed
   (`lib/sleap-io/mediabunny-stub.js`, now unused) and is now the REAL library
   so sleap-io.js's `MediaBunnyVideoBackend` can do frame-accurate video decode
-  (issue #115), wired into `loading/video.js` as the opt-in
-  `LUCID_VIDEO_BACKEND='mediabunny'` backend. Both `pako` and `mediabunny` are
+  (issue #115), wired into `loading/video.js` as the default (opt-out via
+  `LUCID_VIDEO_BACKEND='html5'`) backend. Both `pako` and `mediabunny` are
   aliased in the `index.html` importmap (and `tests/test-runner.html`). LUCID
   uses sleap-io.js on **both** the read and write paths (PR 5.1/5.2).
   **LOCAL PATCH (issue #115):** `lib/sleap-io/chunk-M65RB7KH.js`

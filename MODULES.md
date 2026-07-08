@@ -2202,23 +2202,25 @@ tolerance (half a frame period, `0.5/_fps`) so high-fps recordings
 (e.g. 400 fps) step every frame instead of freezing under a fixed
 constant (issue #89).
 
-**Frame-accurate mediabunny backend (opt-in, issue #115).** HTML5
+**Frame-accurate mediabunny backend (default-on, issue #115).** HTML5
 `<video>.currentTime` seeking is NOT frame-accurate — it can return a
 frame a whole GOP behind the one requested, so the pose overlay (drawn
 from correct, verified data) ends up on a stale video frame and fast
-nodes like the tail visibly mismatch. When `LUCID_VIDEO_BACKEND ===
-'mediabunny'` (read from `window` or `localStorage`), `init()` also
-builds a `MediaBunnyVideoBackend` (from sleap-io.js, using the vendored
+nodes like the tail visibly mismatch. By default `init()` builds a
+`MediaBunnyVideoBackend` (from sleap-io.js, using the vendored
 `lib/mediabunny/`) via `_initMediabunny(source)` and adopts its
-authoritative frame count / fps. `getFrame()` then decodes exact frames
+authoritative frame count / fps; `getFrame()` then decodes exact frames
 through mediabunny (`sink.getSample(_frameTimes[i])`), transparently
-falling back to the HTML5 seek on any miss/error. Playback still uses
-the HTML5 element. Default is OFF (unchanged HTML5 behavior) because the
-backend couldn't be validated headless — headless *software* decode is
-itself frame-inaccurate (every WebCodecs decoder, incl. mediabunny and a
-raw `<video>`, shows the same offset), so it needs real-hardware
-verification. Pose data imports and exports correctly regardless — this
-bug is display-only.
+falling back to the HTML5 seek on any init/decode failure. Playback still
+uses the HTML5 element. `_mediabunnyEnabled()` is ON unless
+`LUCID_VIDEO_BACKEND` (from `window` or `localStorage`) is `'html5'` /
+`'legacy'` — default-on (rather than opt-in) because `localStorage` is
+per-origin, so an opt-in flag silently disables the fix on any origin
+where it wasn't set (a PR preview vs localhost). Confirmed on real
+hardware; note it couldn't be validated headless (headless *software*
+decode is itself frame-inaccurate — every WebCodecs decoder, incl.
+mediabunny and a raw `<video>`, shows the same offset). Pose data imports
+and exports correctly regardless — this bug is display-only.
 
 **Zoom/pan resize anchoring.** Zoom pan offset (`view.zoom.offsetX/offsetY`) is
 screen-space px relative to the wrapper's base display size, which `applyZoom`
