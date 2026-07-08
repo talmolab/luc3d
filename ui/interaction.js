@@ -1967,10 +1967,44 @@ export class InteractionManager {
             }
         }
 
-        let points;
+        let points = null;
+        // Node indices we place as occluded because the template left them null
+        // (e.g. a node that was occluded / untriangulatable in the source
+        // instance). Recorded onto instance.nulledNodes below.
+        let occludedFill = null;
         if (initialPoints && initialPoints.length === numNodes) {
-            points = initialPoints;
-        } else {
+            // Copy the template — but NEVER leave a node unreachable. A null slot
+            // draws no marker, so it could never be clicked to place / un-occlude
+            // it, and the user could never build a full-keypoint instance (issue:
+            // occlusion-node-availability). Give each null slot a fallback
+            // position (fanned out from the centroid of the placed nodes) and
+            // flag it occluded — same treatment as _convertToUserInstance — so
+            // every node has a clickable marker, occluded ones just flagged.
+            let fcx = 0, fcy = 0, fCount = 0, nullTotal = 0;
+            for (let i = 0; i < numNodes; i++) {
+                if (initialPoints[i] != null) { fcx += initialPoints[i][0]; fcy += initialPoints[i][1]; fCount++; }
+                else nullTotal++;
+            }
+            if (fCount > 0 && nullTotal > 0) {
+                fcx = Math.round(fcx / fCount); fcy = Math.round(fcy / fCount);
+                occludedFill = new Set();
+                let nullSeq = 0;
+                const spread = 20;
+                points = initialPoints.map((pt, idx) => {
+                    if (pt != null) return [pt[0], pt[1]];
+                    occludedFill.add(idx);
+                    const angle = (2 * Math.PI * nullSeq) / Math.max(nullTotal, 1);
+                    nullSeq++;
+                    return [Math.round(fcx + Math.cos(angle) * spread), Math.round(fcy + Math.sin(angle) * spread)];
+                });
+            } else if (nullTotal === 0) {
+                // No nulls — use the template as-is.
+                points = initialPoints;
+            }
+            // else (fCount === 0, all-null template): leave points null → full
+            // topology layout below places every node.
+        }
+        if (!points) {
             // Topology-based layout using skeleton edges
             // Center at cursor position if available and within view bounds, else view center
             let cx = vw / 2, cy = vh / 2;
@@ -2047,6 +2081,9 @@ export class InteractionManager {
 
         const instance = new Instance(points, 0, 'user', 1.0);
         instance.modified = true;
+        // Nodes we filled in for null template slots start occluded (positioned
+        // but flagged), so they draw a clickable marker the user can un-occlude.
+        if (occludedFill && occludedFill.size > 0) instance.nulledNodes = occludedFill;
 
         state.session.addUnlinkedInstance(state.currentFrame, targetCamera, instance);
         if (this.callbacks.onUserInstanceCreated) {
