@@ -38,26 +38,43 @@
         return decoder;
     }
 
-    // Run `fn` with window.LUCID_VIDEO_BACKEND set to `val`, then restore.
+    // Run `fn` with the backend flag set to `val` (undefined = truly unset),
+    // controlling BOTH window and localStorage so the ambient per-origin
+    // localStorage value (the test-runner shares the app's origin) can't leak
+    // in. Restores both afterward.
     function withFlag(val, fn) {
         var g = (typeof window !== 'undefined') ? window : globalThis;
-        var had = Object.prototype.hasOwnProperty.call(g, 'LUCID_VIDEO_BACKEND');
-        var prev = g.LUCID_VIDEO_BACKEND;
+        var hadWin = Object.prototype.hasOwnProperty.call(g, 'LUCID_VIDEO_BACKEND');
+        var prevWin = g.LUCID_VIDEO_BACKEND;
+        var hasLS = (typeof localStorage !== 'undefined');
+        var prevLS = null;
+        try { prevLS = hasLS ? localStorage.getItem('LUCID_VIDEO_BACKEND') : null; } catch (e) { hasLS = false; }
+        if (hasLS) { try { localStorage.removeItem('LUCID_VIDEO_BACKEND'); } catch (e) {} }
         if (val === undefined) { try { delete g.LUCID_VIDEO_BACKEND; } catch (e) { g.LUCID_VIDEO_BACKEND = undefined; } }
         else g.LUCID_VIDEO_BACKEND = val;
         try { return fn(); }
         finally {
-            if (had) g.LUCID_VIDEO_BACKEND = prev;
+            if (hadWin) g.LUCID_VIDEO_BACKEND = prevWin;
             else { try { delete g.LUCID_VIDEO_BACKEND; } catch (e) { g.LUCID_VIDEO_BACKEND = undefined; } }
+            if (hasLS) {
+                try {
+                    if (prevLS === null) localStorage.removeItem('LUCID_VIDEO_BACKEND');
+                    else localStorage.setItem('LUCID_VIDEO_BACKEND', prevLS);
+                } catch (e) {}
+            }
         }
     }
 
-    describe('Issue #115: mediabunny backend opt-in flag', function () {
-        it('_mediabunnyEnabled() honors window.LUCID_VIDEO_BACKEND', function () {
+    describe('Issue #115: mediabunny backend is default-on with an html5 opt-out', function () {
+        it('_mediabunnyEnabled() defaults ON and only html5/legacy opts out', function () {
             var d = makeDecoder();
+            // Default (flag unset) must be ON — the fix has to work on any origin
+            // (e.g. a PR preview) without a per-origin localStorage flag.
+            withFlag(undefined, function () { assertTrue(d._mediabunnyEnabled(), 'default (unset) → enabled'); });
             withFlag('mediabunny', function () { assertTrue(d._mediabunnyEnabled(), "'mediabunny' → enabled"); });
-            withFlag('MediaBunny', function () { assertTrue(d._mediabunnyEnabled(), 'case-insensitive'); });
-            withFlag('html5', function () { assertFalse(d._mediabunnyEnabled(), "'html5' → disabled"); });
+            withFlag('html5', function () { assertFalse(d._mediabunnyEnabled(), "'html5' → disabled (opt-out)"); });
+            withFlag('HTML5', function () { assertFalse(d._mediabunnyEnabled(), 'opt-out is case-insensitive'); });
+            withFlag('legacy', function () { assertFalse(d._mediabunnyEnabled(), "'legacy' → disabled (opt-out)"); });
         });
     });
 

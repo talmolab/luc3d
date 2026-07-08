@@ -186,19 +186,17 @@ export class OnDemandVideoDecoder {
             this._emitProgress({ phase: 'mp4box', error: e });
         }
 
-        // Optional: frame-accurate mediabunny backend (issue #115). HTML5
+        // Frame-accurate mediabunny backend (issue #115). HTML5
         // `<video>.currentTime` seeking is NOT frame-accurate — it can return a
         // frame a whole GOP behind the one requested, so the pose overlay ends
         // up drawn on a stale video frame. mediabunny (via sleap-io.js's
         // MediaBunnyVideoBackend) seeks + decodes exact frames via WebCodecs.
-        // OPT-IN for now — it couldn't be validated headless (headless software
-        // decode is itself frame-inaccurate), so it needs real-hardware
-        // verification. Enable with:
-        //   localStorage.LUCID_VIDEO_BACKEND = 'mediabunny'   (then reload)
-        // or window.LUCID_VIDEO_BACKEND = 'mediabunny' before loading a session.
-        // Playback still uses the HTML5 element; only per-frame stepping/seeking
-        // (getFrame) goes through mediabunny, and any failure falls back to the
-        // HTML5 path transparently.
+        // ON BY DEFAULT — only per-frame stepping/seeking (getFrame) goes
+        // through mediabunny; playback still uses the HTML5 element, and any
+        // init/decode failure falls back to the HTML5 path transparently. To
+        // force the old (frame-inaccurate) HTML5 seek, set
+        //   localStorage.LUCID_VIDEO_BACKEND = 'html5'   (then reload)
+        // or window.LUCID_VIDEO_BACKEND = 'html5' before loading a session.
         if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
             try {
                 await this._initMediabunny(source);
@@ -212,18 +210,29 @@ export class OnDemandVideoDecoder {
             + (this._mbBackend ? " [mediabunny frame-accurate]" : ""));
     }
 
-    /** Whether the opt-in mediabunny video backend is requested (issue #115). */
+    /**
+     * Whether to use the frame-accurate mediabunny backend (issue #115).
+     * DEFAULT ON — only an explicit `LUCID_VIDEO_BACKEND` of `'html5'` (or
+     * `'legacy'`) opts back out to the old HTML5 `<video>` seek. Read from
+     * `window` first, then `localStorage`. Note: `localStorage` is per-origin,
+     * so a default-off approach would silently disable the fix on any origin
+     * where the flag wasn't set (e.g. a PR preview vs localhost) — hence
+     * default-on with an explicit opt-out.
+     */
     _mediabunnyEnabled() {
         try {
+            var v = null;
             if (typeof window !== 'undefined' && window.LUCID_VIDEO_BACKEND) {
-                return String(window.LUCID_VIDEO_BACKEND).toLowerCase() === 'mediabunny';
+                v = String(window.LUCID_VIDEO_BACKEND).toLowerCase();
+            } else if (typeof localStorage !== 'undefined') {
+                var ls = localStorage.getItem('LUCID_VIDEO_BACKEND');
+                if (ls) v = String(ls).toLowerCase();
             }
-            if (typeof localStorage !== 'undefined') {
-                var v = localStorage.getItem('LUCID_VIDEO_BACKEND');
-                return v && v.toLowerCase() === 'mediabunny';
-            }
-        } catch (e) { /* localStorage may throw in some sandboxes */ }
-        return false;
+            return !(v === 'html5' || v === 'legacy');
+        } catch (e) {
+            // localStorage may throw in some sandboxes — default to the fix.
+            return true;
+        }
     }
 
     /**
