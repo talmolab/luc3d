@@ -23,7 +23,7 @@
         "imports": {
             "h5wasm": "./lib/h5wasm/hdf5_hl.js",
             "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
-            "mediabunny": "./lib/sleap-io/mediabunny-stub.js",
+            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs",
             "pako": "./lib/pako/pako.esm.mjs"
         }
     }
@@ -859,7 +859,8 @@
             openSlpWriter, saveSlpMergedFromStores, saveSlpMergedToSink, SlpStreamWriter,
             Camera as SioCamera, CameraGroup, RecordingSession,
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
-            Identity as SioIdentity, Instance3D, PredictedInstance3D
+            Identity as SioIdentity, Instance3D, PredictedInstance3D,
+            MediaBunnyVideoBackend
         } from './lib/sleap-io/index.browser.js';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
@@ -868,7 +869,8 @@
             openSlpWriter, saveSlpMergedFromStores, saveSlpMergedToSink, SlpStreamWriter,
             Camera: SioCamera, CameraGroup, RecordingSession,
             InstanceGroup: SioInstanceGroup, FrameGroup: SioFrameGroup,
-            Identity: SioIdentity, Instance3D, PredictedInstance3D
+            Identity: SioIdentity, Instance3D, PredictedInstance3D,
+            MediaBunnyVideoBackend
         };
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
