@@ -213,4 +213,38 @@
                 'the real node still triangulates from its two observations');
         });
     });
+
+    // SLP save/load: an occluded (nulledNodes) node must keep its POSITION.
+    // Regression: `_buildSioPoints` wrote xy:[NaN,NaN] for a nulled node (same as
+    // a missing point), so saving to .slp discarded the position. On reload NaN ->
+    // null, so the occluded node was "deleted from the instance" and unmodifiable
+    // (no position = no clickable marker). Fix: a nulled node WITH a position is
+    // written with its real xy + visible:false; the nulledNodes flag round-trips
+    // via instance metadata. Only genuinely-null points get NaN.
+    describe('Occlusion: SLP export keeps occluded-node positions (round-trip)', function () {
+        it('a nulled node keeps its position (not NaN) and is marked occluded', function () {
+            if (typeof _buildSioPoints !== 'function' || typeof Instance === 'undefined') return;
+            var inst = new Instance([[100, 200], [300, 400], [500, 600]], 0, 'user', 1);
+            inst.nulledNodes = new Set([1]);   // occlude node 1 (it HAS a real position)
+            var pts = _buildSioPoints(inst, 3);
+
+            assertEqual(pts[1].xy[0], 300, 'nulled node keeps x — position preserved, not NaN');
+            assertEqual(pts[1].xy[1], 400, 'nulled node keeps y');
+            assertTrue(pts[1].visible === false, 'nulled node written occluded (visible:false)');
+            assertTrue(pts[1].complete === true, 'nulled node is complete — it has a real point');
+
+            // Non-nulled nodes unaffected.
+            assertEqual(pts[0].xy[0], 100, 'visible node keeps its position');
+            assertTrue(pts[0].visible === true, 'visible node stays visible');
+        });
+
+        it('a genuinely null point is still written as NaN / invisible', function () {
+            if (typeof _buildSioPoints !== 'function' || typeof Instance === 'undefined') return;
+            var inst = new Instance([[100, 200], null, [500, 600]], 0, 'user', 1);
+            var pts = _buildSioPoints(inst, 3);
+            assertTrue(isNaN(pts[1].xy[0]), 'genuinely null node -> NaN x');
+            assertTrue(pts[1].visible === false, 'null node not visible');
+            assertTrue(pts[1].complete === false, 'null node not complete');
+        });
+    });
 })();
