@@ -1339,7 +1339,9 @@ export class VideoController {
             startLoop();
         });
 
-        // Draw one playback frame (video + pose overlay) for `frameIdx`.
+        // Draw one playback frame: paint the video and the pose overlay for the
+        // SAME index — `frameIdx`, which is the presented-frame index from rVFC
+        // `mediaTime` (so it tracks the frame actually on screen, not the clock).
         // Returns false if playback should stop (past the end / paused).
         function drawPlaybackFrame(frameIdx) {
             if (!self.state.isPlaying) return false;
@@ -1374,10 +1376,15 @@ export class VideoController {
             // keeps the pose overlay locked to the displayed video frame — fixes
             // "the tracking leads the video during playback" (issue #115 followup).
             if (primaryEl && typeof primaryEl.requestVideoFrameCallback === 'function') {
+                videoLog('Playback loop: requestVideoFrameCallback (presented-frame accurate)');
                 var onVF = function (now, metadata) {
                     if (!self.state.isPlaying) return;
                     var t = (metadata && typeof metadata.mediaTime === 'number')
                         ? metadata.mediaTime : primaryEl.currentTime;
+                    if (typeof window !== 'undefined' && window.LUCID_PLAYBACK_DEBUG) {
+                        videoLog('rVFC mediaTime=' + t.toFixed(4) + ' currentTime=' + primaryEl.currentTime.toFixed(4)
+                            + ' → frame ' + Math.round(t * fps));
+                    }
                     if (drawPlaybackFrame(Math.round(t * fps))) {
                         self._playRVFCEl = primaryEl;
                         self._playRVFC = primaryEl.requestVideoFrameCallback(onVF);
@@ -1387,6 +1394,7 @@ export class VideoController {
                 self._playRVFC = primaryEl.requestVideoFrameCallback(onVF);
             } else {
                 // Fallback (no rVFC): rAF loop; getCurrentFrameIndex uses floor.
+                videoLog('Playback loop: requestAnimationFrame fallback (no requestVideoFrameCallback)');
                 var onFrame = function () {
                     if (!self.state.isPlaying) return;
                     var d0 = (self.state.views.filter(function (v) { return v.decoder; })[0] || {}).decoder;
