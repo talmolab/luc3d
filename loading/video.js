@@ -1336,53 +1336,66 @@ export class VideoController {
             for (var i = 0; i < views.length; i++) {
                 if (views[i].decoder.playNative) views[i].decoder.playNative();
             }
-            self._playRAF = requestAnimationFrame(onFrame);
+            startLoop();
         });
 
-        // Use requestAnimationFrame to draw frames and update UI in sync
-        function onFrame() {
-            if (!self.state.isPlaying) return;
-
-            var currentViews = self.state.views.filter(function (v) { return v.decoder; });
-            var frameIdx = self.state.currentFrame;
-
-            // Get current frame index from first decoder
-            if (currentViews.length > 0 && currentViews[0].decoder.getCurrentFrameIndex) {
-                frameIdx = currentViews[0].decoder.getCurrentFrameIndex();
-            }
-
-            if (frameIdx >= self.state.totalFrames) {
-                self.stopPlayback();
-                return;
-            }
-
+        // Draw one playback frame (video + pose overlay) for `frameIdx`.
+        // Returns false if playback should stop (past the end / paused).
+        function drawPlaybackFrame(frameIdx) {
+            if (!self.state.isPlaying) return false;
+            if (frameIdx >= self.state.totalFrames) { self.stopPlayback(); return false; }
             self.state.currentFrame = frameIdx;
 
-            // Draw each view directly from its video element (fast - no async)
+            var currentViews = self.state.views.filter(function (v) { return v.decoder; });
             for (var j = 0; j < currentViews.length; j++) {
                 var view = currentViews[j];
                 if (view.decoder.drawCurrentFrame) {
                     view.decoder.drawCurrentFrame(view.ctx, view.canvas.width, view.canvas.height);
                 }
-
-                // Clear overlay for redraw
                 if (view.overlayCtx && view.overlayCanvas) {
                     view.overlayCtx.clearRect(0, 0, view.overlayCanvas.width, view.overlayCanvas.height);
                 }
             }
-
-            // Update overlays and seekbar
-            if (self.callbacks.drawOverlays) {
-                self.callbacks.drawOverlays(frameIdx);
-            }
-            if (self.callbacks.updateSeekbar) {
-                self.callbacks.updateSeekbar(frameIdx);
-            }
-
-            self._playRAF = requestAnimationFrame(onFrame);
+            if (self.callbacks.drawOverlays) self.callbacks.drawOverlays(frameIdx);
+            if (self.callbacks.updateSeekbar) self.callbacks.updateSeekbar(frameIdx);
+            return true;
         }
-        // NOTE: the rAF loop is started in the seek-settle `.then()` above, not
-        // here — so drawing begins only once the video is actually at the frame.
+
+        function startLoop() {
+            var live = self.state.views.filter(function (v) { return v.decoder; });
+            var primaryDec = live.length ? live[0].decoder : null;
+            var primaryEl = primaryDec && primaryDec._videoEl;
+            var fps = (primaryDec && primaryDec._fps) || self.state.fps || 30;
+
+            // Prefer requestVideoFrameCallback: its `metadata.mediaTime` is the
+            // timestamp of the frame ACTUALLY PRESENTED on screen. Deriving the
+            // overlay frame from that (instead of the <video>.currentTime clock,
+            // which leads the painted frame by the decode/compositor latency)
+            // keeps the pose overlay locked to the displayed video frame — fixes
+            // "the tracking leads the video during playback" (issue #115 followup).
+            if (primaryEl && typeof primaryEl.requestVideoFrameCallback === 'function') {
+                var onVF = function (now, metadata) {
+                    if (!self.state.isPlaying) return;
+                    var t = (metadata && typeof metadata.mediaTime === 'number')
+                        ? metadata.mediaTime : primaryEl.currentTime;
+                    if (drawPlaybackFrame(Math.round(t * fps))) {
+                        self._playRVFCEl = primaryEl;
+                        self._playRVFC = primaryEl.requestVideoFrameCallback(onVF);
+                    }
+                };
+                self._playRVFCEl = primaryEl;
+                self._playRVFC = primaryEl.requestVideoFrameCallback(onVF);
+            } else {
+                // Fallback (no rVFC): rAF loop; getCurrentFrameIndex uses floor.
+                var onFrame = function () {
+                    if (!self.state.isPlaying) return;
+                    var d0 = (self.state.views.filter(function (v) { return v.decoder; })[0] || {}).decoder;
+                    var frameIdx = (d0 && d0.getCurrentFrameIndex) ? d0.getCurrentFrameIndex() : self.state.currentFrame;
+                    if (drawPlaybackFrame(frameIdx)) self._playRAF = requestAnimationFrame(onFrame);
+                };
+                self._playRAF = requestAnimationFrame(onFrame);
+            }
+        }
 
         if (this.callbacks.onPlaybackStateChange) {
             this.callbacks.onPlaybackStateChange(true);
@@ -1399,6 +1412,16 @@ export class VideoController {
         if (this._playRAF) {
             cancelAnimationFrame(this._playRAF);
             this._playRAF = null;
+        }
+        // Cancel the requestVideoFrameCallback playback loop, if used.
+        if (this._playRVFC != null) {
+            try {
+                if (this._playRVFCEl && typeof this._playRVFCEl.cancelVideoFrameCallback === 'function') {
+                    this._playRVFCEl.cancelVideoFrameCallback(this._playRVFC);
+                }
+            } catch (e) { /* non-fatal */ }
+            this._playRVFC = null;
+            this._playRVFCEl = null;
         }
         // Clear legacy interval if any
         if (this.state.playInterval) {
