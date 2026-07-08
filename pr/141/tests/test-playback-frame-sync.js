@@ -115,4 +115,51 @@
             assertTrue(true, 'resolved with no video element');
         });
     });
+
+    // The real fix for "tracking leads the video during playback": drive the
+    // overlay from the ACTUALLY PRESENTED frame (requestVideoFrameCallback's
+    // metadata.mediaTime), not the <video>.currentTime clock (which leads the
+    // painted frame by the decode/compositor latency).
+    describe('Playback: overlay follows the presented frame (rVFC mediaTime), not the clock', function () {
+        it('draws the overlay for the presented frame even when currentTime leads', async function () {
+            if (typeof VideoController === 'undefined') return;
+            var overlayFrame = null;
+            var vfcb = null;
+            var videoEl = {
+                currentTime: 10.02,   // clock is AHEAD — this is frame 601 @60fps
+                playbackRate: 1,
+                requestVideoFrameCallback: function (cb) { vfcb = cb; return 1; },
+                cancelVideoFrameCallback: function () {},
+                addEventListener: function () {}, removeEventListener: function () {},
+            };
+            var decoder = {
+                _videoEl: videoEl, _fps: 60, samples: new Array(20000), videoTrack: null,
+                seekNativeSettled: function () { return Promise.resolve(); },
+                seekNative: function () {}, playNative: function () {}, pauseNative: function () {},
+                drawCurrentFrame: function () {},
+                getCurrentFrameIndex: function () { return Math.floor(videoEl.currentTime * 60 + 1e-6); },
+            };
+            var canvas = document.createElement('canvas');
+            var view = {
+                name: 'cam1', decoder: decoder, canvas: canvas, ctx: canvas.getContext('2d'),
+                overlayCanvas: canvas, overlayCtx: canvas.getContext('2d'), videoWidth: 640, videoHeight: 480,
+            };
+            var state = { views: [view], currentFrame: 600, totalFrames: 20000, fps: 60, isPlaying: false };
+            var ctrl = new VideoController(state, {
+                drawOverlays: function (f) { overlayFrame = f; },
+                updateSeekbar: function () {},
+            });
+
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });   // seek settles → rVFC registered
+            assertTrue(typeof vfcb === 'function', 'a requestVideoFrameCallback was registered');
+
+            // The presented frame's mediaTime is 10.0 (frame 600) even though the
+            // clock (currentTime) is already at 10.02 (frame 601).
+            vfcb(0, { mediaTime: 10.0, presentedFrames: 1 });
+            assertEqual(overlayFrame, 600,
+                'overlay uses the PRESENTED frame (mediaTime→600), not the leading clock (601)');
+            ctrl.stopPlayback();
+        });
+    });
 })();
