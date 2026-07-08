@@ -91,6 +91,11 @@ export function getVisibilitySettings() {
     };
 }
 
+// Throttle window (ms) for the info-panel + timeline playhead updates during
+// playback — see the coalescing note at the bottom of drawAllOverlays.
+let _lastAuxUpdate = 0;
+const AUX_UPDATE_MS = 100;
+
 export function drawAllOverlays(frameIdx) {
     if (!state.session) return;
 
@@ -263,12 +268,20 @@ export function drawAllOverlays(frameIdx) {
         });
     }
 
-    // Update info panel with current frame stats
-    updateFrameInfo(frameIdx, instanceGroups);
-
-    // Update timeline current frame
-    if (timeline) {
-        timeline.setCurrentFrame(frameIdx);
+    // Update info panel with current frame stats + the timeline playhead.
+    // During playback these are THROTTLED to ~10 Hz: `updateFrameInfo` rebuilds
+    // info-panel DOM and re-aggregates reprojection errors, and
+    // `timeline.setCurrentFrame` does a full timeline-canvas `redraw()` — both
+    // per frame. A human can't read either at playback speed, and doing them
+    // every frame is a major per-frame cost that caps buffered playback fps.
+    // The skeleton overlays + video above still update every frame, so tracking
+    // stays smooth and frame-accurate; only these two auxiliary updates coalesce.
+    // When paused (seek/step) they always run so the panel/playhead are exact.
+    var _auxNow = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (!state.isPlaying || (_auxNow - _lastAuxUpdate) >= AUX_UPDATE_MS) {
+        _lastAuxUpdate = _auxNow;
+        updateFrameInfo(frameIdx, instanceGroups);
+        if (timeline) timeline.setCurrentFrame(frameIdx);
     }
 }
 
