@@ -1310,26 +1310,91 @@ export class VideoController {
 
         this.state.isPlaying = true;
         var self = this;
-
-        // Start native playback on all decoders
-        // Compute effective playback rate: (desired FPS / native FPS) * speed multiplier
         var speedMult = this.state.speedMultiplier || 1.0;
         var views = this.state.views.filter(function (v) { return v.decoder; });
+        var primaryDec = views.length ? views[0].decoder : null;
+        var fps = (primaryDec && primaryDec._fps) || this.state.fps || 30;
+
+        // ---------------------------------------------------------------
+        // Unified-source playback (issue #115 followup).
+        //
+        // Draw the video frame AND the pose overlay from the SAME frame index,
+        // chosen by a wall clock, decoding both through the frame-accurate
+        // mediabunny backend. One source, one index → they can NEVER desync (the
+        // "tracking leads the video" bug), and playback runs at the true fps
+        // regardless of native-decode timing. If mediabunny can't keep up it
+        // simply drops frames (the wall clock skips ahead) but stays in sync.
+        //
+        // Requires the mediabunny backend; without it we keep the old native
+        // <video> path (seek-settle → play → rVFC/rAF overlay loop).
+        // ---------------------------------------------------------------
+        if (primaryDec && primaryDec._mbBackend) {
+            videoLog('Playback loop: mediabunny unified frame source (wall-clock)');
+            for (var pi = 0; pi < views.length; pi++) {
+                if (views[pi].decoder.pauseNative) views[pi].decoder.pauseNative(); // we drive frames
+            }
+            var startFrame = this.state.currentFrame;
+            var startT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            var lastTarget = -1;
+            var drawing = false;
+            var uloop = function () {
+                if (!self.state.isPlaying) return;
+                var nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                var target = startFrame + Math.floor(((nowT - startT) / 1000) * fps * speedMult);
+                if (target >= self.state.totalFrames) { self.stopPlayback(); return; }
+
+                if (target !== lastTarget && !drawing) {
+                    lastTarget = target;
+                    drawing = true;
+                    self.state.currentFrame = target;
+                    var cv = self.state.views.filter(function (v) { return v.decoder; });
+                    // Decode the SAME frame for every view, paint each, THEN draw
+                    // the overlay for that frame — so video + pose land together.
+                    Promise.all(cv.map(function (view) {
+                        return view.decoder.getFrame(target).then(function (bmp) {
+                            if (bmp && view.ctx) {
+                                view.ctx.drawImage(bmp, 0, 0, view.canvas.width, view.canvas.height);
+                            }
+                        }).catch(function () {});
+                    })).then(function () {
+                        drawing = false;
+                        if (!self.state.isPlaying || self.state.currentFrame !== target) return;
+                        for (var j = 0; j < cv.length; j++) {
+                            if (cv[j].overlayCtx && cv[j].overlayCanvas) {
+                                cv[j].overlayCtx.clearRect(0, 0, cv[j].overlayCanvas.width, cv[j].overlayCanvas.height);
+                            }
+                        }
+                        if (self.callbacks.drawOverlays) self.callbacks.drawOverlays(target);
+                        if (self.callbacks.updateSeekbar) self.callbacks.updateSeekbar(target);
+                    });
+                    // Keep the decoder ahead of the clock.
+                    for (var k = 0; k < views.length; k++) {
+                        var mb = views[k].decoder._mbBackend;
+                        if (mb && typeof mb.prefetch === 'function') {
+                            try { mb.prefetch(target + 1, target + Math.round(fps)); } catch (e) {}
+                        }
+                    }
+                }
+                self._playRAF = requestAnimationFrame(uloop);
+            };
+            self._playRAF = requestAnimationFrame(uloop);
+
+            if (this.callbacks.onPlaybackStateChange) this.callbacks.onPlaybackStateChange(true);
+            videoLog("Playback started (unified)");
+            return;
+        }
+
+        // ---- Native <video> fallback (no mediabunny backend) ----
         var nativeFps = (views.length > 0 && views[0].decoder.videoTrack && views[0].decoder.videoTrack.duration > 0)
             ? views[0].decoder.samples.length / (views[0].decoder.videoTrack.duration / views[0].decoder.videoTrack.timescale)
             : (this.state.fps || 30);
         var rate = ((this.state.fps || 30) / nativeFps) * speedMult;
-        // Seek every view to the current frame and WAIT for the seek to settle
-        // before calling play(): play() while a seek is in flight is rejected by
-        // the browser (swallowed by playNative's `.catch`), which left playback
-        // stuck after scrubbing (issue #115 followup — mediabunny stepping no
-        // longer moves `_videoEl.currentTime`, so this pre-play seek is real).
-        var startFrame = this.state.currentFrame;
+        var startFrameN = this.state.currentFrame;
         Promise.all(views.map(function (v) {
             var d = v.decoder;
             if (d._videoEl) d._videoEl.playbackRate = rate;
-            if (typeof d.seekNativeSettled === 'function') return d.seekNativeSettled(startFrame);
-            if (d.seekNative) d.seekNative(startFrame);
+            if (typeof d.seekNativeSettled === 'function') return d.seekNativeSettled(startFrameN);
+            if (d.seekNative) d.seekNative(startFrameN);
             return Promise.resolve();
         })).then(function () {
             if (!self.state.isPlaying) return;   // user paused during the seek wait
@@ -1339,15 +1404,10 @@ export class VideoController {
             startLoop();
         });
 
-        // Draw one playback frame: paint the video and the pose overlay for the
-        // SAME index — `frameIdx`, which is the presented-frame index from rVFC
-        // `mediaTime` (so it tracks the frame actually on screen, not the clock).
-        // Returns false if playback should stop (past the end / paused).
         function drawPlaybackFrame(frameIdx) {
             if (!self.state.isPlaying) return false;
             if (frameIdx >= self.state.totalFrames) { self.stopPlayback(); return false; }
             self.state.currentFrame = frameIdx;
-
             var currentViews = self.state.views.filter(function (v) { return v.decoder; });
             for (var j = 0; j < currentViews.length; j++) {
                 var view = currentViews[j];
@@ -1365,26 +1425,12 @@ export class VideoController {
 
         function startLoop() {
             var live = self.state.views.filter(function (v) { return v.decoder; });
-            var primaryDec = live.length ? live[0].decoder : null;
-            var primaryEl = primaryDec && primaryDec._videoEl;
-            var fps = (primaryDec && primaryDec._fps) || self.state.fps || 30;
-
-            // Prefer requestVideoFrameCallback: its `metadata.mediaTime` is the
-            // timestamp of the frame ACTUALLY PRESENTED on screen. Deriving the
-            // overlay frame from that (instead of the <video>.currentTime clock,
-            // which leads the painted frame by the decode/compositor latency)
-            // keeps the pose overlay locked to the displayed video frame — fixes
-            // "the tracking leads the video during playback" (issue #115 followup).
+            var primaryEl = live.length ? live[0].decoder._videoEl : null;
             if (primaryEl && typeof primaryEl.requestVideoFrameCallback === 'function') {
-                videoLog('Playback loop: requestVideoFrameCallback (presented-frame accurate)');
+                videoLog('Playback loop: requestVideoFrameCallback (native fallback)');
                 var onVF = function (now, metadata) {
                     if (!self.state.isPlaying) return;
-                    var t = (metadata && typeof metadata.mediaTime === 'number')
-                        ? metadata.mediaTime : primaryEl.currentTime;
-                    if (typeof window !== 'undefined' && window.LUCID_PLAYBACK_DEBUG) {
-                        videoLog('rVFC mediaTime=' + t.toFixed(4) + ' currentTime=' + primaryEl.currentTime.toFixed(4)
-                            + ' → frame ' + Math.round(t * fps));
-                    }
+                    var t = (metadata && typeof metadata.mediaTime === 'number') ? metadata.mediaTime : primaryEl.currentTime;
                     if (drawPlaybackFrame(Math.round(t * fps))) {
                         self._playRVFCEl = primaryEl;
                         self._playRVFC = primaryEl.requestVideoFrameCallback(onVF);
@@ -1393,8 +1439,7 @@ export class VideoController {
                 self._playRVFCEl = primaryEl;
                 self._playRVFC = primaryEl.requestVideoFrameCallback(onVF);
             } else {
-                // Fallback (no rVFC): rAF loop; getCurrentFrameIndex uses floor.
-                videoLog('Playback loop: requestAnimationFrame fallback (no requestVideoFrameCallback)');
+                videoLog('Playback loop: requestAnimationFrame fallback');
                 var onFrame = function () {
                     if (!self.state.isPlaying) return;
                     var d0 = (self.state.views.filter(function (v) { return v.decoder; })[0] || {}).decoder;
