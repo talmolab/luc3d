@@ -57,6 +57,7 @@ export class OnDemandVideoDecoder {
         this._mp4Initialized = false;
         this._mp4InitPromise = null;
         this._html5SeekLock = null; // Prevent concurrent HTML5 seeks
+        this._mbBackend = null; // Optional mediabunny frame-accurate backend (issue #115)
 
         // Source reference for mp4box lazy init
         this._source = null;
@@ -185,7 +186,85 @@ export class OnDemandVideoDecoder {
             this._emitProgress({ phase: 'mp4box', error: e });
         }
 
-        videoLog("Video loaded: " + width + "x" + height + " " + this.samples.length + " frames @ " + this._fps.toFixed(2) + "fps (" + (this.fileSize / 1048576).toFixed(1) + " MB)");
+        // Frame-accurate mediabunny backend (issue #115). HTML5
+        // `<video>.currentTime` seeking is NOT frame-accurate — it can return a
+        // frame a whole GOP behind the one requested, so the pose overlay ends
+        // up drawn on a stale video frame. mediabunny (via sleap-io.js's
+        // MediaBunnyVideoBackend) seeks + decodes exact frames via WebCodecs.
+        // ON BY DEFAULT — only per-frame stepping/seeking (getFrame) goes
+        // through mediabunny; playback still uses the HTML5 element, and any
+        // init/decode failure falls back to the HTML5 path transparently. To
+        // force the old (frame-inaccurate) HTML5 seek, set
+        //   localStorage.LUCID_VIDEO_BACKEND = 'html5'   (then reload)
+        // or window.LUCID_VIDEO_BACKEND = 'html5' before loading a session.
+        if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
+            try {
+                await this._initMediabunny(source);
+            } catch (e) {
+                videoLog("Mediabunny backend init failed (HTML5 seek will be used): " + e.message, "warn");
+                this._mbBackend = null;
+            }
+        }
+
+        videoLog("Video loaded: " + width + "x" + height + " " + this.samples.length + " frames @ " + this._fps.toFixed(2) + "fps (" + (this.fileSize / 1048576).toFixed(1) + " MB)"
+            + (this._mbBackend ? " [mediabunny frame-accurate]" : ""));
+    }
+
+    /**
+     * Whether to use the frame-accurate mediabunny backend (issue #115).
+     * DEFAULT ON — only an explicit `LUCID_VIDEO_BACKEND` of `'html5'` (or
+     * `'legacy'`) opts back out to the old HTML5 `<video>` seek. Read from
+     * `window` first, then `localStorage`. Note: `localStorage` is per-origin,
+     * so a default-off approach would silently disable the fix on any origin
+     * where the flag wasn't set (e.g. a PR preview vs localhost) — hence
+     * default-on with an explicit opt-out.
+     */
+    _mediabunnyEnabled() {
+        try {
+            var v = null;
+            if (typeof window !== 'undefined' && window.LUCID_VIDEO_BACKEND) {
+                v = String(window.LUCID_VIDEO_BACKEND).toLowerCase();
+            } else if (typeof localStorage !== 'undefined') {
+                var ls = localStorage.getItem('LUCID_VIDEO_BACKEND');
+                if (ls) v = String(ls).toLowerCase();
+            }
+            return !(v === 'html5' || v === 'legacy');
+        } catch (e) {
+            // localStorage may throw in some sandboxes — default to the fix.
+            return true;
+        }
+    }
+
+    /**
+     * Initialize the mediabunny frame-accurate backend for this source and adopt
+     * its authoritative frame count / fps. Leaves the HTML5 `<video>` element in
+     * place for playback + as the getFrame fallback.
+     */
+    async _initMediabunny(source) {
+        var SIO = (typeof window !== 'undefined') ? window.SleapIO : null;
+        var Backend = SIO && SIO.MediaBunnyVideoBackend;
+        if (!Backend || typeof Backend.fromBlob !== 'function') {
+            throw new Error('MediaBunnyVideoBackend unavailable (sleap-io.js not loaded)');
+        }
+        var name = (source && source.name) ? source.name : 'video.mp4';
+        this._mbBackend = await Backend.fromBlob(source, name, { cacheSize: this.cacheSize });
+
+        // Adopt mediabunny's authoritative frame count + fps. Keep `this.samples`
+        // as the frame-count carrier the rest of the class reads (`.length`),
+        // resizing it to match so bounds checks and the timeline agree.
+        var n = this._mbBackend.numFrames;
+        if (n && n !== this.samples.length) {
+            var resized = new Array(n);
+            for (var i = 0; i < n; i++) {
+                resized[i] = this.samples[i] || { index: i, is_sync: false, offset: 0, size: 0 };
+            }
+            this.samples = resized;
+        }
+        if (this._mbBackend.fps && this._mbBackend.fps > 0) {
+            this._fps = this._mbBackend.fps;
+        }
+        videoLog("Mediabunny ready: " + n + " frames, fps=" + (this._fps ? this._fps.toFixed(2) : '?')
+            + " (frame-accurate decode)");
     }
 
     _emitProgress(event) {
@@ -389,6 +468,19 @@ export class OnDemandVideoDecoder {
             this.cache.delete(frameIndex);
             this.cache.set(frameIndex, cached);
             return cached;
+        }
+
+        // Frame-accurate mediabunny backend (opt-in, issue #115). It owns its
+        // own cache; on any miss/error we fall through to the HTML5 seek path so
+        // a frame is always returned.
+        if (this._mbBackend) {
+            try {
+                var mbFrame = await this._mbBackend.getFrame(frameIndex);
+                if (mbFrame) return mbFrame;
+                videoLog("Mediabunny returned no frame for " + frameIndex + ", falling back to HTML5", "warn");
+            } catch (e) {
+                videoLog("Mediabunny decode failed for frame " + frameIndex + ": " + e.message + ", falling back to HTML5", "warn");
+            }
         }
 
         // Try WebCodecs path if mp4box is initialized
@@ -694,10 +786,19 @@ export class OnDemandVideoDecoder {
 
     /**
      * Get the current frame index based on the video element's currentTime.
+     *
+     * Uses `floor` (not `round`): the <video> element displays the frame whose
+     * presentation interval [i/fps, (i+1)/fps) contains `currentTime`, i.e.
+     * `floor(currentTime * fps)`. `round` overshoots by one once `currentTime`
+     * passes a frame's midpoint, which made the pose overlay run ONE FRAME AHEAD
+     * of the video during playback and when paused (a pre-existing bug the
+     * frame-accurate mediabunny backend exposed, since stepping is now exact so
+     * the mismatch is visible). Only the playback loop calls this. The small
+     * epsilon absorbs float error at exact frame boundaries.
      */
     getCurrentFrameIndex() {
         if (!this._videoEl) return 0;
-        return Math.round(this._videoEl.currentTime * this._fps);
+        return Math.floor(this._videoEl.currentTime * this._fps + 1e-6);
     }
 
     /**
@@ -725,6 +826,42 @@ export class OnDemandVideoDecoder {
         if (this._videoEl) {
             this._videoEl.currentTime = frameIndex / this._fps;
         }
+    }
+
+    /**
+     * Seek the HTML5 video element to a frame and resolve once the seek has
+     * SETTLED (the `seeked` event), so a following `play()` isn't rejected for
+     * racing an in-flight seek. Resolves immediately if already on the frame.
+     *
+     * This matters because the frame-accurate mediabunny backend decodes without
+     * moving `_videoEl.currentTime`, so after scrubbing the element is stale and
+     * `startPlayback`'s pre-play seek is a REAL seek. Calling `play()` while that
+     * seek is in flight makes the browser reject it (silently, via playNative's
+     * `.catch`), which left playback stuck — "play does nothing after scrubbing"
+     * (issue #115 followup). Bounded by a timeout so a missing `seeked` never
+     * wedges playback.
+     */
+    seekNativeSettled(frameIndex) {
+        var self = this;
+        return new Promise(function (resolve) {
+            var el = self._videoEl;
+            if (!el) return resolve();
+            var time = frameIndex / self._fps;
+            var framePeriod = (self._fps > 0) ? (1 / self._fps) : (1 / 30);
+            if (Math.abs(el.currentTime - time) <= framePeriod / 2) {
+                return resolve();   // already on this frame — no seek needed
+            }
+            var done = false;
+            function finish() {
+                if (done) return;
+                done = true;
+                el.removeEventListener('seeked', finish);
+                resolve();
+            }
+            el.addEventListener('seeked', finish, { once: true });
+            setTimeout(finish, 2000);   // never hang if `seeked` doesn't fire
+            el.currentTime = time;
+        });
     }
 
     /**
@@ -840,6 +977,12 @@ export class OnDemandVideoDecoder {
                 this.decoder.close();
             } catch (_) {}
             this.decoder = null;
+        }
+
+        // Release the mediabunny backend (frees its Input/decoder + cached frames)
+        if (this._mbBackend) {
+            try { this._mbBackend.close(); } catch (_) {}
+            this._mbBackend = null;
         }
 
         // Release HTML5 video element
@@ -1109,6 +1252,12 @@ export class VideoController {
      * to keep the UI responsive during fast mouse drags.
      */
     scrubToFrame(frame) {
+        // Scrubbing implies pausing. Stop native playback first so the rAF play
+        // loop and the scrub don't fight over the frame and `state.isPlaying`
+        // stays consistent with reality (a stuck `isPlaying` makes the play
+        // button no-op — issue #115 followup).
+        if (this.state.isPlaying) this.stopPlayback();
+
         this._scrubTarget = frame;
 
         if (this._isSeeking) {
@@ -1152,6 +1301,168 @@ export class VideoController {
     }
 
     /**
+     * Whether buffered mediabunny playback is enabled. OPT-IN only
+     * (`window.LUCID_PLAYBACK_BACKEND='buffered'` / `'mediabunny'`): the
+     * buffered path is frame-accurate but DECODE-BOUND — WebCodecs can't
+     * software-decode real-time multi-view HEVC, so it plays in choppy spurts.
+     * The native <video> path (default) plays smoothly; frame-accurate STEPPING
+     * still uses the mediabunny backend regardless of this setting, so only
+     * continuous playback differs.
+     */
+    _bufferedPlaybackEnabled() {
+        try {
+            var flag = (typeof window !== 'undefined') && window.LUCID_PLAYBACK_BACKEND;
+            return flag === 'buffered' || flag === 'mediabunny';
+        } catch (_) { /* ignore */ }
+        return false;
+    }
+
+    /**
+     * Buffered, video-led playback off the mediabunny decode cache.
+     *
+     * Producer: `pump(view)` keeps decoding CHUNK-sized ranges ahead of the
+     * playhead into each backend's LRU cache (serialized per backend via
+     * `view._mbBusy` so two `decodeRange` streams never run on one sink at once).
+     * The backend `cacheSize` is enlarged to `W + CHUNK + margin` so the whole
+     * read-ahead window survives eviction, and restored on stop.
+     *
+     * Consumer: a wall-clock rAF loop computes the real-time target frame, then
+     * advances `drawn` only to the newest frame <= target that is decoded in
+     * EVERY view (`allCached`). `paint(f)` draws each view's cached bitmap and
+     * the pose overlay for that SAME `f` synchronously — so the overlay can
+     * never lead the video. Under decode pressure it drops frames (jumps `drawn`
+     * forward to stay real-time) or holds the last frame during an underrun;
+     * either way video and overlay share one index. Tunables:
+     * `window.LUCID_PLAYBACK_BUFFER` (frames ahead), `LUCID_PLAYBACK_CHUNK`.
+     */
+    _startBufferedPlayback(views) {
+        var self = this;
+        var now = function () {
+            return (typeof performance !== 'undefined' && performance.now)
+                ? performance.now() : Date.now();
+        };
+        var fps = this.state.fps || (views[0].decoder && views[0].decoder._fps) || 30;
+        var speed = this.state.speedMultiplier || 1.0;
+        var startFrame = this.state.currentFrame;
+        var total = this.state.totalFrames;
+
+        var win = (typeof window !== 'undefined') ? window : {};
+        var W = win.LUCID_PLAYBACK_BUFFER || Math.max(24, Math.round(fps));   // ~1s read-ahead
+        var CHUNK = win.LUCID_PLAYBACK_CHUNK || 12;                            // decode granularity
+        var MARGIN = 16;
+
+        // Enlarge each backend's cache so the read-ahead window survives LRU
+        // eviction; remember the original size to restore on stop.
+        views.forEach(function (v) {
+            var b = v.decoder._mbBackend;
+            v._mbSavedCacheSize = b.cacheSize;
+            b.cacheSize = Math.max(b.cacheSize, W + CHUNK + MARGIN);
+            v._mbFrontier = startFrame;   // next frame index this view still needs decoded
+            v._mbBusy = false;
+        });
+        self._bufViews = views;   // for stopPlayback cleanup
+
+        self._playTarget = startFrame;
+        var drawn = startFrame - 1;
+        var startTime = now();
+
+        function pump(v) {
+            var b = v.decoder && v.decoder._mbBackend;
+            if (!b || v._mbBusy || !self.state.isPlaying) return;
+            var want = Math.min(self._playTarget + W, total - 1);
+            var start = Math.max(v._mbFrontier, drawn + 1);   // skip frames already passed
+            if (start > want) { v._mbFrontier = start; return; }   // buffer full enough
+            var end = Math.min(start + CHUNK - 1, want);
+            v._mbBusy = true;
+            b.prefetch(start, end).then(function () {
+                v._mbFrontier = end + 1;
+                v._mbBusy = false;
+                if (self.state.isPlaying) pump(v);   // keep filling toward `want`
+            }).catch(function () { v._mbBusy = false; });
+        }
+
+        function allCached(f) {
+            for (var i = 0; i < views.length; i++) {
+                var b = views[i].decoder._mbBackend;
+                if (!b || !b.cache || !b.cache.has(f)) return false;
+            }
+            return true;
+        }
+
+        // Optional instrumentation (window.LUCID_PLAYBACK_DEBUG) — one line/sec:
+        // achieved fps, mean video-draw ms, mean overlay ms, underrun ratio and
+        // buffer depth. This tells us whether playback is DECODE-bound (high
+        // underrun, deep buffer never fills) or OVERLAY-bound (high overlay ms).
+        var DEBUG = !!(win.LUCID_PLAYBACK_DEBUG);
+        var dbg = { painted: 0, drawMs: 0, ovMs: 0, under: 0, ticks: 0, last: startTime };
+
+        function paint(f) {
+            var t0 = DEBUG ? now() : 0;
+            for (var i = 0; i < views.length; i++) {
+                var view = views[i];
+                var b = view.decoder._mbBackend;
+                var bmp = b.cache.get(f);
+                if (bmp && view.ctx && view.canvas) {
+                    // Touch LRU order so the just-shown frame isn't evicted next.
+                    b.cache.delete(f); b.cache.set(f, bmp);
+                    view.ctx.drawImage(bmp, 0, 0, view.canvas.width, view.canvas.height);
+                }
+                if (view.overlayCtx && view.overlayCanvas) {
+                    view.overlayCtx.clearRect(0, 0, view.overlayCanvas.width, view.overlayCanvas.height);
+                }
+            }
+            var t1 = DEBUG ? now() : 0;
+            self.state.currentFrame = f;
+            if (self.callbacks.drawOverlays) self.callbacks.drawOverlays(f);
+            if (self.callbacks.updateSeekbar) self.callbacks.updateSeekbar(f);
+            if (DEBUG) { dbg.painted++; dbg.drawMs += (t1 - t0); dbg.ovMs += (now() - t1); }
+        }
+
+        function loop() {
+            if (!self.state.isPlaying) return;
+            var elapsed = (now() - startTime) / 1000;
+            var target = startFrame + Math.floor(elapsed * fps * speed);
+            if (target > total - 1) target = total - 1;
+            self._playTarget = target;
+
+            if (target > drawn) {
+                // Advance to the newest frame <= target decoded in ALL views.
+                var f = target;
+                while (f > drawn && !allCached(f)) f--;
+                if (f > drawn) { drawn = f; paint(f); }
+                else if (DEBUG) { dbg.under++; }   // underrun — held last frame
+            }
+
+            for (var i = 0; i < views.length; i++) pump(views[i]);
+
+            if (DEBUG) {
+                dbg.ticks++;
+                var tn = now();
+                if (tn - dbg.last >= 1000) {
+                    var secs = (tn - dbg.last) / 1000;
+                    var minFrontier = Infinity;
+                    for (var vi = 0; vi < views.length; vi++) {
+                        minFrontier = Math.min(minFrontier, views[vi]._mbFrontier);
+                    }
+                    videoLog('[buffered] ' + (dbg.painted / secs).toFixed(1) + ' fps'
+                        + ' | draw ' + (dbg.painted ? (dbg.drawMs / dbg.painted).toFixed(1) : '0') + 'ms'
+                        + ' overlay ' + (dbg.painted ? (dbg.ovMs / dbg.painted).toFixed(1) : '0') + 'ms'
+                        + ' | underrun ' + dbg.under + '/' + dbg.ticks
+                        + ' | buffered ' + (minFrontier - 1 - drawn) + ' ahead (drawn=' + drawn + ' target=' + target + ')');
+                    dbg.painted = 0; dbg.drawMs = 0; dbg.ovMs = 0; dbg.under = 0; dbg.ticks = 0; dbg.last = tn;
+                }
+            }
+
+            if (drawn >= total - 1 && target >= total - 1) { self.stopPlayback(); return; }
+            self._playRAF = requestAnimationFrame(loop);
+        }
+
+        // Prime the buffer, then start the clock/loop.
+        for (var i = 0; i < views.length; i++) pump(views[i]);
+        self._playRAF = requestAnimationFrame(loop);
+    }
+
+    /**
      * Start playback using native HTML5 video play + requestAnimationFrame.
      * This is much faster than per-frame seeking because the browser handles
      * decoding natively and we just draw the current video frame each animation frame.
@@ -1162,6 +1473,31 @@ export class VideoController {
         this.state.isPlaying = true;
         var self = this;
 
+        // ------------------------------------------------------------------
+        // Buffered mediabunny playback (issue #115 follow-up) — OPT-IN.
+        //
+        // The buffered path is VIDEO-LED and frame-accurate: it only advances to
+        // a frame already decoded in the cache of EVERY view, then paints that
+        // frame's video bitmap AND its pose overlay for the SAME index in one
+        // synchronous pass, so the overlay can never lead the video. BUT it is
+        // decode-bound — WebCodecs can't sustain real-time multi-view HEVC
+        // decode, so it plays in choppy spurts. It is therefore OPT-IN only
+        // (`_bufferedPlaybackEnabled()`, via `window.LUCID_PLAYBACK_BACKEND`);
+        // the default is the smooth native <video> path below. Frame-accurate
+        // stepping/seeking uses the mediabunny backend on BOTH paths, so only
+        // continuous playback differs.
+        var allViews = this.state.views.filter(function (v) { return v.decoder; });
+        var mbViews = allViews.filter(function (v) { return v.decoder._mbBackend; });
+        if (allViews.length > 0 && mbViews.length === allViews.length
+            && this._bufferedPlaybackEnabled()) {
+            this._startBufferedPlayback(allViews);
+            if (this.callbacks.onPlaybackStateChange) {
+                this.callbacks.onPlaybackStateChange(true);
+            }
+            videoLog("Playback started (buffered mediabunny)");
+            return;
+        }
+
         // Start native playback on all decoders
         // Compute effective playback rate: (desired FPS / native FPS) * speed multiplier
         var speedMult = this.state.speedMultiplier || 1.0;
@@ -1170,59 +1506,91 @@ export class VideoController {
             ? views[0].decoder.samples.length / (views[0].decoder.videoTrack.duration / views[0].decoder.videoTrack.timescale)
             : (this.state.fps || 30);
         var rate = ((this.state.fps || 30) / nativeFps) * speedMult;
-        for (var i = 0; i < views.length; i++) {
-            var d = views[i].decoder;
-            if (d.seekNative) {
-                if (d._videoEl) d._videoEl.playbackRate = rate;
-                d.seekNative(this.state.currentFrame);
-                d.playNative();
+        // Seek every view to the current frame and WAIT for the seek to settle
+        // before calling play(): play() while a seek is in flight is rejected by
+        // the browser (swallowed by playNative's `.catch`), which left playback
+        // stuck after scrubbing (issue #115 followup — mediabunny stepping no
+        // longer moves `_videoEl.currentTime`, so this pre-play seek is real).
+        var startFrame = this.state.currentFrame;
+        Promise.all(views.map(function (v) {
+            var d = v.decoder;
+            if (d._videoEl) d._videoEl.playbackRate = rate;
+            if (typeof d.seekNativeSettled === 'function') return d.seekNativeSettled(startFrame);
+            if (d.seekNative) d.seekNative(startFrame);
+            return Promise.resolve();
+        })).then(function () {
+            if (!self.state.isPlaying) return;   // user paused during the seek wait
+            for (var i = 0; i < views.length; i++) {
+                if (views[i].decoder.playNative) views[i].decoder.playNative();
             }
-        }
+            startLoop();
+        });
 
-        // Use requestAnimationFrame to draw frames and update UI in sync
-        function onFrame() {
-            if (!self.state.isPlaying) return;
-
-            var currentViews = self.state.views.filter(function (v) { return v.decoder; });
-            var frameIdx = self.state.currentFrame;
-
-            // Get current frame index from first decoder
-            if (currentViews.length > 0 && currentViews[0].decoder.getCurrentFrameIndex) {
-                frameIdx = currentViews[0].decoder.getCurrentFrameIndex();
-            }
-
-            if (frameIdx >= self.state.totalFrames) {
-                self.stopPlayback();
-                return;
-            }
-
+        // Draw one playback frame: paint the video and the pose overlay for the
+        // SAME index — `frameIdx`, which is the presented-frame index from rVFC
+        // `mediaTime` (so it tracks the frame actually on screen, not the clock).
+        // Returns false if playback should stop (past the end / paused).
+        function drawPlaybackFrame(frameIdx) {
+            if (!self.state.isPlaying) return false;
+            if (frameIdx >= self.state.totalFrames) { self.stopPlayback(); return false; }
             self.state.currentFrame = frameIdx;
 
-            // Draw each view directly from its video element (fast - no async)
+            var currentViews = self.state.views.filter(function (v) { return v.decoder; });
             for (var j = 0; j < currentViews.length; j++) {
                 var view = currentViews[j];
                 if (view.decoder.drawCurrentFrame) {
                     view.decoder.drawCurrentFrame(view.ctx, view.canvas.width, view.canvas.height);
                 }
-
-                // Clear overlay for redraw
                 if (view.overlayCtx && view.overlayCanvas) {
                     view.overlayCtx.clearRect(0, 0, view.overlayCanvas.width, view.overlayCanvas.height);
                 }
             }
-
-            // Update overlays and seekbar
-            if (self.callbacks.drawOverlays) {
-                self.callbacks.drawOverlays(frameIdx);
-            }
-            if (self.callbacks.updateSeekbar) {
-                self.callbacks.updateSeekbar(frameIdx);
-            }
-
-            self._playRAF = requestAnimationFrame(onFrame);
+            if (self.callbacks.drawOverlays) self.callbacks.drawOverlays(frameIdx);
+            if (self.callbacks.updateSeekbar) self.callbacks.updateSeekbar(frameIdx);
+            return true;
         }
 
-        this._playRAF = requestAnimationFrame(onFrame);
+        function startLoop() {
+            var live = self.state.views.filter(function (v) { return v.decoder; });
+            var primaryDec = live.length ? live[0].decoder : null;
+            var primaryEl = primaryDec && primaryDec._videoEl;
+            var fps = (primaryDec && primaryDec._fps) || self.state.fps || 30;
+
+            // Prefer requestVideoFrameCallback: its `metadata.mediaTime` is the
+            // timestamp of the frame ACTUALLY PRESENTED on screen. Deriving the
+            // overlay frame from that (instead of the <video>.currentTime clock,
+            // which leads the painted frame by the decode/compositor latency)
+            // keeps the pose overlay locked to the displayed video frame — fixes
+            // "the tracking leads the video during playback" (issue #115 followup).
+            if (primaryEl && typeof primaryEl.requestVideoFrameCallback === 'function') {
+                videoLog('Playback loop: requestVideoFrameCallback (presented-frame accurate)');
+                var onVF = function (now, metadata) {
+                    if (!self.state.isPlaying) return;
+                    var t = (metadata && typeof metadata.mediaTime === 'number')
+                        ? metadata.mediaTime : primaryEl.currentTime;
+                    if (typeof window !== 'undefined' && window.LUCID_PLAYBACK_DEBUG) {
+                        videoLog('rVFC mediaTime=' + t.toFixed(4) + ' currentTime=' + primaryEl.currentTime.toFixed(4)
+                            + ' → frame ' + Math.round(t * fps));
+                    }
+                    if (drawPlaybackFrame(Math.round(t * fps))) {
+                        self._playRVFCEl = primaryEl;
+                        self._playRVFC = primaryEl.requestVideoFrameCallback(onVF);
+                    }
+                };
+                self._playRVFCEl = primaryEl;
+                self._playRVFC = primaryEl.requestVideoFrameCallback(onVF);
+            } else {
+                // Fallback (no rVFC): rAF loop; getCurrentFrameIndex uses floor.
+                videoLog('Playback loop: requestAnimationFrame fallback (no requestVideoFrameCallback)');
+                var onFrame = function () {
+                    if (!self.state.isPlaying) return;
+                    var d0 = (self.state.views.filter(function (v) { return v.decoder; })[0] || {}).decoder;
+                    var frameIdx = (d0 && d0.getCurrentFrameIndex) ? d0.getCurrentFrameIndex() : self.state.currentFrame;
+                    if (drawPlaybackFrame(frameIdx)) self._playRAF = requestAnimationFrame(onFrame);
+                };
+                self._playRAF = requestAnimationFrame(onFrame);
+            }
+        }
 
         if (this.callbacks.onPlaybackStateChange) {
             this.callbacks.onPlaybackStateChange(true);
@@ -1235,15 +1603,39 @@ export class VideoController {
      * Stop playback.
      */
     stopPlayback() {
+        var wasPlaying = this.state.isPlaying;
         // Cancel animation frame
         if (this._playRAF) {
             cancelAnimationFrame(this._playRAF);
             this._playRAF = null;
         }
+        // Cancel the requestVideoFrameCallback playback loop, if used.
+        if (this._playRVFC != null) {
+            try {
+                if (this._playRVFCEl && typeof this._playRVFCEl.cancelVideoFrameCallback === 'function') {
+                    this._playRVFCEl.cancelVideoFrameCallback(this._playRVFC);
+                }
+            } catch (e) { /* non-fatal */ }
+            this._playRVFC = null;
+            this._playRVFCEl = null;
+        }
         // Clear legacy interval if any
         if (this.state.playInterval) {
             clearInterval(this.state.playInterval);
             this.state.playInterval = null;
+        }
+
+        // Restore the mediabunny backend cache sizes bumped for buffered
+        // playback (so idle/seek memory returns to the smaller working set).
+        if (this._bufViews) {
+            for (var b = 0; b < this._bufViews.length; b++) {
+                var bv = this._bufViews[b];
+                if (bv.decoder && bv.decoder._mbBackend && typeof bv._mbSavedCacheSize === 'number') {
+                    bv.decoder._mbBackend.cacheSize = bv._mbSavedCacheSize;
+                }
+                bv._mbBusy = false;
+            }
+            this._bufViews = null;
         }
 
         // Pause all native video elements
@@ -1256,11 +1648,42 @@ export class VideoController {
 
         this.state.isPlaying = false;
 
+        // Settle the info panel, timeline playhead, and 3D viewport to the exact
+        // final frame: during playback those auxiliary updates are throttled
+        // (~10 Hz), so on stop they can be up to one throttle window stale. With
+        // isPlaying now false these run the full, unthrottled updates.
+        if (wasPlaying) {
+            try { if (this.callbacks.drawOverlays) this.callbacks.drawOverlays(this.state.currentFrame); } catch (e) { /* non-fatal */ }
+            try { if (this.callbacks.updateSeekbar) this.callbacks.updateSeekbar(this.state.currentFrame); } catch (e) { /* non-fatal */ }
+        }
+
         if (this.callbacks.onPlaybackStateChange) {
             this.callbacks.onPlaybackStateChange(false);
         }
 
         videoLog("Playback stopped");
+    }
+
+    /**
+     * User-initiated pause. Stops playback, then does a frame-accurate mediabunny
+     * seek ONE FRAME FORWARD so we land exactly on-frame with the pose overlay.
+     *
+     * Native <video> playback can settle a hair off (the residual "tracking
+     * leads the video" lag), and the user already found that pressing "next
+     * frame" after pausing snaps everything back into place — because a step
+     * goes through the frame-accurate mediabunny decode path. This just does
+     * that step automatically on pause. Internal stops (scrub, teardown,
+     * end-of-video) call `stopPlayback()` directly and skip this snap, so only
+     * the explicit pause buttons advance/realign.
+     */
+    pausePlayback() {
+        var wasPlaying = this.state.isPlaying;
+        this.stopPlayback();
+        if (!wasPlaying) return;
+        var target = Math.min(this.state.currentFrame + 1, (this.state.totalFrames || 1) - 1);
+        // seekToFrame decodes via the frame-accurate mediabunny backend and
+        // redraws the video + overlay for the SAME index → guaranteed aligned.
+        this.seekToFrame(target);
     }
 
     /**
