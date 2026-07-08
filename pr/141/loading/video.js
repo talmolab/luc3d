@@ -786,10 +786,19 @@ export class OnDemandVideoDecoder {
 
     /**
      * Get the current frame index based on the video element's currentTime.
+     *
+     * Uses `floor` (not `round`): the <video> element displays the frame whose
+     * presentation interval [i/fps, (i+1)/fps) contains `currentTime`, i.e.
+     * `floor(currentTime * fps)`. `round` overshoots by one once `currentTime`
+     * passes a frame's midpoint, which made the pose overlay run ONE FRAME AHEAD
+     * of the video during playback and when paused (a pre-existing bug the
+     * frame-accurate mediabunny backend exposed, since stepping is now exact so
+     * the mismatch is visible). Only the playback loop calls this. The small
+     * epsilon absorbs float error at exact frame boundaries.
      */
     getCurrentFrameIndex() {
         if (!this._videoEl) return 0;
-        return Math.round(this._videoEl.currentTime * this._fps);
+        return Math.floor(this._videoEl.currentTime * this._fps + 1e-6);
     }
 
     /**
@@ -817,6 +826,42 @@ export class OnDemandVideoDecoder {
         if (this._videoEl) {
             this._videoEl.currentTime = frameIndex / this._fps;
         }
+    }
+
+    /**
+     * Seek the HTML5 video element to a frame and resolve once the seek has
+     * SETTLED (the `seeked` event), so a following `play()` isn't rejected for
+     * racing an in-flight seek. Resolves immediately if already on the frame.
+     *
+     * This matters because the frame-accurate mediabunny backend decodes without
+     * moving `_videoEl.currentTime`, so after scrubbing the element is stale and
+     * `startPlayback`'s pre-play seek is a REAL seek. Calling `play()` while that
+     * seek is in flight makes the browser reject it (silently, via playNative's
+     * `.catch`), which left playback stuck — "play does nothing after scrubbing"
+     * (issue #115 followup). Bounded by a timeout so a missing `seeked` never
+     * wedges playback.
+     */
+    seekNativeSettled(frameIndex) {
+        var self = this;
+        return new Promise(function (resolve) {
+            var el = self._videoEl;
+            if (!el) return resolve();
+            var time = frameIndex / self._fps;
+            var framePeriod = (self._fps > 0) ? (1 / self._fps) : (1 / 30);
+            if (Math.abs(el.currentTime - time) <= framePeriod / 2) {
+                return resolve();   // already on this frame — no seek needed
+            }
+            var done = false;
+            function finish() {
+                if (done) return;
+                done = true;
+                el.removeEventListener('seeked', finish);
+                resolve();
+            }
+            el.addEventListener('seeked', finish, { once: true });
+            setTimeout(finish, 2000);   // never hang if `seeked` doesn't fire
+            el.currentTime = time;
+        });
     }
 
     /**
@@ -1207,6 +1252,12 @@ export class VideoController {
      * to keep the UI responsive during fast mouse drags.
      */
     scrubToFrame(frame) {
+        // Scrubbing implies pausing. Stop native playback first so the rAF play
+        // loop and the scrub don't fight over the frame and `state.isPlaying`
+        // stays consistent with reality (a stuck `isPlaying` makes the play
+        // button no-op — issue #115 followup).
+        if (this.state.isPlaying) this.stopPlayback();
+
         this._scrubTarget = frame;
 
         if (this._isSeeking) {
@@ -1268,14 +1319,25 @@ export class VideoController {
             ? views[0].decoder.samples.length / (views[0].decoder.videoTrack.duration / views[0].decoder.videoTrack.timescale)
             : (this.state.fps || 30);
         var rate = ((this.state.fps || 30) / nativeFps) * speedMult;
-        for (var i = 0; i < views.length; i++) {
-            var d = views[i].decoder;
-            if (d.seekNative) {
-                if (d._videoEl) d._videoEl.playbackRate = rate;
-                d.seekNative(this.state.currentFrame);
-                d.playNative();
+        // Seek every view to the current frame and WAIT for the seek to settle
+        // before calling play(): play() while a seek is in flight is rejected by
+        // the browser (swallowed by playNative's `.catch`), which left playback
+        // stuck after scrubbing (issue #115 followup — mediabunny stepping no
+        // longer moves `_videoEl.currentTime`, so this pre-play seek is real).
+        var startFrame = this.state.currentFrame;
+        Promise.all(views.map(function (v) {
+            var d = v.decoder;
+            if (d._videoEl) d._videoEl.playbackRate = rate;
+            if (typeof d.seekNativeSettled === 'function') return d.seekNativeSettled(startFrame);
+            if (d.seekNative) d.seekNative(startFrame);
+            return Promise.resolve();
+        })).then(function () {
+            if (!self.state.isPlaying) return;   // user paused during the seek wait
+            for (var i = 0; i < views.length; i++) {
+                if (views[i].decoder.playNative) views[i].decoder.playNative();
             }
-        }
+            self._playRAF = requestAnimationFrame(onFrame);
+        });
 
         // Use requestAnimationFrame to draw frames and update UI in sync
         function onFrame() {
@@ -1319,8 +1381,8 @@ export class VideoController {
 
             self._playRAF = requestAnimationFrame(onFrame);
         }
-
-        this._playRAF = requestAnimationFrame(onFrame);
+        // NOTE: the rAF loop is started in the seek-settle `.then()` above, not
+        // here — so drawing begins only once the video is actually at the frame.
 
         if (this.callbacks.onPlaybackStateChange) {
             this.callbacks.onPlaybackStateChange(true);

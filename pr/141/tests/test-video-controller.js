@@ -219,8 +219,11 @@
             ctrl.stopPlayback();
         });
 
-        it('startPlayback calls playNative on decoders', function () {
+        it('startPlayback calls playNative on decoders', async function () {
             ctrl.startPlayback();
+            // play() now starts only AFTER the pre-play seek settles (async), so
+            // flush microtasks/timers before asserting (issue #115 followup).
+            await new Promise(function (r) { setTimeout(r, 0); });
             for (var i = 0; i < state.views.length; i++) {
                 assertTrue(state.views[i].decoder.playingNative,
                     'Decoder ' + i + ' should be playing');
@@ -237,8 +240,10 @@
             }
         });
 
-        it('stopPlayback cancels animation frame', function () {
+        it('stopPlayback cancels animation frame', async function () {
             ctrl.startPlayback();
+            // the rAF loop now starts after the pre-play seek settles (async).
+            await new Promise(function (r) { setTimeout(r, 0); });
             assertNotNull(ctrl._playRAF, 'Should have RAF handle');
             ctrl.stopPlayback();
             // _playRAF should be cleared
