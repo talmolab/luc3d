@@ -1324,8 +1324,18 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
         var pt = (src == null) ? undefined : inst.points[src];
         var isNulled = nulledNodes && src != null && nulledNodes.has(src);
         var entry;
-        if (pt == null || isNulled) {
+        if (pt == null) {
+            // Genuinely missing point → NaN / invisible.
             entry = { xy: [NaN, NaN], visible: false, complete: false };
+        } else if (isNulled) {
+            // Occluded-but-positioned (nulledNodes): KEEP the real position and
+            // mark it invisible/occluded. The nulledNodes flag round-trips
+            // separately via instance metadata (buildSlpLabelsAllViews /
+            // slp-streaming-write.js), so on reload the node comes back BOTH
+            // positioned and flagged occluded. Writing NaN here (the old
+            // behavior) discarded the position, so an occluded node reloaded as
+            // null and vanished from the skeleton (SLP round-trip occlusion loss).
+            entry = { xy: [pt[0], pt[1]], visible: false, complete: true };
         } else {
             var occ = inst.occluded && inst.occluded[src];
             entry = { xy: [pt[0], pt[1]], visible: !occ, complete: true };
