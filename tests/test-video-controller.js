@@ -240,6 +240,33 @@
             }
         });
 
+        it('pausePlayback stops and steps one frame forward (frame-accurate snap)', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            state.currentFrame = 10;
+            ctrl.pausePlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });   // seekToFrame is async
+            assertFalse(state.isPlaying, 'paused');
+            assertEqual(state.currentFrame, 11, 'snapped one frame forward via frame-accurate seek');
+        });
+
+        it('pausePlayback clamps at the last frame', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            state.currentFrame = state.totalFrames - 1;   // 99
+            ctrl.pausePlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertEqual(state.currentFrame, state.totalFrames - 1, 'does not advance past the last frame');
+        });
+
+        it('pausePlayback does not snap when not playing', async function () {
+            state.currentFrame = 20;
+            assertFalse(state.isPlaying);
+            ctrl.pausePlayback();   // no-op snap (wasPlaying false)
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertEqual(state.currentFrame, 20, 'no forward step when already paused');
+        });
+
         it('stopPlayback cancels animation frame', async function () {
             ctrl.startPlayback();
             // the rAF loop now starts after the pre-play seek settles (async).

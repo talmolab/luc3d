@@ -1144,7 +1144,15 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   for direct callers; the user-facing default comes from here.)
 - `drawAllOverlays(frameIdx)` — main per-frame redraw across every view. Threads
   `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
-  into each `drawFrameOverlays` call.
+  into each `drawFrameOverlays` call. **Playback throttle (issue #115):** the
+  skeleton overlays + video redraw every frame, but the two *auxiliary* updates —
+  `updateFrameInfo` (info-panel DOM + reproj-error aggregation) and
+  `timeline.setCurrentFrame` (a full timeline-canvas `redraw()`) — are coalesced
+  to ~10 Hz (`AUX_UPDATE_MS`) while `state.isPlaying`, since neither is legible at
+  playback speed and both were a per-frame cost capping buffered-playback fps.
+  When paused (seek/step) they run every call; `VideoController.stopPlayback`
+  fires one final unthrottled `drawAllOverlays` so the panel/playhead settle to
+  the exact stop frame.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
 **Imports from project modules.**
@@ -2211,8 +2219,8 @@ nodes like the tail visibly mismatch. By default `init()` builds a
 `lib/mediabunny/`) via `_initMediabunny(source)` and adopts its
 authoritative frame count / fps; `getFrame()` then decodes exact frames
 through mediabunny (`sink.getSample(_frameTimes[i])`), transparently
-falling back to the HTML5 seek on any init/decode failure. Playback still
-uses the HTML5 element. `_mediabunnyEnabled()` is ON unless
+falling back to the HTML5 seek on any init/decode failure.
+`_mediabunnyEnabled()` is ON unless
 `LUCID_VIDEO_BACKEND` (from `window` or `localStorage`) is `'html5'` /
 `'legacy'` — default-on (rather than opt-in) because `localStorage` is
 per-origin, so an opt-in flag silently disables the fix on any origin
@@ -2221,6 +2229,40 @@ hardware; note it couldn't be validated headless (headless *software*
 decode is itself frame-inaccurate — every WebCodecs decoder, incl.
 mediabunny and a raw `<video>`, shows the same offset). Pose data imports
 and exports correctly regardless — this bug is display-only.
+
+**Playback overlay/video sync — native default + per-frame throttling
+(issue #115 follow-up).** During playback the pose overlay drifted a few
+frames AHEAD of the video ("the tracking leads the video"; stepping one
+frame snapped it back). The root cost was that per playback frame the app
+ran three heavy updates in addition to the video+skeleton draw:
+`updateFrameInfo` + timeline `redraw()` (throttled in `rendering.js`) and
+`update3DViewport` — a full Three.js scene rebuild+render wired through
+`updateSeekbar` (throttled in `ui-wiring.js`), plus per-frame `[3D]`
+`console.log` spam (now gated behind `window.LUCID_3D_DEBUG`). With those
+coalesced to ~10 Hz during playback, the native `<video>` +
+`requestVideoFrameCallback` overlay keeps up frame-to-frame. **Native
+playback is the default** (smooth); `VideoController.stopPlayback` fires a
+final unthrottled overlay/seekbar update so info panel, timeline, and 3D
+settle to the exact stop frame.
+
+*Buffered mediabunny playback (`_startBufferedPlayback`) is OPT-IN* via
+`window.LUCID_PLAYBACK_BACKEND='buffered'`/`'mediabunny'`
+(`_bufferedPlaybackEnabled()`). It is VIDEO-LED and frame-accurate — a
+producer (`pump(view)`) decodes CHUNK-sized ranges ahead of the playhead
+into each backend's LRU cache (serialized per backend via `view._mbBusy`;
+`cacheSize` bumped to `W+CHUNK+margin` and restored on stop), and a
+wall-clock rAF loop advances `drawn` only to the newest frame `<= target`
+decoded in EVERY view, then `paint(f)` draws each view's cached bitmap AND
+the overlay for that SAME `f` synchronously, so the overlay can never lead
+the video. BUT it is DECODE-BOUND: WebCodecs can't sustain real-time
+multi-view HEVC decode, so it plays in choppy spurts — hence opt-in, not
+default. Tunables: `LUCID_PLAYBACK_BUFFER` (frames ahead, default
+`max(24, fps)`), `LUCID_PLAYBACK_CHUNK` (default 12), `LUCID_PLAYBACK_DEBUG`
+(per-second fps / draw-ms / overlay-ms / underrun readout to diagnose
+decode- vs overlay-bound). Frame-accurate STEPPING uses the mediabunny
+backend on both paths. The sync invariant (overlay never leads) is
+unit-tested with a mock backend (`tests/test-playback-buffered.js`);
+smoothness can only be validated on real hardware.
 
 **Zoom/pan resize anchoring.** Zoom pan offset (`view.zoom.offsetX/offsetY`) is
 screen-space px relative to the wrapper's base display size, which `applyZoom`
@@ -2239,6 +2281,12 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `hasFrame`, `close`.
 - `VideoController` — class. Selected methods: `seekToFrame`,
   `scrubToFrame`, `togglePlayback`, `startPlayback`, `stopPlayback`,
+  `pausePlayback` (user-pause: stop + frame-accurate mediabunny step one
+  frame forward so the video lands exactly on-frame with the pose overlay,
+  issue #115 — the play button and spacebar call this, internal stops call
+  `stopPlayback`),
+  `_startBufferedPlayback` / `_bufferedPlaybackEnabled` (buffered
+  video-led mediabunny playback, issue #115),
   `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
   `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
   `resetAllZoom`, `setupZoomHandlers`.
