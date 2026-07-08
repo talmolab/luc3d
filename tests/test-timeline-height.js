@@ -60,6 +60,37 @@
         return session;
     }
 
+    // Identity-mode analogue of buildSessionWithTracks: numIds identities,
+    // each occupying its own frame (per camera) with a per-frame identity
+    // override, so the timeline's 'identities' display mode yields one
+    // occupied row per identity.
+    function buildSessionWithIdentities(numIds, cameraNames) {
+        var skeleton = new Skeleton('test', ['a'], []);
+        var cameras = [];
+        for (var i = 0; i < cameraNames.length; i++) {
+            cameras.push(new Camera(cameraNames[i],
+                [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]));
+        }
+        var trackNames = [];
+        for (var t = 0; t < numIds; t++) trackNames.push('track_' + t);
+        var session = new Session(cameras, skeleton, trackNames);
+        var ids = [];
+        for (var k = 0; k < numIds; k++) ids.push(session.addIdentity('id_' + k));
+        for (var c = 0; c < cameraNames.length; c++) {
+            for (var t2 = 0; t2 < numIds; t2++) {
+                var inst = new Instance([[100, 100]], 0, 'user', 1);
+                inst.trackIdx = t2;
+                var frameIdx = c * numIds + t2;
+                var fg = session.getFrameGroup(frameIdx) || new FrameGroup(frameIdx);
+                fg.addInstance(cameraNames[c], inst);
+                if (!session.getFrameGroup(frameIdx)) session.addFrameGroup(fg);
+                session.setFrameIdentity(frameIdx, cameraNames[c], t2, ids[t2].id);
+            }
+        }
+        return session;
+    }
+
     describe('Timeline Prompt 95 - height + layout', function () {
         var container, tl;
 
@@ -175,6 +206,85 @@
             var h = parseFloat(el.style.height);
             assertTrue(h <= cap + 1, 'cap-mode clamps container to <= 30% of window (h=' + h + ', cap=' + cap + ')');
             assertLessThan(h, preferred, 'cap-mode does NOT balloon to the preferred height');
+            tl.destroy();
+        });
+
+        it('issue #137: keepSize collapses the track area on a new occupied row; cap keeps it visible', function () {
+            // Reproduces "Adding a new track makes the timeline disappear".
+            // The Instances-panel "(+) New Track" flow CREATES a track AND
+            // assigns it to instances, so a new *occupied* row appears. It
+            // used to refresh with { keepSize: true }, which skips the
+            // grow/resize step — so the extra row overflows the fit-to-content
+            // canvas and _computeLayout collapses the ENTIRE track area
+            // (showTracks === false). The Tracks-menu path never hit this
+            // because it creates an *empty* track (no new row). The fix routes
+            // the assignment refresh through { cap: true } so the container
+            // grows/resizes to fit the new row and the tracks stay visible.
+
+            // Start fit-to-content: setData grows a too-small container so it
+            // fits exactly the 3 existing track rows and nothing more.
+            var el = sized(40);
+            var tl = new Timeline(el, { totalFrames: 50 });
+            tl.setData(buildSessionWithTracks(3, ['cam1']));
+            var hFit3 = parseFloat(el.style.height);
+            assertEqual(hFit3, tl.getPreferredHeight(),
+                'precondition: container is fit-to-content for 3 tracks');
+            assertTrue(tl._computeLayout(hFit3).showTracks,
+                'precondition: all 3 track rows are visible at the fit height');
+
+            // Simulate "(+) New Track" + assign → a 4th occupied row.
+            var session4 = buildSessionWithTracks(4, ['cam1']);
+
+            // BUG path: keepSize must NOT touch the container height, so the
+            // 4th row no longer fits and the whole track area collapses.
+            tl.refreshTracks(session4, { keepSize: true });
+            assertEqual(parseFloat(el.style.height), hFit3,
+                'keepSize leaves the container height fixed');
+            assertFalse(tl._computeLayout(parseFloat(el.style.height)).showTracks,
+                'keepSize: the new occupied row overflows the fixed canvas → track area collapses (the #137 bug)');
+
+            // FIX path: cap grows/resizes so the 4th row fits and tracks stay up.
+            tl.refreshTracks(session4, { cap: true });
+            assertGreaterThan(parseFloat(el.style.height), hFit3,
+                'cap grows the container to fit the newly assigned track row');
+            assertTrue(tl._computeLayout(parseFloat(el.style.height)).showTracks,
+                'cap: the timeline resizes so the track area stays visible (the #137 fix)');
+            tl.destroy();
+        });
+
+        it('issue #137 (identities): keepSize collapses the ID rows on a new ID; cap keeps them visible', function () {
+            // The identity mirror of #137: the Instances-panel "(+) New ID"
+            // flow creates an identity AND assigns it, adding an occupied row
+            // in the "IDs"/"Both" timeline modes. It must refresh with
+            // { cap: true } (not { keepSize: true }) or _computeLayout
+            // collapses the whole row area in identity mode too.
+            var el = sized(40);
+            var tl = new Timeline(el, { totalFrames: 50 });
+            tl.setDisplayMode('identities');   // session still null → just sets the mode
+            tl.setData(buildSessionWithIdentities(3, ['cam1']));
+            var rows3 = tl._trackSegments.length;
+            assertEqual(rows3, 3, 'precondition: 3 identity rows built in identities mode');
+            var hFit3 = parseFloat(el.style.height);
+            assertEqual(hFit3, tl.getPreferredHeight(),
+                'precondition: container is fit-to-content for 3 identity rows');
+            assertTrue(tl._computeLayout(hFit3).showTracks,
+                'precondition: all 3 identity rows are visible at the fit height');
+
+            // Simulate "(+) New ID" + assign → a 4th occupied identity row.
+            var session4 = buildSessionWithIdentities(4, ['cam1']);
+
+            tl.refreshTracks(session4, { keepSize: true });
+            assertEqual(tl._trackSegments.length, 4, 'rebuilt to 4 identity rows');
+            assertEqual(parseFloat(el.style.height), hFit3,
+                'keepSize leaves the container height fixed');
+            assertFalse(tl._computeLayout(parseFloat(el.style.height)).showTracks,
+                'keepSize: the new identity row overflows the fixed canvas → row area collapses (#137 mirror)');
+
+            tl.refreshTracks(session4, { cap: true });
+            assertGreaterThan(parseFloat(el.style.height), hFit3,
+                'cap grows the container to fit the newly assigned identity row');
+            assertTrue(tl._computeLayout(parseFloat(el.style.height)).showTracks,
+                'cap: the ID timeline resizes so the row area stays visible (the #137 fix)');
             tl.destroy();
         });
 
