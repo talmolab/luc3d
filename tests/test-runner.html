@@ -74,7 +74,7 @@
         "imports": {
             "h5wasm": "../lib/h5wasm/hdf5_hl.js",
             "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
-            "mediabunny": "../lib/sleap-io/mediabunny-stub.js",
+            "mediabunny": "../lib/mediabunny/mediabunny.min.mjs",
             "pako": "../lib/pako/pako.esm.mjs"
         }
     }
@@ -122,6 +122,8 @@
     <script src="test-grouped-track-dropdown.js"></script>
     <script src="test-track-identity-modals.js"></script>
     <script src="test-video-controller.js"></script>
+    <script src="test-playback-frame-sync.js"></script>
+    <script src="test-playback-buffered.js"></script>
     <script src="test-multi-video.js"></script>
 
     <!-- Prompt 4 / Block 1 (Timeline visual updates):
@@ -211,6 +213,7 @@
 
     <!-- Issue #89: HTML5 seek tolerance must scale with frame rate (high-fps) -->
     <script src="test-html5-seek-tolerance.js"></script>
+    <script src="test-mediabunny-backend.js"></script>
 
     <!-- QoL: switchSession parallel decoders + slot stability + early timeline.setData -->
     <script src="test-switchsession-parallel-decoders.js"></script>
