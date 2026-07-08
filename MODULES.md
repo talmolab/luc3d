@@ -41,16 +41,6 @@ the old `app.js` entry point.
   "Show Camera View"/"Show Initial View" buttons.
 - `update3DViewport(frameIdx)` — pushes current InstanceGroups into the 3D
   scene; auto-initializes the viewport if calibration is present.
-- `occludeOutOfFrameNodes(points, camName, existingNulled)` — when converting a
-  reprojected/predicted instance to a user instance, flags any node whose 2D
-  point is OUTSIDE `camName`'s frame as occluded (adds its index to the returned
-  `nulledNodes` set) and clamps the point to the nearest on-frame edge (2px
-  inset) so it keeps a clickable marker. An out-of-frame reprojection isn't a
-  real observation — left un-occluded it would pollute the next triangulation
-  and draw an unreachable off-canvas marker. Used by `onDoubleClickReprojected`
-  and `onClonePredictedGroup`; `ui/interaction.js` has a local mirror
-  (`InteractionManager._occludeOutOfFrameNodes`) for `_convertToUserInstance`
-  to avoid a circular import.
 - `navigateToFrame(frameIdx)` — unified frame navigation used by every UI entry
   point (timeline scrub/drag, transport buttons, arrow/Home/End keys). With a
   video controller it defers to `videoController.seekToFrame`; for a video-less

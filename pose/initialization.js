@@ -501,10 +501,6 @@ export function setupInteraction() {
                 var srcTrackIdx = group.getInstance(viewName) ? group.getInstance(viewName).trackIdx : identityId;
                 var newInst = new Instance(clonedPoints, srcTrackIdx, 'user', 1.0);
                 newInst.modified = true;
-                // Reprojected nodes that landed out of frame aren't visible here —
-                // flag them occluded so they don't pollute triangulation.
-                var oofPts2 = occludeOutOfFrameNodes(clonedPoints, viewName);
-                if (oofPts2.size > 0) newInst.nulledNodes = oofPts2;
                 existingGroup.addInstance(viewName, newInst);
                 if (fg) fg.addInstance(viewName, newInst);
                 recordUserPoints(viewName, clonedPoints);
@@ -524,9 +520,6 @@ export function setupInteraction() {
                             inst.trackIdx, 'user', 1.0
                         );
                         userClone.modified = true;
-                        // Predicted nodes out of frame (rare) → occluded.
-                        var oofClone = occludeOutOfFrameNodes(userClone.points, camName, userClone.nulledNodes);
-                        if (oofClone.size > 0) userClone.nulledNodes = oofClone;
                         recordUserPoints(camName, userClone.points);
                         var ul = state.session.addUnlinkedInstance(frameIdx, camName, userClone);
                         unlinkedList.push(ul);
@@ -538,9 +531,6 @@ export function setupInteraction() {
                     var clickTrackIdx = reprojInst.trackIdx != null ? reprojInst.trackIdx : identityId;
                     var newInst = new Instance(clonedPoints, clickTrackIdx, 'user', 1.0);
                     newInst.modified = true;
-                    // Reprojected nodes out of frame in the clicked view → occluded.
-                    var oofClick = occludeOutOfFrameNodes(clonedPoints, viewName);
-                    if (oofClick.size > 0) newInst.nulledNodes = oofClick;
                     recordUserPoints(viewName, clonedPoints);
                     var ul = state.session.addUnlinkedInstance(frameIdx, viewName, newInst);
                     unlinkedList.push(ul);
@@ -623,9 +613,6 @@ export function setupInteraction() {
                     }
                     return null;
                 });
-                // Also occlude any (reprojection-filled or predicted) node that
-                // ended up outside this view's frame.
-                occludeOutOfFrameNodes(inst.points, camName, nulled);
                 if (nulled.size > 0) inst.nulledNodes = nulled;
                 inst.type = 'user';
                 inst.modified = true;
@@ -939,52 +926,6 @@ export function setup3DViewport() {
 }
 
 
-
-/**
- * Flag any node whose 2D point falls OUTSIDE the camera's frame as occluded,
- * used when converting a reprojected/predicted instance into a user instance.
- *
- * A reprojected node can land off-frame when its 3D point projects outside a
- * given camera's image; a predicted node can too (rare). Such a node isn't
- * actually visible in that view, so it must not become an observed 2D label:
- * left un-occluded it would (a) pollute the next triangulation with a bogus
- * observation and (b) draw an off-canvas marker the user can't reach. We add
- * its index to `nulledNodes` (occluded-but-positioned — triangulation skips
- * nulled nodes) and clamp the point just inside the frame so it still draws a
- * clickable marker at the edge, upholding the "every node is clickable"
- * invariant from the occlusion-node-availability fix.
- *
- * @param {Array<[number,number]|null>} points  points array (mutated in place: out-of-frame points are clamped)
- * @param {string} camName  camera/view name (looked up for its video dimensions)
- * @param {Set<number>} [existingNulled]  nulled-node set to extend (or a fresh one)
- * @returns {Set<number>} the nulled-node index set
- */
-export function occludeOutOfFrameNodes(points, camName, existingNulled) {
-    var nulled = existingNulled instanceof Set ? existingNulled : new Set();
-    if (!points || !state.views) return nulled;
-    var vw = 0, vh = 0, found = false;
-    for (var i = 0; i < state.views.length; i++) {
-        if (state.views[i].name === camName) {
-            vw = state.views[i].videoWidth || 0;
-            vh = state.views[i].videoHeight || 0;
-            found = true;
-            break;
-        }
-    }
-    if (!found || vw <= 0 || vh <= 0) return nulled;
-    var inset = 2;
-    var hi = function (v, max) { return Math.min(Math.max(v, inset), Math.max(inset, max - inset)); };
-    for (var n = 0; n < points.length; n++) {
-        var p = points[n];
-        if (p == null) continue;
-        if (p[0] < 0 || p[0] > vw || p[1] < 0 || p[1] > vh) {
-            nulled.add(n);
-            p[0] = hi(p[0], vw);
-            p[1] = hi(p[1], vh);
-        }
-    }
-    return nulled;
-}
 
 export function update3DViewport(frameIdx) {
     if (!viewport3d) {
