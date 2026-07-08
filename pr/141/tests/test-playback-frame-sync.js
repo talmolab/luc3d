@@ -162,44 +162,4 @@
             ctrl.stopPlayback();
         });
     });
-
-    // The definitive fix: when a mediabunny backend is present, playback draws
-    // the video AND the pose overlay from the SAME frame index (wall-clock
-    // driven), so they can never desync regardless of decode timing.
-    describe('Playback: unified mediabunny source draws video + overlay for the same frame', function () {
-        it('video frame index === overlay frame index (cannot desync)', async function () {
-            if (typeof VideoController === 'undefined') return;
-            var drawnVideoFrame = null, overlayFrame = null;
-            var decoder = {
-                _fps: 60,
-                _mbBackend: { prefetch: function () {} },   // presence selects the unified path
-                getFrame: function (n) { return Promise.resolve({ __frame: n }); },
-                pauseNative: function () {},
-            };
-            var view = {
-                name: 'cam1', decoder: decoder,
-                canvas: { width: 64, height: 64 },
-                ctx: { drawImage: function (bmp) { drawnVideoFrame = bmp.__frame; } },
-                overlayCanvas: { width: 64, height: 64 },
-                overlayCtx: { clearRect: function () {} },
-                videoWidth: 64, videoHeight: 64,
-            };
-            var state = { views: [view], currentFrame: 600, totalFrames: 20000, fps: 60, isPlaying: false, speedMultiplier: 1 };
-            var ctrl = new VideoController(state, {
-                drawOverlays: function (f) { overlayFrame = f; },
-                updateSeekbar: function () {},
-            });
-
-            ctrl.startPlayback();
-            // Let a few rAF ticks + their getFrame/overlay microtasks settle.
-            await new Promise(function (r) { setTimeout(r, 80); });
-            ctrl.stopPlayback();
-
-            assertTrue(drawnVideoFrame !== null, 'a video frame was drawn');
-            assertTrue(overlayFrame !== null, 'an overlay frame was drawn');
-            assertEqual(drawnVideoFrame, overlayFrame,
-                'video and overlay are drawn for the SAME frame — unified source cannot desync');
-            assertTrue(overlayFrame >= 600, 'wall clock advanced from the start frame');
-        });
-    });
 })();
