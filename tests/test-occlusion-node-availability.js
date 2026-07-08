@@ -213,4 +213,70 @@
                 'the real node still triangulates from its two observations');
         });
     });
+
+    // When a reprojected/predicted instance is converted to a user instance, any
+    // node that falls OUTSIDE the view's frame must be (a) flagged occluded so it
+    // doesn't pollute triangulation and (b) pulled to the NEAREST point on the
+    // frame edge so it still draws a clickable marker (issue: out-of-frame
+    // reprojected nodes on conversion).
+    describe('Occlusion: out-of-frame nodes → occluded + clamped to nearest edge', function () {
+        it('flags out-of-frame nodes and clamps each to the closest on-screen point', function () {
+            if (typeof InteractionManager === 'undefined') return;
+            var env = buildManager();   // vw=640, vh=480
+            try {
+                var pts = [[100, 100], [-50, 240], [700, 240], [320, 600]];
+                var nulled = env.mgr._occludeOutOfFrameNodes(pts, 'cam1', new Set());
+
+                // In-frame node: untouched, not occluded.
+                assertTrue(!nulled.has(0), 'in-frame node is not occluded');
+                assertEqual(pts[0][0], 100, 'in-frame node x unchanged');
+                assertEqual(pts[0][1], 100, 'in-frame node y unchanged');
+
+                // Off the left edge → clamped to x=2, y unchanged (nearest point).
+                assertTrue(nulled.has(1), 'left-of-frame node flagged occluded');
+                assertEqual(pts[1][0], 2, 'clamped to the left edge (nearest x)');
+                assertEqual(pts[1][1], 240, 'y stays (already in range) → closest edge point');
+
+                // Off the right edge → clamped to x=638 (vw-2), y unchanged.
+                assertTrue(nulled.has(2), 'right-of-frame node flagged occluded');
+                assertEqual(pts[2][0], 638, 'clamped to the right edge (nearest x)');
+                assertEqual(pts[2][1], 240, 'y stays');
+
+                // Off the bottom edge → clamped to y=478 (vh-2), x unchanged.
+                assertTrue(nulled.has(3), 'below-frame node flagged occluded');
+                assertEqual(pts[3][0], 320, 'x stays');
+                assertEqual(pts[3][1], 478, 'clamped to the bottom edge (nearest y)');
+            } finally {
+                cleanupCanvases();
+            }
+        });
+
+        it('clamps a corner-out-of-frame node to the nearest corner', function () {
+            if (typeof InteractionManager === 'undefined') return;
+            var env = buildManager();
+            try {
+                var pts = [[-50, -30]];   // off top-left
+                var nulled = env.mgr._occludeOutOfFrameNodes(pts, 'cam1', new Set());
+                assertTrue(nulled.has(0), 'corner-out node occluded');
+                assertEqual(pts[0][0], 2, 'clamped to left edge');
+                assertEqual(pts[0][1], 2, 'clamped to top edge → nearest corner');
+            } finally {
+                cleanupCanvases();
+            }
+        });
+
+        it('leaves nulls and fully in-frame instances untouched', function () {
+            if (typeof InteractionManager === 'undefined') return;
+            var env = buildManager();
+            try {
+                var pts = [[10, 10], null, [630, 470]];
+                var nulled = env.mgr._occludeOutOfFrameNodes(pts, 'cam1', new Set());
+                assertEqual(nulled.size, 0, 'nothing occluded when all in-frame');
+                assertTrue(pts[1] === null, 'null slot left as null (not clamped)');
+                assertEqual(pts[2][0], 630, 'in-frame node unchanged');
+            } finally {
+                cleanupCanvases();
+            }
+        });
+    });
 })();

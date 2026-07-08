@@ -1684,6 +1684,42 @@ export class InteractionManager {
      * @param {InstanceGroup} group
      * @private
      */
+    /**
+     * Flag any node whose 2D point is outside `camName`'s frame as occluded
+     * (added to `nulled`) and clamp it just inside the frame so it keeps a
+     * clickable marker. Out-of-frame reprojected/predicted nodes aren't visible
+     * in that view, so they must not become observed labels that pollute
+     * triangulation. Mirrors `occludeOutOfFrameNodes` in pose/initialization.js
+     * (kept local to avoid a circular import).
+     */
+    _occludeOutOfFrameNodes(points, camName, nulled) {
+        var set = nulled instanceof Set ? nulled : new Set();
+        var state = this._getState();
+        if (!points || !state || !state.views) return set;
+        var vw = 0, vh = 0, found = false;
+        for (var i = 0; i < state.views.length; i++) {
+            if (state.views[i].name === camName) {
+                vw = state.views[i].videoWidth || 0;
+                vh = state.views[i].videoHeight || 0;
+                found = true;
+                break;
+            }
+        }
+        if (!found || vw <= 0 || vh <= 0) return set;
+        var inset = 2;
+        var clamp = function (v, max) { return Math.min(Math.max(v, inset), Math.max(inset, max - inset)); };
+        for (var n = 0; n < points.length; n++) {
+            var p = points[n];
+            if (p == null) continue;
+            if (p[0] < 0 || p[0] > vw || p[1] < 0 || p[1] > vh) {
+                set.add(n);
+                p[0] = clamp(p[0], vw);
+                p[1] = clamp(p[1], vh);
+            }
+        }
+        return set;
+    }
+
     _convertToUserInstance(group) {
         if (!group || !group.instances) return;
 
@@ -1734,6 +1770,9 @@ export class InteractionManager {
                     }
                     return null;
                 });
+                // Also occlude any node that ended up outside this view's frame
+                // (an out-of-frame reprojection/prediction isn't a real label).
+                this._occludeOutOfFrameNodes(instance.points, camName, nulled);
                 if (nulled.size > 0) {
                     instance.nulledNodes = nulled;
                 }
