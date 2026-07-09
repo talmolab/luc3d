@@ -41,3 +41,12 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   session, across `+`-new-session, boot-session, and session-switch flows.
   (Fails against the pre-fix `handleLoadVideos`; passes against the scoped
   `newVideoFiles` version.)
+- **`occlusion-roundtrip.mjs`** — regression guard for the project-`.slp`
+  round-trip bug (branch `eric/occlusion-skeleton-issue`). Builds a project with
+  a grouped user instance whose node is occluded (`nulledNodes`), saves it to
+  `.slp` via the real save path, assembles a session folder (project.slp +
+  calibration.toml + `videos/<cam>.mp4`), then REOPENS it through
+  `handleLoadSessionFolderSingleSlp` and asserts the occlusion, InstanceGroup
+  grouping, and 3D points survive. (Fails against the pre-fix session-folder
+  loader, which rebuilt flat poses and dropped all of it; passes with the shared
+  `restoreGroupingAndUnlink` path.)

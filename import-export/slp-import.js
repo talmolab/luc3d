@@ -31,7 +31,7 @@ import {
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
 } from '../loading/session-loader.js';
-import { remapGlobalTrackToSession } from './import-track-resolve.js';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
 } from './save-load.js';
@@ -374,6 +374,189 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
     return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
 }
 
+/**
+ * Restore a session's LUCID project state (identities + InstanceGroup grouping +
+ * per-instance `nulledNodes`/occlusion + 3D points) from a parsed SLP's
+ * `sessions_json`, then move every ungrouped instance into the unlinked pool.
+ *
+ * The `session` must already hold "pass-1" raw instances in its FrameGroups
+ * (i.e. every 2D instance added via `fg.addInstance(camName, inst)`); this
+ * routine rebuilds the grouping on top of them and removes the pass-1
+ * duplicates that the grouped reconstruction replaces.
+ *
+ * Extracted verbatim from `handleLoadSlpFile` so BOTH the plain SLP-load path
+ * AND the session-folder single-SLP loader (`handleLoadSessionFolderSingleSlp`)
+ * share ONE implementation — previously the session-folder path rebuilt the
+ * session flat (raw poses only) and silently dropped grouping, occlusion
+ * (`nulledNodes`), and identities from the project SLP. Keep them unified.
+ *
+ * @param {Session} session - session whose FrameGroups already hold pass-1 raw instances
+ * @param {Object} slpData - parsed SLP data (from parseSlpViaSleapIO or parseSlpH5)
+ * @param {number} slpSessIdx - index into `slpData.sessions` for this session
+ * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
+ * @returns {Promise<{hasSessionData:boolean}>}
+ */
+export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opts) {
+    opts = opts || {};
+    var onProgress = opts.onProgress || function () {};
+    var BATCH = opts.batch || 20000;
+
+    // Restore identities from SLP. Prefer the per-session identity list saved in
+    // this session's lucid metadata so IDs stay scoped per session — the
+    // file-level identities_json is a cross-session concatenation.
+    var slpSessForIds = (slpData.sessions && slpData.sessions.length > slpSessIdx)
+        ? slpData.sessions[slpSessIdx] : null;
+    var perSessionIdentities = (slpSessForIds && slpSessForIds.metadata
+        && slpSessForIds.metadata.lucid && slpSessForIds.metadata.lucid.identities) || null;
+    var identitySource = (perSessionIdentities && perSessionIdentities.length > 0)
+        ? perSessionIdentities
+        : ((slpData.identities && slpData.identities.length > 0) ? slpData.identities : null);
+    if (identitySource) {
+        session.identities = identitySource.map(function (idData, idx) {
+            return new Identity(idx, idData.name || ('id_' + idx), idData.color || null);
+        });
+        console.log('[load-slp] Loaded', session.identities.length, 'identities for session',
+            slpSessIdx, perSessionIdentities && perSessionIdentities.length > 0
+                ? '(per-session metadata)' : '(global fallback)');
+    }
+
+    var _sessData2 = slpSessForIds;
+    var hasTypedSession = !!(_sessData2 && _sessData2._typedSession);
+    var hasSessionData = hasTypedSession
+        || !!(_sessData2 && _sessData2.frame_group_dicts && _sessData2.frame_group_dicts.length > 0);
+
+    if (hasSessionData) {
+        // === Reconstruct InstanceGroups from sessions_json ===
+        var sessData2 = slpData.sessions[slpSessIdx];
+        var fgDicts = sessData2.frame_group_dicts || [];
+
+        var lucidMeta = (sessData2.metadata && sessData2.metadata.lucid) || {};
+        if (lucidMeta.trustTracks != null) session.trustTracks = lucidMeta.trustTracks;
+        var legacyGlobalIdentities = lucidMeta.trackIdentityMap || null;
+        if (lucidMeta.frameIdentityMap) {
+            session.frameIdentityMap = new Map(lucidMeta.frameIdentityMap);
+        }
+
+        var camKeyToName = {};
+        var calibKeys = Object.keys(sessData2.calibration || {}).filter(function (k) { return k !== 'metadata'; });
+        for (var cki = 0; cki < calibKeys.length; cki++) {
+            var ck2 = calibKeys[cki];
+            var cd2 = sessData2.calibration[ck2];
+            camKeyToName[ck2] = (cd2 && cd2.name) || ck2;
+        }
+
+        onProgress('Rebuilding instance groups from session data...');
+        await new Promise(function (r) { setTimeout(r, 0); });
+
+        var nodeNames = session.skeleton.nodes.map(function (n) {
+            return typeof n === 'string' ? n : (n.name || '');
+        });
+
+        var _recon;
+        if (hasTypedSession) {
+            _recon = await reconstructInstanceGroupsFromSession(
+                session, sessData2._typedSession, sessData2, nodeNames,
+                { onProgress: onProgress });
+        } else {
+            _recon = await reconstructInstanceGroupsFromDicts(
+                session, fgDicts, camKeyToName, nodeNames,
+                { onProgress: onProgress });
+        }
+        console.log('[load-slp] Rebuilt', _recon.restoredGroups, 'instance groups from session data,', _recon.restoredWith3d, 'with 3D points');
+
+        if (legacyGlobalIdentities && legacyGlobalIdentities.length) {
+            var migratedSlp = session.migrateGlobalIdentitiesToPerFrame(legacyGlobalIdentities);
+            if (migratedSlp) console.log('[load-slp] migrated', migratedSlp, 'legacy global identities to per-frame');
+        }
+
+    } else {
+        // === Fallback: no session_json → treat as a flat 2D SLP and move
+        // every loaded instance into the unlinked pool.
+        onProgress('Preparing unlinked instances...');
+        await new Promise(function (r) { setTimeout(r, 0); });
+        var ulFgCount = 0;
+        for (var [frameIdx2, fg2] of session.frameGroups) {
+            for (var [cn, instances] of fg2.instances) {
+                for (var ulItem of instances) {
+                    fg2.addUnlinkedInstance(cn, new UnlinkedInstance(ulItem, cn));
+                }
+                fg2.instances.set(cn, []);
+            }
+            ulFgCount++;
+            if (ulFgCount % BATCH === 0) {
+                onProgress('Preparing unlinked instances (' + ulFgCount + '/' + session.frameGroups.size + ')...');
+                await new Promise(function (r) { setTimeout(r, 0); });
+            }
+        }
+    }
+
+    // Move non-grouped instances into unlinkedInstances so they are
+    // interactive (clickable/draggable). Instances in fg.instances that are NOT
+    // referenced by any InstanceGroup are "orphan" predictions.
+    var movedToUnlinked = 0;
+    for (var [ulFrameIdx, ulFg] of session.frameGroups) {
+        var frameGroups = session.instanceGroups.get(ulFrameIdx) || [];
+        var groupedInstances = new Set();
+        for (var ulGi = 0; ulGi < frameGroups.length; ulGi++) {
+            for (var [, gInst] of frameGroups[ulGi].instances) {
+                groupedInstances.add(gInst);
+            }
+        }
+        for (var [ulCam, ulInsts] of ulFg.instances) {
+            var remaining = [];
+            for (var ulI = 0; ulI < ulInsts.length; ulI++) {
+                if (!groupedInstances.has(ulInsts[ulI])) {
+                    ulFg.addUnlinkedInstance(ulCam, new UnlinkedInstance(ulInsts[ulI], ulCam));
+                    movedToUnlinked++;
+                } else {
+                    remaining.push(ulInsts[ulI]);
+                }
+            }
+            ulFg.instances.set(ulCam, remaining);
+        }
+    }
+    if (movedToUnlinked > 0) {
+        console.log('[load-slp] Moved', movedToUnlinked, 'ungrouped instances to unlinked pool');
+    }
+
+    // Belt-and-suspenders: drop any unlinked instance whose points align with a
+    // grouped instance on the same frame and camera.
+    var extraDedup = 0;
+    for (var [ddFrameIdx, ddFg] of session.frameGroups) {
+        var ddGroups = session.instanceGroups.get(ddFrameIdx) || [];
+        if (ddGroups.length === 0) continue;
+        var groupedByCam = {};
+        for (var ddGi = 0; ddGi < ddGroups.length; ddGi++) {
+            for (var [ddCam, ddInst] of ddGroups[ddGi].instances) {
+                if (!groupedByCam[ddCam]) groupedByCam[ddCam] = [];
+                groupedByCam[ddCam].push(ddInst.points);
+            }
+        }
+        for (var [ddUlCam, ddUls] of ddFg.unlinkedInstances) {
+            var camGrouped = groupedByCam[ddUlCam];
+            if (!camGrouped || camGrouped.length === 0) continue;
+            var keptUls = [];
+            for (var ddUi = 0; ddUi < ddUls.length; ddUi++) {
+                var dup = false;
+                for (var ddGp = 0; ddGp < camGrouped.length; ddGp++) {
+                    if (instancePointsMatch(ddUls[ddUi].instance.points, camGrouped[ddGp])) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (dup) { extraDedup++; continue; }
+                keptUls.push(ddUls[ddUi]);
+            }
+            ddFg.unlinkedInstances.set(ddUlCam, keptUls);
+        }
+    }
+    if (extraDedup > 0) {
+        console.log('[load-slp] Dropped', extraDedup, 'unlinked duplicates that matched grouped instances by position');
+    }
+
+    return { hasSessionData: hasSessionData };
+}
+
 export async function handleLoadSlpFile(slpFile) {
     try {
         // Warn + reset if 3D points were imported into a skeleton-only project.
@@ -656,6 +839,14 @@ export async function handleLoadSlpFile(slpFile) {
                     instData.score || 0
                 );
                 if (instData.occluded) inst.occluded = instData.occluded;
+                // Rebuild the occlusion flag for a user label whose occluded
+                // node was saved as finite-xy + not-visible. Grouped instances
+                // get their explicit nulledNodes back from metadata below (and
+                // this pass-1 copy is then replaced); an UNLINKED user label has
+                // no such metadata, so this is the only place its occlusion is
+                // restored.
+                var _nn = nulledNodesFromOcclusion(instData.points, instData.occluded, inst.type);
+                if (_nn) inst.nulledNodes = _nn;
                 fg.addInstance(camName, inst);
             }
             if (fi > 0 && fi % BATCH === 0) {
@@ -664,192 +855,12 @@ export async function handleLoadSlpFile(slpFile) {
             }
         }
 
-        // Restore identities from SLP. Prefer the per-session identity list
-        // saved in this session's lucid metadata so IDs stay scoped per
-        // session — the file-level identities_json is a cross-session
-        // concatenation and using it for every session leaks IDs between
-        // sessions (and misaligns identity_idx). Fall back to the global list
-        // only for legacy / non-lucid SLPs that lack per-session metadata.
-        var slpSessForIds = (slpData.sessions && slpData.sessions.length > slpSessIdx)
-            ? slpData.sessions[slpSessIdx] : null;
-        var perSessionIdentities = (slpSessForIds && slpSessForIds.metadata
-            && slpSessForIds.metadata.lucid && slpSessForIds.metadata.lucid.identities) || null;
-        var identitySource = (perSessionIdentities && perSessionIdentities.length > 0)
-            ? perSessionIdentities
-            : ((slpData.identities && slpData.identities.length > 0) ? slpData.identities : null);
-        if (identitySource) {
-            session.identities = identitySource.map(function (idData, idx) {
-                return new Identity(idx, idData.name || ('id_' + idx), idData.color || null);
-            });
-            console.log('[load-slp] Loaded', session.identities.length, 'identities for session',
-                slpSessIdx, perSessionIdentities && perSessionIdentities.length > 0
-                    ? '(per-session metadata)' : '(global fallback)');
-        }
-
-        // Build InstanceGroups from session data if available (preserves
-        // identity-based grouping), otherwise fall back to track-based grouping.
-        // The sleap-io.js streaming path attaches a typed RecordingSession
-        // (`_typedSession`) and reconstructs grouping from it (reads both LUCID's
-        // legacy and the new canonical sessions_json); the raw-worker fallback
-        // has only `frame_group_dicts` and uses the dict reconstructor.
-        var _sessData2 = (slpData.sessions && slpData.sessions.length > slpSessIdx)
-            ? slpData.sessions[slpSessIdx] : null;
-        var hasTypedSession = !!(_sessData2 && _sessData2._typedSession);
-        var hasSessionData = hasTypedSession
-            || !!(_sessData2 && _sessData2.frame_group_dicts && _sessData2.frame_group_dicts.length > 0);
-
-        if (hasSessionData) {
-            // === Reconstruct InstanceGroups from sessions_json ===
-            var sessData2 = slpData.sessions[slpSessIdx];
-            var fgDicts = sessData2.frame_group_dicts || [];
-
-            // Restore lucid session-level metadata
-            var lucidMeta = (sessData2.metadata && sessData2.metadata.lucid) || {};
-            if (lucidMeta.trustTracks != null) session.trustTracks = lucidMeta.trustTracks;
-            // Legacy global identity map (removed) → migrated to per-frame
-            // after the instance groups below are reconstructed.
-            var legacyGlobalIdentities = lucidMeta.trackIdentityMap || null;
-            if (lucidMeta.frameIdentityMap) {
-                session.frameIdentityMap = new Map(lucidMeta.frameIdentityMap);
-            }
-
-            // Build camera key → name map
-            var camKeyToName = {};
-            var calibKeys = Object.keys(sessData2.calibration || {}).filter(function (k) { return k !== 'metadata'; });
-            for (var cki = 0; cki < calibKeys.length; cki++) {
-                var ck2 = calibKeys[cki];
-                var cd2 = sessData2.calibration[ck2];
-                camKeyToName[ck2] = (cd2 && cd2.name) || ck2;
-            }
-
-            showLoading('Rebuilding instance groups from session data...');
-            await new Promise(function (r) { setTimeout(r, 0); });
-
-            // Build node name list for reconstructing points from dicts
-            var nodeNames = session.skeleton.nodes.map(function (n) {
-                return typeof n === 'string' ? n : (n.name || '');
-            });
-
-            var _recon;
-            if (hasTypedSession) {
-                _recon = await reconstructInstanceGroupsFromSession(
-                    session, sessData2._typedSession, sessData2, nodeNames,
-                    { onProgress: function (msg) { showLoading(msg); } });
-            } else {
-                _recon = await reconstructInstanceGroupsFromDicts(
-                    session, fgDicts, camKeyToName, nodeNames,
-                    { onProgress: function (msg) { showLoading(msg); } });
-            }
-            console.log('[load-slp] Rebuilt', _recon.restoredGroups, 'instance groups from session data,', _recon.restoredWith3d, 'with 3D points');
-
-            // Migrate legacy global identities to per-frame now that groups exist.
-            if (legacyGlobalIdentities && legacyGlobalIdentities.length) {
-                var migratedSlp = session.migrateGlobalIdentitiesToPerFrame(legacyGlobalIdentities);
-                if (migratedSlp) console.log('[load-slp] migrated', migratedSlp, 'legacy global identities to per-frame');
-            }
-
-        } else {
-            // === Fallback: no session_json → treat as a flat 2D SLP
-            // and move every loaded instance into the unlinked pool,
-            // matching handleLoadSessionFolderPerCamera (line ~12810).
-            // Previous behavior grouped by trackIdx unconditionally,
-            // which wrapped every single-camera 2D-SLP instance in a
-            // trivial one-view InstanceGroup — inconsistent with the
-            // session-folder path where the same file loads as
-            // ungrouped. Users run the Assign menu when they want
-            // cross-view grouping from track/identity data.
-            showLoading('Preparing unlinked instances...');
-            await new Promise(function (r) { setTimeout(r, 0); });
-            var ulFgCount = 0;
-            for (var [frameIdx2, fg2] of session.frameGroups) {
-                for (var [cn, instances] of fg2.instances) {
-                    for (var ulItem of instances) {
-                        fg2.addUnlinkedInstance(cn, new UnlinkedInstance(ulItem, cn));
-                    }
-                    fg2.instances.set(cn, []);
-                }
-                ulFgCount++;
-                if (ulFgCount % BATCH === 0) {
-                    showLoading('Preparing unlinked instances (' + ulFgCount + '/' + session.frameGroups.size + ')...');
-                    await new Promise(function (r) { setTimeout(r, 0); });
-                }
-            }
-        }
-
-        // Move non-grouped instances into unlinkedInstances so they are
-        // interactive (clickable/draggable). Instances in fg.instances that
-        // are NOT referenced by any InstanceGroup are "orphan" predictions —
-        // they need to be in fg.unlinkedInstances for hit testing to find them.
-        var movedToUnlinked = 0;
-        for (var [ulFrameIdx, ulFg] of session.frameGroups) {
-            var frameGroups = session.instanceGroups.get(ulFrameIdx) || [];
-            // Collect all instances that belong to a group
-            var groupedInstances = new Set();
-            for (var ulGi = 0; ulGi < frameGroups.length; ulGi++) {
-                for (var [, gInst] of frameGroups[ulGi].instances) {
-                    groupedInstances.add(gInst);
-                }
-            }
-            // Move ungrouped instances to unlinked
-            for (var [ulCam, ulInsts] of ulFg.instances) {
-                var remaining = [];
-                for (var ulI = 0; ulI < ulInsts.length; ulI++) {
-                    if (!groupedInstances.has(ulInsts[ulI])) {
-                        ulFg.addUnlinkedInstance(ulCam, new UnlinkedInstance(ulInsts[ulI], ulCam));
-                        movedToUnlinked++;
-                    } else {
-                        remaining.push(ulInsts[ulI]);
-                    }
-                }
-                ulFg.instances.set(ulCam, remaining);
-            }
-        }
-        if (movedToUnlinked > 0) {
-            console.log('[load-slp] Moved', movedToUnlinked, 'ungrouped instances to unlinked pool');
-        }
-
-        // Belt-and-suspenders: drop any unlinked instance whose
-        // points align with a grouped instance on the same frame
-        // and camera. Pass-2 dedup in the metadata-driven loader
-        // catches the common case, but in some SLP files the
-        // pass-1 raw points and pass-2 metadata points diverge
-        // enough (e.g. null-node distribution, micro precision)
-        // to slip past the match — those leftovers render as a
-        // second skeleton in the pre-proofreading track color
-        // and contribute a phantom track bar on the timeline.
-        var extraDedup = 0;
-        for (var [ddFrameIdx, ddFg] of session.frameGroups) {
-            var ddGroups = session.instanceGroups.get(ddFrameIdx) || [];
-            if (ddGroups.length === 0) continue;
-            // Build camera → list-of-grouped-points for fast dup detection.
-            var groupedByCam = {};
-            for (var ddGi = 0; ddGi < ddGroups.length; ddGi++) {
-                for (var [ddCam, ddInst] of ddGroups[ddGi].instances) {
-                    if (!groupedByCam[ddCam]) groupedByCam[ddCam] = [];
-                    groupedByCam[ddCam].push(ddInst.points);
-                }
-            }
-            for (var [ddUlCam, ddUls] of ddFg.unlinkedInstances) {
-                var camGrouped = groupedByCam[ddUlCam];
-                if (!camGrouped || camGrouped.length === 0) continue;
-                var keptUls = [];
-                for (var ddUi = 0; ddUi < ddUls.length; ddUi++) {
-                    var dup = false;
-                    for (var ddGp = 0; ddGp < camGrouped.length; ddGp++) {
-                        if (instancePointsMatch(ddUls[ddUi].instance.points, camGrouped[ddGp])) {
-                            dup = true;
-                            break;
-                        }
-                    }
-                    if (dup) { extraDedup++; continue; }
-                    keptUls.push(ddUls[ddUi]);
-                }
-                ddFg.unlinkedInstances.set(ddUlCam, keptUls);
-            }
-        }
-        if (extraDedup > 0) {
-            console.log('[load-slp] Dropped', extraDedup, 'unlinked duplicates that matched grouped instances by position');
-        }
+        // Restore identities + InstanceGroup grouping + per-instance
+        // nulledNodes/occlusion + 3D points from the SLP's sessions_json, then
+        // move ungrouped instances to the unlinked pool. Shared with the
+        // session-folder single-SLP loader (see restoreGroupingAndUnlink).
+        await restoreGroupingAndUnlink(session, slpData, slpSessIdx,
+            { onProgress: function (msg) { showLoading(msg); }, batch: BATCH });
 
         // Recompute reprojections from stored 3D points + calibration
         if (session.cameras.length >= 2) {

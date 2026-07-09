@@ -350,4 +350,8 @@
             });
         });
     });
+
+    // NOTE: the SLP-export occluded-node round-trip tests live in the *registered*
+    // tests/test-occlusion-node-availability.js (this file isn't loaded by
+    // test-runner.html). Kept out of here to avoid a dead duplicate.
 })();

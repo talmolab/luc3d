@@ -31,11 +31,15 @@ import { OnDemandVideoDecoder, VideoController } from './video.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
-    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5,
+    parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
 } from '../import-export/file-io.js';
 
-import { resolveImportTrackIdx } from '../import-export/import-track-resolve.js';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
+// Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
+// occlusion + 3D points). Circular ESM import (slp-import imports back
+// recomputeUploadedCameras); only invoked inside a function body.
+import { restoreGroupingAndUnlink } from '../import-export/slp-import.js';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
@@ -1639,15 +1643,25 @@ export async function handleLoadSessionFolderSingleSlp() {
             videos: videoFiles.length
         });
 
-        // Load the SLP — reuse handleLoadSlp's parsing logic
+        // Load the SLP. Use the typed sleap-io.js reader (same as File → Load
+        // SLP) so the project's sessions_json — InstanceGroup grouping,
+        // per-instance nulledNodes/occlusion, identities, 3D points — is
+        // available to restoreGroupingAndUnlink below. Loading a project .slp
+        // must reflect the changes saved in THAT file, not rebuild flat poses
+        // from it. Fall back to the raw worker only if the typed reader throws.
         showLoading('Reading SLP: ' + slpFile.name + '...');
         var slpData;
         try {
-            slpData = await parseSlpH5(slpFile, function (msg) { showLoading(msg); });
-        } catch (parseErr) {
-            hideLoading();
-            setStatus('SLP parse error: ' + parseErr.message, 'error');
-            return;
+            slpData = await parseSlpViaSleapIO(slpFile, function (msg) { showLoading(msg); });
+        } catch (typedErr) {
+            console.warn('[single-slp] typed SLP read failed — falling back to raw h5wasm worker:', typedErr);
+            try {
+                slpData = await parseSlpH5(slpFile, function (msg) { showLoading(msg); });
+            } catch (parseErr) {
+                hideLoading();
+                setStatus('SLP parse error: ' + parseErr.message, 'error');
+                return;
+            }
         }
 
         // Load calibration
@@ -1740,19 +1754,24 @@ export async function handleLoadSessionFolderSingleSlp() {
                 var resolvedTrackIdx = resolveImportTrackIdx(session, instData.trackIdx, instData.type);
                 var inst = new Instance(instData.points, resolvedTrackIdx, instData.type || 'user', instData.score || 0);
                 if (instData.occluded) inst.occluded = instData.occluded;
+                // Restore the occlusion flag for an unlinked user label (its
+                // occluded node was saved finite-xy + not-visible; the
+                // nulledNodes flag itself isn't persisted for ungrouped
+                // instances). See nulledNodesFromOcclusion.
+                var _nn = nulledNodesFromOcclusion(instData.points, instData.occluded, inst.type);
+                if (_nn) inst.nulledNodes = _nn;
                 fg.addInstance(camName, inst);
             }
         }
 
-        // Move to unlinked pool
-        for (var [fgIdx, fgObj] of session.frameGroups) {
-            for (var [cn, instances] of fgObj.instances) {
-                for (var instItem of instances) {
-                    fgObj.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
-                }
-                fgObj.instances.set(cn, []);
-            }
-        }
+        // Restore the project's saved state from the SLP's sessions_json —
+        // InstanceGroup grouping, per-instance nulledNodes/occlusion,
+        // identities, and 3D points — then move ungrouped instances to the
+        // unlinked pool. Shared with File → Load SLP (handleLoadSlpFile). When
+        // the file has no sessions_json (a flat 2D SLP) the helper moves every
+        // instance to unlinked, matching the previous behavior of this path.
+        await restoreGroupingAndUnlink(session, slpData, 0,
+            { onProgress: function (msg) { showLoading(msg); } });
 
         // Save current session state before switching
         if (state.sessions.length > 0 && state.session) {
@@ -1782,6 +1801,25 @@ export async function handleLoadSessionFolderSingleSlp() {
         if (videoController && state.isPlaying) videoController.stopPlayback();
         setVideoController(null);
         paneManager.clearAll();
+
+        // Order videos by calibration camera index so the 2D viewers appear in
+        // the project's camera order, not the folder's file-enumeration order
+        // (pickFolder returns files in an OS-dependent order, which made the
+        // 2D panes reshuffle on reload). Videos that match no camera keep their
+        // relative order, placed after the matched ones.
+        if (cameras.length > 0) {
+            var camOrderIndex = function (vf) {
+                var stem = vf.name.replace(/\.[^.]+$/, '').toLowerCase();
+                for (var ci = 0; ci < cameras.length; ci++) {
+                    if (stem.indexOf(cameras[ci].name.toLowerCase()) >= 0) return ci;
+                }
+                return cameras.length;
+            };
+            videoFiles = videoFiles
+                .map(function (vf, i) { return { vf: vf, key: camOrderIndex(vf), i: i }; })
+                .sort(function (a, b) { return (a.key - b.key) || (a.i - b.i); })
+                .map(function (o) { return o.vf; });
+        }
 
         var failedVideos = [];
         for (var vfi = 0; vfi < videoFiles.length; vfi++) {
