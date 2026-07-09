@@ -35,11 +35,11 @@ import {
     loadCalibrationFile,
 } from '../import-export/file-io.js';
 
-import { resolveImportTrackIdx } from '../import-export/import-track-resolve.js';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, nulledNodesFromOcclusion } from '../import-export/slp-import.js';
+import { restoreGroupingAndUnlink } from '../import-export/slp-import.js';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,

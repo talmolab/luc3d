@@ -74,3 +74,37 @@ export function remapGlobalTrackToSession(rawTrackIdx, globalTrackNames, session
     if (name == null) return -1;
     return sessionTrackNames.indexOf(name); // -1 if this session lacks the track
 }
+
+/**
+ * Reconstruct a user instance's occlusion set (`nulledNodes`) from its saved
+ * per-point occlusion (a point present in the file but flagged not-visible).
+ *
+ * `_buildSioPoints` writes an occluded (nulled) node as its real xy with
+ * `visible:false`, so the occlusion IS in the SLP — as invisibility — for BOTH
+ * grouped and UNGROUPED (unlinked) instances. But the explicit `nulledNodes`
+ * FLAG is only persisted in per-group `metadata.lucid.instanceMeta` (grouped
+ * instances only). An unlinked user label — e.g. a prediction converted to a
+ * user label that was never grouped — therefore lost its occlusion on reload:
+ * the point came back positioned but no longer flagged occluded. Deriving the
+ * flag back from the finite-but-invisible signal restores it on every load
+ * path. Lives here (dependency-free) so it can be unit-tested headlessly — its
+ * callers (`slp-import.js` / `session-loader.js`) both transitively import
+ * `app.js` and cannot be bridged into the test runner.
+ *
+ * Only USER instances carry occlusion — a predicted instance's invisible point
+ * is a low-confidence/absent prediction, not a user occlusion (and the occlude
+ * UI blocks predicted instances). Returns a Set, or null when none apply.
+ *
+ * @param {Array} points - instance points ([x,y] or null per node)
+ * @param {boolean[]} occluded - per-node "present but not visible" flags
+ * @param {string} type - instance type ('user' | 'predicted')
+ * @returns {Set<number>|null}
+ */
+export function nulledNodesFromOcclusion(points, occluded, type) {
+    if (type !== 'user' || !occluded) return null;
+    var s = new Set();
+    for (var i = 0; i < occluded.length; i++) {
+        if (occluded[i] && points && points[i] != null) s.add(i);
+    }
+    return s.size > 0 ? s : null;
+}
