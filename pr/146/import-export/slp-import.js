@@ -396,6 +396,38 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
  * @returns {Promise<{hasSessionData:boolean}>}
  */
+/**
+ * Reconstruct a user instance's occlusion set (`nulledNodes`) from its saved
+ * per-point occlusion (a point present in the file but flagged not-visible).
+ *
+ * `_buildSioPoints` writes an occluded (nulled) node as its real xy with
+ * `visible:false`, so the occlusion IS in the SLP — as invisibility — for BOTH
+ * grouped and UNGROUPED (unlinked) instances. But the explicit `nulledNodes`
+ * FLAG is only persisted in per-group `metadata.lucid.instanceMeta` (grouped
+ * instances only). An unlinked user label — e.g. a prediction converted to a
+ * user label that was never grouped — therefore lost its occlusion on reload:
+ * the point came back positioned but no longer flagged occluded. Deriving the
+ * flag back from the finite-but-invisible signal restores it on every load
+ * path, for both grouped and unlinked instances.
+ *
+ * Only USER instances carry occlusion — a predicted instance's invisible point
+ * is a low-confidence/absent prediction, not a user occlusion (and the occlude
+ * UI blocks predicted instances). Returns a Set, or null when none apply.
+ *
+ * @param {Array} points - instance points ([x,y] or null per node)
+ * @param {boolean[]} occluded - per-node "present but not visible" flags
+ * @param {string} type - instance type ('user' | 'predicted')
+ * @returns {Set<number>|null}
+ */
+export function nulledNodesFromOcclusion(points, occluded, type) {
+    if (type !== 'user' || !occluded) return null;
+    var s = new Set();
+    for (var i = 0; i < occluded.length; i++) {
+        if (occluded[i] && points && points[i] != null) s.add(i);
+    }
+    return s.size > 0 ? s : null;
+}
+
 export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opts) {
     opts = opts || {};
     var onProgress = opts.onProgress || function () {};
@@ -839,6 +871,14 @@ export async function handleLoadSlpFile(slpFile) {
                     instData.score || 0
                 );
                 if (instData.occluded) inst.occluded = instData.occluded;
+                // Rebuild the occlusion flag for a user label whose occluded
+                // node was saved as finite-xy + not-visible. Grouped instances
+                // get their explicit nulledNodes back from metadata below (and
+                // this pass-1 copy is then replaced); an UNLINKED user label has
+                // no such metadata, so this is the only place its occlusion is
+                // restored.
+                var _nn = nulledNodesFromOcclusion(instData.points, instData.occluded, inst.type);
+                if (_nn) inst.nulledNodes = _nn;
                 fg.addInstance(camName, inst);
             }
             if (fi > 0 && fi % BATCH === 0) {

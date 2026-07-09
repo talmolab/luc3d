@@ -39,7 +39,7 @@ import { resolveImportTrackIdx } from '../import-export/import-track-resolve.js'
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink } from '../import-export/slp-import.js';
+import { restoreGroupingAndUnlink, nulledNodesFromOcclusion } from '../import-export/slp-import.js';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
@@ -1754,6 +1754,12 @@ export async function handleLoadSessionFolderSingleSlp() {
                 var resolvedTrackIdx = resolveImportTrackIdx(session, instData.trackIdx, instData.type);
                 var inst = new Instance(instData.points, resolvedTrackIdx, instData.type || 'user', instData.score || 0);
                 if (instData.occluded) inst.occluded = instData.occluded;
+                // Restore the occlusion flag for an unlinked user label (its
+                // occluded node was saved finite-xy + not-visible; the
+                // nulledNodes flag itself isn't persisted for ungrouped
+                // instances). See nulledNodesFromOcclusion.
+                var _nn = nulledNodesFromOcclusion(instData.points, instData.occluded, inst.type);
+                if (_nn) inst.nulledNodes = _nn;
                 fg.addInstance(camName, inst);
             }
         }
