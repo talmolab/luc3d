@@ -633,6 +633,46 @@ playback state, dirty tracking, multi-session UI.
 
 ---
 
+### ui/custom-delete-ops.js
+
+**Purpose.** Pure, DOM-free filtering + deletion logic backing the **Edit ▸
+Custom Instance Delete…** modal (`showCustomDeleteModal` in `ui/ui-wiring.js`).
+Mirrors SLEAP's `DeleteDialog` (`sleap/gui/dialogs/delete.py`) — a form that
+bulk-deletes a filtered subset of instances — expanded to LUCID's 2D datatypes
+(grouped `InstanceGroup` members, ungrouped `UnlinkedInstance`s, and
+reprojections). Issue #72.
+
+**Key exports.**
+- `collectDeletionTargets(sessions, filters, ctx)` → `{ targets, count,
+  frameCount, sessionCount }`. Reads the model, mutates nothing. `filters` =
+  `{ type: 'user'|'predicted'|'all'|'reprojected', grouping:
+  'any'|'grouped'|'ungrouped', view: camName|null, trackMode/trackIdx,
+  identityMode/identityId, frameScope:
+  'currentFrame'|'currentSession'|'allSessions'|'clip'|'exceptClip' }`. `ctx` =
+  `{ currentSession, currentFrame, clipRange:[start,end] }`. Type `'all'` unions
+  user+predicted observed labels only; `'reprojected'` targets
+  `InstanceGroup.reprojectedInstances` (group-level when no view filter, else
+  per-view). Track match uses `inst.trackIdx`; identity match uses
+  `session.getIdentityIdForTrack(camName, trackIdx, frameIdx)`.
+- `executeDeletion(targets)` → mutates the Session model, returning
+  `{ purgedGroups:[{session,frameIdx,group}], sessions }`. Grouped-member
+  deletes follow the same cascade as `InteractionManager._deleteSelected`
+  (full-group → `removeInstanceGroup`; lone survivor → `unlinkGroup` with
+  mixed-promotion; partial → `dirty`). Ungrouped → `FrameGroup.removeUnlinkedById`.
+  Reprojections cleared in-model; `purgedGroups` tells the caller which groups
+  need `purgeTriangulationDataForGroup` (triangulation-cache cleanup).
+
+**Imports from project modules.** None (calls methods on the Session objects
+passed in) — deliberately import-free so it is bridgeable/unit-testable, same
+contract as `ui/track-identity-ops.js`.
+
+**Imported by.** `ui/ui-wiring.js` (`showCustomDeleteModal`); bridged into
+`tests/test-runner.html` (`tests/test-custom-delete.js`).
+
+**User-facing features.** Edit ▸ Custom Instance Delete… bulk delete.
+
+---
+
 ### ui/export-modals.js
 
 **Purpose.** Modal dialogs for bulk-triangulation and export (Group-by-Track,
@@ -1884,7 +1924,17 @@ shifts higher indices down, while identity delete clears the per-frame
 `frameIdentityMap`; both the count and delete use the per-frame identity source
 (`getIdentityIdForTrack`), not `group.identityId`.
 All apply paths refresh overlays / info panel / timeline (`keepSize`) /
-visibility.
+visibility (via the shared `refreshAfterBulkEdit(session)` helper).
+- `showCustomDeleteModal()` — Edit ▸ Custom Instance Delete… (issue #72).
+  Filter form (Delete type · Grouping · frame scope · View · Track · Identity)
+  mirroring SLEAP's `DeleteDialog`, expanded to LUCID's 2D datatypes. Shows a
+  live "Delete N instances across M frames" count (recomputed via
+  `collectDeletionTargets` on every change) that gates the `.danger` Delete
+  button; irreversible with a "This cannot be undone." warning; frame range
+  reuses the dual-slider markup; Esc closes. On Delete: `executeDeletion`, then
+  `purgeTriangulationDataForGroup` for each returned group in the active session,
+  `markDirty()`, and `refreshAfterBulkEdit`. Filter/cascade logic lives in
+  `ui/custom-delete-ops.js`.
 
 **Catalog-driven keyboard shortcuts.** Every **standard single-action** shortcut
 is now dispatched: it attaches a runtime handler via `setHandler(id, fn)` (from

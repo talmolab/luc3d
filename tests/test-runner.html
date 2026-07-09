@@ -249,6 +249,9 @@
     <!-- Rotation tests -->
     <script src="test-rotation.js"></script>
 
+    <!-- Custom Instance Delete ops (issue #72): filter + cascade -->
+    <script src="test-custom-delete.js"></script>
+
     <!-- Pass 2 transitional bridge + test runner.
          Loads ESM-converted modules (pose/, ui/) and exposes their exports on
          window so the test files (loaded as classic scripts above) can find
@@ -289,12 +292,15 @@
         // Dependency-free (no app.js in its import graph; uses window.SleapIO +
         // document.baseURI only inside open()). Bridged for the lazy-release tests.
         import * as __SioLazy from '../loading/sio-lazy-loader.js';
+        // Pure (DOM-free, import-free) filter/cascade ops backing the Custom
+        // Instance Delete modal. Safe to bridge (no app.js in its graph).
+        import * as __CustomDeleteOps from '../ui/custom-delete-ops.js';
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
                               __LoadingProgressModal,
                               __TimelineCtrl, __TrackIdentityOps,
-                              __ImportTrackResolve, __SioLazy);
+                              __ImportTrackResolve, __SioLazy, __CustomDeleteOps);
 
         // sleap-io.js bridge for the SLP export post-pass test — mirrors the
         // window.SleapIO bridge in index.html so test-slp-export-postpass.js can

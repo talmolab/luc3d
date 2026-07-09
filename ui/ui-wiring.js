@@ -49,6 +49,9 @@ import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangula
 // User settings: default triangulation method + editable keyboard bindings.
 import { getDefaultTriangulationMethod, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js';
 import { showSettingsModal } from './settings-modal.js';
+// Custom Instance Delete (issue #72): pure filtering/deletion ops backing
+// the Edit ▸ Custom Instance Delete… modal (showCustomDeleteModal below).
+import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
@@ -388,10 +391,7 @@ function showDeleteModal(kind) {
             ? deleteTrackAt(state.session, selectedIdx)
             : deleteIdentityAt(state.session, selectedIdx);
         setStatus('Deleted ' + (isTrack ? 'track' : 'identity') + ': ' + deletedName, 'success');
-        drawAllOverlays(state.currentFrame);
-        updateInfoPanel();
-        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
-        populateTimelineVisibility(state.session);
+        refreshAfterBulkEdit(state.session);
         close();
     }
 
@@ -404,6 +404,224 @@ function showDeleteModal(kind) {
 
     // Pre-select the first entry so the warning + counts populate immediately.
     selectItem(items[0].idx);
+}
+
+/**
+ * Shared post-edit refresh for bulk model mutations (track/identity delete,
+ * custom instance delete). Redraws overlays, rebuilds the info panel, and
+ * re-syncs the timeline tracks + visibility for the active session.
+ * @param {Object} session
+ */
+function refreshAfterBulkEdit(session) {
+    drawAllOverlays(state.currentFrame);
+    updateInfoPanel();
+    if (timeline) timeline.refreshTracks(session, { keepSize: true });
+    populateTimelineVisibility(session);
+    if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+}
+
+/**
+ * Custom Instance Delete modal (issue #72). Mirrors SLEAP's DeleteDialog
+ * (Labels ▸ Custom Instance Delete…) — a filter form that bulk-deletes a
+ * subset of instances — expanded to LUCID's 2D datatypes: user/predicted/
+ * reprojected instances, grouped vs ungrouped, per-view, and per
+ * track/identity, over a frame scope. Deletion is irreversible (LUCID has
+ * no undo), so a live count + explicit "cannot be undone" warning gate the
+ * Delete button. Esc closes (CLAUDE.md modal convention). The pure
+ * filtering/mutation lives in custom-delete-ops.js.
+ */
+function showCustomDeleteModal() {
+    if (!state.session) { setStatus('No session', 'warning'); return; }
+    var session = state.session;
+    var allSessions = (state.sessions && state.sessions.length) ? state.sessions : [session];
+    var maxFrame = Math.max(0, (state.totalFrames || 1) - 1);
+    var hasTracks = session.tracks && session.tracks.length > 0;
+    var hasIdentities = session.identities && session.identities.length > 0;
+
+    function opt(value, label, sel) {
+        return '<option value="' + value + '"' + (sel ? ' selected' : '') + '>' + label + '</option>';
+    }
+    var rowStyle = 'style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0;"';
+    var selStyle = 'style="flex:1;max-width:62%;"';
+
+    // Frame-scope options (session analogue of SLEAP's video options).
+    var frameOpts = opt('currentFrame', 'Current frame', true) +
+        opt('currentSession', 'Current session');
+    if (allSessions.length > 1) frameOpts += opt('allSessions', 'All sessions');
+    frameOpts += opt('clip', 'Frame range…') + opt('exceptClip', 'Current session except range…');
+
+    // View options.
+    var viewOpts = opt('', 'All views', true);
+    session.cameras.forEach(function (c) { viewOpts += opt('cam:' + c.name, c.name); });
+
+    // Track options.
+    var trackRow = '';
+    if (hasTracks) {
+        var trackOpts = opt('any', 'Any (incl. none)', true) + opt('none', 'No track set');
+        session.tracks.forEach(function (name, i) { trackOpts += opt('idx:' + i, name); });
+        trackRow = '<div ' + rowStyle + '><label>with track</label><select id="cdTrack" ' + selStyle + '>' + trackOpts + '</select></div>';
+    }
+    // Identity options.
+    var idRow = '';
+    if (hasIdentities) {
+        var idOpts = opt('any', 'Any (incl. none)', true) + opt('none', 'No identity set');
+        session.identities.forEach(function (id) { idOpts += opt('id:' + id.id, id.name); });
+        idRow = '<div ' + rowStyle + '><label>with identity</label><select id="cdIdentity" ' + selStyle + '>' + idOpts + '</select></div>';
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.innerHTML =
+        '<h3>Custom Instance Delete</h3>' +
+        '<div ' + rowStyle + '><label>Delete</label><select id="cdType" ' + selStyle + '>' +
+        opt('user', 'User instances') + opt('predicted', 'Predicted instances') +
+        opt('all', 'All instances (user + predicted)', true) + opt('reprojected', 'Reprojections') +
+        '</select></div>' +
+        '<div ' + rowStyle + '><label>Grouping</label><select id="cdGrouping" ' + selStyle + '>' +
+        opt('any', 'Any', true) + opt('grouped', 'Grouped only') + opt('ungrouped', 'Ungrouped only') +
+        '</select></div>' +
+        '<div ' + rowStyle + '><label>in</label><select id="cdFrames" ' + selStyle + '>' + frameOpts + '</select></div>' +
+        '<div id="cdRangeWrap" style="display:none;margin:6px 0 10px;">' +
+        '  <div class="range-slider-container">' +
+        '    <div class="range-slider-track"></div>' +
+        '    <div class="range-slider-fill" id="cdSliderFill"></div>' +
+        '    <input type="range" id="cdRangeStart" min="0" max="' + maxFrame + '" value="0">' +
+        '    <input type="range" id="cdRangeEnd" min="0" max="' + maxFrame + '" value="' + maxFrame + '">' +
+        '  </div>' +
+        '  <div class="frame-inputs-row">' +
+        '    <label>Start</label><input type="number" id="cdInputStart" min="1" max="' + (maxFrame + 1) + '" value="1">' +
+        '    <span class="separator">—</span>' +
+        '    <label>End</label><input type="number" id="cdInputEnd" min="1" max="' + (maxFrame + 1) + '" value="' + (maxFrame + 1) + '">' +
+        '  </div>' +
+        '</div>' +
+        '<div ' + rowStyle + '><label>in view</label><select id="cdView" ' + selStyle + '>' + viewOpts + '</select></div>' +
+        trackRow + idRow +
+        '<div class="delete-warning" id="cdCount">No instances match.</div>' +
+        '<div class="delete-warning" style="opacity:0.85;">This cannot be undone.</div>' +
+        '<div class="modal-actions">' +
+        '<button id="cdCancel">Cancel</button>' +
+        '<button class="danger" id="cdApply" disabled>Delete</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    var typeSel = modal.querySelector('#cdType');
+    var groupingSel = modal.querySelector('#cdGrouping');
+    var framesSel = modal.querySelector('#cdFrames');
+    var viewSel = modal.querySelector('#cdView');
+    var trackSel = modal.querySelector('#cdTrack');
+    var idSel = modal.querySelector('#cdIdentity');
+    var rangeWrap = modal.querySelector('#cdRangeWrap');
+    var rangeStart = modal.querySelector('#cdRangeStart');
+    var rangeEnd = modal.querySelector('#cdRangeEnd');
+    var inputStart = modal.querySelector('#cdInputStart');
+    var inputEnd = modal.querySelector('#cdInputEnd');
+    var sliderFill = modal.querySelector('#cdSliderFill');
+    var countEl = modal.querySelector('#cdCount');
+    var applyBtn = modal.querySelector('#cdApply');
+
+    function updateSliderFill() {
+        var s = parseInt(rangeStart.value), e = parseInt(rangeEnd.value);
+        var max = parseInt(rangeStart.max) || 1;
+        sliderFill.style.left = (s / max) * 100 + '%';
+        sliderFill.style.width = ((e - s) / max) * 100 + '%';
+    }
+    function syncSliders() {
+        var s = parseInt(rangeStart.value), e = parseInt(rangeEnd.value);
+        if (s > e) { rangeStart.value = e; s = e; }
+        inputStart.value = s + 1; inputEnd.value = e + 1;
+        updateSliderFill(); recompute();
+    }
+    rangeStart.addEventListener('input', syncSliders);
+    rangeEnd.addEventListener('input', syncSliders);
+    inputStart.addEventListener('change', function () {
+        var v = parseInt(inputStart.value) - 1;
+        if (isNaN(v) || v < 0) v = 0;
+        if (v > parseInt(rangeEnd.value)) v = parseInt(rangeEnd.value);
+        rangeStart.value = v; syncSliders();
+    });
+    inputEnd.addEventListener('change', function () {
+        var v = parseInt(inputEnd.value) - 1;
+        if (isNaN(v) || v < 0) v = 0;
+        if (v < parseInt(rangeStart.value)) v = parseInt(rangeStart.value);
+        if (v > maxFrame) v = maxFrame;
+        rangeEnd.value = v; syncSliders();
+    });
+
+    function buildFilters() {
+        var trackMode = 'any', trackIdx = null;
+        if (trackSel) {
+            var tv = trackSel.value;
+            if (tv === 'none') trackMode = 'none';
+            else if (tv.indexOf('idx:') === 0) { trackMode = 'specific'; trackIdx = parseInt(tv.slice(4)); }
+        }
+        var identityMode = 'any', identityId = null;
+        if (idSel) {
+            var iv = idSel.value;
+            if (iv === 'none') identityMode = 'none';
+            else if (iv.indexOf('id:') === 0) { identityMode = 'specific'; identityId = parseInt(iv.slice(3)); }
+        }
+        return {
+            type: typeSel.value,
+            grouping: groupingSel.value,
+            view: viewSel.value.indexOf('cam:') === 0 ? viewSel.value.slice(4) : null,
+            trackMode: trackMode, trackIdx: trackIdx,
+            identityMode: identityMode, identityId: identityId,
+            frameScope: framesSel.value,
+        };
+    }
+    function buildCtx() {
+        return {
+            currentSession: session,
+            currentFrame: state.currentFrame,
+            clipRange: [parseInt(rangeStart.value), parseInt(rangeEnd.value)],
+        };
+    }
+
+    function recompute() {
+        var isRange = framesSel.value === 'clip' || framesSel.value === 'exceptClip';
+        rangeWrap.style.display = isRange ? 'block' : 'none';
+        var res = collectDeletionTargets(allSessions, buildFilters(), buildCtx());
+        if (res.count === 0) {
+            countEl.textContent = 'No instances match.';
+            applyBtn.disabled = true;
+        } else {
+            countEl.textContent = 'Delete ' + res.count + ' instance' + (res.count === 1 ? '' : 's') +
+                ' across ' + res.frameCount + ' frame' + (res.frameCount === 1 ? '' : 's') +
+                (res.sessionCount > 1 ? ' in ' + res.sessionCount + ' sessions' : '') + '.';
+            applyBtn.disabled = false;
+        }
+    }
+    [typeSel, groupingSel, framesSel, viewSel, trackSel, idSel].forEach(function (el) {
+        if (el) el.addEventListener('change', recompute);
+    });
+
+    function close() {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+    }
+    function doDelete() {
+        var res = collectDeletionTargets(allSessions, buildFilters(), buildCtx());
+        if (res.count === 0) return;
+        if (interactionManager) interactionManager.clearSelection();
+        var out = executeDeletion(res.targets);
+        out.purgedGroups.forEach(function (pg) {
+            if (pg.session === state.session) purgeTriangulationDataForGroup(pg.frameIdx, pg.group);
+        });
+        markDirty();
+        refreshAfterBulkEdit(state.session);
+        setStatus('Deleted ' + res.count + ' instance' + (res.count === 1 ? '' : 's'), 'success');
+        close();
+    }
+    function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); close(); } }
+    document.addEventListener('keydown', onKey);
+    modal.querySelector('#cdCancel').addEventListener('click', close);
+    applyBtn.addEventListener('click', doDelete);
+
+    updateSliderFill();
+    recompute();
 }
 
 // ============================================
@@ -471,6 +689,11 @@ export function setupMenus() {
     document.getElementById('menuDeleteInstance').addEventListener('click', function () {
         closeMenus();
         if (interactionManager) interactionManager._deleteSelected();
+    });
+
+    document.getElementById('menuCustomDeleteInstance').addEventListener('click', function () {
+        closeMenus();
+        showCustomDeleteModal();
     });
 
     document.getElementById('menuUnlinkGroup').addEventListener('click', function () {
