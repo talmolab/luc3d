@@ -66,6 +66,9 @@ const ACTION_CATALOG = [
     { id: 'trackAll', label: 'Track all frames', category: 'Editing', binding: 'Mod+Shift+T', editable: true, dispatched: true },
     { id: 'openTrackingWizard', label: 'Open Tracking Wizard', category: 'Editing', binding: 'Mod+Shift+I', editable: true, dispatched: true },
     { id: 'findMatch', label: 'Find match for selection', category: 'Editing', binding: 'f', editable: true, dispatched: true },
+    { id: 'qcRun', label: 'Run QC (current frame)', category: 'Editing', binding: 'q', editable: true, dispatched: true },
+    { id: 'qcNextIssue', label: 'Next QC-flagged frame', category: 'Navigation', binding: 'Shift+q', editable: true, dispatched: true },
+    { id: 'qcPrevIssue', label: 'Previous QC-flagged frame', category: 'Navigation', binding: 'Opt+q', editable: true, dispatched: true },
 
     // --- Identity & Tracks (select a group first) ---
     { id: 'assignIdentity', label: 'Assign identity 1–9 to selection', category: 'Identity & Tracks', binding: '1 – 9', editable: false, dispatched: false },

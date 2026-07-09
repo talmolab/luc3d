@@ -569,6 +569,49 @@ loading, "Triangulation needed" badge.
 
 ---
 
+### pose/qc.js
+
+**Purpose.** Quality-Control metrics engine (ported/modernized from the old
+`eric/qc-control` engine, luc3d PR #8). Pure ES module, no DOM. Computes label
+QC signals and classifies them into issues. Key design: it **reads** the
+per-camera reprojection errors already cached in `state.triangulationResults`
+(from `triangulateAndReproject`) instead of recomputing reprojections — the old
+engine's main slowness — and only (re)triangulates a group when the caller opts
+in AND the group is missing/stale (`points3d == null || group.dirty`). Metrics
+separate threshold-INDEPENDENT extraction from threshold-DEPENDENT classification
+so `classify()` re-runs cheaply on histogram-threshold drag.
+
+**Metrics.** Reprojection error (per node/cam), epipolar distance (per node, via
+`computeFundamentalMatrix`, subsampled for large data), node-switch/**inversion**
+(single-camera-concentrated error), cross-instance **swap** (symmetric — both
+directions must cross, unlike PR #8's A→B-only test), **IOU duplicate-instance**
+(2D, per view: bbox-IOU AND mean-node-distance, runs before grouping/triangulation),
+**low-node-count** (2D), completeness/miss, **temporal jitter** and **limb-length
+consistency** — computed per **track in 2D** (always available) and per **identity
+in 3D** when identities exist (2D uses pixel distances/lengths; 3D uses world units,
+the anatomically meaningful limb check). Velocity is per-frame mean node displacement
+÷ frame gap; limb outliers are per-frame z-scores of each bone's length vs its
+per-series mean/std. Both feed draggable histograms.
+
+**Exports.** `QC_DEFAULTS`, `makeThresholds`, `analyzeFrame(session, frameIdx, th)`
+(single-frame, cache-read), `runProjectQC(session, opts, onProgress)` (async sweep;
+`opts.triangulateMissing` gates opt-in triangulation; returns `{raw, distributions,
+autoThresholds, coverage, thresholds, triCalls, globalStats, frameIssues,
+flaggedFrames, sortedIssues, issuesByType}`), `classify(rawResult, thresholds)`
+(re-classify without geometry recompute), `computeAutoThresholds`, `buildHistogram`,
+`groupConsecutiveIssues`, `nextFlaggedFrame`, `prevFlaggedFrame`, `percentile`.
+
+**Imports.** `ui/app-state.js` (`state`), `pose/triangulation.js`
+(`computeFundamentalMatrix`, `triangulateAndReproject`, `getInstanceGroupsForFrame`,
+`ensureGroupsFromIdentities`).
+
+**Imported by.** `ui/qc-panel.js`; bridged into `tests/test-runner.html` (test-qc.js).
+
+**User-facing features.** QC tab in the info panel + toolbar QC button; `q` runs
+QC on the current frame, `Shift+q`/`Opt+q` step through flagged frames.
+
+---
+
 ## ui/
 
 ### ui/app-state.js
@@ -1122,6 +1165,29 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 **User-facing features.** All on-canvas pose drawing — colored skeletons,
 reprojection error vectors, drag preview, selection highlight, instance
 labels, occluded/null markers.
+
+---
+
+### ui/qc-panel.js
+
+**Purpose.** The Quality-Control tab in the info panel + its toolbar button/badge.
+Pure DOM + wiring; all compute lives in `pose/qc.js`. Fully manual: QC runs only on
+explicit user action (toolbar `#tbQC`, "Check Frame"/"Run Project QC" buttons, or
+the `q`/`Shift+q`/`Opt+q` shortcuts). Every entry point calls `showQCTab()` to
+un-collapse the panel (clicks `#infoPanelToggleBtn`) and activate the QC tab
+(`.panel-tab[data-tab="tabQC"]`). Renders summary/score, issues-by-type filter chips,
+draggable-threshold histograms (drag → `qc.classify()` re-classify, no geometry
+recompute), and a range-grouped flagged-frame list (click → `videoController.seekToFrame`).
+
+**Exports.** `setupQCPanel()` (one-time wiring, called from `pose/initialization.js`
+after `setupPanelTabs`), `showQCTab`, `runQCCurrentFrame`, `runQCProject`, `qcNext`,
+`qcPrev`, `renderQC`, `updateQCBadge`.
+
+**Imports.** `ui/app-state.js` (`state`, `videoController`), `ui/settings.js`
+(`getDefaultTriangulationMethod`), `pose/qc.js`.
+
+**Imported by.** `pose/initialization.js` (`setupQCPanel`), `ui/ui-wiring.js`
+(`runQCCurrentFrame`, `qcNext`, `qcPrev` → `setHandler` for `qcRun`/`qcNextIssue`/`qcPrevIssue`).
 
 ---
 

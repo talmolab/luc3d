@@ -96,6 +96,7 @@
     <script src="test-pose-data.js"></script>
     <script src="test-skeleton-json.js"></script>
     <script src="test-triangulation.js"></script>
+    <script src="test-qc.js"></script>
     <script src="test-file-io.js"></script>
     <script src="test-interaction.js"></script>
     <script src="test-regressions.js"></script>
@@ -267,6 +268,9 @@
         // Pure (DOM-free) standalone .skeleton.json (de)serialization.
         import * as __SkeletonJSON from '../import-export/skeleton-json.js';
         import * as __Triangulation from '../pose/triangulation.js';
+        // pose/qc.js is DOM-free and only imports app-state + triangulation
+        // (both bridged above), so it is safe to expose for unit tests.
+        import * as __QC from '../pose/qc.js';
         import * as __Overlays from '../ui/overlays.js';
         import * as __Viewport3D from '../ui/viewport3d.js';
         import * as __Timeline from '../ui/timeline.js';
@@ -289,6 +293,7 @@
         // Dependency-free (no app.js in its import graph; uses window.SleapIO +
         // document.baseURI only inside open()). Bridged for the lazy-release tests.
         import * as __SioLazy from '../loading/sio-lazy-loader.js';
+        Object.assign(window, __QC);
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
