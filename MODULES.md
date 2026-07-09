@@ -2599,6 +2599,17 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   ONE implementation — that loader previously rebuilt the session flat (raw
   poses only) and silently dropped grouping, occlusion, and identities from the
   saved project `.slp`.
+- `nulledNodesFromOcclusion(points, occluded, type)` — rebuilds a **user**
+  instance's occlusion set (`nulledNodes`) from its saved per-point occlusion (a
+  point present in the file but flagged not-visible). `_buildSioPoints` writes an
+  occluded node as real-xy + `visible:false`, so occlusion lives in the SLP as
+  invisibility for BOTH grouped and unlinked instances — but the explicit
+  `nulledNodes` FLAG is only persisted in per-group `instanceMeta` (grouped
+  only). An **unlinked** user label (e.g. a prediction converted to a user label
+  that was never grouped) therefore lost its occlusion on reload; this derives
+  it back. Called in the pass-1 raw-instance build of BOTH `handleLoadSlpFile`
+  and `handleLoadSessionFolderSingleSlp`. (Predicted instances are excluded — an
+  invisible predicted point is low-confidence, not a user occlusion.)
 - `handleAddSlp()` — additive merge into current session.
 - `handleLoadPoints3dH5()` — overlay 3D points from H5. Requires only a loaded
   **skeleton** (not a full session): a camera-less skeleton-only project is
