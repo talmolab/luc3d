@@ -2599,17 +2599,10 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   ONE implementation — that loader previously rebuilt the session flat (raw
   poses only) and silently dropped grouping, occlusion, and identities from the
   saved project `.slp`.
-- `nulledNodesFromOcclusion(points, occluded, type)` — rebuilds a **user**
-  instance's occlusion set (`nulledNodes`) from its saved per-point occlusion (a
-  point present in the file but flagged not-visible). `_buildSioPoints` writes an
-  occluded node as real-xy + `visible:false`, so occlusion lives in the SLP as
-  invisibility for BOTH grouped and unlinked instances — but the explicit
-  `nulledNodes` FLAG is only persisted in per-group `instanceMeta` (grouped
-  only). An **unlinked** user label (e.g. a prediction converted to a user label
-  that was never grouped) therefore lost its occlusion on reload; this derives
-  it back. Called in the pass-1 raw-instance build of BOTH `handleLoadSlpFile`
-  and `handleLoadSessionFolderSingleSlp`. (Predicted instances are excluded — an
-  invisible predicted point is low-confidence, not a user occlusion.)
+- Occlusion of **unlinked** user labels is restored on load by
+  `nulledNodesFromOcclusion` (lives in `import-export/import-track-resolve.js` so
+  it's unit-testable; see that module). Called in the pass-1 raw-instance build
+  of BOTH `handleLoadSlpFile` and `handleLoadSessionFolderSingleSlp`.
 - `handleAddSlp()` — additive merge into current session.
 - `handleLoadPoints3dH5()` — overlay 3D points from H5. Requires only a loaded
   **skeleton** (not a full session): a camera-less skeleton-only project is
@@ -2706,7 +2699,22 @@ Trackless stays trackless; a global track absent from the session returns `-1`.
 save-side counterpart (re-pointing instances to canonical Track objects so they
 serialize to the right global slot) lives in `save-load.js` `buildSlpBytes`.
 
-**Key exports.** `resolveImportTrackIdx`, `remapGlobalTrackToSession`.
+Also exports `nulledNodesFromOcclusion(points, occluded, type)` — rebuilds a
+**user** instance's occlusion set (`nulledNodes`) from its saved per-point
+occlusion (a point present in the file but flagged not-visible).
+`_buildSioPoints` writes an occluded node as real-xy + `visible:false`, so
+occlusion lives in the SLP as invisibility for BOTH grouped and unlinked
+instances — but the explicit `nulledNodes` FLAG is only persisted in per-group
+`instanceMeta` (grouped only). An **unlinked** user label (e.g. a prediction
+converted to a user label that was never grouped) therefore lost its occlusion
+on reload; this derives it back, in the pass-1 raw-instance build of BOTH
+`handleLoadSlpFile` and `handleLoadSessionFolderSingleSlp`. Predicted instances
+are excluded (an invisible predicted point is low-confidence, not a user
+occlusion). Lives here (dependency-free) so it's unit-testable —
+`tests/test-occlusion-derive.js`.
+
+**Key exports.** `resolveImportTrackIdx`, `remapGlobalTrackToSession`,
+`nulledNodesFromOcclusion`.
 
 **Imported by.** `loading/session-loader.js` (re-exports `resolveImportTrackIdx`;
 the three import paths keep importing it from there),
