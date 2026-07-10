@@ -22,10 +22,10 @@ import {
 // Metric definitions for the draggable histograms (only the ones with data /
 // that the user asked to tune interactively).
 const HIST_METRICS = [
-    { key: 'reproj', thKey: 'reprojHigh', label: 'Reprojection error (px)', color: '#4f9dff' },
+    { key: 'reproj', thKey: 'reprojHigh', label: 'Reprojection error (px, per node)', color: '#4f9dff' },
     { key: 'epipolar', thKey: 'epiThresh', label: 'Epipolar distance (px)', color: '#c084fc' },
-    { key: 'velocity', thKey: 'velThresh', label: 'Temporal velocity (/frame)', color: '#22c55e' },
-    { key: 'limbZ', thKey: 'limbZ', label: 'Limb-length z-score', color: '#ec4899' },
+    { key: 'velocity', thKey: 'velThresh2d', label: '2D temporal velocity (px/frame)', color: '#22c55e' },
+    { key: 'limbZ', thKey: 'limbZ', label: 'Limb-length z-score (robust)', color: '#ec4899' },
     { key: 'iou', thKey: 'iouThresh', label: 'Duplicate IOU', color: '#f59e0b' },
 ];
 
