@@ -23,6 +23,47 @@ import { state } from '../ui/app-state.js';
 import {
     computeFundamentalMatrix,
 } from './triangulation.js';
+import { getNodeWeightArray, isCameraTracked } from '../ui/settings.js';
+
+// ---------------------------------------------------------------------------
+// Node / view inclusion — excluded nodes (weight 0) and excluded camera views
+// (Camera Views panel) must not participate in ANY QC metric. Resolved once per
+// run from settings into module state, then honored at extraction time so no
+// excluded signal ever reaches classify(). Defaults (unset) = everything included,
+// which keeps the pure classify()/analyzeFrame unit tests unchanged.
+// ---------------------------------------------------------------------------
+let _incNode = null;   // bool[] indexed by node, or null => all nodes included
+let _incView = null;   // Set<string> of included view names, or null => all views
+
+function nodeIncluded(k) { return !_incNode || _incNode[k] !== false; }
+function viewIncluded(name) { return !_incView || _incView.has(name); }
+
+// Populate inclusion from settings for a session; returns the count of included
+// nodes (drives the low-node fraction). Safe under tests (defaults to all-in).
+function resolveInclusion(session) {
+    const nodes = session && session.skeleton ? session.skeleton.nodes : null;
+    let count = nodes ? nodes.length : 0;
+    _incNode = null;
+    try {
+        const w = (typeof getNodeWeightArray === 'function' && Array.isArray(nodes))
+            ? getNodeWeightArray(nodes) : null;
+        if (w) {
+            _incNode = w.map(function (x) { return !(x === 0); });
+            count = _incNode.reduce(function (a, b) { return a + (b ? 1 : 0); }, 0);
+        }
+    } catch (e) { _incNode = null; }
+    _incView = null;
+    try {
+        if (typeof isCameraTracked === 'function' && session && session.cameras) {
+            const inc = new Set();
+            for (let c = 0; c < session.cameras.length; c++) {
+                if (isCameraTracked(session.cameras[c].name)) inc.add(session.cameras[c].name);
+            }
+            _incView = inc;
+        }
+    } catch (e) { _incView = null; }
+    return count;
+}
 
 // ---------------------------------------------------------------------------
 // Defaults / config
@@ -52,6 +93,16 @@ export const QC_DEFAULTS = {
     velThresh3d: null,     // world units/frame — 3D jitter (auto: median+k·MAD)
     velMadK: 6,            // k in median + k·MAD (conservative)
     velFloor2d: 15,        // px/frame — absolute floor; a real 2D jump exceeds this
+    // 2D pixel-space jitter/limb are perspective-noisy on predicted data, so they
+    // are OFF by default; the anatomically-meaningful 3D (per-identity, world-unit)
+    // versions always run. Re-enable per checkbox in the QC panel.
+    enable2dJitter: false,
+    enable2dLimb: false,
+    // ID switch (temporal identity crossing, 3D). A switch is flagged when swapping
+    // two identities' assignments between adjacent frames beats keeping them.
+    idSwitchRatio: 0.5,    // swap cost must be < this × keep cost
+    idSwitchMaxGap: 3,     // only compare frames at most this far apart
+    idSwitchMoveMult: 3,   // ... and the "jump" must exceed this × typical per-frame motion
     minCameras: 2,         // a node visible in < this many cams => "miss"
     // Swap (cross-instance identity) detection.
     swapMarginRatio: 0.8,  // a kp "crosses" if d(own reproj) beats d(other reproj) by this
@@ -76,6 +127,11 @@ export const QC_DEFAULTS = {
 export function makeThresholds(overrides) {
     return Object.assign({}, QC_DEFAULTS, overrides || {});
 }
+
+// Limb-length robustness guards (see analyzeSeries): minimum series length before
+// a robust scale is trusted, and a coefficient-of-variation floor on the MAD.
+const LIMB_MIN_SAMPLES = 8;
+const LIMB_CV_FLOOR = 0.05;
 
 // ---------------------------------------------------------------------------
 // Small math utilities
@@ -150,12 +206,12 @@ function subsample(arr, maxN) {
     return out;
 }
 
-// Axis-aligned bbox over visible (non-null) points; null if < 1 point.
+// Axis-aligned bbox over visible (non-null) INCLUDED points; null if < 1 point.
 function bboxOf(points) {
     let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity, n = 0;
     for (let i = 0; i < points.length; i++) {
         const p = points[i];
-        if (p == null) continue;
+        if (p == null || !nodeIncluded(i)) continue;
         n++;
         if (p[0] < minx) minx = p[0];
         if (p[1] < miny) miny = p[1];
@@ -207,17 +263,19 @@ function instancesInView(frameGroup, camName) {
 
 function countVisible(points) {
     let n = 0;
-    for (let i = 0; i < points.length; i++) if (points[i] != null) n++;
+    for (let i = 0; i < points.length; i++) if (points[i] != null && nodeIncluded(i)) n++;
     return n;
 }
 
 // 2D detectors over a FrameGroup: duplicates (IOU + node-distance) and low-node-count.
+// Excluded views are skipped entirely; excluded nodes never contribute.
 function extract2D(session, frameGroup, numNodes) {
     const cameras = session.cameras;
     const duplicates = [];
     const lowNodes = [];
     for (let c = 0; c < cameras.length; c++) {
         const camName = cameras[c].name;
+        if (!viewIncluded(camName)) continue;
         const insts = instancesInView(frameGroup, camName);
         // Low-node-count.
         for (let i = 0; i < insts.length; i++) {
@@ -232,6 +290,7 @@ function extract2D(session, frameGroup, numNodes) {
                 let shared = 0, sumd = 0;
                 const len = Math.min(pa.length, pb.length);
                 for (let k = 0; k < len; k++) {
+                    if (!nodeIncluded(k)) continue;
                     if (pa[k] != null && pb[k] != null) { shared++; sumd += dist2d(pa[k], pb[k]); }
                 }
                 if (shared === 0) continue;
@@ -262,9 +321,11 @@ function extractReprojGroup(entry, reprojLowFloor) {
     const perNodeCam = new Array(numKp).fill(null); // only for candidate nodes
     const camSeen = new Array(numKp).fill(0);
     for (let k = 0; k < numKp; k++) {
+        if (!nodeIncluded(k)) continue;                 // excluded node: leave perNode/camSeen empty
         const vals = [];
         const camErrs = [];
         for (let c = 0; c < camNames.length; c++) {
+            if (!viewIncluded(camNames[c])) continue;   // excluded view: never scored
             const e = errors[camNames[c]][k];
             if (e != null) { vals.push(e); camErrs.push({ cam: camNames[c], err: e }); }
         }
@@ -301,11 +362,12 @@ function extractSwaps(entries, minErr) {
             const cams = Object.keys(repA);
             for (let ci = 0; ci < cams.length; ci++) {
                 const cam = cams[ci];
-                if (!repB[cam]) continue;
+                if (!repB[cam] || !viewIncluded(cam)) continue;
                 const instA = gA.getInstance(cam), instB = gB.getInstance(cam);
                 if (!instA || !instB || !instA.points || !instB.points) continue;
                 const nk = Math.min(instA.points.length, instB.points.length, repA[cam].length, repB[cam].length);
                 for (let k = 0; k < nk; k++) {
+                    if (!nodeIncluded(k)) continue;
                     const dA = instA.points[k], dB = instB.points[k];
                     const rA = repA[cam][k], rB = repB[cam][k];
                     if (!dA || !dB || !rA || !rB) continue;
@@ -393,7 +455,10 @@ function classifyFrame(session, fr, th) {
         }
     }
 
-    // --- Swap ---
+    // --- Node swap / chimera (within-frame: some nodes of instance A actually
+    // belong to animal B, so one "instance" is a chimera of two animals). This is
+    // NOT an ID switch (that's the temporal id_switch below) — here the identity
+    // label is fine but the node membership is mixed.
     if (fr.swaps) {
         for (let si = 0; si < fr.swaps.length; si++) {
             const sw = fr.swaps[si];
@@ -407,12 +472,25 @@ function classifyFrame(session, fr, th) {
             }
             if (crossed.length) {
                 issues.push({
-                    type: 'swap', severity: crossed.length >= th.swapHighCount ? 'high' : 'medium',
+                    type: 'node_swap', severity: crossed.length >= th.swapHighCount ? 'high' : 'medium',
                     frameIdx: fr.frameIdx, trackA: sw.trackA, trackB: sw.trackB, keypoints: crossed,
-                    description: 'Possible identity swap between ' + trackLabel(session, sw.trackA) +
-                        ' and ' + trackLabel(session, sw.trackB) + ' (' + crossed.length + ' keypoint(s) crossed)',
+                    description: 'Possible node swap / chimera between ' + trackLabel(session, sw.trackA) +
+                        ' and ' + trackLabel(session, sw.trackB) + ' (' + crossed.length + ' node(s) belong to the other animal)',
                 });
             }
+        }
+    }
+
+    // --- ID switch (temporal: two identities exchange labels between frames) ---
+    if (fr.idSwitches) {
+        for (let ii = 0; ii < fr.idSwitches.length; ii++) {
+            const sw = fr.idSwitches[ii];
+            issues.push({
+                type: 'id_switch', severity: 'high', frameIdx: fr.frameIdx,
+                identityA: sw.idA, identityB: sw.idB, keypoints: [],
+                description: 'Possible ID switch between ' + identityLabel(session, sw.idA) +
+                    ' and ' + identityLabel(session, sw.idB) + ' (identities appear to have swapped positions)',
+            });
         }
     }
 
@@ -462,6 +540,7 @@ function classifyFrame(session, fr, th) {
     if (fr.temporal) {
         for (let ti = 0; ti < fr.temporal.length; ti++) {
             const t = fr.temporal[ti];
+            if (t.space === '2d' && !th.enable2dJitter) continue;   // 2D jitter opt-in
             const vt = (t.space === '3d')
                 ? (th.velThresh3d != null ? th.velThresh3d : th.velThresh)
                 : (th.velThresh2d != null ? th.velThresh2d : th.velThresh);
@@ -481,6 +560,7 @@ function classifyFrame(session, fr, th) {
     if (fr.limb) {
         for (let li = 0; li < fr.limb.length; li++) {
             const lb = fr.limb[li];
+            if (lb.space === '2d' && !th.enable2dLimb) continue;    // 2D limb opt-in
             const bad = lb.edges.filter(function (e) { return e.z > th.limbZ; });
             if (bad.length) {
                 issues.push({
@@ -545,7 +625,7 @@ export function classify(rawResult, thresholds) {
 
 export function analyzeFrame(session, frameIdx, thresholds) {
     const th = thresholds || makeThresholds();
-    const numNodes = session.skeleton ? session.skeleton.nodes.length : 0;
+    const numNodes = resolveInclusion(session);   // included-node count; also arms node/view gating
     const fr = { frameIdx: frameIdx };
 
     const frameGroup = session.frameGroups.get(frameIdx);
@@ -582,7 +662,7 @@ export function analyzeFrame(session, frameIdx, thresholds) {
 export async function runProjectQC(session, opts, onProgress) {
     opts = opts || {};
     const th = opts.thresholds || makeThresholds();
-    const numNodes = session.skeleton ? session.skeleton.nodes.length : 0;
+    const numNodes = resolveInclusion(session);   // included-node count; arms node/view gating
 
     // Frame set = union of frames that have raw 2D groups or triangulation groups.
     const frameSet = new Set();
@@ -632,6 +712,7 @@ export async function runProjectQC(session, opts, onProgress) {
             // Accumulate 2D per-track series (one pose per view+track per frame).
             for (let c = 0; c < cameras.length; c++) {
                 const camName = cameras[c].name;
+                if (!viewIncluded(camName)) continue;   // excluded view: no 2D jitter/limb series
                 const insts = instancesInView(frameGroup, camName);
                 const seenTrack = new Set();
                 for (let i = 0; i < insts.length; i++) {
@@ -695,6 +776,14 @@ export async function runProjectQC(session, opts, onProgress) {
     const edges = session.skeleton ? session.skeleton.edges : [];
     const tl2d = analyzeSeries(series2d, edges, '2d');
     const tl3d = analyzeSeries(series3d, edges, '3d');
+    // ID switches (temporal identity crossing) from the 3D per-identity series.
+    const idSwitches = detectIdSwitches(series3d, th);
+    for (let i = 0; i < idSwitches.length; i++) {
+        const ev = idSwitches[i];
+        const fr = getOrCreateFr(perFrame, ev.frameIdx);
+        if (!fr.idSwitches) fr.idSwitches = [];
+        fr.idSwitches.push({ idA: ev.idA, idB: ev.idB });
+    }
     series2d.clear();
     series3d.clear();
     // Keep the 2D and 3D velocity distributions SEPARATE — they carry different
@@ -766,9 +855,12 @@ function epipolarPerNode(group, cameras, Fcache) {
     if (!numKp) return null;
     const out = new Array(numKp).fill(null);
     for (let k = 0; k < numKp; k++) {
+        if (!nodeIncluded(k)) continue;
         const dists = [];
         for (let i = 0; i < camNames.length; i++) {
+            if (!viewIncluded(camNames[i])) continue;
             for (let j = i + 1; j < camNames.length; j++) {
+                if (!viewIncluded(camNames[j])) continue;
                 const key = camNames[i] + '|' + camNames[j];
                 let F = Fcache[key], swap = false;
                 if (!F) { F = Fcache[camNames[j] + '|' + camNames[i]]; swap = true; }
@@ -798,6 +890,7 @@ function meanNodeVelocity(cur, prev, space, dt) {
     let s = 0, n = 0;
     const len = Math.min(cur.length, prev.length);
     for (let k = 0; k < len; k++) {
+        if (!nodeIncluded(k)) continue;
         const a = cur[k], b = prev[k];
         if (a == null || b == null) continue;
         s += (space === '3d') ? dist3d(a, b) : dist2d(a, b);
@@ -832,6 +925,8 @@ function analyzeSeries(seriesMap, edges, space) {
                 const pts = getPoints(seq[si]);
                 const lens = new Array(edges.length).fill(null);
                 for (let ei = 0; ei < edges.length; ei++) {
+                    // Skip an edge whose either endpoint is an excluded node.
+                    if (!nodeIncluded(edges[ei][0]) || !nodeIncluded(edges[ei][1])) continue;
                     const a = pts[edges[ei][0]], b = pts[edges[ei][1]];
                     if (a == null || b == null) continue;
                     const L = (space === '3d') ? dist3d(a, b) : dist2d(a, b);
@@ -841,9 +936,18 @@ function analyzeSeries(seriesMap, edges, space) {
                 lengthsByFrame.push({ frameIdx: seq[si].frameIdx, lens: lens });
             }
             const ms = lensByEdge.map(function (arr) {
-                if (arr.length < 3) return null;      // need enough samples for a robust scale
+                // Need a real sample before trusting a scale — short tracklets give
+                // an unstable MAD that manufactures huge z-scores (a big driver of
+                // spurious limb flags on fragmented predicted tracks).
+                if (arr.length < LIMB_MIN_SAMPLES) return null;
                 const mm = medianMAD(arr);
-                return mm.mad > 1e-9 ? mm : null;     // constant-length edge => no meaningful z
+                if (mm.median <= 1e-9) return null;
+                // Floor the scale at a fraction of the limb length (a coefficient of
+                // variation floor). Without it a very consistent limb makes MAD ≈ 0,
+                // so a tiny wobble reads as a many-sigma outlier. With it, flagging
+                // requires a deviation of ~z·(cvFloor·length) — a real length change.
+                const madEff = Math.max(mm.mad, LIMB_CV_FLOOR * mm.median);
+                return madEff > 1e-9 ? { median: mm.median, mad: madEff } : null;
             });
             for (let fi = 0; fi < lengthsByFrame.length; fi++) {
                 const lens = lengthsByFrame[fi].lens;
@@ -860,6 +964,64 @@ function analyzeSeries(seriesMap, edges, space) {
         }
     }
     return { velEvents: velEvents, limbEvents: limbEvents, velDist: velDist, limbZDist: limbZDist };
+}
+
+// Centroid of a 3D pose over its visible, INCLUDED nodes (null if none).
+function centroid3d(points) {
+    let sx = 0, sy = 0, sz = 0, n = 0;
+    for (let k = 0; k < points.length; k++) {
+        const p = points[k];
+        if (p == null || !nodeIncluded(k)) continue;
+        sx += p[0]; sy += p[1]; sz += p[2]; n++;
+    }
+    return n ? [sx / n, sy / n, sz / n] : null;
+}
+
+// ID-switch detector (temporal): between two adjacent frames, if swapping two
+// identities' 3D-centroid assignments costs far less than keeping them (and the
+// implied motion is a real jump, not noise), the identity labels likely switched.
+// This is DISTINCT from node_swap/chimera (within-frame node membership) — here
+// each instance is internally consistent but its ID label jumped to the other.
+function detectIdSwitches(series3d, th) {
+    const events = [];
+    if (!series3d || series3d.size < 2) return events;   // need ≥ 2 identities
+    const byFrame = new Map();                            // frame -> Map(id -> centroid)
+    const moves = [];                                    // typical single-frame motion scale
+    for (const [id, seq] of series3d) {
+        const sorted = seq.slice().sort(function (a, b) { return a.frameIdx - b.frameIdx; });
+        let prev = null;
+        for (let i = 0; i < sorted.length; i++) {
+            const c = centroid3d(sorted[i].points3d);
+            if (!c) { prev = null; continue; }
+            let m = byFrame.get(sorted[i].frameIdx);
+            if (!m) { m = new Map(); byFrame.set(sorted[i].frameIdx, m); }
+            m.set(id, c);
+            const gap = prev ? (sorted[i].frameIdx - prev.f) : 0;
+            if (prev && gap > 0 && gap <= th.idSwitchMaxGap) moves.push(dist3d(c, prev.c) / gap);
+            prev = { f: sorted[i].frameIdx, c: c };
+        }
+    }
+    const typicalMove = moves.length ? median(finiteOnly(moves)) : 0;
+    const frames = Array.from(byFrame.keys()).sort(function (a, b) { return a - b; });
+    for (let fi = 1; fi < frames.length; fi++) {
+        const t0 = frames[fi - 1], t1 = frames[fi];
+        if (t1 - t0 > th.idSwitchMaxGap) continue;
+        const m0 = byFrame.get(t0), m1 = byFrame.get(t1);
+        const ids = [];
+        for (const id of m1.keys()) if (m0.has(id)) ids.push(id);
+        for (let a = 0; a < ids.length; a++) {
+            for (let b = a + 1; b < ids.length; b++) {
+                const ia = ids[a], ib = ids[b];
+                const keep = dist3d(m1.get(ia), m0.get(ia)) + dist3d(m1.get(ib), m0.get(ib));
+                const swap = dist3d(m1.get(ia), m0.get(ib)) + dist3d(m1.get(ib), m0.get(ia));
+                const minJump = th.idSwitchMoveMult * typicalMove * (t1 - t0);
+                if (swap < keep * th.idSwitchRatio && keep > Math.max(minJump, 1e-9)) {
+                    events.push({ frameIdx: t1, idA: ia, idB: ib });
+                }
+            }
+        }
+    }
+    return events;
 }
 
 function identityLabel(session, id) {

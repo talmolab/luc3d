@@ -34,6 +34,13 @@ let _sevFilter = 'all';
 
 function el(id) { return document.getElementById(id); }
 
+// Human-readable label for an issue type (the raw type stays the CSS class + filter key).
+const TYPE_LABELS = {
+    node_swap: 'node swap', id_switch: 'ID switch', low_nodes: 'low nodes',
+    limb_outlier: 'limb outlier',
+};
+function prettyType(t) { return TYPE_LABELS[t] || t; }
+
 // ---------------------------------------------------------------------------
 // Reveal / activate the QC tab (used by every entry point)
 // ---------------------------------------------------------------------------
@@ -52,11 +59,18 @@ export function showQCTab() {
 // Entry points
 // ---------------------------------------------------------------------------
 
+// Fold the 2D jitter/limb opt-in checkboxes into a thresholds object.
+function apply2dOpts(th) {
+    th.enable2dJitter = !!(el('qcEnable2dJitter') && el('qcEnable2dJitter').checked);
+    th.enable2dLimb = !!(el('qcEnable2dLimb') && el('qcEnable2dLimb').checked);
+    return th;
+}
+
 export function runQCCurrentFrame() {
     showQCTab(); // always reveal the tab, even with no session yet
     const session = state.session;
     if (!session) { renderNoSession(); return; }
-    const th = state.qcResults ? state.qcResults.thresholds : makeThresholds();
+    const th = apply2dOpts(state.qcResults ? state.qcResults.thresholds : makeThresholds());
     const frameRes = analyzeFrame(session, state.currentFrame, th);
     renderCurrentFrameResult(frameRes);
     updateQCBadge();
@@ -70,7 +84,7 @@ export async function runQCProject() {
     const btn = el('qcRunProjectBtn');
     if (btn) btn.disabled = true;
     if (progress) { progress.style.display = ''; progress.textContent = 'Running QC…'; }
-    const th = state.qcResults ? state.qcResults.thresholds : makeThresholds();
+    const th = apply2dOpts(state.qcResults ? state.qcResults.thresholds : makeThresholds());
     try {
         const result = await runProjectQC(session, {
             thresholds: th,
@@ -141,7 +155,7 @@ function scoreClass(score) {
 function renderCurrentFrameResult(frameRes) {
     const summary = el('qcSummary');
     if (!summary) return;
-    const covered = frameRes.coverage.triangulated ? 'triangulated' : 'not triangulated (reproj/swap/epipolar unavailable)';
+    const covered = frameRes.coverage.triangulated ? 'triangulated' : 'not triangulated (reproj/node-swap/epipolar unavailable)';
     const meanErr = frameRes.meanError != null ? frameRes.meanError.toFixed(2) + ' px' : '—';
     summary.innerHTML = '';
     const head = document.createElement('div');
@@ -215,7 +229,7 @@ function renderSummary(r) {
         types.forEach(function (t) {
             const c = document.createElement('button');
             c.className = 'qc-chip qc-type-' + t + (_typeFilter === t ? ' active' : '');
-            c.textContent = t + ' (' + g.issuesByType[t] + ')';
+            c.textContent = prettyType(t) + ' (' + g.issuesByType[t] + ')';
             c.onclick = function () { _typeFilter = (_typeFilter === t ? 'all' : t); renderIssueList(r); renderSummary(r); };
             chips.appendChild(c);
         });
@@ -321,7 +335,7 @@ function renderTypeFilter(r) {
     const optAll = document.createElement('option'); optAll.value = 'all'; optAll.textContent = 'All types';
     sel.appendChild(optAll);
     Object.keys(r.issuesByType).sort().forEach(function (t) {
-        const o = document.createElement('option'); o.value = t; o.textContent = t + ' (' + r.issuesByType[t] + ')';
+        const o = document.createElement('option'); o.value = t; o.textContent = prettyType(t) + ' (' + r.issuesByType[t] + ')';
         sel.appendChild(o);
     });
     sel.value = (r.issuesByType[cur] || cur === 'all') ? cur : 'all';
@@ -335,7 +349,7 @@ function issueRow(iss, clickable) {
     row.appendChild(dot);
     const body = document.createElement('div');
     body.className = 'qc-issue-body';
-    body.innerHTML = '<span class="qc-issue-type qc-type-' + iss.type + '">' + iss.type + '</span> ' +
+    body.innerHTML = '<span class="qc-issue-type qc-type-' + iss.type + '">' + prettyType(iss.type) + '</span> ' +
         '<span class="qc-issue-frame">F' + iss.frameIdx + '</span> ' +
         '<span class="qc-issue-desc">' + escapeHtml(iss.description || '') + '</span>';
     row.appendChild(body);
@@ -375,7 +389,7 @@ function renderIssueList(r) {
         const body = document.createElement('div');
         body.className = 'qc-issue-body';
         const frameLabel = run.startFrame === run.endFrame ? ('F' + run.startFrame) : ('F' + run.startFrame + '–F' + run.endFrame);
-        body.innerHTML = '<span class="qc-issue-type qc-type-' + run.type + '">' + run.type + '</span> ' +
+        body.innerHTML = '<span class="qc-issue-type qc-type-' + run.type + '">' + prettyType(run.type) + '</span> ' +
             '<span class="qc-issue-frame">' + frameLabel + '</span> ' +
             '<span class="qc-issue-desc">' + escapeHtml(run.description || '') + '</span>' +
             (run.count > 1 ? ' <span class="qc-muted">(' + run.count + ' frames)</span>' : '');
@@ -420,6 +434,22 @@ export function setupQCPanel() {
     if (typeSel) typeSel.onchange = function () { if (state.qcResults) renderIssueList(state.qcResults); };
     const sevSel = el('qcSevFilter');
     if (sevSel) sevSel.onchange = function () { if (state.qcResults) renderIssueList(state.qcResults); };
+    // 2D jitter/limb opt-in: toggling after a run re-classifies live (the events are
+    // already in the raw store, so no geometry recompute — same as a threshold drag).
+    function on2dToggle() {
+        const r = state.qcResults;
+        if (!r) return;
+        apply2dOpts(r.thresholds);
+        classify(r, r.thresholds);
+        renderSummary(r);
+        renderTypeFilter(r);
+        renderIssueList(r);
+        updateQCBadge();
+    }
+    const j2d = el('qcEnable2dJitter');
+    if (j2d) j2d.onchange = on2dToggle;
+    const l2d = el('qcEnable2dLimb');
+    if (l2d) l2d.onchange = on2dToggle;
 }
 
 function escapeHtml(s) {
