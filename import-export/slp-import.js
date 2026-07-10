@@ -254,6 +254,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
     var restoredGroups = 0, restoredWith3d = 0;
+    // For deriving type/trackIdx/score from resolved typed instances when slim
+    // metadata (#134) omits them.
+    var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
 
     // Index the legacy raw frame_group_dicts by frame index for the identity
     // fallback (only consulted when metadata.lucid.identityId is absent).
@@ -325,10 +328,19 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                     }
                 }
 
+                // trackIdx / type / score are reconstructed from the resolved
+                // typed instance when absent from metadata (slim files, #134);
+                // older files that still carry them in metadata are honored.
                 var instMeta = instanceMetaMap[igCamName] || {};
-                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : null;
-                var instType = instMeta.type || 'predicted';
-                var instScore = instMeta.score || 0;
+                var _isPred = (_SIO && _SIO.PredictedInstance)
+                    ? (typedInst instanceof _SIO.PredictedInstance)
+                    : (typedInst && typedInst.pointScores !== undefined);
+                var _derivedTrackIdx = (typedInst && typedInst.track && typedInst.track.name != null)
+                    ? session.tracks.indexOf(typedInst.track.name) : -1;
+                if (_derivedTrackIdx < 0) _derivedTrackIdx = null;
+                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : _derivedTrackIdx;
+                var instType = instMeta.type || (_isPred ? 'predicted' : 'user');
+                var instScore = instMeta.score != null ? instMeta.score : (_isPred ? (typedInst.score || 0) : 0);
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
                 inst.occluded = occluded;

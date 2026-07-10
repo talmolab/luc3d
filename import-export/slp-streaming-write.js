@@ -344,17 +344,14 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
                 instanceRefsByCamera.set(sioCamRef, ref);
                 labeledFrameRefsByCamera.set(sioCamRef, ref[0]);
                 refCount++;
-                var instMeta = {
-                    trackIdx: gInst.trackIdx, type: gInst.type || 'user',
-                    score: gInst.score || 0, modified: gInst.modified || false,
-                };
-                if (gInst.nulledNodes && gInst.nulledNodes.size > 0) instMeta.nulledNodes = Array.from(gInst.nulledNodes);
-                if (gInst.occluded) {
-                    var hasAnyOcc = false;
-                    for (var ok in gInst.occluded) { if (gInst.occluded[ok]) { hasAnyOcc = true; break; } }
-                    if (hasAnyOcc) instMeta.occluded = gInst.occluded;
-                }
-                igLucidMeta.instanceMeta[gCamName] = instMeta;
+                // Slim metadata (#134): only non-reconstructable fields, only
+                // when set (trackIdx/type/score/occluded derive from the standard
+                // instance on load). Mirrors buildSlpLabelsAllViews.
+                var instMeta = {};
+                var hasMeta = false;
+                if (gInst.modified) { instMeta.modified = true; hasMeta = true; }
+                if (gInst.nulledNodes && gInst.nulledNodes.size > 0) { instMeta.nulledNodes = Array.from(gInst.nulledNodes); hasMeta = true; }
+                if (hasMeta) igLucidMeta.instanceMeta[gCamName] = instMeta;
             }
             if (refCount === 0) continue;
 

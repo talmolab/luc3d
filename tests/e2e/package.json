@@ -7,7 +7,8 @@
     "postinstall": "playwright install chromium",
     "test:scoping": "node session-video-scoping.mjs",
     "test:occlusion": "node occlusion-roundtrip.mjs",
-    "test:save-dedup": "node save-no-inline-dup.mjs"
+    "test:save-dedup": "node save-no-inline-dup.mjs",
+    "test:save-slim": "node save-slim-metadata.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"
