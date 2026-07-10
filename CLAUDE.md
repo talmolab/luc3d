@@ -59,7 +59,18 @@ python3 -m http.server 8080
   ("A VideoSample was garbage collected without first being closed"), which can
   exhaust the WebCodecs frame pool over a long session. Both patch lines are
   marked `// LUCID local patch (#115)`. **Re-apply after any re-vendor** (grep the
-  marker) and report upstream to sleap-io. This is the read/write split:
+  marker) and report upstream to sleap-io.
+  **LOCAL PATCH (issue #134):** `lib/sleap-io/chunk-M65RB7KH.js`
+  `serializeInstanceGroup` was patched to write a grouped instance's inline
+  point dict (`pointsToDict`) **only as a fallback** when no labeled-frame ref
+  `(lf_idx, inst_idx)` resolves. Upstream wrote BOTH the ref map AND the full
+  inline 2D pose, duplicating every keypoint into the single per-session
+  `sessions_json` string — which overflowed V8's max string length
+  ("Save failed: invalid string length") on large projects and ~2×'d the `.slp`.
+  The ref map round-trips the grouping losslessly (identical to the streaming
+  writer's output). Marked `// LUCID local patch (#134)`; **re-apply after any
+  re-vendor** (grep the marker) and report upstream. Guarded by
+  `tests/e2e/save-no-inline-dup.mjs`. This is the read/write split:
   - **Read** (`parseSlpViaSleapIO`, `import-export/file-io.js`): drives
     `readSlpStreaming` (#196) and adapts the typed `Labels` into LUCID's `slpData`
     shape. Grouping is rebuilt from the **typed `RecordingSession`** by
