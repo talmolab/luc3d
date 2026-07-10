@@ -1277,98 +1277,166 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
         }
     }
 
-    // ---- Per-node per-camera error breakdown table ----
+    // ---- Per-instance per-node per-camera error breakdown (issue #135) ----
+    // The headline mean + per-camera rows above are the frame SUMMARY (averaged
+    // across every triangulated instance). Here we drill down to ONE breakdown
+    // table PER instance, each labelled by its track/identity, so a large error
+    // can be traced to a specific animal + node + view instead of being hidden
+    // in a cross-track average.
     var breakdownDiv = document.getElementById('errorBreakdownTable');
     breakdownDiv.textContent = '';
     if (results && results.length > 0 && state.session && state.session.skeleton) {
         var nodeNames = state.session.skeleton.nodes;
         var cameras = state.session.cameras;
-        var camNames = cameras.map(function(c) { return c.name; });
+        var camNames = cameras.map(function (c) { return c.name; });
+        var colorClass = function (v) {
+            return v < 2 ? 'var(--success-color)' : v < 5 ? 'var(--warning-color)' : 'var(--error-color)';
+        };
 
-        // Accumulate errors: nodeErrors[nodeIdx][camName] = {sum, count}
-        var nodeErrors = [];
-        for (var ni = 0; ni < nodeNames.length; ni++) {
-            nodeErrors[ni] = {};
-            for (var ci = 0; ci < camNames.length; ci++) {
-                nodeErrors[ni][camNames[ci]] = { sum: 0, count: 0 };
+        // Build one per-node × per-camera table for a single result. Kept
+        // sum/count based so a rare multi-observation node still averages
+        // correctly, but for one instance each cell is normally one value.
+        var buildBreakdownTable = function (r) {
+            var nodeErrors = [];
+            for (var ni = 0; ni < nodeNames.length; ni++) {
+                nodeErrors[ni] = {};
+                for (var ci = 0; ci < camNames.length; ci++) {
+                    nodeErrors[ni][camNames[ci]] = { sum: 0, count: 0 };
+                }
             }
-        }
-        for (var ri = 0; ri < results.length; ri++) {
-            var r = results[ri];
-            if (!r.errors) continue;
-            for (var ci = 0; ci < camNames.length; ci++) {
-                var camErrs = r.errors[camNames[ci]];
-                if (!camErrs) continue;
-                for (var ni = 0; ni < Math.min(camErrs.length, nodeNames.length); ni++) {
-                    if (camErrs[ni] != null) {
-                        nodeErrors[ni][camNames[ci]].sum += camErrs[ni];
-                        nodeErrors[ni][camNames[ci]].count++;
+            if (r.errors) {
+                for (var ci = 0; ci < camNames.length; ci++) {
+                    var camErrs = r.errors[camNames[ci]];
+                    if (!camErrs) continue;
+                    for (var ni = 0; ni < Math.min(camErrs.length, nodeNames.length); ni++) {
+                        if (camErrs[ni] != null) {
+                            nodeErrors[ni][camNames[ci]].sum += camErrs[ni];
+                            nodeErrors[ni][camNames[ci]].count++;
+                        }
                     }
                 }
             }
-        }
 
-        // Build table
-        var tbl = document.createElement('table');
-        tbl.style.cssText = 'font-size:10px;border-collapse:collapse;width:100%;';
-        var thead = document.createElement('thead');
-        var hrow = document.createElement('tr');
-        var th0 = document.createElement('th');
-        th0.textContent = 'Node';
-        th0.style.cssText = 'text-align:left;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
-        hrow.appendChild(th0);
-        for (var ci = 0; ci < camNames.length; ci++) {
-            var th = document.createElement('th');
-            th.textContent = camNames[ci];
-            th.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
-            hrow.appendChild(th);
-        }
-        var thAvg = document.createElement('th');
-        thAvg.textContent = 'Avg';
-        thAvg.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);font-weight:700;';
-        hrow.appendChild(thAvg);
-        thead.appendChild(hrow);
-        tbl.appendChild(thead);
-
-        var tbody = document.createElement('tbody');
-        for (var ni = 0; ni < nodeNames.length; ni++) {
-            var row = document.createElement('tr');
-            var tdName = document.createElement('td');
-            tdName.textContent = nodeNames[ni];
-            tdName.style.cssText = 'padding:1px 4px;white-space:nowrap;color:var(--text-secondary);';
-            row.appendChild(tdName);
-            var rowSum = 0, rowCount = 0;
+            var tbl = document.createElement('table');
+            tbl.style.cssText = 'font-size:10px;border-collapse:collapse;width:100%;';
+            var thead = document.createElement('thead');
+            var hrow = document.createElement('tr');
+            var th0 = document.createElement('th');
+            th0.textContent = 'Node';
+            th0.style.cssText = 'text-align:left;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
+            hrow.appendChild(th0);
             for (var ci = 0; ci < camNames.length; ci++) {
-                var td = document.createElement('td');
-                td.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;';
-                var entry = nodeErrors[ni][camNames[ci]];
-                if (entry.count > 0) {
-                    var avg = entry.sum / entry.count;
-                    td.textContent = avg.toFixed(1);
-                    td.style.color = avg < 2 ? 'var(--success-color)' : avg < 5 ? 'var(--warning-color)' : 'var(--error-color)';
-                    rowSum += entry.sum;
-                    rowCount += entry.count;
-                } else {
-                    td.textContent = '-';
-                    td.style.color = 'var(--text-muted)';
+                var th = document.createElement('th');
+                th.textContent = camNames[ci];
+                th.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
+                hrow.appendChild(th);
+            }
+            var thAvg = document.createElement('th');
+            thAvg.textContent = 'Avg';
+            thAvg.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);font-weight:700;';
+            hrow.appendChild(thAvg);
+            thead.appendChild(hrow);
+            tbl.appendChild(thead);
+
+            var tbody = document.createElement('tbody');
+            for (var ni = 0; ni < nodeNames.length; ni++) {
+                var row = document.createElement('tr');
+                var tdName = document.createElement('td');
+                tdName.textContent = nodeNames[ni];
+                tdName.style.cssText = 'padding:1px 4px;white-space:nowrap;color:var(--text-secondary);';
+                row.appendChild(tdName);
+                var rowSum = 0, rowCount = 0;
+                for (var ci = 0; ci < camNames.length; ci++) {
+                    var td = document.createElement('td');
+                    td.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;';
+                    var entry = nodeErrors[ni][camNames[ci]];
+                    if (entry.count > 0) {
+                        var avg = entry.sum / entry.count;
+                        td.textContent = avg.toFixed(1);
+                        td.style.color = colorClass(avg);
+                        rowSum += entry.sum;
+                        rowCount += entry.count;
+                    } else {
+                        td.textContent = '-';
+                        td.style.color = 'var(--text-muted)';
+                    }
+                    row.appendChild(td);
                 }
-                row.appendChild(td);
+                var tdAvg = document.createElement('td');
+                tdAvg.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;font-weight:700;';
+                if (rowCount > 0) {
+                    var rowAvg = rowSum / rowCount;
+                    tdAvg.textContent = rowAvg.toFixed(1);
+                    tdAvg.style.color = colorClass(rowAvg);
+                } else {
+                    tdAvg.textContent = '-';
+                    tdAvg.style.color = 'var(--text-muted)';
+                }
+                row.appendChild(tdAvg);
+                tbody.appendChild(row);
             }
-            var tdAvg = document.createElement('td');
-            tdAvg.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;font-weight:700;';
-            if (rowCount > 0) {
-                var rowAvg = rowSum / rowCount;
-                tdAvg.textContent = rowAvg.toFixed(1);
-                tdAvg.style.color = rowAvg < 2 ? 'var(--success-color)' : rowAvg < 5 ? 'var(--warning-color)' : 'var(--error-color)';
-            } else {
-                tdAvg.textContent = '-';
-                tdAvg.style.color = 'var(--text-muted)';
+            tbl.appendChild(tbody);
+            return tbl;
+        };
+
+        // Resolve a stable label + color for the instance behind a result,
+        // preferring identity, then track, then a positional fallback.
+        var resultLabel = function (r, idx) {
+            var group = r.group;
+            var trackIdx = null;
+            if (group && group.instances) {
+                var firstInst = group.instances.values().next().value;
+                if (firstInst && firstInst.trackIdx != null && firstInst.trackIdx >= 0) trackIdx = firstInst.trackIdx;
             }
-            row.appendChild(tdAvg);
-            tbody.appendChild(row);
+            var trackName = trackIdx != null ? (state.session.tracks[trackIdx] || ('track ' + trackIdx)) : null;
+            var identName = null;
+            if (group && group.identityId != null && group.identityId >= 0 && state.session.identities) {
+                var ident = state.session.identities.find(function (id) { return id.id === group.identityId; });
+                if (ident) identName = ident.name;
+            }
+            var parts = [];
+            if (identName) parts.push(identName);
+            if (trackName) parts.push(trackName);
+            var text = parts.length ? parts.join(' · ') : ('Instance ' + (idx + 1));
+            // Trackless groups get a neutral dot instead of implying track 0.
+            var color = trackIdx != null ? getTrackColor(trackIdx) : 'var(--text-muted)';
+            return { text: text, color: color };
+        };
+
+        // Order instances by track name, then identity, for a stable reading
+        // order across frames (matches the Linked Instance Groups table).
+        var orderedResults = results.slice().sort(function (a, b) {
+            var la = resultLabel(a, 0).text, lb = resultLabel(b, 0).text;
+            return la.localeCompare(lb);
+        });
+
+        for (var oi = 0; oi < orderedResults.length; oi++) {
+            var res = orderedResults[oi];
+            var block = document.createElement('div');
+            block.style.cssText = 'margin-top:' + (oi === 0 ? '0' : '8px') + ';';
+
+            // Instance header: color dot + label + this instance's mean error.
+            var lbl = resultLabel(res, oi);
+            var hdr = document.createElement('div');
+            hdr.style.cssText = 'display:flex;align-items:center;gap:5px;margin-bottom:2px;font-size:10px;';
+            var dot = document.createElement('span');
+            dot.className = 'track-indicator';
+            dot.style.cssText = 'background-color:' + lbl.color + ';flex:0 0 auto;';
+            hdr.appendChild(dot);
+            var name = document.createElement('span');
+            name.textContent = lbl.text;
+            name.style.cssText = 'color:var(--text-secondary);font-weight:600;';
+            hdr.appendChild(name);
+            if (res.meanError != null) {
+                var me = document.createElement('span');
+                me.textContent = res.meanError.toFixed(1) + ' px';
+                me.style.cssText = 'margin-left:auto;font-family:monospace;color:' + colorClass(res.meanError) + ';';
+                hdr.appendChild(me);
+            }
+            block.appendChild(hdr);
+            block.appendChild(buildBreakdownTable(res));
+            breakdownDiv.appendChild(block);
         }
-        tbl.appendChild(tbody);
-        breakdownDiv.appendChild(tbl);
     }
 
     // ---- Linked Instance Groups table ----

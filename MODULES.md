@@ -814,6 +814,17 @@ multi-frame triangulation modals, track-swap dialogs.
 Skeleton, Sessions, and Frame Info tables; hosts the skeleton editor and
 the per-frame instance-group / unlinked-instance tables.
 
+**Reprojection Error panel (`updateFrameInfo`, issue #135).** The headline mean,
+undistorted residual, method label, and per-camera rows are the frame SUMMARY
+(averaged over every triangulated instance). The "Per-instance node breakdown"
+`<details>` then renders ONE per-node × per-camera table PER instance, each
+labelled with a color dot + track/identity (identity preferred, then track, then
+`Instance N`) and that instance's own mean error, ordered by label. This
+replaced the earlier single table that averaged all instances together and hid
+which animal/node/view carried a large error. Reads each `state.triangulationResults`
+entry's `{ group, errors, meanError }`; labels via `getTrackColor` + the session
+tracks/identities.
+
 **Instance-panel track/identity dropdowns.** Each grouped/unlinked instance
 row has a track `<select>` and an identity `<select>`. Both selects include a
 `(none)` option (value `-1`) and a `(+) New Track` / `(+) New ID` option (value
