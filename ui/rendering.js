@@ -10,7 +10,7 @@ import {
     ensureLazyFrameData, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
 } from '../pose/triangulation.js';
-import { drawFrameOverlays } from './overlays.js';
+import { drawFrameOverlays, makeVideoToCanvasTransform } from './overlays.js';
 import { isCameraTracked } from './settings.js';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
@@ -266,6 +266,10 @@ export function drawAllOverlays(frameIdx) {
             editGroupTarget: editGroupTarget,
             trackingExcluded: !isCameraTracked(view.name),
         });
+
+        // QC location indicator: draw an orange box around the flagged instance and
+        // arrows pointing at flagged nodes for THIS view/frame (set on QC row click).
+        drawQCHighlight(view.overlayCtx, view.name, view, frameIdx);
     }
 
     // Update info panel with current frame stats + the timeline playhead.
@@ -283,6 +287,56 @@ export function drawAllOverlays(frameIdx) {
         updateFrameInfo(frameIdx, instanceGroups);
         if (timeline) timeline.setCurrentFrame(frameIdx);
     }
+}
+
+// ============================================
+// QC location indicator (orange box + node arrows)
+// ============================================
+//
+// `state.qcHighlight` (set by ui/qc-panel.js on a flagged-row click) is:
+//   { frameIdx, boxes:[{view,minx,miny,maxx,maxy}], nodes:[{view,x,y}] }
+// Coordinates are in VIDEO pixels; we map them to the overlay canvas with the same
+// transform the skeleton overlays use, so the box/arrows land exactly on the pose.
+function drawQCHighlight(ctx, viewName, view, frameIdx) {
+    const hl = state.qcHighlight;
+    if (!ctx || !hl || hl.frameIdx !== frameIdx) return;
+    const tf = makeVideoToCanvasTransform(view.videoWidth, view.videoHeight,
+        view.overlayCanvas.width, view.overlayCanvas.height);
+    const ORANGE = '#ff8c00';
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = ORANGE;
+    ctx.fillStyle = ORANGE;
+    // Boxes around flagged instances.
+    (hl.boxes || []).forEach(function (b) {
+        if (b.view !== viewName) return;
+        const p0 = tf(b.minx, b.miny), p1 = tf(b.maxx, b.maxy);
+        const pad = 8;
+        const x = Math.min(p0.x, p1.x) - pad, y = Math.min(p0.y, p1.y) - pad;
+        const w = Math.abs(p1.x - p0.x) + pad * 2, h = Math.abs(p1.y - p0.y) + pad * 2;
+        ctx.setLineDash([8, 4]);
+        ctx.strokeRect(x, y, w, h);
+        ctx.setLineDash([]);
+    });
+    // Arrows pointing at flagged nodes (from up-left into the node).
+    (hl.nodes || []).forEach(function (nd) {
+        if (nd.view !== viewName) return;
+        const p = tf(nd.x, nd.y);
+        const len = 26, tip = 7;               // arrow shaft length + arrowhead size
+        const ax = p.x - len, ay = p.y - len;  // tail up-and-left of the node
+        // Shaft.
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(p.x - tip, p.y - tip); ctx.stroke();
+        // Arrowhead.
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - tip * 2, p.y - tip);
+        ctx.lineTo(p.x - tip, p.y - tip * 2);
+        ctx.closePath();
+        ctx.fill();
+        // Ring on the node.
+        ctx.beginPath(); ctx.arc(p.x, p.y, 9, 0, Math.PI * 2); ctx.stroke();
+    });
+    ctx.restore();
 }
 
 // ============================================

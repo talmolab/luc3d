@@ -419,21 +419,25 @@ function classifyFrame(session, fr, th) {
                 const m = g.perNode[k];
                 if (m == null || m <= th.reprojHigh) continue;
                 const camErrs = g.perNodeCam[k];
-                let isInversion = false, desc;
+                let isInversion = false, desc, worstCam = null;
                 const kpName = nodeNames[k] || ('kp' + k);
                 if (camErrs && camErrs.length >= 2) {
                     const sorted = camErrs.slice().sort(function (x, y) { return y.err - x.err; });
                     const worst = sorted[0];
+                    worstCam = worst.cam;
                     const otherMed = median(sorted.slice(1).map(function (c) { return c.err; }));
                     if (worst.err > otherMed * 3 && otherMed < 3) isInversion = true;
                     desc = kpName + ': ' + worst.err.toFixed(1) + 'px in ' + worst.cam +
                         ' (vs ' + sorted.slice(1).map(function (c) { return c.cam + ': ' + c.err.toFixed(1); }).join(', ') + ')';
+                } else if (camErrs && camErrs.length === 1) {
+                    worstCam = camErrs[0].cam;
+                    desc = kpName + ': ' + m.toFixed(1) + 'px reprojection error in ' + worstCam;
                 } else {
                     desc = kpName + ': ' + m.toFixed(1) + 'px reprojection error';
                 }
                 issues.push({
                     type: isInversion ? 'inversion' : 'reprojection', severity: 'high',
-                    frameIdx: fr.frameIdx, trackIdx: g.trackIdx, keypoints: [k],
+                    frameIdx: fr.frameIdx, trackIdx: g.trackIdx, keypoints: [k], view: worstCam,
                     description: desc + (isInversion ? ' — possible mislabel' : ''),
                 });
             }
@@ -1133,11 +1137,12 @@ export function groupConsecutiveIssues(sortedIssues, gap, cap) {
         for (let i = 1; i <= list.length; i++) {
             if (i === list.length || list[i].frameIdx - list[i - 1].frameIdx > gap) {
                 const seg = list.slice(start, i);
+                const mid = Math.floor(seg.length / 2);
                 runs.push({
                     type: seg[0].type, severity: seg[0].severity,
                     startFrame: seg[0].frameIdx, endFrame: seg[seg.length - 1].frameIdx,
-                    count: seg.length, representative: seg[Math.floor(seg.length / 2)].frameIdx,
-                    description: seg[0].description, issue: seg[0],
+                    count: seg.length, representative: seg[mid].frameIdx,
+                    description: seg[0].description, issue: seg[mid],   // representative-frame issue (for seek + highlight)
                 });
                 start = i;
             }

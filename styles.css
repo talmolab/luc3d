@@ -3869,6 +3869,8 @@ kbd {
     background: var(--bg-button); color: var(--text-secondary); border: 1px solid var(--border-color); }
 .qc-chip:hover { background: var(--bg-button-hover); }
 .qc-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.qc-chip-zero { opacity: 0.45; cursor: default; }
+.qc-chip-zero:hover { background: var(--bg-button); }
 
 .qc-hist { margin-bottom: 10px; }
 .qc-hist-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; }
