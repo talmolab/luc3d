@@ -96,7 +96,7 @@
     });
 
     // -------------------------------------------------------------------
-    describe('QC — swap detection is symmetric', function () {
+    describe('QC — node-swap / chimera detection is symmetric', function () {
         function rawWith(swaps) {
             return {
                 session: makeSession(),
@@ -106,22 +106,58 @@
                 raw: { perFrame: new Map([[0, { frameIdx: 0, swaps: swaps }]]) },
             };
         }
-        it('flags a swap when BOTH directions cross', function () {
+        it('flags a node swap when BOTH directions cross', function () {
             if (!available()) return;
             // A's detection near B's reprojection (dAB<0.8*dAA) AND vice-versa.
             const km = [{ kp: 0, cam: 'a', dAA: 10, dAB: 1, dBB: 10, dBA: 1 },
                         { kp: 1, cam: 'a', dAA: 10, dAB: 1, dBB: 10, dBA: 1 },
                         { kp: 2, cam: 'a', dAA: 10, dAB: 1, dBB: 10, dBA: 1 }];
             const r = classify(rawWith([{ trackA: 0, trackB: 1, kpMargins: km }]));
-            assertEqual(r.issuesByType.swap || 0, 1, 'one swap issue');
-            assertEqual(r.sortedIssues[0].severity, 'high', '3 crossed kps => high');
+            assertEqual(r.issuesByType.node_swap || 0, 1, 'one node_swap issue');
+            assertEqual(r.sortedIssues[0].severity, 'high', '3 crossed nodes => high');
         });
         it('does NOT flag when only one direction crosses (old false-positive case)', function () {
             if (!available()) return;
             // A crosses (dAB<0.8*dAA) but B does not (dBA=9 not < 0.8*10=8).
             const km = [{ kp: 0, cam: 'a', dAA: 10, dAB: 1, dBB: 10, dBA: 9 }];
             const r = classify(rawWith([{ trackA: 0, trackB: 1, kpMargins: km }]));
-            assertEqual(r.issuesByType.swap || 0, 0, 'asymmetric => no swap');
+            assertEqual(r.issuesByType.node_swap || 0, 0, 'asymmetric => no node_swap');
+        });
+    });
+
+    // -------------------------------------------------------------------
+    describe('QC — ID switch (temporal) is distinct from node swap', function () {
+        it('flags an ID switch when two identities exchange positions', async function () {
+            if (!available()) return;
+            const session = makeSession();
+            const idA = session.addIdentity('A');
+            const idB = session.addIdentity('B');
+            state.session = session;
+            state.triangulationResults = new Map();
+            // Two identities sit far apart and move smoothly, then SWAP positions at f=10.
+            for (let f = 0; f <= 20; f++) {
+                const swapped = (f >= 10);
+                const posA = swapped ? [100, 0, 50] : [0, 0, 50];
+                const posB = swapped ? [0, 0, 50] : [100, 0, 50];
+                const mk = function (id, base) {
+                    const g = new InstanceGroup(f, id); g.identityId = id;
+                    g.addInstance('a', new Instance(clone(BASE_PTS), 0, 'user', 1));
+                    g.addInstance('b', new Instance(clone(BASE_PTS), 0, 'user', 1));
+                    g.points3d = [base, [base[0], 10, 50], [base[0], 20, 50], [base[0], 30, 50]];
+                    g.markClean();
+                    return { group: g, points3d: g.points3d,
+                        reprojections: { a: clone(BASE_PTS), b: clone(BASE_PTS) },
+                        errors: { a: [1, 1, 1, 1], b: [1, 1, 1, 1] },
+                        errorsUndistorted: { a: [1, 1, 1, 1], b: [1, 1, 1, 1] }, meanError: 1, method: 'dlt' };
+                };
+                const eA = mk(idA.id, posA), eB = mk(idB.id, posB);
+                session.instanceGroups.set(f, [eA.group, eB.group]);
+                state.triangulationResults.set(f, [eA, eB]);
+            }
+            const result = await runProjectQC(session, { thresholds: makeThresholds() });
+            assertTrue((result.issuesByType.id_switch || 0) >= 1, 'flagged an ID switch at the crossover');
+            assertTrue(result.sortedIssues.some(function (i) { return i.type === 'id_switch' && i.frameIdx === 10; }),
+                'ID switch at the swap frame');
         });
     });
 
@@ -297,7 +333,7 @@
             if (!available()) return;
             const raw = {
                 session: makeSession(),
-                thresholds: makeThresholds({ velThresh: 10, limbZ: 3 }),
+                thresholds: makeThresholds({ velThresh: 10, limbZ: 3, enable2dJitter: true }),
                 coverage: { total: 1, triangulated: 0 },
                 globalStats: {},
                 raw: {
@@ -327,7 +363,7 @@
                 fg.addInstance('a', new Instance(pts, 0, 'user', 1));  // track 0 across all frames
                 session.frameGroups.set(f, fg);
             }
-            const result = await runProjectQC(session, { thresholds: makeThresholds() });
+            const result = await runProjectQC(session, { thresholds: makeThresholds({ enable2dJitter: true }) });
             assertTrue(result.distributions.velocity.length > 0, '2D velocities were computed');
             assertTrue((result.issuesByType.jitter || 0) >= 1, 'flagged the 2D jitter frame');
         });

@@ -776,6 +776,10 @@
                             <button class="toolbar-btn" id="qcNextBtn" title="Next flagged frame (Shift+Q)">Next ▸</button>
                         </div>
                         <div class="qc-hint">QC reads cached triangulations — run <strong>Triangulate All</strong> first for full 3D coverage.</div>
+                        <div class="qc-opts">
+                            <label class="qc-check" title="2D pixel-space jitter is perspective-noisy on predicted data; off by default (3D per-identity jitter always runs)"><input type="checkbox" id="qcEnable2dJitter"> 2D jitter</label>
+                            <label class="qc-check" title="2D pixel-space limb length is perspective-noisy; off by default (3D per-identity limb always runs)"><input type="checkbox" id="qcEnable2dLimb"> 2D limb length</label>
+                        </div>
                         <div id="qcProgress" class="qc-progress" style="display:none"></div>
                         <div id="qcSummary" class="qc-summary"><div class="qc-muted">QC has not been run. Click <strong>Check Frame</strong> or <strong>Run Project QC</strong>.</div></div>
                     </div>

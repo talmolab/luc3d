@@ -3847,6 +3847,8 @@ kbd {
 
 .qc-controls { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .qc-check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; }
+.qc-opts { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 6px; }
+.qc-opts .qc-check { margin-bottom: 0; }
 .qc-progress { font-size: 12px; color: var(--accent); margin: 6px 0; }
 .qc-muted { color: var(--text-muted); font-size: 11px; }
 .qc-hint { color: var(--text-muted); font-size: 10px; font-weight: normal; }
