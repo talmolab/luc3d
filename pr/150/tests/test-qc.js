@@ -251,6 +251,47 @@
     });
 
     // -------------------------------------------------------------------
+    describe('QC — conservative defaults do not flag a clean dataset', function () {
+        // The core regression guard for the "it flags every frame" report: a large,
+        // clean, low-error session (mean reproj ~2px, smooth motion, stable limbs,
+        // one animal per view) must leave the overwhelming majority of frames unflagged.
+        it('flags only a tiny fraction of frames on clean, low-error data', async function () {
+            if (!available()) return;
+            const session = makeSession();
+            state.session = session;
+            state.triangulationResults = new Map();
+            const N = 200;
+            for (let f = 0; f < N; f++) {
+                const dx = (f % 7);                              // small bounded drift (0..6 px)
+                const pa = BASE_PTS.map(function (p) { return [p[0] + dx, p[1]]; });
+                const pb = BASE_PTS.map(function (p) { return [p[0] + dx + 20, p[1]]; });
+                const fg = new FrameGroup(f);
+                const g = new InstanceGroup(f, -1);
+                const ia = new Instance(pa, 0, 'user', 1);
+                const ib = new Instance(pb, 0, 'user', 1);
+                g.addInstance('a', ia); g.addInstance('b', ib);
+                fg.addInstance('a', ia); fg.addInstance('b', ib);
+                g.points3d = [[dx, 0, 50], [dx, 10, 50], [dx, 20, 50], [dx, 30, 50]];
+                g.markClean();
+                session.frameGroups.set(f, fg);
+                session.instanceGroups.set(f, [g]);
+                state.triangulationResults.set(f, [{
+                    group: g, points3d: g.points3d,
+                    reprojections: { a: pa, b: pb },
+                    errors: { a: [2, 2, 2, 2], b: [2, 2, 2, 2] },        // ~2px per node
+                    errorsUndistorted: { a: [2, 2, 2, 2], b: [2, 2, 2, 2] },
+                    meanError: 2, method: 'dlt',
+                }]);
+            }
+            const result = await runProjectQC(session, { thresholds: makeThresholds() });
+            assertTrue(result.globalStats.flaggedFrameCount <= N * 0.05,
+                'clean data should flag <=5% of frames, got ' +
+                result.globalStats.flaggedFrameCount + '/' + N +
+                ' (issues: ' + JSON.stringify(result.issuesByType) + ')');
+        });
+    });
+
+    // -------------------------------------------------------------------
     describe('QC — temporal jitter + limb length', function () {
         it('classify emits jitter (velocity>threshold) and limb_outlier (z>threshold)', function () {
             if (!available()) return;
@@ -315,7 +356,7 @@
                 }]);
             }
             const result = await runProjectQC(session, { thresholds: makeThresholds() });
-            assertTrue(result.distributions.velocity.length > 0, '3D velocities were computed');
+            assertTrue(result.distributions.velocity3d.length > 0, '3D velocities were computed');
             assertTrue((result.issuesByType.jitter || 0) >= 1, 'flagged the 3D jitter frame');
             // The jitter description should mention 3D space.
             assertTrue(result.sortedIssues.some(function (i) { return i.type === 'jitter' && /3d/.test(i.description); }),

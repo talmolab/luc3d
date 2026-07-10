@@ -31,27 +31,44 @@ import {
 export const QC_DEFAULTS = {
     reprojLow: 2,          // px — green
     reprojMed: 5,          // px — yellow
-    reprojHigh: 10,        // px — red / outlier (overridden by auto P95 at runtime)
-    epiThresh: 10,         // px — epipolar-distance outlier (auto P95)
-    velThresh: null,       // 3D units/frame — jitter (auto P95)
+    // --- Reprojection: ABSOLUTE quality bar (not a percentile). A node is an
+    // outlier only when its per-camera-mean reprojection error clears BOTH a hard
+    // floor AND a multiple of the dataset median, so a clean set (mean < 3px)
+    // flags only genuinely bad nodes rather than a fixed 5% by construction.
+    reprojHigh: 10,        // px — hard floor for a reprojection outlier
+    reprojMedianMult: 4,   // ... or 4x the dataset median per-node error, whichever is larger
+    // --- Epipolar: same absolute-bar treatment.
+    epiThresh: 15,         // px — hard floor for an epipolar outlier
+    epiMedianMult: 4,      // ... or 4x median epipolar distance
     limbCV: 0.15,          // coefficient-of-variation flag for limb length
-    limbZ: 3.0,            // per-frame limb-length z-score outlier
+    // --- Limb-length: robust MAD-based z-score (median/MAD, not mean/std, so a
+    // few spikes don't inflate the scale and hide everything else).
+    limbZ: 6.0,            // per-frame limb-length MAD z-score outlier (conservative)
+    // --- Temporal jitter: robust per-series threshold = median + k·MAD, with a
+    // hard 2D pixel floor so near-static predicted series don't flag pixel noise.
+    // Computed per space at runtime into velThresh2d / velThresh3d.
+    velThresh: null,       // legacy single threshold (fallback for callers/tests)
+    velThresh2d: null,     // px/frame — 2D jitter (auto: max(median+k·MAD, velFloor2d))
+    velThresh3d: null,     // world units/frame — 3D jitter (auto: median+k·MAD)
+    velMadK: 6,            // k in median + k·MAD (conservative)
+    velFloor2d: 15,        // px/frame — absolute floor; a real 2D jump exceeds this
     minCameras: 2,         // a node visible in < this many cams => "miss"
     // Swap (cross-instance identity) detection.
     swapMarginRatio: 0.8,  // a kp "crosses" if d(own reproj) beats d(other reproj) by this
     swapMinErr: 5,         // px — only consider kps whose own fit is already this poor
     swapHighCount: 3,      // >= this many crossed kps => high severity
-    // IOU duplicate-instance (2D, per view).
-    iouThresh: 0.9,        // bbox IOU above this => duplicate candidate
-    dupPx: 5,              // mean per-node distance below this => duplicate candidate
-    dupNodeFrac: 0.6,      // ... over at least this fraction of shared visible nodes
+    // IOU duplicate-instance (2D, per view). Requires BOTH high bbox-IOU AND
+    // near-coincident nodes (AND, not OR) — only true stacked duplicates flag.
+    iouThresh: 0.9,        // bbox IOU above this ...
+    dupPx: 3,              // ... AND mean per-node distance below this ...
+    dupNodeFrac: 0.8,      // ... over at least this fraction of shared visible nodes
     // Low-node-count.
     minNodesAbs: 2,        // absolute floor
     minNodesFrac: 0.3,     // ... or this fraction of the skeleton, whichever is larger
     // Auto-thresholding / sampling.
-    autoPercentile: 95,
+    autoPercentile: 95,    // (retained for computeAutoThresholds util; not used for flagging)
     epiSampleMax: 5000,    // cap frames scanned for epipolar (stride + subsample)
-    histSampleMax: 10000,  // cap distribution arrays fed to histograms
+    histSampleMax: 300000, // cap distribution arrays (kept full so histogram counts are faithful)
     // Composite-score weights.
     weights: { reprojection: 0.35, completeness: 0.25, limbLength: 0.20, temporal: 0.20 },
 };
@@ -70,6 +87,48 @@ function mean(arr) { if (!arr.length) return null; let s = 0; for (let i = 0; i 
 function stddev(arr) { if (arr.length < 2) return 0; const m = mean(arr); let s = 0; for (let i = 0; i < arr.length; i++) { const d = arr[i] - m; s += d * d; } return Math.sqrt(s / (arr.length - 1)); }
 function sortedCopy(arr) { return arr.slice().sort(function (a, b) { return a - b; }); }
 function finiteOnly(arr) { return arr.filter(function (v) { return typeof v === 'number' && isFinite(v); }); }
+
+// Robust location/scale: median and MAD (scaled to be a std-equivalent via 1.4826).
+function medianMAD(values) {
+    const f = finiteOnly(values);
+    if (!f.length) return { median: 0, mad: 0, n: 0 };
+    const med = median(f);
+    const dev = new Array(f.length);
+    for (let i = 0; i < f.length; i++) dev[i] = Math.abs(f[i] - med);
+    const mad = median(dev) * 1.4826;
+    return { median: med, mad: mad, n: f.length };
+}
+
+// Absolute quality bar: max(hard floor, mult × median). Falls back to the floor
+// when the distribution is empty. This is the core of "flag genuinely bad, not a
+// fixed fraction" — a clean dataset's median is small, so the floor dominates.
+function absoluteHigh(values, floor, mult) {
+    const f = finiteOnly(values);
+    if (!f.length) return floor;
+    return Math.max(floor, mult * median(f));
+}
+
+// Robust upper cutoff for a per-series velocity distribution: median + k·MAD.
+// MAD collapses to 0 when >50% of velocities are ~identical — the *typical* case
+// for jitter (mostly-static motion with rare jumps), which would make median+k·MAD
+// degenerate. In that case we fall back to median + k·mean: the rare jumps inflate
+// the mean, so the cutoff sits above the static baseline but below the jumps, and
+// only genuine spikes flag. `absFloor` (px/frame for 2D) guards sub-pixel noise;
+// null (3D, unknown world scale) with no signal yields Infinity (never flag).
+function robustVelHigh(values, k, absFloor) {
+    const f = finiteOnly(values);
+    if (!f.length) return absFloor != null ? absFloor : Infinity;
+    const { median: m, mad } = medianMAD(f);
+    let base;
+    if (mad > 1e-9) {
+        base = m + k * mad;
+    } else {
+        const mn = mean(f);
+        base = (mn != null && mn > 1e-9) ? m + k * mn : (absFloor != null ? absFloor : Infinity);
+    }
+    if (absFloor != null) base = Math.max(base, absFloor);
+    return base;
+}
 function median(arr) { if (!arr.length) return 0; const s = sortedCopy(arr); const n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; }
 // Percentile over an ALREADY-SORTED ascending array (linear interpolation).
 function percentileSorted(s, p) {
@@ -363,9 +422,12 @@ function classifyFrame(session, fr, th) {
             const d = fr.duplicates[di];
             const iouHit = d.iou >= th.iouThresh;
             const distHit = d.meanNodeDist <= th.dupPx && d.sharedFrac >= th.dupNodeFrac;
-            if (iouHit || distHit) {
+            // Require BOTH signals: only instances that overlap in bbox AND sit
+            // near-coincident node-for-node are true stacked duplicates. Either
+            // alone over-flags on ordinary close/overlapping animals in one view.
+            if (iouHit && distHit) {
                 issues.push({
-                    type: 'duplicate', severity: (iouHit && distHit) ? 'high' : 'medium',
+                    type: 'duplicate', severity: 'high',
                     frameIdx: fr.frameIdx, view: d.view, trackA: d.trackA, trackB: d.trackB,
                     values: { iou: d.iou, meanNodeDist: d.meanNodeDist },
                     description: 'Duplicate instances in ' + d.view + ' (IOU ' + d.iou.toFixed(2) +
@@ -394,10 +456,17 @@ function classifyFrame(session, fr, th) {
     }
 
     // --- Temporal jitter (per track in 2D; per identity in 3D) ---
-    if (fr.temporal && th.velThresh != null && isFinite(th.velThresh)) {
+    // 2D and 3D velocities live in different units, so each has its own robust
+    // threshold; fall back to the legacy single velThresh when a space-specific
+    // one isn't set (keeps older callers/tests working).
+    if (fr.temporal) {
         for (let ti = 0; ti < fr.temporal.length; ti++) {
             const t = fr.temporal[ti];
-            if (t.velocity > th.velThresh) {
+            const vt = (t.space === '3d')
+                ? (th.velThresh3d != null ? th.velThresh3d : th.velThresh)
+                : (th.velThresh2d != null ? th.velThresh2d : th.velThresh);
+            if (vt == null || !isFinite(vt)) continue;
+            if (t.velocity > vt) {
                 issues.push({
                     type: 'jitter', severity: 'medium', frameIdx: fr.frameIdx, trackIdx: t.trackIdx, view: t.view,
                     keypoints: [],
@@ -415,7 +484,7 @@ function classifyFrame(session, fr, th) {
             const bad = lb.edges.filter(function (e) { return e.z > th.limbZ; });
             if (bad.length) {
                 issues.push({
-                    type: 'limb_outlier', severity: bad.some(function (e) { return e.z > 5; }) ? 'high' : 'medium',
+                    type: 'limb_outlier', severity: bad.some(function (e) { return e.z > th.limbZ * 1.5; }) ? 'high' : 'medium',
                     frameIdx: fr.frameIdx, trackIdx: lb.trackIdx, view: lb.view, keypoints: [],
                     description: 'Abnormal ' + lb.space + ' limb length' + (lb.view ? (' in ' + lb.view) : '') +
                         ' (' + lb.label + '): ' + bad.map(function (e) { return 'edge ' + e.edge + ' (z=' + e.z.toFixed(1) + ')'; }).join(', '),
@@ -588,7 +657,11 @@ export async function runProjectQC(session, opts, onProgress) {
                 const g = extractReprojGroup(entries[i], th.reprojLow);
                 if (!g) continue;
                 fr.groups.push(g);
-                if (g.meanError != null) distributions.reproj.push(g.meanError);
+                // Collect PER-NODE errors — the same quantity classify() thresholds
+                // against (a node is flagged when perNode[k] > reprojHigh). Feeding
+                // the histogram per-node errors (not the group mean) makes the
+                // draggable threshold and the flagged-node count consistent.
+                for (let k = 0; k < g.perNode.length; k++) if (g.perNode[k] != null) distributions.reproj.push(g.perNode[k]);
                 // Epipolar per node on sampled frames.
                 if (epiSet.has(frameIdx) && entries[i].group) {
                     g.epiPerNode = epipolarPerNode(entries[i].group, cameras, Fcache);
@@ -624,24 +697,29 @@ export async function runProjectQC(session, opts, onProgress) {
     const tl3d = analyzeSeries(series3d, edges, '3d');
     series2d.clear();
     series3d.clear();
+    // Keep the 2D and 3D velocity distributions SEPARATE — they carry different
+    // units (px/frame vs world/frame), so one shared threshold is meaningless. The
+    // histogram shows the 2D distribution (the always-present, common case).
+    const vel3dDist = finiteOnly(tl3d.velDist);
     for (let i = 0; i < tl2d.velDist.length; i++) distributions.velocity.push(tl2d.velDist[i]);
-    for (let i = 0; i < tl3d.velDist.length; i++) distributions.velocity.push(tl3d.velDist[i]);
     for (let i = 0; i < tl2d.limbZDist.length; i++) distributions.limbZ.push(tl2d.limbZDist[i]);
     for (let i = 0; i < tl3d.limbZDist.length; i++) distributions.limbZ.push(tl3d.limbZDist[i]);
     mergeTemporal(perFrame, tl2d, session, '2d');
     mergeTemporal(perFrame, tl3d, session, '3d');
 
     // Drop any non-finite values (degenerate triangulations can emit NaN/Infinity
-    // reprojection errors) so a single bad group can't blow up the auto-thresholds
-    // (Infinity P95 => nothing flagged), the global stats, or the histograms.
+    // reprojection errors) so a single bad group can't blow up the thresholds,
+    // the global stats, or the histograms.
     for (const k in distributions) distributions[k] = finiteOnly(distributions[k]);
 
-    // Auto-thresholds (P95) — seed thresholds the user can then drag.
-    const auto = computeAutoThresholds(distributions, th.autoPercentile);
+    // Effective thresholds = ABSOLUTE quality bars (reproj/epipolar) and ROBUST
+    // cutoffs (jitter median+k·MAD). These flag genuinely bad values instead of a
+    // fixed percentile fraction. The user can still drag any of them afterwards.
     const effective = makeThresholds(Object.assign({}, th, {
-        reprojHigh: isFinite(auto.reproj) ? auto.reproj : th.reprojHigh,
-        epiThresh: isFinite(auto.epipolar) ? auto.epipolar : th.epiThresh,
-        velThresh: isFinite(auto.velocity) ? auto.velocity : th.velThresh,
+        reprojHigh: absoluteHigh(distributions.reproj, th.reprojHigh, th.reprojMedianMult),
+        epiThresh: absoluteHigh(distributions.epipolar, th.epiThresh, th.epiMedianMult),
+        velThresh2d: robustVelHigh(distributions.velocity, th.velMadK, th.velFloor2d),
+        velThresh3d: robustVelHigh(vel3dDist, th.velMadK, null),
     }));
 
     const sortedReproj = sortedCopy(distributions.reproj);
@@ -651,16 +729,20 @@ export async function runProjectQC(session, opts, onProgress) {
         distributions: {
             reproj: subsample(distributions.reproj, th.histSampleMax),
             epipolar: subsample(distributions.epipolar, th.histSampleMax),
-            velocity: subsample(distributions.velocity, th.histSampleMax),
+            velocity: subsample(distributions.velocity, th.histSampleMax),   // 2D (px/frame), shown in the histogram
+            velocity3d: subsample(vel3dDist, th.histSampleMax),              // 3D (world/frame), for inspection
             limbZ: subsample(distributions.limbZ, th.histSampleMax),
             iou: subsample(distributions.iou, th.histSampleMax),
         },
-        autoThresholds: auto,
+        autoThresholds: {
+            reproj: effective.reprojHigh, epipolar: effective.epiThresh,
+            velocity2d: effective.velThresh2d, velocity3d: effective.velThresh3d,
+        },
         coverage: { triangulated: triangulatedCount, total: frames.length },
         thresholds: effective,
         triCalls: triCalls,
         globalStats: {
-            meanReprojError: mean(distributions.reproj),
+            meanReprojError: mean(distributions.reproj),   // mean per-node reprojection error
             errorP95: percentileSorted(sortedReproj, 95),
         },
     };
@@ -740,9 +822,11 @@ function analyzeSeries(seriesMap, edges, space) {
             const v = meanNodeVelocity(getPoints(seq[i]), getPoints(seq[i - 1]), space, dt);
             if (v != null) { velEvents.push({ frameIdx: seq[i].frameIdx, velocity: v, meta: meta }); velDist.push(v); }
         }
-        // Limb length: per-edge running stats -> per-frame z-score.
+        // Limb length: per-edge ROBUST stats (median/MAD) -> per-frame z-score.
+        // Mean/std let a single spike inflate the scale (hiding real outliers) and
+        // over-flag noisy 2D pixel-space limbs; median/MAD is resistant to both.
         if (edges.length) {
-            const stat = edges.map(function () { return { sum: 0, sumSq: 0, count: 0 }; });
+            const lensByEdge = edges.map(function () { return []; });
             const lengthsByFrame = [];
             for (let si = 0; si < seq.length; si++) {
                 const pts = getPoints(seq[si]);
@@ -752,23 +836,22 @@ function analyzeSeries(seriesMap, edges, space) {
                     if (a == null || b == null) continue;
                     const L = (space === '3d') ? dist3d(a, b) : dist2d(a, b);
                     lens[ei] = L;
-                    stat[ei].sum += L; stat[ei].sumSq += L * L; stat[ei].count++;
+                    lensByEdge[ei].push(L);
                 }
                 lengthsByFrame.push({ frameIdx: seq[si].frameIdx, lens: lens });
             }
-            const ms = stat.map(function (s) {
-                if (s.count < 2) return null;
-                const m = s.sum / s.count;
-                const varr = Math.max(0, s.sumSq / s.count - m * m);
-                return { mean: m, std: Math.sqrt(varr) };
+            const ms = lensByEdge.map(function (arr) {
+                if (arr.length < 3) return null;      // need enough samples for a robust scale
+                const mm = medianMAD(arr);
+                return mm.mad > 1e-9 ? mm : null;     // constant-length edge => no meaningful z
             });
             for (let fi = 0; fi < lengthsByFrame.length; fi++) {
                 const lens = lengthsByFrame[fi].lens;
                 const flagged = [];
                 for (let ei = 0; ei < lens.length; ei++) {
                     const m = ms[ei];
-                    if (lens[ei] == null || !m || m.std <= 1e-9) continue;
-                    const z = Math.abs(lens[ei] - m.mean) / m.std;
+                    if (lens[ei] == null || !m) continue;
+                    const z = Math.abs(lens[ei] - m.median) / m.mad;
                     limbZDist.push(z);
                     if (z > 1.0) flagged.push({ edge: ei, length: lens[ei], z: z }); // store candidates only
                 }
@@ -845,14 +928,16 @@ export function buildHistogram(values, threshold, binCount) {
     if (!finite.length) return { bins: [], counts: [], max: 0, displayMax: 1, threshBin: -1, outlierCount: 0 };
     const s = sortedCopy(finite);
     const hasTh = threshold != null && isFinite(threshold);
-    // Bulk-visible upper bound: show at least up to P90, and (when a threshold is
-    // set) enough headroom to keep the line near the middle — but never let one
-    // extreme outlier past P99.5 stretch the axis.
-    const p90 = percentileSorted(s, 90);
-    const p995 = percentileSorted(s, 99.5);
-    let displayMax = hasTh ? Math.max(threshold * 2, p90) : percentileSorted(s, 95);
-    if (isFinite(p995) && p995 > 0) displayMax = Math.min(displayMax, Math.max(p995, hasTh ? threshold * 1.05 : 0));
-    displayMax = Math.max(displayMax, 1e-6);
+    // Bulk-visible upper bound = median + k·MAD of the data. This is resistant to
+    // the long right tail (which a P99 axis let crush everything into bin 0) AND
+    // to a threshold that sits far above the bulk (a clean ~2px set with a 10px
+    // bar) — the axis tracks the DATA, not the threshold. We then extend just
+    // enough to keep the threshold line on-canvas and draggable; anything past
+    // displayMax piles into the overflow (last) bin and is still counted in "N out".
+    const mm = medianMAD(finite);
+    let robustUpper = (mm.mad > 1e-9) ? mm.median + 5 * mm.mad : percentileSorted(s, 95);
+    if (!isFinite(robustUpper) || robustUpper <= 0) robustUpper = percentileSorted(s, 95);
+    let displayMax = Math.max(robustUpper, hasTh ? threshold * 1.1 : 0, 1e-6);
     const counts = new Array(binCount).fill(0);
     for (let i = 0; i < finite.length; i++) {
         let b = Math.floor((finite[i] / displayMax) * binCount);
