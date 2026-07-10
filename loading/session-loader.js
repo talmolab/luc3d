@@ -2343,6 +2343,36 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
+        // Recover embedded calibration (#134 / eric/fix-save): a LUCID project
+        // .slp carries its calibration inside sessions_json, but this loader
+        // otherwise reads calibration ONLY from a separate calibration.toml — so
+        // reopening a saved project with no .toml fell back to placeholder
+        // identity cameras (calibration silently lost). When no .toml cameras
+        // were parsed, build real Camera objects from the lazy loader's captured
+        // embedded calibration BEFORE the video loop, so it finds them and does
+        // not synthesize placeholders.
+        if (cameras.length === 0 && lazyLoader && lazyLoader.calibration && state.session) {
+            var _embCal = lazyLoader.calibration;
+            var _embKeys = Object.keys(_embCal).filter(function (k) { return k !== 'metadata'; });
+            for (var _eki = 0; _eki < _embKeys.length; _eki++) {
+                var _cd = _embCal[_embKeys[_eki]];
+                if (!_cd || typeof _cd !== 'object') continue;
+                var _cn = _cd.name || _embKeys[_eki];
+                if (state.session.cameras.some(function (c) { return c.name === _cn; })) continue;
+                state.session.cameras.push(new Camera(
+                    _cn,
+                    _cd.matrix || [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    _cd.distortions || _cd.dist || [0, 0, 0, 0, 0],
+                    _cd.rotation || _cd.rvec || [0, 0, 0],
+                    _cd.translation || _cd.tvec || [0, 0, 0],
+                    _cd.size || [640, 480]
+                ));
+            }
+            if (_embKeys.length > 0) {
+                console.log('[session-folder] Recovered embedded calibration for', _embKeys.length, 'camera(s) from project .slp');
+            }
+        }
+
         // Load videos for each camera directory
         for (var vdi = 0; vdi < matchedCameraDirs.length; vdi++) {
             var camDir = matchedCameraDirs[vdi];

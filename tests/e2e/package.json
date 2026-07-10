@@ -8,7 +8,8 @@
     "test:scoping": "node session-video-scoping.mjs",
     "test:occlusion": "node occlusion-roundtrip.mjs",
     "test:save-dedup": "node save-no-inline-dup.mjs",
-    "test:save-slim": "node save-slim-metadata.mjs"
+    "test:save-slim": "node save-slim-metadata.mjs",
+    "test:lazy-calib": "node lazy-embedded-calibration.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"
