@@ -660,7 +660,12 @@ reprojections). Issue #72.
   (full-group → `removeInstanceGroup`; lone survivor → `unlinkGroup` with
   mixed-promotion; partial → `dirty`). Ungrouped → `FrameGroup.removeUnlinkedById`.
   Reprojections cleared in-model; `purgedGroups` tells the caller which groups
-  need `purgeTriangulationDataForGroup` (triangulation-cache cleanup).
+  need `purgeTriangulationDataForGroup` (triangulation-cache cleanup). After
+  the mutations it prunes orphaned per-frame identity overrides
+  (`session.frameIdentityMap` entries whose `frame:cam:track` no longer has a
+  live instance) so a bulk delete leaves no dead identity metadata in the
+  exported `.slp` (`metadata.lucid.frameIdentityMap`); overrides shared by
+  surviving members are preserved.
 
 **Imports from project modules.** None (calls methods on the Session objects
 passed in) — deliberately import-free so it is bridgeable/unit-testable, same

@@ -200,4 +200,35 @@
             assertEqual(s.getInstanceGroupsForFrame(0).length, 2, 'groups untouched');
         });
     });
+
+    describe('executeDeletion — frameIdentityMap pruning (no orphaned overrides)', function () {
+        it('delete predicted (f0): overrides for removed (cam,track) pruned, survivor kept', function () {
+            var s = buildSession().s;
+            // Precondition: 4 per-frame identity overrides on frame 0.
+            assertEqual(s.frameIdentityMap.size, 4, 'precondition: 4 identity overrides');
+            var r = collectDeletionTargets([s], F('predicted', 'any'), ctxFrame(s, 0));
+            executeDeletion(r.targets);
+            // Group A (track 0) removed entirely → both track-0 overrides gone.
+            assertFalse(s.frameIdentityMap.has('0:cam1:0'), 'cam1 track0 override pruned (group A gone)');
+            assertFalse(s.frameIdentityMap.has('0:cam2:0'), 'cam2 track0 override pruned (group A gone)');
+            // Group B lost its cam2 predicted member → that override is pruned,
+            // but the cam1 user survivor (track 1, now unlinked) keeps its override.
+            assertFalse(s.frameIdentityMap.has('0:cam2:1'), 'cam2 track1 override pruned (member deleted)');
+            assertTrue(s.frameIdentityMap.has('0:cam1:1'), 'cam1 track1 override kept (survivor lives on)');
+            assertEqual(s.frameIdentityMap.size, 1, 'exactly one live override remains');
+        });
+        it('delete a single grouped view (f1 cam1): only the deleted view override pruned', function () {
+            var s = buildSession().s;
+            // Frame 1's group C (cam1/cam2/cam3, track 0) has no overrides yet;
+            // add them so the prune is observable.
+            s.setFrameIdentity(1, 'cam1', 0, s.identities[0].id);
+            s.setFrameIdentity(1, 'cam2', 0, s.identities[0].id);
+            s.setFrameIdentity(1, 'cam3', 0, s.identities[0].id);
+            var r = collectDeletionTargets([s], F('user', 'grouped', { view: 'cam1', frameScope: 'clip' }), ctxFrame(s, 0, [1, 1]));
+            executeDeletion(r.targets);
+            assertFalse(s.frameIdentityMap.has('1:cam1:0'), 'deleted cam1 override pruned');
+            assertTrue(s.frameIdentityMap.has('1:cam2:0'), 'surviving cam2 override kept');
+            assertTrue(s.frameIdentityMap.has('1:cam3:0'), 'surviving cam3 override kept');
+        });
+    });
 })();

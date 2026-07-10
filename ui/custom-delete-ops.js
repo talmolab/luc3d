@@ -209,6 +209,13 @@ function _clearGroupTriangulation(group) {
  * group is marked dirty. Every group that loses a member — or whose
  * reprojections are cleared — is reported in `purgedGroups`.
  *
+ * After the model mutations, orphaned per-frame identity overrides
+ * (`session.frameIdentityMap` entries whose (frame, camera, track) no longer
+ * has any live instance) are pruned — otherwise a bulk delete leaves dead
+ * identity metadata that is written verbatim into the exported `.slp`
+ * (`metadata.lucid.frameIdentityMap`) and could later re-attach a ghost
+ * identity to a freshly-added instance reusing that (frame, camera, track).
+ *
  * @param {Object[]} targets  From collectDeletionTargets().
  * @returns {{purgedGroups: Object[], sessions: Object[]}}
  */
@@ -310,5 +317,55 @@ export function executeDeletion(targets) {
         t.group.dirty = true;
     });
 
+    // 5. Prune orphaned per-frame identity overrides on every touched
+    //    (session, frame). Deleting an instance leaves its
+    //    frameIdentityMap[`frame:cam:track`] entry dangling; that dead entry
+    //    otherwise survives into the exported `.slp`. Only entries whose
+    //    (frame, cam, track) no longer resolves to a live instance (grouped
+    //    or unlinked) are removed, so identities shared by surviving members
+    //    are preserved.
+    _pruneOrphanIdentityOverrides(targets);
+
     return { purgedGroups: purgedGroups, sessions: Array.from(sessions) };
+}
+
+/**
+ * Remove `session.frameIdentityMap` entries that no longer correspond to any
+ * live instance, restricted to the (session, frame) pairs the deletion
+ * touched. Keyed the same way `Session.setFrameIdentity` writes them:
+ * `frameIdx + ':' + cameraName + ':' + trackIdx`.
+ * @param {Object[]} targets
+ */
+function _pruneOrphanIdentityOverrides(targets) {
+    var affected = new Map(); // session -> Set(frameIdx)
+    targets.forEach(function (t) {
+        if (!t || !t.session) return;
+        var set = affected.get(t.session);
+        if (!set) { set = new Set(); affected.set(t.session, set); }
+        set.add(t.frameIdx);
+    });
+
+    affected.forEach(function (frameSet, session) {
+        var fim = session.frameIdentityMap;
+        if (!fim || typeof fim.forEach !== 'function') return;
+        frameSet.forEach(function (frameIdx) {
+            // Set of `frame:cam:track` keys still backed by a real instance.
+            var live = new Set();
+            var fg = session.frameGroups.get(frameIdx);
+            if (fg) {
+                fg.instances.forEach(function (list, cam) {
+                    list.forEach(function (inst) { live.add(frameIdx + ':' + cam + ':' + inst.trackIdx); });
+                });
+                fg.unlinkedInstances.forEach(function (list, cam) {
+                    list.forEach(function (ul) { live.add(frameIdx + ':' + cam + ':' + ul.instance.trackIdx); });
+                });
+            }
+            var prefix = frameIdx + ':';
+            var stale = [];
+            fim.forEach(function (_v, key) {
+                if (key.indexOf(prefix) === 0 && !live.has(key)) stale.push(key);
+            });
+            stale.forEach(function (key) { fim.delete(key); });
+        });
+    });
 }
