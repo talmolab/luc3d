@@ -202,8 +202,8 @@
     });
 
     // -------------------------------------------------------------------
-    describe('QC — conservative triangulation (no re-triangulation of clean groups)', function () {
-        it('runProjectQC reads cache and does ZERO triangulation when triangulateMissing=false', async function () {
+    describe('QC — pure cache read (never re-triangulates)', function () {
+        it('runProjectQC reads cache and does ZERO triangulation', async function () {
             if (!available()) return;
             const session = makeSession();
             // A clean, already-triangulated group with cached errors.
@@ -226,14 +226,14 @@
                 meanError: 5, method: 'dlt',
             }]]]);
 
-            const result = await runProjectQC(session, { thresholds: makeThresholds(), triangulateMissing: false });
+            const result = await runProjectQC(session, { thresholds: makeThresholds() });
             assertEqual(result.triCalls, 0, 'never triangulated clean/cached groups');
             assertEqual(result.coverage.total, 1, 'one frame swept');
             assertNotNull(result.flaggedFrames, 'produced a flagged-frame set');
             assertTrue(result.flaggedFrames instanceof Set);
         });
 
-        it('runProjectQC DOES triangulate a dirty/missing group when opted in', async function () {
+        it('runProjectQC does NOT triangulate a dirty/missing group — reports it uncovered', async function () {
             if (!available()) return;
             const session = makeSession();
             const g = new InstanceGroup(0, 0);
@@ -244,8 +244,9 @@
             state.session = session;
             state.triangulationResults = new Map();      // no cache
 
-            const result = await runProjectQC(session, { thresholds: makeThresholds(), triangulateMissing: true });
-            assertTrue(result.triCalls >= 1, 'triangulated the missing group once opted in');
+            const result = await runProjectQC(session, { thresholds: makeThresholds() });
+            assertEqual(result.triCalls, 0, 'QC never re-triangulates, even for a missing group');
+            assertEqual(result.coverage.triangulated, 0, 'missing group reported as not covered');
         });
     });
 
@@ -285,7 +286,7 @@
                 fg.addInstance('a', new Instance(pts, 0, 'user', 1));  // track 0 across all frames
                 session.frameGroups.set(f, fg);
             }
-            const result = await runProjectQC(session, { thresholds: makeThresholds(), triangulateMissing: false });
+            const result = await runProjectQC(session, { thresholds: makeThresholds() });
             assertTrue(result.distributions.velocity.length > 0, '2D velocities were computed');
             assertTrue((result.issuesByType.jitter || 0) >= 1, 'flagged the 2D jitter frame');
         });
@@ -313,7 +314,7 @@
                     meanError: 1, method: 'dlt',
                 }]);
             }
-            const result = await runProjectQC(session, { thresholds: makeThresholds(), triangulateMissing: false });
+            const result = await runProjectQC(session, { thresholds: makeThresholds() });
             assertTrue(result.distributions.velocity.length > 0, '3D velocities were computed');
             assertTrue((result.issuesByType.jitter || 0) >= 1, 'flagged the 3D jitter frame');
             // The jitter description should mention 3D space.
