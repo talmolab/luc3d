@@ -310,6 +310,10 @@ async function ensureSleapIO() {
 }
 
 export function markDirty() {
+    // Per-session dirty (active-session memory model): the switch-away save
+    // prompt and safe lazy-eviction key off THIS flag, so it must be set even
+    // when the global flag is already true from another session.
+    if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
     document.title = '\u2022 Lucid';
@@ -319,6 +323,13 @@ export function markDirty() {
 
 export function clearDirty() {
     state.isDirty = false;
+    // A full save writes every session, so all become clean. (When per-session
+    // save lands, pass the saved session to clear just that one.)
+    if (state.sessions && state.sessions.length) {
+        state.sessions.forEach(function (s) { if (s) s.isDirty = false; });
+    } else if (state.session) {
+        state.session.isDirty = false;
+    }
     document.title = 'Lucid';
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
