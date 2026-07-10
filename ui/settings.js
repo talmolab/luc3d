@@ -328,6 +328,11 @@ const TRACKING_THRESHOLDS = [
         min: 0, max: 500, step: 1,
         desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
     },
+    {
+        id: 'temporalSmoothing', label: 'Temporal smoothing (scale_smooth)', default: 0,
+        min: 0, max: 50, step: 0.5,
+        desc: 'anipose-style temporal smoothing of the 3D trajectories after a multi-frame ("Triangulate All" / "Group by … & Triangulate All") solve. Penalises the per-frame change (jerk, n_deriv_smooth=3) of every 3D coordinate over time, weighted by this scale_smooth (auto-normalised to the trajectory\'s motion, exactly like anipose). Reduces frame-to-frame jitter; higher = smoother. 0 = disabled. anipose\'s recommended value is 2. Only applies when instances are linked across frames by identity (or track).',
+    },
 ];
 
 const _thrById = new Map();
@@ -341,7 +346,7 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
-    'reprojErrorThreshold',
+    'reprojErrorThreshold', 'temporalSmoothing',
 ]);
 
 // Clamp a value to a threshold's [min, max] range, or null if not a number.

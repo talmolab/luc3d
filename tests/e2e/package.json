@@ -6,7 +6,8 @@
   "scripts": {
     "postinstall": "playwright install chromium",
     "test:scoping": "node session-video-scoping.mjs",
-    "test:occlusion": "node occlusion-roundtrip.mjs"
+    "test:occlusion": "node occlusion-roundtrip.mjs",
+    "test:smoothing-wizard": "node temporal-smoothing-wizard.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

@@ -248,6 +248,7 @@
 
     <!-- Rotation tests -->
     <script src="test-rotation.js"></script>
+    <script src="test-temporal-smoothing.js"></script>
 
     <!-- Pass 2 transitional bridge + test runner.
          Loads ESM-converted modules (pose/, ui/) and exposes their exports on
@@ -267,6 +268,9 @@
         // Pure (DOM-free) standalone .skeleton.json (de)serialization.
         import * as __SkeletonJSON from '../import-export/skeleton-json.js';
         import * as __Triangulation from '../pose/triangulation.js';
+        // Pure (DOM-free, no project imports) anipose-style temporal smoothing
+        // of 3D trajectories. Safe to bridge for unit tests (issue #134).
+        import * as __TemporalSmoothing from '../pose/temporal-smoothing.js';
         import * as __Overlays from '../ui/overlays.js';
         import * as __Viewport3D from '../ui/viewport3d.js';
         import * as __Timeline from '../ui/timeline.js';
@@ -289,6 +293,7 @@
         // Dependency-free (no app.js in its import graph; uses window.SleapIO +
         // document.baseURI only inside open()). Bridged for the lazy-release tests.
         import * as __SioLazy from '../loading/sio-lazy-loader.js';
+        Object.assign(window, __TemporalSmoothing);
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,

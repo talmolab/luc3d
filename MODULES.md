@@ -446,6 +446,39 @@ reused by passing the bare extrinsic + normalized points:
 
 ---
 
+### pose/temporal-smoothing.js
+
+**Purpose.** anipose-style temporal smoothing of 3D pose trajectories (issue
+#134) to remove frame-to-frame jitter. Pure, DOM-free, imports NO project
+modules — unit-testable in isolation and bridged into the browser test runner.
+
+**Method.** anipose's 3D optimization penalizes the n-th time-derivative of every
+3D coordinate (`scale_smooth` × `diff(p3ds, n_deriv_smooth, axis=time)`, inside a
+joint reprojection bundle). LUCID has no scipy least-squares solver and
+triangulates per frame, so this module applies the **same temporal penalty** as a
+post-triangulation Whittaker–Henderson / Tikhonov smoother: per node, per world
+axis, it minimizes `Σ w_t (p_t − y_t)² + λ Σ (Dⁿp)²` where `y_t` is the per-frame
+triangulated coordinate, solved matrix-free by conjugate gradient on the SPD
+normal equations `(W + λ DⁿᵀDⁿ)p = W y`. `scale_smooth` is auto-normalized
+exactly as anipose does (`default_smooth = 1/mean|Δ p̃|` of the interpolated,
+k=7-median-filtered init), so the knob is unit- and speed-invariant. Defaults
+match anipose: `scale_smooth=2` (recommended), `n_deriv_smooth=3` (jerk penalty).
+The one deliberate simplification vs anipose: the data term anchors to the
+per-frame triangulated point rather than a joint multi-view/multi-frame
+reprojection bundle; anipose's limb-length spatial constraint is not implemented
+(temporal jitter only). Missing frames get weight 0 (still couple neighbours
+across the gap) and are never fabricated into new 3D points.
+
+**Key exports.** `smoothTrajectory(trajectory, {scaleSmooth, order?, normalizer?,
+weights?})` (the [frame][node]→[x,y,z]|null wrapper; 0 ⇒ passthrough),
+`smoothSeries(y, w, lambda, order, iters?, tol?)` (1-D CG solver),
+`nthDiff`/`nthDiffT` (finite-difference operator + adjoint),
+`interpolateGaps`, `medianFilter1d`, `computeSmoothNormalizer`. Consumed by
+`pose/triangulation.js` `applyTemporalSmoothing`. Covered by
+`tests/test-temporal-smoothing.js`.
+
+---
+
 ### pose/triangulation.js
 
 **Purpose.** DLT triangulation, bundle-adjustment refinement, reprojection
@@ -502,8 +535,10 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `pointToRayDistance`, `pointsToRayDistances`,
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
 - Group math: `triangulateAndReproject(instanceGroup, cameras, options)`
-  (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`; returns
-  `.method`, `.meanError`/`.errors` distorted-space and
+  (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`,
+  `options.fixedPoints3d` — skip triangulation and recompute reprojections +
+  distorted/undistorted errors against a supplied 3D solve, used by the temporal
+  smoother; returns `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
   **Two robustness features:** (1) views excluded in the Tracking Wizard's Camera
@@ -537,6 +572,16 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `reTriangulateGroup` (preserves the group's existing method),
   `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
   (`method` defaults to `'dlt'`), `sessionHasCalibration`,
+- Temporal smoothing (issue #134): `applyTemporalSmoothing(session, scaleSmooth,
+  opts?)` — anipose-style post-pass run at the end of `triangulateAllFrames` /
+  `triangulateMultiFrameInstances` when the Tracking Wizard's `temporalSmoothing`
+  (`scale_smooth`) is > 0. Links triangulated groups into per-identity (else
+  per-track) trajectories, smooths every 3D coordinate over time via
+  `pose/temporal-smoothing.js` (jerk penalty, `n_deriv_smooth=3`), writes the
+  smoothed `points3d` back, and recomputes each group's reprojections/errors via
+  `triangulateAndReproject({fixedPoints3d})`, keeping `state.triangulationResults`
+  in sync. Untracked groups (no identity + no track) are left unsmoothed. Covered
+  by `tests/test-temporal-smoothing.js`.
   `showCalibrationRequiredPopup`,
   `ensureGroupsFromIdentities(session, frameIdx)` — auto-creates a frame's
   InstanceGroups from its per-frame identity assignments (>=2-camera buckets;

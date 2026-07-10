@@ -11,6 +11,8 @@ import { state, timeline, viewport3d } from '../ui/app-state.js';
 import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
 import { updateTriangulationBadge } from '../ui/info-panel.js';
 import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js';
+// anipose-style temporal smoothing of 3D trajectories (issue #134).
+import { smoothTrajectory } from './temporal-smoothing.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
@@ -767,6 +769,9 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     //   'dlt' (default) — fast linear DLT.
     //   'ba'            — DLT to initialize, then non-linear bundle-adjustment
     //                     refinement minimizing geometric reprojection error.
+    // Temporal smoothing re-uses this function purely for the reproject/score
+    // stages: pass `options.fixedPoints3d` to skip triangulation entirely and
+    // recompute reprojections + errors against a supplied (smoothed) 3D solve.
     const method = (options && options.method === 'ba') ? 'ba' : 'dlt';
     function triangulateFrom(obs) {
         if (method === 'ba') {
@@ -775,7 +780,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         }
         return triangulatePoints(obs, projMatrices);
     }
-    let points3d = triangulateFrom(allObservations);
+    const fixedPoints3d = options && options.fixedPoints3d;
+    let points3d = fixedPoints3d ? fixedPoints3d.slice() : triangulateFrom(allObservations);
 
     // Robust triangulation (opt-in via the Tracking Wizard's "Reprojection error
     // threshold (px)"): iteratively drop any 2D node whose reprojection error in a
@@ -785,7 +791,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     const reprojThresh = (options && options.reprojErrorThreshold != null)
         ? options.reprojErrorThreshold
         : ((typeof getTrackingThreshold === 'function') ? getTrackingThreshold('reprojErrorThreshold') : 0);
-    if (reprojThresh > 0) {
+    if (reprojThresh > 0 && !fixedPoints3d) {
         // Don't include a node-in-a-view (a single 2D keypoint) whose reprojection
         // error exceeds the threshold — re-triangulate that node from the views that
         // remain. This works PER NODE within a view; it never drops a whole view
@@ -1969,7 +1975,137 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
         }
     }
 
+    // Temporal smoothing post-pass (issue #134): smooth the solved 3D
+    // trajectories over time when enabled in the Tracking Wizard.
+    var smoothWeight = (typeof getTrackingThreshold === 'function') ? getTrackingThreshold('temporalSmoothing') : 0;
+    if (smoothWeight > 0) applyTemporalSmoothing(session, smoothWeight);
+
     return { triangulated: triangulated, totalGroups: totalGroups, totalErrors: totalErrors };
+}
+
+/**
+ * Cross-frame trajectory key for temporal smoothing: instances are linked over
+ * time by IDENTITY when the group has one (identityId >= 0), else by TRACK
+ * index (from any member). Groups with neither are untracked in time and are
+ * left unsmoothed (returns null).
+ * @param {InstanceGroup} group
+ * @returns {string|null}
+ */
+function trajectoryKeyForGroup(group) {
+    if (group.identityId != null && group.identityId >= 0) return 'id:' + group.identityId;
+    for (var inst of group.instances.values()) {
+        if (inst && inst.trackIdx != null && inst.trackIdx >= 0) return 'tr:' + inst.trackIdx;
+    }
+    return null;
+}
+
+/**
+ * anipose-style temporal smoothing post-pass (issue #134). Runs AFTER a
+ * multi-frame triangulation has populated `state.triangulationResults` and each
+ * group's `points3d`. Links triangulated groups into per-identity/-track
+ * trajectories, smooths every 3D coordinate over time (penalising the jerk =
+ * 3rd time-derivative, weighted by the auto-normalised `scale_smooth`; see
+ * pose/temporal-smoothing.js), writes the smoothed `points3d` back, and
+ * recomputes each affected group's reprojections + per-view/per-node errors so
+ * the 3D viewport, overlays, and Reprojection Error panel reflect the smoothed
+ * solution.
+ *
+ * Mutates group state and `state.triangulationResults` in place. No-op when
+ * `scaleSmooth <= 0`.
+ *
+ * @param {Session} session
+ * @param {number} scaleSmooth   anipose scale_smooth (0 = disabled)
+ * @param {Object} [opts]        { order }  order = n_deriv_smooth (default 3)
+ * @returns {{trajectories:number, groupsSmoothed:number}}
+ */
+export function applyTemporalSmoothing(session, scaleSmooth, opts) {
+    if (!session || !(scaleSmooth > 0)) return { trajectories: 0, groupsSmoothed: 0 };
+    var order = (opts && opts.order != null) ? opts.order : 3;
+    var cameras = session.cameras;
+
+    // 1. Bucket every triangulated group by its cross-frame trajectory key.
+    var byKey = new Map(); // key -> [{ frameIdx, group, result }]
+    state.triangulationResults.forEach(function (results, frameIdx) {
+        for (var i = 0; i < results.length; i++) {
+            var r = results[i];
+            var g = r.group;
+            if (!g || !g.points3d) continue;
+            var key = trajectoryKeyForGroup(g);
+            if (key == null) continue;
+            if (!byKey.has(key)) byKey.set(key, []);
+            byKey.get(key).push({ frameIdx: frameIdx, group: g, result: r });
+        }
+    });
+
+    var trajectories = 0;
+    var groupsSmoothed = 0;
+
+    byKey.forEach(function (entries) {
+        if (entries.length < order + 2) return; // too short to smooth meaningfully
+        entries.sort(function (a, b) { return a.frameIdx - b.frameIdx; });
+
+        // Node count = widest points3d in the trajectory.
+        var nNodes = 0;
+        for (var e = 0; e < entries.length; e++) {
+            var p3 = entries[e].group.points3d;
+            if (p3 && p3.length > nNodes) nNodes = p3.length;
+        }
+        if (nNodes === 0) return;
+
+        // Build [frame][node] -> [x,y,z] | null.
+        var traj = entries.map(function (ent) {
+            var p = ent.group.points3d || [];
+            var pose = new Array(nNodes).fill(null);
+            for (var k = 0; k < nNodes; k++) {
+                var pt = p[k];
+                if (pt != null && pt.length === 3 && isFinite(pt[0]) && isFinite(pt[1]) && isFinite(pt[2])) {
+                    pose[k] = pt;
+                }
+            }
+            return pose;
+        });
+
+        var smoothed = smoothTrajectory(traj, { scaleSmooth: scaleSmooth, order: order });
+        trajectories++;
+
+        // 2. Write smoothed points back + recompute reprojections/errors.
+        for (var ei = 0; ei < entries.length; ei++) {
+            var ent2 = entries[ei];
+            var group = ent2.group;
+            var newPts = group.points3d.slice();
+            var changed = false;
+            for (var k2 = 0; k2 < nNodes; k2++) {
+                if (newPts[k2] != null && smoothed[ei][k2] != null) {
+                    newPts[k2] = smoothed[ei][k2];
+                    changed = true;
+                }
+            }
+            if (!changed) continue;
+
+            var groupCamNames = group.cameraNames;
+            var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
+            // Reuse triangulateAndReproject's reproject/score stages against the
+            // smoothed points (no re-triangulation) so distorted + undistorted
+            // errors stay consistent with the rest of the pipeline.
+            var res = triangulateAndReproject(group, groupCameras, { fixedPoints3d: newPts });
+
+            group.points3d = res.points3d;
+            group.reprojections = res.reprojections;
+            storeReprojectedInstances(group, res, cameras);
+
+            // Keep the cached triangulationResults entry in sync (drives the RPE panel).
+            var rr = ent2.result;
+            rr.points3d = res.points3d;
+            rr.reprojections = res.reprojections;
+            rr.errors = res.errors;
+            rr.errorsUndistorted = res.errorsUndistorted;
+            rr.meanError = res.meanError;
+            rr.meanErrorUndistorted = res.meanErrorUndistorted;
+            groupsSmoothed++;
+        }
+    });
+
+    return { trajectories: trajectories, groupsSmoothed: groupsSmoothed };
 }
 
 /**
@@ -2460,6 +2596,15 @@ export async function triangulateAllFrames(method) {
             showLoading('Triangulating... ' + fi + '/' + frameIndices.length + ' frames');
             await new Promise(function (r) { setTimeout(r, 0); });
         }
+    }
+
+    // Temporal smoothing post-pass (issue #134): if enabled in the Tracking
+    // Wizard, smooth the just-solved 3D trajectories over time before display.
+    var scaleSmooth = (typeof getTrackingThreshold === 'function') ? getTrackingThreshold('temporalSmoothing') : 0;
+    if (scaleSmooth > 0) {
+        showLoading('Temporal smoothing (scale_smooth ' + scaleSmooth + ')...');
+        await new Promise(function (r) { setTimeout(r, 0); });
+        applyTemporalSmoothing(state.session, scaleSmooth);
     }
 
     // Show reproj/error UI elements
