@@ -7,8 +7,7 @@
 //
 // Compute lives in pose/qc.js; this module is pure DOM + wiring.
 
-import { state, videoController } from './app-state.js';
-import { getDefaultTriangulationMethod } from './settings.js';
+import { state, videoController, paneManager, interactionManager } from './app-state.js';
 import {
     analyzeFrame,
     runProjectQC,
@@ -72,12 +71,9 @@ export async function runQCProject() {
     if (btn) btn.disabled = true;
     if (progress) { progress.style.display = ''; progress.textContent = 'Running QC…'; }
     const th = state.qcResults ? state.qcResults.thresholds : makeThresholds();
-    const triangulateMissing = !!(el('qcTriangulateMissing') && el('qcTriangulateMissing').checked);
     try {
         const result = await runProjectQC(session, {
             thresholds: th,
-            triangulateMissing: triangulateMissing,
-            method: getDefaultTriangulationMethod(),
         }, function (done, total) {
             if (progress) progress.textContent = 'Running QC… ' + done + ' / ' + total + ' frames';
         });
@@ -92,6 +88,19 @@ export async function runQCProject() {
         if (progress) setTimeout(function () { progress.style.display = 'none'; }, 800);
     }
     updateQCBadge();
+}
+
+// Seek to a flagged frame and, when the issue points at a specific camera view,
+// activate that view's pane so the user lands on the exact 2D image being flagged
+// (duplicate / low_nodes / 2D jitter / 2D limb all carry a `view`). Issues that
+// aren't tied to one view (reprojection, swap, epipolar, 3D metrics) just seek.
+function seekToIssue(frameIdx, view) {
+    if (videoController) videoController.seekToFrame(frameIdx);
+    if (view && paneManager && typeof paneManager.addVideoPanel === 'function') {
+        // addVideoPanel activates the pane if the view is already docked, else docks it.
+        paneManager.addVideoPanel(view);
+        if (interactionManager) interactionManager.lastInteractedView = view;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +159,7 @@ function renderCurrentFrameResult(frameRes) {
         ok.textContent = 'No issues on this frame.';
         list.appendChild(ok);
     } else {
-        frameRes.issues.forEach(function (iss) { list.appendChild(issueRow(iss, false)); });
+        frameRes.issues.forEach(function (iss) { list.appendChild(issueRow(iss, true)); });
     }
     summary.appendChild(list);
     // Hide the project-level sections in single-frame mode.
@@ -332,7 +341,7 @@ function issueRow(iss, clickable) {
     row.appendChild(body);
     if (clickable && videoController) {
         row.classList.add('qc-clickable');
-        row.onclick = function () { videoController.seekToFrame(iss.frameIdx); };
+        row.onclick = function () { seekToIssue(iss.frameIdx, iss.view); };
     }
     return row;
 }
@@ -371,7 +380,7 @@ function renderIssueList(r) {
             '<span class="qc-issue-desc">' + escapeHtml(run.description || '') + '</span>' +
             (run.count > 1 ? ' <span class="qc-muted">(' + run.count + ' frames)</span>' : '');
         row.appendChild(body);
-        row.onclick = function () { if (videoController) videoController.seekToFrame(run.representative); };
+        row.onclick = function () { seekToIssue(run.representative, run.issue && run.issue.view); };
         host.appendChild(row);
     });
 }

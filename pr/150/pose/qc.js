@@ -4,9 +4,10 @@
 // difference vs the old engine: this one is a pure ES module and it READS the
 // per-camera reprojection errors already cached in `state.triangulationResults`
 // (populated by `triangulateAndReproject`) instead of recomputing reprojections
-// on the main thread every run — which is what made the old engine slow. It only
-// (re)triangulates a group when the caller explicitly opts in AND the group is
-// missing/stale (`points3d == null || group.dirty`).
+// on the main thread every run — which is what made the old engine slow. QC is a
+// pure READ over the cache: it NEVER (re)triangulates. Groups that aren't already
+// triangulated are reported as "not covered" (triangulate first via "Triangulate
+// All", then run QC).
 //
 // Fully manual: nothing here runs until the UI (ui/qc-panel.js) invokes it.
 //
@@ -21,9 +22,6 @@
 import { state } from '../ui/app-state.js';
 import {
     computeFundamentalMatrix,
-    triangulateAndReproject,
-    getInstanceGroupsForFrame,
-    ensureGroupsFromIdentities,
 } from './triangulation.js';
 
 // ---------------------------------------------------------------------------
@@ -71,6 +69,7 @@ function dist3d(a, b) { const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[
 function mean(arr) { if (!arr.length) return null; let s = 0; for (let i = 0; i < arr.length; i++) s += arr[i]; return s / arr.length; }
 function stddev(arr) { if (arr.length < 2) return 0; const m = mean(arr); let s = 0; for (let i = 0; i < arr.length; i++) { const d = arr[i] - m; s += d * d; } return Math.sqrt(s / (arr.length - 1)); }
 function sortedCopy(arr) { return arr.slice().sort(function (a, b) { return a - b; }); }
+function finiteOnly(arr) { return arr.filter(function (v) { return typeof v === 'number' && isFinite(v); }); }
 function median(arr) { if (!arr.length) return 0; const s = sortedCopy(arr); const n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; }
 // Percentile over an ALREADY-SORTED ascending array (linear interpolation).
 function percentileSorted(s, p) {
@@ -514,8 +513,6 @@ export function analyzeFrame(session, frameIdx, thresholds) {
 export async function runProjectQC(session, opts, onProgress) {
     opts = opts || {};
     const th = opts.thresholds || makeThresholds();
-    const triangulateMissing = !!opts.triangulateMissing;
-    const method = opts.method || 'dlt';
     const numNodes = session.skeleton ? session.skeleton.nodes.length : 0;
 
     // Frame set = union of frames that have raw 2D groups or triangulation groups.
@@ -544,7 +541,7 @@ export async function runProjectQC(session, opts, onProgress) {
     const perFrame = new Map();
     const distributions = { reproj: [], epipolar: [], velocity: [], limbZ: [], iou: [] };
     let triangulatedCount = 0;
-    let triCalls = 0; // spy: how many times we actually (re)triangulated
+    const triCalls = 0; // QC never re-triangulates — always a pure cache read.
 
     // Time series for temporal jitter + limb length:
     //   series2d: "view|trackIdx" -> [{frameIdx, points, view, trackIdx}]  (always, needs tracks)
@@ -581,33 +578,10 @@ export async function runProjectQC(session, opts, onProgress) {
             }
         }
 
-        // 3D metrics from cache (optionally triangulate missing/dirty).
-        let entries = state.triangulationResults.get(frameIdx);
-        if ((!entries || !entries.length) && triangulateMissing) {
-            entries = triangulateFrameForQC(session, frameIdx, method);
-            if (entries && entries.length) triCalls += entries.length;
-        } else if (triangulateMissing && entries) {
-            // Re-triangulate any dirty/missing group in-place, updating the cache.
-            const groups = getInstanceGroupsForFrame(frameIdx);
-            let changed = false;
-            for (let gi = 0; gi < groups.length; gi++) {
-                if (groups[gi].points3d != null && !groups[gi].dirty) continue;
-                const res = triangulateAndReproject(groups[gi], cameras, { method: method });
-                triCalls++;
-                groups[gi].points3d = res.points3d;
-                groups[gi].reprojections = res.reprojections;
-                if (groups[gi].markClean) groups[gi].markClean();
-                const newEntry = { group: groups[gi], points3d: res.points3d, reprojections: res.reprojections, errors: res.errors, errorsUndistorted: res.errorsUndistorted, meanError: res.meanError, method: method };
-                let matched = false;
-                for (let ei = 0; ei < entries.length; ei++) {
-                    if (entries[ei].group === groups[gi]) { entries[ei] = newEntry; matched = true; break; }
-                }
-                if (!matched) entries.push(newEntry);
-                changed = true;
-            }
-            if (changed) state.triangulationResults.set(frameIdx, entries);
-        }
-
+        // 3D metrics — pure read of the cached triangulations. QC never
+        // (re)triangulates; frames without a cached result are simply reported
+        // as "not covered" (triangulate first via "Triangulate All").
+        const entries = state.triangulationResults.get(frameIdx);
         if (entries && entries.length) {
             fr.groups = [];
             for (let i = 0; i < entries.length; i++) {
@@ -657,6 +631,11 @@ export async function runProjectQC(session, opts, onProgress) {
     mergeTemporal(perFrame, tl2d, session, '2d');
     mergeTemporal(perFrame, tl3d, session, '3d');
 
+    // Drop any non-finite values (degenerate triangulations can emit NaN/Infinity
+    // reprojection errors) so a single bad group can't blow up the auto-thresholds
+    // (Infinity P95 => nothing flagged), the global stats, or the histograms.
+    for (const k in distributions) distributions[k] = finiteOnly(distributions[k]);
+
     // Auto-thresholds (P95) — seed thresholds the user can then drag.
     const auto = computeAutoThresholds(distributions, th.autoPercentile);
     const effective = makeThresholds(Object.assign({}, th, {
@@ -691,23 +670,6 @@ export async function runProjectQC(session, opts, onProgress) {
 
     classify(result, effective);
     return result;
-}
-
-// Triangulate all groups of a frame for QC (opt-in path); returns entry array.
-function triangulateFrameForQC(session, frameIdx, method) {
-    ensureGroupsFromIdentities(session, frameIdx);
-    const groups = getInstanceGroupsForFrame(frameIdx);
-    const cameras = session.cameras;
-    const entries = [];
-    for (let i = 0; i < groups.length; i++) {
-        const res = triangulateAndReproject(groups[i], cameras, { method: method });
-        groups[i].points3d = res.points3d;
-        groups[i].reprojections = res.reprojections;
-        groups[i].markClean && groups[i].markClean();
-        entries.push({ group: groups[i], points3d: res.points3d, reprojections: res.reprojections, errors: res.errors, errorsUndistorted: res.errorsUndistorted, meanError: res.meanError, method: method });
-    }
-    state.triangulationResults.set(frameIdx, entries);
-    return entries;
 }
 
 // Per-node epipolar distance for a group: mean point-to-epiline over camera pairs.
@@ -867,23 +829,41 @@ export function computeAutoThresholds(distributions, pct) {
     };
 }
 
-// Histogram bin data (no drawing). Clamps long tails at P99.
+// Histogram bin data (no drawing).
+//
+// Reprojection/velocity/limb distributions are heavily right-skewed (a long tail
+// of a few very-bad groups). Using the P99 as the x-axis max crushed the entire
+// bulk into the first 1–2 bins, so the histogram showed "only a few bars" and
+// looked nothing like a distribution. Instead we pick a robust display range that
+// keeps the bulk visible AND leaves the (draggable) threshold roughly centered so
+// it can be pulled either way; values past displayMax accumulate in the last
+// (overflow) bin, and the "N out" count already communicates the tail. Non-finite
+// values (from degenerate triangulations) are dropped up front.
 export function buildHistogram(values, threshold, binCount) {
     binCount = binCount || 40;
-    if (!values || !values.length) return { bins: [], counts: [], max: 0, displayMax: 1, threshBin: -1, outlierCount: 0 };
-    const s = sortedCopy(values);
-    const displayMax = Math.max(percentileSorted(s, 99), 1e-6);
+    const finite = (values || []).filter(function (v) { return typeof v === 'number' && isFinite(v); });
+    if (!finite.length) return { bins: [], counts: [], max: 0, displayMax: 1, threshBin: -1, outlierCount: 0 };
+    const s = sortedCopy(finite);
+    const hasTh = threshold != null && isFinite(threshold);
+    // Bulk-visible upper bound: show at least up to P90, and (when a threshold is
+    // set) enough headroom to keep the line near the middle — but never let one
+    // extreme outlier past P99.5 stretch the axis.
+    const p90 = percentileSorted(s, 90);
+    const p995 = percentileSorted(s, 99.5);
+    let displayMax = hasTh ? Math.max(threshold * 2, p90) : percentileSorted(s, 95);
+    if (isFinite(p995) && p995 > 0) displayMax = Math.min(displayMax, Math.max(p995, hasTh ? threshold * 1.05 : 0));
+    displayMax = Math.max(displayMax, 1e-6);
     const counts = new Array(binCount).fill(0);
-    for (let i = 0; i < values.length; i++) {
-        let b = Math.floor((values[i] / displayMax) * binCount);
+    for (let i = 0; i < finite.length; i++) {
+        let b = Math.floor((finite[i] / displayMax) * binCount);
         if (b < 0) b = 0; if (b >= binCount) b = binCount - 1;
         counts[b]++;
     }
     let maxCount = 0;
     for (let i = 0; i < binCount; i++) if (counts[i] > maxCount) maxCount = counts[i];
-    const threshBin = threshold != null && isFinite(threshold) ? Math.floor((threshold / displayMax) * binCount) : -1;
+    const threshBin = hasTh ? Math.floor((threshold / displayMax) * binCount) : -1;
     let outlierCount = 0;
-    for (let i = 0; i < values.length; i++) if (threshold != null && values[i] > threshold) outlierCount++;
+    for (let i = 0; i < finite.length; i++) if (hasTh && finite[i] > threshold) outlierCount++;
     return { bins: binCount, counts: counts, max: maxCount, displayMax: displayMax, threshBin: threshBin, outlierCount: outlierCount };
 }
 
