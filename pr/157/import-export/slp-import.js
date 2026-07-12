@@ -126,11 +126,38 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             }
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
 
-            // Create instances directly from inline point dicts
+            // Members come from EITHER the inline point dicts (legacy) OR — post
+            // #134, when inline instances are omitted to keep sessions_json under
+            // V8's string cap — the ref map `camcorder_to_lf_and_inst_idx_map`
+            // (camKey → [labeledFrameIdx, instIdx]). In the ref case the group
+            // member is the `instIdx`-th pass-1 raw instance for that camera at
+            // THIS frame (pass-1 already populated `fg3.instances`). Without this,
+            // a large canonical project that falls back to the raw worker (no
+            // typed session) reconstructed ZERO groups → 3D/tracking silently lost.
             var igInstances = igDict.instances || {};
+            var refMap = igDict.camcorder_to_lf_and_inst_idx_map || {};
             var igLucid = (igDict.metadata && igDict.metadata.lucid) || {};
             var instanceMetaMap = igLucid.instanceMeta || {};
 
+            if (Object.keys(igInstances).length === 0 && Object.keys(refMap).length > 0) {
+                for (var refCamKey in refMap) {
+                    var refCamName = camKeyToName[refCamKey] || refCamKey;
+                    var refPair = refMap[refCamKey];
+                    var refInstIdx = Array.isArray(refPair) ? (parseInt(refPair[1]) || 0) : 0;
+                    var refList = fg3.instances.get(refCamName);
+                    if (!refList || refInstIdx < 0 || refInstIdx >= refList.length) continue;
+                    var refInst = refList[refInstIdx];
+                    // Slim metadata (#134) drops trackIdx/type — the pass-1 instance
+                    // already carries them from the .slp; honor any that ARE present.
+                    var refMeta = instanceMetaMap[refCamName] || instanceMetaMap[refCamKey] || {};
+                    if (refMeta.trackIdx != null) refInst.trackIdx = refMeta.trackIdx;
+                    if (refMeta.type) refInst.type = refMeta.type;
+                    if (refMeta.modified) refInst.modified = true;
+                    if (refMeta.nulledNodes) refInst.nulledNodes = new Set(refMeta.nulledNodes);
+                    // The pass-1 instance IS the group member (already in fg3.instances).
+                    group.addInstance(refCamName, refInst);
+                }
+            } else {
             for (var igCamKey in igInstances) {
                 var igCamName = camKeyToName[igCamKey];
                 if (!igCamName) {
@@ -198,6 +225,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 // Add to both the group and the FrameGroup
                 group.addInstance(igCamName, inst);
                 fg3.addInstance(igCamName, inst);
+            }
             }
 
             // Restore 3D points
