@@ -74,6 +74,15 @@ export class SioLazyLoader {
     constructor() {
         /** @type {Map<string, Object>} camName -> lazy sleap-io.js Labels */
         this.labelsByCam = new Map();
+        /**
+         * camName -> the `File`/`Blob` this camera was opened from. A local-disk
+         * `File` is a cheap lazy handle (not a resident copy of the bytes), so
+         * retaining these costs ~nothing and lets a caller re-open a fresh
+         * `SioLazyLoader` for the SAME cameras later (e.g. the multi-session
+         * streaming save's pass-2 restream, after pass-1 evicted this loader's
+         * parsed columnar data — see `saveAllSessionsStreaming` in save-load.js).
+         */
+        this.sourceFiles = new Map();
         /** @type {Map<string, Map<number, number>>} camName -> (videoFrameIdx -> store row) */
         this.frameRowByCam = new Map();
         /** @type {Map<string, number>} camName -> node count */
@@ -129,6 +138,7 @@ export class SioLazyLoader {
                 : undefined,
         });
         this.labelsByCam.set(cameraName, labels);
+        this.sourceFiles.set(cameraName, file);
 
         // Capture the embedded per-camera calibration from the first opened file
         // that carries one (a project .slp saved by LUCID does; a raw prediction
