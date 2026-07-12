@@ -1528,6 +1528,24 @@ export async function switchSession(newIdx) {
         }
     }
 
+    // Active-session memory model: now that the outgoing session is either
+    // clean or the user explicitly discarded its changes, free its ~1 GB+ of
+    // lazy data. `quickSave()` (the 'save' choice above) durably persists
+    // EVERY session in `state.sessions`, not just this one — for a
+    // multi-session project, `saveAllSessionsStreaming` (import-export/
+    // save-load.js) already evicted `lazyLoader` as part of saving, so this is
+    // a no-op there; for a single lazy session (or the 'discard' choice) this
+    // is what actually reclaims the memory. Re-activating this session later
+    // reopens it from scratch (the existing "load session folder" path) —
+    // there's no lazy re-hydration from within one project .slp yet.
+    if (_leaving && _leaving.lazyLoader) {
+        _leaving.lazyLoader.close();
+        _leaving.lazyLoader = null;
+        _leaving.frameGroups = new Map();
+        _leaving.instanceGroups = new Map();
+        _leaving.triangulationResults = null;
+    }
+
     // Cold-reserve initialization — decoders trimmed off the active pool
     // (when a smaller session follows a larger one) park here and get
     // closed after 60s idle. Rehydrating from this reserve cancels the
