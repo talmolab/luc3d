@@ -277,6 +277,30 @@ function frameGroupHasUserInstances(fg) {
  *
  * @returns {Promise<number>} number of frames processed.
  */
+// No `--expose-gc` in a real browser — a large, immediately-discarded
+// allocation typically forces V8 to prove it has room (or reclaim some)
+// before granting it, nudging a collection sooner than just waiting would.
+// Real-data testing showed a released window's garbage can otherwise pile up
+// across a whole ~108k-frame sweep. Best-effort only — see pose/tracker.js's
+// identical helper (`sweepTrackAllFrames`), duplicated here to avoid a new
+// cross-module import for one small pure helper.
+async function encourageGC(totalMB) {
+    // See the identical helper in import-export/save-load.js for why this
+    // allocates toward the real heap ceiling rather than a token amount.
+    var junk = [];
+    try {
+        var chunkMB = 100;
+        var n = Math.ceil((totalMB || 800) / chunkMB);
+        for (var i = 0; i < n; i++) {
+            var buf = new ArrayBuffer(chunkMB * 1024 * 1024);
+            new Uint8Array(buf)[0] = 1;
+            junk.push(buf);
+        }
+    } catch (e) { /* ignore — hitting real pressure is the point */ }
+    junk = null;
+    await new Promise(function (r) { setTimeout(r, 50); });
+}
+
 async function sweepTriangulationFrames(session, onFrame, opts) {
     opts = opts || {};
     var loader = session.lazyLoader;
@@ -287,6 +311,7 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
     if (windowed) {
         var W = opts.window || 2000;
         var total = loader.nFrames;
+        var windowCount = 0;
         for (var start = 0; start < total; start += W) {
             var end = Math.min(start + W, total);
             await batchLoadLazyFrames(start, end - start);
@@ -308,6 +333,10 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
                 if (rfg && !frameGroupHasUserInstances(rfg)) session.frameGroups.delete(rf);
             }
             loader.releaseWindow(start, end);
+            windowCount++;
+            if (windowCount % 5 === 0) {
+                await encourageGC(800);
+            }
         }
         return processed;
     }
