@@ -129,15 +129,17 @@ export function assignIdentityToSelected(identityId, identityName) {
 
     var propagated = 0;
     if (sel) {
+        markDirty();
         session.assignIdentityToGroup(sel, identityId);
-        // Use the swap-aware setter on the global map so the per-camera
-        // (trackIdx → identity) invariant is preserved when reassigning.
+        // Propagate the identity from the CURRENT frame forward, per camera,
+        // via the swap-aware setter. This is forward-only and never re-stamps
+        // earlier frames. The old whole-track `assignTrackToIdentity` call
+        // (removed) relabelled EVERY frame of the track, corrupting already-
+        // correct earlier frames when fixing a mid-video swap — issue #155.
         for (var [cn, inst] of sel.instances) {
-            session.assignTrackToIdentity(inst.trackIdx, identityId, cn);
             propagated += propagateIdentityForward(inst.trackIdx, identityId, cn);
         }
     } else if (selUl) {
-        session.assignTrackToIdentity(selUl.instance.trackIdx, identityId, selUl.cameraName);
         markDirty();
         propagated = propagateIdentityForward(selUl.instance.trackIdx, identityId, selUl.cameraName);
     }
