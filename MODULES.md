@@ -368,8 +368,20 @@ shows results immediately; Color-by-Track / native `.slp` track export reflect
 them once the user propagates.) Both filter out views excluded in the Tracking
 Wizard (`isCameraTracked`) and abort if fewer than 2 views remain. **Lazy
 sessions:** `session.frameIndices` returns only the resident window on a lazy
-`.slp` session (#132), so Track All first `await loadAllLazyFrames()` to
-materialize the whole project, then re-reads the full frame list — otherwise it
+`.slp` session (#132). For a windowing-capable loader (`SioLazyLoader` —
+`loader.isSync && releaseWindow`), Track All now drives `sweepTrackAllFrames`
+(memory-bounded, multi-session save follow-up): materialize a window
+(`batchLoadLazyFrames`), step the sequential tracker over it
+(`stepTrackerFrame` only ever reads the CURRENT frame's `FrameGroup` — all
+cross-frame state lives in the tracker run object, not in `session.
+frameGroups`), then release the window (mirrors `ui/export-modals.js`'s
+`sweepTriangulationFrames`) — cutting the old full-project `loadAllLazyFrames()`
+materialization (a ~1+ GB spike on a 108k-frame×3-camera session) out of Track
+All entirely. Verified byte-identical output (`frameIdentityMap`, identity
+count, `instanceGroups` count) against the old full-materialization path on
+real data. A worker-backed lazy loader (small analysis `.h5`, no windowing)
+or a non-lazy session still take the old path: `await loadAllLazyFrames()` to
+materialize the whole project, then re-read the full frame list — otherwise it
 would silently track only the visited frames. Hyperparameters come from the
 `corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`
 tracking thresholds (`ui/settings.js`; defaults are the `G_keeptrack_3d6`
@@ -531,6 +543,21 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
+  **`_rawInstIndex` tagging (#158 fix).** All three lazy-materialization sites
+  (`ensureLazyFrameData`, `buildLazyFrameGroupSync`, and the worker-batch
+  branch of `batchLoadLazyFrames`) tag every constructed `Instance` with
+  `inst._rawInstIndex = ii` — `ii` being that instance's position within its
+  frame's raw instance list, which equals its exact row offset in the lazy
+  store's `[instance_id_start, instance_id_end)` range for that
+  (camera, frame). `import-export/slp-streaming-write.js`'s `refFor` reads
+  this directly on save instead of guessing the row via `trackIdx` matching —
+  see that module's docs for why the guess was wrong. Verified against Elly's
+  real ~108k-frame×3-camera dataset in `scratch/2026-07-13-elly-perf/`: the
+  old trackIdx-only heuristic produced 8 real ref collisions (wrong animal's
+  2D pose/track attached to a group) in the first 3000 frames alone;
+  `_rawInstIndex` resolved all 35611 refs with zero collisions. Regression
+  test: `tests/e2e/save-multiinstance-ref-integrity.mjs`
+  (`npm run test:ref-integrity`).
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,
@@ -1237,6 +1264,24 @@ so the brace-walked `switchSession` test harnesses
 `test-switchsession-parallel-decoders.js`) don't need an additional
 stub parameter. The same constraint shapes the inlined
 `_uploadedCameras` recompute earlier in the function.
+
+**Active-session memory model — dirty prompt + eviction.** `switchSession`
+prompts Save/Discard/Cancel when leaving a dirty outgoing session
+(`_leaving.isDirty`, tracked per-session by `markDirty`/`clearDirty` in
+`import-export/save-load.js`) before switching. Once resolved (Save runs
+`quickSave()` then proceeds only if it cleared the dirty flag; Discard
+proceeds, dropping the changes), `switchSession` frees the outgoing session's
+lazy state: if `_leaving.lazyLoader` is set, it's closed and
+`frameGroups`/`instanceGroups`/`triangulationResults` are reset. For a
+multi-session project this is usually a no-op by this point — a successful
+`quickSave()` routes through `saveAllSessionsStreaming`
+(`import-export/save-load.js`), which already evicted every session's
+`lazyLoader` as part of saving — but it's what actually reclaims the memory
+for a single-lazy-session project (whose streaming save doesn't touch
+`session.lazyLoader`) or the Discard path (no save happened at all).
+Re-activating an evicted session later requires reopening it from scratch
+(the existing "load session folder" path) — there's no lazy re-hydration
+from within one already-open project `.slp` yet.
 
 **User-facing features.** Video pane docking (drag/move/resize), view
 strip (top), session strip (bottom), per-pane brightness/rotation
@@ -2113,8 +2158,13 @@ worker. Frames are materialized on demand via `labels.frameAt(row)`, so
 metadata + builds a videoFrameIdx→store-row map, first camera's skeleton/tracks
 win), `getFrame` / `getFrameSync` (adapt typed instances → `{trackIdx, score,
 type, points, occluded}`, LRU-cached), `prefetch`, `close`; fields `nFrames`,
-`skeleton`, `trackNames`, `videos`, `trackOccupancy`, and `isSync = true` (so
-`batchLoadLazyFrames` takes its worker-free path).
+`skeleton`, `trackNames`, `videos`, `trackOccupancy`, `isSync = true` (so
+`batchLoadLazyFrames` takes its worker-free path), and `sourceFiles` (camName →
+the `File`/`Blob` it was opened from — a local-disk `File` is a cheap lazy
+handle, not a resident copy of the bytes, so retaining these costs ~nothing and
+lets a caller reopen a fresh loader for the SAME cameras later without
+re-picking files; used by the multi-session streaming save's pass-2 restream,
+`reopenSessionLazyLoader` in `import-export/save-load.js`).
 
 `trackOccupancy` (phase-5) is populated per camera by `_computeSparseOccupancy(labels,
 nFrames)` — one O(nInstances) pass over the columnar store (`framesData.frame_idx` +
@@ -2424,44 +2474,70 @@ pipeline) — the write-side companion to `SioLazyLoader`. The eager builder
 frame; on a ~108k×N lazy prediction session that re-OOMs and silently drops every
 unvisited frame (it only iterates the resident `frameGroups`).
 
-**Key export.** `buildSessionSlpBytesStreaming(session, views, videoFiles, opts)` —
-builds the file incrementally: `openSlpWriter({skeletons, videos, tracks, sessions,
-provenance})` → `appendStore(perCameraLazyStore, {videoIndexOffset, trackOffset})`
-per camera (columnar, window-by-window, zero per-frame JS objects) → `close()` (or
-`writeToSink(opts.sink)`). The 2D pose streams straight from the loader's per-camera
-`_lazyDataStore`s. The triangulated grouping (`session.instanceGroups`) is carried
-as a **ref-based** `RecordingSession`: `FrameGroup`/`InstanceGroup` reference frames/
-instances by OUTPUT index (`labeledFrameRefsByCamera` / `instanceRefsByCamera`), not
-objects, so the session graph stays compact and `sessions_json` serializes with zero
-frame materialization (sleap-io.js #208). **Calibration-only cameras** (in
-`session.cameras` but with no loaded lazy store — a calibration file defining more
-cameras than videos loaded) get a header `Camera`+`Video` (0-frame) and a cameraGroup
-slot so the calibration round-trips, but are skipped for `appendStore` — matching the
-eager builder (the old code hard-threw "lazy store missing"). Loaded cameras carry
-their full-list `videoIndex` (not their position among loaded cameras) into
-`appendStore`'s `videoIndexOffset` and the overlay's video ref, so video ids stay
-correct across the skipped cameras. **2D user corrections are overlaid:**
-any resident frameGroup carrying a user instance in a camera is a corrected/added
-`(camera, frameIdx)`; those camera-frames are materialized (grouped + unlinked
-union, via the shared `_buildSioPoints` from `file-io.js`) and `appendFrames`d
-FIRST, so #208's first-write-wins dedup shadows the store's original predicted row.
-Because overlays occupy output frames `[0, E)` and each shadowed store row is
-skipped by `appendStore`, a grouped frame's output index is NOT `cameraBase[c] +
-storeRow` — it is recomputed in a per-camera `storeOutIndex` map (overlays first,
-then each camera's non-skipped rows in camera/row order), and `refFor` resolves an
-edited camera-frame to its overlay (instance position by object identity, then
+**Multi-session two-pass split (eric/fix-save follow-up).** `SIO.openSlpWriter`
+serializes `sessions_json`/`identities_json` **synchronously at open time** (not
+at `close()`), so every session's ref-based `RecordingSession` graph — with
+correct file-**global** `lf_idx`/`inst_idx` (sleap-io resolves refs against one
+flat, file-wide labeled-frames table, never per-session) — must be complete
+*before* the writer opens, i.e. before any frame streams. For multiple large
+lazy sessions that can never all be resident at once, this forces two passes,
+each holding only one session's data at a time:
+- **`createProjectWriterContext()`** — a fresh shared context
+  (`{ runningOut, allSkeletons, allVideos, allTracks, allIdentities }`) threaded
+  through every session so refs stay file-global (never reset per session).
+- **`buildSessionRefGraph(session, views, videoFiles, ctx)`** — PASS 1, per
+  session: prunes `session.frameGroups` to user-edited frames only (frees the
+  bulk of Track All's per-frame materialization before the rest of this
+  function runs), builds the overlay plan / `storeOutIndex` / per-`InstanceGroup`
+  refs against `ctx`'s running counter (advancing it for the next session), and
+  accumulates this session's cameras/tracks/skeleton into `ctx`. Requires
+  `session.lazyLoader` open and Track All/Triangulate All already run. Touches
+  no writer. Returns `{ sioSession, overlayLfs, cam }` — small enough that the
+  caller can safely evict the session's lazy loader/`frameGroups`/
+  `instanceGroups` right after this returns.
+- **`openProjectWriter(ctx, allSioSessions, provenance)`** — the single
+  `SIO.openSlpWriter(...)` call, made once every session's ref graph is final.
+- **`streamSessionIntoWriter(writer, session, refGraphResult)`** — PASS 2, per
+  session: `appendFrames(overlayLfs)` + `appendStore(store, {videoIndexOffset,
+  trackOffset})` per camera, using the offsets saved in pass 1. Requires
+  `session.lazyLoader` to be (re)opened — no Track All/Triangulate All needed,
+  `appendStore` reads straight from the columnar store (~1.2 GB peak for a
+  108k-frame×3-camera session, not pass 1's ~3.7 GB).
+- **`finalizeProjectWriter(writer, opts)`** — `writer.close()`/`writeToSink()`.
+- **`buildSessionSlpBytesStreaming(session, views, videoFiles, opts)`** — thin
+  single-session wrapper chaining all four (unchanged call signature/behavior
+  for existing callers/tests).
+
+**Calibration-only cameras** (in `session.cameras` but with no loaded lazy
+store — a calibration file defining more cameras than videos loaded) get a
+header `Camera`+`Video` (0-frame) and a cameraGroup slot so the calibration
+round-trips, but are skipped for `appendStore`. Loaded cameras carry their
+GLOBAL `videoIndex`/`trackBase` (position in `ctx.allVideos`/`ctx.allTracks`,
+not a per-session-local index) into `appendStore`'s offsets and the overlay's
+video ref. **2D user corrections are overlaid:** any resident frameGroup
+carrying a user instance in a camera is a corrected/added `(camera, frameIdx)`;
+those camera-frames are materialized (grouped + unlinked union, via the shared
+`_buildSioPoints` from `file-io.js`) and `appendFrames`d FIRST, so #208's
+first-write-wins dedup shadows the store's original predicted row. Because
+overlays occupy output frames `[ctx.runningOut, ctx.runningOut+E)` for THIS
+session and each shadowed store row is skipped by `appendStore`, a grouped
+frame's output index is recomputed in a per-camera `storeOutIndex` map
+(overlays first, then each camera's non-skipped rows in camera/row order,
+continuing the shared running counter), and `refFor` resolves an edited
+camera-frame to its overlay (instance position by object identity, then
 `track`) or otherwise to the shifted store row. Only edited camera-frames are
 materialized (minimal at prediction scale); every other frame streams from the
-columnar store. Routed to by `buildSlpBytes` (`save-load.js`) for a single lazy
-session. **Scope:** predictions + full grouping (identities + 3D) + 2D corrections.
-An overlaid frame's untouched predicted siblings are re-materialized too (the store
-row is skipped wholesale); they carry the instance-level score as a per-point score
-(the frameGroup keeps no per-point scores) so SLEAP's GUI doesn't hide them — mirrors
-the eager `buildSlpLabels` reproj export.
+columnar store. An overlaid frame's untouched predicted siblings are
+re-materialized too (the store row is skipped wholesale); they carry the
+instance-level score as a per-point score (the frameGroup keeps no per-point
+scores) so SLEAP's GUI doesn't hide them — mirrors the eager `buildSlpLabels`
+reproj export. **Scope:** predictions + full grouping (identities + 3D) + 2D
+corrections.
 
 **Imports.** `window.SleapIO` (streaming writer API); `_buildSioPoints`
 (`import-export/file-io.js`). **Imported by.** `import-export/save-load.js`
-(`buildSlpBytes`).
+(`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
+`finalizeMultiSessionSave`).
 
 ### import-export/save-load.js
 
@@ -2474,11 +2550,61 @@ loading-overlay/status-text UI helpers.
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
   is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
   `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject`.
-- `buildSlpBytes` (internal) assembles the multi-session SLP. **For a single
-  lazy session it routes to `buildSessionSlpBytesStreaming`
-  (`import-export/slp-streaming-write.js`)** — the memory-bounded streaming
-  writer path — instead of the eager `buildSlpLabelsAllViews` + `saveSlpToBytes`
-  (which would re-OOM and silently drop every unvisited frame). Each session's
+- `buildSlpBytes` (internal) assembles the multi-session SLP. **When EVERY
+  session in `state.sessions` has an open `lazyLoader`, it routes to the
+  memory-bounded streaming path** — `buildSessionSlpBytesStreaming`
+  (`import-export/slp-streaming-write.js`) for a single lazy session, or
+  `saveAllSessionsStreaming(sessions)` (below) for multiple — instead of the
+  eager `buildSlpLabelsAllViews` + `saveSlpToBytes` (which would re-OOM and
+  silently drop every unvisited frame). A mixed project (any session without a
+  `lazyLoader`, e.g. hand-labeled) still falls through to the eager path.
+- **`saveAllSessionsStreaming(sessions)`** / **`beginMultiSessionSave()`** +
+  **`commitSessionForMultiSessionSave(handle, session)`** +
+  **`finalizeMultiSessionSave(handle, opts)`** — the multi-session
+  generalization of the streaming writer (see `slp-streaming-write.js`'s
+  two-pass split). `saveAllSessionsStreaming` is a convenience wrapper for the
+  case where every session's Track All/Triangulate All has ALREADY run and all
+  sessions are simultaneously resident (fine when their combined compute
+  fits). The three-piece API exists so a caller can interleave PASS 1's
+  per-session commit (`commitSessionForMultiSessionSave` — builds the ref
+  graph, then evicts that session's `lazyLoader`/`frameGroups`/
+  `instanceGroups`) with that session's OWN compute step, one session at a
+  time — the only way to keep peak memory bounded when a single session's
+  compute alone approaches the tab's ceiling (~3.7 GB measured for a
+  108k-frame×3-camera prediction session; three such sessions can never be
+  simultaneously computed). **No UI currently drives that interactive
+  per-session flow** (open → Track All → Triangulate All → commit → evict →
+  next session) — `reopenSessionLazyLoader` (internal) supports it via
+  `SioLazyLoader.sourceFiles` (cheap retained `File` handles, so pass 2's
+  restream doesn't need Track All/Triangulate All redone).
+
+  **GC-timing finding (real cage5×3) — resolved.** Dereferencing a session's
+  heavy state makes it *eligible* for GC but doesn't force reclamation —
+  driving the real pipeline with `opts.sink` streaming and short yields alone
+  still left memory climbing session over session and crashed at pass 2. The
+  actual root cause turned out to be upstream: `pose/tracker.js`'s
+  `trackAll()` called `loadAllLazyFrames()` (full ~108k-frame materialization)
+  before tracking even started, though the cross-view tracker is genuinely
+  sequential and never needed it — see `sweepTrackAllFrames` below, the fix.
+  Combined with `opts.sink` streaming (avoids also materializing the whole
+  output as one extra in-memory buffer) and `encourageGC(totalMB)` (allocates
+  toward the real heap ceiling — a modest allocation is trivially satisfied
+  from free space without forcing the mark-compact pass that reclaims a
+  large, old-generation object graph — called between sessions and
+  periodically within each windowed sweep, in `save-load.js`/`tracker.js`/
+  `export-modals.js`), the real cage5×3 pipeline now completes without
+  crashing, verified across three independent full runs. A worker-based
+  redesign (each session's compute in a dedicated Worker, `terminate()`d
+  between sessions) was investigated as a more structurally deterministic
+  alternative and ruled out: `tracker.js` has a top-level DOM call that fires
+  on import, `trackAll()`/`triangulateAllFrames()` are UI-entangled, and — a
+  module Worker cannot import `lib/sleap-io/index.browser.js` at all in this
+  environment (bare-specifier imports in `chunk-M65RB7KH.js` only resolve via
+  the page's import map, which Workers don't inherit; `yaml` specifically is
+  CDN-only, not vendored) — moot once the real fix (stop over-materializing)
+  was found.
+
+  Each session's
   `sessions_json` payload carries per-session `metadata.lucid.identities`
   (alongside `frameIdentityMap`/`tracks`), keeping identities scoped per
   session across save/load. The file-level `identities_json` remains a

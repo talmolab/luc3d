@@ -1897,33 +1897,36 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 identity = lucidIdToSioId.get(group.identityId);
             }
 
-            // Collect full per-instance lucid metadata for precise round-trip.
+            // Collect per-instance lucid metadata for precise round-trip.
             // `identityId` is the PER-SESSION identity index (LUCID scopes
             // identities per session). It is persisted here — not relied upon
             // from the canonical `identity_idx`/`ig.identity`, which resolve
             // against the file-level (cross-session concat) identity list and so
             // mis-scope for multi-session files. The typed importer reads this
-            // back verbatim (see reconstructInstanceGroupsFromSession).
+            // back (see reconstructInstanceGroupsFromSession).
+            //
+            // SLIM METADATA (#134): only NON-reconstructable per-instance fields
+            // are written, and only when set. `trackIdx` (from the instance's
+            // track ref), `type` (Instance vs PredictedInstance), `score`
+            // (PredictedInstance.score), and `occluded` (from point visibility)
+            // are ALL derivable from the standard SLP instance on load, so
+            // writing them per instance per frame just bloated `sessions_json`
+            // (the "invalid string length" cap). `modified` (LUCID edit flag,
+            // absent from standard SLP) and `nulledNodes` are the only fields
+            // kept — sparse, so most grouped instances now emit NO metadata.
             var igLucidMeta = {
                 instanceMeta: {},
                 identityId: (group.identityId != null && group.identityId >= 0) ? group.identityId : -1,
             };
             for (var [metaCam, metaInst] of group.instances) {
-                var instMeta = {
-                    trackIdx: metaInst.trackIdx,
-                    type: metaInst.type || 'user',
-                    score: metaInst.score || 0,
-                    modified: metaInst.modified || false,
-                };
+                var instMeta = {};
+                var hasMeta = false;
+                if (metaInst.modified) { instMeta.modified = true; hasMeta = true; }
                 if (metaInst.nulledNodes && metaInst.nulledNodes.size > 0) {
                     instMeta.nulledNodes = Array.from(metaInst.nulledNodes);
+                    hasMeta = true;
                 }
-                if (metaInst.occluded) {
-                    var hasAnyOcc = false;
-                    for (var ok in metaInst.occluded) { if (metaInst.occluded[ok]) { hasAnyOcc = true; break; } }
-                    if (hasAnyOcc) instMeta.occluded = metaInst.occluded;
-                }
-                igLucidMeta.instanceMeta[metaCam] = instMeta;
+                if (hasMeta) igLucidMeta.instanceMeta[metaCam] = instMeta;
             }
 
             var igMetadata = { lucid: igLucidMeta };

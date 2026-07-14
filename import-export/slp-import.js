@@ -126,11 +126,38 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             }
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
 
-            // Create instances directly from inline point dicts
+            // Members come from EITHER the inline point dicts (legacy) OR — post
+            // #134, when inline instances are omitted to keep sessions_json under
+            // V8's string cap — the ref map `camcorder_to_lf_and_inst_idx_map`
+            // (camKey → [labeledFrameIdx, instIdx]). In the ref case the group
+            // member is the `instIdx`-th pass-1 raw instance for that camera at
+            // THIS frame (pass-1 already populated `fg3.instances`). Without this,
+            // a large canonical project that falls back to the raw worker (no
+            // typed session) reconstructed ZERO groups → 3D/tracking silently lost.
             var igInstances = igDict.instances || {};
+            var refMap = igDict.camcorder_to_lf_and_inst_idx_map || {};
             var igLucid = (igDict.metadata && igDict.metadata.lucid) || {};
             var instanceMetaMap = igLucid.instanceMeta || {};
 
+            if (Object.keys(igInstances).length === 0 && Object.keys(refMap).length > 0) {
+                for (var refCamKey in refMap) {
+                    var refCamName = camKeyToName[refCamKey] || refCamKey;
+                    var refPair = refMap[refCamKey];
+                    var refInstIdx = Array.isArray(refPair) ? (parseInt(refPair[1]) || 0) : 0;
+                    var refList = fg3.instances.get(refCamName);
+                    if (!refList || refInstIdx < 0 || refInstIdx >= refList.length) continue;
+                    var refInst = refList[refInstIdx];
+                    // Slim metadata (#134) drops trackIdx/type — the pass-1 instance
+                    // already carries them from the .slp; honor any that ARE present.
+                    var refMeta = instanceMetaMap[refCamName] || instanceMetaMap[refCamKey] || {};
+                    if (refMeta.trackIdx != null) refInst.trackIdx = refMeta.trackIdx;
+                    if (refMeta.type) refInst.type = refMeta.type;
+                    if (refMeta.modified) refInst.modified = true;
+                    if (refMeta.nulledNodes) refInst.nulledNodes = new Set(refMeta.nulledNodes);
+                    // The pass-1 instance IS the group member (already in fg3.instances).
+                    group.addInstance(refCamName, refInst);
+                }
+            } else {
             for (var igCamKey in igInstances) {
                 var igCamName = camKeyToName[igCamKey];
                 if (!igCamName) {
@@ -199,6 +226,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 group.addInstance(igCamName, inst);
                 fg3.addInstance(igCamName, inst);
             }
+            }
 
             // Restore 3D points
             if (igDict.points && Array.isArray(igDict.points)) {
@@ -254,6 +282,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
     var restoredGroups = 0, restoredWith3d = 0;
+    // For deriving type/trackIdx/score from resolved typed instances when slim
+    // metadata (#134) omits them.
+    var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
 
     // Index the legacy raw frame_group_dicts by frame index for the identity
     // fallback (only consulted when metadata.lucid.identityId is absent).
@@ -264,6 +295,15 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
         var rfIdx = rfd.frame_idx != null ? rfd.frame_idx : (rfd.frameIdx != null ? rfd.frameIdx : null);
         if (rfIdx != null) rawFgByFrame.set(rfIdx, rfd);
     }
+
+    // #158 diagnostic: two different InstanceGroups resolving the SAME typed
+    // instance (by object identity) for the same camera+frame is direct proof
+    // of a ref collision on save — the fix in slp-streaming-write.js's
+    // `refFor` (`_rawInstIndex`) should make this impossible going forward,
+    // but keep detecting it here as a cheap read-side tripwire for older
+    // files or any other ref-resolution path this didn't cover.
+    var _seenTypedInstByCamFrame = new Map(); // "camName:frameIdx" -> Set<typedInst>
+    var _refCollisions = 0;
 
     var fgEntries = Array.from(typedSession.frameGroups.entries());
     for (var fei = 0; fei < fgEntries.length; fei++) {
@@ -306,6 +346,17 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 var typedInst = camEntry[1];
                 var igCamName = (typedCam && typedCam.name) || '';
 
+                var _cfKey = igCamName + ':' + fgFrameIdx;
+                var _seenSet = _seenTypedInstByCamFrame.get(_cfKey);
+                if (!_seenSet) { _seenSet = new Set(); _seenTypedInstByCamFrame.set(_cfKey, _seenSet); }
+                if (_seenSet.has(typedInst)) {
+                    _refCollisions++;
+                    console.warn('[load-slp] ref collision: camera "' + igCamName + '" frame ' + fgFrameIdx
+                        + ' — two InstanceGroups resolved the SAME raw instance (#158 symptom)');
+                } else {
+                    _seenSet.add(typedInst);
+                }
+
                 // Points from typed columnar _xy; occlusion from _visible. NOT
                 // numpy() (which zeroes invisible points to NaN and would drop
                 // occluded-but-placed keypoints).
@@ -325,10 +376,19 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                     }
                 }
 
+                // trackIdx / type / score are reconstructed from the resolved
+                // typed instance when absent from metadata (slim files, #134);
+                // older files that still carry them in metadata are honored.
                 var instMeta = instanceMetaMap[igCamName] || {};
-                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : null;
-                var instType = instMeta.type || 'predicted';
-                var instScore = instMeta.score || 0;
+                var _isPred = (_SIO && _SIO.PredictedInstance)
+                    ? (typedInst instanceof _SIO.PredictedInstance)
+                    : (typedInst && typedInst.pointScores !== undefined);
+                var _derivedTrackIdx = (typedInst && typedInst.track && typedInst.track.name != null)
+                    ? session.tracks.indexOf(typedInst.track.name) : -1;
+                if (_derivedTrackIdx < 0) _derivedTrackIdx = null;
+                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : _derivedTrackIdx;
+                var instType = instMeta.type || (_isPred ? 'predicted' : 'user');
+                var instScore = instMeta.score != null ? instMeta.score : (_isPred ? (typedInst.score || 0) : 0);
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
                 inst.occluded = occluded;
@@ -371,7 +431,12 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             await new Promise(function (r) { setTimeout(r, 0); });
         }
     }
-    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
+    if (_refCollisions > 0) {
+        console.warn('[load-slp] ' + _refCollisions + ' ref collision(s) detected while reconstructing instance groups — '
+            + 'some 2D poses/tracks may be misattributed between animals (#158). If this fires on a freshly-saved '
+            + 'file, the write-side fix in slp-streaming-write.js did not fully resolve the issue.');
+    }
+    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d, refCollisions: _refCollisions };
 }
 
 /**

@@ -6,7 +6,13 @@
   "scripts": {
     "postinstall": "playwright install chromium",
     "test:scoping": "node session-video-scoping.mjs",
-    "test:occlusion": "node occlusion-roundtrip.mjs"
+    "test:occlusion": "node occlusion-roundtrip.mjs",
+    "test:save-dedup": "node save-no-inline-dup.mjs",
+    "test:save-slim": "node save-slim-metadata.mjs",
+    "test:lazy-calib": "node lazy-embedded-calibration.mjs",
+    "test:reopen-calib": "node reopen-project-calibration.mjs",
+    "test:multi-session-save": "node multi-session-save-streaming.mjs",
+    "test:ref-integrity": "node save-multiinstance-ref-integrity.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

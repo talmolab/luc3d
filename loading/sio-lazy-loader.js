@@ -74,6 +74,15 @@ export class SioLazyLoader {
     constructor() {
         /** @type {Map<string, Object>} camName -> lazy sleap-io.js Labels */
         this.labelsByCam = new Map();
+        /**
+         * camName -> the `File`/`Blob` this camera was opened from. A local-disk
+         * `File` is a cheap lazy handle (not a resident copy of the bytes), so
+         * retaining these costs ~nothing and lets a caller re-open a fresh
+         * `SioLazyLoader` for the SAME cameras later (e.g. the multi-session
+         * streaming save's pass-2 restream, after pass-1 evicted this loader's
+         * parsed columnar data — see `saveAllSessionsStreaming` in save-load.js).
+         */
+        this.sourceFiles = new Map();
         /** @type {Map<string, Map<number, number>>} camName -> (videoFrameIdx -> store row) */
         this.frameRowByCam = new Map();
         /** @type {Map<string, number>} camName -> node count */
@@ -91,6 +100,11 @@ export class SioLazyLoader {
         this.nFrames = 0;
         this.skeleton = null;
         this.trackNames = [];
+        // Embedded calibration recovered from a project .slp's sessions_json
+        // (raw calibration dict + camcorder→video map), used by the session
+        // builder when the folder has no separate calibration.toml.
+        this.calibration = null;
+        this.camcorderToVideoMap = null;
         this.videos = new Map();
         this.trackOccupancy = new Map(); // left empty (see file header)
 
@@ -112,12 +126,36 @@ export class SioLazyLoader {
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
+            // Capture the verbatim sessions_json so we can recover the embedded
+            // calibration a LUCID project .slp carries (see this.calibration) —
+            // without it the session-folder loader falls back to placeholder
+            // identity cameras and the user's calibration is silently lost
+            // (#134 / eric/fix-save).
+            rawSessions: true,
             h5wasmUrl: h5wasmUrl,
             onProgress: onProgress
                 ? function (n, total, msg) { onProgress(msg || ('Reading ' + n + '/' + total)); }
                 : undefined,
         });
         this.labelsByCam.set(cameraName, labels);
+        this.sourceFiles.set(cameraName, file);
+
+        // Capture the embedded per-camera calibration from the first opened file
+        // that carries one (a project .slp saved by LUCID does; a raw prediction
+        // .slp usually does not). Stored as the raw sessions_json calibration
+        // dict ({ cam_0: {name, matrix, rotation, translation, distortions,
+        // size}, … }) plus the camcorder→video map; the session builder turns
+        // these into real Camera objects when no calibration.toml is present.
+        if (!this.calibration) {
+            var rawSess = (labels.rawSessionsJson && labels.rawSessionsJson[0]) || null;
+            if (rawSess && rawSess.calibration) {
+                var calKeys = Object.keys(rawSess.calibration).filter(function (k) { return k !== 'metadata'; });
+                if (calKeys.length > 0) {
+                    this.calibration = rawSess.calibration;
+                    this.camcorderToVideoMap = rawSess.camcorder_to_video_idx_map || null;
+                }
+            }
+        }
 
         // Bound the reader's internal typed-frame cache via the public API
         // (`frameCacheLimit` FIFO-evicts beyond the cap) so long scrubbing and

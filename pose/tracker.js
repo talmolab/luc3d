@@ -24,7 +24,7 @@ import { InstanceGroup } from './pose-data.js';
 import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
 import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
 import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
-import { loadAllLazyFrames } from './triangulation.js';
+import { loadAllLazyFrames, batchLoadLazyFrames } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 
@@ -959,6 +959,107 @@ export async function runCrossViewTrackerProgress(session, cameras, frameIndices
     return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
 
+/** Mirrors `ui/export-modals.js`'s private `frameGroupHasUserInstances` (kept
+ * local rather than shared to avoid a new cross-module import for one small
+ * pure helper) — true if a FrameGroup carries any user-authored instance. */
+function frameGroupHasUserInstances(fg) {
+    for (var [, insts] of fg.instances) {
+        for (var i = 0; i < insts.length; i++) {
+            if (insts[i] && insts[i].type === 'user') return true;
+        }
+    }
+    for (var [, uInsts] of fg.unlinkedInstances) {
+        for (var j = 0; j < uInsts.length; j++) {
+            if (uInsts[j] && uInsts[j].instance && uInsts[j].instance.type === 'user') return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Windowed sibling of `runCrossViewTrackerProgress` for a windowing-capable
+ * lazy loader (`SioLazyLoader` — memory-bounded phase-5 sessions). The
+ * cross-view tracker is sequential (`stepTrackerFrame` only ever reads the
+ * CURRENT frame's `FrameGroup`; all cross-frame state lives in `run.trk`/
+ * `run.trackToIdentity`, not in `session.frameGroups`), so — mirroring
+ * `ui/export-modals.js`'s `sweepTriangulationFrames` — this walks
+ * `0..loader.nFrames` in windows, materializes each window
+ * (`batchLoadLazyFrames`), steps the tracker over it, then releases it
+ * (dropping predicted-only `FrameGroup`s — they rebuild from the columnar
+ * store on demand; identities/instanceGroups already live in
+ * `session.identities`/`session.instanceGroups`, untouched by the release).
+ *
+ * This replaces `trackAll()`'s previous `loadAllLazyFrames()` (materializing
+ * the WHOLE ~108k-frame project into `frameGroups` before tracking even
+ * starts) with a bounded window — measured to cut a 108k-frame×3-camera
+ * session's Track-All-time peak by roughly the full-materialization cost
+ * (~1+ GB), critical headroom for sequential multi-session processing where
+ * every GB matters (see `saveAllSessionsStreaming` / the multi-session save
+ * plan).
+ */
+/**
+ * No `--expose-gc` in a real browser — a large, immediately-discarded
+ * allocation typically forces V8 to prove it has room (or reclaim some)
+ * before granting it, nudging a collection sooner than just waiting would.
+ * Real-data testing showed a released window's garbage can otherwise pile up
+ * across a whole ~108k-frame/~54-window sweep. Best-effort only.
+ */
+async function encourageGC(totalMB) {
+    // See the identical helper in import-export/save-load.js for why this
+    // allocates toward the real heap ceiling rather than a token amount — a
+    // modest allocation is trivially satisfied from free space without V8
+    // bothering to run the mark-compact pass that actually reclaims a large,
+    // promoted-to-old-space object graph like a released window's data.
+    var junk = [];
+    try {
+        var chunkMB = 100;
+        var n = Math.ceil((totalMB || 800) / chunkMB);
+        for (var i = 0; i < n; i++) {
+            var buf = new ArrayBuffer(chunkMB * 1024 * 1024);
+            new Uint8Array(buf)[0] = 1;
+            junk.push(buf);
+        }
+    } catch (e) { /* ignore — hitting real pressure is the point */ }
+    junk = null;
+    await new Promise(function (r) { setTimeout(r, 50); });
+}
+
+async function sweepTrackAllFrames(session, cameras, maxTargets, onProgress, windowSize) {
+    var run = createTrackerRun(session, cameras, maxTargets);
+    var loader = session.lazyLoader;
+    var total = loader.nFrames;
+    var W = windowSize || 2000;
+    var done = 0;
+    var windowCount = 0;
+    var stride = Math.max(1, Math.ceil(total / 20));
+    for (var start = 0; start < total; start += W) {
+        var end = Math.min(start + W, total);
+        await batchLoadLazyFrames(start, end - start);
+        for (var fi = start; fi < end; fi++) {
+            stepTrackerFrame(session, run, fi);
+            done++;
+            if (onProgress && (done % stride === 0 || done === total)) {
+                await onProgress(done, total);
+            }
+        }
+        // Release the window — keep the on-screen current frame and any
+        // user-edited frame; everything else is predicted-only and rebuildable.
+        for (var rf = start; rf < end; rf++) {
+            if (rf === state.currentFrame) continue;
+            var rfg = session.frameGroups.get(rf);
+            if (rfg && !frameGroupHasUserInstances(rfg)) session.frameGroups.delete(rf);
+        }
+        loader.releaseWindow(start, end);
+        windowCount++;
+        // Every few windows, nudge + yield so released windows don't just
+        // pile up as uncollected garbage across the whole sweep.
+        if (windowCount % 5 === 0) {
+            await encourageGC(800);
+        }
+    }
+    return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
+}
+
 export function trackCurrentFrame() {
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
@@ -1095,9 +1196,14 @@ export async function trackAll() {
     // Lazy sessions (large .slp session folders, #132) keep only a resident window
     // in `frameGroups`, so `session.frameIndices` covers just the VISITED frames —
     // but the cross-view tracker is sequential and needs EVERY frame in order.
-    // Materialize the whole project first, then re-read the full frame list.
-    // (Non-lazy sessions already have all frames resident — this is a no-op.)
-    if (session.lazyLoader) {
+    // A windowing-capable loader (SioLazyLoader) drives `sweepTrackAllFrames`
+    // below instead — materialize-a-window/step/release, never the whole
+    // project at once (the full `loadAllLazyFrames()` up front is kept only
+    // for a worker-backed lazy loader (small analysis .h5, no windowing) or a
+    // non-lazy session, where it's already a no-op).
+    var loader = session.lazyLoader;
+    var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
+    if (loader && !windowed) {
         showLoading('Loading all ' + session.numFrames + ' frames for tracking…');
         await new Promise(function (r) { setTimeout(r, 0); });
         try {
@@ -1112,9 +1218,10 @@ export async function trackAll() {
     }
 
     var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+    var totalFrameCount = windowed ? loader.nFrames : frameIndices.length;
     console.log('[TrackAll] numAnimals:', effectiveNumAnimals,
         trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
-        'frames:', frameIndices.length);
+        'frames:', totalFrameCount, windowed ? '(windowed)' : '');
     console.time('[TrackAll] total');
 
     // Clear old identities/groups for a fresh run
@@ -1122,7 +1229,7 @@ export async function trackAll() {
     session.frameIdentityMap = new Map();
     session.instanceGroups = new Map();
 
-    showLoading('Assigning identities: 0/' + frameIndices.length + ' frames…');
+    showLoading('Assigning identities: 0/' + totalFrameCount + ' frames…');
 
     // Drive the CrossViewTracker across all frames and populate IDENTITIES +
     // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
@@ -1136,20 +1243,21 @@ export async function trackAll() {
         // calls back with (done, total) so the counter advances without freezing
         // at 0/N (infrequent so the repaints don't slow the run).
         await new Promise(function (r) { setTimeout(r, 0); });
-        var lres = await runCrossViewTrackerProgress(
-            session, cameras, frameIndices, false, effectiveNumAnimals,
-            function (done, total) {
-                showLoading('Assigning identities: ' + done + '/' + total +
-                    ' frames (' + Math.round(done / total * 100) + '%)…');
-                return new Promise(function (r) { setTimeout(r, 0); });
-            });
+        var onProgress = function (done, total) {
+            showLoading('Assigning identities: ' + done + '/' + total +
+                ' frames (' + Math.round(done / total * 100) + '%)…');
+            return new Promise(function (r) { setTimeout(r, 0); });
+        };
+        var lres = windowed
+            ? await sweepTrackAllFrames(session, cameras, effectiveNumAnimals, onProgress)
+            : await runCrossViewTrackerProgress(session, cameras, frameIndices, false, effectiveNumAnimals, onProgress);
         hideLoading();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         console.timeEnd('[TrackAll] total');
         setStatus('Assigned ' + lres.numIdentities + ' identities across ' +
-            frameIndices.length + ' frames — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
+            totalFrameCount + ' frames — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
     } catch (e) {
         hideLoading();
         console.error('[TrackAll] error:', e, e.stack);
