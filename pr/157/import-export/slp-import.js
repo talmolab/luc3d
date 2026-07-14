@@ -296,6 +296,15 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
         if (rfIdx != null) rawFgByFrame.set(rfIdx, rfd);
     }
 
+    // #158 diagnostic: two different InstanceGroups resolving the SAME typed
+    // instance (by object identity) for the same camera+frame is direct proof
+    // of a ref collision on save — the fix in slp-streaming-write.js's
+    // `refFor` (`_rawInstIndex`) should make this impossible going forward,
+    // but keep detecting it here as a cheap read-side tripwire for older
+    // files or any other ref-resolution path this didn't cover.
+    var _seenTypedInstByCamFrame = new Map(); // "camName:frameIdx" -> Set<typedInst>
+    var _refCollisions = 0;
+
     var fgEntries = Array.from(typedSession.frameGroups.entries());
     for (var fei = 0; fei < fgEntries.length; fei++) {
         var typedFg = fgEntries[fei][1];
@@ -336,6 +345,17 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 var typedCam = camEntry[0];
                 var typedInst = camEntry[1];
                 var igCamName = (typedCam && typedCam.name) || '';
+
+                var _cfKey = igCamName + ':' + fgFrameIdx;
+                var _seenSet = _seenTypedInstByCamFrame.get(_cfKey);
+                if (!_seenSet) { _seenSet = new Set(); _seenTypedInstByCamFrame.set(_cfKey, _seenSet); }
+                if (_seenSet.has(typedInst)) {
+                    _refCollisions++;
+                    console.warn('[load-slp] ref collision: camera "' + igCamName + '" frame ' + fgFrameIdx
+                        + ' — two InstanceGroups resolved the SAME raw instance (#158 symptom)');
+                } else {
+                    _seenSet.add(typedInst);
+                }
 
                 // Points from typed columnar _xy; occlusion from _visible. NOT
                 // numpy() (which zeroes invisible points to NaN and would drop
@@ -411,7 +431,12 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             await new Promise(function (r) { setTimeout(r, 0); });
         }
     }
-    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };
+    if (_refCollisions > 0) {
+        console.warn('[load-slp] ' + _refCollisions + ' ref collision(s) detected while reconstructing instance groups — '
+            + 'some 2D poses/tracks may be misattributed between animals (#158). If this fires on a freshly-saved '
+            + 'file, the write-side fix in slp-streaming-write.js did not fully resolve the issue.');
+    }
+    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d, refCollisions: _refCollisions };
 }
 
 /**
