@@ -6,26 +6,42 @@
  * `Labels` holding every `LabeledFrame`/`Instance` — fine for hand-labeled projects,
  * but on a lazy prediction session (≈108k frames × 3 cameras) it both re-OOMs and,
  * because it only iterates the resident `session.frameGroups`, silently drops every
- * unvisited frame. This builds the file **incrementally** instead:
+ * unvisited frame. This builds the file **incrementally** instead.
  *
- *   openSlpWriter({ skeletons, videos, tracks, sessions, provenance })
- *     → appendStore(perCameraLazyStore, { videoIndexOffset, trackOffset })   // ×N cameras
- *     → close()  /  writeToSink()
+ * ## Multi-session two-pass design
  *
- * `appendStore` streams each camera's columnar `LazyDataStore` window-by-window into
- * resizable HDF5 datasets, constructing zero per-frame JS objects — so nothing more
- * than one internal window is ever resident. The 2D pose comes straight from the
- * lazy stores the loader already holds (no re-read).
+ * `SIO.openSlpWriter()` serializes `sessions_json`/`identities_json`
+ * **synchronously at open time** (it does not re-read those arrays at
+ * `close()`) — so every session's ref-based `RecordingSession` graph (with
+ * final, file-GLOBAL `lf_idx`/`inst_idx` values — sleap-io resolves refs
+ * against one flat, file-wide labeled-frames table, never per-session) must
+ * be complete *before* the writer opens, which is *before* any frame data can
+ * be streamed. For ONE lazy session that's naturally already true (the ref
+ * graph is built, then the writer opens, then frames stream — see the single-
+ * session wrapper below). For MULTIPLE large lazy sessions that can never all
+ * be resident at once, this forces two passes, each holding only one
+ * session's data at a time:
  *
- * The triangulated 3D grouping (`session.instanceGroups`) is carried as a **ref-based**
- * `RecordingSession`: each `FrameGroup`/`InstanceGroup` references its frames/instances
- * by output index (`labeledFrameRefsByCamera` / `instanceRefsByCamera`) rather than by
- * object, so the session graph stays compact (indices + `Instance3D` + metadata, no
- * frame objects) and `sessions_json` serializes with zero frame materialization
- * (sleap-io.js #208). The output layout is deterministic — overlays (below) occupy
- * output frames `[0, E)`, then `appendStore` emits each camera's non-skipped store
- * rows in order — so a grouped frame's output index is computed up front from the
- * columnar store into a per-camera `storeOutIndex` map (see `refFor`).
+ *   PASS 1 (compute + ref-graph): for each session — reopen its lazy loader,
+ *   run Track All/Triangulate All (peak ~3.7 GB for a 108k-frame×3-camera
+ *   session), then `buildSessionRefGraph()` against a shared running
+ *   output-frame counter carried across sessions (never reset per session).
+ *   The result kept resident per session is small (a ref-only
+ *   `RecordingSession` + the materialized user-edit overlay instances) — the
+ *   caller evicts everything else (lazy loader, `frameGroups`,
+ *   `instanceGroups`) before moving to the next session.
+ *
+ *   PASS 2 (stream): once every session's ref graph is final, `openSlpWriter`
+ *   is called ONCE with the complete `videos`/`tracks`/`skeletons`/
+ *   `identities`/`sessions`. Then for each session again — reopen its lazy
+ *   loader (cheap: `appendStore` reads straight from the columnar store, no
+ *   Track All/Triangulate needed, ~1.2 GB not ~3.7 GB), stream its frames via
+ *   `streamSessionIntoWriter()`, evict again.
+ *
+ * `appendStore` streams each camera's columnar `LazyDataStore` window-by-window
+ * into resizable HDF5 datasets, constructing zero per-frame JS objects — so
+ * nothing more than one internal window is ever resident. The 2D pose comes
+ * straight from the lazy stores the loader already holds (no re-read).
  *
  * 2D user *corrections* on visited frames ARE overlaid: any resident frameGroup
  * carrying a user instance in a camera is a corrected/added `(camera, frameIdx)`.
@@ -60,64 +76,119 @@ function resolveVideoPath(cam, views, videoFiles) {
 }
 
 /**
- * Build the `.slp` bytes for ONE lazy session, memory-bounded.
- *
- * @param {Object} session       LUCID Session (must have `.lazyLoader`).
- * @param {Array}  views         state.views (for video dimensions).
- * @param {Array}  videoFiles    state.videoFiles (for filenames).
- * @param {Object} [opts]        { sink, chunkBytes } — if `sink` is given, streams
- *                               the output via `writeToSink` and resolves to null;
- *                               otherwise resolves to the Uint8Array.
- * @returns {Promise<Uint8Array|null>}
+ * Create a fresh cross-session writer context. Shared by every
+ * `buildSessionRefGraph`/`openProjectWriter` call in one save so every
+ * session's frame refs stay file-global (see module docstring). Reused
+ * as-is for a single-session save (one session's `buildSessionRefGraph`
+ * call against a context nobody else touches).
  */
-export async function buildSessionSlpBytesStreaming(session, views, videoFiles, opts) {
+export function createProjectWriterContext() {
+    return {
+        runningOut: 0,
+        allSkeletons: [],          // SIO.Skeleton[], deduped by name across sessions
+        skeletonByName: new Map(),
+        allVideos: [],             // SIO.Video[], global index = videoIndexOffset for appendStore
+        allTracks: [],             // SIO.Track[], global index = trackOffset for appendStore
+        allIdentities: [],         // SIO.Identity[], concatenated across sessions
+    };
+}
+
+/**
+ * PASS 1, per session: build this session's ref-based `RecordingSession`
+ * graph (skeleton/cameras/videos/tracks contribution, overlay plan,
+ * instance-group refs) against the shared `ctx`. Requires `session.lazyLoader`
+ * open and Track All/Triangulate All already run (needs `frameGroups`/
+ * `instanceGroups`). Touches no writer — safe to call before
+ * `openProjectWriter`. The caller may evict the session's lazy loader and
+ * clear `frameGroups`/`instanceGroups` immediately after this returns; only
+ * the small returned result needs to survive until pass 2.
+ *
+ * @returns {{ sioSession: Object, overlayLfs: Array, cam: Array<{name:string, videoIndex:number, trackBase:number}> }}
+ */
+export function buildSessionRefGraph(session, views, videoFiles, ctx) {
     var SIO = window.SleapIO;
-    if (!SIO || typeof SIO.openSlpWriter !== 'function') {
-        throw new Error('sleap-io.js streaming writer (openSlpWriter) not available');
-    }
     var loader = session.lazyLoader;
-    if (!loader) throw new Error('buildSessionSlpBytesStreaming requires a lazy session');
-    opts = opts || {};
+    if (!loader) throw new Error('buildSessionRefGraph requires a lazy session with a lazyLoader');
 
-    // ---- Skeleton ----
-    var nodeNames = session.skeleton.nodes.map(function (n) {
-        return typeof n === 'string' ? n : (n.name || '');
-    });
-    var sioNodes = nodeNames.map(function (name) { return new SIO.Node(name); });
-    var sioEdges = (session.skeleton.edges || []).map(function (e) {
-        return new SIO.Edge(sioNodes[e[0]], sioNodes[e[1]]);
-    });
-    var skeleton = new SIO.Skeleton({
-        nodes: sioNodes, edges: sioEdges, name: session.skeleton.name || 'skeleton',
-    });
+    // MEMORY (#134 follow-up): "Track All" materializes EVERY frame into
+    // `frameGroups` (the cross-view tracker is sequential), so a
+    // fully-triangulated 108k-frame session can hold multiple GB of 2D there
+    // by the time this runs. The overlay plan below only ever looks at
+    // user-edited frames (`camHasUserInstance` skips the rest), so free
+    // every resident frame that carries NO user instance FIRST — before the
+    // camera/instance-group loops below run — so GC can reclaim the bulk of
+    // it while the rest of this function executes. The triangulated 3D
+    // grouping is unaffected: it lives in `session.instanceGroups`, resolved
+    // below against the (unpruned) lazy store.
+    var _prunedFG = new Map();
+    var _prunedCount = 0;
+    for (var _fgEntry of session.frameGroups) {
+        var _fIdx = _fgEntry[0], _fgObj = _fgEntry[1];
+        var _hasUser = false;
+        if (_fgObj.instances) {
+            for (var _ci of _fgObj.instances) {
+                var _list = _ci[1];
+                for (var _li = 0; _li < _list.length; _li++) {
+                    if (_list[_li] && _list[_li].type === 'user') { _hasUser = true; break; }
+                }
+                if (_hasUser) break;
+            }
+        }
+        if (!_hasUser && _fgObj.unlinkedInstances) {
+            for (var _ui of _fgObj.unlinkedInstances) {
+                var _uls = _ui[1];
+                for (var _uli = 0; _uli < _uls.length; _uli++) {
+                    if (_uls[_uli] && _uls[_uli].instance && _uls[_uli].instance.type === 'user') { _hasUser = true; break; }
+                }
+                if (_hasUser) break;
+            }
+        }
+        if (_hasUser) _prunedFG.set(_fIdx, _fgObj);
+        else _prunedCount++;
+    }
+    session.frameGroups = _prunedFG;
+    console.log('[slp-streaming-write] session', session.name || '(unnamed)', '- freed', _prunedCount,
+        'non-edited resident frames before building its ref graph');
 
-    // ---- Identities ----
+    // ---- Skeleton (dedup by name — sessions in one project typically share one) ----
+    var skelName = session.skeleton.name || 'skeleton';
+    var skeleton = ctx.skeletonByName.get(skelName);
+    if (!skeleton) {
+        var nodeNames = session.skeleton.nodes.map(function (n) {
+            return typeof n === 'string' ? n : (n.name || '');
+        });
+        var sioNodes = nodeNames.map(function (name) { return new SIO.Node(name); });
+        var sioEdges = (session.skeleton.edges || []).map(function (e) {
+            return new SIO.Edge(sioNodes[e[0]], sioNodes[e[1]]);
+        });
+        skeleton = new SIO.Skeleton({ nodes: sioNodes, edges: sioEdges, name: skelName });
+        ctx.skeletonByName.set(skelName, skeleton);
+        ctx.allSkeletons.push(skeleton);
+    }
+    var numNodes = session.skeleton.nodes.length;
+
+    // ---- Identities (session-scoped in LUCID; concatenated into ctx like tracks) ----
     var lucidIdToSioId = new Map();
-    var sioIdentities = [];
     if (session.identities && session.identities.length > 0) {
         for (var iid = 0; iid < session.identities.length; iid++) {
             var lucidId = session.identities[iid];
             var sioId = new SIO.Identity({ name: lucidId.name, color: lucidId.color });
-            sioIdentities.push(sioId);
+            ctx.allIdentities.push(sioId);
             lucidIdToSioId.set(lucidId.id, sioId);
         }
     }
 
     // ---- Per-camera stores, cameras, videos, and concatenated tracks ----
     // The header carries a Camera + Video for EVERY session camera (calibration
-    // round-trip), matching the eager `buildSlpLabelsAllViews` — including
-    // calibration-only cameras that have no loaded lazy store (they just contribute
-    // no frames). Only cameras WITH a store go into `cam[]` (the appendStore list),
-    // each tagged with its `videoIndex` (position in the full `sioVideos`) so the
-    // appendStore video offset + the overlay's video reference stay correct even
-    // when some cameras are skipped. Output frame layout: overlays first, then each
-    // `cam[]` camera's non-skipped store rows in order (see `storeOutIndex`/`refFor`).
+    // round-trip) — including calibration-only cameras with no loaded lazy store
+    // (they just contribute no frames). Only cameras WITH a store go into `cam[]`
+    // (the appendStore list). Every video/track index pushed here is GLOBAL
+    // (position in `ctx.allVideos`/`ctx.allTracks`), not session-local, so a later
+    // session's cameras/tracks never collide with an earlier one's.
     var sioCameras = [];
-    var sioVideos = [];
     var lucidCamToSioCam = new Map();
-    var allTracks = [];
-    var cam = [];           // loaded cameras only: { name, sioCam, videoIndex, framesData, instancesData, rowMap, nFrames, trackBase, storeOutIndex }
-    var runningTrackBase = 0;
+    var sessionVideoIndices = [];  // parallel to session.cameras / sioCameras
+    var cam = [];                  // loaded cameras only: { name, sioCam, videoIndex, framesData, instancesData, rowMap, nFrames, trackBase }
 
     for (var ci = 0; ci < session.cameras.length; ci++) {
         var c = session.cameras[ci];
@@ -143,10 +214,12 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
             openBackend: false,
         });
         video.shape = [fc, vh, vw, 1];
-        sioVideos.push(video);
+        var videoIndex = ctx.allVideos.length;
+        ctx.allVideos.push(video);
+        sessionVideoIndices.push(videoIndex);
 
         // Calibration-only camera (no loaded lazy store): header entry only, no
-        // frames/tracks. The eager builder tolerates this; the streaming one must too.
+        // frames/tracks.
         var labels = loader.labelsByCam.get(c.name);
         var store = labels && labels._lazyDataStore;
         if (!store) continue;
@@ -155,20 +228,19 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         var rowMap = loader.frameRowByCam.get(c.name) || new Map();
         var nFrames = (framesData.frame_idx || framesData.frame_id || []).length;
 
-        // Concatenate this camera's tracks into the combined header list. The store's
-        // `instancesData.track` ids index into this camera's own tracks; appendStore's
-        // trackOffset rebases them into the combined list.
+        // Concatenate this camera's tracks into the GLOBAL header list. The
+        // store's `instancesData.track` ids index into this camera's own
+        // tracks; appendStore's trackOffset rebases them into the combined list.
+        var trackBase = ctx.allTracks.length;
         var camTracks = (labels.tracks || []);
         for (var ti = 0; ti < camTracks.length; ti++) {
-            allTracks.push(new SIO.Track(camTracks[ti].name));
+            ctx.allTracks.push(new SIO.Track(camTracks[ti].name));
         }
 
         cam.push({
-            name: c.name, sioCam: sioCam, videoIndex: ci, framesData: framesData, instancesData: instancesData,
-            rowMap: rowMap, nFrames: nFrames, trackBase: runningTrackBase,
-            _labels: labels,
+            name: c.name, sioCam: sioCam, videoIndex: videoIndex, framesData: framesData, instancesData: instancesData,
+            rowMap: rowMap, nFrames: nFrames, trackBase: trackBase,
         });
-        runningTrackBase += camTracks.length;
     }
 
     // ---- RecordingSession (ref-based grouping) ----
@@ -192,20 +264,17 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         skeleton: { name: session.skeleton.name || 'skeleton', nodes: session.skeleton.nodes, edges: session.skeleton.edges },
         tracks: session.tracks,
     };
-    for (var av = 0; av < session.cameras.length; av++) sioSession.addVideo(sioVideos[av], sioCameras[av]);
+    for (var av = 0; av < sioCameras.length; av++) sioSession.addVideo(ctx.allVideos[sessionVideoIndices[av]], sioCameras[av]);
 
     var camByName = new Map();
     for (var cbi = 0; cbi < cam.length; cbi++) camByName.set(cam[cbi].name, cam[cbi]);
-    var numNodes = session.skeleton.nodes.length;
 
     // ---- 2D user-correction overlay plan ----
     // A resident frameGroup carrying a user instance in camera `c` means `(c,
-    // frameIdx)` was corrected or added after lazy-load, so its columnar store row
-    // (the original prediction) is stale. Materialize the current per-camera frame
-    // (grouped + unlinked instances, mirroring buildSlpLabelsAllViews) and append
-    // it FIRST; #208's first-write-wins dedup then skips the store row. Detection
-    // and materialization are per (camera, frameIdx) — only edited camera-frames
-    // are built; every other frame streams straight from the store.
+    // frameIdx)` was corrected or added after lazy-load, so its columnar store
+    // row (the original prediction) is stale. Materialize the current per-camera
+    // frame (grouped + unlinked instances, mirroring buildSlpLabelsAllViews) and
+    // append it FIRST; #208's first-write-wins dedup then skips the store row.
     var overlayLfs = [];           // SIO.LabeledFrame[], appended before the stores
     var overlayByKey = new Map();  // "camName:frameIdx" -> { lfIndex, byInst, byTrack }
     var overlaidKeys = new Set();  // "camName:frameIdx" a store row must skip
@@ -218,14 +287,10 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         return false;
     }
 
-    // Build one overlay SIO instance, resolving its track into the combined header
-    // list (this camera's tracks start at `trackBase`) — mirrors _getOrCreateSioInst.
-    // The whole store row is skipped for an edited camera-frame, so its untouched
-    // PREDICTED siblings are re-materialized here too. Carry a per-point score on
-    // them (the frameGroup keeps only the instance-level score) so SLEAP's GUI —
-    // which hides predicted points below a small score threshold — still shows
-    // them; without it the streamed store row's real scores would be lost to 0 and
-    // those animals would vanish. Mirrors the eager per-camera export (buildSlpLabels).
+    // Build one overlay SIO instance, resolving its track into the GLOBAL
+    // header list (this camera's tracks start at `trackBase`). Carry a
+    // per-point score on predicted siblings (SLEAP's GUI hides low-score
+    // predicted points) so they don't visually vanish.
     function buildOverlayInstance(inst, trackBase) {
         var isPredicted = inst.type !== 'user';
         var perPointScore = isPredicted ? (inst.score != null ? inst.score : 1.0) : undefined;
@@ -233,7 +298,7 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         var track = null;
         if (inst.trackIdx != null && inst.trackIdx >= 0) {
             var combinedIdx = trackBase + inst.trackIdx;
-            if (combinedIdx >= 0 && combinedIdx < allTracks.length) track = allTracks[combinedIdx];
+            if (combinedIdx >= 0 && combinedIdx < ctx.allTracks.length) track = ctx.allTracks[combinedIdx];
         }
         if (isPredicted) {
             return new SIO.PredictedInstance({ points: pts, skeleton: skeleton, track: track, score: inst.score || 0 });
@@ -245,9 +310,6 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         for (var oc = 0; oc < cam.length; oc++) {
             var ocInfo = cam[oc];
             if (!camHasUserInstance(fg, ocInfo.name)) continue;
-            // Full per-camera instance set: grouped first, then unlinked (matches
-            // buildSlpLabelsAllViews). The store row is skipped as a whole, so the
-            // overlay must also carry the frame's untouched predicted siblings.
             var lucidInsts = [];
             var grouped = fg.getInstances(ocInfo.name);
             for (var gg = 0; gg < grouped.length; gg++) lucidInsts.push(grouped[gg]);
@@ -267,16 +329,17 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
             var okey = ocInfo.name + ':' + fgIdx;
             overlayByKey.set(okey, { lfIndex: overlayLfs.length, byInst: byInst, byTrack: byTrack });
             overlaidKeys.add(okey);
-            overlayLfs.push(new SIO.LabeledFrame({ video: sioVideos[ocInfo.videoIndex], frameIdx: fgIdx, instances: sioInsts }));
+            overlayLfs.push(new SIO.LabeledFrame({ video: ctx.allVideos[ocInfo.videoIndex], frameIdx: fgIdx, instances: sioInsts }));
         }
     }
-    var E = overlayLfs.length;
 
-    // Output frame index of each store row, accounting for the E prepended overlays
-    // and any store rows shadowed by an overlay (skipped by appendStore). Mirrors
-    // the writer's running frame counter: overlays occupy [0, E); then each camera's
-    // NON-skipped rows continue in camera/row order.
-    var runningOut = E;
+    // Output frame index of each store row, continuing the SHARED running
+    // counter (never resetting per session — refs are file-global). Overlays
+    // for THIS session occupy [ctx.runningOut, overlayBase+E); then each of
+    // this session's cameras' non-skipped rows continue in camera/row order.
+    var overlayBase = ctx.runningOut;
+    var E = overlayLfs.length;
+    var runningOut = overlayBase + E;
     for (var so = 0; so < cam.length; so++) {
         var soInfo = cam[so];
         soInfo.storeOutIndex = new Map();
@@ -286,11 +349,21 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
             soInfo.storeOutIndex.set(row, runningOut++);
         }
     }
+    ctx.runningOut = runningOut;
 
-    // Find the output [lfIndex, instIndex] for a grouped LUCID instance `gInst` in
-    // camera `camName` at `frameIdx`. Resolves to the prepended overlay when that
-    // camera-frame was user-edited, else to the (shifted) store row. Returns null if
-    // the frame isn't present in that camera.
+    // Adjust overlay lfIndex values (currently local to this session's
+    // `overlayLfs`, i.e. 0-based) to the shared/global numbering.
+    for (var [, ov] of overlayByKey) ov.lfIndex += overlayBase;
+
+    // Diagnostic counters for the non-overlay ref-resolution path (#158
+    // investigation) — logged once at the end of this function. `ambiguous`
+    // counts frames where the OLD trackIdx-guess heuristic could not have
+    // disambiguated (>1 raw instance in range, no unique trackIdx match) —
+    // i.e. cases that were silently wrong before `_rawInstIndex` tagging.
+    var _refStats = { total: 0, tagged: 0, fallback: 0, ambiguous: 0 };
+
+    // Find the output [lfIndex, instIndex] for a grouped LUCID instance `gInst`
+    // in camera `camName` at `frameIdx`.
     function refFor(camName, frameIdx, gInst) {
         var ov = overlayByKey.get(camName + ':' + frameIdx);
         if (ov) {
@@ -302,20 +375,40 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
             if (oi === undefined) oi = 0;
             return [ov.lfIndex, oi];
         }
-        var ci = camByName.get(camName);
-        if (!ci) return null;
-        var row = ci.rowMap.get(frameIdx);
+        var ci2 = camByName.get(camName);
+        if (!ci2) return null;
+        var row = ci2.rowMap.get(frameIdx);
         if (row === undefined) return null;
-        var lfIndex = ci.storeOutIndex ? ci.storeOutIndex.get(row) : undefined;
+        var lfIndex = ci2.storeOutIndex ? ci2.storeOutIndex.get(row) : undefined;
         if (lfIndex === undefined) return null;
-        var start = numAt(ci.framesData.instance_id_start, row);
-        var end = numAt(ci.framesData.instance_id_end, row);
-        var trackIdx = (gInst && gInst.trackIdx != null) ? gInst.trackIdx : null;
-        var instIndex = 0; // default: first instance in the frame
-        if (trackIdx != null && trackIdx >= 0) {
-            for (var j = start; j < end; j++) {
-                if (numAt(ci.instancesData.track, j, -1) === trackIdx) { instIndex = j - start; break; }
+        var start = numAt(ci2.framesData.instance_id_start, row);
+        var end = numAt(ci2.framesData.instance_id_end, row);
+        var instIndex = 0;
+        // Prefer the exact row offset tagged when this Instance was first
+        // materialized from the lazy store (`_rawInstIndex` — see
+        // ensureLazyFrameData/buildLazyFrameGroupSync/batchLoadLazyFrames in
+        // pose/triangulation.js). Track-based matching below is ambiguous
+        // whenever a camera-frame has more than one raw instance and the
+        // grouped one is trackless (or its trackIdx collides/doesn't match a
+        // row) — it silently fell back to `instIndex = 0`, which is wrong for
+        // any frame with >1 instance and misattributes 2D pose/track data on
+        // reload (#158). Fall back to the old heuristic only for instances
+        // that never went through that tagging path (e.g. pre-existing
+        // frameGroups from an older in-memory session state).
+        _refStats.total++;
+        if (gInst && gInst._rawInstIndex != null && gInst._rawInstIndex >= 0 && (start + gInst._rawInstIndex) < end) {
+            instIndex = gInst._rawInstIndex;
+            _refStats.tagged++;
+        } else {
+            _refStats.fallback++;
+            var trackIdx = (gInst && gInst.trackIdx != null) ? gInst.trackIdx : null;
+            var matched = false;
+            if (trackIdx != null && trackIdx >= 0) {
+                for (var j = start; j < end; j++) {
+                    if (numAt(ci2.instancesData.track, j, -1) === trackIdx) { instIndex = j - start; matched = true; break; }
+                }
             }
+            if ((end - start) > 1 && !matched) _refStats.ambiguous++;
         }
         return [lfIndex, instIndex];
     }
@@ -344,17 +437,14 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
                 instanceRefsByCamera.set(sioCamRef, ref);
                 labeledFrameRefsByCamera.set(sioCamRef, ref[0]);
                 refCount++;
-                var instMeta = {
-                    trackIdx: gInst.trackIdx, type: gInst.type || 'user',
-                    score: gInst.score || 0, modified: gInst.modified || false,
-                };
-                if (gInst.nulledNodes && gInst.nulledNodes.size > 0) instMeta.nulledNodes = Array.from(gInst.nulledNodes);
-                if (gInst.occluded) {
-                    var hasAnyOcc = false;
-                    for (var ok in gInst.occluded) { if (gInst.occluded[ok]) { hasAnyOcc = true; break; } }
-                    if (hasAnyOcc) instMeta.occluded = gInst.occluded;
-                }
-                igLucidMeta.instanceMeta[gCamName] = instMeta;
+                // Slim metadata (#134): only non-reconstructable fields, only
+                // when set (trackIdx/type/score/occluded derive from the
+                // standard instance on load).
+                var instMeta = {};
+                var hasMeta = false;
+                if (gInst.modified) { instMeta.modified = true; hasMeta = true; }
+                if (gInst.nulledNodes && gInst.nulledNodes.size > 0) { instMeta.nulledNodes = Array.from(gInst.nulledNodes); hasMeta = true; }
+                if (hasMeta) igLucidMeta.instanceMeta[gCamName] = instMeta;
             }
             if (refCount === 0) continue;
 
@@ -373,7 +463,6 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
             }));
         }
         if (sioInstanceGroups.length === 0) continue;
-        // A frame group's own labeled-frame refs: union of its instance groups' refs.
         var fgRefs = new Map();
         for (var ig2 = 0; ig2 < sioInstanceGroups.length; ig2++) {
             var m = sioInstanceGroups[ig2]._instanceRefsByCamera;
@@ -384,29 +473,89 @@ export async function buildSessionSlpBytesStreaming(session, views, videoFiles, 
         }));
     }
 
-    // ---- Write incrementally ----
-    var writer = await SIO.openSlpWriter({
-        skeletons: [skeleton],
-        videos: sioVideos,
-        tracks: allTracks,
-        identities: sioIdentities,
-        sessions: [sioSession],
-        provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+    console.log('[slp-streaming-write] session', session.name || '(unnamed)', '- ref resolution:',
+        _refStats.total, 'refs,', _refStats.tagged, 'via _rawInstIndex,', _refStats.fallback,
+        'via trackIdx fallback (', _refStats.ambiguous, 'of those genuinely ambiguous — >1 raw instance, no track match; would have silently defaulted to instIndex=0 before this fix)');
+
+    // Returned `cam` is intentionally slim — no `framesData`/`instancesData`/
+    // `rowMap` references, so the caller's eviction of `session.lazyLoader`
+    // actually frees that memory instead of it surviving via this result.
+    var camOut = cam.map(function (c) { return { name: c.name, videoIndex: c.videoIndex, trackBase: c.trackBase }; });
+
+    return { sioSession: sioSession, overlayLfs: overlayLfs, cam: camOut };
+}
+
+/**
+ * Open the project writer once every session's ref graph is final (§
+ * module docstring — `sessions`/`identities`/`videos`/`tracks`/`skeletons`
+ * must be complete at this point; `openSlpWriter` serializes them
+ * synchronously).
+ */
+export async function openProjectWriter(ctx, allSioSessions, provenance) {
+    var SIO = window.SleapIO;
+    if (!SIO || typeof SIO.openSlpWriter !== 'function') {
+        throw new Error('sleap-io.js streaming writer (openSlpWriter) not available');
+    }
+    return await SIO.openSlpWriter({
+        skeletons: ctx.allSkeletons,
+        videos: ctx.allVideos,
+        tracks: ctx.allTracks,
+        identities: ctx.allIdentities,
+        sessions: allSioSessions,
+        provenance: provenance || { source: 'lucid', exported_at: new Date().toISOString() },
     });
+}
+
+/**
+ * PASS 2, per session: stream this session's 2D data into an already-open
+ * writer, using the offsets computed for it in pass 1
+ * (`refGraphResult.cam[i].videoIndex`/`.trackBase`). Requires
+ * `session.lazyLoader` to be (re)opened — Track All/Triangulate All are NOT
+ * needed here; `appendStore` reads straight from the columnar store.
+ */
+export function streamSessionIntoWriter(writer, session, refGraphResult) {
+    var loader = session.lazyLoader;
+    if (!loader) throw new Error('streamSessionIntoWriter requires session.lazyLoader to be (re)opened');
+    if (refGraphResult.overlayLfs.length > 0) writer.appendFrames(refGraphResult.overlayLfs);
+    for (var i = 0; i < refGraphResult.cam.length; i++) {
+        var camInfo = refGraphResult.cam[i];
+        var labels = loader.labelsByCam.get(camInfo.name);
+        var store = labels && labels._lazyDataStore;
+        if (!store) continue;
+        writer.appendStore(store, { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase });
+    }
+}
+
+/** Finalize the writer (bytes in memory, or streamed to `opts.sink`). */
+export async function finalizeProjectWriter(writer, opts) {
+    opts = opts || {};
+    if (opts.sink) {
+        await writer.writeToSink(opts.sink, { chunkBytes: opts.chunkBytes });
+        return null;
+    }
+    return writer.close();
+}
+
+/**
+ * Build the `.slp` bytes for ONE lazy session, memory-bounded — thin wrapper
+ * around the pass-1/pass-2 primitives above for the single-session case
+ * (existing callers/tests).
+ *
+ * @param {Object} session       LUCID Session (must have `.lazyLoader`).
+ * @param {Array}  views         state.views (for video dimensions).
+ * @param {Array}  videoFiles    state.videoFiles (for filenames).
+ * @param {Object} [opts]        { sink, chunkBytes } — if `sink` is given, streams
+ *                               the output via `writeToSink` and resolves to null;
+ *                               otherwise resolves to the Uint8Array.
+ * @returns {Promise<Uint8Array|null>}
+ */
+export async function buildSessionSlpBytesStreaming(session, views, videoFiles, opts) {
+    var ctx = createProjectWriterContext();
+    var refGraph = buildSessionRefGraph(session, views, videoFiles, ctx);
+    var writer = await openProjectWriter(ctx, [refGraph.sioSession], (opts || {}).provenance);
     try {
-        // Overlays FIRST — their (video, frameIdx) keys win #208's dedup so the
-        // matching store rows below are skipped (recomputed in storeOutIndex).
-        if (overlayLfs.length > 0) writer.appendFrames(overlayLfs);
-        for (var ai = 0; ai < cam.length; ai++) {
-            var camInfo = cam[ai];
-            var camStore = loader.labelsByCam.get(camInfo.name)._lazyDataStore;
-            writer.appendStore(camStore, { videoIndexOffset: camInfo.videoIndex, trackOffset: camInfo.trackBase });
-        }
-        if (opts.sink) {
-            await writer.writeToSink(opts.sink, { chunkBytes: opts.chunkBytes });
-            return null;
-        }
-        return writer.close();
+        streamSessionIntoWriter(writer, session, refGraph);
+        return await finalizeProjectWriter(writer, opts);
     } catch (err) {
         try { if (typeof writer.dispose === 'function') writer.dispose(); } catch (e) { /* ignore */ }
         throw err;

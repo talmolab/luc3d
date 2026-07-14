@@ -136,7 +136,13 @@
                 const lucid = ig.metadata && ig.metadata.lucid;
                 assertTrue(!!lucid, 'instance_group missing metadata.lucid');
                 assertEqual(lucid.identityId, 1, 'per-session identityId not persisted');
-                assertTrue(!!lucid.instanceMeta && !!lucid.instanceMeta.cam0, 'missing per-camera instanceMeta');
+                // Slim metadata (#134): instanceMeta is a container, but
+                // trackIdx/type/score/occluded are NOT written per instance —
+                // they are reconstructed from the standard SLP instance on load.
+                // Per-camera entries appear only for modified/occluded instances
+                // (these fixtures have none), so instanceMeta is empty here.
+                assertTrue(!!lucid.instanceMeta && typeof lucid.instanceMeta === 'object', 'instanceMeta container present');
+                assertEqual(Object.keys(lucid.instanceMeta).length, 0, 'unmodified instances emit no per-camera metadata');
                 assertTrue(Array.isArray(ig.points) && ig.points.length === 2, 'instance_group 3D points not persisted');
             } finally {
                 try { file.close(); } catch (e) {}
