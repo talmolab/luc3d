@@ -75,35 +75,42 @@ export function adjustColorBrightness(hex, factor) {
 
 export function getGroupColor(group, session, useIdentity, frameIdx, cameraName) {
     // --- Identity-color path (only when coloring by identity) ------------
-    // A group may have been explicitly assigned an Identity via
-    // assignIdentityToGroup — that's the strongest signal. Otherwise fall
-    // back to the per-track identity lookup keyed by the instance's live
-    // `trackIdx` so the color reflects what's actually drawn on this view.
+    // The per-frame identity keyed by the group's LIVE `trackIdx` on this view
+    // is the source of truth — the SAME rationale the track-color path below
+    // relies on. `group.identityId` is only refreshed on the frame where an
+    // identity is (re)assigned, so it goes STALE on every other frame once a
+    // swap fix is propagated forward; consulting it first painted the pre-fix
+    // identity on those frames (issue #155: "setting ID does not propagate").
+    // So resolve per-frame FIRST, and use `group.identityId` only as a fallback
+    // for a group with no per-frame entry yet (e.g. freshly grouped / empty).
     if (useIdentity && session) {
+        var probeIdx = null;
+        if (cameraName && group.instances.has(cameraName)) {
+            var pInst = group.instances.get(cameraName);
+            if (pInst && pInst.trackIdx != null) probeIdx = pInst.trackIdx;
+        }
+        if (probeIdx == null) {
+            for (var [, pI] of group.instances) {
+                if (pI && pI.trackIdx != null) { probeIdx = pI.trackIdx; break; }
+            }
+        }
+        // (1) Positive per-frame identity for the live track wins.
+        if (probeIdx != null && session.getIdentityForTrack) {
+            var tIdentity = session.getIdentityForTrack(probeIdx, cameraName, frameIdx);
+            if (tIdentity && tIdentity.color) return tIdentity.color;
+        }
+        // (2) Fallback: an explicitly-assigned group identity — used only when
+        //     the per-frame lookup didn't resolve (no entry yet / empty group).
         if (group.identityId != null && group.identityId >= 0 && session.getIdentity) {
             var gIdentity = session.getIdentity(group.identityId);
             if (gIdentity && gIdentity.color) return gIdentity.color;
         }
-        if (session.getIdentityForTrack) {
-            var probeIdx = null;
-            if (cameraName && group.instances.has(cameraName)) {
-                var pInst = group.instances.get(cameraName);
-                if (pInst && pInst.trackIdx != null) probeIdx = pInst.trackIdx;
-            }
-            if (probeIdx == null) {
-                for (var [, pI] of group.instances) {
-                    if (pI && pI.trackIdx != null) { probeIdx = pI.trackIdx; break; }
-                }
-            }
-            if (probeIdx != null) {
-                // Explicit "no identity" (-1) → space gray, not a track color.
-                if (session.isExplicitNoIdentity &&
-                    session.isExplicitNoIdentity(cameraName, probeIdx, frameIdx)) {
-                    return NULL_ID_COLOR;
-                }
-                var tIdentity = session.getIdentityForTrack(probeIdx, cameraName, frameIdx);
-                if (tIdentity && tIdentity.color) return tIdentity.color;
-            }
+        // (3) Explicit "no identity" (negative per-frame sentinel) → space gray.
+        //     Checked AFTER group.identityId so it never overrides a valid
+        //     assigned group identity (preserves the prior precedence exactly).
+        if (probeIdx != null && session.isExplicitNoIdentity &&
+            session.isExplicitNoIdentity(cameraName, probeIdx, frameIdx)) {
+            return NULL_ID_COLOR;
         }
     }
 

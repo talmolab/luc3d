@@ -161,6 +161,68 @@
         });
     });
 
+    // ---- getGroupColor identity path follows the per-frame map (issue #155) ----
+    // When coloring BY IDENTITY, getGroupColor must resolve identity from the
+    // per-frame map keyed by the group's LIVE trackIdx — NOT the per-group
+    // `group.identityId`, which is only refreshed on the frame an identity was
+    // (re)assigned and so goes stale on every other frame after a swap fix is
+    // propagated forward ("setting ID does not propagate").
+    describe('Overlays - getGroupColor identity path (issue #155)', function () {
+        function idSession() {
+            var cams = [new Camera('cam1', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480])];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['Red', 'Blue']);
+            s.addIdentity('Red', '#ff0000');   // id 0
+            s.addIdentity('Blue', '#0000ff');  // id 1
+            return s;
+        }
+
+        it('follows per-frame identity via live trackIdx, not stale group.identityId', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = idSession();
+            s.setFrameIdentity(0, 'cam1', 0, 0);   // per-frame: track 0 -> Red
+            var inst = new Instance([[0, 0]], 0, 'user', 1);
+            var group = new InstanceGroup(1, 1);   // group.identityId STALE = Blue(1)
+            group.addInstance('cam1', inst);
+            assertEqual(getGroupColor(group, s, true, 0, 'cam1'), '#ff0000',
+                'per-frame identity (Red) wins over stale group.identityId (Blue)');
+        });
+
+        it('recolors a future frame after a swap fix propagates forward', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = idSession();
+            // Post "Propagate IDs -> Tracks": track 0 -> Red, track 1 -> Blue on every frame.
+            for (var f = 0; f < 2; f++) { s.setFrameIdentity(f, 'cam1', 0, 0); s.setFrameIdentity(f, 'cam1', 1, 1); }
+            // A physical-Red group on a FUTURE frame still carries the pre-fix
+            // group.identityId (Blue) but its instance was swapped back to track 0.
+            var inst = new Instance([[0, 0]], 0, 'user', 1);
+            var future = new InstanceGroup(2, 1);  // stale Blue
+            future.addInstance('cam1', inst);
+            assertEqual(getGroupColor(future, s, true, 1, 'cam1'), '#ff0000',
+                'future frame reflects propagated per-frame identity, not stale group id');
+        });
+
+        it('falls back to group.identityId when no per-frame entry exists', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = idSession();
+            var inst = new Instance([[0, 0]], 5, 'user', 1);   // track 5: no per-frame entry
+            var group = new InstanceGroup(1, 0);               // group.identityId = Red(0)
+            group.addInstance('cam1', inst);
+            assertEqual(getGroupColor(group, s, true, 0, 'cam1'), '#ff0000',
+                'empty per-frame -> use the assigned group identity');
+        });
+
+        it('explicit no-identity sentinel does not override a valid group identity', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = idSession();
+            s.setFrameIdentity(0, 'cam1', 0, -1);   // explicit "no identity" on track 0
+            var inst = new Instance([[0, 0]], 0, 'user', 1);
+            var group = new InstanceGroup(1, 0);    // group.identityId = Red(0)
+            group.addInstance('cam1', inst);
+            assertEqual(getGroupColor(group, s, true, 0, 'cam1'), '#ff0000',
+                'a valid assigned group identity beats the negative sentinel (unchanged precedence)');
+        });
+    });
+
     // ---- errorColor ----
 
     describe('Overlays - errorColor', function () {
