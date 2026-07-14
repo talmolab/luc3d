@@ -801,6 +801,14 @@ triangulation, multi-frame assignment modal, track/identity helpers.
 - Track helpers: `swapAssignTrack`, `assignTrackToSelected`,
   `propagateIdentityForward`, `assignIdentityToSelected`,
   `purgeTriangulationDataForGroup`, `swapTracks`.
+  `assignIdentityToSelected` (and the info-panel Identity dropdowns) propagate
+  the identity from the CURRENT frame **forward only** via the swap-aware
+  `propagateIdentity` — they no longer call `assignTrackToIdentity` (which
+  re-stamped EVERY frame of the track, corrupting already-correct earlier
+  frames when fixing a mid-video swap; issue #155). Whole-track identity
+  assignment is still available via **Tracks ▸ Propagate Tracks → IDs**; to
+  identity-stamp a whole track from the dropdown, assign at the track's first
+  frame.
 - Manual assign: `manualAssignState`, `getTotalUnlinkedCount`,
   `cleanupManualAssignment`, `startManualAssignment`.
 - Edit group: `editGroupState`, `startEditGroup`, `cancelEditGroup`,
@@ -1105,7 +1113,17 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `useIdentity` and `session.isExplicitNoIdentity(...)` is true, and also —
   when coloring by track — for any instance/group on the "No ID" track
   (`session.isNoIdTrack(trackIdx)`), so the null track matches the ID
-  panel's gray on the skeleton.
+  panel's gray on the skeleton. **When coloring by identity,
+  `getGroupColor` resolves the identity from the per-frame map keyed by the
+  group's LIVE `trackIdx` (`getIdentityForTrack`) FIRST, using
+  `group.identityId` only as a fallback for a group with no per-frame entry
+  (issue #155). `group.identityId` is refreshed only on the frame an identity
+  is (re)assigned, so consulting it first painted the pre-fix identity on every
+  other frame after a swap fix propagated forward — the same staleness reason
+  the track-color path already ignores `group.identityId`. The explicit-no-id
+  sentinel is checked AFTER the `group.identityId` fallback so it never
+  overrides a validly-assigned group identity (precedence unchanged for that
+  case).**
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,

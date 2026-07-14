@@ -1515,16 +1515,34 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             newIdOpt.value = '__new__';
             newIdOpt.textContent = '(+) New ID';
             idSelect.appendChild(newIdOpt);
-            idSelect.value = String(group.identityId != null ? group.identityId : -1);
+            // Show the per-frame identity for the group's LIVE trackIdx, not the
+            // stale per-group field: group.identityId is only refreshed on the
+            // frame where the dropdown fired, so it lies on every other frame
+            // after a swap fix propagates forward (issue #155). Mirrors the
+            // UNLINKED row's per-frame pre-select below. Fall back to
+            // group.identityId when there is no per-frame entry yet (e.g. a
+            // freshly grouped group before any identity assignment).
+            var grpIdCam = null, grpIdTrack = null;
+            for (var [gidCn, gidInst] of group.instances) {
+                if (gidInst && gidInst.trackIdx != null) { grpIdCam = gidCn; grpIdTrack = gidInst.trackIdx; break; }
+            }
+            var grpPerFrameId = grpIdTrack != null
+                ? state.session.getIdentityIdForTrack(grpIdCam, grpIdTrack, state.currentFrame)
+                : null;
+            idSelect.value = String(
+                grpPerFrameId != null ? grpPerFrameId
+                    : (group.identityId != null && group.identityId >= 0 ? group.identityId : -1)
+            );
             (function (g, sel) {
                 function applyIdentity(newIdentityId) {
+                    markDirty();
                     state.session.assignIdentityToGroup(g, newIdentityId);
-                    // Propagate forward for all cameras in the group.
-                    // Use assignTrackToIdentity (swap-aware) for the global
-                    // map so two distinct trackIdx values can't both end up
-                    // mapped to newIdentityId on the same camera.
+                    // Propagate the identity from the CURRENT frame forward, per
+                    // camera (swap-aware, forward-only). The old whole-track
+                    // `assignTrackToIdentity` call (removed) relabelled every
+                    // frame of the track, corrupting already-correct earlier
+                    // frames when fixing a mid-video swap — issue #155.
                     for (var [cn, inst] of g.instances) {
-                        state.session.assignTrackToIdentity(inst.trackIdx, newIdentityId, cn);
                         propagateIdentityForward(inst.trackIdx, newIdentityId, cn);
                     }
                     drawAllOverlays(state.currentFrame);
@@ -1865,7 +1883,9 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 (function (inst, sel, camNameForId) {
                     function applyIdentity(newIdVal) {
                         if (newIdVal >= 0) {
-                            state.session.assignTrackToIdentity(inst.trackIdx, newIdVal, camNameForId);
+                            // Forward-only, swap-aware (issue #155): assign from
+                            // the current frame on without re-stamping earlier
+                            // frames (the old whole-track assignTrackToIdentity did).
                             markDirty();
                             propagateIdentityForward(inst.trackIdx, newIdVal, camNameForId);
                         } else {
