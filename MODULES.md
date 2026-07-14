@@ -543,6 +543,21 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
+  **`_rawInstIndex` tagging (#158 fix).** All three lazy-materialization sites
+  (`ensureLazyFrameData`, `buildLazyFrameGroupSync`, and the worker-batch
+  branch of `batchLoadLazyFrames`) tag every constructed `Instance` with
+  `inst._rawInstIndex = ii` — `ii` being that instance's position within its
+  frame's raw instance list, which equals its exact row offset in the lazy
+  store's `[instance_id_start, instance_id_end)` range for that
+  (camera, frame). `import-export/slp-streaming-write.js`'s `refFor` reads
+  this directly on save instead of guessing the row via `trackIdx` matching —
+  see that module's docs for why the guess was wrong. Verified against Elly's
+  real ~108k-frame×3-camera dataset in `scratch/2026-07-13-elly-perf/`: the
+  old trackIdx-only heuristic produced 8 real ref collisions (wrong animal's
+  2D pose/track attached to a group) in the first 3000 frames alone;
+  `_rawInstIndex` resolved all 35611 refs with zero collisions. Regression
+  test: `tests/e2e/save-multiinstance-ref-integrity.mjs`
+  (`npm run test:ref-integrity`).
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,

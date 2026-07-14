@@ -355,6 +355,13 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
     // `overlayLfs`, i.e. 0-based) to the shared/global numbering.
     for (var [, ov] of overlayByKey) ov.lfIndex += overlayBase;
 
+    // Diagnostic counters for the non-overlay ref-resolution path (#158
+    // investigation) — logged once at the end of this function. `ambiguous`
+    // counts frames where the OLD trackIdx-guess heuristic could not have
+    // disambiguated (>1 raw instance in range, no unique trackIdx match) —
+    // i.e. cases that were silently wrong before `_rawInstIndex` tagging.
+    var _refStats = { total: 0, tagged: 0, fallback: 0, ambiguous: 0 };
+
     // Find the output [lfIndex, instIndex] for a grouped LUCID instance `gInst`
     // in camera `camName` at `frameIdx`.
     function refFor(camName, frameIdx, gInst) {
@@ -376,12 +383,32 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
         if (lfIndex === undefined) return null;
         var start = numAt(ci2.framesData.instance_id_start, row);
         var end = numAt(ci2.framesData.instance_id_end, row);
-        var trackIdx = (gInst && gInst.trackIdx != null) ? gInst.trackIdx : null;
         var instIndex = 0;
-        if (trackIdx != null && trackIdx >= 0) {
-            for (var j = start; j < end; j++) {
-                if (numAt(ci2.instancesData.track, j, -1) === trackIdx) { instIndex = j - start; break; }
+        // Prefer the exact row offset tagged when this Instance was first
+        // materialized from the lazy store (`_rawInstIndex` — see
+        // ensureLazyFrameData/buildLazyFrameGroupSync/batchLoadLazyFrames in
+        // pose/triangulation.js). Track-based matching below is ambiguous
+        // whenever a camera-frame has more than one raw instance and the
+        // grouped one is trackless (or its trackIdx collides/doesn't match a
+        // row) — it silently fell back to `instIndex = 0`, which is wrong for
+        // any frame with >1 instance and misattributes 2D pose/track data on
+        // reload (#158). Fall back to the old heuristic only for instances
+        // that never went through that tagging path (e.g. pre-existing
+        // frameGroups from an older in-memory session state).
+        _refStats.total++;
+        if (gInst && gInst._rawInstIndex != null && gInst._rawInstIndex >= 0 && (start + gInst._rawInstIndex) < end) {
+            instIndex = gInst._rawInstIndex;
+            _refStats.tagged++;
+        } else {
+            _refStats.fallback++;
+            var trackIdx = (gInst && gInst.trackIdx != null) ? gInst.trackIdx : null;
+            var matched = false;
+            if (trackIdx != null && trackIdx >= 0) {
+                for (var j = start; j < end; j++) {
+                    if (numAt(ci2.instancesData.track, j, -1) === trackIdx) { instIndex = j - start; matched = true; break; }
+                }
             }
+            if ((end - start) > 1 && !matched) _refStats.ambiguous++;
         }
         return [lfIndex, instIndex];
     }
@@ -445,6 +472,10 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
             frameIdx: frameIdx, instanceGroups: sioInstanceGroups, labeledFrameRefsByCamera: fgRefs,
         }));
     }
+
+    console.log('[slp-streaming-write] session', session.name || '(unnamed)', '- ref resolution:',
+        _refStats.total, 'refs,', _refStats.tagged, 'via _rawInstIndex,', _refStats.fallback,
+        'via trackIdx fallback (', _refStats.ambiguous, 'of those genuinely ambiguous — >1 raw instance, no track match; would have silently defaulted to instIndex=0 before this fix)');
 
     // Returned `cam` is intentionally slim — no `framesData`/`instancesData`/
     // `rowMap` references, so the caller's eviction of `session.lazyLoader`
