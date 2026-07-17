@@ -1,22 +1,25 @@
 /**
  * save-no-inline-dup.mjs — regression guard for the "Save failed: invalid
- * string length" bug (issue #134 / eric/fix-save).
+ * string length" / "large project silently loses 3D on reload" bug family
+ * (issues #134, #156, #158, #161).
  *
- * ROOT CAUSE: sleap-io's serializeInstanceGroup wrote BOTH an index-ref map
- * AND the full inline 2D pose (pointsToDict) for every grouped instance, so the
- * entire 2D keypoint set was duplicated verbatim into the single per-session
- * `sessions_json` JSON string — which blew past V8's max string length
- * (RangeError: Invalid string length) on large projects and ~2× the .slp size.
+ * ORIGINAL ROOT CAUSE: sleap-io serialized the entire per-session grouping —
+ * including every grouped instance's inline 2D pose AND all triangulated 3D
+ * points — into ONE `sessions_json` JSON string, which blew past V8's max string
+ * length on write and, worse, past h5wasm's ~0.45 GB vlen-string READ ceiling
+ * (returning 0 sessions → silent loss of calibration/3D/IDs on reload).
  *
- * FIX (LUCID local patch in lib/sleap-io/chunk-M65RB7KH.js): inline the point
- * dict ONLY as a fallback when no labeled-frame ref resolves. Grouped instances
- * always resolve a ref, so their pose is no longer duplicated.
+ * FIX (SLP 2.8, sleap-io.js #224 porting Python sleap-io #546): 3D points +
+ * frame-group/instance-group grouping move OUT of `sessions_json` into a columnar
+ * `/session_data` HDF5 group; `sessions_json` stays slim (calibration + video map
+ * + session metadata + a frame-group range). No inline duplication is even
+ * possible anymore.
  *
  * This test builds a grouped, triangulated, partly-occluded multi-frame session,
- * saves via the real path, and asserts (a) grouped instance groups carry the ref
- * map and NOT an inline `instances` dict, (b) 3D points + grouping still
- * round-trip, and (c) sessions_json is far smaller than the 2D pose it would
- * duplicate.
+ * saves via the real path, and asserts (a) `sessions_json` carries NO inline
+ * `frame_group_dicts` (all grouping is columnar), (b) every group's 3D points +
+ * per-camera members still round-trip via `readSlpStreaming`, and (c)
+ * `sessions_json` stays tiny (no per-frame numeric payload inline).
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -71,30 +74,38 @@ try {
     const re = await window.SleapIO.readSlpStreaming(file, { openVideos: false, rawSessions: true, h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href });
 
     const raw = re.rawSessionsJson[0];
-    const fgd = raw.frame_group_dicts;
-    let anyInline = false, allHaveRef = true, allHave3d = true, groupCount = 0;
-    for (const fg of fgd) {
-      for (const ig of (fg.instance_groups || [])) {
-        groupCount++;
-        if (ig.instances && Object.keys(ig.instances).length > 0) anyInline = true;
-        if (!(ig.camcorder_to_lf_and_inst_idx_map && Object.keys(ig.camcorder_to_lf_and_inst_idx_map).length > 0)) allHaveRef = false;
-        if (!(ig.points && ig.points.length > 0)) allHave3d = false;
+    // SLP 2.8 (#546/#224): 3D grouping moved OUT of the inline `frame_group_dicts`
+    // (the single per-session JSON string that overflowed V8's max length) into a
+    // columnar `/session_data` group. sessions_json must carry NO frame_group_dicts.
+    const hasInlineFgd = Array.isArray(raw.frame_group_dicts) && raw.frame_group_dicts.length > 0;
+    // Typed round-trip: every group's 3D points + per-camera members come back
+    // from the columnar /session_data datasets.
+    const sess = (re.sessions || [])[0];
+    let groupCount = 0, allHave3d = true, allHaveMembers = true;
+    if (sess && sess.frameGroups) {
+      for (const [, fg] of sess.frameGroups) {
+        for (const ig of (fg.instanceGroups || [])) {
+          groupCount++;
+          if (!(ig.instance3d && ig.instance3d.points && ig.instance3d.points.length > 0)) allHave3d = false;
+          if (!(ig.instanceByCamera && ig.instanceByCamera.size > 0)) allHaveMembers = false;
+        }
       }
     }
-    // Typed reconstruction: labeled frames still carry the 2D instances.
+    // Labeled frames still carry the 2D instances (unchanged).
     const totalInst = (re.labeledFrames || []).reduce((a, f) => a + (f.instances || []).length, 0);
     const sessJsonLen = JSON.stringify(raw).length;
-    return { NODES, NFRAMES, groupCount, anyInline, allHaveRef, allHave3d, totalInst, sessJsonLen, bytes: bytes.length };
+    return { NODES, NFRAMES, groupCount, hasInlineFgd, allHave3d, allHaveMembers, totalInst, sessJsonLen, bytes: bytes.length };
   });
 
   console.log('  measured:', JSON.stringify(r));
-  check(r.groupCount === r.NFRAMES * 2, `all ${r.NFRAMES * 2} grouped instances serialized (got ${r.groupCount})`);
-  check(r.anyInline === false, 'NO inline per-node point dict duplicated into sessions_json');
-  check(r.allHaveRef === true, 'every group carries the compact labeled-frame ref map');
-  check(r.allHave3d === true, 'every group keeps its instance3d points');
+  check(r.groupCount === r.NFRAMES * 2, `all ${r.NFRAMES * 2} groups round-trip from /session_data (got ${r.groupCount})`);
+  check(r.hasInlineFgd === false, 'sessions_json carries NO inline frame_group_dicts (SLP 2.8 columnar /session_data)');
+  check(r.allHave3d === true, 'every group keeps its 3D points (columnar points_3d)');
+  check(r.allHaveMembers === true, 'every group keeps its per-camera members (columnar refs)');
   check(r.totalInst === r.NFRAMES * 2 * 3, `all 2D instances present in labeled frames (got ${r.totalInst})`);
-  // (Size is proven by anyInline===false: with inline, each of the 80 groups
-  // would ALSO embed 3 cams × 8 nodes of point arrays into sessions_json.)
+  // sessions_json stays tiny — no per-frame 2D/3D numeric payload lives in the JSON
+  // string anymore (with inline, 80 groups × 3 cams × 8 nodes would bloat it).
+  check(r.sessJsonLen < 50000, `sessions_json is small (${r.sessJsonLen} bytes) — no per-frame numeric payload inline`);
 
   await browser.close();
 } finally {

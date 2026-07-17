@@ -26,23 +26,31 @@ python3 -m http.server 8080
 - mp4box.js
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
-- sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to the **released
-  tag `0.5.3`** (npm `@talmolab/sleap-io.js@0.5.3`, gitHead `5aa7869`) — vendored from
-  the published npm **dist** (not source-built; byte-parity with what users get). This
-  is the first release to contain the streaming SLP **writer** (PR #208, the write-side
-  companion to `readSlpStreaming({ lazy })`): `openSlpWriter`
-  (`appendStore`/`appendFrames`/`close`/`writeToSink`), `saveSlpMergedFromStores` /
-  `saveSlpMergedToSink`, and the public lazy frame-release API
-  (`labels.frameCacheLimit` / `releaseFrame` / `releaseFrameWindow`) — the memory-
-  bounded write path for large lazy sessions (streaming export/save). Supersedes the
-  earlier EXPERIMENTAL source-built pin `c7e0cbd` (#208 head); 0.5.3 is a superset with
-  an identical `index.browser.js` export set and identical importmap bare-imports, so
-  the swap was drop-in (only `index.browser.js` + the big chunk `MFLVNUYB`→`M65RB7KH`
-  changed; the small chunks + `gdrive` are byte-identical). Builds on 0.5.2's PR #205
-  lazy video-id remap, 0.5.1's `readSlpStreaming({ lazy })` (PR #203), and 0.5.0's #196
-  read-perf + #198 session model. The lazy streaming reader backs `SioLazyLoader`
-  (`loading/sio-lazy-loader.js`) for large prediction `.slp` session loads; the writer
-  backs streaming export/save.
+- sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to **0.5.5**,
+  **built from source** at `talmolab/sleap-io.js@e8dbaef8c` (the `0.5.5` release-bump
+  commit) via `scripts/revendor-sleap-io.sh e8dbaef8ccc8` — 0.5.5 was **not yet on
+  npm** at vendor time, so this is a source build (not npm-dist byte-parity); **re-
+  vendor from the npm dist once `0.5.5` publishes** for parity. 0.5.5 lands the
+  **SLP 2.8 columnar `/session_data`** storage (PR #224, porting Python sleap-io #546):
+  3D points + frame-group/instance-group grouping move OUT of the single per-session
+  `sessions_json` JSON string into chunked HDF5 datasets — fixing the large-project
+  read bug (luc3d #161: a ~524 MB `sessions_json` exceeded h5wasm's ~0.45 GB vlen-
+  string read ceiling and silently returned 0 sessions, dropping calibration/3D/IDs).
+  It also adds **fail-loud** reads (a present-but-unreadable `sessions_json` now
+  THROWS instead of silently yielding `[]`), the **per-2D-detection identity** stack
+  (`/identity` + `/identity/links` + `/embeddings`, SLP 2.5, PR #225) and the
+  **category** subsystem (SLP 2.7, PR #226), plus two write-side fixes folded in from
+  #161 (`NaN`-not-`null` for missing 3D keypoints; the 2D point-span off-by-one).
+  Retains the streaming SLP **writer** (`openSlpWriter`
+  /`appendStore`/`appendFrames`/`close`/`writeToSink`, `saveSlpMergedFromStores` /
+  `saveSlpMergedToSink`) + lazy frame-release API (`labels.frameCacheLimit` /
+  `releaseFrame` / `releaseFrameWindow`). **Chunks:** `index.browser.js` +
+  `chunk-X76PRJK6.js` (the big one: session I/O + `MediaBunnyVideoBackend`),
+  `chunk-H7G4PJNA.js`, `chunk-YS7Q6CO6.js`, `gdrive-6DDSPUUK.js` (byte-stable).
+  Importmap bare-imports (h5wasm/mediabunny/pako/yaml) are unchanged from 0.5.3. The
+  lazy streaming reader backs `SioLazyLoader` (`loading/sio-lazy-loader.js`) for large
+  prediction `.slp` session loads; both the eager `saveSlpToBytes` and streaming
+  `openSlpWriter` now emit SLP 2.8 automatically when a session has frame groups.
   Its `pako`
   dep is vendored at `lib/pako/`; `mediabunny` is vendored at
   `lib/mediabunny/mediabunny.min.mjs` (npm `mediabunny@1.30.0` browser ESM,
@@ -53,38 +61,39 @@ python3 -m http.server 8080
   `LUCID_VIDEO_BACKEND='html5'`) backend. Both `pako` and `mediabunny` are
   aliased in the `index.html` importmap (and `tests/test-runner.html`). LUCID
   uses sleap-io.js on **both** the read and write paths (PR 5.1/5.2).
-  **LOCAL PATCH (issue #115):** `lib/sleap-io/chunk-M65RB7KH.js`
+  **LOCAL PATCH (issue #115):** `lib/sleap-io/chunk-X76PRJK6.js`
   `MediaBunnyVideoBackend.decodeSingleFrame`/`decodeRange` were patched to call
   `sample.close()` after `sample.toVideoFrame()` — upstream leaks the VideoSample
   ("A VideoSample was garbage collected without first being closed"), which can
   exhaust the WebCodecs frame pool over a long session. Both patch lines are
   marked `// LUCID local patch (#115)`. **Re-apply after any re-vendor** (grep the
-  marker) and report upstream to sleap-io.
-  **LOCAL PATCH (issue #134):** `lib/sleap-io/chunk-M65RB7KH.js`
-  `serializeInstanceGroup` was patched to write a grouped instance's inline
-  point dict (`pointsToDict`) **only as a fallback** when no labeled-frame ref
-  `(lf_idx, inst_idx)` resolves. Upstream wrote BOTH the ref map AND the full
-  inline 2D pose, duplicating every keypoint into the single per-session
-  `sessions_json` string — which overflowed V8's max string length
-  ("Save failed: invalid string length") on large projects and ~2×'d the `.slp`.
-  The ref map round-trips the grouping losslessly (identical to the streaming
-  writer's output). Marked `// LUCID local patch (#134)`; **re-apply after any
-  re-vendor** (grep the marker) and report upstream. Guarded by
-  `tests/e2e/save-no-inline-dup.mjs`. This is the read/write split:
+  marker) and report upstream to sleap-io. (The chunk moved `M65RB7KH`→`X76PRJK6`
+  in the 0.5.5 re-vendor.)
+  **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
+  `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
+  replaced the inline `frame_group_dicts` serializer with the columnar
+  `/session_data` writer, so `serializeInstanceGroup` no longer exists in the bundle
+  and no 2D/3D is duplicated into `sessions_json` (the whole #134 failure class is
+  structurally gone). `tests/e2e/save-no-inline-dup.mjs` now guards the 2.8 columnar
+  layout instead. The read/write split:
   - **Read** (`parseSlpViaSleapIO`, `import-export/file-io.js`): drives
     `readSlpStreaming` (#196) and adapts the typed `Labels` into LUCID's `slpData`
     shape. Grouping is rebuilt from the **typed `RecordingSession`** by
-    `reconstructInstanceGroupsFromSession` (`slp-import.js`) — reads both LUCID's
-    legacy and the new canonical `sessions_json`. The raw worker (`parseSlpH5`) stays
+    `reconstructInstanceGroupsFromSession` (`slp-import.js`) — reads LUCID's legacy
+    inline `frame_group_dicts`, the canonical `sessions_json`, AND the SLP 2.8
+    columnar `/session_data` (the reader dispatches on which is present). The raw worker (`parseSlpH5`) stays
     for SLEAP analysis `.h5` and as a fallback (`parseSlpForImport` dispatches; that
     path still uses `reconstructInstanceGroupsFromDicts`).
   - **Write** (PR 5.2): export is **raw `saveSlpToBytes(labels)`** — the old
     `convertSlpToV06Compatible` v0.6-compat post-pass is **deleted**. The typed graph
     `buildSlpLabelsAllViews` builds carries all LUCID state (RecordingSession /
     FrameGroup / InstanceGroup with `instance3d`, `identity`, and `metadata.lucid`
-    incl. per-session `identityId`), so `saveSlpToBytes` emits a canonical
-    `sessions_json` the typed reader round-trips. Reads back natively in SLEAP >= 1.6
-    (sleap-io >= 0.7, flat-matrix `field_names` interop). *Interop gate:
+    incl. per-session `identityId`), so `saveSlpToBytes` (and the streaming
+    `openSlpWriter`) emit the **SLP 2.8 columnar `/session_data`** (3D points +
+    grouping) plus a **slim `sessions_json`** (calibration + video map + session
+    metadata + fg range) that the typed reader round-trips. Reads back natively in
+    SLEAP >= 1.6 (sleap-io >= 0.7, flat-matrix `field_names` interop; the 2.8
+    `/session_data` needs sleap-io >= the #546 release). *Interop gate:
     `scripts/validate_slp_sleap_compat.py` (needs a SLEAP Python env).*
 
   All h5wasm is now LUCID's local vendored 0.10.3 (PR 5.2b): the importmap `h5wasm`
