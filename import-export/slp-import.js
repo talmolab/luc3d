@@ -480,7 +480,13 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
     // Instances is ~tens of seconds of work; yield every ~40ms so the tab stays
     // responsive (a frame-count batch of 20k blocks the main thread for seconds).
     var _now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); };
+    var _yieldMs = opts.yieldMs != null ? opts.yieldMs : 40;
     var _ty = _now();
+    // O(1) track-name → index lookup. session.tracks can be thousands of entries
+    // (2357 on the real cage5 project); a per-member Array.indexOf would be
+    // O(tracks) × 1.25M members ≈ billions of comparisons.
+    var trackIdxByName = new Map();
+    for (var _tn = 0; _tn < session.tracks.length; _tn++) trackIdxByName.set(session.tracks[_tn], _tn);
 
     var fgKeys = Array.from(typedSession.frameGroups.keys());
     for (var fki = 0; fki < fgKeys.length; fki++) {
@@ -506,28 +512,21 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 var typedInst = camEntry[1];
                 var igCamName = (typedCam && typedCam.name) || '';
 
-                var xy = typedInst._xy;
-                var vis = typedInst._visible;
-                var points = new Array(numNodes);
-                var occluded = new Array(numNodes);
-                for (var ni = 0; ni < numNodes; ni++) {
-                    var x = (xy && 2 * ni + 1 < xy.length) ? xy[2 * ni] : NaN;
-                    var y = (xy && 2 * ni + 1 < xy.length) ? xy[2 * ni + 1] : NaN;
-                    if (isFinite(x) && isFinite(y)) {
-                        points[ni] = [x, y];
-                        occluded[ni] = !(vis && vis[ni]);
-                    } else {
-                        points[ni] = null;
-                        occluded[ni] = false;
-                    }
-                }
+                // LIGHTWEIGHT member: deliberately do NOT read `_xy`. Materializing
+                // each member's 2D here materializes the lazy store frame-by-frame
+                // (~324k times on a real cage5 project) and degrades to hours. The
+                // 2D is instead hydrated on scrub from the lazy store by
+                // `_rawInstIndex` (see `hydrateLazyFrameGroups` in triangulation.js).
+                // A null-filled placeholder keeps the Instance valid until then;
+                // `points`/`occluded` cost ~one slot per node, not an [x,y] per node.
+                var points = new Array(numNodes).fill(null);
+                var occluded = new Array(numNodes).fill(false);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
                 var _isPred = PredI ? (typedInst instanceof PredI)
                     : (typedInst && typedInst.pointScores !== undefined);
-                var _derivedTrackIdx = (typedInst && typedInst.track && typedInst.track.name != null)
-                    ? session.tracks.indexOf(typedInst.track.name) : -1;
-                if (_derivedTrackIdx < 0) _derivedTrackIdx = null;
+                var _tName = (typedInst && typedInst.track && typedInst.track.name != null) ? typedInst.track.name : null;
+                var _derivedTrackIdx = (_tName != null && trackIdxByName.has(_tName)) ? trackIdxByName.get(_tName) : null;
                 var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : _derivedTrackIdx;
                 var instType = instMeta.type || (_isPred ? 'predicted' : 'user');
                 var instScore = instMeta.score != null ? instMeta.score : (_isPred ? (typedInst.score || 0) : 0);
@@ -537,25 +536,16 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 inst.modified = instMeta.modified || false;
                 if (instMeta.nulledNodes) inst.nulledNodes = new Set(instMeta.nulledNodes);
 
-                // _rawInstIndex = the member's instance index within its
-                // camera-frame, for the streaming re-save's ref resolution.
+                // _rawInstIndex = the member's instance index within its camera-frame.
+                // Drives BOTH the on-scrub 2D hydration (which store instance to copy
+                // points from) AND the streaming re-save's ref resolution (`refFor`).
                 var ri = null;
                 if (refs && typeof refs.get === 'function') {
                     var pr = refs.get(typedCam);
                     if (Array.isArray(pr) && pr.length >= 2) ri = pr[1];
                 }
-                if (ri == null && loader) {
-                    var rowMap = loader.frameRowByCam.get(igCamName);
-                    var row = rowMap ? rowMap.get(fgFrameIdx) : undefined;
-                    if (row !== undefined && loader._projectLabels) {
-                        var lf = loader._projectLabels.frameAt(row);
-                        if (lf && lf.instances) {
-                            var ix = lf.instances.indexOf(typedInst);
-                            if (ix >= 0) ri = ix;
-                        }
-                    }
-                }
                 if (ri != null) inst._rawInstIndex = ri;
+                inst._lazy2d = true; // awaiting on-scrub hydration from the lazy 2D store
 
                 group.addInstance(igCamName, inst);
             }
@@ -572,7 +562,7 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
         session.instanceGroups.set(fgFrameIdx, groups);
         typedSession.frameGroups.delete(fgKeys[fki]); // release typed group as we consume it
 
-        if (_now() - _ty > 40) {
+        if (_now() - _ty > _yieldMs) {
             onProgress('Restoring 3D grouping (' + fki + '/' + fgKeys.length + ')...');
             await new Promise(function (r) { setTimeout(r, 0); });
             _ty = _now();
