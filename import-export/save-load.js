@@ -965,9 +965,23 @@ export async function handleLoadProject(prePickedFile) {
             file = files[0];
         }
 
-        // Route SLP/H5 files to the SLP loader
+        // Route SLP/H5 files to the SLP loader.
         var ext = file.name.split('.').pop().toLowerCase();
         if (ext === 'slp' || ext === 'h5') {
+            // Large project .slp → reopen LAZILY. The eager path
+            // (handleLoadSlpFile) materializes every frame's 2D + a grouping
+            // reconstruct duplicate and OOMs the tab on real multi-camera
+            // prediction sessions (e.g. a 108k-frame × 3-cam cage5 project). The
+            // lazy path keeps 2D on-demand and rebuilds grouping with lightweight
+            // members; videos are attached afterward via File → Load Videos.
+            var LARGE_SLP_BYTES = 200 * 1024 * 1024;
+            if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
+                // Dynamic import avoids a session-loader ↔ save-load import cycle.
+                var _sl = await import('../loading/session-loader.js');
+                if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
+                    return _sl.handleLoadProjectSlpLazy(file);
+                }
+            }
             return handleLoadSlpFile(file);
         }
 

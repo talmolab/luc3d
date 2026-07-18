@@ -39,10 +39,11 @@ import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-expor
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink } from '../import-export/slp-import.js';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
+    ensureLazyFrameData,
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
 
@@ -1944,6 +1945,130 @@ export async function handleLoadSessionFolderSingleSlp() {
         console.error('[single-slp] Error:', err);
         hideLoading();
         setStatus('Load error: ' + err.message, 'error');
+    }
+}
+
+/**
+ * Reopen a large project `.slp` LAZILY (the memory-bounded "Load Project" path).
+ *
+ * The eager path (`handleLoadSlpFile` / `parseSlpViaSleapIO`) materializes every
+ * frame's 2D (21.7M points on a real cage5 project) plus a full grouping
+ * reconstruct duplicate and OOMs the tab. This instead:
+ *  - opens the single multi-camera file lazily (`SioLazyLoader.openProjectSlp`) so
+ *    2D frames materialize on demand;
+ *  - restores calibration + identities + `frameIdentityMap` from the embedded
+ *    `sessions_json`;
+ *  - rebuilds `session.instanceGroups` with LIGHTWEIGHT members (3D + refs, no 2D)
+ *    via `reconstructInstanceGroupsFromSessionLazy` (~2.5s, ~1 GB) — 2D hydrates
+ *    on scrub (`ensureLazyFrameData` → `finalizeLazyFrameGroup`).
+ *
+ * Videos are NOT auto-loaded (a project `.slp` only references them by path);
+ * the 3D view + timeline + grouping/IDs come up immediately, and the user can
+ * File → Load Videos to attach the image backgrounds + 2D panes.
+ */
+export async function handleLoadProjectSlpLazy(slpFile) {
+    try {
+        if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return; }
+        showLoading('Reopening project (lazy): ' + slpFile.name + '...');
+
+        var loader = new SioLazyLoader();
+        var opened = await loader.openProjectSlp(slpFile, function (msg) { showLoading(msg); });
+        var labels = opened.labels;
+        var typedSession = opened.typedSession;
+
+        // Cameras from the embedded calibration.
+        var cameras = [];
+        if (loader.calibration) {
+            var calKeys = Object.keys(loader.calibration).filter(function (k) { return k !== 'metadata'; });
+            for (var cki = 0; cki < calKeys.length; cki++) {
+                var cd = loader.calibration[calKeys[cki]];
+                if (!cd || typeof cd !== 'object') continue;
+                cameras.push(new Camera(
+                    cd.name || calKeys[cki],
+                    cd.matrix || [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    cd.distortions || cd.dist || [0, 0, 0, 0, 0],
+                    cd.rotation || cd.rvec || [0, 0, 0],
+                    cd.translation || cd.tvec || [0, 0, 0],
+                    cd.size || [640, 480]
+                ));
+            }
+        }
+        var hasCalibration = cameras.length > 0;
+
+        var skeleton = new Skeleton(loader.skeleton.name, loader.skeleton.nodes, loader.skeleton.edges);
+        var tracks = loader.trackNames.length ? loader.trackNames.slice() : ['track_0'];
+
+        var lucid = ((labels.rawSessionsJson || [])[0] || {}).metadata;
+        lucid = (lucid && lucid.lucid) || {};
+        var sessName = lucid.sessionName || slpFile.name.replace(/\.slp$/i, '');
+        var session = new Session(cameras, skeleton, tracks, sessName);
+        if (lucid.identities && lucid.identities.length) {
+            session.identities = lucid.identities.map(function (id, i) {
+                return new Identity(i, id.name || ('id_' + i), id.color || null);
+            });
+        }
+        if (lucid.frameIdentityMap) session.frameIdentityMap = new Map(lucid.frameIdentityMap);
+        if (lucid.trustTracks != null) session.trustTracks = lucid.trustTracks;
+
+        session.lazyLoader = loader;
+        session._lazyReopened = true;
+
+        // Rebuild grouping + 3D (lightweight, memory-bounded).
+        var nodeNames = skeleton.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); });
+        await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames,
+            { onProgress: function (m) { showLoading(m); } });
+
+        // Reset previous UI state.
+        if (videoController) {
+            if (state.isPlaying && typeof videoController.pause === 'function') videoController.pause();
+            setVideoController(null);
+        }
+        state.views = [];
+        state.videoFiles = state.videoFiles || [];
+        paneManager.clearAll();
+
+        // Activate the reopened session.
+        state.sessions.push(session);
+        state.activeSessionIdx = state.sessions.length - 1;
+        state.session = session;
+        state.triangulationResults = new Map();
+        state.totalFrames = loader.nFrames;
+
+        // 3D viewport (needs a live session).
+        if (hasCalibration) {
+            var vp3dMsg = document.getElementById('viewport3dMessage');
+            if (vp3dMsg) vp3dMsg.classList.add('hidden');
+            if (!viewport3d) setup3DViewport();
+            if (viewport3d) {
+                viewport3d.cameras = session.cameras;
+                viewport3d.skeleton = session.skeleton;
+                viewport3d.addCameraPyramids();
+                viewport3d.setFrame([]);
+                viewport3d.fitToScene();
+            }
+        }
+        if (!interactionManager) setupInteraction();
+        if (!timeline) setupTimeline();
+        if (timeline) timeline.setData(session);
+
+        // Land on the first grouped frame + render it (hydrates its 2D).
+        var gk = Array.from(session.instanceGroups.keys());
+        gk.sort(function (a, b) { return a - b; });
+        var firstFrame = gk.length ? gk[0] : 0;
+        state.currentFrame = firstFrame;
+        await ensureLazyFrameData(firstFrame);
+        drawAllOverlays(firstFrame);
+        if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(firstFrame));
+        if (typeof updateSeekbar === 'function') updateSeekbar();
+
+        hideLoading();
+        updateInfoPanel();
+        setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
+            + ' grouped frames, ' + loader.nFrames + ' frames. File → Load Videos to show images.', 'success');
+    } catch (err) {
+        console.error('[load-project-lazy] Error:', err);
+        hideLoading();
+        setStatus('Lazy reopen error: ' + (err && err.message || err), 'error');
     }
 }
 
