@@ -19,7 +19,10 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 11.
 
-import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core/+esm';
+// Pinned: 7.x renamed api.onUnhandledDragOverEvent → onUnhandledDragOver and
+// the unpinned /+esm import silently broke pane docking when the CDN cache
+// refreshed past 6.6.1. Keep in sync with the dockview.css pin in index.html.
+import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,

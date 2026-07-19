@@ -23,6 +23,11 @@ python3 -m http.server 8080
 
 ## Dependencies (CDN only)
 - Three.js 0.147
+- dockview-core **pinned to 6.6.1** (`index.html` CSS + `ui/sessions-panes.js` ESM
+  import — keep the two pins in sync). 7.x renamed `api.onUnhandledDragOverEvent`
+  → `onUnhandledDragOver`, so an unpinned `/+esm` import silently breaks pane
+  docking whenever the CDN cache refreshes. Audit the dockview API usage in
+  `ui/sessions-panes.js` before bumping past 6.x.
 - mp4box.js
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
