@@ -700,10 +700,26 @@ export function showParentDirMatchSummary(matched, unmatched) {
  */
 export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
     var allSessionNames = options && options.allSessionNames;
+    var allowSkip = options && options.allowSkip;
     return new Promise(function (resolve) {
         var overlay = document.createElement('div');
         overlay.id = 'videoSelectOverlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+
+        // Esc skips the prompt (UI convention: modals close on Esc). Every
+        // caller treats a null result as "no videos picked" and continues.
+        function onKeyDown(ev) {
+            if (ev.key === 'Escape') {
+                ev.preventDefault();
+                finish(null);
+            }
+        }
+        function finish(result) {
+            document.removeEventListener('keydown', onKeyDown);
+            overlay.remove();
+            resolve(result);
+        }
+        document.addEventListener('keydown', onKeyDown);
 
         var title = document.createElement('div');
         title.style.cssText = 'color:#fff;font-size:20px;font-weight:600;margin-bottom:8px;';
@@ -731,8 +747,7 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
                 var result;
                 try { result = await pickParentDirectoryForSessions(allSessionNames); } catch (e) { console.error(e); return; }
                 if (!result) return; // cancelled
-                overlay.remove();
-                resolve({ parentResult: result });
+                finish({ parentResult: result });
             });
         }
 
@@ -771,8 +786,7 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
             }
 
             if (matchedFiles.length > 0) {
-                overlay.remove();
-                resolve(matchedFiles);
+                finish(matchedFiles);
             }
         });
 
@@ -781,10 +795,19 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
             var files = [];
             try { files = await pickVideoFiles(); } catch (e) { /* cancelled */ }
             if (files.length > 0) {
-                overlay.remove();
-                resolve(files);
+                finish(files);
             }
         });
+
+        // Optional explicit skip (lazy project reopen: videos can be attached
+        // later via File → Load Videos).
+        if (allowSkip) {
+            var btnSkip = document.createElement('button');
+            btnSkip.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:transparent;color:#aaa;border:1px solid var(--border-color,#555);border-radius:8px;';
+            btnSkip.textContent = 'Skip — Load Videos Later';
+            btnRow.appendChild(btnSkip);
+            btnSkip.addEventListener('click', function () { finish(null); });
+        }
 
         document.body.appendChild(overlay);
     });
@@ -1949,6 +1972,165 @@ export async function handleLoadSessionFolderSingleSlp() {
 }
 
 /**
+ * Prompt for + attach the videos of a lazily-reopened project session — the
+ * video-finalization step of `handleLoadProjectSlpLazy`, mirroring
+ * `handleLoadSlpFile`'s external-video flow. A project `.slp` references its
+ * videos by path only, so the user picks the session folder (or files); each
+ * picked video is matched to a session camera by parent-directory name, by
+ * camera-name-in-stem, or against the video filename referenced in the
+ * reopened file (`loader.videos`). Matched videos get decoders + views + the
+ * dock grid; unmatched ones are skipped. The prompt is skippable (Esc or the
+ * Skip button) — the session then stays video-less exactly like before this
+ * step existed, and File → Load Videos still works later.
+ *
+ * `pickedFilesOverride` (tests/automation): bypasses the prompt and uses the
+ * given File list directly.
+ *
+ * @returns {Promise<boolean>} true if at least one video view was attached.
+ */
+export async function attachVideosForLazyReopen(session, loader, pickedFilesOverride) {
+    var cameras = session.cameras || [];
+    var camNames = cameras.map(function (c) { return c.name; });
+
+    // Referenced video basenames from the reopened file — shown in the prompt
+    // and used as a filename-matching fallback.
+    var refBaseByCam = new Map();
+    for (var rci = 0; rci < camNames.length; rci++) {
+        var lv = loader.videos && loader.videos.get(camNames[rci]);
+        if (lv && lv.filename) {
+            refBaseByCam.set(camNames[rci],
+                String(lv.filename).replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase());
+        }
+    }
+    var refInfo = 'Cameras: ' + camNames.join(', ');
+    if (refBaseByCam.size > 0) {
+        refInfo += ' — referenced videos: ' + Array.from(refBaseByCam.values()).join(', ');
+    }
+
+    var picked = pickedFilesOverride
+        || await forceVideoSelectionWithFolder(refInfo, session.name || 'Session', { allowSkip: true });
+    if (!picked || picked.parentResult || picked.length === 0) return false;
+
+    // Filter to real session videos and match each to a camera.
+    var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
+    var toLoad = [];
+    var unmatched = 0;
+    for (var pfi = 0; pfi < picked.length; pfi++) {
+        var pFile = picked[pfi];
+        if (!pFile || !pFile.name) continue;
+        var pExt = pFile.name.substring(pFile.name.lastIndexOf('.')).toLowerCase();
+        if (vidExts.indexOf(pExt) < 0 || isCalibrationVideoFile(pFile)) continue;
+        var pStem = pFile.name.replace(/\.[^.]+$/, '');
+        var pStemLower = pStem.toLowerCase();
+        if (state.videoFiles.some(function (vf) { return vf.name === pStem; })) continue;
+
+        var pRel = pFile.webkitRelativePath || pFile.name;
+        var pParts = pRel.split('/');
+        var pParentDir = pParts.length >= 2 ? pParts[pParts.length - 2].toLowerCase() : null;
+
+        var assignedCam = null;
+        for (var mci = 0; mci < camNames.length && !assignedCam; mci++) {
+            if (pParentDir && pParentDir === camNames[mci].toLowerCase()) assignedCam = camNames[mci];
+        }
+        for (var sci = 0; sci < camNames.length && !assignedCam; sci++) {
+            if (pStemLower.indexOf(camNames[sci].toLowerCase()) >= 0) assignedCam = camNames[sci];
+        }
+        for (var bci = 0; bci < camNames.length && !assignedCam; bci++) {
+            var refBase = refBaseByCam.get(camNames[bci]);
+            if (refBase && (pStemLower === refBase || pStemLower.indexOf(refBase) >= 0 || refBase.indexOf(pStemLower) >= 0)) {
+                assignedCam = camNames[bci];
+            }
+        }
+        if (!assignedCam) { unmatched++; continue; }
+        if (toLoad.some(function (e) { return e.assignedCam === assignedCam; })) continue;
+        toLoad.push({ file: pFile, stem: pStem, rel: pRel, assignedCam: assignedCam });
+    }
+    if (toLoad.length === 0) {
+        if (unmatched > 0) {
+            setStatus(unmatched + ' video(s) matched no camera (' + camNames.join(', ') + ') — use File → Load Videos', 'warning');
+        }
+        return false;
+    }
+
+    showLoading('Loading ' + toLoad.length + ' video(s)...');
+    var modal = getLoadingProgressModal({ title: 'Loading videos' });
+    modal.reset();
+    modal.show();
+
+    await Promise.allSettled(toLoad.map(async function (entry) {
+        var taskId = modal.addTask({ label: entry.file.name });
+        try {
+            var decoder = new OnDemandVideoDecoder({
+                cacheSize: 60, lookahead: 10,
+                onProgress: function (ev) {
+                    if (ev && ev.error) modal.failTask(taskId, ev.error);
+                    else modal.updateTask(taskId, ev);
+                },
+            });
+            await decoder.init(entry.file);
+            entry.decoder = decoder;
+            modal.completeTask(taskId);
+        } catch (decErr) {
+            console.error('[load-project-lazy] Failed to load video:', entry.file.name, decErr);
+            entry.error = decErr;
+            modal.failTask(taskId, decErr);
+        }
+    }));
+
+    var attachedNames = [];
+    var failed = [];
+    for (var li = 0; li < toLoad.length; li++) {
+        var lEntry = toLoad[li];
+        if (!lEntry.decoder) { failed.push(lEntry.file.name); continue; }
+        var vfEntry = {
+            file: lEntry.file, name: lEntry.stem, decoder: lEntry.decoder,
+            videoWidth: lEntry.decoder.videoTrack.video.width,
+            videoHeight: lEntry.decoder.videoTrack.video.height,
+            frameCount: lEntry.decoder.samples.length,
+            assignedCamera: lEntry.assignedCam,
+            videoPath: lEntry.rel,
+            sessionIdx: state.activeSessionIdx,
+        };
+        state.videoFiles.push(vfEntry);
+        var hasView = state.views.some(function (v) { return v.name === lEntry.assignedCam; });
+        if (!hasView) createViewForVideoFile(vfEntry);
+        attachedNames.push(lEntry.assignedCam);
+    }
+    if (attachedNames.length === 0) {
+        hideLoading();
+        if (failed.length > 0) setStatus('All videos failed to load: ' + failed.join('; '), 'error');
+        return false;
+    }
+
+    paneManager._suppressActiveHighlight = true;
+    populateViewStrip();
+    populateSessionStrip();
+    paneManager.addAllViewsAsGrid();
+    paneManager._suppressActiveHighlight = false;
+    rebuildVideoController();
+    updateTotalFrames();
+    fitCanvasesToCells();
+    hideWelcomeOverlay();
+
+    if (!interactionManager) setupInteraction();
+    if (interactionManager && state.views.length > 0) {
+        interactionManager.detach();
+        interactionManager.attach(state.views);
+    }
+    recomputeUploadedCameras(session, state);
+    if (timeline) timeline.refreshTracks(session);
+
+    // Render the images (the current frame's 2D is already hydrated).
+    if (videoController) await videoController.seekToFrame(state.currentFrame);
+    drawAllOverlays(state.currentFrame);
+    hideLoading();
+    if (failed.length > 0) {
+        setStatus('Attached ' + attachedNames.length + ' video(s), ' + failed.length + ' failed: ' + failed[0], 'warning');
+    }
+    return true;
+}
+
+/**
  * Reopen a large project `.slp` LAZILY (the memory-bounded "Load Project" path).
  *
  * The eager path (`handleLoadSlpFile` / `parseSlpViaSleapIO`) materializes every
@@ -1962,9 +2144,9 @@ export async function handleLoadSessionFolderSingleSlp() {
  *    via `reconstructInstanceGroupsFromSessionLazy` (~2.5s, ~1 GB) — 2D hydrates
  *    on scrub (`ensureLazyFrameData` → `finalizeLazyFrameGroup`).
  *
- * Videos are NOT auto-loaded (a project `.slp` only references them by path);
- * the 3D view + timeline + grouping/IDs come up immediately, and the user can
- * File → Load Videos to attach the image backgrounds + 2D panes.
+ * A project `.slp` only references videos by path, so after the data comes up
+ * the user is prompted to attach them (`attachVideosForLazyReopen`, skippable —
+ * File → Load Videos still works later).
  */
 export async function handleLoadProjectSlpLazy(slpFile) {
     try {
@@ -2064,6 +2246,13 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         state.activeSessionIdx = state.sessions.length - 1;
         state.session = session;
         state.totalFrames = loader.nFrames;
+        // No decoders yet, so updateTotalFrames() (which reads decoder sample
+        // counts, and resets to 0 when there are none) can't be used here —
+        // write the frame counter + timeline span from the labeled-frame count
+        // directly. attachVideosForLazyReopen refines both from the real
+        // decoders once videos are attached.
+        var tfEl = document.getElementById('totalFrames');
+        if (tfEl) tfEl.textContent = state.totalFrames;
 
         // 3D viewport (needs a live session).
         if (hasCalibration) {
@@ -2080,7 +2269,12 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         if (!interactionManager) setupInteraction();
         if (!timeline) setupTimeline();
-        if (timeline) timeline.setData(session);
+        if (timeline) {
+            timeline.setData(session);
+            // setData does not propagate the frame span (other load paths pair
+            // it with setTotalFrames) — without this the timeline clamps to 1.
+            timeline.setTotalFrames(state.totalFrames);
+        }
 
         // Land on the first grouped frame + render it (hydrates its 2D).
         var gk = Array.from(session.instanceGroups.keys());
@@ -2094,8 +2288,23 @@ export async function handleLoadProjectSlpLazy(slpFile) {
 
         hideLoading();
         updateInfoPanel();
-        setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
-            + ' grouped frames, ' + loader.nFrames + ' frames. File → Load Videos to show images.', 'success');
+
+        // Attach the project's videos (prompt; Esc/Skip keeps them deferred).
+        var videosAttached = false;
+        try {
+            videosAttached = await attachVideosForLazyReopen(session, loader);
+        } catch (vErr) {
+            console.error('[load-project-lazy] Video attach failed:', vErr);
+            hideLoading();
+        }
+        updateInfoPanel();
+        if (videosAttached) {
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
+                + ' grouped frames, ' + state.views.length + ' videos', 'success');
+        } else {
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
+                + ' grouped frames, ' + loader.nFrames + ' frames. File → Load Videos to show images.', 'success');
+        }
     } catch (err) {
         console.error('[load-project-lazy] Error:', err);
         hideLoading();

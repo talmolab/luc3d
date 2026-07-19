@@ -61,9 +61,14 @@ function numAt(arr, i, dflt) {
     return isNaN(v) ? (dflt === undefined ? 0 : dflt) : v;
 }
 
-/** Resolve the output video path for a camera (mirrors buildSlpLabelsAllViews). */
-function resolveVideoPath(cam, views, videoFiles) {
-    var videoPath = cam.name + '.mp4';
+/**
+ * Resolve the output video path for a camera (mirrors buildSlpLabelsAllViews).
+ * `lazyVid` is the loader's `{filename, shape}` record for this camera from the
+ * REOPENED project file — used when no live video is attached (a lazily
+ * reopened session before File → Load Videos) so the re-save round-trips the
+ * original video reference instead of fabricating `<camName>.mp4`.
+ */
+function resolveVideoPath(cam, views, videoFiles, lazyVid) {
     if (videoFiles) {
         for (var i = 0; i < videoFiles.length; i++) {
             var vf = videoFiles[i];
@@ -72,7 +77,8 @@ function resolveVideoPath(cam, views, videoFiles) {
             }
         }
     }
-    return videoPath;
+    if (lazyVid && lazyVid.filename) return lazyVid.filename;
+    return cam.name + '.mp4';
 }
 
 /**
@@ -212,7 +218,17 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
                 fc = views[vi].frameCount || 0; break;
             }
         }
-        var videoPath = resolveVideoPath(c, views, videoFiles);
+        // No attached video (lazily reopened session before File → Load
+        // Videos): fall back to the reopened file's own video record so shape
+        // and filename round-trip instead of degrading to zeros/<camName>.mp4.
+        var lazyVid = (loader.videos && typeof loader.videos.get === 'function')
+            ? loader.videos.get(c.name) : null;
+        if ((!vw || !vh || !fc) && lazyVid && Array.isArray(lazyVid.shape) && lazyVid.shape.length >= 3) {
+            fc = fc || Number(lazyVid.shape[0]) || 0;
+            vh = vh || Number(lazyVid.shape[1]) || 0;
+            vw = vw || Number(lazyVid.shape[2]) || 0;
+        }
+        var videoPath = resolveVideoPath(c, views, videoFiles, lazyVid);
         var video = new SIO.Video({
             filename: videoPath,
             backendMetadata: { type: 'MediaVideo', shape: [fc, vh, vw, 1], filename: videoPath },
@@ -360,15 +376,20 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
     if (_sharedStore && cam.length > 0) {
         // Shared multi-camera store, appended ONCE: build a SINGLE store-row →
         // output-lf map that every camera reuses. A store row belongs to one
-        // camera via its video id (which matches the header camera order for a
-        // fresh single-session reopen, so appendStore offset 0 is correct); skip
-        // rows overlaid by a user correction for that camera.
+        // camera via its NATIVE video id (`loader.videoIdByCam`, captured at
+        // openProjectSlp); `streamSessionIntoWriter` remaps those native ids
+        // onto the output header order when they differ. Skip rows overlaid by
+        // a user correction for that camera.
         var sInfo = cam[0];
         var sharedOut = new Map();
         var sFidx = sInfo.framesData.frame_idx || sInfo.framesData.frame_id || [];
         var sVideo = sInfo.framesData.video || [];
-        var videoToCam = new Map();
-        for (var vci = 0; vci < cam.length; vci++) videoToCam.set(cam[vci].videoIndex, cam[vci].name);
+        var videoToCam = new Map(); // NATIVE store video id -> camera name
+        for (var vci = 0; vci < cam.length; vci++) {
+            var vNat = (loader.videoIdByCam && loader.videoIdByCam.has(cam[vci].name))
+                ? loader.videoIdByCam.get(cam[vci].name) : cam[vci].videoIndex;
+            videoToCam.set(vNat, cam[vci].name);
+        }
         for (var srow = 0; srow < sInfo.nFrames; srow++) {
             var sCamName = videoToCam.get(numAt(sVideo, srow));
             if (sCamName && overlaidKeys.has(sCamName + ':' + numAt(sFidx, srow))) continue;
@@ -544,6 +565,63 @@ export async function openProjectWriter(ctx, allSioSessions, provenance) {
 }
 
 /**
+ * Remap a shared store's `framesData.video` column (and the video-keyed
+ * annotation/negative-frame keys) from NATIVE store video ids onto the output
+ * header's GLOBAL video indices, as a shallow wrapper — the underlying columns
+ * are shared, only the video column is copied (O(nFrames) numbers). Needed
+ * because `appendStore`'s own remap (`buildVideoIdMap`) is a no-op for
+ * external-video project files (no `videoN/...` dataset to parse), so raw ids
+ * pass through verbatim. `videos: []` keeps that passthrough inert so the
+ * remapped ids we write ARE final. The wrapper carries every property
+ * `appendStore`/`collectStoreAnnotations` read (framesData, instancesData,
+ * points/predPoints, negativeFrames, the 5 `_*ByFrame` maps + 5
+ * `_undistributed*` lists).
+ */
+function _remapSharedStoreVideos(store, headerByNative) {
+    var fd = store.framesData || {};
+    var vidCol = fd.video || [];
+    var n = vidCol.length;
+    var remapped = new Float64Array(n);
+    for (var r = 0; r < n; r++) {
+        var raw = Number(vidCol[r]);
+        var mapped = headerByNative.get(raw);
+        remapped[r] = mapped !== undefined ? mapped : raw;
+    }
+    function remapKey(key) {
+        var s = String(key);
+        var ci = s.indexOf(':');
+        if (ci < 0) return s;
+        var m = headerByNative.get(Number(s.slice(0, ci)));
+        return m !== undefined ? (m + s.slice(ci)) : s;
+    }
+    var neg = new Set();
+    for (var negKey of (store.negativeFrames || [])) neg.add(remapKey(negKey));
+    function remapAnnMap(annMap) {
+        var out = new Map();
+        for (var e of (annMap || new Map())) out.set(remapKey(e[0]), e[1]);
+        return out;
+    }
+    return {
+        framesData: Object.assign({}, fd, { video: remapped }),
+        instancesData: store.instancesData,
+        pointsData: store.pointsData,
+        predPointsData: store.predPointsData,
+        videos: [],
+        negativeFrames: neg,
+        _roiByFrame: remapAnnMap(store._roiByFrame),
+        _maskByFrame: remapAnnMap(store._maskByFrame),
+        _bboxByFrame: remapAnnMap(store._bboxByFrame),
+        _centroidByFrame: remapAnnMap(store._centroidByFrame),
+        _labelImageByFrame: remapAnnMap(store._labelImageByFrame),
+        _undistributedRois: store._undistributedRois || [],
+        _undistributedMasks: store._undistributedMasks || [],
+        _undistributedBboxes: store._undistributedBboxes || [],
+        _undistributedCentroids: store._undistributedCentroids || [],
+        _undistributedLabelImages: store._undistributedLabelImages || [],
+    };
+}
+
+/**
  * PASS 2, per session: stream this session's 2D data into an already-open
  * writer, using the offsets computed for it in pass 1
  * (`refGraphResult.cam[i].videoIndex`/`.trackBase`). Requires
@@ -555,15 +633,35 @@ export function streamSessionIntoWriter(writer, session, refGraphResult) {
     if (!loader) throw new Error('streamSessionIntoWriter requires session.lazyLoader to be (re)opened');
     if (refGraphResult.overlayLfs.length > 0) writer.appendFrames(refGraphResult.overlayLfs);
     if (loader._sharedStore) {
-        // Reopened single-file project: ONE store holds every camera's frames with
-        // their native video ids (aligned to the header camera order). Append it
-        // ONCE — appending per camera rewrites the whole store N times (duplicate
-        // frames + tracks). offset 0 = identity video map; trackBase is shared.
+        // Reopened single-file project: ONE store holds every camera's frames
+        // with their NATIVE video ids. Append it ONCE — appending per camera
+        // rewrites the whole store N times (duplicate frames + tracks). The
+        // native ids only coincide with the output header indices for a fresh
+        // single-session reopen of a LUCID-written file; remap the video
+        // column whenever they differ (Python-written files, multi-session
+        // saves where this session's videos sit at a global offset).
         var anyCam = refGraphResult.cam[0];
         if (anyCam) {
             var sLabels = loader.labelsByCam.get(anyCam.name);
             var sStore = sLabels && sLabels._lazyDataStore;
-            if (sStore) writer.appendStore(sStore, { videoIndexOffset: 0, trackOffset: anyCam.trackBase });
+            if (sStore) {
+                var headerByNative = new Map(); // native store video id -> global header video index
+                var identityMap = true;
+                for (var hci = 0; hci < refGraphResult.cam.length; hci++) {
+                    var hc = refGraphResult.cam[hci];
+                    var hNat = (loader.videoIdByCam && loader.videoIdByCam.has(hc.name))
+                        ? loader.videoIdByCam.get(hc.name) : hc.videoIndex;
+                    headerByNative.set(hNat, hc.videoIndex);
+                    if (hNat !== hc.videoIndex) identityMap = false;
+                }
+                var appendTarget = sStore;
+                if (!identityMap) {
+                    console.log('[slp-streaming-write] shared store: remapping native video ids -> header indices:',
+                        Array.from(headerByNative.entries()).map(function (e) { return e[0] + '->' + e[1]; }).join(', '));
+                    appendTarget = _remapSharedStoreVideos(sStore, headerByNative);
+                }
+                writer.appendStore(appendTarget, { videoIndexOffset: 0, trackOffset: anyCam.trackBase });
+            }
         }
         return;
     }

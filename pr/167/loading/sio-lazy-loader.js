@@ -105,6 +105,9 @@ export class SioLazyLoader {
         // builder when the folder has no separate calibration.toml.
         this.calibration = null;
         this.camcorderToVideoMap = null;
+        // camName → native store video id (only set by openProjectSlp; the
+        // per-camera open() path has one single-video store per camera).
+        this.videoIdByCam = null;
         this.videos = new Map();
         this.trackOccupancy = new Map(); // left empty (see file header)
 
@@ -299,6 +302,12 @@ export class SioLazyLoader {
         }
         var vidToCam = new Map();
         for (var cv of camToVid) vidToCam.set(cv[1], cv[0]);
+        // Retain camera → NATIVE store video id (the values in the columnar
+        // `framesData.video` column). The streaming re-save needs this to remap
+        // store video ids onto its own header order instead of assuming they
+        // coincide (they do for a LUCID-written file, but not necessarily for a
+        // project .slp from Python sleap-io) — see `streamSessionIntoWriter`.
+        this.videoIdByCam = camToVid;
 
         // Split the interleaved store into per-camera videoFrameIdx→storeRow maps.
         var store = labels._lazyDataStore;
@@ -512,5 +521,6 @@ export class SioLazyLoader {
         this.cache.clear();
         this.cacheOrder = [];
         this.videos.clear();
+        this.videoIdByCam = null;
     }
 }

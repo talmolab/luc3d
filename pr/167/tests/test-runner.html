@@ -249,6 +249,14 @@
     <!-- Rotation tests -->
     <script src="test-rotation.js"></script>
 
+    <!-- Lazy project reopen (shared-store .slp): openProjectSlp split,
+         lightweight reconstruct + on-scrub hydration, shared-store re-save,
+         permuted native video-id remap. Keep LAST among the test files: it
+         dynamic-imports slp-import.js, whose graph runs the app's init()
+         (fails gracefully without the app DOM) — being last keeps any init
+         side effects out of the other suites. -->
+    <script src="test-lazy-reopen.js"></script>
+
     <!-- Pass 2 transitional bridge + test runner.
          Loads ESM-converted modules (pose/, ui/) and exposes their exports on
          window so the test files (loaded as classic scripts above) can find

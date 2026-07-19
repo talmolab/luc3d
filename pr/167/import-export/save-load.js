@@ -532,8 +532,19 @@ async function buildSlpBytes(opts) {
  * bytes, so this is cheap relative to the FIRST open — no Track All/
  * Triangulate All is redone, only the columnar store is reconstructed.
  */
-async function reopenSessionLazyLoader(session, sourceFileEntries) {
+async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore) {
     var loader = new SioLazyLoader();
+    if (wasSharedStore) {
+        // Lazily-reopened single-file project: every camera's sourceFiles entry
+        // is the SAME project `.slp`. Reopen through openProjectSlp so the ONE
+        // interleaved store is read once and `_sharedStore`/`videoIdByCam` are
+        // restored — per-camera open() would re-read the whole project N times
+        // and pass 2 would then append the shared store once per camera
+        // (duplicating every frame/track).
+        await loader.openProjectSlp(sourceFileEntries[0][1]);
+        session.lazyLoader = loader;
+        return loader;
+    }
     var opens = [];
     for (var i = 0; i < sourceFileEntries.length; i++) {
         var entry = sourceFileEntries[i];
@@ -586,8 +597,9 @@ export async function commitSessionForMultiSessionSave(handle, session) {
         return session.cameras.some(function (c) { return c.name === vf.assignedCamera; });
     });
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
+    var wasSharedStore = !!session.lazyLoader._sharedStore;
     var refGraph = buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
-    handle.pending.push({ session: session, sourceFiles: sourceFiles, refGraph: refGraph });
+    handle.pending.push({ session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
     // ref-only RecordingSession + the materialized user-edit overlay
@@ -615,7 +627,7 @@ export async function finalizeMultiSessionSave(handle, opts) {
     try {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
-            await reopenSessionLazyLoader(p.session, p.sourceFiles);
+            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore);
             streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();
             p.session.lazyLoader = null;
