@@ -109,6 +109,11 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
     var SIO = window.SleapIO;
     var loader = session.lazyLoader;
     if (!loader) throw new Error('buildSessionRefGraph requires a lazy session with a lazyLoader');
+    // Reopened single-file project (`SioLazyLoader.openProjectSlp`): every camera
+    // shares ONE `_lazyDataStore`, so its tracks + frames must be added/appended
+    // exactly ONCE (not once per camera) or the re-save duplicates them.
+    var _sharedStore = !!loader._sharedStore;
+    var _sharedTrackBase = -1;
 
     // MEMORY (#134 follow-up): "Track All" materializes EVERY frame into
     // `frameGroups` (the cross-view tracker is sequential), so a
@@ -229,12 +234,24 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
         var nFrames = (framesData.frame_idx || framesData.frame_id || []).length;
 
         // Concatenate this camera's tracks into the GLOBAL header list. The
-        // store's `instancesData.track` ids index into this camera's own
-        // tracks; appendStore's trackOffset rebases them into the combined list.
-        var trackBase = ctx.allTracks.length;
-        var camTracks = (labels.tracks || []);
-        for (var ti = 0; ti < camTracks.length; ti++) {
-            ctx.allTracks.push(new SIO.Track(camTracks[ti].name));
+        // store's `instancesData.track` ids index into this camera's own tracks;
+        // appendStore's trackOffset rebases them into the combined list. For a
+        // shared store every camera has the SAME `labels.tracks`, so add them
+        // ONCE and reuse one trackBase (else 2357 tracks × N cameras).
+        var trackBase;
+        if (_sharedStore) {
+            if (_sharedTrackBase < 0) {
+                _sharedTrackBase = ctx.allTracks.length;
+                var camTracksS = (labels.tracks || []);
+                for (var tiS = 0; tiS < camTracksS.length; tiS++) ctx.allTracks.push(new SIO.Track(camTracksS[tiS].name));
+            }
+            trackBase = _sharedTrackBase;
+        } else {
+            trackBase = ctx.allTracks.length;
+            var camTracks = (labels.tracks || []);
+            for (var ti = 0; ti < camTracks.length; ti++) {
+                ctx.allTracks.push(new SIO.Track(camTracks[ti].name));
+            }
         }
 
         cam.push({
@@ -340,13 +357,33 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
     var overlayBase = ctx.runningOut;
     var E = overlayLfs.length;
     var runningOut = overlayBase + E;
-    for (var so = 0; so < cam.length; so++) {
-        var soInfo = cam[so];
-        soInfo.storeOutIndex = new Map();
-        var soFidx = soInfo.framesData.frame_idx || soInfo.framesData.frame_id || [];
-        for (var row = 0; row < soInfo.nFrames; row++) {
-            if (overlaidKeys.has(soInfo.name + ':' + numAt(soFidx, row))) continue;
-            soInfo.storeOutIndex.set(row, runningOut++);
+    if (_sharedStore && cam.length > 0) {
+        // Shared multi-camera store, appended ONCE: build a SINGLE store-row →
+        // output-lf map that every camera reuses. A store row belongs to one
+        // camera via its video id (which matches the header camera order for a
+        // fresh single-session reopen, so appendStore offset 0 is correct); skip
+        // rows overlaid by a user correction for that camera.
+        var sInfo = cam[0];
+        var sharedOut = new Map();
+        var sFidx = sInfo.framesData.frame_idx || sInfo.framesData.frame_id || [];
+        var sVideo = sInfo.framesData.video || [];
+        var videoToCam = new Map();
+        for (var vci = 0; vci < cam.length; vci++) videoToCam.set(cam[vci].videoIndex, cam[vci].name);
+        for (var srow = 0; srow < sInfo.nFrames; srow++) {
+            var sCamName = videoToCam.get(numAt(sVideo, srow));
+            if (sCamName && overlaidKeys.has(sCamName + ':' + numAt(sFidx, srow))) continue;
+            sharedOut.set(srow, runningOut++);
+        }
+        for (var aci = 0; aci < cam.length; aci++) cam[aci].storeOutIndex = sharedOut;
+    } else {
+        for (var so = 0; so < cam.length; so++) {
+            var soInfo = cam[so];
+            soInfo.storeOutIndex = new Map();
+            var soFidx = soInfo.framesData.frame_idx || soInfo.framesData.frame_id || [];
+            for (var row = 0; row < soInfo.nFrames; row++) {
+                if (overlaidKeys.has(soInfo.name + ':' + numAt(soFidx, row))) continue;
+                soInfo.storeOutIndex.set(row, runningOut++);
+            }
         }
     }
     ctx.runningOut = runningOut;
@@ -517,6 +554,19 @@ export function streamSessionIntoWriter(writer, session, refGraphResult) {
     var loader = session.lazyLoader;
     if (!loader) throw new Error('streamSessionIntoWriter requires session.lazyLoader to be (re)opened');
     if (refGraphResult.overlayLfs.length > 0) writer.appendFrames(refGraphResult.overlayLfs);
+    if (loader._sharedStore) {
+        // Reopened single-file project: ONE store holds every camera's frames with
+        // their native video ids (aligned to the header camera order). Append it
+        // ONCE — appending per camera rewrites the whole store N times (duplicate
+        // frames + tracks). offset 0 = identity video map; trackBase is shared.
+        var anyCam = refGraphResult.cam[0];
+        if (anyCam) {
+            var sLabels = loader.labelsByCam.get(anyCam.name);
+            var sStore = sLabels && sLabels._lazyDataStore;
+            if (sStore) writer.appendStore(sStore, { videoIndexOffset: 0, trackOffset: anyCam.trackBase });
+        }
+        return;
+    }
     for (var i = 0; i < refGraphResult.cam.length; i++) {
         var camInfo = refGraphResult.cam[i];
         var labels = loader.labelsByCam.get(camInfo.name);

@@ -245,6 +245,12 @@ export class SioLazyLoader {
                 : undefined,
         });
         this._projectLabels = labels;
+        // A single project `.slp` interleaves every camera in ONE store, so all
+        // `labelsByCam` entries point at the same `labels`/`_lazyDataStore`. The
+        // streaming writer must append that shared store ONCE (not per camera) or
+        // it duplicates every frame/track — see `buildSessionRefGraph` /
+        // `streamSessionIntoWriter` in slp-streaming-write.js.
+        this._sharedStore = true;
         try { labels.frameCacheLimit = this.internalFrameCacheLimit; } catch (e) { /* older bundle */ }
 
         var skel = labels.skeletons && labels.skeletons[0];
