@@ -413,5 +413,41 @@
             assertEqual(rowsSeen.Camera_A, 3, 'Camera_A contributes 3 output frames');
             assertEqual(rowsSeen.Camera_B, 3, 'Camera_B contributes 3 output frames');
         });
+
+        it('writes the instances table as float64 (2^24 point-id ceiling guard)', async function () {
+            // sleap-io.js#231: h5wasm parses "<f8" as FLOAT32, so an unpatched
+            // bundle writes /instances as f32 and point_id_start/end quantize
+            // to even integers beyond 2^24 point rows — silently corrupting
+            // every instance's node assignment on files with >16.7M points
+            // (~1M instances). The vendored bundle carries a LUCID local patch
+            // ("<d" = h5wasm float64) at all three writer sites; this guards it
+            // across re-vendors for the eager AND streaming writers.
+            const S = window.SleapIO;
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js');
+
+            const eagerBytes = await buildProjectFixtureBytes(S); // saveSlpToBytes output
+            const { loader, opened } = await openProjectFixture(eagerBytes, 'lazy-reopen-dtype.slp');
+            const session = buildLucidSession(loader);
+            await reconstructLazy(session, opened, loader);
+            const streamBytes = await buildSessionSlpBytesStreaming(session, [], []); // openSlpWriter output
+
+            const h5 = await import('h5wasm');
+            await h5.ready;
+            for (const [tag, bytes] of [['eager saveSlpToBytes', eagerBytes], ['streaming openSlpWriter', streamBytes]]) {
+                const p = '/dtype-' + tag.split(' ')[0] + '.slp';
+                h5.FS.writeFile(p, bytes);
+                const file = new h5.File(p, 'r');
+                try {
+                    // h5wasm formats dtypes on read as '<f' (float32) / '<d' (float64).
+                    const dt = String(file.get('instances').dtype);
+                    assertEqual(dt, '<d',
+                        tag + ': /instances must be float64 — as float32 ("<f") point ids '
+                        + 'corrupt beyond 2^24 rows (sleap-io.js#231)');
+                } finally {
+                    file.close();
+                    h5.FS.unlink(p);
+                }
+            }
+        });
     });
 })();
