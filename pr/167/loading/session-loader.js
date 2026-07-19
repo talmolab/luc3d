@@ -1971,6 +1971,46 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return; }
         showLoading('Reopening project (lazy): ' + slpFile.name + '...');
 
+        // Free the PREVIOUS project's memory BEFORE opening the new one. A large
+        // lazy session holds ~1 GB in its loader + GBs of grouping/3D; opening a
+        // second project on top OOMs the tab (user-reported). Evict every resident
+        // session's lazyLoader + grouping, close decoders, and start fresh.
+        if (videoController) {
+            if (state.isPlaying && typeof videoController.pause === 'function') videoController.pause();
+            setVideoController(null);
+        }
+        for (var _psi = 0; _psi < (state.sessions || []).length; _psi++) {
+            var _ps = state.sessions[_psi];
+            if (!_ps) continue;
+            if (_ps.lazyLoader && typeof _ps.lazyLoader.close === 'function') {
+                try { _ps.lazyLoader.close(); } catch (e) { /* ignore */ }
+            }
+            _ps.lazyLoader = null;
+            _ps.instanceGroups = new Map();
+            _ps.frameGroups = new Map();
+        }
+        if (Array.isArray(state.decoderPool)) {
+            for (var _dpi = 0; _dpi < state.decoderPool.length; _dpi++) {
+                var _dp = state.decoderPool[_dpi];
+                if (_dp && typeof _dp.close === 'function') { try { _dp.close(); } catch (e) { /* ignore */ } }
+            }
+        }
+        state.decoderPool = [];
+        if (Array.isArray(state._decoderPoolCold)) {
+            for (var _dci = 0; _dci < state._decoderPoolCold.length; _dci++) {
+                var _dc = state._decoderPoolCold[_dci];
+                if (_dc && _dc._coldTimer) { clearTimeout(_dc._coldTimer); _dc._coldTimer = null; }
+                if (_dc && typeof _dc.close === 'function') { try { _dc.close(); } catch (e) { /* ignore */ } }
+            }
+        }
+        state._decoderPoolCold = [];
+        state.sessions = [];
+        state.session = null;
+        state.views = [];
+        state.videoFiles = [];
+        state.triangulationResults = new Map();
+        paneManager.clearAll();
+
         var loader = new SioLazyLoader();
         var opened = await loader.openProjectSlp(slpFile, function (msg) { showLoading(msg); });
         var labels = opened.labels;
@@ -2018,20 +2058,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames,
             { onProgress: function (m) { showLoading(m); } });
 
-        // Reset previous UI state.
-        if (videoController) {
-            if (state.isPlaying && typeof videoController.pause === 'function') videoController.pause();
-            setVideoController(null);
-        }
-        state.views = [];
-        state.videoFiles = state.videoFiles || [];
-        paneManager.clearAll();
-
-        // Activate the reopened session.
+        // Activate the reopened session (the previous project was already evicted
+        // + state reset at the top, so this is the sole session).
         state.sessions.push(session);
         state.activeSessionIdx = state.sessions.length - 1;
         state.session = session;
-        state.triangulationResults = new Map();
         state.totalFrames = loader.nFrames;
 
         // 3D viewport (needs a live session).
