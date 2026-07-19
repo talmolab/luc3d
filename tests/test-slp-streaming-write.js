@@ -46,6 +46,67 @@
         return await S.readSlpStreaming(new File([bytes], fn), { lazy: true, openVideos: false, h5wasmUrl });
     }
 
+    // SLP 2.8 (#546/#224): 3D grouping moved OUT of the inline `sessions_json`
+    // `frame_group_dicts` into the columnar `/session_data` group. The refs
+    // (camcorder→(lf,inst)) are now `instance_group_members` rows that the reader
+    // resolves back into concrete instances. Rather than assert the columnar
+    // bytes directly (a brittle multi-table join), read the file back through the
+    // real `readSlpStreaming` and check the resolved typed grouping — this proves
+    // the write emitted refs that resolve to the CORRECT instances (the same
+    // correctness `camcorder_to_lf_and_inst_idx_map` used to lock, and what #159's
+    // regression guard checks). Returns `Map<frameIdx, [{cams, points3d, identityId}]>`.
+    async function readBackGroups(S, bytes, fn) {
+        const lab = await S.readSlpStreaming(new File([bytes], fn || ('rb-' + Math.floor(performance.now()) + '.slp')),
+            { openVideos: false, rawSessions: true, h5wasmUrl });
+        const sess = (lab.sessions || [])[0];
+        const out = new Map();
+        if (sess && sess.frameGroups) {
+            for (const [fidx, fg] of sess.frameGroups) {
+                const groups = [];
+                for (const ig of (fg.instanceGroups || [])) {
+                    const cams = {};
+                    for (const [cam, inst] of ig.instanceByCamera) {
+                        const xy = inst._xy || [];
+                        const pts = [];
+                        for (let k = 0; 2 * k + 1 < xy.length; k++) pts.push([xy[2 * k], xy[2 * k + 1]]);
+                        cams[(cam && cam.name) || '?'] = {
+                            points: pts,
+                            isPred: !!(S.PredictedInstance && inst instanceof S.PredictedInstance),
+                        };
+                    }
+                    const lucid = (ig.metadata && ig.metadata.lucid) || {};
+                    groups.push({
+                        cams: cams,
+                        points3d: ig.instance3d ? ig.instance3d.points : null,
+                        identityId: lucid.identityId,
+                    });
+                }
+                out.set(Number(fidx), groups);
+            }
+        }
+        return { lab: lab, groups: out };
+    }
+
+    // Structural check: SLP 2.8 writes the columnar `/session_data` group and a
+    // SLIM `sessions_json` (no inline `frame_group_dicts`).
+    function assertColumnarSessionData(file, expectPts3dRows) {
+        const keys = file.keys();
+        assertTrue(keys.indexOf('session_data') >= 0, 'missing /session_data group (SLP 2.8)');
+        const sdKeys = file.get('session_data').keys();
+        ['frame_groups', 'instance_groups', 'instance_group_members', 'points_3d'].forEach(function (k) {
+            assertTrue(sdKeys.indexOf(k) >= 0, '/session_data missing ' + k);
+        });
+        const sj = JSON.parse(file.get('sessions_json').value[0]);
+        assertTrue(!sj.frame_group_dicts || sj.frame_group_dicts.length === 0,
+            'sessions_json must NOT carry inline frame_group_dicts under SLP 2.8 (moved to /session_data)');
+        if (expectPts3dRows != null) {
+            const p3 = file.get('session_data/points_3d').shape;
+            assertEqual(p3[0], expectPts3dRows, 'points_3d row count');
+            assertEqual(p3[1], 3, 'points_3d must be (N,3)');
+        }
+        return sj;
+    }
+
     describe('SLP streaming save (lazy session)', function () {
         it('preserves every frame and the ref-based 3D grouping', async function () {
             const S = window.SleapIO;
@@ -99,25 +160,35 @@
                 // Every frame survives: 4 (cam0) + 4 (cam1) = 8, no silent drop.
                 assertEqual(file.get('frames').shape[0], 8, 'all frames from both cameras preserved');
 
-                const sj = JSON.parse(file.get('sessions_json').value[0]);
+                // SLP 2.8: slim sessions_json + columnar /session_data. Two groups
+                // (frames 0, 2), each with 2 nodes → 4 3D-point rows.
+                const sj = assertColumnarSessionData(file, 4);
                 assertTrue(!!sj.calibration, 'sessions_json missing calibration');
-                assertEqual((sj.frame_group_dicts || []).length, 2, 'expected 2 frame groups');
-
-                // Frame 0: cam0 → lf 0 (base 0 + row 0); cam1 → lf 4 (base 4 + row 0).
-                const fg0 = sj.frame_group_dicts.find(function (d) { return d.frame_idx === 0; });
-                assertDeepEqual(fg0.labeled_frame_by_camera, { '0': 0, '1': 4 }, 'frame 0 lf-by-camera');
-                assertDeepEqual(fg0.instance_groups[0].camcorder_to_lf_and_inst_idx_map, { '0': [0, 0], '1': [4, 0] }, 'frame 0 instance refs');
-                assertEqual((fg0.instance_groups[0].points || []).length, 2, 'frame 0 3D points');
-                assertEqual(fg0.instance_groups[0].metadata.lucid.identityId, 1, 'frame 0 identityId');
-
-                // Frame 2: cam0 → lf 2; cam1 → lf 6.
-                const fg2 = sj.frame_group_dicts.find(function (d) { return d.frame_idx === 2; });
-                assertDeepEqual(fg2.labeled_frame_by_camera, { '0': 2, '1': 6 }, 'frame 2 lf-by-camera');
-                assertDeepEqual(fg2.instance_groups[0].camcorder_to_lf_and_inst_idx_map, { '0': [2, 0], '1': [6, 0] }, 'frame 2 instance refs');
             } finally {
                 try { file.close(); } catch (e) { /* ignore */ }
                 try { h5.FS.unlink(p); } catch (e) { /* ignore */ }
             }
+
+            // Round-trip the refs: the reader must resolve each group member back to
+            // the CORRECT instance (cam0 = iA, cam1 = iB) with its 3D + identity.
+            const { groups } = await readBackGroups(S, bytes);
+            assertEqual(groups.size, 2, 'expected grouped frames 0 and 2');
+            // The group members are REFS resolved by track into each camera's store
+            // row (the group's own placeholder Instance points are not what persists;
+            // the ref → store instance is). Track 0 on frame f = the store's k=0 row:
+            // [[f*10, f*10+1], [f*10+2, f*10+3]].
+            [0, 2].forEach(function (f) {
+                const g = groups.get(f);
+                assertTrue(!!g && g.length === 1, 'frame ' + f + ' has exactly 1 instance group');
+                const grp = g[0];
+                assertEqual(grp.identityId, 1, 'frame ' + f + ' identityId');
+                assertTrue(!!grp.points3d && grp.points3d.length === 2, 'frame ' + f + ' 3D points');
+                assertDeepEqual(grp.points3d[0], [100 + f, 200, 300], 'frame ' + f + ' 3D[0]');
+                const t0 = [[f * 10, f * 10 + 1], [f * 10 + 2, f * 10 + 3]];
+                assertDeepEqual(Object.keys(grp.cams).sort(), ['cam0', 'cam1'], 'frame ' + f + ' has both camera members');
+                assertDeepEqual(grp.cams.cam0.points, t0, 'frame ' + f + ' cam0 member resolves to store track0 row');
+                assertDeepEqual(grp.cams.cam1.points, t0, 'frame ' + f + ' cam1 member resolves to store track0 row');
+            });
         });
 
         it('tolerates calibration-only cameras with no loaded store (video-id offset)', async function () {
@@ -168,17 +239,25 @@
                 assertDeepEqual(vids, { 0: 4, 2: 4 }, 'loaded cameras land at video ids 0 and 2 (skip calib camera 1)');
                 assertEqual(file.get('videos_json').value.length, 3, 'all 3 cameras get a header video (calibration round-trip)');
 
-                const sj = JSON.parse(file.get('sessions_json').value[0]);
+                // SLP 2.8: slim sessions_json + columnar /session_data (1 group, 2 nodes → 2 rows).
+                const sj = assertColumnarSessionData(file, 2);
                 assertEqual(Object.keys(sj.calibration).filter(function (k) { return k.startsWith('cam_'); }).length, 3, 'cameraGroup keeps all 3 cameras');
-                const fg0 = sj.frame_group_dicts.find(function (d) { return d.frame_idx === 0; });
-                // Camera keys: cam0 → '0', cam1 → '2' (session index). lf-indices are
-                // output frame positions: cam0 frame0 → 0, cam1 frame0 → 4.
-                assertDeepEqual(fg0.labeled_frame_by_camera, { '0': 0, '2': 4 }, 'refs use session camera keys 0 and 2');
-                assertDeepEqual(fg0.instance_groups[0].camcorder_to_lf_and_inst_idx_map, { '0': [0, 0], '2': [4, 0] }, 'instance refs resolve for both loaded cameras');
             } finally {
                 try { file.close(); } catch (e) { /* ignore */ }
                 try { h5.FS.unlink(p); } catch (e) { /* ignore */ }
             }
+
+            // Round-trip: the single group on frame 0 resolves ONLY to the two
+            // LOADED cameras (cam0, cam1); the calibration-only camCalib is not a
+            // member. This is the ref-resolution the old lf-by-camera assertion locked.
+            const { groups } = await readBackGroups(S, bytes);
+            const g0 = groups.get(0);
+            assertTrue(!!g0 && g0.length === 1, 'frame 0 has exactly 1 instance group');
+            assertDeepEqual(Object.keys(g0[0].cams).sort(), ['cam0', 'cam1'], 'group resolves to the two loaded cameras only (not camCalib)');
+            // Refs resolve by track into each loaded store's frame-0 track-0 row.
+            assertDeepEqual(g0[0].cams.cam0.points, [[0, 1], [2, 3]], 'cam0 member resolves to store track0 row');
+            assertDeepEqual(g0[0].cams.cam1.points, [[0, 1], [2, 3]], 'cam1 member resolves to store track0 row');
+            assertTrue(!!g0[0].points3d && g0[0].points3d.length === 2, 'group 3D points round-trip');
         });
 
         it('overlays 2D user corrections and reshifts store refs (edited frame)', async function () {
@@ -260,22 +339,31 @@
                 // point is NOT 0 (which SLEAP would hide) and NOT the store's 1.0.
                 assertTrue(Math.abs(ppv[4] - 0.9) < 1e-3, 'overlaid predicted sibling carries its per-point score (~0.9, not 0)');
 
-                const sj = JSON.parse(file.get('sessions_json').value[0]);
-                const byIdx = {};
-                (sj.frame_group_dicts || []).forEach(function (d) { byIdx[d.frame_idx] = d; });
-
-                // Overlay occupies lf 0. cam0 (no overlay) shifts up by E=1 → rows 0..3
-                // become lf 1..4. cam1 rows 0,2,3 (row 1 skipped) → lf 5,6,7.
-                assertDeepEqual(byIdx[0].labeled_frame_by_camera, { '0': 1, '1': 5 }, 'frame 0 lf-by-camera (shifted)');
-                assertDeepEqual(byIdx[1].labeled_frame_by_camera, { '0': 2, '1': 0 }, 'frame 1 lf-by-camera (cam1 = overlay lf 0)');
-                assertDeepEqual(byIdx[2].labeled_frame_by_camera, { '0': 3, '1': 6 }, 'frame 2 lf-by-camera (shifted)');
-
-                assertDeepEqual(byIdx[1].instance_groups[0].camcorder_to_lf_and_inst_idx_map, { '0': [2, 0], '1': [0, 0] }, 'frame 1 refs: cam0 store lf2, cam1 overlay lf0/inst0');
-                assertDeepEqual(byIdx[0].instance_groups[0].camcorder_to_lf_and_inst_idx_map, { '0': [1, 0], '1': [5, 0] }, 'frame 0 refs shifted');
+                // SLP 2.8: slim sessions_json + columnar /session_data (3 groups, 2 nodes → 6 rows).
+                assertColumnarSessionData(file, 6);
             } finally {
                 try { file.close(); } catch (e) { /* ignore */ }
                 try { h5.FS.unlink(p); } catch (e) { /* ignore */ }
             }
+
+            // Round-trip: the overlay reshift must make frame 1's cam1 member resolve
+            // to the CORRECTED USER instance ([[999,888],[777,666]], not a store row),
+            // while the other cameras/frames resolve to their predicted store rows.
+            // This is the ref-reshift correctness the old lf-by-camera indices locked.
+            const { groups } = await readBackGroups(S, bytes);
+            assertEqual(groups.size, 3, 'grouped frames 0, 1, 2');
+            const gf1 = groups.get(1);
+            assertTrue(!!gf1 && gf1.length === 1, 'frame 1 has exactly 1 instance group');
+            // cam1/frame1 resolves to the corrected USER overlay (unique points),
+            // NOT a predicted store row — the whole point of the overlay reshift.
+            assertDeepEqual(gf1[0].cams.cam1.points, [[999, 888], [777, 666]], 'frame 1 cam1 = corrected user overlay');
+            assertTrue(gf1[0].cams.cam1.isPred === false, 'frame 1 cam1 member is the USER correction (not predicted store row)');
+            // cam0/frame1 has no overlay → resolves to its store frame-1 track-0 row.
+            assertDeepEqual(gf1[0].cams.cam0.points, [[10, 11], [12, 13]], 'frame 1 cam0 = store frame1 track0 row');
+            const gf0 = groups.get(0);
+            // frame 0 has no overlay on either camera → both resolve to store frame-0 track-0.
+            assertDeepEqual(gf0[0].cams.cam1.points, [[0, 1], [2, 3]], 'frame 0 cam1 = store frame0 track0 row (not the overlay)');
+            assertTrue(gf0[0].cams.cam1.isPred === true, 'frame 0 cam1 member is a predicted store row');
         });
 
         it('per-camera export of a lazy session writes all frames (Download-All path)', async function () {

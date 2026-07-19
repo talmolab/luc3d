@@ -2443,7 +2443,9 @@ layer.
   `buildSlpBytes`).
 - `buildSlpLabelsAllViews` builds the full typed graph (RecordingSession /
   FrameGroup / InstanceGroup with `instance3d`, `identity`, and `metadata.lucid`)
-  that `saveSlpToBytes` serializes to the canonical `sessions_json`. It writes each
+  that `saveSlpToBytes` serializes — as of sleap-io.js 0.5.5 this is **SLP 2.8**:
+  3D points + grouping go to the columnar `/session_data` group and `sessions_json`
+  stays slim (calibration + video map + session metadata + frame-group range). It writes each
   session's identity list into `metadata.lucid.identities` AND each group's
   per-session index into `InstanceGroup.metadata.lucid.identityId` (authoritative on
   reload — the canonical `identity_idx`/`ig.identity` resolve against the file-level
@@ -2463,11 +2465,12 @@ layer.
   `points[]` + parallel `occluded[]`, NOT `numpy()`). Each `sessions[]` entry is
   the verbatim on-disk dict (for the direct calibration/video-map/metadata reads)
   PLUS a `_typedSession` ref (the typed RecordingSession) used by
-  `reconstructInstanceGroupsFromSession` for grouping — which reads both LUCID's
-  legacy and the new canonical `sessions_json`. Streams via a `File` source;
-  reader loads h5wasm from its CDN default (local IIFE wiring is the remaining
-  h5wasm step). Pose byte-parity with `parseSlpH5` + full canonical round-trip
-  verified in-browser.
+  `reconstructInstanceGroupsFromSession` for grouping — which reads LUCID's legacy
+  inline `frame_group_dicts`, the canonical `sessions_json`, and the SLP 2.8
+  columnar `/session_data`. Streams via a `File` source; the reader's I/O worker
+  loads LUCID's local vendored h5wasm IIFE via `h5wasmUrl` (no CDN fetch). Pose
+  byte-parity with `parseSlpH5` + full 2.8 round-trip (calibration / 3D incl. NaN /
+  identity / occlusion) verified in-browser.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`.
 - Misc: `downloadJSON`, `instancePointsMatch`.
@@ -2493,7 +2496,8 @@ frame; on a ~108k×N lazy prediction session that re-OOMs and silently drops eve
 unvisited frame (it only iterates the resident `frameGroups`).
 
 **Multi-session two-pass split (eric/fix-save follow-up).** `SIO.openSlpWriter`
-serializes `sessions_json`/`identities_json` **synchronously at open time** (not
+serializes `sessions_json`/`identities_json` (+ the SLP 2.8 columnar `/session_data`
+group holding 3D points + grouping) **synchronously at open time** (not
 at `close()`), so every session's ref-based `RecordingSession` graph — with
 correct file-**global** `lf_idx`/`inst_idx` (sleap-io resolves refs against one
 flat, file-wide labeled-frames table, never per-session) — must be complete
@@ -2617,7 +2621,7 @@ loading-overlay/status-text UI helpers.
   alternative and ruled out: `tracker.js` has a top-level DOM call that fires
   on import, `trackAll()`/`triangulateAllFrames()` are UI-entangled, and — a
   module Worker cannot import `lib/sleap-io/index.browser.js` at all in this
-  environment (bare-specifier imports in `chunk-M65RB7KH.js` only resolve via
+  environment (bare-specifier imports in `chunk-X76PRJK6.js` only resolve via
   the page's import map, which Workers don't inherit; `yaml` specifically is
   CDN-only, not vendored) — moot once the real fix (stop over-materializing)
   was found.
