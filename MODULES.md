@@ -11,9 +11,10 @@ The codebase is split across four directories plus two root files:
 - `import-export/` — file pickers, parsers, project save/load, SLP import.
 - root — `app.js` entry point, `demo-data.js` synthetic dataset.
 
-External script-tag globals (`three`, `mp4box`, `h5wasm`, `dockview-core`, and
-`Mp4Muxer` — local copy in `lib/mp4-muxer/`, used for 3D-video `.mp4` muxing)
-are not listed under "Imports from project modules".
+External script-tag globals (`three`, `mp4box`, `h5wasm`, `dockview-core` —
+**pinned to 6.6.1**, see CLAUDE.md Dependencies — and `Mp4Muxer` — local copy in
+`lib/mp4-muxer/`, used for 3D-video `.mp4` muxing) are not listed under
+"Imports from project modules".
 
 ---
 
