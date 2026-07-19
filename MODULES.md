@@ -2061,7 +2061,8 @@ filesystem enumeration, decoder rebuild.
   `handleLoadMultiSession`, `loadSingleSessionFromCache`,
   `handleLoadSessionFolder`, `handleEmptySession`,
   `handleLoadSessionFolderSingleSlp`,
-  `handleLoadSessionFolderPerCamera`.
+  `handleLoadSessionFolderPerCamera`, `handleLoadProjectSlpLazy`,
+  `attachVideosForLazyReopen`.
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
   plus `videos/` + calibration. It reads the SLP with the **typed** reader
   (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores the
@@ -2082,6 +2083,11 @@ filesystem enumeration, decoder rebuild.
 - Video assignment: `autoAssignVideosToCameras`, `forceVideoSelection`,
   `forceVideoSelectionWithFolder`, `matchSessionFolder`,
   `pickParentDirectoryForSessions`, `showParentDirMatchSummary`.
+  `forceVideoSelectionWithFolder(refInfo, sessionName, options)` accepts
+  `options.allowSkip` (adds a "Skip — Load Videos Later" button that resolves
+  `null`; used by the lazy project reopen) and closes on `Esc` (resolving
+  `null`, per the modal UI convention) — every caller treats `null` as "no
+  videos picked".
 - `isCalibrationVideoFile(file)` — true for per-camera calibration clips
   (`<cam>/calibration_images/<date>-<cam>-calibration.mp4`). The folder scans
   recurse into camera subfolders, so these clips would otherwise be collected
@@ -2139,6 +2145,30 @@ on 100k-frame predictions. The lazy loader is chosen when all lazy jobs are `.sl
 an error rather than falling back to the OOM-prone eager path. It plugs into the
 existing `state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
 
+**Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
+Project" path for a large saved project `.slp` (routed here by
+`handleLoadProject` in `import-export/save-load.js` via `shouldUseLazySlp`).
+Opens the ONE interleaved multi-camera file with
+`SioLazyLoader.openProjectSlp`, restores calibration + grouping/IDs/3D from the
+typed `RecordingSession` via `reconstructInstanceGroupsFromSessionLazy`
+(`import-export/slp-import.js`) — 2D hydrates on scrub — and brings up the 3D
+view + timeline immediately. Because no decoders exist yet,
+`updateTotalFrames()` (which reads decoder sample counts and resets to 0
+without them) can't be used: the `#totalFrames` counter and
+`timeline.setTotalFrames` are written directly from `loader.nFrames`
+(`timeline.setData` alone does not propagate the frame span — the timeline
+would clamp to 1). Once the data is up, `attachVideosForLazyReopen(session,
+loader, pickedFilesOverride)` runs as the video-finalization step: it prompts
+(`forceVideoSelectionWithFolder` with `allowSkip`; a project `.slp` references
+videos by path only), matches each picked video to a session camera by
+parent-directory name, camera-name-in-stem, or the referenced video filename
+from the reopened file (`loader.videos`), spins up decoders in parallel
+(progress modal), then creates views/panes, rebuilds the video controller, and
+refines the frame counter via `updateTotalFrames`. Skippable (Esc / Skip
+button, or all videos unmatched/failed) — the session then stays video-less
+and File → Load Videos still works later. `pickedFilesOverride` bypasses the
+prompt for tests/automation. Covered by `tests/test-lazy-reopen.js`.
+
 **Imports from project modules.**
 - `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
   `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
@@ -2147,6 +2177,8 @@ existing `state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
   `../import-export/save-load.js`, `../ui/rendering.js`,
   `../ui/info-panel.js` (`updateInfoPanel`),
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
+  `../import-export/slp-import.js`, `../ui/loading-progress-modal.js`,
+  `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`.
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
@@ -2154,7 +2186,8 @@ existing `state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
 `ui/sessions-panes.js`, `ui/ui-wiring.js`.
 
 **User-facing features.** File menu Load Calibration / Load Videos /
-Load Session Folder / Load Multi-Session, all video-to-camera
+Load Session Folder / Load Multi-Session (plus the lazy Load Project path for
+large project `.slp`s, incl. its attach-videos prompt), all video-to-camera
 auto-matching, session-folder mode chooser. `handleLoadSessionFolder` calls
 `ensureNo3dImportBlockingLoad()` first, so loading a session over a
 skeleton-only 3D-points import prompts before discarding it.
@@ -2174,9 +2207,20 @@ worker. Frames are materialized on demand via `labels.frameAt(row)`, so
 
 **Key export.** class `SioLazyLoader` — `open(camName, file, onProgress)` (reads
 metadata + builds a videoFrameIdx→store-row map, first camera's skeleton/tracks
-win), `getFrame` / `getFrameSync` (adapt typed instances → `{trackIdx, score,
-type, points, occluded}`, LRU-cached), `prefetch`, `close`; fields `nFrames`,
-`skeleton`, `trackNames`, `videos`, `trackOccupancy`, `isSync = true` (so
+win), `openProjectSlp(file, onProgress)` (lazy reopen of a SINGLE multi-camera
+project `.slp` — the "Load Project" path for large projects: one interleaved
+store shared by every camera, split into the same per-camera maps `open()`
+builds; sets `_sharedStore = true` so the streaming re-save appends the store
+ONCE, retains `videoIdByCam` (camName → NATIVE store video id, read from the
+typed session's `videoByCamera` or the raw camcorder map) for the re-save's
+video-id remap, and returns `{labels, typedSession, cameraNames, nFrames}` so
+the caller can restore grouping/3D via
+`reconstructInstanceGroupsFromSessionLazy`), `getFrame` / `getFrameSync` (adapt
+typed instances → `{trackIdx, score,
+type, points, occluded}`, LRU-cached), `prefetch`, `close` (also clears
+`videoIdByCam`); fields `nFrames`,
+`skeleton`, `trackNames`, `videos`, `trackOccupancy`, `videoIdByCam` (only set
+by `openProjectSlp`; `null` on the per-camera `open()` path), `isSync = true` (so
 `batchLoadLazyFrames` takes its worker-free path), and `sourceFiles` (camName →
 the `File`/`Blob` it was opened from — a local-disk `File` is a cheap lazy
 handle, not a resident copy of the bytes, so retaining these costs ~nothing and
@@ -2211,10 +2255,13 @@ frame-release API from sleap-io.js PR #208 — replacing the earlier private
 local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).
 
 **Imported by.** `loading/session-loader.js`
-(`handleLoadSessionFolderPerCamera` routing).
+(`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
+`import-export/save-load.js` (`reopenSessionLazyLoader`).
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
-`.slp` files load and render without OOMing the tab.
+`.slp` files — and a large saved project `.slp` (Load Project) — load and render
+without OOMing the tab. Lazy project reopen is covered by
+`tests/test-lazy-reopen.js`.
 
 ---
 
@@ -2525,6 +2572,32 @@ each holding only one session's data at a time:
   `session.lazyLoader` to be (re)opened — no Track All/Triangulate All needed,
   `appendStore` reads straight from the columnar store (~1.2 GB peak for a
   108k-frame×3-camera session, not pass 1's ~3.7 GB).
+
+**Shared-store re-save (lazy project reopen).** A session reopened via
+`SioLazyLoader.openProjectSlp` has `loader._sharedStore` set: ONE interleaved
+store holds every camera's frames, so `streamSessionIntoWriter` appends it
+ONCE (appending per camera would rewrite the whole store N times — duplicate
+frames + tracks). Two extra pieces make this correct for arbitrary inputs:
+- `buildSessionRefGraph`'s shared-store branch keys its store-row → camera map
+  (`videoToCam`) on the NATIVE store video ids (`loader.videoIdByCam`), not on
+  the output header order.
+- `_remapSharedStoreVideos(store, headerByNative)` (module-private) +
+  `streamSessionIntoWriter`: when the native ids differ from the output header
+  indices (a project `.slp` written by Python sleap-io, or a multi-session
+  save where this session's videos sit at a global offset), the store's
+  `framesData.video` column (and the video-keyed annotation/negative-frame
+  keys) is remapped onto the header indices via a shallow wrapper — only the
+  video column is copied; `appendStore`'s own `buildVideoIdMap` remap is a
+  no-op for external-video files, so the remapped ids written ARE final
+  (`videos: []` keeps that passthrough inert). Identity maps skip the copy.
+
+**Video fallback for video-less reopened sessions.** `resolveVideoPath(cam,
+views, videoFiles, lazyVid)` and the `buildSessionRefGraph` camera loop fall
+back to the reopened file's own video record (`loader.videos`: filename +
+shape) when no live video is attached (a lazily reopened session saved before
+attaching videos), so the re-save round-trips the original video
+filename/shape instead of degrading to `<camName>.mp4` with zero dimensions.
+Covered by `tests/test-lazy-reopen.js`.
 - **`finalizeProjectWriter(writer, opts)`** — `writer.close()`/`writeToSink()`.
 - **`buildSessionSlpBytesStreaming(session, views, videoFiles, opts)`** — thin
   single-session wrapper chaining all four (unchanged call signature/behavior
@@ -2571,7 +2644,10 @@ loading-overlay/status-text UI helpers.
 **Key exports.**
 - Project: `newProject(force)` (`force` skips the unsaved-changes confirm and
   is used by the 3D-import reset), `markDirty`, `clearDirty`, `quickSave`,
-  `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject`.
+  `saveAs`, `saveProjectSlp`, `saveProject`, `handleLoadProject` (routes a
+  large `.slp` — `shouldUseLazySlp` — to the memory-bounded
+  `handleLoadProjectSlpLazy` in `loading/session-loader.js` instead of the
+  eager parse, freeing any previously loaded project first).
 - `buildSlpBytes` (internal) assembles the multi-session SLP. **When EVERY
   session in `state.sessions` has an open `lazyLoader`, it routes to the
   memory-bounded streaming path** — `buildSessionSlpBytesStreaming`
@@ -2596,9 +2672,18 @@ loading-overlay/status-text UI helpers.
   108k-frame×3-camera prediction session; three such sessions can never be
   simultaneously computed). **No UI currently drives that interactive
   per-session flow** (open → Track All → Triangulate All → commit → evict →
-  next session) — `reopenSessionLazyLoader` (internal) supports it via
+  next session) — `reopenSessionLazyLoader(session, sourceFileEntries,
+  wasSharedStore)` (internal) supports it via
   `SioLazyLoader.sourceFiles` (cheap retained `File` handles, so pass 2's
-  restream doesn't need Track All/Triangulate All redone).
+  restream doesn't need Track All/Triangulate All redone). For a shared-store
+  project session (lazily reopened single-file project, where every camera's
+  sourceFiles entry is the SAME `.slp`), it reopens via
+  `SioLazyLoader.openProjectSlp` so the one interleaved store is read once and
+  `_sharedStore`/`videoIdByCam` are restored — per-camera `open()` would
+  re-read the whole project once per camera and pass 2 would then append the
+  shared store N times (duplicating every frame/track).
+  `commitSessionForMultiSessionSave` records the flag as `sharedStore` on
+  `handle.pending`, and `finalizeMultiSessionSave` passes it through.
 
   **GC-timing finding (real cage5×3) — resolved.** Dereferencing a session's
   heavy state makes it *eligible* for GC but doesn't force reclamation —
@@ -2658,6 +2743,8 @@ project save/reload — matching the SLP import path in `slp-import.js`.
 - `../pose/pose-data.js`, `../pose/triangulation.js`,
   `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
   `../ui/app-state.js`, `../loading/session-loader.js`,
+  `../loading/sio-lazy-loader.js` (`SioLazyLoader`, for
+  `reopenSessionLazyLoader`), `./slp-streaming-write.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`,
   `./slp-import.js`.
