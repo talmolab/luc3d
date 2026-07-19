@@ -69,17 +69,24 @@ try {
     const file = new File([bytes], 'x.slp');
     const re = await window.SleapIO.readSlpStreaming(file, { openVideos: false, rawSessions: true, h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href });
 
-    // (1) Inspect raw sessions_json: metadata must be slim.
+    // (1) Metadata must be slim. Under SLP 2.8 (#546/#224) the per-group
+    // metadata.lucid.instanceMeta lives in the columnar /session_data/
+    // instance_group_meta dataset, surfaced on the TYPED InstanceGroup (not in
+    // the inline sessions_json, which no longer carries frame_group_dicts).
     const raw = re.rawSessionsJson[0];
-    const igs = raw.frame_group_dicts[0].instance_groups;
+    const typedForMeta = (re.sessions && re.sessions[0]) || null;
     let sawTrackIdxField = false, sawTypeField = false, sawScoreField = false, metaEntries = 0;
-    for (const ig of igs) {
-      const im = (ig.metadata && ig.metadata.lucid && ig.metadata.lucid.instanceMeta) || {};
-      for (const cam of Object.keys(im)) {
-        metaEntries++;
-        if ('trackIdx' in im[cam]) sawTrackIdxField = true;
-        if ('type' in im[cam]) sawTypeField = true;
-        if ('score' in im[cam]) sawScoreField = true;
+    if (typedForMeta && typedForMeta.frameGroups) {
+      for (const [, fg] of typedForMeta.frameGroups) {
+        for (const ig of (fg.instanceGroups || [])) {
+          const im = (ig.metadata && ig.metadata.lucid && ig.metadata.lucid.instanceMeta) || {};
+          for (const cam of Object.keys(im)) {
+            metaEntries++;
+            if ('trackIdx' in im[cam]) sawTrackIdxField = true;
+            if ('type' in im[cam]) sawTypeField = true;
+            if ('score' in im[cam]) sawScoreField = true;
+          }
+        }
       }
     }
 

@@ -7,7 +7,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
     <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/dockview-core/dist/styles/dockview.css">
+    <!-- Pinned: dockview-core 7.x renamed api.onUnhandledDragOverEvent →
+         onUnhandledDragOver, so the unpinned /+esm import broke pane docking
+         whenever the CDN cache refreshed. Keep this pin in sync with the
+         import in ui/sessions-panes.js. -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/dist/styles/dockview.css">
     <!-- MP4 demuxing -->
     <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.js"></script>
     <!-- Three.js for 3D viewport (v0.147 is the last version with examples/js/) -->

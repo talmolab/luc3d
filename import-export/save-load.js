@@ -532,8 +532,19 @@ async function buildSlpBytes(opts) {
  * bytes, so this is cheap relative to the FIRST open — no Track All/
  * Triangulate All is redone, only the columnar store is reconstructed.
  */
-async function reopenSessionLazyLoader(session, sourceFileEntries) {
+async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore) {
     var loader = new SioLazyLoader();
+    if (wasSharedStore) {
+        // Lazily-reopened single-file project: every camera's sourceFiles entry
+        // is the SAME project `.slp`. Reopen through openProjectSlp so the ONE
+        // interleaved store is read once and `_sharedStore`/`videoIdByCam` are
+        // restored — per-camera open() would re-read the whole project N times
+        // and pass 2 would then append the shared store once per camera
+        // (duplicating every frame/track).
+        await loader.openProjectSlp(sourceFileEntries[0][1]);
+        session.lazyLoader = loader;
+        return loader;
+    }
     var opens = [];
     for (var i = 0; i < sourceFileEntries.length; i++) {
         var entry = sourceFileEntries[i];
@@ -586,8 +597,9 @@ export async function commitSessionForMultiSessionSave(handle, session) {
         return session.cameras.some(function (c) { return c.name === vf.assignedCamera; });
     });
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
+    var wasSharedStore = !!session.lazyLoader._sharedStore;
     var refGraph = buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
-    handle.pending.push({ session: session, sourceFiles: sourceFiles, refGraph: refGraph });
+    handle.pending.push({ session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
     // ref-only RecordingSession + the materialized user-edit overlay
@@ -615,7 +627,7 @@ export async function finalizeMultiSessionSave(handle, opts) {
     try {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
-            await reopenSessionLazyLoader(p.session, p.sourceFiles);
+            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore);
             streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();
             p.session.lazyLoader = null;
@@ -965,9 +977,23 @@ export async function handleLoadProject(prePickedFile) {
             file = files[0];
         }
 
-        // Route SLP/H5 files to the SLP loader
+        // Route SLP/H5 files to the SLP loader.
         var ext = file.name.split('.').pop().toLowerCase();
         if (ext === 'slp' || ext === 'h5') {
+            // Large project .slp → reopen LAZILY. The eager path
+            // (handleLoadSlpFile) materializes every frame's 2D + a grouping
+            // reconstruct duplicate and OOMs the tab on real multi-camera
+            // prediction sessions (e.g. a 108k-frame × 3-cam cage5 project). The
+            // lazy path keeps 2D on-demand and rebuilds grouping with lightweight
+            // members; videos are attached afterward via File → Load Videos.
+            var LARGE_SLP_BYTES = 200 * 1024 * 1024;
+            if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
+                // Dynamic import avoids a session-loader ↔ save-load import cycle.
+                var _sl = await import('../loading/session-loader.js');
+                if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
+                    return _sl.handleLoadProjectSlpLazy(file);
+                }
+            }
             return handleLoadSlpFile(file);
         }
 

@@ -105,6 +105,9 @@ export class SioLazyLoader {
         // builder when the folder has no separate calibration.toml.
         this.calibration = null;
         this.camcorderToVideoMap = null;
+        // camName → native store video id (only set by openProjectSlp; the
+        // per-camera open() path has one single-video store per camera).
+        this.videoIdByCam = null;
         this.videos = new Map();
         this.trackOccupancy = new Map(); // left empty (see file header)
 
@@ -205,6 +208,136 @@ export class SioLazyLoader {
             trackNames: this.trackNames,
             nFrames: this.nFrames,
             videos: [this.videos.get(cameraName)],
+        };
+    }
+
+    /**
+     * Open a SINGLE multi-camera project `.slp` lazily (the "Load Project" reopen
+     * path) — as opposed to `open()`, which handles one per-camera prediction
+     * `.slp` at a time. A LUCID project `.slp` interleaves every camera's video +
+     * labeled frames in one file plus a `RecordingSession` (calibration + grouping
+     * + 3D). Reopening it eagerly (`parseSlpViaSleapIO`) materializes all frames'
+     * 2D (21.7M points on a real cage5 project) and OOMs the tab; this keeps the
+     * 2D lazy (materialized per frame on demand) while the caller restores the
+     * bounded grouping + 3D from the typed session (see
+     * `reconstructInstanceGroupsFromSessionLazy`).
+     *
+     * Populates the SAME per-camera maps `open()` does (all cameras share the one
+     * `labels`; `frameRowByCam` splits the interleaved store by video) so every
+     * downstream accessor (`getFrameSync`, `_extractCamFrame`, `releaseFrame`,
+     * the streaming save's `refFor`) works unchanged. Returns the open `labels`
+     * (with its lazy 2D store + typed `RecordingSession`) for the caller.
+     *
+     * @param {File} file - the project `.slp`
+     * @param {Function} [onProgress] - `(msg) => void`
+     * @returns {Promise<{labels:Object, typedSession:Object, cameraNames:string[], nFrames:number}>}
+     */
+    async openProjectSlp(file, onProgress) {
+        var SIO = window.SleapIO;
+        if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
+            throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
+        }
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href;
+        var labels = await SIO.readSlpStreaming(file, {
+            lazy: true,
+            openVideos: false,
+            rawSessions: true, // for embedded calibration + the raw camcorder map
+            h5wasmUrl: h5wasmUrl,
+            onProgress: onProgress
+                ? function (n, total, msg) { onProgress(msg || ('Reading ' + n + '/' + total)); }
+                : undefined,
+        });
+        this._projectLabels = labels;
+        // A single project `.slp` interleaves every camera in ONE store, so all
+        // `labelsByCam` entries point at the same `labels`/`_lazyDataStore`. The
+        // streaming writer must append that shared store ONCE (not per camera) or
+        // it duplicates every frame/track — see `buildSessionRefGraph` /
+        // `streamSessionIntoWriter` in slp-streaming-write.js.
+        this._sharedStore = true;
+        try { labels.frameCacheLimit = this.internalFrameCacheLimit; } catch (e) { /* older bundle */ }
+
+        var skel = labels.skeletons && labels.skeletons[0];
+        if (skel) {
+            this.skeleton = { name: skel.name || 'skeleton', nodes: skel.nodeNames, edges: skel.edgeIndices };
+            this.trackNames = (labels.tracks || []).map(function (t) { return t.name; });
+        }
+        var numNodes = skel ? skel.nodeNames.length : 0;
+
+        // Embedded calibration (raw dict + camcorder→video map), same as open().
+        var rawSess = (labels.rawSessionsJson && labels.rawSessionsJson[0]) || null;
+        if (!this.calibration && rawSess && rawSess.calibration) {
+            var calKeys = Object.keys(rawSess.calibration).filter(function (k) { return k !== 'metadata'; });
+            if (calKeys.length > 0) {
+                this.calibration = rawSess.calibration;
+                this.camcorderToVideoMap = rawSess.camcorder_to_video_idx_map || null;
+            }
+        }
+
+        // Camera name → video index. Prefer the TYPED session's videoByCamera
+        // (authoritative Camera→Video objects); fall back to the raw camcorder map
+        // resolved against the calibration camera names.
+        var typedSession = (labels.sessions && labels.sessions[0]) || null;
+        var camToVid = new Map(); // cameraName → videoIdx
+        var videosArr = labels.videos || [];
+        if (typedSession && typedSession.videoByCamera && typedSession.videoByCamera.size > 0) {
+            for (var camEntry of typedSession.videoByCamera) {
+                var camObj = camEntry[0], vidObj = camEntry[1];
+                var nm = camObj && camObj.name;
+                var vi = videosArr.indexOf(vidObj);
+                if (nm != null && vi >= 0) camToVid.set(nm, vi);
+            }
+        } else if (this.calibration && this.camcorderToVideoMap) {
+            var cKeys = Object.keys(this.calibration).filter(function (k) { return k !== 'metadata'; });
+            for (var mk in this.camcorderToVideoMap) {
+                var vIdx = this.camcorderToVideoMap[mk];
+                // Key may be a camcorder index ("0") or a calibration key ("cam_0").
+                var cd = this.calibration[mk];
+                if (!cd) {
+                    var ki = parseInt(String(mk).replace(/[^0-9]/g, ''));
+                    if (!isNaN(ki) && cKeys[ki]) cd = this.calibration[cKeys[ki]];
+                }
+                var camName = (cd && cd.name) || mk;
+                if (vIdx != null) camToVid.set(camName, vIdx);
+            }
+        }
+        var vidToCam = new Map();
+        for (var cv of camToVid) vidToCam.set(cv[1], cv[0]);
+        // Retain camera → NATIVE store video id (the values in the columnar
+        // `framesData.video` column). The streaming re-save needs this to remap
+        // store video ids onto its own header order instead of assuming they
+        // coincide (they do for a LUCID-written file, but not necessarily for a
+        // project .slp from Python sleap-io) — see `streamSessionIntoWriter`.
+        this.videoIdByCam = camToVid;
+
+        // Split the interleaved store into per-camera videoFrameIdx→storeRow maps.
+        var store = labels._lazyDataStore;
+        var fd = (store && store.framesData) || {};
+        var frameIdxCol = fd.frame_idx || [];
+        var videoCol = fd.video || [];
+        var maxFrameIdx = -1;
+        for (var r = 0; r < frameIdxCol.length; r++) {
+            var vid = Number(videoCol[r]);
+            var cam = vidToCam.get(vid);
+            if (cam == null) continue;
+            if (!this.labelsByCam.has(cam)) {
+                this.labelsByCam.set(cam, labels);
+                this.numNodesByCam.set(cam, numNodes);
+                this.frameRowByCam.set(cam, new Map());
+                this.sourceFiles.set(cam, file);
+                var vobj = videosArr[vid];
+                this.videos.set(cam, vobj ? { filename: vobj.filename, shape: vobj.shape } : null);
+            }
+            var fi = Number(frameIdxCol[r]);
+            this.frameRowByCam.get(cam).set(fi, r);
+            if (fi > maxFrameIdx) maxFrameIdx = fi;
+        }
+        this.nFrames = maxFrameIdx + 1;
+
+        return {
+            labels: labels,
+            typedSession: typedSession,
+            cameraNames: Array.from(this.labelsByCam.keys()),
+            nFrames: this.nFrames,
         };
     }
 
@@ -388,5 +521,6 @@ export class SioLazyLoader {
         this.cache.clear();
         this.cacheOrder = [];
         this.videos.clear();
+        this.videoIdByCam = null;
     }
 }
