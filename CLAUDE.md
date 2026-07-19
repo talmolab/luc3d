@@ -23,6 +23,11 @@ python3 -m http.server 8080
 
 ## Dependencies (CDN only)
 - Three.js 0.147
+- dockview-core **pinned to 6.6.1** (`index.html` CSS + `ui/sessions-panes.js` ESM
+  import — keep the two pins in sync). 7.x renamed `api.onUnhandledDragOverEvent`
+  → `onUnhandledDragOver`, so an unpinned `/+esm` import silently breaks pane
+  docking whenever the CDN cache refreshes. Audit the dockview API usage in
+  `ui/sessions-panes.js` before bumping past 6.x.
 - mp4box.js
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
@@ -69,6 +74,18 @@ python3 -m http.server 8080
   marked `// LUCID local patch (#115)`. **Re-apply after any re-vendor** (grep the
   marker) and report upstream to sleap-io. (The chunk moved `M65RB7KH`→`X76PRJK6`
   in the 0.5.5 re-vendor.)
+  **LOCAL PATCH (sleap-io.js#231):** `lib/sleap-io/chunk-X76PRJK6.js` writes the
+  SLP `instances` table with dtype `"<d"` (h5wasm float64) instead of upstream's
+  `"<f8"` — h5wasm does NOT speak numpy dtype strings and parses `"<f8"` as
+  FLOAT32, which quantizes `point_id_start/end` to even integers beyond 2^24
+  point rows and silently corrupts every instance's node assignment on files
+  with >16.7M points (~1M instances at 17 nodes; the real cage5 project has
+  21.7M). Three patched sites (eager `createMatrixDataset`, streaming
+  `createAppendableMatrixDataset`, merged `writeLazyMatrixDataset` — all marked
+  `// LUCID local patch (sleap-io.js#231)`); `points`/`pred_points` stay f32
+  deliberately (coordinates only — f64 would add ~50% file size). Guarded by a
+  dtype regression test in `tests/test-lazy-reopen.js`. **Re-apply after any
+  re-vendor until upstream fixes #231** (grep the marker).
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
