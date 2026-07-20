@@ -1124,7 +1124,33 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   the track-color path already ignores `group.identityId`. The explicit-no-id
   sentinel is checked AFTER the `group.identityId` fallback so it never
   overrides a validly-assigned group identity (precedence unchanged for that
-  case).**
+  case). The per-frame `trackIdx` probe is per-camera-local, so it is only
+  ever queried paired with the SAME camera it came from. If a specific
+  `cameraName` was requested AND the group has a real instance there, THAT
+  view's own `(camera, trackIdx)` pair is the ONLY candidate — it is
+  authoritative and never falls through to a sibling camera's identity, even
+  if its own per-frame entry is absent or an explicit no-identity marker
+  (issue #168 follow-up: a sibling camera's identity is not this view's
+  answer). Only when there's no specific view to be authoritative for — no
+  `cameraName` given at all (the 3D-viewport color callback), or the group
+  has no real instance in the requested `cameraName` (a reprojection into a
+  false-negative view) — does it search every OTHER member camera the group
+  has a real instance in (in `group.instances` iteration order), trying each
+  pair's `getIdentityForTrack`/`isExplicitNoIdentity` lookup correctly paired
+  with its own camera. It NEVER calls `getIdentityForTrack` with no
+  `cameraName`: that triggers its "search any camera in the whole frame for
+  this trackIdx NUMBER" fallback, which matches purely on the number and can
+  hit a completely unrelated group/animal that happens to share the same
+  per-camera-local trackIdx (issue #168: duplicate-colored reprojection AND
+  duplicate-colored 3D instances — the 3D-viewport color callbacks,
+  `pose/initialization.js`/`ui/export-modals.js`, call `getGroupColor` with no
+  `cameraName` at all since they have no per-view concept, so they always hit
+  this wildcard mode before the fix). Regression tests:
+  `tests/test-overlays.js` "getGroupColor identity path across cameras
+  (issue #168)" (covers the reprojection case, the camera-agnostic 3D-viewport
+  case, the own-camera-authoritative-over-a-sibling case, multi-camera
+  fallthrough with 3+ cameras, null-trackIdx instances, and a fully empty
+  group).**
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,
