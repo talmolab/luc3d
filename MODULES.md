@@ -1124,7 +1124,24 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   the track-color path already ignores `group.identityId`. The explicit-no-id
   sentinel is checked AFTER the `group.identityId` fallback so it never
   overrides a validly-assigned group identity (precedence unchanged for that
-  case).**
+  case). The per-frame `trackIdx` probe is per-camera-local — when the group
+  has no real instance in the queried `cameraName` (e.g. it's a reprojection
+  drawn into a view where the animal was a false-negative detection that
+  frame), the borrowed `trackIdx` is paired with the camera it actually came
+  from (`probeCamera`), never with `cameraName`, before being looked up via
+  `getIdentityForTrack`/`isExplicitNoIdentity`. Pairing a foreign camera's
+  trackIdx with the wrong camera name previously let a reprojection collide
+  with a different animal's identity/color whenever two cameras happened to
+  assign the same local trackIdx number (issue #168: duplicate-colored
+  reprojection with false-negative detections). The 3D-viewport color
+  callbacks (`pose/initialization.js`, `ui/export-modals.js`) call
+  `getGroupColor` with no `cameraName` at all (`undefined`) since they have no
+  per-view concept — for those, `probeCamera` is only ever repointed to a
+  borrowed instance's camera when a specific `cameraName` was actually
+  requested, so `getIdentityForTrack`'s "search any camera for this
+  frame+trackIdx" fallback (triggered when its `cameraName` arg is `null`) is
+  preserved for them unchanged. Regression tests: `tests/test-overlays.js`
+  "getGroupColor identity path across cameras (issue #168)".**
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,

@@ -223,6 +223,70 @@
         });
     });
 
+    // ---- getGroupColor identity path across cameras (issue #168) ----
+    // Reprojections are drawn into EVERY calibrated camera, including one
+    // where the group has no real instance (a false-negative detection).
+    // getGroupColor must resolve identity using the camera the borrowed
+    // trackIdx actually came from — never pair a foreign camera's trackIdx
+    // with the TARGET camera's frameIdentityMap, since per-camera trackIdx
+    // numbering is independent (see getTrackColor's comment above). Doing so
+    // can return a completely different animal's identity/color whenever the
+    // two cameras happen to share the same local trackIdx number.
+    describe('Overlays - getGroupColor identity path across cameras (issue #168)', function () {
+        function twoCamSession() {
+            var cams = [
+                new Camera('cam1', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]),
+                new Camera('cam2', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]),
+            ];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['Red', 'Blue']);
+            s.addIdentity('Red', '#ff0000');   // id 0
+            s.addIdentity('Blue', '#0000ff');  // id 1
+            return s;
+        }
+
+        it('resolves a group\'s OWN identity when reprojected into a camera it has no instance in, even with a colliding trackIdx', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = twoCamSession();
+            // Group A (Red): real instance only in cam1, trackIdx 0.
+            s.setFrameIdentity(0, 'cam1', 0, 0);   // cam1 track 0 -> Red
+            var instA = new Instance([[0, 0]], 0, 'user', 1);
+            var groupA = new InstanceGroup(1, 0);
+            groupA.addInstance('cam1', instA);
+            // Group B (Blue): real instance only in cam2, COLLIDING trackIdx 0.
+            s.setFrameIdentity(0, 'cam2', 0, 1);   // cam2 track 0 -> Blue
+            var instB = new Instance([[1, 1]], 0, 'user', 1);
+            var groupB = new InstanceGroup(2, 1);
+            groupB.addInstance('cam2', instB);
+
+            // Group A is reprojected into cam2 (it has no real instance there).
+            // It must render as ITS OWN identity (Red), not Blue (group B's
+            // identity, which happens to own cam2's local track 0).
+            assertEqual(getGroupColor(groupA, s, true, 0, 'cam2'), '#ff0000',
+                'reprojection keeps its own identity color across cameras, not a colliding foreign trackIdx\'s');
+        });
+
+        it('does not apply another camera\'s explicit no-identity sentinel to a group with a valid identity elsewhere', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = twoCamSession();
+            // Group A: real instance only in cam1, trackIdx 0, with a valid
+            // PER-FRAME identity (Red) but NO group.identityId fallback (-1),
+            // so resolution must go through the per-frame trackIdx lookup
+            // rather than being shortcut by the group.identityId fallback.
+            s.setFrameIdentity(0, 'cam1', 0, 0);   // cam1 track 0 -> Red
+            var instA = new Instance([[0, 0]], 0, 'user', 1);
+            var groupA = new InstanceGroup(1, -1);
+            groupA.addInstance('cam1', instA);
+            // cam2's OWN track 0 is explicitly marked "no identity" (unrelated animal/context).
+            s.setFrameIdentity(0, 'cam2', 0, -1);
+
+            // Reprojected into cam2: must resolve group A's own Red identity
+            // (via cam1's per-frame entry), not cam2's unrelated no-identity
+            // sentinel for its own local track 0.
+            assertEqual(getGroupColor(groupA, s, true, 0, 'cam2'), '#ff0000',
+                'own identity (resolved via its source camera) wins over an unrelated camera\'s no-identity sentinel');
+        });
+    });
+
     // ---- errorColor ----
 
     describe('Overlays - errorColor', function () {
