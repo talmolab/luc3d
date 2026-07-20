@@ -285,6 +285,34 @@
             assertEqual(getGroupColor(groupA, s, true, 0, 'cam2'), '#ff0000',
                 'own identity (resolved via its source camera) wins over an unrelated camera\'s no-identity sentinel');
         });
+
+        // The 3D viewport's color callback (pose/initialization.js,
+        // ui/export-modals.js) calls getGroupColor with NO cameraName at
+        // all — it has no per-view concept, it just wants "this group's
+        // color". That omitted-cameraName path was left untouched by the
+        // reprojection fix above and hits a DIFFERENT unsound branch:
+        // session.getIdentityForTrack's cameraName-less mode, which
+        // searches the ENTIRE frameIdentityMap for ANY camera whose local
+        // trackIdx matches the number, regardless of which camera it came
+        // from. That's the same class of bug (per-camera trackIdx isn't a
+        // global key) reappearing through a second door.
+        it('resolves a group\'s OWN identity with no cameraName at all (3D-viewport color callback), even with a colliding trackIdx', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = twoCamSession();
+            // Insert the COLLIDING (wrong) entry into frameIdentityMap FIRST,
+            // so a naive "first match wins" search over the whole map would
+            // hit it before group A's own (correct) entry — proving this
+            // isn't passing by insertion-order luck.
+            s.setFrameIdentity(0, 'cam2', 0, 1);   // unrelated group B: cam2 track 0 -> Blue
+            s.setFrameIdentity(0, 'cam1', 0, 0);   // group A's own: cam1 track 0 -> Red
+            var instA = new Instance([[0, 0]], 0, 'user', 1);
+            var groupA = new InstanceGroup(1, -1);   // no group.identityId fallback
+            groupA.addInstance('cam1', instA);
+
+            // No cameraName argument at all, matching the 3D-viewport call signature.
+            assertEqual(getGroupColor(groupA, s, true, 0), '#ff0000',
+                'camera-agnostic color resolves via the group\'s OWN member camera, not a colliding foreign track number');
+        });
     });
 
     // ---- errorColor ----

@@ -1124,24 +1124,24 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   the track-color path already ignores `group.identityId`. The explicit-no-id
   sentinel is checked AFTER the `group.identityId` fallback so it never
   overrides a validly-assigned group identity (precedence unchanged for that
-  case). The per-frame `trackIdx` probe is per-camera-local — when the group
-  has no real instance in the queried `cameraName` (e.g. it's a reprojection
-  drawn into a view where the animal was a false-negative detection that
-  frame), the borrowed `trackIdx` is paired with the camera it actually came
-  from (`probeCamera`), never with `cameraName`, before being looked up via
-  `getIdentityForTrack`/`isExplicitNoIdentity`. Pairing a foreign camera's
-  trackIdx with the wrong camera name previously let a reprojection collide
-  with a different animal's identity/color whenever two cameras happened to
-  assign the same local trackIdx number (issue #168: duplicate-colored
-  reprojection with false-negative detections). The 3D-viewport color
-  callbacks (`pose/initialization.js`, `ui/export-modals.js`) call
-  `getGroupColor` with no `cameraName` at all (`undefined`) since they have no
-  per-view concept — for those, `probeCamera` is only ever repointed to a
-  borrowed instance's camera when a specific `cameraName` was actually
-  requested, so `getIdentityForTrack`'s "search any camera for this
-  frame+trackIdx" fallback (triggered when its `cameraName` arg is `null`) is
-  preserved for them unchanged. Regression tests: `tests/test-overlays.js`
-  "getGroupColor identity path across cameras (issue #168)".**
+  case). The per-frame `trackIdx` probe is per-camera-local, so it is only
+  ever queried paired with the SAME camera it came from. `getGroupColor`
+  builds an ordered candidate list of the group's own `(camera, trackIdx)`
+  pairs — the queried `cameraName`'s own instance first if present (keeps the
+  live-view precedence from issue #155), then every other member camera the
+  group has a real instance in — and tries each pair's `getIdentityForTrack`/
+  `isExplicitNoIdentity` lookup in turn, each correctly paired with its own
+  camera. It NEVER calls `getIdentityForTrack` with no `cameraName`: that
+  triggers its "search any camera in the whole frame for this trackIdx
+  NUMBER" fallback, which matches purely on the number and can hit a
+  completely unrelated group/animal that happens to share the same
+  per-camera-local trackIdx (issue #168: duplicate-colored reprojection AND
+  duplicate-colored 3D instances — the 3D-viewport color callbacks,
+  `pose/initialization.js`/`ui/export-modals.js`, call `getGroupColor` with no
+  `cameraName` at all since they have no per-view concept, so they always hit
+  this wildcard mode before the fix). Regression tests:
+  `tests/test-overlays.js` "getGroupColor identity path across cameras
+  (issue #168)".**
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,

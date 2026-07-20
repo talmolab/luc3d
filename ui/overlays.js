@@ -84,40 +84,40 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
     // So resolve per-frame FIRST, and use `group.identityId` only as a fallback
     // for a group with no per-frame entry yet (e.g. freshly grouped / empty).
     if (useIdentity && session) {
-        // `probeIdx` is a per-camera-local trackIdx, so it's only a valid key
-        // into `frameIdentityMap` when paired with the camera it actually
-        // came from (`probeCamera`) — NEVER with `cameraName` if the group
-        // has no real instance there (e.g. this is a reprojection into a
-        // view where the animal went undetected this frame). Per-camera
-        // trackIdx numbering is independent across cameras (see
-        // getTrackColor's comment above), so pairing a borrowed trackIdx with
-        // the wrong camera name can collide with a DIFFERENT animal's
-        // identity in that view (issue #168: duplicate-colored reprojection).
-        // `probeCamera` starts as `cameraName` itself (falling back to null):
-        // callers with no specific view (the 3D-viewport color callbacks,
-        // which pass `cameraName` as `undefined`) only repoint it when a
-        // trackIdx is borrowed from another camera AND a specific view was
-        // actually requested — otherwise `getIdentityForTrack`'s "search any
-        // camera for this frame+trackIdx" fallback (used when its
-        // `cameraName` arg is null) is preserved unchanged.
-        var probeIdx = null, probeCamera = cameraName || null;
+        // A per-camera `trackIdx` is only a valid key into `frameIdentityMap`
+        // when paired with the SAME camera it came from — resolve identity by
+        // trying each of the group's OWN (camera, trackIdx) pairs in turn,
+        // each queried paired with its own camera. NEVER fall back to
+        // `session.getIdentityForTrack`'s cameraName-less "search any camera
+        // in the whole frame for this trackIdx NUMBER" mode: that matches
+        // purely on the number, and per-camera trackIdx numbering is
+        // independent (see getTrackColor's comment above), so it can hit a
+        // completely unrelated group/animal that happens to share the same
+        // local trackIdx (issue #168: duplicate-colored reprojection AND
+        // duplicate-colored 3D instances — the 3D-viewport color callback,
+        // `pose/initialization.js`/`ui/export-modals.js`, never passes a
+        // `cameraName` at all, so it always hit this wildcard mode).
+        //
+        // Preference order: the queried view's own instance first (if a
+        // specific `cameraName` was requested and the group has a real
+        // instance there — keeps the live-view precedence from issue #155),
+        // then every other member camera the group has a real instance in.
+        var candidates = [];
         if (cameraName && group.instances.has(cameraName)) {
             var pInst = group.instances.get(cameraName);
-            if (pInst && pInst.trackIdx != null) probeIdx = pInst.trackIdx;
+            if (pInst && pInst.trackIdx != null) candidates.push([cameraName, pInst.trackIdx]);
         }
-        if (probeIdx == null) {
-            for (var [pCam, pI] of group.instances) {
-                if (pI && pI.trackIdx != null) {
-                    probeIdx = pI.trackIdx;
-                    if (cameraName) probeCamera = pCam;
-                    break;
-                }
+        for (var [pCam, pI] of group.instances) {
+            if (pCam === cameraName) continue;
+            if (pI && pI.trackIdx != null) candidates.push([pCam, pI.trackIdx]);
+        }
+        // (1) Positive per-frame identity for the live track wins — try each
+        //     candidate camera/trackIdx pair (in preference order) in turn.
+        if (session.getIdentityForTrack) {
+            for (var ci = 0; ci < candidates.length; ci++) {
+                var tIdentity = session.getIdentityForTrack(candidates[ci][1], candidates[ci][0], frameIdx);
+                if (tIdentity && tIdentity.color) return tIdentity.color;
             }
-        }
-        // (1) Positive per-frame identity for the live track wins.
-        if (probeIdx != null && session.getIdentityForTrack) {
-            var tIdentity = session.getIdentityForTrack(probeIdx, probeCamera, frameIdx);
-            if (tIdentity && tIdentity.color) return tIdentity.color;
         }
         // (2) Fallback: an explicitly-assigned group identity — used only when
         //     the per-frame lookup didn't resolve (no entry yet / empty group).
@@ -128,9 +128,12 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
         // (3) Explicit "no identity" (negative per-frame sentinel) → space gray.
         //     Checked AFTER group.identityId so it never overrides a valid
         //     assigned group identity (preserves the prior precedence exactly).
-        if (probeIdx != null && session.isExplicitNoIdentity &&
-            session.isExplicitNoIdentity(probeCamera, probeIdx, frameIdx)) {
-            return NULL_ID_COLOR;
+        if (session.isExplicitNoIdentity) {
+            for (var ci2 = 0; ci2 < candidates.length; ci2++) {
+                if (session.isExplicitNoIdentity(candidates[ci2][0], candidates[ci2][1], frameIdx)) {
+                    return NULL_ID_COLOR;
+                }
+            }
         }
     }
 
