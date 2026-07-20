@@ -11,6 +11,25 @@
 import { getTrackColor, NULL_ID_COLOR } from './overlays.js';
 import { isCameraTracked } from './settings.js';
 
+/**
+ * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into
+ * its parts. Splits on the FIRST colon for frameIdx and the LAST colon for
+ * trackIdx — camera names aren't guaranteed colon-free, so a naive 3-way
+ * split would misparse one whose name contains ':'. Mirrors the equivalent
+ * inline parsing in `ui/track-identity-ops.js` (`deleteTrackAt`).
+ * @param {string} key
+ * @returns {{frameIdx: number, camName: string, trackIdx: number}|null}
+ */
+function _parseFrameIdentityKey(key) {
+    var parts = key.split(':');
+    if (parts.length < 3) return null;
+    var frameIdx = parseInt(parts[0], 10);
+    var trackIdx = parseInt(parts[parts.length - 1], 10);
+    var camName = parts.slice(1, parts.length - 1).join(':');
+    if (!Number.isFinite(frameIdx) || !Number.isFinite(trackIdx)) return null;
+    return { frameIdx: frameIdx, camName: camName, trackIdx: trackIdx };
+}
+
 // ============================================================================
 // Timeline class
 // ============================================================================
@@ -1633,7 +1652,13 @@ export class Timeline {
         var NO_ID_KEY = '__noid__';
 
         if (hasIdentities) {
+            // Pass 1: materialized frames (session.frameGroups) — AUTHORITATIVE.
+            // Live per-instance data always wins over the fallback below (a
+            // frame's instance may have been deleted/reassigned since the
+            // fallback source was written).
+            var materializedFrames = new Set();
             for (var [frameIdx, fg] of session.frameGroups) {
+                materializedFrames.add(frameIdx);
                 // Grouped instances
                 for (var [camName, instances] of fg.instances) {
                     for (var i = 0; i < instances.length; i++) {
@@ -1668,6 +1693,32 @@ export class Timeline {
                         var segKey2 = idId2 + ':' + camName2;
                         if (!idCamFrames[segKey2]) idCamFrames[segKey2] = new Set();
                         idCamFrames[segKey2].add(frameIdx);
+                    }
+                }
+            }
+
+            // Pass 2: session.frameIdentityMap fallback — covers frames NOT
+            // (yet) materialized in session.frameGroups. Under lazy loading,
+            // frameGroups only holds frames the user has actually visited
+            // (#167), but frameIdentityMap is restored/written for the WHOLE
+            // tracked range (Track All / Triangulate All write it per-frame
+            // as they process every frame, and nothing ever evicts it
+            // per-frame) — so it's the cheap, complete, whole-project source
+            // for identity presence. The raw map value already tells us
+            // everything (>=0 → identityId, <0 → explicit no-identity), no
+            // per-key helper calls needed.
+            if (session.frameIdentityMap) {
+                for (var [fiKey, fiVal] of session.frameIdentityMap) {
+                    var parsed = _parseFrameIdentityKey(fiKey);
+                    if (!parsed || materializedFrames.has(parsed.frameIdx)) continue;
+                    if (fiVal < 0) {
+                        var fbNKey = NO_ID_KEY + ':' + parsed.camName;
+                        if (!idCamFrames[fbNKey]) idCamFrames[fbNKey] = new Set();
+                        idCamFrames[fbNKey].add(parsed.frameIdx);
+                    } else {
+                        var fbKey = fiVal + ':' + parsed.camName;
+                        if (!idCamFrames[fbKey]) idCamFrames[fbKey] = new Set();
+                        idCamFrames[fbKey].add(parsed.frameIdx);
                     }
                 }
             }
