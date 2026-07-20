@@ -98,18 +98,27 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
         // `pose/initialization.js`/`ui/export-modals.js`, never passes a
         // `cameraName` at all, so it always hit this wildcard mode).
         //
-        // Preference order: the queried view's own instance first (if a
-        // specific `cameraName` was requested and the group has a real
-        // instance there — keeps the live-view precedence from issue #155),
-        // then every other member camera the group has a real instance in.
+        // When a specific `cameraName` was requested AND the group has a
+        // real instance there, that view's own data is AUTHORITATIVE — it is
+        // the only candidate. It must never fall through to a sibling
+        // camera's identity just because its own per-frame entry is absent
+        // or an explicit no-identity marker rather than a positive identity
+        // (a sibling's identity is not "this view"'s answer). Only when
+        // there's no specific view to be authoritative for — no `cameraName`
+        // given at all (the 3D-viewport color callback), or the group has no
+        // real instance in the requested `cameraName` (a reprojection into a
+        // false-negative view) — do we search every OTHER member camera the
+        // group has a real instance in, in `group.instances`' iteration
+        // order, since the tracker assigns the SAME identity to every real
+        // member camera of a group each frame (`commitTrackedFrame`).
         var candidates = [];
         if (cameraName && group.instances.has(cameraName)) {
             var pInst = group.instances.get(cameraName);
             if (pInst && pInst.trackIdx != null) candidates.push([cameraName, pInst.trackIdx]);
-        }
-        for (var [pCam, pI] of group.instances) {
-            if (pCam === cameraName) continue;
-            if (pI && pI.trackIdx != null) candidates.push([pCam, pI.trackIdx]);
+        } else {
+            for (var [pCam, pI] of group.instances) {
+                if (pI && pI.trackIdx != null) candidates.push([pCam, pI.trackIdx]);
+            }
         }
         // (1) Positive per-frame identity for the live track wins — try each
         //     candidate camera/trackIdx pair (in preference order) in turn.
