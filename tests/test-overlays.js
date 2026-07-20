@@ -223,6 +223,184 @@
         });
     });
 
+    // ---- getGroupColor identity path across cameras (issue #168) ----
+    // Reprojections are drawn into EVERY calibrated camera, including one
+    // where the group has no real instance (a false-negative detection).
+    // getGroupColor must resolve identity using the camera the borrowed
+    // trackIdx actually came from — never pair a foreign camera's trackIdx
+    // with the TARGET camera's frameIdentityMap, since per-camera trackIdx
+    // numbering is independent (see getTrackColor's comment above). Doing so
+    // can return a completely different animal's identity/color whenever the
+    // two cameras happen to share the same local trackIdx number.
+    describe('Overlays - getGroupColor identity path across cameras (issue #168)', function () {
+        function twoCamSession() {
+            var cams = [
+                new Camera('cam1', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]),
+                new Camera('cam2', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]),
+            ];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['Red', 'Blue']);
+            s.addIdentity('Red', '#ff0000');   // id 0
+            s.addIdentity('Blue', '#0000ff');  // id 1
+            return s;
+        }
+
+        it('resolves a group\'s OWN identity when reprojected into a camera it has no instance in, even with a colliding trackIdx', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = twoCamSession();
+            // Group A (Red): real instance only in cam1, trackIdx 0.
+            s.setFrameIdentity(0, 'cam1', 0, 0);   // cam1 track 0 -> Red
+            var instA = new Instance([[0, 0]], 0, 'user', 1);
+            var groupA = new InstanceGroup(1, 0);
+            groupA.addInstance('cam1', instA);
+            // Group B (Blue): real instance only in cam2, COLLIDING trackIdx 0.
+            s.setFrameIdentity(0, 'cam2', 0, 1);   // cam2 track 0 -> Blue
+            var instB = new Instance([[1, 1]], 0, 'user', 1);
+            var groupB = new InstanceGroup(2, 1);
+            groupB.addInstance('cam2', instB);
+
+            // Group A is reprojected into cam2 (it has no real instance there).
+            // It must render as ITS OWN identity (Red), not Blue (group B's
+            // identity, which happens to own cam2's local track 0).
+            assertEqual(getGroupColor(groupA, s, true, 0, 'cam2'), '#ff0000',
+                'reprojection keeps its own identity color across cameras, not a colliding foreign trackIdx\'s');
+        });
+
+        it('does not apply another camera\'s explicit no-identity sentinel to a group with a valid identity elsewhere', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = twoCamSession();
+            // Group A: real instance only in cam1, trackIdx 0, with a valid
+            // PER-FRAME identity (Red) but NO group.identityId fallback (-1),
+            // so resolution must go through the per-frame trackIdx lookup
+            // rather than being shortcut by the group.identityId fallback.
+            s.setFrameIdentity(0, 'cam1', 0, 0);   // cam1 track 0 -> Red
+            var instA = new Instance([[0, 0]], 0, 'user', 1);
+            var groupA = new InstanceGroup(1, -1);
+            groupA.addInstance('cam1', instA);
+            // cam2's OWN track 0 is explicitly marked "no identity" (unrelated animal/context).
+            s.setFrameIdentity(0, 'cam2', 0, -1);
+
+            // Reprojected into cam2: must resolve group A's own Red identity
+            // (via cam1's per-frame entry), not cam2's unrelated no-identity
+            // sentinel for its own local track 0.
+            assertEqual(getGroupColor(groupA, s, true, 0, 'cam2'), '#ff0000',
+                'own identity (resolved via its source camera) wins over an unrelated camera\'s no-identity sentinel');
+        });
+
+        // The 3D viewport's color callback (pose/initialization.js,
+        // ui/export-modals.js) calls getGroupColor with NO cameraName at
+        // all — it has no per-view concept, it just wants "this group's
+        // color". That omitted-cameraName path was left untouched by the
+        // reprojection fix above and hits a DIFFERENT unsound branch:
+        // session.getIdentityForTrack's cameraName-less mode, which
+        // searches the ENTIRE frameIdentityMap for ANY camera whose local
+        // trackIdx matches the number, regardless of which camera it came
+        // from. That's the same class of bug (per-camera trackIdx isn't a
+        // global key) reappearing through a second door.
+        it('resolves a group\'s OWN identity with no cameraName at all (3D-viewport color callback), even with a colliding trackIdx', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = twoCamSession();
+            // Insert the COLLIDING (wrong) entry into frameIdentityMap FIRST,
+            // so a naive "first match wins" search over the whole map would
+            // hit it before group A's own (correct) entry — proving this
+            // isn't passing by insertion-order luck.
+            s.setFrameIdentity(0, 'cam2', 0, 1);   // unrelated group B: cam2 track 0 -> Blue
+            s.setFrameIdentity(0, 'cam1', 0, 0);   // group A's own: cam1 track 0 -> Red
+            var instA = new Instance([[0, 0]], 0, 'user', 1);
+            var groupA = new InstanceGroup(1, -1);   // no group.identityId fallback
+            groupA.addInstance('cam1', instA);
+
+            // No cameraName argument at all, matching the 3D-viewport call signature.
+            assertEqual(getGroupColor(groupA, s, true, 0), '#ff0000',
+                'camera-agnostic color resolves via the group\'s OWN member camera, not a colliding foreign track number');
+        });
+
+        // Regression guard: when a SPECIFIC cameraName is queried and the
+        // group has a real instance there, that camera's own per-frame data
+        // must be authoritative — it must never fall through to a SIBLING
+        // member camera's identity just because its own entry happens to be
+        // an explicit "no identity" marker rather than a positive identity.
+        // (A prior draft of the #168 fix always built a candidate list of
+        // EVERY member camera regardless of whether the queried camera
+        // matched, which let a sibling's valid identity leak through here.)
+        it('a specific camera\'s own explicit no-identity sentinel is NOT overridden by a sibling camera\'s valid identity', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = twoCamSession();
+            // Same group, present in BOTH cameras (e.g. tracked in both
+            // views this frame) — cam1's own per-frame entry is explicitly
+            // "no identity", cam2's is a valid identity (Blue). This can
+            // happen when a per-frame identity edit only touched one view.
+            s.setFrameIdentity(0, 'cam1', 0, -1);  // cam1: explicit no-identity
+            s.setFrameIdentity(0, 'cam2', 5, 1);   // cam2: Blue (different trackIdx, no collision)
+            var instCam1 = new Instance([[0, 0]], 0, 'user', 1);
+            var instCam2 = new Instance([[1, 1]], 5, 'user', 1);
+            var group = new InstanceGroup(1, -1);   // no group.identityId fallback
+            group.addInstance('cam1', instCam1);
+            group.addInstance('cam2', instCam2);
+
+            assertEqual(getGroupColor(group, s, true, 0, 'cam1'), NULL_ID_COLOR,
+                'querying cam1 must respect CAM1\'S OWN no-identity marker, not borrow cam2\'s Blue');
+        });
+
+        // Regression guard: the candidate search must try ALL of a group's
+        // member cameras (not just the first found in Map order) when no
+        // specific camera is queried — with 3+ cameras, an earlier draft's
+        // logic could plausibly stop after one non-matching camera.
+        it('searches every member camera (not just the first) when no cameraName is given, across 3 cameras', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var cams = [
+                new Camera('cam1', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]),
+                new Camera('cam2', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]),
+                new Camera('cam3', [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]),
+            ];
+            var s = new Session(cams, new Skeleton('s', ['a'], []), ['Red', 'Blue']);
+            s.addIdentity('Red', '#ff0000');
+            s.addIdentity('Blue', '#0000ff');
+            // Group has real instances in cam1 and cam3 only; cam1's own
+            // entry has NO per-frame identity assigned yet, cam3's does.
+            var instCam1 = new Instance([[0, 0]], 9, 'user', 1);   // no frameIdentity for cam1 track 9
+            var instCam3 = new Instance([[2, 2]], 0, 'user', 1);
+            s.setFrameIdentity(0, 'cam3', 0, 0);   // cam3 track 0 -> Red
+            var group = new InstanceGroup(1, -1);
+            group.addInstance('cam1', instCam1);
+            group.addInstance('cam3', instCam3);
+
+            // No cameraName: must fall through past cam1 (no entry) to cam3 (Red).
+            assertEqual(getGroupColor(group, s, true, 0), '#ff0000',
+                'falls through to a later member camera\'s valid identity when an earlier one has none');
+        });
+
+        // Regression guard: instances with a null trackIdx (untracked) must
+        // be skipped as candidates, not crash or get treated as track 0.
+        it('skips member-camera instances with a null trackIdx when building candidates', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = twoCamSession();
+            var instCam1 = new Instance([[0, 0]], null, 'user', 1);   // untracked
+            var instCam2 = new Instance([[1, 1]], 0, 'user', 1);
+            s.setFrameIdentity(0, 'cam2', 0, 0);   // cam2 track 0 -> Red
+            var group = new InstanceGroup(1, -1);
+            group.addInstance('cam1', instCam1);
+            group.addInstance('cam2', instCam2);
+
+            assertEqual(getGroupColor(group, s, true, 0), '#ff0000',
+                'null-trackIdx instance is skipped; resolution falls through to the valid member camera');
+        });
+
+        // Regression guard: a fully empty group (no real instances at all —
+        // e.g. an orphaned/freshly-created group) must not crash and must
+        // fall back to group.identityId, then the track-color path.
+        it('handles a group with no real instances at all without crashing', function () {
+            if (typeof getGroupColor !== 'function') return;
+            var s = twoCamSession();
+            var emptyGroupWithId = new InstanceGroup(1, 0);     // falls back to Red
+            var emptyGroupNoId = new InstanceGroup(2, -1);      // falls through to track-color path
+
+            assertEqual(getGroupColor(emptyGroupWithId, s, true, 0, 'cam1'), '#ff0000',
+                'empty group with an assigned group.identityId falls back to it');
+            assertNotNull(getGroupColor(emptyGroupNoId, s, true, 0, 'cam1'),
+                'empty group with no identityId still returns SOME color (track-color fallback), not a crash');
+        });
+    });
+
     // ---- errorColor ----
 
     describe('Overlays - errorColor', function () {
