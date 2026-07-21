@@ -36,7 +36,11 @@ import {
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { handleLoadSlpFile } from './slp-import.js';
-import { buildSessionSlpBytesStreaming } from './slp-streaming-write.js';
+import {
+    buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
+    openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
+} from './slp-streaming-write.js';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 
 /**
@@ -310,6 +314,10 @@ async function ensureSleapIO() {
 }
 
 export function markDirty() {
+    // Per-session dirty (active-session memory model): the switch-away save
+    // prompt and safe lazy-eviction key off THIS flag, so it must be set even
+    // when the global flag is already true from another session.
+    if (state.session) state.session.isDirty = true;
     if (state.isDirty) return;
     state.isDirty = true;
     document.title = '\u2022 Lucid';
@@ -319,12 +327,73 @@ export function markDirty() {
 
 export function clearDirty() {
     state.isDirty = false;
+    // A full save writes every session, so all become clean. (When per-session
+    // save lands, pass the saved session to clear just that one.)
+    if (state.sessions && state.sessions.length) {
+        state.sessions.forEach(function (s) { if (s) s.isDirty = false; });
+    } else if (state.session) {
+        state.session.isDirty = false;
+    }
     document.title = 'Lucid';
     var saveDot = document.getElementById('saveDirtyDot');
     if (saveDot) saveDot.style.display = 'none';
 }
 
-async function buildSlpBytes() {
+/**
+ * Yield to the event loop (a real macrotask boundary, not just a microtask)
+ * between sessions in the multi-session streaming save. Dereferencing a
+ * session's heavy state (lazyLoader/frameGroups/instanceGroups) makes it
+ * ELIGIBLE for GC but does not force reclamation — real-data testing showed
+ * V8 can leave several GB of a "evicted" session's garbage resident well into
+ * the NEXT session's own allocation, stacking peaks that were each meant to
+ * be sequential. This can't force a collection (no `--expose-gc` in a real
+ * browser), but giving the engine an idle window between sessions measurably
+ * helps it catch up rather than piling every session's compute back-to-back
+ * with zero breathing room.
+ */
+function yieldToEventLoop(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms || 0); });
+}
+
+/**
+ * Coax V8 into actually running a collection pass. There is no `--expose-gc`
+ * in a real browser, so this can't force one directly — but a large,
+ * immediately-discarded allocation typically forces the allocator to prove it
+ * has room (or reclaim some) before granting it, which in practice triggers
+ * at least a scavenge/incremental-mark step sooner than just waiting would.
+ * Real-data testing showed dereferencing a session's heavy state alone left
+ * several GB resident well into the NEXT session's own allocation — a plain
+ * `setTimeout` yield wasn't enough to change that; this is a further nudge,
+ * best-effort only (wrapped in try/catch since the probe allocation itself
+ * could throw under real memory pressure, which is fine — that pressure IS
+ * what triggers collection).
+ */
+async function encourageGC(totalMB) {
+    // A modest allocation (tried first) is trivially satisfied from free space
+    // without V8 bothering to collect anything — the large old-generation
+    // Maps/objects this needs to reclaim have almost certainly been promoted
+    // out of the young generation, so only a MARK-COMPACT (full) GC touches
+    // them, and V8 is conservative about running one of those. Allocating
+    // toward the ACTUAL heap ceiling is what reliably forces that: V8 tries a
+    // last-resort collection before failing an allocation, which is exactly
+    // the collection this needs. Hitting the catch (OOM on the probe itself)
+    // is a fine, expected outcome — it means real pressure was applied.
+    var junk = [];
+    try {
+        var chunkMB = 150;
+        var n = Math.ceil((totalMB || 2500) / chunkMB);
+        for (var i = 0; i < n; i++) {
+            var buf = new ArrayBuffer(chunkMB * 1024 * 1024);
+            new Uint8Array(buf)[0] = 1; // touch it — keeps V8 from eliding a dead-on-arrival allocation
+            junk.push(buf);
+        }
+    } catch (e) { /* ignore — hitting real pressure is the point */ }
+    junk = null;
+    await yieldToEventLoop(50);
+}
+
+async function buildSlpBytes(opts) {
+    opts = opts || {};
     await ensureSleapIO();
     var SIO = window.SleapIO;
 
@@ -342,20 +411,28 @@ async function buildSlpBytes() {
     // Large lazy prediction sessions: build the file INCREMENTALLY via sleap-io.js's
     // streaming writer so the whole ~108k×N-frame graph is never resident and no
     // unvisited frame is dropped (the eager path below iterates only the resident
-    // `frameGroups`). Single lazy session only for now; multi-session projects (rare
-    // for a large prediction folder) fall through to the eager path.
-    if (sessionsToExport.length === 1 && sessionsToExport[0].lazyLoader &&
-        SIO && typeof SIO.openSlpWriter === 'function') {
-        var lazySess = sessionsToExport[0];
-        var lazyViews = state.views.filter(function (v) {
-            return lazySess.cameras.some(function (c) { return c.name === v.name; });
-        });
-        var lazyVideoFiles = state.videoFiles.filter(function (vf) {
-            return lazySess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
-        });
-        console.log('[save-slp] lazy session → streaming writer (', lazySess.lazyLoader.nFrames, 'frames ×',
-            lazySess.cameras.length, 'cameras )');
-        return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles);
+    // `frameGroups`). Requires EVERY session to be lazy-loaded — a mixed project
+    // (some hand-labeled, some lazy) falls through to the eager path below.
+    // When `opts.sink` is given, the finished bytes stream straight to it (e.g. a
+    // `FileSystemWritableFileStream`) instead of being materialized as one big
+    // `Uint8Array` — for a multi-GB multi-session project that in-memory copy is
+    // itself a meaningful chunk of peak memory on top of whatever the sessions
+    // themselves haven't been reclaimed yet. Returns `null` when streamed to a sink.
+    if (sessionsToExport.length > 0 && SIO && typeof SIO.openSlpWriter === 'function' &&
+        sessionsToExport.every(function (s) { return !!s.lazyLoader; })) {
+        if (sessionsToExport.length === 1) {
+            var lazySess = sessionsToExport[0];
+            var lazyViews = state.views.filter(function (v) {
+                return lazySess.cameras.some(function (c) { return c.name === v.name; });
+            });
+            var lazyVideoFiles = state.videoFiles.filter(function (vf) {
+                return lazySess.cameras.some(function (c) { return c.name === vf.assignedCamera; });
+            });
+            console.log('[save-slp] lazy session → streaming writer (', lazySess.lazyLoader.nFrames, 'frames ×',
+                lazySess.cameras.length, 'cameras )');
+            return await buildSessionSlpBytesStreaming(lazySess, lazyViews, lazyVideoFiles, opts.sink ? { sink: opts.sink } : undefined);
+        }
+        return await saveAllSessionsStreaming(sessionsToExport, opts.sink ? { sink: opts.sink } : undefined);
     }
 
     for (var si = 0; si < sessionsToExport.length; si++) {
@@ -448,6 +525,144 @@ async function buildSlpBytes() {
     return await SIO.saveSlpToBytes(labels);
 }
 
+/**
+ * Reopen a fresh `SioLazyLoader` for `session` from cheap, previously-retained
+ * `File`/`Blob` handles (`SioLazyLoader.sourceFiles`, captured at the original
+ * `open()`). A local-disk `File` is a lazy handle, not a resident copy of the
+ * bytes, so this is cheap relative to the FIRST open — no Track All/
+ * Triangulate All is redone, only the columnar store is reconstructed.
+ */
+async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore) {
+    var loader = new SioLazyLoader();
+    if (wasSharedStore) {
+        // Lazily-reopened single-file project: every camera's sourceFiles entry
+        // is the SAME project `.slp`. Reopen through openProjectSlp so the ONE
+        // interleaved store is read once and `_sharedStore`/`videoIdByCam` are
+        // restored — per-camera open() would re-read the whole project N times
+        // and pass 2 would then append the shared store once per camera
+        // (duplicating every frame/track).
+        await loader.openProjectSlp(sourceFileEntries[0][1]);
+        session.lazyLoader = loader;
+        return loader;
+    }
+    var opens = [];
+    for (var i = 0; i < sourceFileEntries.length; i++) {
+        var entry = sourceFileEntries[i];
+        opens.push(loader.open(entry[0], entry[1]));
+    }
+    await Promise.all(opens);
+    session.lazyLoader = loader;
+    return loader;
+}
+
+/**
+ * Start a multi-session streaming save. Returns a `handle` threaded through
+ * `commitSessionForMultiSessionSave`/`finalizeMultiSessionSave` (below) — kept
+ * as a plain object, not module state, so it can be parked on `state` across
+ * interactive steps (e.g. a future "commit this session, then load the next"
+ * UI flow) without this module needing to know about that UI.
+ */
+export function beginMultiSessionSave() {
+    return { ctx: createProjectWriterContext(), pending: [] };
+}
+
+/**
+ * PASS 1, per session: `session` must currently have compute results
+ * (Track All/Triangulate All already run — this function does not run them)
+ * and an open `lazyLoader`. Builds its ref graph against `handle.ctx`'s
+ * running counter, then EVICTS the session's heavy state (lazy loader,
+ * `frameGroups`, `instanceGroups`) — safe because the small ref graph +
+ * cheap `sourceFiles` handles are kept in `handle.pending`.
+ *
+ * This is the piece that must be interleaved with each session's OWN
+ * compute step for truly memory-bounded end-to-end processing of sessions
+ * whose compute alone approaches the tab's memory ceiling (e.g. a
+ * ~108k-frame × 3-camera prediction session peaks ~3.7 GB — three such
+ * sessions can never be simultaneously computed, only sequentially committed
+ * one at a time via this function). There is currently no UI wired to drive
+ * that interactively (open session → Track All → Triangulate All → commit →
+ * evict → next session) — see CLAUDE.md / the multi-session save plan for
+ * that follow-up; `saveAllSessionsStreaming` below covers the simpler case
+ * where every session's compute already fits resident simultaneously.
+ */
+export async function commitSessionForMultiSessionSave(handle, session) {
+    if (!session.lazyLoader) {
+        throw new Error('commitSessionForMultiSessionSave: session "' + (session.name || '') +
+            '" has no open lazyLoader');
+    }
+    var sessViews = state.views.filter(function (v) {
+        return session.cameras.some(function (c) { return c.name === v.name; });
+    });
+    var sessVideoFiles = state.videoFiles.filter(function (vf) {
+        return session.cameras.some(function (c) { return c.name === vf.assignedCamera; });
+    });
+    var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
+    var wasSharedStore = !!session.lazyLoader._sharedStore;
+    var refGraph = buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
+    handle.pending.push({ session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore });
+
+    // Evict: this session's contribution now lives in `refGraph` (small — a
+    // ref-only RecordingSession + the materialized user-edit overlay
+    // instances) — the lazy loader and per-frame LUCID state can go.
+    session.lazyLoader.close();
+    session.lazyLoader = null;
+    session.frameGroups = new Map();
+    session.instanceGroups = new Map();
+    console.log('[save-slp] pass 1/2: committed ref graph for session', session.name || '(unnamed)', '- evicted its lazy loader');
+    // See `encourageGC` — dereferencing doesn't force reclamation; nudge the
+    // engine toward a real (mark-compact) collection before the next
+    // session's own heavy allocation begins.
+    await encourageGC(2500);
+}
+
+/**
+ * PASS 2: open the writer (every session's ref graph is now final) then
+ * re-stream each session's 2D data from a freshly (cheaply) reopened lazy
+ * loader — no recompute needed, `appendStore` reads straight from the
+ * columnar store — evicting again after each. Returns the finished bytes
+ * (or null if `opts.sink` was given).
+ */
+export async function finalizeMultiSessionSave(handle, opts) {
+    var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }));
+    try {
+        for (var j = 0; j < handle.pending.length; j++) {
+            var p = handle.pending[j];
+            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore);
+            streamSessionIntoWriter(writer, p.session, p.refGraph);
+            p.session.lazyLoader.close();
+            p.session.lazyLoader = null;
+            console.log('[save-slp] pass 2/2: streamed session', p.session.name || j, 'into the project writer');
+            await encourageGC(1000);
+        }
+        return await finalizeProjectWriter(writer, opts);
+    } catch (err) {
+        try { if (typeof writer.dispose === 'function') writer.dispose(); } catch (e) { /* ignore */ }
+        throw err;
+    }
+}
+
+/**
+ * Memory-bounded save for MULTIPLE simultaneously-loaded lazy sessions (e.g.
+ * several modest prediction sessions that together still fit resident at
+ * once — the case where the OLD eager path would double-materialize
+ * everything, or blow the `sessions_json` string-length cap, but where
+ * per-session compute doesn't itself approach the memory ceiling). See
+ * `slp-streaming-write.js`'s module docstring for why this needs two passes:
+ * `SIO.openSlpWriter` serializes `sessions_json` synchronously at open time,
+ * so every session's ref graph must be complete before the writer opens.
+ *
+ * Every `sessions` entry must currently have compute results and an open
+ * `lazyLoader` — this convenience wrapper does NOT interleave eviction with
+ * each session's OWN compute step (see `commitSessionForMultiSessionSave`
+ * for that), so it does not, on its own, bound peak memory for sessions
+ * whose compute alone approaches the ceiling.
+ */
+export async function saveAllSessionsStreaming(sessions, opts) {
+    var handle = beginMultiSessionSave();
+    for (var i = 0; i < sessions.length; i++) await commitSessionForMultiSessionSave(handle, sessions[i]);
+    return await finalizeMultiSessionSave(handle, opts);
+}
+
 export async function quickSave() {
     if (!state.session) {
         setStatus('No session to save', 'error');
@@ -490,16 +705,31 @@ export async function quickSave() {
         state.isSaving = true;
         setStatus('Saving...', 'warning');
 
-        var bytes = await buildSlpBytes();
-
-        // Write to file handle
+        // Stream straight to the file handle when the streaming path is used
+        // (single or multi-session lazy save) — for a multi-GB project,
+        // materializing the whole finished file as one extra in-memory
+        // Uint8Array on top of whatever session state hasn't been reclaimed
+        // yet is itself a meaningful chunk of peak memory. `bytesWritten`
+        // tracks the total since a streamed save resolves `bytes` to `null`
+        // (see `buildSlpBytes`/`finalizeProjectWriter`).
         var writable = await state.slpFileHandle.createWritable();
-        await writable.write(bytes);
-        await writable.close();
+        var bytesWritten = 0;
+        var sink = {
+            write: function (chunk) { bytesWritten += chunk.byteLength; return writable.write(chunk); },
+            close: function () { return writable.close(); },
+        };
+        var bytes = await buildSlpBytes({ sink: sink });
+        if (bytes) {
+            // Eager (non-streaming) path returned bytes directly instead of
+            // using the sink — write them out now.
+            await writable.write(bytes);
+            await writable.close();
+            bytesWritten = bytes.byteLength;
+        }
 
         state.isSaving = false;
         clearDirty();
-        var sizeMB = (bytes.byteLength / 1024 / 1024).toFixed(1);
+        var sizeMB = (bytesWritten / 1024 / 1024).toFixed(1);
         setStatus('Saved (' + sizeMB + ' MB)', 'success');
     } catch (err) {
         state.isSaving = false;
@@ -747,9 +977,23 @@ export async function handleLoadProject(prePickedFile) {
             file = files[0];
         }
 
-        // Route SLP/H5 files to the SLP loader
+        // Route SLP/H5 files to the SLP loader.
         var ext = file.name.split('.').pop().toLowerCase();
         if (ext === 'slp' || ext === 'h5') {
+            // Large project .slp → reopen LAZILY. The eager path
+            // (handleLoadSlpFile) materializes every frame's 2D + a grouping
+            // reconstruct duplicate and OOMs the tab on real multi-camera
+            // prediction sessions (e.g. a 108k-frame × 3-cam cage5 project). The
+            // lazy path keeps 2D on-demand and rebuilds grouping with lightweight
+            // members; videos are attached afterward via File → Load Videos.
+            var LARGE_SLP_BYTES = 200 * 1024 * 1024;
+            if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
+                // Dynamic import avoids a session-loader ↔ save-load import cycle.
+                var _sl = await import('../loading/session-loader.js');
+                if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
+                    return _sl.handleLoadProjectSlpLazy(file);
+                }
+            }
             return handleLoadSlpFile(file);
         }
 

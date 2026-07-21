@@ -126,11 +126,38 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             }
             var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
 
-            // Create instances directly from inline point dicts
+            // Members come from EITHER the inline point dicts (legacy) OR — post
+            // #134, when inline instances are omitted to keep sessions_json under
+            // V8's string cap — the ref map `camcorder_to_lf_and_inst_idx_map`
+            // (camKey → [labeledFrameIdx, instIdx]). In the ref case the group
+            // member is the `instIdx`-th pass-1 raw instance for that camera at
+            // THIS frame (pass-1 already populated `fg3.instances`). Without this,
+            // a large canonical project that falls back to the raw worker (no
+            // typed session) reconstructed ZERO groups → 3D/tracking silently lost.
             var igInstances = igDict.instances || {};
+            var refMap = igDict.camcorder_to_lf_and_inst_idx_map || {};
             var igLucid = (igDict.metadata && igDict.metadata.lucid) || {};
             var instanceMetaMap = igLucid.instanceMeta || {};
 
+            if (Object.keys(igInstances).length === 0 && Object.keys(refMap).length > 0) {
+                for (var refCamKey in refMap) {
+                    var refCamName = camKeyToName[refCamKey] || refCamKey;
+                    var refPair = refMap[refCamKey];
+                    var refInstIdx = Array.isArray(refPair) ? (parseInt(refPair[1]) || 0) : 0;
+                    var refList = fg3.instances.get(refCamName);
+                    if (!refList || refInstIdx < 0 || refInstIdx >= refList.length) continue;
+                    var refInst = refList[refInstIdx];
+                    // Slim metadata (#134) drops trackIdx/type — the pass-1 instance
+                    // already carries them from the .slp; honor any that ARE present.
+                    var refMeta = instanceMetaMap[refCamName] || instanceMetaMap[refCamKey] || {};
+                    if (refMeta.trackIdx != null) refInst.trackIdx = refMeta.trackIdx;
+                    if (refMeta.type) refInst.type = refMeta.type;
+                    if (refMeta.modified) refInst.modified = true;
+                    if (refMeta.nulledNodes) refInst.nulledNodes = new Set(refMeta.nulledNodes);
+                    // The pass-1 instance IS the group member (already in fg3.instances).
+                    group.addInstance(refCamName, refInst);
+                }
+            } else {
             for (var igCamKey in igInstances) {
                 var igCamName = camKeyToName[igCamKey];
                 if (!igCamName) {
@@ -199,6 +226,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 group.addInstance(igCamName, inst);
                 fg3.addInstance(igCamName, inst);
             }
+            }
 
             // Restore 3D points
             if (igDict.points && Array.isArray(igDict.points)) {
@@ -254,6 +282,9 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
     var BATCH = opts.batch || 20000;
     var onProgress = opts.onProgress || function () {};
     var restoredGroups = 0, restoredWith3d = 0;
+    // For deriving type/trackIdx/score from resolved typed instances when slim
+    // metadata (#134) omits them.
+    var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
 
     // Index the legacy raw frame_group_dicts by frame index for the identity
     // fallback (only consulted when metadata.lucid.identityId is absent).
@@ -264,6 +295,15 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
         var rfIdx = rfd.frame_idx != null ? rfd.frame_idx : (rfd.frameIdx != null ? rfd.frameIdx : null);
         if (rfIdx != null) rawFgByFrame.set(rfIdx, rfd);
     }
+
+    // #158 diagnostic: two different InstanceGroups resolving the SAME typed
+    // instance (by object identity) for the same camera+frame is direct proof
+    // of a ref collision on save — the fix in slp-streaming-write.js's
+    // `refFor` (`_rawInstIndex`) should make this impossible going forward,
+    // but keep detecting it here as a cheap read-side tripwire for older
+    // files or any other ref-resolution path this didn't cover.
+    var _seenTypedInstByCamFrame = new Map(); // "camName:frameIdx" -> Set<typedInst>
+    var _refCollisions = 0;
 
     var fgEntries = Array.from(typedSession.frameGroups.entries());
     for (var fei = 0; fei < fgEntries.length; fei++) {
@@ -306,6 +346,17 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 var typedInst = camEntry[1];
                 var igCamName = (typedCam && typedCam.name) || '';
 
+                var _cfKey = igCamName + ':' + fgFrameIdx;
+                var _seenSet = _seenTypedInstByCamFrame.get(_cfKey);
+                if (!_seenSet) { _seenSet = new Set(); _seenTypedInstByCamFrame.set(_cfKey, _seenSet); }
+                if (_seenSet.has(typedInst)) {
+                    _refCollisions++;
+                    console.warn('[load-slp] ref collision: camera "' + igCamName + '" frame ' + fgFrameIdx
+                        + ' — two InstanceGroups resolved the SAME raw instance (#158 symptom)');
+                } else {
+                    _seenSet.add(typedInst);
+                }
+
                 // Points from typed columnar _xy; occlusion from _visible. NOT
                 // numpy() (which zeroes invisible points to NaN and would drop
                 // occluded-but-placed keypoints).
@@ -325,10 +376,19 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                     }
                 }
 
+                // trackIdx / type / score are reconstructed from the resolved
+                // typed instance when absent from metadata (slim files, #134);
+                // older files that still carry them in metadata are honored.
                 var instMeta = instanceMetaMap[igCamName] || {};
-                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : null;
-                var instType = instMeta.type || 'predicted';
-                var instScore = instMeta.score || 0;
+                var _isPred = (_SIO && _SIO.PredictedInstance)
+                    ? (typedInst instanceof _SIO.PredictedInstance)
+                    : (typedInst && typedInst.pointScores !== undefined);
+                var _derivedTrackIdx = (typedInst && typedInst.track && typedInst.track.name != null)
+                    ? session.tracks.indexOf(typedInst.track.name) : -1;
+                if (_derivedTrackIdx < 0) _derivedTrackIdx = null;
+                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : _derivedTrackIdx;
+                var instType = instMeta.type || (_isPred ? 'predicted' : 'user');
+                var instScore = instMeta.score != null ? instMeta.score : (_isPred ? (typedInst.score || 0) : 0);
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
                 inst.occluded = occluded;
@@ -369,6 +429,143 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
         if (fei > 0 && fei % BATCH === 0) {
             onProgress('Rebuilding instance groups (' + fei + '/' + fgEntries.length + ')...');
             await new Promise(function (r) { setTimeout(r, 0); });
+        }
+    }
+    if (_refCollisions > 0) {
+        console.warn('[load-slp] ' + _refCollisions + ' ref collision(s) detected while reconstructing instance groups — '
+            + 'some 2D poses/tracks may be misattributed between animals (#158). If this fires on a freshly-saved '
+            + 'file, the write-side fix in slp-streaming-write.js did not fully resolve the issue.');
+    }
+    return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d, refCollisions: _refCollisions };
+}
+
+/**
+ * Lazy-reopen variant of `reconstructInstanceGroupsFromSession` — builds
+ * `session.instanceGroups` (grouping + 3D + per-camera member Instances) from the
+ * typed `RecordingSession` WITHOUT the eager path's memory blow-up, for reopening
+ * a large project `.slp` via `SioLazyLoader.openProjectSlp`.
+ *
+ * Differences from the eager reconstructor, each a deliberate memory choice
+ * (a real cage5 project is 108k frames / 427k groups / 1.25M members / 7.26M 3D
+ * points — the eager reopen OOMs a 4.4 GB tab; this reproduces the ~2.2 GB
+ * save-time footprint instead):
+ *  - **Reuses** each `Instance3D.points` array in place (`group.points3d = i3d.points`)
+ *    rather than copying — avoids a second 7.26M-coord allocation.
+ *  - **Releases** each typed `FrameGroup` from `typedSession.frameGroups` right
+ *    after building its LUCID groups, so the typed graph shrinks as the LUCID one
+ *    grows (peak ≈ one copy, not two).
+ *  - Does **not** touch `session.frameGroups` / the unlinked pool: 2D frames are
+ *    materialized on demand by `ensureLazyFrameData` on scrub (the lazy 2D store).
+ *  - Tags each member with `_rawInstIndex` (its instance index within its
+ *    camera-frame) so the streaming re-save (`slp-streaming-write.js` `refFor`)
+ *    resolves the correct store row — the same tag `ensureLazyFrameData` sets on
+ *    the Track-All path.
+ *
+ * @param {Session} session - target session (identities/tracks already set)
+ * @param {Object} typedSession - sleap-io.js RecordingSession (mutated: frameGroups drained)
+ * @param {SioLazyLoader} loader - the open project loader (for `_rawInstIndex` refs)
+ * @param {string[]} nodeNames - skeleton node names
+ * @param {{onProgress?:(msg:string)=>void, batch?:number}} [opts]
+ * @returns {Promise<{restoredGroups:number, restoredWith3d:number}>}
+ */
+export async function reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames, opts) {
+    opts = opts || {};
+    var numNodes = nodeNames.length;
+    var BATCH = opts.batch || 20000;
+    var onProgress = opts.onProgress || function () {};
+    var _SIO = (typeof window !== 'undefined' && window.SleapIO) ? window.SleapIO : null;
+    var PredI = _SIO && _SIO.PredictedInstance;
+    var restoredGroups = 0, restoredWith3d = 0;
+    // Time-based yielding: materializing 108k frames + building ~1.25M member
+    // Instances is ~tens of seconds of work; yield every ~40ms so the tab stays
+    // responsive (a frame-count batch of 20k blocks the main thread for seconds).
+    var _now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); };
+    var _yieldMs = opts.yieldMs != null ? opts.yieldMs : 40;
+    var _ty = _now();
+    // O(1) track-name → index lookup. session.tracks can be thousands of entries
+    // (2357 on the real cage5 project); a per-member Array.indexOf would be
+    // O(tracks) × 1.25M members ≈ billions of comparisons.
+    var trackIdxByName = new Map();
+    for (var _tn = 0; _tn < session.tracks.length; _tn++) trackIdxByName.set(session.tracks[_tn], _tn);
+
+    var fgKeys = Array.from(typedSession.frameGroups.keys());
+    for (var fki = 0; fki < fgKeys.length; fki++) {
+        var typedFg = typedSession.frameGroups.get(fgKeys[fki]);
+        if (!typedFg) continue;
+        var fgFrameIdx = typedFg.frameIdx != null ? typedFg.frameIdx : fgKeys[fki];
+        var typedIGs = typedFg.instanceGroups || [];
+        var groups = [];
+        for (var igi = 0; igi < typedIGs.length; igi++) {
+            var typedIG = typedIGs[igi];
+            var igLucid = (typedIG.metadata && typedIG.metadata.lucid) || {};
+            var instanceMetaMap = igLucid.instanceMeta || {};
+
+            var identityId = -1;
+            if (igLucid.identityId != null) identityId = igLucid.identityId;
+            if (identityId >= 0 && identityId >= session.identities.length) identityId = -1;
+
+            var group = new InstanceGroup(Date.now() + Math.random() * 1000 + igi, identityId);
+            var refs = typedIG._instanceRefsByCamera || null;
+
+            for (var camEntry of typedIG.instanceByCamera) {
+                var typedCam = camEntry[0];
+                var typedInst = camEntry[1];
+                var igCamName = (typedCam && typedCam.name) || '';
+
+                // LIGHTWEIGHT member: deliberately do NOT read `_xy`. Materializing
+                // each member's 2D here materializes the lazy store frame-by-frame
+                // (~324k times on a real cage5 project) and degrades to hours. The
+                // 2D is instead hydrated on scrub from the lazy store by
+                // `_rawInstIndex` (see `hydrateLazyFrameGroups` in triangulation.js).
+                // A null-filled placeholder keeps the Instance valid until then;
+                // `points`/`occluded` cost ~one slot per node, not an [x,y] per node.
+                var points = new Array(numNodes).fill(null);
+                var occluded = new Array(numNodes).fill(false);
+
+                var instMeta = instanceMetaMap[igCamName] || {};
+                var _isPred = PredI ? (typedInst instanceof PredI)
+                    : (typedInst && typedInst.pointScores !== undefined);
+                var _tName = (typedInst && typedInst.track && typedInst.track.name != null) ? typedInst.track.name : null;
+                var _derivedTrackIdx = (_tName != null && trackIdxByName.has(_tName)) ? trackIdxByName.get(_tName) : null;
+                var instTrackIdx = instMeta.trackIdx != null ? instMeta.trackIdx : _derivedTrackIdx;
+                var instType = instMeta.type || (_isPred ? 'predicted' : 'user');
+                var instScore = instMeta.score != null ? instMeta.score : (_isPred ? (typedInst.score || 0) : 0);
+
+                var inst = new Instance(points, instTrackIdx, instType, instScore);
+                inst.occluded = occluded;
+                inst.modified = instMeta.modified || false;
+                if (instMeta.nulledNodes) inst.nulledNodes = new Set(instMeta.nulledNodes);
+
+                // _rawInstIndex = the member's instance index within its camera-frame.
+                // Drives BOTH the on-scrub 2D hydration (which store instance to copy
+                // points from) AND the streaming re-save's ref resolution (`refFor`).
+                var ri = null;
+                if (refs && typeof refs.get === 'function') {
+                    var pr = refs.get(typedCam);
+                    if (Array.isArray(pr) && pr.length >= 2) ri = pr[1];
+                }
+                if (ri != null) inst._rawInstIndex = ri;
+                inst._lazy2d = true; // awaiting on-scrub hydration from the lazy 2D store
+
+                group.addInstance(igCamName, inst);
+            }
+
+            var i3d = typedIG.instance3d;
+            if (i3d && Array.isArray(i3d.points) && i3d.points.length > 0) {
+                group.points3d = i3d.points; // REUSE — do not copy 7.26M coords
+                restoredWith3d++;
+            }
+
+            groups.push(group);
+            restoredGroups++;
+        }
+        session.instanceGroups.set(fgFrameIdx, groups);
+        typedSession.frameGroups.delete(fgKeys[fki]); // release typed group as we consume it
+
+        if (_now() - _ty > _yieldMs) {
+            onProgress('Restoring 3D grouping (' + fki + '/' + fgKeys.length + ')...');
+            await new Promise(function (r) { setTimeout(r, 0); });
+            _ty = _now();
         }
     }
     return { restoredGroups: restoredGroups, restoredWith3d: restoredWith3d };

@@ -19,7 +19,10 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 11.
 
-import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core/+esm';
+// Pinned: 7.x renamed api.onUnhandledDragOverEvent → onUnhandledDragOver and
+// the unpinned /+esm import silently broke pane docking when the CDN cache
+// refreshed past 6.6.1. Keep in sync with the dockview.css pin in index.html.
+import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
@@ -38,7 +41,7 @@ import {
     updateTotalFrames,
 } from '../loading/session-loader.js';
 import { OnDemandVideoDecoder } from '../loading/video.js';
-import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
+import { setStatus, showLoading, hideLoading, quickSave } from '../import-export/save-load.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
@@ -1467,9 +1470,84 @@ export function removeSession(idx) {
     setStatus('Session removed', 'success');
 }
 
+/**
+ * Modal shown when switching away from a session with unsaved changes.
+ * Resolves to 'save', 'discard', or 'cancel'. Esc = cancel (CLAUDE.md modal
+ * convention). Kept dependency-light (raw DOM) so it works anywhere switchSession
+ * runs; returns 'discard' immediately if there is no DOM (headless/tests).
+ * @param {Object} session
+ * @returns {Promise<'save'|'discard'|'cancel'>}
+ */
+function promptSaveBeforeSwitch(session) {
+    if (typeof document === 'undefined' || !document.body) return Promise.resolve('discard');
+    return new Promise(function (resolve) {
+        var name = (session && session.name) || 'this session';
+        var overlay = document.createElement('div');
+        overlay.className = 'multi-frame-modal-overlay';
+        var modal = document.createElement('div');
+        modal.className = 'multi-frame-modal';
+        modal.innerHTML =
+            '<h3>Unsaved changes</h3>' +
+            '<div style="margin:8px 0 14px;line-height:1.5;">You have unsaved changes in <b>' +
+            String(name).replace(/[&<>]/g, '') + '</b>. Switching sessions will unload it to free memory.' +
+            '<br>Save your changes before switching?</div>' +
+            '<div class="modal-actions">' +
+            '<button id="swCancel">Cancel</button>' +
+            '<button id="swDiscard" class="danger">Discard &amp; switch</button>' +
+            '<button id="swSave" class="primary">Save &amp; switch</button>' +
+            '</div>';
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        function done(choice) {
+            document.removeEventListener('keydown', onKey);
+            overlay.remove();
+            resolve(choice);
+        }
+        function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); done('cancel'); } }
+        document.addEventListener('keydown', onKey);
+        modal.querySelector('#swCancel').addEventListener('click', function () { done('cancel'); });
+        modal.querySelector('#swDiscard').addEventListener('click', function () { done('discard'); });
+        modal.querySelector('#swSave').addEventListener('click', function () { done('save'); });
+    });
+}
+
 export async function switchSession(newIdx) {
     if (newIdx === state.activeSessionIdx) return;
     if (newIdx < 0 || newIdx >= state.sessions.length) return;
+
+    // Active-session memory model: leaving a session lets us evict its ~1 GB of
+    // lazy data, so unsaved changes on it would be lost. Prompt first. Only
+    // fires for a genuinely dirty outgoing session — so the brace-walked
+    // session-switch tests (which never dirty a session) are unaffected.
+    var _leaving = state.sessions[state.activeSessionIdx];
+    if (_leaving && _leaving.isDirty) {
+        var choice = await promptSaveBeforeSwitch(_leaving);
+        if (choice === 'cancel') return;                 // stay put
+        if (choice === 'save') {
+            await quickSave();
+            if (_leaving.isDirty) return;                // save cancelled/failed → don't switch
+        } else if (choice === 'discard') {
+            _leaving.isDirty = false;                    // proceed; changes will be dropped on evict
+        }
+    }
+
+    // Active-session memory model: now that the outgoing session is either
+    // clean or the user explicitly discarded its changes, free its ~1 GB+ of
+    // lazy data. `quickSave()` (the 'save' choice above) durably persists
+    // EVERY session in `state.sessions`, not just this one — for a
+    // multi-session project, `saveAllSessionsStreaming` (import-export/
+    // save-load.js) already evicted `lazyLoader` as part of saving, so this is
+    // a no-op there; for a single lazy session (or the 'discard' choice) this
+    // is what actually reclaims the memory. Re-activating this session later
+    // reopens it from scratch (the existing "load session folder" path) —
+    // there's no lazy re-hydration from within one project .slp yet.
+    if (_leaving && _leaving.lazyLoader) {
+        _leaving.lazyLoader.close();
+        _leaving.lazyLoader = null;
+        _leaving.frameGroups = new Map();
+        _leaving.instanceGroups = new Map();
+        _leaving.triangulationResults = null;
+    }
 
     // Cold-reserve initialization — decoders trimmed off the active pool
     // (when a smaller session follows a larger one) park here and get
