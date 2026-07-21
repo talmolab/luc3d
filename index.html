@@ -193,6 +193,11 @@
                 <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
             </div>
             <div class="toolbar-separator"></div>
+            <div class="toolbar-group">
+                <button class="toolbar-btn" id="tbQC" title="Run QC on current frame (q)">QC</button>
+                <span id="qcBadge" class="qc-badge" style="display:none"></span>
+            </div>
+            <div class="toolbar-separator"></div>
             <div class="toolbar-group toolbar-checkboxes">
                 <label><input type="checkbox" id="visUser" checked> User</label>
                 <label><input type="checkbox" id="visPredicted" checked> Predicted</label>
@@ -266,6 +271,7 @@
                     <button class="panel-tab" data-tab="tabCameras">Cameras</button>
                     <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
                     <button class="panel-tab" data-tab="tabSession">Session</button>
+                    <button class="panel-tab" data-tab="tabQC">QC</button>
                 </div>
 
                 <!-- ==================== Instances Tab ==================== -->
@@ -760,6 +766,45 @@
                             <div>Double-click: Reset zoom / Convert</div>
                             <div>Right-click: Toggle node visibility</div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- ==================== QC Tab ==================== -->
+                <div class="panel-tab-content" id="tabQC">
+                    <div class="info-section">
+                        <h3>Quality Control</h3>
+                        <div class="qc-controls">
+                            <button class="toolbar-btn" id="qcRunFrameBtn" title="Check the current frame">Check Frame</button>
+                            <button class="toolbar-btn" id="qcRunProjectBtn" title="Run QC over the whole project">Run Project QC</button>
+                            <button class="toolbar-btn" id="qcPrevBtn" title="Previous flagged frame (Opt+Q)">◂ Prev</button>
+                            <button class="toolbar-btn" id="qcNextBtn" title="Next flagged frame (Shift+Q)">Next ▸</button>
+                        </div>
+                        <div class="qc-hint">QC reads cached triangulations — run <strong>Triangulate All</strong> first for full 3D coverage.</div>
+                        <div class="qc-opts">
+                            <label class="qc-check" title="2D pixel-space jitter is perspective-noisy on predicted data; off by default (3D per-identity jitter always runs)"><input type="checkbox" id="qcEnable2dJitter"> 2D jitter</label>
+                            <label class="qc-check" title="2D pixel-space limb length is perspective-noisy; off by default (3D per-identity limb always runs)"><input type="checkbox" id="qcEnable2dLimb"> 2D limb length</label>
+                        </div>
+                        <div id="qcProgress" class="qc-progress" style="display:none"></div>
+                        <div id="qcSummary" class="qc-summary"><div class="qc-muted">QC has not been run. Click <strong>Check Frame</strong> or <strong>Run Project QC</strong>.</div></div>
+                    </div>
+
+                    <div class="info-section" id="qcThresholdsSection" style="display:none">
+                        <h3>Outlier thresholds <span class="qc-hint">(drag the line)</span></h3>
+                        <div id="qcHistograms"></div>
+                    </div>
+
+                    <div class="info-section" id="qcIssuesSection" style="display:none">
+                        <h3>Flagged frames</h3>
+                        <div class="qc-filters">
+                            <select id="qcTypeFilter"><option value="all">All types</option></select>
+                            <select id="qcSevFilter">
+                                <option value="all">All severities</option>
+                                <option value="high">High</option>
+                                <option value="medium">Medium</option>
+                                <option value="low">Low</option>
+                            </select>
+                        </div>
+                        <div id="qcIssueList" class="qc-issue-list"></div>
                     </div>
                 </div>
 

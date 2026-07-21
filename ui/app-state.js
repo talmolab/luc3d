@@ -41,6 +41,8 @@ export const state = {
     slpFileHandle: null,        // FileSystemFileHandle for quick save
     isDirty: false,             // true when unsaved annotation changes exist
     isSaving: false,            // true while save is in progress
+    qcResults: null,            // last Quality-Control result (see pose/qc.js runProjectQC); null until QC is run
+    qcHighlight: null,          // { frameIdx, boxes[], nodes[] } — orange "where is the error" overlay (ui/qc-panel.js → ui/rendering.js)
 };
 
 export let videoController = null;

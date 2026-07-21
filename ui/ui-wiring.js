@@ -34,6 +34,7 @@ import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
+import { runQCCurrentFrame, qcNext, qcPrev } from './qc-panel.js';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
@@ -1607,6 +1608,11 @@ export function setupUI() {
     });
     setHandler('toggleInfoPanel', function () { toggleInfoPanel(); });
     setHandler('toggle3D', function () { toggle3DViewport(); });
+    // Quality Control: q = run QC on current frame (opens QC tab); Shift+q / Opt+q
+    // step through flagged frames (after a project QC run).
+    setHandler('qcRun', function () { runQCCurrentFrame(); });
+    setHandler('qcNextIssue', function () { qcNext(); });
+    setHandler('qcPrevIssue', function () { qcPrev(); });
 
     // Single dispatcher for catalog-driven shortcuts. Runs before the structural
     // handlers below; if a catalog action matches it consumes the event.

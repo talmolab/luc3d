@@ -23,6 +23,7 @@ import { createDemoSession } from '../demo-data.js';
 import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
 import { installTimelineShortcuts } from '../ui/timeline-controller.js';
 import { setupPanelTabs, setupSkeletonEditing, updateInfoPanel } from '../ui/info-panel.js';
+import { setupQCPanel } from '../ui/qc-panel.js';
 import { setupSplitHandles } from '../ui/layout-controls.js';
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
@@ -56,6 +57,7 @@ async function init() {
         setupEmptyVideoController();
         setupUI();
         setupPanelTabs();
+        setupQCPanel();
         setupSkeletonEditing();
         setupInteraction();
         try {
