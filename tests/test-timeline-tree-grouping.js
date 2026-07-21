@@ -512,4 +512,131 @@
             cleanup(tl, container);
         });
     });
+
+    // ----- ID Timeline population after lazy eviction ----------------------
+    //
+    // After a lazy project reopen, `session.frameGroups` only contains
+    // frames the user has actually scrubbed to — full 2D pose materialization
+    // is deferred for memory (#167). `session.frameIdentityMap`, in contrast,
+    // is cheap (one integer per frame:cam:trackIdx) and is restored/written
+    // for the WHOLE tracked range regardless of which frames are currently
+    // materialized (Track All's `commitTrackedFrame` / `assignTrackToIdentity`
+    // both write it per-frame as they go; nothing ever evicts it per-frame).
+    // `_buildIdentitySegments` must use it as a fallback for frames not (yet)
+    // in `frameGroups`, or the ID Timeline only shows color for played frames.
+    describe('Timeline ID population after lazy eviction (Track All / Triangulate All)', function () {
+        it('identity segments cover the whole tracked range even when most frames are evicted from session.frameGroups', function () {
+            var container = createContainer(900, 320);
+            var tl = new Timeline(container, { totalFrames: 10 });
+
+            var skel = new Skeleton('s', ['a', 'b'], [[0, 1]]);
+            var cam = new Camera('cam1',
+                [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                [0, 0, 0, 0, 0],
+                [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0],
+                [640, 480]);
+            var session = new Session([cam], skel, ['track_0']);
+            session._uploadedCameras = ['cam1'];
+
+            // Simulate "Track All" having tracked frames 0-4 with the SAME
+            // (camera, trackIdx) — one continuous animal across the range.
+            for (var f = 0; f < 5; f++) {
+                var inst = new Instance([[100, 100], [200, 200]], 0, 'user', 1);
+                inst.trackIdx = 0;
+                var fg = new FrameGroup(f);
+                fg.addInstance('cam1', inst);
+                session.addFrameGroup(fg);
+            }
+
+            session.addIdentity('Red');
+            // Mirrors what Track All's commitTrackedFrame does for the live
+            // tracker: writes a frameIdentityMap entry per frame the track
+            // appears in (assignTrackToIdentity iterates ALL of
+            // session.frameGroups, which right now holds all 5 frames).
+            session.assignTrackToIdentity(0, session.identities[0].id, 'cam1');
+
+            // Simulate a lazy reopen: only frame 0 has actually been visited/
+            // materialized; frames 1-4 are evicted from frameGroups (as lazy
+            // loading would leave them, never having been scrubbed to) while
+            // their frameIdentityMap entries (written above) remain intact.
+            for (var ef = 1; ef < 5; ef++) session.frameGroups.delete(ef);
+
+            tl.setData(session);
+            tl.setDisplayMode('identities');
+
+            var idRow = null;
+            for (var ri = 0; ri < (tl._trackSegments || []).length; ri++) {
+                var row = tl._trackSegments[ri];
+                if (row._isIdentity && row.cameraName === 'cam1' && !row._isNoId) { idRow = row; break; }
+            }
+            assertNotNull(idRow, 'an identity row for cam1 should exist');
+
+            var coveredFrames = {};
+            for (var si = 0; si < (idRow.segments || []).length; si++) {
+                var seg = idRow.segments[si];
+                for (var fr = seg.start; fr <= seg.end; fr++) coveredFrames[fr] = true;
+            }
+
+            for (var expectFrame = 0; expectFrame < 5; expectFrame++) {
+                assertTrue(!!coveredFrames[expectFrame],
+                    'frame ' + expectFrame + ' should be covered by the identity timeline ' +
+                    'even though only frame 0 is materialized in session.frameGroups');
+            }
+
+            cleanup(tl, container);
+        });
+
+        it('a materialized frame whose instance was removed is NOT re-shown via the frameIdentityMap fallback', function () {
+            var container = createContainer(900, 320);
+            var tl = new Timeline(container, { totalFrames: 10 });
+
+            var skel = new Skeleton('s', ['a', 'b'], [[0, 1]]);
+            var cam = new Camera('cam1',
+                [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                [0, 0, 0, 0, 0],
+                [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0],
+                [640, 480]);
+            var session = new Session([cam], skel, ['track_0']);
+            session._uploadedCameras = ['cam1'];
+
+            var inst0 = new Instance([[100, 100], [200, 200]], 0, 'user', 1);
+            inst0.trackIdx = 0;
+            var fg0 = new FrameGroup(0);
+            fg0.addInstance('cam1', inst0);
+            session.addFrameGroup(fg0);
+
+            session.addIdentity('Red');
+            session.assignTrackToIdentity(0, session.identities[0].id, 'cam1');
+
+            // Frame 0 IS materialized (still in frameGroups), but its
+            // instance was subsequently removed — the frameIdentityMap entry
+            // lingers (a known, accepted, self-healing gap; see plan). The
+            // materialized pass must still win: frame 0 should NOT show a
+            // color bar despite the stale frameIdentityMap entry.
+            fg0.instances.set('cam1', []);
+
+            tl.setData(session);
+            tl.setDisplayMode('identities');
+
+            var idRow = null;
+            for (var ri = 0; ri < (tl._trackSegments || []).length; ri++) {
+                var row = tl._trackSegments[ri];
+                if (row._isIdentity && row.cameraName === 'cam1' && !row._isNoId) { idRow = row; break; }
+            }
+            var coversFrame0 = false;
+            if (idRow) {
+                for (var si = 0; si < (idRow.segments || []).length; si++) {
+                    var seg = idRow.segments[si];
+                    if (0 >= seg.start && 0 <= seg.end) coversFrame0 = true;
+                }
+            }
+            assertFalse(coversFrame0,
+                'a materialized frame with its instance removed must not show a color bar ' +
+                'just because a stale frameIdentityMap entry lingers for it');
+
+            cleanup(tl, container);
+        });
+    });
 })();
