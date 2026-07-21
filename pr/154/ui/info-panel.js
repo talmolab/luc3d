@@ -6,9 +6,7 @@
 import {
     Skeleton, Camera, Session,
 } from '../pose/pose-data.js';
-import {
-    getInstanceGroupsForFrame, triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
 import { REPROJECTION_COLOR, getTrackColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
@@ -1157,43 +1155,6 @@ export function populateUnassignedVideos(sessionVideos) {
 }
 
 export function updateFrameInfo(frameIdx, instanceGroups) {
-    // Backfill reprojections/error for any group that already has `points3d`
-    // (e.g. restored from a save on a lazy project reopen) but hasn't been
-    // reprojected yet — this panel must not depend on some earlier caller
-    // (drawAllOverlays) having already triggered that computation as a side
-    // effect of drawing this exact frame; it can be reached without that
-    // (e.g. right after a lazy reopen lands on a frame, or after Track All
-    // rebuilds groups from scratch with points3d but no reprojections).
-    if (instanceGroups && state.session && state.session.cameras.length >= 2) {
-        for (let bi = 0; bi < instanceGroups.length; bi++) {
-            const bGroup = instanceGroups[bi];
-            if (bGroup.points3d && bGroup.points3d.length > 0 &&
-                (!bGroup.reprojectedInstances || bGroup.reprojectedInstances.size === 0) &&
-                (!bGroup.reprojections || Object.keys(bGroup.reprojections).length === 0)) {
-                const bTriRes = triangulateAndReproject(bGroup, state.session.cameras);
-                bGroup.reprojections = bTriRes.reprojections;
-                storeReprojectedInstances(bGroup, bTriRes, state.session.cameras);
-                bGroup.observedPoints = {};
-                for (let bc = 0; bc < state.session.cameras.length; bc++) {
-                    const bCam = state.session.cameras[bc];
-                    const bInst = bGroup.getInstance(bCam.name);
-                    if (bInst) bGroup.observedPoints[bCam.name] = bInst.points;
-                }
-                const bExisting = state.triangulationResults.get(frameIdx) || [];
-                bExisting.push({
-                    group: bGroup,
-                    points3d: bTriRes.points3d,
-                    reprojections: bTriRes.reprojections,
-                    errors: bTriRes.errors,
-                    errorsUndistorted: bTriRes.errorsUndistorted,
-                    meanError: bTriRes.meanError,
-                    meanErrorUndistorted: bTriRes.meanErrorUndistorted,
-                });
-                state.triangulationResults.set(frameIdx, bExisting);
-            }
-        }
-    }
-
     // Reprojection error display
     const results = state.triangulationResults.get(frameIdx);
     let meanError = null;
@@ -1801,13 +1762,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 if (!state.triangulationResults || state.triangulationResults.size === 0) {
                     rtdError.style.display = 'none';
                 }
-                if (results) {
-                    const reprojGroupResult = results.find(function (r) { return r.group === group; });
-                    rtdError.textContent = (reprojGroupResult && reprojGroupResult.meanError != null)
-                        ? reprojGroupResult.meanError.toFixed(1) : '-';
-                } else {
-                    rtdError.textContent = '-';
-                }
+                rtdError.textContent = '-';
 
                 const rtdEmpty = document.createElement('td');
                 rtdEmpty.style.padding = '0';
