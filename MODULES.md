@@ -1646,6 +1646,49 @@ row. The producer's per-track `counts`
 sessions are under the cap and render exactly as before. Covered by
 `tests/test-timeline-sparse-occupancy.js`.
 
+**ID Timeline population after lazy eviction.** `_buildIdentitySegments` (the
+identity-mode counterpart to `_buildTrackSegments` above) had the same lazy-
+loading gap `_buildTrackSegments` already solved for tracks, but nobody had
+fixed it for identities: it built `idCamFrames` **exclusively** from
+`session.frameGroups`, which after a lazy reopen (#167) only contains frames
+the user has actually visited — so the ID Timeline only showed color for
+played frames instead of the whole tracked range (symptom: "colored IDs only
+show up for frames we've played" after Track All / Triangulate All). Fixed
+with a two-pass build: pass 1 is the original `frameGroups` scan, unchanged
+and AUTHORITATIVE for whichever frames it covers; pass 2 is a NEW fallback
+that iterates `session.frameIdentityMap` directly (parsed via the local
+`_parseFrameIdentityKey(key)` helper — uses `indexOf`/`substring`, NOT
+`split(':')`+`slice`/`join`, since this runs once per map entry on every
+rebuild and a large project's map can have hundreds of thousands of entries;
+measured ~3.5-4x faster at 100k frames (276ms → 72ms for
+`setDisplayMode('identities')`) from avoiding the extra array allocations
+alone, no caching involved. Splits on the first colon for frameIdx, the LAST
+colon for trackIdx, so a colon-containing camera name still parses correctly;
+mirrors the equivalent inline parsing in `ui/track-identity-ops.js`'s
+`deleteTrackAt`) for every frame pass 1 didn't already cover. There is
+currently no caching — the full pass re-runs on every `setDisplayMode`/
+`setData`/`refreshTracks` call, so repeated mode-toggling on a huge project
+still costs the same each time; a bigger follow-up would cache the built
+segments and invalidate only when `frameIdentityMap`/`frameGroups`/
+`instanceGroups` actually change. `frameIdentityMap` is the right fallback
+source (rather than mirroring `_buildTrackSegments`'s
+`instanceGroups`+`trackOccupancy` merge):
+it's restored/written for the WHOLE tracked range regardless of frame
+materialization (Track All / `groupByIdentityAndTriangulateAll` both write
+it per-frame as they process every frame; nothing ever evicts it per-frame —
+confirmed by grepping every `frameIdentityMap` reference in the repo), it's
+tiny (one integer per assignment vs. full 2D pose data), and its raw value
+already IS the answer (`>= 0` → identityId, `< 0` → explicit no-identity),
+so it also natively covers the gray "No ID" row for unvisited frames, which
+`instanceGroups` can't represent at all (ungrouped/unlinked instances are
+never part of any group). One accepted, self-healing tradeoff: an instance
+deleted via `removeInstance`/`removeInstanceGroup` doesn't clean up its
+`frameIdentityMap` entry, so an unvisited frame could show a stale color bar
+until visited — pass 1 (materialized frames) always wins once a frame is
+actually visited, so this self-heals and is not treated as a bug to engineer
+around. Covered by `tests/test-timeline-tree-grouping.js` ("Timeline ID
+population after lazy eviction").
+
 **Visibility panel row sizing (Phase-7 refinements).** `styles.css`
 scopes a **compact** 28×16 `.toggle-switch` (knob 12×12, travel 12px)
 to `.vis-toggle-row .toggle-switch` so the narrower toggles fit cleanly
