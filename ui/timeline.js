@@ -16,16 +16,22 @@ import { isCameraTracked } from './settings.js';
  * its parts. Splits on the FIRST colon for frameIdx and the LAST colon for
  * trackIdx — camera names aren't guaranteed colon-free, so a naive 3-way
  * split would misparse one whose name contains ':'. Mirrors the equivalent
- * inline parsing in `ui/track-identity-ops.js` (`deleteTrackAt`).
+ * inline parsing in `ui/track-identity-ops.js` (`deleteTrackAt`), but uses
+ * `indexOf`/`substring` instead of `split(':')`+`slice`/`join` — this runs
+ * once per entry in `session.frameIdentityMap` on every identity-timeline
+ * rebuild, which can be hundreds of thousands of calls on a large project,
+ * so avoiding the extra array allocations measurably cuts the constant
+ * factor (no behavior change).
  * @param {string} key
  * @returns {{frameIdx: number, camName: string, trackIdx: number}|null}
  */
 function _parseFrameIdentityKey(key) {
-    var parts = key.split(':');
-    if (parts.length < 3) return null;
-    var frameIdx = parseInt(parts[0], 10);
-    var trackIdx = parseInt(parts[parts.length - 1], 10);
-    var camName = parts.slice(1, parts.length - 1).join(':');
+    var i1 = key.indexOf(':');
+    var i2 = key.lastIndexOf(':');
+    if (i1 < 0 || i2 <= i1) return null;
+    var frameIdx = parseInt(key.substring(0, i1), 10);
+    var trackIdx = parseInt(key.substring(i2 + 1), 10);
+    var camName = key.substring(i1 + 1, i2);
     if (!Number.isFinite(frameIdx) || !Number.isFinite(trackIdx)) return null;
     return { frameIdx: frameIdx, camName: camName, trackIdx: trackIdx };
 }
