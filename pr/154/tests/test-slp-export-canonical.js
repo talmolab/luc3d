@@ -28,7 +28,7 @@
  */
 
 (function () {
-    const { describe, it, assert, assertEqual, assertGreaterThan, assertTrue } = TestFramework;
+    const { describe, it, assert, assertEqual, assertGreaterThan, assertTrue, assertDeepEqual } = TestFramework;
 
     const HDF5_MAGIC = [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a]; // \x89HDF\r\n\x1a\n
 
@@ -120,7 +120,7 @@
             }
         });
 
-        it('multi-view export emits a canonical sessions_json with lucid metadata', async function () {
+        it('multi-view export emits SLP 2.8 columnar /session_data + slim sessions_json', async function () {
             const raw = await window.SleapIO.saveSlpToBytes(buildMultiViewLabels());
             const { h5, file, path } = await openH5(raw, 'mv');
             try {
@@ -128,20 +128,48 @@
                 assertTrue(keys.indexOf('sessions_json') >= 0, 'missing sessions_json');
                 const sess = file.get('sessions_json').value;
                 assertEqual(sess.length, 1, 'sessions_json length');
+                // SLP 2.8 (#546/#224): 3D grouping moved OUT of the inline
+                // `frame_group_dicts` (which grew a single per-session JSON string
+                // past h5wasm's ~0.45 GB vlen read ceiling) into a columnar
+                // `/session_data` group. `sessions_json` is now SLIM.
                 const s = JSON.parse(sess[0]);
                 assertTrue(!!s.calibration, 'sessions_json missing calibration');
                 assertTrue(!!s.camcorder_to_video_idx_map, 'missing camcorder_to_video_idx_map');
-                assertTrue(Array.isArray(s.frame_group_dicts) && s.frame_group_dicts.length === 1, 'expected 1 frame_group_dict');
-                const ig = s.frame_group_dicts[0].instance_groups[0];
-                const lucid = ig.metadata && ig.metadata.lucid;
-                assertTrue(!!lucid, 'instance_group missing metadata.lucid');
-                assertEqual(lucid.identityId, 1, 'per-session identityId not persisted');
-                assertTrue(!!lucid.instanceMeta && !!lucid.instanceMeta.cam0, 'missing per-camera instanceMeta');
-                assertTrue(Array.isArray(ig.points) && ig.points.length === 2, 'instance_group 3D points not persisted');
+                assertTrue(!s.frame_group_dicts || s.frame_group_dicts.length === 0,
+                    'frame_group_dicts must NOT be inline under SLP 2.8 (moved to /session_data)');
+                // Columnar /session_data with the struct tables + numeric 3D matrix.
+                assertTrue(keys.indexOf('session_data') >= 0, 'missing /session_data group (SLP 2.8)');
+                const sdKeys = file.get('session_data').keys();
+                ['frame_groups', 'instance_groups', 'instance_group_members', 'points_3d'].forEach(function (k) {
+                    assertTrue(sdKeys.indexOf(k) >= 0, '/session_data missing ' + k);
+                });
+                assertEqual(file.get('session_data/frame_groups').shape[0], 1, 'expected 1 frame group');
+                assertEqual(file.get('session_data/instance_groups').shape[0], 1, 'expected 1 instance group');
+                const p3 = file.get('session_data/points_3d').shape;
+                assertEqual(p3[0], 2, 'expected 2 triangulated 3D points');
+                assertEqual(p3[1], 3, '3D points must be (N,3)');
             } finally {
                 try { file.close(); } catch (e) {}
                 try { h5.FS.unlink(path); } catch (e) {}
             }
+        });
+
+        it('multi-view 3D grouping + per-session identity round-trip via readSlpStreaming', async function () {
+            const raw = await window.SleapIO.saveSlpToBytes(buildMultiViewLabels());
+            const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js', document.baseURI).href;
+            const lab = await window.SleapIO.readSlpStreaming(new File([raw], 'mv-rt.slp'),
+                { openVideos: false, rawSessions: true, h5wasmUrl: h5wasmUrl });
+            const sess = (lab.sessions || [])[0];
+            assertTrue(!!sess && !!sess.frameGroups, 'typed session did not round-trip');
+            let ig = null;
+            for (const [, fg] of sess.frameGroups) { for (const g of (fg.instanceGroups || [])) { ig = g; break; } if (ig) break; }
+            assertTrue(!!ig, 'no instance group round-tripped');
+            // 3D points came back from the columnar /session_data/points_3d matrix.
+            assertTrue(!!ig.instance3d && ig.instance3d.points.length === 2, '3D points did not round-trip');
+            assertDeepEqual(ig.instance3d.points[0], [100, 200, 300], 'first 3D point');
+            // Per-session identityId (LUCID scopes identities per session) survives.
+            const lucid = (ig.metadata && ig.metadata.lucid) || {};
+            assertEqual(lucid.identityId, 1, 'per-session identityId round-trip (idB)');
         });
     });
 })();

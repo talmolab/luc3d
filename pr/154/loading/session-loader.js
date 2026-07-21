@@ -39,10 +39,11 @@ import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-expor
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink } from '../import-export/slp-import.js';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
+    ensureLazyFrameData,
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
 
@@ -699,10 +700,26 @@ export function showParentDirMatchSummary(matched, unmatched) {
  */
 export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
     var allSessionNames = options && options.allSessionNames;
+    var allowSkip = options && options.allowSkip;
     return new Promise(function (resolve) {
         var overlay = document.createElement('div');
         overlay.id = 'videoSelectOverlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+
+        // Esc skips the prompt (UI convention: modals close on Esc). Every
+        // caller treats a null result as "no videos picked" and continues.
+        function onKeyDown(ev) {
+            if (ev.key === 'Escape') {
+                ev.preventDefault();
+                finish(null);
+            }
+        }
+        function finish(result) {
+            document.removeEventListener('keydown', onKeyDown);
+            overlay.remove();
+            resolve(result);
+        }
+        document.addEventListener('keydown', onKeyDown);
 
         var title = document.createElement('div');
         title.style.cssText = 'color:#fff;font-size:20px;font-weight:600;margin-bottom:8px;';
@@ -730,8 +747,7 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
                 var result;
                 try { result = await pickParentDirectoryForSessions(allSessionNames); } catch (e) { console.error(e); return; }
                 if (!result) return; // cancelled
-                overlay.remove();
-                resolve({ parentResult: result });
+                finish({ parentResult: result });
             });
         }
 
@@ -770,8 +786,7 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
             }
 
             if (matchedFiles.length > 0) {
-                overlay.remove();
-                resolve(matchedFiles);
+                finish(matchedFiles);
             }
         });
 
@@ -780,10 +795,19 @@ export function forceVideoSelectionWithFolder(refInfo, sessionName, options) {
             var files = [];
             try { files = await pickVideoFiles(); } catch (e) { /* cancelled */ }
             if (files.length > 0) {
-                overlay.remove();
-                resolve(files);
+                finish(files);
             }
         });
+
+        // Optional explicit skip (lazy project reopen: videos can be attached
+        // later via File → Load Videos).
+        if (allowSkip) {
+            var btnSkip = document.createElement('button');
+            btnSkip.style.cssText = 'padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;background:transparent;color:#aaa;border:1px solid var(--border-color,#555);border-radius:8px;';
+            btnSkip.textContent = 'Skip — Load Videos Later';
+            btnRow.appendChild(btnSkip);
+            btnSkip.addEventListener('click', function () { finish(null); });
+        }
 
         document.body.appendChild(overlay);
     });
@@ -1682,6 +1706,33 @@ export async function handleLoadSessionFolderSingleSlp() {
             }
         }
 
+        // No calibration.toml? Recover the calibration EMBEDDED in the project
+        // .slp's sessions_json (#134). A LUCID project .slp carries its full
+        // calibration there, but this loader previously read calibration only
+        // from a separate .toml — so reopening a saved project (which has no
+        // .toml) dropped the cameras entirely and lost calibration + 3D. This
+        // mirrors handleLoadSlpFile's embedded-calibration read.
+        if (cameras.length === 0 && slpData.sessions && slpData.sessions.length > 0) {
+            var _embCalib = slpData.sessions[0].calibration || {};
+            var _embKeys = Object.keys(_embCalib).filter(function (k) { return k !== 'metadata'; });
+            for (var _eki = 0; _eki < _embKeys.length; _eki++) {
+                var _cd = _embCalib[_embKeys[_eki]];
+                if (!_cd || typeof _cd !== 'object') continue;
+                cameras.push(new Camera(
+                    _cd.name || _embKeys[_eki],
+                    _cd.matrix || [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    _cd.distortions || _cd.dist || [0, 0, 0, 0, 0],
+                    _cd.rotation || _cd.rvec || [0, 0, 0],
+                    _cd.translation || _cd.tvec || [0, 0, 0],
+                    _cd.size || [640, 480]
+                ));
+            }
+            if (cameras.length > 0) {
+                hasCalibration = true;
+                console.log('[single-slp] Recovered embedded calibration for', cameras.length, 'camera(s) from project .slp');
+            }
+        }
+
         // Build session from SLP data
         var skelData = slpData.skeleton || { name: 'skeleton', nodes: [], edges: [] };
         var skeleton = new Skeleton(skelData.name, skelData.nodes, skelData.edges);
@@ -1917,6 +1968,347 @@ export async function handleLoadSessionFolderSingleSlp() {
         console.error('[single-slp] Error:', err);
         hideLoading();
         setStatus('Load error: ' + err.message, 'error');
+    }
+}
+
+/**
+ * Prompt for + attach the videos of a lazily-reopened project session — the
+ * video-finalization step of `handleLoadProjectSlpLazy`, mirroring
+ * `handleLoadSlpFile`'s external-video flow. A project `.slp` references its
+ * videos by path only, so the user picks the session folder (or files); each
+ * picked video is matched to a session camera by parent-directory name, by
+ * camera-name-in-stem, or against the video filename referenced in the
+ * reopened file (`loader.videos`). Matched videos get decoders + views + the
+ * dock grid; unmatched ones are skipped. The prompt is skippable (Esc or the
+ * Skip button) — the session then stays video-less exactly like before this
+ * step existed, and File → Load Videos still works later.
+ *
+ * `pickedFilesOverride` (tests/automation): bypasses the prompt and uses the
+ * given File list directly.
+ *
+ * @returns {Promise<boolean>} true if at least one video view was attached.
+ */
+export async function attachVideosForLazyReopen(session, loader, pickedFilesOverride) {
+    var cameras = session.cameras || [];
+    var camNames = cameras.map(function (c) { return c.name; });
+
+    // Referenced video basenames from the reopened file — shown in the prompt
+    // and used as a filename-matching fallback.
+    var refBaseByCam = new Map();
+    for (var rci = 0; rci < camNames.length; rci++) {
+        var lv = loader.videos && loader.videos.get(camNames[rci]);
+        if (lv && lv.filename) {
+            refBaseByCam.set(camNames[rci],
+                String(lv.filename).replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase());
+        }
+    }
+    var refInfo = 'Cameras: ' + camNames.join(', ');
+    if (refBaseByCam.size > 0) {
+        refInfo += ' — referenced videos: ' + Array.from(refBaseByCam.values()).join(', ');
+    }
+
+    var picked = pickedFilesOverride
+        || await forceVideoSelectionWithFolder(refInfo, session.name || 'Session', { allowSkip: true });
+    if (!picked || picked.parentResult || picked.length === 0) return false;
+
+    // Filter to real session videos and match each to a camera.
+    var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
+    var toLoad = [];
+    var unmatched = 0;
+    for (var pfi = 0; pfi < picked.length; pfi++) {
+        var pFile = picked[pfi];
+        if (!pFile || !pFile.name) continue;
+        var pExt = pFile.name.substring(pFile.name.lastIndexOf('.')).toLowerCase();
+        if (vidExts.indexOf(pExt) < 0 || isCalibrationVideoFile(pFile)) continue;
+        var pStem = pFile.name.replace(/\.[^.]+$/, '');
+        var pStemLower = pStem.toLowerCase();
+        if (state.videoFiles.some(function (vf) { return vf.name === pStem; })) continue;
+
+        var pRel = pFile.webkitRelativePath || pFile.name;
+        var pParts = pRel.split('/');
+        var pParentDir = pParts.length >= 2 ? pParts[pParts.length - 2].toLowerCase() : null;
+
+        var assignedCam = null;
+        for (var mci = 0; mci < camNames.length && !assignedCam; mci++) {
+            if (pParentDir && pParentDir === camNames[mci].toLowerCase()) assignedCam = camNames[mci];
+        }
+        for (var sci = 0; sci < camNames.length && !assignedCam; sci++) {
+            if (pStemLower.indexOf(camNames[sci].toLowerCase()) >= 0) assignedCam = camNames[sci];
+        }
+        for (var bci = 0; bci < camNames.length && !assignedCam; bci++) {
+            var refBase = refBaseByCam.get(camNames[bci]);
+            if (refBase && (pStemLower === refBase || pStemLower.indexOf(refBase) >= 0 || refBase.indexOf(pStemLower) >= 0)) {
+                assignedCam = camNames[bci];
+            }
+        }
+        if (!assignedCam) { unmatched++; continue; }
+        if (toLoad.some(function (e) { return e.assignedCam === assignedCam; })) continue;
+        toLoad.push({ file: pFile, stem: pStem, rel: pRel, assignedCam: assignedCam });
+    }
+    if (toLoad.length === 0) {
+        if (unmatched > 0) {
+            setStatus(unmatched + ' video(s) matched no camera (' + camNames.join(', ') + ') — use File → Load Videos', 'warning');
+        }
+        return false;
+    }
+
+    showLoading('Loading ' + toLoad.length + ' video(s)...');
+    var modal = getLoadingProgressModal({ title: 'Loading videos' });
+    modal.reset();
+    modal.show();
+
+    await Promise.allSettled(toLoad.map(async function (entry) {
+        var taskId = modal.addTask({ label: entry.file.name });
+        try {
+            var decoder = new OnDemandVideoDecoder({
+                cacheSize: 60, lookahead: 10,
+                onProgress: function (ev) {
+                    if (ev && ev.error) modal.failTask(taskId, ev.error);
+                    else modal.updateTask(taskId, ev);
+                },
+            });
+            await decoder.init(entry.file);
+            entry.decoder = decoder;
+            modal.completeTask(taskId);
+        } catch (decErr) {
+            console.error('[load-project-lazy] Failed to load video:', entry.file.name, decErr);
+            entry.error = decErr;
+            modal.failTask(taskId, decErr);
+        }
+    }));
+
+    var attachedNames = [];
+    var failed = [];
+    for (var li = 0; li < toLoad.length; li++) {
+        var lEntry = toLoad[li];
+        if (!lEntry.decoder) { failed.push(lEntry.file.name); continue; }
+        var vfEntry = {
+            file: lEntry.file, name: lEntry.stem, decoder: lEntry.decoder,
+            videoWidth: lEntry.decoder.videoTrack.video.width,
+            videoHeight: lEntry.decoder.videoTrack.video.height,
+            frameCount: lEntry.decoder.samples.length,
+            assignedCamera: lEntry.assignedCam,
+            videoPath: lEntry.rel,
+            sessionIdx: state.activeSessionIdx,
+        };
+        state.videoFiles.push(vfEntry);
+        var hasView = state.views.some(function (v) { return v.name === lEntry.assignedCam; });
+        if (!hasView) createViewForVideoFile(vfEntry);
+        attachedNames.push(lEntry.assignedCam);
+    }
+    if (attachedNames.length === 0) {
+        hideLoading();
+        if (failed.length > 0) setStatus('All videos failed to load: ' + failed.join('; '), 'error');
+        return false;
+    }
+
+    paneManager._suppressActiveHighlight = true;
+    populateViewStrip();
+    populateSessionStrip();
+    paneManager.addAllViewsAsGrid();
+    paneManager._suppressActiveHighlight = false;
+    rebuildVideoController();
+    updateTotalFrames();
+    fitCanvasesToCells();
+    hideWelcomeOverlay();
+
+    if (!interactionManager) setupInteraction();
+    if (interactionManager && state.views.length > 0) {
+        interactionManager.detach();
+        interactionManager.attach(state.views);
+    }
+    recomputeUploadedCameras(session, state);
+    if (timeline) timeline.refreshTracks(session);
+
+    // Render the images (the current frame's 2D is already hydrated).
+    if (videoController) await videoController.seekToFrame(state.currentFrame);
+    drawAllOverlays(state.currentFrame);
+    hideLoading();
+    if (failed.length > 0) {
+        setStatus('Attached ' + attachedNames.length + ' video(s), ' + failed.length + ' failed: ' + failed[0], 'warning');
+    }
+    return true;
+}
+
+/**
+ * Reopen a large project `.slp` LAZILY (the memory-bounded "Load Project" path).
+ *
+ * The eager path (`handleLoadSlpFile` / `parseSlpViaSleapIO`) materializes every
+ * frame's 2D (21.7M points on a real cage5 project) plus a full grouping
+ * reconstruct duplicate and OOMs the tab. This instead:
+ *  - opens the single multi-camera file lazily (`SioLazyLoader.openProjectSlp`) so
+ *    2D frames materialize on demand;
+ *  - restores calibration + identities + `frameIdentityMap` from the embedded
+ *    `sessions_json`;
+ *  - rebuilds `session.instanceGroups` with LIGHTWEIGHT members (3D + refs, no 2D)
+ *    via `reconstructInstanceGroupsFromSessionLazy` (~2.5s, ~1 GB) — 2D hydrates
+ *    on scrub (`ensureLazyFrameData` → `finalizeLazyFrameGroup`).
+ *
+ * A project `.slp` only references videos by path, so after the data comes up
+ * the user is prompted to attach them (`attachVideosForLazyReopen`, skippable —
+ * File → Load Videos still works later).
+ */
+export async function handleLoadProjectSlpLazy(slpFile) {
+    try {
+        if (!(await ensureNo3dImportBlockingLoad())) { setStatus('Load cancelled', 'warning'); return; }
+        showLoading('Reopening project (lazy): ' + slpFile.name + '...');
+
+        // Free the PREVIOUS project's memory BEFORE opening the new one. A large
+        // lazy session holds ~1 GB in its loader + GBs of grouping/3D; opening a
+        // second project on top OOMs the tab (user-reported). Evict every resident
+        // session's lazyLoader + grouping, close decoders, and start fresh.
+        if (videoController) {
+            if (state.isPlaying && typeof videoController.pause === 'function') videoController.pause();
+            setVideoController(null);
+        }
+        for (var _psi = 0; _psi < (state.sessions || []).length; _psi++) {
+            var _ps = state.sessions[_psi];
+            if (!_ps) continue;
+            if (_ps.lazyLoader && typeof _ps.lazyLoader.close === 'function') {
+                try { _ps.lazyLoader.close(); } catch (e) { /* ignore */ }
+            }
+            _ps.lazyLoader = null;
+            _ps.instanceGroups = new Map();
+            _ps.frameGroups = new Map();
+        }
+        if (Array.isArray(state.decoderPool)) {
+            for (var _dpi = 0; _dpi < state.decoderPool.length; _dpi++) {
+                var _dp = state.decoderPool[_dpi];
+                if (_dp && typeof _dp.close === 'function') { try { _dp.close(); } catch (e) { /* ignore */ } }
+            }
+        }
+        state.decoderPool = [];
+        if (Array.isArray(state._decoderPoolCold)) {
+            for (var _dci = 0; _dci < state._decoderPoolCold.length; _dci++) {
+                var _dc = state._decoderPoolCold[_dci];
+                if (_dc && _dc._coldTimer) { clearTimeout(_dc._coldTimer); _dc._coldTimer = null; }
+                if (_dc && typeof _dc.close === 'function') { try { _dc.close(); } catch (e) { /* ignore */ } }
+            }
+        }
+        state._decoderPoolCold = [];
+        state.sessions = [];
+        state.session = null;
+        state.views = [];
+        state.videoFiles = [];
+        state.triangulationResults = new Map();
+        paneManager.clearAll();
+
+        var loader = new SioLazyLoader();
+        var opened = await loader.openProjectSlp(slpFile, function (msg) { showLoading(msg); });
+        var labels = opened.labels;
+        var typedSession = opened.typedSession;
+
+        // Cameras from the embedded calibration.
+        var cameras = [];
+        if (loader.calibration) {
+            var calKeys = Object.keys(loader.calibration).filter(function (k) { return k !== 'metadata'; });
+            for (var cki = 0; cki < calKeys.length; cki++) {
+                var cd = loader.calibration[calKeys[cki]];
+                if (!cd || typeof cd !== 'object') continue;
+                cameras.push(new Camera(
+                    cd.name || calKeys[cki],
+                    cd.matrix || [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    cd.distortions || cd.dist || [0, 0, 0, 0, 0],
+                    cd.rotation || cd.rvec || [0, 0, 0],
+                    cd.translation || cd.tvec || [0, 0, 0],
+                    cd.size || [640, 480]
+                ));
+            }
+        }
+        var hasCalibration = cameras.length > 0;
+
+        var skeleton = new Skeleton(loader.skeleton.name, loader.skeleton.nodes, loader.skeleton.edges);
+        var tracks = loader.trackNames.length ? loader.trackNames.slice() : ['track_0'];
+
+        var lucid = ((labels.rawSessionsJson || [])[0] || {}).metadata;
+        lucid = (lucid && lucid.lucid) || {};
+        var sessName = lucid.sessionName || slpFile.name.replace(/\.slp$/i, '');
+        var session = new Session(cameras, skeleton, tracks, sessName);
+        if (lucid.identities && lucid.identities.length) {
+            session.identities = lucid.identities.map(function (id, i) {
+                return new Identity(i, id.name || ('id_' + i), id.color || null);
+            });
+        }
+        if (lucid.frameIdentityMap) session.frameIdentityMap = new Map(lucid.frameIdentityMap);
+        if (lucid.trustTracks != null) session.trustTracks = lucid.trustTracks;
+
+        session.lazyLoader = loader;
+        session._lazyReopened = true;
+
+        // Rebuild grouping + 3D (lightweight, memory-bounded).
+        var nodeNames = skeleton.nodes.map(function (n) { return typeof n === 'string' ? n : (n.name || ''); });
+        await reconstructInstanceGroupsFromSessionLazy(session, typedSession, loader, nodeNames,
+            { onProgress: function (m) { showLoading(m); } });
+
+        // Activate the reopened session (the previous project was already evicted
+        // + state reset at the top, so this is the sole session).
+        state.sessions.push(session);
+        state.activeSessionIdx = state.sessions.length - 1;
+        state.session = session;
+        state.totalFrames = loader.nFrames;
+        // No decoders yet, so updateTotalFrames() (which reads decoder sample
+        // counts, and resets to 0 when there are none) can't be used here —
+        // write the frame counter + timeline span from the labeled-frame count
+        // directly. attachVideosForLazyReopen refines both from the real
+        // decoders once videos are attached.
+        var tfEl = document.getElementById('totalFrames');
+        if (tfEl) tfEl.textContent = state.totalFrames;
+
+        // 3D viewport (needs a live session).
+        if (hasCalibration) {
+            var vp3dMsg = document.getElementById('viewport3dMessage');
+            if (vp3dMsg) vp3dMsg.classList.add('hidden');
+            if (!viewport3d) setup3DViewport();
+            if (viewport3d) {
+                viewport3d.cameras = session.cameras;
+                viewport3d.skeleton = session.skeleton;
+                viewport3d.addCameraPyramids();
+                viewport3d.setFrame([]);
+                viewport3d.fitToScene();
+            }
+        }
+        if (!interactionManager) setupInteraction();
+        if (!timeline) setupTimeline();
+        if (timeline) {
+            timeline.setData(session);
+            // setData does not propagate the frame span (other load paths pair
+            // it with setTotalFrames) — without this the timeline clamps to 1.
+            timeline.setTotalFrames(state.totalFrames);
+        }
+
+        // Land on the first grouped frame + render it (hydrates its 2D).
+        var gk = Array.from(session.instanceGroups.keys());
+        gk.sort(function (a, b) { return a - b; });
+        var firstFrame = gk.length ? gk[0] : 0;
+        state.currentFrame = firstFrame;
+        await ensureLazyFrameData(firstFrame);
+        drawAllOverlays(firstFrame);
+        if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(firstFrame));
+        if (typeof updateSeekbar === 'function') updateSeekbar();
+
+        hideLoading();
+        updateInfoPanel();
+
+        // Attach the project's videos (prompt; Esc/Skip keeps them deferred).
+        var videosAttached = false;
+        try {
+            videosAttached = await attachVideosForLazyReopen(session, loader);
+        } catch (vErr) {
+            console.error('[load-project-lazy] Video attach failed:', vErr);
+            hideLoading();
+        }
+        updateInfoPanel();
+        if (videosAttached) {
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
+                + ' grouped frames, ' + state.views.length + ' videos', 'success');
+        } else {
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
+                + ' grouped frames, ' + loader.nFrames + ' frames. File → Load Videos to show images.', 'success');
+        }
+    } catch (err) {
+        console.error('[load-project-lazy] Error:', err);
+        hideLoading();
+        setStatus('Lazy reopen error: ' + (err && err.message || err), 'error');
     }
 }
 
@@ -2340,6 +2732,36 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
             if (lazyLoader.nFrames > state.totalFrames) {
                 state.totalFrames = lazyLoader.nFrames;
+            }
+        }
+
+        // Recover embedded calibration (#134 / eric/fix-save): a LUCID project
+        // .slp carries its calibration inside sessions_json, but this loader
+        // otherwise reads calibration ONLY from a separate calibration.toml — so
+        // reopening a saved project with no .toml fell back to placeholder
+        // identity cameras (calibration silently lost). When no .toml cameras
+        // were parsed, build real Camera objects from the lazy loader's captured
+        // embedded calibration BEFORE the video loop, so it finds them and does
+        // not synthesize placeholders.
+        if (cameras.length === 0 && lazyLoader && lazyLoader.calibration && state.session) {
+            var _embCal = lazyLoader.calibration;
+            var _embKeys = Object.keys(_embCal).filter(function (k) { return k !== 'metadata'; });
+            for (var _eki = 0; _eki < _embKeys.length; _eki++) {
+                var _cd = _embCal[_embKeys[_eki]];
+                if (!_cd || typeof _cd !== 'object') continue;
+                var _cn = _cd.name || _embKeys[_eki];
+                if (state.session.cameras.some(function (c) { return c.name === _cn; })) continue;
+                state.session.cameras.push(new Camera(
+                    _cn,
+                    _cd.matrix || [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                    _cd.distortions || _cd.dist || [0, 0, 0, 0, 0],
+                    _cd.rotation || _cd.rvec || [0, 0, 0],
+                    _cd.translation || _cd.tvec || [0, 0, 0],
+                    _cd.size || [640, 480]
+                ));
+            }
+            if (_embKeys.length > 0) {
+                console.log('[session-folder] Recovered embedded calibration for', _embKeys.length, 'camera(s) from project .slp');
             }
         }
 

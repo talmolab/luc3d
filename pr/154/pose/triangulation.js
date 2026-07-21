@@ -1601,6 +1601,67 @@ export function frameHasGroupedUserInstances(frameIdx) {
 // ============================================
 
 /**
+ * Finalize a freshly-built lazy FrameGroup: split its raw per-camera store
+ * instances (currently all in `fg.instances`) into this frame's pre-existing
+ * InstanceGroups vs the unlinked pool.
+ *
+ * Default (per-camera lazy load / Track All): no reopened grouping → every raw
+ * instance goes to the unlinked pool (the original behavior).
+ *
+ * Reopened lazy project (`session._lazyReopened`, from
+ * `reconstructInstanceGroupsFromSessionLazy`): the groups already exist with
+ * LIGHTWEIGHT members (null 2D, tagged `_rawInstIndex`/`_lazy2d`). Here we
+ * **hydrate** each member's 2D from the matching raw store instance (by
+ * `_rawInstIndex`) and place the member in `fg.instances` (grouped); only the
+ * non-member raw instances go to the unlinked pool — mirroring an eager-loaded
+ * frame so rendering / the 3D view / reprojection all work unchanged.
+ */
+function finalizeLazyFrameGroup(session, fg, frameIdx) {
+    var groups = (session._lazyReopened && session.instanceGroups)
+        ? session.instanceGroups.get(frameIdx) : null;
+
+    if (!groups || groups.length === 0) {
+        for (var [cn, camInsts] of fg.instances) {
+            for (var instItem of camInsts) {
+                fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
+            }
+            fg.instances.set(cn, []);
+        }
+        return;
+    }
+
+    // (camName -> Map(rawInstIndex -> member)) for this frame's groups.
+    var memberByCamIdx = new Map();
+    for (var gi = 0; gi < groups.length; gi++) {
+        for (var [mcn, m] of groups[gi].instances) {
+            if (m._rawInstIndex == null) continue;
+            var mm = memberByCamIdx.get(mcn);
+            if (!mm) { mm = new Map(); memberByCamIdx.set(mcn, mm); }
+            mm.set(m._rawInstIndex, m);
+        }
+    }
+    for (var [cn2, built] of fg.instances) {
+        var mm2 = memberByCamIdx.get(cn2);
+        var grouped = [];
+        for (var bi = 0; bi < built.length; bi++) {
+            var member = mm2 ? mm2.get(bi) : undefined;
+            if (member) {
+                if (member._lazy2d) {
+                    // Hydrate the member's 2D from the store instance at this row.
+                    member.points = built[bi].points;
+                    member.occluded = built[bi].occluded;
+                    member._lazy2d = false;
+                }
+                grouped.push(member);
+            } else {
+                fg.addUnlinkedInstance(cn2, new UnlinkedInstance(built[bi], cn2));
+            }
+        }
+        fg.instances.set(cn2, grouped);
+    }
+}
+
+/**
  * Ensure frame data is loaded for lazy sessions.
  * For eager sessions, returns immediately. For lazy sessions,
  * fetches the frame data from workers and populates a temporary FrameGroup.
@@ -1625,17 +1686,19 @@ export async function ensureLazyFrameData(frameIdx) {
                 instData.type || 'predicted',
                 instData.score || 0
             );
+            // `ii` is this instance's position in the frame's raw instance list,
+            // i.e. its row offset within the lazy store's [start,end) range for
+            // this (camera, frame) — see slp-streaming-write.js's `refFor`, which
+            // uses this to resolve the exact store row on save instead of
+            // guessing via trackIdx (ambiguous/wrong whenever a frame has more
+            // than one instance and the grouped one is trackless).
+            inst._rawInstIndex = ii;
             fg.addInstance(camName, inst);
         }
     }
     session.addFrameGroup(fg);
 
-    for (var [cn, camInsts] of fg.instances) {
-        for (var instItem of camInsts) {
-            fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
-        }
-        fg.instances.set(cn, []);
-    }
+    finalizeLazyFrameGroup(session, fg, frameIdx);
 
     var direction = frameIdx >= (state._lastLazyFrame || 0) ? 1 : -1;
     state._lastLazyFrame = frameIdx;
@@ -1672,16 +1735,15 @@ export function buildLazyFrameGroupSync(frameIdx) {
                 instData.type || 'predicted',
                 instData.score || 0
             );
+            // See the identical tag in ensureLazyFrameData above — this is
+            // the store row offset `refFor` (slp-streaming-write.js) needs to
+            // resolve this instance's exact raw row on save.
+            inst._rawInstIndex = ii;
             fg.addInstance(camName, inst);
         }
     }
     session.addFrameGroup(fg);
-    for (var [cn, camInsts] of fg.instances) {
-        for (var instItem of camInsts) {
-            fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
-        }
-        fg.instances.set(cn, []);
-    }
+    finalizeLazyFrameGroup(session, fg, frameIdx);
     return true;
 }
 
@@ -1744,6 +1806,8 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
                     instData.points || [], instData.trackIdx,
                     instData.type || 'predicted', instData.score || 0
                 );
+                // See ensureLazyFrameData's identical tag above.
+                inst._rawInstIndex = ii;
                 fg.addInstance(cameraNames[ci], inst);
             }
         }

@@ -373,8 +373,18 @@ export function setupInteraction() {
         onSelectionChanged: function (selectedGroup, selectedNodeIdx) {
             // Update status bar
             if (selectedGroup) {
-                const trackName = (selectedGroup.identityId >= 0 && state.session.tracks[selectedGroup.identityId]) || ('Group ' + selectedGroup.identityId);
-                const identity = selectedGroup.identityId >= 0 ? state.session.getIdentity(selectedGroup.identityId) : null;
+                // Resolve track + identity from the selected group's LIVE instance
+                // trackIdx at the current frame — NOT selectedGroup.identityId,
+                // which only updates on the frame an identity was assigned and so
+                // shows the stale (pre-fix) name on every other frame (issue #155).
+                let liveTrackIdx = null, liveCam = null;
+                for (const [cn, gi] of selectedGroup.instances) {
+                    if (gi && gi.trackIdx != null) { liveTrackIdx = gi.trackIdx; liveCam = cn; break; }
+                }
+                const trackName = (liveTrackIdx != null && state.session.tracks[liveTrackIdx]) || ('Group ' + selectedGroup.id);
+                const identity = liveTrackIdx != null
+                    ? state.session.getIdentityForTrack(liveTrackIdx, liveCam, state.currentFrame)
+                    : null;
                 const identityLabel = identity ? ' [' + identity.name + ']' : '';
                 const nodeName = selectedNodeIdx >= 0 && state.session.skeleton.nodes[selectedNodeIdx]
                     ? state.session.skeleton.nodes[selectedNodeIdx]
