@@ -2389,6 +2389,24 @@ export function triangulateCurrentFrame(method) {
     if (timeline) timeline.refreshTracks(state.session, { cap: true });
 }
 
+// Mirrors `pose/tracker.js`'s private `frameGroupHasUserInstances` (kept local
+// rather than shared for the same reason noted there — one small pure helper
+// isn't worth a new cross-module import) — true if a FrameGroup carries any
+// user-authored instance, i.e. it's unsafe to release/evict.
+function frameGroupHasUserInstances(fg) {
+    for (var [, insts] of fg.instances) {
+        for (var i = 0; i < insts.length; i++) {
+            if (insts[i] && insts[i].type === 'user') return true;
+        }
+    }
+    for (var [, uInsts] of fg.unlinkedInstances) {
+        for (var j = 0; j < uInsts.length; j++) {
+            if (uInsts[j] && uInsts[j].instance && uInsts[j].instance.type === 'user') return true;
+        }
+    }
+    return false;
+}
+
 /**
  * Triangulate all frames in the session.
  * Uses the same logic as triangulateCurrentFrame but batched across all frames.
@@ -2423,23 +2441,59 @@ export async function triangulateAllFrames(method) {
         return;
     }
 
+    // A reopened lazy project (`session._lazyReopened`) restores 3D + grouping
+    // for EVERY frame up front, but leaves each group member's 2D as an
+    // unhydrated placeholder (`_lazy2d`) until the frame is actually visited
+    // (`ensureLazyFrameData`). Without hydrating first, every not-yet-visited
+    // group fails the viewsWithLabels check below and is silently skipped —
+    // so this would only ever touch whatever frame(s) happen to already be
+    // resident, instead of the whole project. Mirror `trackAll`'s lazy
+    // handling (`sweepTrackAllFrames` in pose/tracker.js) so both operations
+    // sweep a lazy project the same way.
+    var loader = state.session.lazyLoader;
+    var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
+    if (loader && !windowed) {
+        showLoading('Loading all frames for triangulation…');
+        await new Promise(function (r) { setTimeout(r, 0); });
+        try {
+            await loadAllLazyFrames(function (msg) { showLoading(msg); });
+        } catch (e) {
+            hideLoading();
+            console.error('[triangulate-all] failed to load all lazy frames:', e);
+            setStatus('Triangulate All: could not load all frames — ' + e.message, 'error');
+            return;
+        }
+    }
+
     markDirty();
     showLoading('Triangulating ' + frameIndices.length + ' frames (' +
         triangulationMethodLabel(method) + ')...');
     var totalTriangulated = 0;
     var totalGroups = 0;
     var totalErrors = [];
+    var WINDOW = 2000;
     var YIELD_EVERY = 100;
 
-    for (var fi = 0; fi < frameIndices.length; fi++) {
-        var frameIdx = frameIndices[fi];
-        // Auto-create groups from identities when needed (e.g. after Track All).
-        var frameGroupsList = ensureGroupsFromIdentities(state.session, frameIdx);
-        if (!frameGroupsList || frameGroupsList.length === 0) continue;
+    for (var wStart = 0; wStart < frameIndices.length; wStart += WINDOW) {
+        var wEnd = Math.min(wStart + WINDOW, frameIndices.length);
+        var winFirst = frameIndices[wStart];
+        var winLast = frameIndices[wEnd - 1];
+        if (windowed) {
+            // Hydrate this window's 2D before triangulating it — a lazy
+            // reopen only restores 3D + grouping eagerly, not 2D (see the
+            // comment above the loader/windowed setup).
+            await batchLoadLazyFrames(winFirst, winLast - winFirst + 1);
+        }
 
-        var frameResults = [];
+        for (var fi = wStart; fi < wEnd; fi++) {
+            var frameIdx = frameIndices[fi];
+            // Auto-create groups from identities when needed (e.g. after Track All).
+            var frameGroupsList = ensureGroupsFromIdentities(state.session, frameIdx);
+            if (!frameGroupsList || frameGroupsList.length === 0) continue;
 
-        for (var gi = 0; gi < frameGroupsList.length; gi++) {
+            var frameResults = [];
+
+            for (var gi = 0; gi < frameGroupsList.length; gi++) {
                 var group = frameGroupsList[gi];
 
                 // Resolve camera name mismatches
@@ -2514,15 +2568,29 @@ export async function triangulateAllFrames(method) {
                 }
             }
 
-        if (frameResults.length > 0) {
-            state.triangulationResults.set(frameIdx, frameResults);
-            totalTriangulated++;
+            if (frameResults.length > 0) {
+                state.triangulationResults.set(frameIdx, frameResults);
+                totalTriangulated++;
+            }
+
+            // Yield to UI periodically
+            if (fi > 0 && fi % YIELD_EVERY === 0) {
+                showLoading('Triangulating... ' + fi + '/' + frameIndices.length + ' frames');
+                await new Promise(function (r) { setTimeout(r, 0); });
+            }
         }
 
-        // Yield to UI periodically
-        if (fi > 0 && fi % YIELD_EVERY === 0) {
-            showLoading('Triangulating... ' + fi + '/' + frameIndices.length + ' frames');
-            await new Promise(function (r) { setTimeout(r, 0); });
+        if (windowed) {
+            // Release this window's 2D again (predicted-only frames) to stay
+            // memory-bounded on a large reopened project — mirrors
+            // `sweepTrackAllFrames`'s release step. Keep the on-screen
+            // current frame and any user-edited frame resident.
+            for (var rf = winFirst; rf <= winLast; rf++) {
+                if (rf === state.currentFrame) continue;
+                var rfg = state.session.frameGroups.get(rf);
+                if (rfg && !frameGroupHasUserInstances(rfg)) state.session.frameGroups.delete(rf);
+            }
+            loader.releaseWindow(winFirst, winLast + 1);
         }
     }
 
