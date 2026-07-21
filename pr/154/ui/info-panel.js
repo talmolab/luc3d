@@ -1762,7 +1762,13 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 if (!state.triangulationResults || state.triangulationResults.size === 0) {
                     rtdError.style.display = 'none';
                 }
-                rtdError.textContent = '-';
+                if (results) {
+                    const reprojGroupResult = results.find(function (r) { return r.group === group; });
+                    rtdError.textContent = (reprojGroupResult && reprojGroupResult.meanError != null)
+                        ? reprojGroupResult.meanError.toFixed(1) : '-';
+                } else {
+                    rtdError.textContent = '-';
+                }
 
                 const rtdEmpty = document.createElement('td');
                 rtdEmpty.style.padding = '0';
