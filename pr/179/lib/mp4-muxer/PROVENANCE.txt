@@ -1,0 +1,13 @@
+mp4-muxer — in-browser MP4 multiplexer for WebCodecs-encoded video.
+
+Used by: ui/export-modals.js (showExport3DVideoModal) to mux H.264 frames
+encoded via the WebCodecs VideoEncoder into a downloadable .mp4. Loaded as a
+plain <script> tag in index.html; exposes the global `Mp4Muxer` (with
+`Muxer` and `ArrayBufferTarget`).
+
+Version: 5.2.1 (UMD build).
+Re-fetch:
+  curl -sL -o lib/mp4-muxer/mp4-muxer.js \
+    https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.1/build/mp4-muxer.js
+
+Committed (not gitignored) — same policy as lib/h5wasm and lib/sleap-io.
