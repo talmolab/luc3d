@@ -153,7 +153,28 @@ session graph that holds them.
   under the new keys; instances with no identity — whether entry-less OR
   explicitly marked "no identity" (negative sentinel) — become trackless
   (`trackIdx = null`): a null identity propagates to a null track, and no
-  dedicated "No ID" track is created), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  dedicated "No ID" track is created). **Whole-project correctness on a lazy
+  session:** both propagate directions used to walk only `frameGroups` — a
+  lazy session's small resident window — so an unvisited frame's data was
+  under-covered, and `propagateIdentitiesToTracks`'s old wholesale
+  `frameIdentityMap` replace (built only from that partial walk) silently
+  DESTROYED identity data for every frame outside the window (issue: gray-out
+  after "Propagate IDs → Tracks" on a large project). Fixed:
+  `propagateIdentitiesToTracks` now derives its used-identity set and the
+  remapped `frameIdentityMap` from the existing, always-complete
+  `frameIdentityMap` itself (no `frameGroups` walk needed for that part), so
+  replacing it wholesale is safe again; `frameGroups` is still walked to keep
+  resident instances' `trackIdx` live for immediate GUI feedback. Both
+  directions additionally delegate to `session.lazyLoader` when present —
+  `propagateIdentitiesToTracks` calls `lazyLoader.remapTracksFromIdentity`
+  (rewrites the persistent columnar track column so native SLP export and any
+  future re-materialization pick up the change too, with zero frame
+  materialization) and `propagateTracksToIdentities` calls
+  `lazyLoader.forEachInstanceRow` (read-only project-wide sweep to stamp
+  identity for instances outside the resident window) — see
+  `loading/sio-lazy-loader.js`. Both are duck-typed (`typeof … === 'function'`)
+  so a non-lazy session or the worker-backed `LazyFrameLoader` (which lacks
+  these methods) is unaffected. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
   group editing (`createGroupFromUnlinked` — when no identity is passed it
   derives one from the first member's track, but only if that member HAS a
@@ -2320,6 +2341,31 @@ rebuilds a dropped frame on next access, so release is safe. These use the publi
 frame-release API from sleap-io.js PR #208 — replacing the earlier private
 `_lazyFrameList.cache` reach-in and manual `capInternalCaches` (now redundant, so
 `evictLazyFrames` no longer calls it).
+
+**Project-wide identity/track propagation primitives** (fix for "Propagate
+IDs → Tracks only affects a handful of frames near the cursor" on a large
+project): `forEachInstanceRow(visitFn)` — read-only sweep over every
+`(camName, frameIdx, trackIdx)` instance triple in the WHOLE project, straight
+from each camera's columnar store (`framesData.instance_id_start/end` +
+`instancesData.track`) — zero frame/instance materialization, independent of
+what's resident. Used by `Session.propagateTracksToIdentities`
+(`pose/pose-data.js`) so an unvisited frame's track still gets stamped to
+identity. `remapTracksFromIdentity(newTrackNames, remapFn)` — the write-side
+companion, used by `Session.propagateIdentitiesToTracks`: rebuilds each
+underlying `labels.tracks` (shared by reference with its
+`_lazyDataStore.tracks` — mutated in place, so both stay in sync; a shared
+project-`.slp` store is only rebuilt once) to `newTrackNames`, then for every
+instance row calls `remapFn(camName, frameIdx, oldTrackIdx)` and writes the
+result into `instancesData.track` in place — the same array `appendStore`
+(export, `import-export/slp-streaming-write.js`) and `materializeFrame`
+(re-materializing an evicted/revisited frame) both read by reference, so the
+propagated track survives eviction/reload and is exported correctly with no
+new writer plumbing. Invalidates the loader's own adapted-dict cache and each
+camera's underlying sleap-io.js typed-frame cache afterward (`releaseFrame`)
+so anything already cached re-materializes from the mutated columns. Both are
+duck-typed feature checks from the `Session` side (`typeof … === 'function'`),
+so the worker-backed `LazyFrameLoader` (SLEAP analysis `.h5`, no columnar
+store) is unaffected.
 
 **Imports.** `window.SleapIO.readSlpStreaming` (via the index.html bridge) and the
 local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).

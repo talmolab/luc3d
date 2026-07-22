@@ -449,5 +449,74 @@
                 }
             }
         });
+
+        it('propagateIdentitiesToTracks rewrites the columnar store and survives export, with ZERO frames materialized', async function () {
+            // Regression for the "Propagate IDs -> Tracks only affects a
+            // handful of frames near the cursor" bug: the fix must not depend
+            // on session.frameGroups residency at all for a lazy session. This
+            // test never calls reconstructLazy/buildLazyFrameGroupSync — no
+            // FrameGroup is ever built — proving the store-level remap alone
+            // (SioLazyLoader.remapTracksFromIdentity) carries the whole
+            // project, independent of what's been visited/scrubbed.
+            const S = window.SleapIO;
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js');
+
+            const bytes = await buildProjectFixtureBytes(S);
+            const { loader, opened } = await openProjectFixture(bytes, 'lazy-reopen-propagate.slp');
+            const session = buildLucidSession(loader);
+            assertEqual(session.frameGroups.size, 0, 'precondition: nothing materialized whatsoever');
+
+            // Simulate a completed Track All: identity stamped per (frame,cam,
+            // track) across the whole project, straight into frameIdentityMap
+            // — exactly what Track All itself does, without ever touching
+            // frameGroups for frames the tracker's window already released.
+            const idA = session.addIdentity('Alice');
+            const idB = session.addIdentity('Bob');
+            for (let f = 0; f < N_FIXTURE_FRAMES; f++) {
+                CAMS.forEach(function (camName) {
+                    session.setFrameIdentity(f, camName, 0, idA.id);  // fixture track t0 -> Alice
+                    session.setFrameIdentity(f, camName, 1, idB.id);  // fixture track t1 -> Bob
+                });
+            }
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(res.tracks, 2, 'two tracks created from the two used identities');
+            assertDeepEqual(session.tracks.slice().sort(), ['Alice', 'Bob'], 'session.tracks renamed to identity names');
+            assertEqual(session.frameIdentityMap.size, N_FIXTURE_FRAMES * CAMS.length * 2,
+                'frameIdentityMap still covers every frame/camera/track in the project');
+
+            // The underlying columnar store (shared by BOTH cameras here, per
+            // openProjectSlp) must be rewritten — this is what export and any
+            // future re-materialization actually read for a lazy session.
+            const storeA = loader.labelsByCam.get('Camera_A')._lazyDataStore;
+            assertTrue(storeA === loader.labelsByCam.get('Camera_B')._lazyDataStore, 'shared store, rebuilt once');
+            assertDeepEqual(storeA.tracks.map(function (t) { return t.name; }).sort(), ['Alice', 'Bob'],
+                'labels.tracks (== store.tracks) rebuilt to the identity names');
+            for (let j = 0; j < storeA.instancesData.track.length; j++) {
+                assertTrue(Number(storeA.instancesData.track[j]) >= 0,
+                    'store row ' + j + ' got a real identity-derived track (not left at the old t0/t1 id)');
+            }
+
+            // Re-materializing (as scrubbing to a frame would, post-eviction)
+            // must reflect the NEW assignment — proves this survives
+            // eviction/revisit without keeping anything resident.
+            const frameMap = loader.getFrameSync(0);
+            const camAInsts = frameMap.get('Camera_A');
+            assertEqual(camAInsts.length, 2, 'both instances still present after the remap');
+            const gotNames = camAInsts.map(function (inst) { return session.tracks[inst.trackIdx]; }).sort();
+            assertDeepEqual(gotNames, ['Alice', 'Bob'], 'materialized instances carry the identity-derived track');
+
+            // Export (streaming writer, what a lazy session actually uses to
+            // save) must carry it too — the whole point of the fix.
+            const out = await buildSessionSlpBytesStreaming(session, [], []);
+            const rb = await S.readSlpStreaming(new File([out], 'lazy-reopen-propagate-resave.slp'),
+                { lazy: true, openVideos: false, rawSessions: true, h5wasmUrl: h5wasmUrl });
+            assertDeepEqual(rb.tracks.map(function (t) { return t.name; }).sort(), ['Alice', 'Bob'],
+                'exported file carries the new, identity-derived track names');
+            for (let j = 0; j < rb._lazyDataStore.instancesData.track.length; j++) {
+                assertTrue(Number(rb._lazyDataStore.instancesData.track[j]) >= 0,
+                    'exported row ' + j + ' has a real track (not the untouched original t0/t1 ids)');
+            }
+        });
     });
 })();
