@@ -222,6 +222,35 @@ session graph that holds them.
   (previously missing — only `drawAllOverlays`/`updateInfoPanel`/
   `timeline.refreshTracks` ran), matching the "recolor 3D instances instantly"
   pattern already used by the Color-by-Track/Identity toolbar toggles.
+  **First-frame Track/Identity Timeline regression (raw-trackIdx collision):**
+  `commitTrackedFrame`'s (`pose/tracker.js`) `writtenThisFrame` collision guard
+  marks a (frame,cam,rawTrackIdx) key `-1`/ambiguous in `frameIdentityMap` when
+  the raw per-camera tracker briefly assigns the SAME trackIdx to two
+  different animals on one frame — most common on frame 0, before the tracker
+  has history to differentiate them. Correct for its original purpose (stops
+  the 2D overlay's per-camera-per-frame color lookup from confidently showing
+  the wrong animal's color) — but `propagateIdentitiesToTracks` resolved each
+  instance's new track PURELY through that same ambiguous per-camera key, so
+  on a collision frame BOTH colliding instances went trackless (`null`)
+  instead of falling back to the one signal that stays unambiguous through a
+  collision: each instance's own `group.identityId` (set once per group at
+  creation, never shared across two colliding groups). That silently emptied
+  the Timeline's Track view AND Identity view for that one frame (self-
+  correcting on later frames once the raw tracker differentiates them) — the
+  reported symptom was literally "frame 1 [index 0] remains unchanged in
+  track view... same is happening with IDs now." Fixed with two additions:
+  a **new step 2b** that repairs/supplements `newFrameMap` directly from
+  `session.instanceGroups` (so `frameIdentityMap`-only consumers like
+  `_buildIdentitySegments` see the correct identity too, not just resident
+  in-memory instances), and an `instanceToIdentity` per-instance-object
+  fallback Map (built from `instanceGroups` before any remap runs) that
+  `remapInstance` (steps 3/3b) checks before falling back to the raw
+  per-camera `getIdentityIdForTrack` lookup. Regression test:
+  `tests/e2e/first-frame-track-identity-collision.mjs` (builds a synthetic
+  raw-trackIdx collision on frame 0 only, propagates, and asserts both
+  Timeline display modes cover frame 0 identically to frame 1 — confirmed it
+  fails pre-fix with `[null, null]` on the colliding camera's frame-0
+  instances and passes post-fix).
   Separately, the auto-generated track-name fallback changed from `'id_' +
   ident.id` to the app's normal `'track_' + index` convention (a genuinely
   custom identity name like "Alice" is still preserved verbatim; only a
@@ -697,6 +726,40 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `_rawInstIndex` resolved all 35611 refs with zero collisions. Regression
   test: `tests/e2e/save-multiinstance-ref-integrity.mjs`
   (`npm run test:ref-integrity`).
+  **`finalizeLazyFrameGroup` fresh-Track-All duplicate-render fix.** This
+  function (splits a freshly-(re)materialized lazy FrameGroup's raw
+  instances into "already grouped" vs "unlinked", using `_rawInstIndex` to
+  match a raw instance to an existing group's member) used to gate its
+  "does this frame already have groups?" check on `session._lazyReopened` —
+  a flag set ONLY by `handleLoadProjectSlpLazy` (reopening a saved project),
+  never by a fresh Track All run in the current session. A fresh Track-All
+  sweep evicts every frame except the current one from `session.frameGroups`
+  (`sweepTrackAllFrames`'s windowed release) but never evicts
+  `session.instanceGroups` — so scrubbing to any other frame afterward
+  re-materialized it here, always took the "no groups" branch (since
+  `_lazyReopened` was never true), and dumped every instance into the
+  unlinked pool even though `session.instanceGroups` already had real groups
+  for that exact frame — rendering each tracked animal TWICE: once via its
+  still-resident InstanceGroup, once again as a freshly-unlinked duplicate.
+  Only the current frame (kept resident throughout Track All, never
+  evicted/rebuilt) was unaffected — matching the report exactly ("frame 1 is
+  correct... all other frames have duplicate ungrouped instances"). Fixed by
+  checking `session.instanceGroups` directly instead of gating on
+  `_lazyReopened` — the existing `_rawInstIndex`-keyed hydration logic
+  already works for both a reopened project's lightweight members and a
+  fresh Track-All group's real members (both get `_rawInstIndex` tagged by
+  whichever materialization site created them, per the tagging note above).
+  Also verified the reverse direction still works: ungrouping an instance
+  (`Session.unlinkGroup`) correctly makes it reappear in the unlinked pool
+  (not missing, not still shown as linked) on the next re-materialization —
+  the same hydration logic naturally handles "not claimed by any remaining
+  group → unlinked." Regression test:
+  `tests/e2e/lazy-frame-rematerialize-duplicate.mjs` (mirrors
+  `commitTrackedFrame`'s real grouping across several frames, evicts all but
+  the current one exactly like the windowed sweep, re-materializes one, and
+  asserts no duplication; then ungroups one animal and confirms it correctly
+  reappears unlinked while the other stays linked with no duplicate —
+  confirmed all 4 assertions fail pre-fix and pass post-fix).
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,
@@ -1289,12 +1352,51 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   case, the own-camera-authoritative-over-a-sibling case, multi-camera
   fallthrough with 3+ cameras, null-trackIdx instances, and a fully empty
   group).**
+  **First-frame Track-color collision (2D viewer, not the Timeline):**
+  `commitTrackedFrame`'s (`pose/tracker.js`) `writtenThisFrame` guard marks a
+  (frame,cam,rawTrackIdx) key `-1`/ambiguous in `frameIdentityMap` when the raw
+  per-camera tracker briefly assigns the SAME trackIdx to two DIFFERENT
+  animals on one frame — most common on frame 0, before it has history to
+  differentiate them (`-1` is written nowhere else, so this is unambiguous).
+  The Track-color path used to color purely by that raw trackIdx with no
+  awareness of the collision, so on a collision frame two different animals
+  resolved to the exact same `getTrackColor(sharedTrackIdx)` — reproducible
+  immediately after Track All, with no Propagate step needed (the
+  Identity-color path above was already fine — its own `group.identityId`
+  fallback happened to cover this case). Fixed: when the group's own resolved
+  `(camera, trackIdx)` is flagged `isExplicitNoIdentity` for this exact frame,
+  fall back to the group's own `identityId` (unambiguous, never shared
+  between two colliding groups) — mirroring the existing "no trackIdx at all"
+  fallback a few lines below it. Regression test:
+  `tests/e2e/first-frame-viewer-color-collision.mjs` (forces the exact
+  collision on frame 0 only, asserts both display modes give the two animals
+  distinct colors on frame 0 and that each animal's Track-color matches
+  between frame 0 and frame 1 — confirmed it fails pre-fix, showing both
+  animals as the identical color on frame 0, and passes post-fix).
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
   `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
+  **`drawUnlinkedInstances` same-trackIdx collision fix:** an unlinked
+  instance (no group, no identity — e.g. an animal visible in only 1 camera
+  this frame, so `commitTrackedFrame`'s `members.length < 2` check never
+  groups it) colors purely via `getInstanceColor`'s raw `instance.trackIdx` —
+  there's no `group.identityId` to fall back to the way `getGroupColor` does
+  for linked instances. Two DIFFERENT unlinked instances in the same
+  (camera, frame) that happen to share that raw trackIdx (an upstream
+  tracking-data property, not something LUCID's tracker assigns) used to
+  render as the exact same color with nothing to distinguish them. Fixed by
+  precomputing, per draw call, an occurrence index for each trackIdx among
+  the type-filtered instances actually being drawn together, and darkening
+  (`adjustColorBrightness`, floored at 0.35 so several collisions never
+  converge to black) every occurrence after the first. Regression test:
+  `tests/e2e/unlinked-instance-color-collision.mjs` (two colliding
+  instances + one non-colliding control, asserts the collision pair gets
+  distinct colors and the control is unaffected — confirmed it fails
+  pre-fix, both colliding instances resolving to the identical color, and
+  passes post-fix).
 - Node trails (issue #102): `drawNodeTrails(ctx, viewName, session, frameIdx,
   options)` — mirrors SLEAP's TrackTrailOverlay. The window is the last
   `options.trailLength`+1 **present** frames up to and including `frameIdx`
@@ -2460,6 +2562,23 @@ on-disk frame ordering (same invariant `appendStore` assumes); zero frame
 materialization. `session.trackOccupancy` picks it up
 (`session-loader.js`); the timeline reads the `sparse` flag (`_buildTrackSegments`) and
 caps rendered rows (first-N per camera by appearance). See `ui/timeline.js`.
+
+**`_computeSparseOccupancy` shared-store `rowMap` param.** `openProjectSlp`
+(the single-`.slp` project-reopen path) shares ONE interleaved columnar store
+across every camera — scanning it without scoping to one camera's rows would
+mix every camera's data into a single occupancy result. `_computeSparseOccupancy`
+takes an optional `rowMap` (camName → videoFrameIdx→store-row, from
+`frameRowByCam`) that restricts the scan to just that camera's sorted rows;
+omitted, it scans every row (correct for the per-camera `open()` path, which has
+no shared store). `openProjectSlp` used to never call this at all — occupancy
+was silently `null` for a reopened project, and the same latent gap existed in
+`remapTracksFromIdentity`'s post-propagate occupancy rebuild (called this with no
+`rowMap` despite iterating per-camera in a potentially-shared-store context).
+Both fixed: `openProjectSlp` now computes occupancy for every camera right after
+determining `nFrames`, passing each camera's own `rowMap`; `remapTracksFromIdentity`
+passes `this.frameRowByCam.get(camName)`. Regression:
+`tests/test-lazy-reopen.js`'s "propagateIdentitiesToTracks rebuilds the lazy
+loader's trackOccupancy (Tracks Timeline bug)" test.
 
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds

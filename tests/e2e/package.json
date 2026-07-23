@@ -13,7 +13,11 @@
     "test:reopen-calib": "node reopen-project-calibration.mjs",
     "test:multi-session-save": "node multi-session-save-streaming.mjs",
     "test:ref-integrity": "node save-multiinstance-ref-integrity.mjs",
-    "test:track-all-fresh-lazy": "node track-all-fresh-lazy-session.mjs"
+    "test:track-all-fresh-lazy": "node track-all-fresh-lazy-session.mjs",
+    "test:first-frame-collision": "node first-frame-track-identity-collision.mjs",
+    "test:first-frame-viewer-collision": "node first-frame-viewer-color-collision.mjs",
+    "test:unlinked-color-collision": "node unlinked-instance-color-collision.mjs",
+    "test:lazy-rematerialize-dup": "node lazy-frame-rematerialize-duplicate.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

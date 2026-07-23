@@ -404,11 +404,24 @@ export class SioLazyLoader {
             rows = frameIdxCol.length;   // sentinel: iterate 0..rows-1 below
         }
 
+        // A shared multi-camera store (openProjectSlp) interleaves every
+        // camera's rows together — scoping to just this camera's rows via
+        // rowMap keeps occupancy from mixing cameras' data. Per-camera open()
+        // has no shared store, so it scans every row as before.
+        var rows;
+        if (rowMap) {
+            rows = Array.from(rowMap.values()).sort(function (a, b) {
+                return Number(frameIdxCol[a]) - Number(frameIdxCol[b]);
+            });
+        } else {
+            rows = frameIdxCol.length;
+        }
+        var nRows = rowMap ? rows.length : rows;
+
         var segments = new Map();   // trackIdx -> [{start,end}]
         var counts = new Map();     // trackIdx -> occupied-frame count
         var open = new Map();       // trackIdx -> {start,last}: the run in progress
 
-        var nRows = rowMap ? rows.length : rows;
         for (var ri = 0; ri < nRows; ri++) {
             var r = rowMap ? rows[ri] : ri;
             var f = Number(frameIdxCol[r]);
