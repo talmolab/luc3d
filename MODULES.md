@@ -186,8 +186,23 @@ session graph that holds them.
   `identityForTrack` Map) — that lookup is a LINEAR SCAN over
   `session.identities`, and the sweep calls it once per **instance row**
   (millions on a large project); with many distinct tracks the unmemoized
-  version is O(rows × identities), which was observed to freeze the tab on
-  "Propagate Tracks → IDs" for a heavily-tracked project. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  version is O(rows × identities). `propagateTracksToIdentities`'s final
+  "align `group.identityId` with instances' track" pass also used to call
+  `assignIdentityToGroup(group, id)` with no frame hint while ALREADY
+  iterating every frame of `session.instanceGroups` (project-wide on a lazy
+  session, not just the resident `frameGroups` window) — and
+  `assignIdentityToGroup` itself re-derives its host frame by scanning ALL of
+  `instanceGroups` per call (to find per-frame identity collisions), so doing
+  that once per group inside a project-wide loop was an O(frames²) blowup on
+  top of the O(rows × identities) one above. Fixed by giving
+  `assignIdentityToGroup` an optional 3rd `hostFrameIdx` param: the propagate
+  loop now passes the frame index it's already iterating (making its call
+  O(1) instead of O(frames)); every other, single-group interactive caller
+  (`ui/identity-assignment.js`, `ui/info-panel.js`, `ui/ui-wiring.js`) omits
+  it and keeps the original O(project) search, which is fine as a one-off
+  per user click. Together these were observed to freeze the tab outright on
+  "Propagate Tracks → IDs" for a large heavily-tracked/grouped project — not
+  just slow. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
   group editing (`createGroupFromUnlinked` — when no identity is passed it
   derives one from the first member's track, but only if that member HAS a

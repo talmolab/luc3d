@@ -616,6 +616,46 @@
             assertFalse(session.frameIdentityMap.has('90002:cam0:-1'), 'trackless row produces no identity entry');
         });
 
+        it('aligns instanceGroups.identityId across many frames without O(frames^2) blowup (freeze regression)', function () {
+            // Regression: the "Align grouped frames' group.identityId" pass
+            // at the end of propagateTracksToIdentities walks EVERY frame of
+            // session.instanceGroups (project-wide on a lazy session, not
+            // just the resident frameGroups window) and used to call
+            // assignIdentityToGroup(group, id) with no frame hint — which
+            // itself re-derives the host frame by scanning ALL of
+            // instanceGroups per call. Doing that once per group while
+            // already iterating every frame is O(frames^2); this test builds
+            // enough frames that the fix must still complete correctly (and
+            // fast) with NO frameGroups populated at all — the exact lazy
+            // "instanceGroups populated, frameGroups mostly empty" shape.
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam], sk, [], 'S');
+
+            const N_FRAMES = 300;
+            let nextGroupId = 1;
+            for (let f = 0; f < N_FRAMES; f++) {
+                const gEven = new InstanceGroup(nextGroupId++, -1);
+                gEven.addInstance('cam0', new Instance([[1, 1]], 0, 'predicted', 0.9));   // track 0
+                const gOdd = new InstanceGroup(nextGroupId++, -1);
+                gOdd.addInstance('cam0', new Instance([[2, 2]], 1, 'predicted', 0.9));    // track 1
+                session.instanceGroups.set(f, [gEven, gOdd]);
+            }
+            assertEqual(session.frameGroups.size, 0, 'precondition: frameGroups is empty (nothing materialized)');
+
+            const res = session.propagateTracksToIdentities();
+
+            const idTrack0 = session.getOrCreateIdentityForTrack(0).id;
+            const idTrack1 = session.getOrCreateIdentityForTrack(1).id;
+            assertEqual(res.identities, 2, 'exactly 2 identities created (one per distinct track)');
+            for (let f = 0; f < N_FRAMES; f++) {
+                const [gEven, gOdd] = session.instanceGroups.get(f);
+                assertEqual(gEven.identityId, idTrack0, 'frame ' + f + ' track-0 group aligned to its track\'s identity');
+                assertEqual(gOdd.identityId, idTrack1, 'frame ' + f + ' track-1 group aligned to its track\'s identity');
+            }
+        });
+
         it('does not create a duplicate identity per repeated row for the same track (freeze regression)', function () {
             // Regression for "Propagate Tracks -> IDs freezes on a large
             // heavily-tracked project": getOrCreateIdentityForTrack does a
@@ -762,6 +802,20 @@
             session.assignIdentityToGroup(gA, -1);
             assertEqual(gA.identityId, -1);
             assertEqual(gB.identityId, 2); // unchanged
+        });
+
+        it('passing hostFrameIdx explicitly (propagate\'s fast path) matches the fallback-search behavior', function () {
+            // Regression for the O(frames^2) freeze: propagateTracksToIdentities
+            // now passes the already-known frameIdx as a 3rd arg instead of
+            // making assignIdentityToGroup re-derive it by scanning ALL of
+            // instanceGroups. Same swap/collision scenario as "swaps when
+            // assigning an identity already held by a sibling group" above,
+            // but with the frame passed explicitly — must produce the
+            // identical outcome.
+            const { session, gA, gB } = buildSessionWithGroups();
+            session.assignIdentityToGroup(gA, 2, 100);   // 100 = the real host frame
+            assertEqual(gA.identityId, 2);
+            assertEqual(gB.identityId, 1, 'swap still fires correctly with an explicit hostFrameIdx');
         });
     });
 
