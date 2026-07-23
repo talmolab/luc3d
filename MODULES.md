@@ -1307,6 +1307,24 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
   `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
+  **`drawUnlinkedInstances` same-trackIdx collision fix:** an unlinked
+  instance (no group, no identity — e.g. an animal visible in only 1 camera
+  this frame, so `commitTrackedFrame`'s `members.length < 2` check never
+  groups it) colors purely via `getInstanceColor`'s raw `instance.trackIdx` —
+  there's no `group.identityId` to fall back to the way `getGroupColor` does
+  for linked instances. Two DIFFERENT unlinked instances in the same
+  (camera, frame) that happen to share that raw trackIdx (an upstream
+  tracking-data property, not something LUCID's tracker assigns) used to
+  render as the exact same color with nothing to distinguish them. Fixed by
+  precomputing, per draw call, an occurrence index for each trackIdx among
+  the type-filtered instances actually being drawn together, and darkening
+  (`adjustColorBrightness`, floored at 0.35 so several collisions never
+  converge to black) every occurrence after the first. Regression test:
+  `tests/e2e/unlinked-instance-color-collision.mjs` (two colliding
+  instances + one non-colliding control, asserts the collision pair gets
+  distinct colors and the control is unaffected — confirmed it fails
+  pre-fix, both colliding instances resolving to the identical color, and
+  passes post-fix).
 - Node trails (issue #102): `drawNodeTrails(ctx, viewName, session, frameIdx,
   options)` — mirrors SLEAP's TrackTrailOverlay. The window is the last
   `options.trailLength`+1 **present** frames up to and including `frameIdx`

@@ -14,7 +14,8 @@
     "test:multi-session-save": "node multi-session-save-streaming.mjs",
     "test:ref-integrity": "node save-multiinstance-ref-integrity.mjs",
     "test:first-frame-collision": "node first-frame-track-identity-collision.mjs",
-    "test:first-frame-viewer-collision": "node first-frame-viewer-color-collision.mjs"
+    "test:first-frame-viewer-collision": "node first-frame-viewer-color-collision.mjs",
+    "test:unlinked-color-collision": "node unlinked-instance-color-collision.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"
