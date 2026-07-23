@@ -615,6 +615,55 @@
                 'evicted frame 90001 got its identity stamped from the lazy sweep');
             assertFalse(session.frameIdentityMap.has('90002:cam0:-1'), 'trackless row produces no identity entry');
         });
+
+        it('does not create a duplicate identity per repeated row for the same track (freeze regression)', function () {
+            // Regression for "Propagate Tracks -> IDs freezes on a large
+            // heavily-tracked project": getOrCreateIdentityForTrack does a
+            // LINEAR SCAN over session.identities. Before the fix, the lazy
+            // sweep called it once per INSTANCE ROW — with many distinct
+            // tracks repeated across many frames that's O(rows x identities).
+            // This drives many rows per track through the sweep and asserts
+            // exactly one identity gets created per distinct track (proving
+            // the memoized lookup still finds/reuses the same identity
+            // instead of scanning-and-recreating), not a timing assertion
+            // (unreliable in CI) — the fix's complexity change is what
+            // eliminates the freeze, not something a small unit test can
+            // directly clock.
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam], sk, [], 'S');
+
+            const N_TRACKS = 50, REPEATS_PER_TRACK = 20;
+            const rows = [];
+            let frameIdx = 0;
+            for (let t = 0; t < N_TRACKS; t++) {
+                for (let r = 0; r < REPEATS_PER_TRACK; r++) {
+                    rows.push(['cam0', frameIdx++, t]);
+                }
+            }
+            session.lazyLoader = {
+                forEachInstanceRow: function (visitFn) {
+                    rows.forEach(function (row) { visitFn(row[0], row[1], row[2]); });
+                },
+            };
+
+            const res = session.propagateTracksToIdentities();
+
+            assertEqual(session.identities.length, N_TRACKS,
+                'exactly one identity per distinct track, not one per row (' + rows.length + ' rows)');
+            assertEqual(res.identities, N_TRACKS, 'returned identity count matches');
+            // Every row's frame got the SAME identity as every other row for
+            // that track (not a fresh/duplicate identity per occurrence).
+            for (let t = 0; t < N_TRACKS; t++) {
+                const expectedId = session.getOrCreateIdentityForTrack(t).id;
+                for (let r = 0; r < REPEATS_PER_TRACK; r++) {
+                    const f = t * REPEATS_PER_TRACK + r;
+                    assertEqual(session.getIdentityIdForTrack('cam0', t, f), expectedId,
+                        'track ' + t + ' frame ' + f + ' stamped with its track\'s single identity');
+                }
+            }
+        });
     });
 
     describe('Session.createGroupFromUnlinked — trackless grouping', function () {

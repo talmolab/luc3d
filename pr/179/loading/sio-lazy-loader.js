@@ -571,12 +571,14 @@ export class SioLazyLoader {
         var SIO = window.SleapIO;
         var TrackCtor = SIO && SIO.Track;
         var changed = 0;
-        var rebuiltLabels = new Set();
+        var rebuiltLabels = new Set();   // labels whose .tracks array was rebuilt
+        var seenLabels = new Set();      // every labels object touched (cache-clear target)
         for (var camName of this.labelsByCam.keys()) {
             var labels = this.labelsByCam.get(camName);
             var store = labels && labels._lazyDataStore;
             var rowMap = this.frameRowByCam.get(camName);
             if (!store || !rowMap) continue;
+            seenLabels.add(labels);
 
             if (TrackCtor && !rebuiltLabels.has(labels)) {
                 rebuiltLabels.add(labels);
@@ -603,6 +605,22 @@ export class SioLazyLoader {
                     if (idn.track[j] !== newTrk) { idn.track[j] = newTrk; changed++; }
                 }
             }
+
+            // Rebuild THIS camera's sparse track-occupancy from the just-
+            // remapped column. `session.trackOccupancy` is the SAME Map
+            // object as `this.trackOccupancy` (set by reference in
+            // session-loader.js), so replacing this entry is picked up by the
+            // Timeline with no extra wiring. Without this, `_computeSparseOccupancy`'s
+            // one-time snapshot from `open()` keeps describing the
+            // PRE-propagate track ids forever, and `ui/timeline.js:
+            // _buildTrackSegments` trusts it for every frame the user hasn't
+            // scrubbed to — the "Tracks Timeline doesn't update after
+            // Propagate IDs → Tracks" bug.
+            try {
+                var newOcc = this._computeSparseOccupancy(labels, this.nFrames);
+                if (newOcc) this.trackOccupancy.set(camName, newOcc);
+                else this.trackOccupancy.delete(camName);
+            } catch (e) { /* occupancy is optional; ignore */ }
         }
 
         // Invalidate every resident cache layer — our own adapted-dict LRU
@@ -612,13 +630,28 @@ export class SioLazyLoader {
         // (adaptTypedInstance/`materializeFrame` both resolve trackIdx from
         // `tracks`/`instancesData.track` fresh on each materialization, so
         // simply dropping the cached copies is sufficient — no rebuild here).
+        //
+        // Reaches into `_lazyFrameList.clearCache()` (drops the WHOLE cache
+        // in one call) instead of the public per-row `releaseFrame(row)` API
+        // looped over every frame in the project: for a 180k-frame x 5-camera
+        // project that loop was up to ~900k calls just to invalidate what's
+        // normally a few hundred cached entries (`internalFrameCacheLimit`)
+        // — the dominant cost in the "Propagate IDs -> Tracks takes forever"
+        // report. Falls back to the old per-row loop on an older bundle
+        // without `clearCache`.
         this.cache.clear();
         this.cacheOrder = [];
-        for (var camName2 of this.labelsByCam.keys()) {
-            var labels2 = this.labelsByCam.get(camName2);
-            var rowMap2 = this.frameRowByCam.get(camName2);
-            if (!labels2 || typeof labels2.releaseFrame !== 'function' || !rowMap2) continue;
-            for (var frameRow2 of rowMap2.values()) labels2.releaseFrame(frameRow2);
+        for (var labels2 of seenLabels) {
+            if (labels2._lazyFrameList && typeof labels2._lazyFrameList.clearCache === 'function') {
+                labels2._lazyFrameList.clearCache();
+            } else if (typeof labels2.releaseFrame === 'function') {
+                for (var camName2 of this.labelsByCam.keys()) {
+                    if (this.labelsByCam.get(camName2) !== labels2) continue;
+                    var rowMap2 = this.frameRowByCam.get(camName2);
+                    if (!rowMap2) continue;
+                    for (var frameRow2 of rowMap2.values()) labels2.releaseFrame(frameRow2);
+                }
+            }
         }
         return changed;
     }

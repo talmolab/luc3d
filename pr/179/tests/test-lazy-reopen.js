@@ -518,5 +518,61 @@
                     'exported row ' + j + ' has a real track (not the untouched original t0/t1 ids)');
             }
         });
+
+        it('propagateIdentitiesToTracks rebuilds the lazy loader\'s trackOccupancy (Tracks Timeline bug)', async function () {
+            // Regression for "the 2D viewer shows the propagated tracks
+            // correctly but the Tracks Timeline never updates": the Timeline's
+            // _buildTrackSegments (ui/timeline.js) trusts session.trackOccupancy
+            // (== loader.trackOccupancy, same Map by reference) for every frame
+            // outside frameGroups — which is almost the whole project on a
+            // large lazy session. That occupancy is a one-time snapshot from
+            // SioLazyLoader.open()/_computeSparseOccupancy; if propagate doesn't
+            // refresh it, the timeline keeps showing PRE-propagate track bars
+            // forever for anything unvisited.
+            //
+            // Collapsing both fixture tracks (t0, t1) onto the SAME identity
+            // changes the track count from 2 -> 1, which a stale occupancy
+            // snapshot cannot coincidentally match — a strong signal the
+            // rebuild actually ran (a same-count remap could pass even with
+            // no rebuild, by accident).
+            const S = window.SleapIO;
+            const bytes = await buildProjectFixtureBytes(S);
+            const { loader, opened } = await openProjectFixture(bytes, 'lazy-reopen-propagate-occupancy.slp');
+            const session = buildLucidSession(loader);
+            assertEqual(session.frameGroups.size, 0, 'precondition: nothing materialized whatsoever');
+
+            const preOcc = loader.trackOccupancy.get('Camera_A');
+            assertTrue(!!preOcc, 'precondition: occupancy was computed at open()');
+            assertEqual(preOcc.nTracks, 2, 'precondition: pre-propagate occupancy still reflects the raw t0/t1 tracks');
+
+            const idA = session.addIdentity('Alice');
+            for (let f = 0; f < N_FIXTURE_FRAMES; f++) {
+                CAMS.forEach(function (camName) {
+                    session.setFrameIdentity(f, camName, 0, idA.id);   // t0 -> Alice
+                    session.setFrameIdentity(f, camName, 1, idA.id);   // t1 -> Alice too (collapse)
+                });
+            }
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(res.tracks, 1, 'both old tracks collapse onto the single used identity');
+
+            const postOcc = loader.trackOccupancy.get('Camera_A');
+            assertTrue(!!postOcc, 'occupancy entry still present after remap');
+            assertTrue(postOcc !== preOcc, 'occupancy object was rebuilt, not left as the same stale reference');
+            assertEqual(postOcc.nTracks, 1, 'occupancy nTracks now matches the collapsed 1-track project, not the stale 2');
+            assertTrue(postOcc.segments.has(0), 'rebuilt occupancy has a segment entry for the single new track');
+            const segs0 = postOcc.segments.get(0);
+            assertEqual(segs0.length, 1, 'both cameras present every fixture frame -> one contiguous run');
+            assertEqual(segs0[0].start, 0, 'run starts at frame 0');
+            assertEqual(segs0[0].end, N_FIXTURE_FRAMES - 1, 'run covers every fixture frame');
+
+            // Same Map object as session.trackOccupancy would be after the real
+            // session-loader.js wiring (state.session.trackOccupancy =
+            // lazyLoader.trackOccupancy) — asserting identity here proves the
+            // Timeline picks this up with zero extra plumbing.
+            session.trackOccupancy = loader.trackOccupancy;
+            assertTrue(session.trackOccupancy.get('Camera_A') === postOcc,
+                'session.trackOccupancy (aliased to the loader\'s Map) sees the rebuilt entry');
+        });
     });
 })();
