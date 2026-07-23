@@ -2411,8 +2411,13 @@ ONCE, retains `videoIdByCam` (camName → NATIVE store video id, read from the
 typed session's `videoByCamera` or the raw camcorder map) for the re-save's
 video-id remap, and returns `{labels, typedSession, cameraNames, nFrames}` so
 the caller can restore grouping/3D via
-`reconstructInstanceGroupsFromSessionLazy`), `getFrame` / `getFrameSync` (adapt
-typed instances → `{trackIdx, score,
+`reconstructInstanceGroupsFromSessionLazy`; **now also computes each camera's
+`trackOccupancy` entry at load time**, same as `open()` — found missing via a
+real Playwright test run (`tests/test-lazy-reopen.js`): reopening an
+already-saved project left the Tracks Timeline with NO occupancy data for any
+camera until a propagate action happened to rebuild it, unlike the per-camera
+`open()` path which always had it from the start), `getFrame` / `getFrameSync`
+(adapt typed instances → `{trackIdx, score,
 type, points, occluded}`, LRU-cached), `prefetch`, `close` (also clears
 `videoIdByCam`); fields `nFrames`,
 `skeleton`, `trackNames`, `videos`, `trackOccupancy`, `videoIdByCam` (only set
@@ -2425,12 +2430,22 @@ re-picking files; used by the multi-session streaming save's pass-2 restream,
 `reopenSessionLazyLoader` in `import-export/save-load.js`).
 
 `trackOccupancy` (phase-5) is populated per camera by `_computeSparseOccupancy(labels,
-nFrames)` — one O(nInstances) pass over the columnar store (`framesData.frame_idx` +
+nFrames, rowMap?)` — one O(nInstances) pass over the columnar store (`framesData.frame_idx` +
 `instance_id_start/end`, `instancesData.track`) emitting **sparse** per-track
 run-segments `{ sparse:true, nTracks, nFrames, segments:Map<trackIdx,[{start,end}]>,
 counts:Map<trackIdx,frameCount> }` — never a dense nFrames×nTracks grid (a ~108k×1000s
-prediction dump would be huge). Relies on the SLP on-disk frame ordering (same invariant
-`appendStore` assumes); zero frame materialization. `session.trackOccupancy` picks it up
+prediction dump would be huge). The optional `rowMap` (videoFrameIdx → store row)
+restricts the scan to one camera's own rows, sorted by frame — **required**
+whenever `labels`'s store is SHARED across multiple cameras
+(`openProjectSlp`'s one interleaved store, or `remapTracksFromIdentity`'s
+occupancy rebuild for the same reason), since without it the scan would mix a
+DIFFERENT camera's rows in with this one's (found via a real Playwright test
+run — both call sites passed no `rowMap` at all before this, so the shared-
+store case either silently produced wrong occupancy or, for `openProjectSlp`,
+was never called at all). Omit for the per-camera `open()` path, where every
+row in that store already belongs to exactly one camera. Relies on the SLP
+on-disk frame ordering (same invariant `appendStore` assumes); zero frame
+materialization. `session.trackOccupancy` picks it up
 (`session-loader.js`); the timeline reads the `sparse` flag (`_buildTrackSegments`) and
 caps rendered rows (first-N per camera by appearance). See `ui/timeline.js`.
 
@@ -2730,6 +2745,15 @@ layer.
   ungrouped instance only drops its track if a grouped instance already
   holds that track in the same frame (SLEAP forbids two instances sharing
   a (frame, track) pair). Reprojections still export trackless.
+  **Both `buildSlpLabels` and `buildSlpLabelsMultiSession` normalize a
+  null/undefined `videoFileInfo` to `{}`** instead of crashing on
+  `videoFileInfo.videoPath` — found via a real Playwright test run: a lazy
+  session before "Load Videos" (or a calibration-only camera) has no
+  attached video file, a real reachable case, not just a test artifact
+  (mirrors `slp-streaming-write.js`'s `resolveVideoPath` fallback for the
+  identical scenario). Degrades to the existing `cameraName + '.mp4'` /
+  zero-dimension fallback already written for a present-but-empty
+  `videoFileInfo`.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`. For a **lazy session** these route a plain
   per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the

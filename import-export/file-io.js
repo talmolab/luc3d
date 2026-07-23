@@ -1081,6 +1081,13 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
 export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
+    // A lazy session before "Load Videos" (or a calibration-only camera) has
+    // no attached video file — null/undefined is a real, reachable case, not
+    // just a test artifact (mirrors slp-streaming-write.js's resolveVideoPath
+    // fallback for the same scenario). Normalize so the property reads below
+    // degrade to the cameraName + '.mp4' / zero-dimension fallback instead of
+    // throwing.
+    videoFileInfo = videoFileInfo || {};
 
     // 1. Build skeleton
     var nodeNames = session.skeleton.nodes.map(function (n) {
@@ -1548,7 +1555,10 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
     for (var sel = 0; sel < selections.length; sel++) {
         var session = selections[sel].session;
         var cameraName = selections[sel].cameraName;
-        var videoFileInfo = selections[sel].videoFileInfo;
+        // See buildSlpLabels's identical normalization: a lazy session before
+        // "Load Videos" (or a calibration-only camera) has no attached video
+        // file — a real, reachable case, not just a test artifact.
+        var videoFileInfo = selections[sel].videoFileInfo || {};
 
         // Per-session node remap: when this session's skeleton has the same
         // node set as the canonical (first) skeleton but in a different order,
