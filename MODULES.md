@@ -435,7 +435,30 @@ the counter steps rather than streams, keeping Track All fast. `buildTrackerDete
 `commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
 (with `identityId` + `points3d`), maps each target's stable trackId to a session
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
-linked pool. Both Track All and Track Frame pass `propagate:false`: the tracker
+linked pool. **Raw-trackIdx collision guard** (regression: 2D-viewer identity
+color diverges from the info panel/3D viewport, usually only on the first
+frame or two, self-correcting after): per-camera prediction files number
+tracks independently PER CAMERA, and a camera's own raw tracker is commonly
+less differentiated right at the start of a video. If it briefly assigns the
+SAME trackIdx to two DIFFERENT physical animals in the same camera on the
+same frame, `commitTrackedFrame` used to write both animals' `setFrameIdentity`
+calls to the identical `frameIdentityMap` key — the second silently
+overwrote the first. `ui/overlays.js`'s 2D color path queries that exact
+per-camera-per-frame key (`getIdentityForTrack`), so it would confidently
+show the wrong identity's color for whichever animal lost the race, while
+`group.identityId` — read by the info panel and the 3D viewport's
+any-camera-fallback color lookup (`getGroupColor` called with no
+`cameraName`) — stayed correct the whole time, since it's set once per
+group, never through this shared map key. `commitTrackedFrame` now tracks
+every `camName:trackIdx` key it writes within a single frame
+(`writtenThisFrame`); a second, DIFFERENT identity claiming the same key
+marks that key explicit "no identity" (-1) instead of letting either side
+silently win — the 2D lookup then correctly misses and falls through to
+`group.identityId`, matching what the info panel/3D viewport already show.
+`commitTrackedFrame` is exported specifically so this guard is directly
+unit-testable; covered by `tests/test-tracker-collision-guard.mjs` (Node,
+`scripts/bench/hooks.mjs`-stubbed — drives the real function with two
+synthetic colliding targets, not a mock of the guard logic itself). Both Track All and Track Frame pass `propagate:false`: the tracker
 assigns **identities only** (per-frame identity map + InstanceGroups). It does NOT
 rewrite `Instance.trackIdx` — propagation is a deliberate, user-chosen step via
 **Tracks ▸ Propagate IDs → Tracks** (`propagateIdentitiesToTracks`) or **Tracks →
@@ -465,7 +488,9 @@ champion values). Track Frame/Track All pass the user's animal count as
 `maxTargets` so the tracker caps live targets at that number (a LUCID divergence
 from the reference — see `pose/cross-view-tracker.js`; `null`/omitted =
 uncapped/faithful). Covered by `tests/test-crossview-populate.mjs` (data-structure
-population) and `tests/test-cross-view-tracker.mjs` (algorithm).
+population), `tests/test-cross-view-tracker.mjs` (algorithm), and
+`tests/test-tracker-collision-guard.mjs` (`commitTrackedFrame`'s raw-trackIdx
+collision guard).
 
 **Legacy `matchFrameInstances` (bench-only).** The original per-frame matcher +
 4-signal reorder is retained and exported but **no longer used by the app** —

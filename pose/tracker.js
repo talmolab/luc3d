@@ -860,9 +860,34 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx) {
 // Persist a tracked frame: for each live target with a cross-view bundle THIS
 // frame, create an InstanceGroup, map the target's stable trackId to a session
 // Identity, write the per-frame identity entries, and promote unlinked members.
-function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
+//
+// Raw-trackIdx collision guard (2D-viewer color bug, most visible on the
+// first frame or two of a video): `session.setFrameIdentity` keys
+// `frameIdentityMap` by (frameIdx, camName, RAW per-camera trackIdx) — but
+// per-camera prediction files number tracks independently PER CAMERA, and a
+// single camera's own raw tracker is commonly less differentiated right at
+// the start of a video (not enough history yet to tell two animals apart
+// confidently). If that raw tracker briefly assigns the SAME trackIdx to two
+// DIFFERENT physical animals in the same camera on the same frame, this
+// function used to call `setFrameIdentity` for both — the second silently
+// overwrote the first's map entry. `group.identityId` (read by the info
+// panel and the 3D viewport's any-camera-fallback color lookup) stayed
+// correct regardless, since it's set once per group, not through this
+// shared map key — but `ui/overlays.js`'s 2D color path queries this exact
+// per-camera-per-frame key, so it would confidently show the WRONG identity's
+// color for whichever animal got overwritten, on that one (camera, frame)
+// only, self-correcting the moment the raw tracker re-differentiates them
+// (matching the report: "same Track and ID name on click, different color in
+// the 2D viewer, 3D viewport correct, self-corrects next frame"). `writtenThisFrame`
+// detects the collision (two DIFFERENT identities writing the identical
+// camName+trackIdx key within this single frame) and marks that one key
+// explicit "no identity" (-1) instead of letting either identity win — the
+// 2D lookup then correctly misses and falls through to `group.identityId`,
+// exactly like the info panel and 3D viewport already do.
+export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
     var fg = session.getFrameGroup(frameIdx);
     if (!fg) return;
+    var writtenThisFrame = new Map();   // "camName:trackIdx" -> identityId
     for (var ti = 0; ti < trk.targets.length; ti++) {
         var target = trk.targets[ti];
         var members = [];
@@ -889,7 +914,19 @@ function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
                 fg.addInstance(camName, inst);          // promote into the linked pool
                 fg.removeUnlinkedById(det.unlinkedId);
             }
-            session.setFrameIdentity(frameIdx, camName, inst.trackIdx, identityId);
+            var collisionKey = camName + ':' + inst.trackIdx;
+            var priorIdentity = writtenThisFrame.get(collisionKey);
+            if (priorIdentity != null && priorIdentity !== identityId) {
+                session.setFrameIdentity(frameIdx, camName, inst.trackIdx, -1);
+                console.warn('[commitTrackedFrame] frame ' + frameIdx + ' camera ' + camName +
+                    ' trackIdx ' + inst.trackIdx + ': the raw per-camera tracker assigned this same ' +
+                    'trackIdx to two different animals this frame — marking per-frame identity ' +
+                    'ambiguous for this (frame,camera,trackIdx) key so the 2D viewer falls back to ' +
+                    'each group\'s own (correct) identityId instead of showing whichever animal wrote last.');
+            } else {
+                writtenThisFrame.set(collisionKey, identityId);
+                session.setFrameIdentity(frameIdx, camName, inst.trackIdx, identityId);
+            }
         }
         if (!session.instanceGroups.has(frameIdx)) session.instanceGroups.set(frameIdx, []);
         session.instanceGroups.get(frameIdx).push(group);
