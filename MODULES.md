@@ -2510,6 +2510,23 @@ prediction dump would be huge). Relies on the SLP on-disk frame ordering (same i
 (`session-loader.js`); the timeline reads the `sparse` flag (`_buildTrackSegments`) and
 caps rendered rows (first-N per camera by appearance). See `ui/timeline.js`.
 
+**`_computeSparseOccupancy` shared-store `rowMap` param.** `openProjectSlp`
+(the single-`.slp` project-reopen path) shares ONE interleaved columnar store
+across every camera — scanning it without scoping to one camera's rows would
+mix every camera's data into a single occupancy result. `_computeSparseOccupancy`
+takes an optional `rowMap` (camName → videoFrameIdx→store-row, from
+`frameRowByCam`) that restricts the scan to just that camera's sorted rows;
+omitted, it scans every row (correct for the per-camera `open()` path, which has
+no shared store). `openProjectSlp` used to never call this at all — occupancy
+was silently `null` for a reopened project, and the same latent gap existed in
+`remapTracksFromIdentity`'s post-propagate occupancy rebuild (called this with no
+`rowMap` despite iterating per-camera in a potentially-shared-store context).
+Both fixed: `openProjectSlp` now computes occupancy for every camera right after
+determining `nFrames`, passing each camera's own `rowMap`; `remapTracksFromIdentity`
+passes `this.frameRowByCam.get(camName)`. Regression:
+`tests/test-lazy-reopen.js`'s "propagateIdentitiesToTracks rebuilds the lazy
+loader's trackOccupancy (Tracks Timeline bug)" test.
+
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds
 its internal typed-frame cache automatically. `releaseFrame(frameIdx)` /
