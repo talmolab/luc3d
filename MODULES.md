@@ -153,7 +153,82 @@ session graph that holds them.
   under the new keys; instances with no identity — whether entry-less OR
   explicitly marked "no identity" (negative sentinel) — become trackless
   (`trackIdx = null`): a null identity propagates to a null track, and no
-  dedicated "No ID" track is created), legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  dedicated "No ID" track is created). **Whole-project correctness on a lazy
+  session:** both propagate directions used to walk only `frameGroups` — a
+  lazy session's small resident window — so an unvisited frame's data was
+  under-covered, and `propagateIdentitiesToTracks`'s old wholesale
+  `frameIdentityMap` replace (built only from that partial walk) silently
+  DESTROYED identity data for every frame outside the window (issue: gray-out
+  after "Propagate IDs → Tracks" on a large project). Fixed:
+  `propagateIdentitiesToTracks` now derives its used-identity set and the
+  remapped `frameIdentityMap` from the existing, always-complete
+  `frameIdentityMap` itself (no `frameGroups` walk needed for that part), so
+  replacing it wholesale is safe again; `frameGroups` is still walked to keep
+  resident instances' `trackIdx` live for immediate GUI feedback. Both
+  directions additionally delegate to `session.lazyLoader` when present —
+  `propagateIdentitiesToTracks` calls `lazyLoader.remapTracksFromIdentity`
+  (rewrites the persistent columnar track column so native SLP export and any
+  future re-materialization pick up the change too, with zero frame
+  materialization) and `propagateTracksToIdentities` calls
+  `lazyLoader.forEachInstanceRow` (read-only project-wide sweep to stamp
+  identity for instances outside the resident window) — see
+  `loading/sio-lazy-loader.js`. Both are duck-typed (`typeof … === 'function'`)
+  so a non-lazy session or the worker-backed `LazyFrameLoader` (which lacks
+  these methods) is unaffected. **Perf/correctness follow-up (large lazy
+  projects):** `propagateIdentitiesToTracks` now also builds
+  `oldKeyToNewTrackIdx` (a "frame:cam:oldTrackIdx" → newTrackIdx map) for free
+  while it already walks `frameIdentityMap` in step 2, so its
+  `remapTracksFromIdentity` callback is one direct `Map.get` per instance row
+  instead of re-deriving the same fact via `getIdentityIdForTrack` +
+  `idToTrackIdx.get` (two hash lookups) on every row.
+  `propagateTracksToIdentities`'s lazy sweep now memoizes
+  `getOrCreateIdentityForTrack` per distinct `trackIdx` (a local
+  `identityForTrack` Map) — that lookup is a LINEAR SCAN over
+  `session.identities`, and the sweep calls it once per **instance row**
+  (millions on a large project); with many distinct tracks the unmemoized
+  version is O(rows × identities). `propagateTracksToIdentities`'s final
+  "align `group.identityId` with instances' track" pass also used to call
+  `assignIdentityToGroup(group, id)` with no frame hint while ALREADY
+  iterating every frame of `session.instanceGroups` (project-wide on a lazy
+  session, not just the resident `frameGroups` window) — and
+  `assignIdentityToGroup` itself re-derives its host frame by scanning ALL of
+  `instanceGroups` per call (to find per-frame identity collisions), so doing
+  that once per group inside a project-wide loop was an O(frames²) blowup on
+  top of the O(rows × identities) one above. Fixed by giving
+  `assignIdentityToGroup` an optional 3rd `hostFrameIdx` param: the propagate
+  loop now passes the frame index it's already iterating (making its call
+  O(1) instead of O(frames)); every other, single-group interactive caller
+  (`ui/identity-assignment.js`, `ui/info-panel.js`, `ui/ui-wiring.js`) omits
+  it and keeps the original O(project) search, which is fine as a one-off
+  per user click. Together these were observed to freeze the tab outright on
+  "Propagate Tracks → IDs" for a large heavily-tracked/grouped project — not
+  just slow. **`propagateIdentitiesToTracks` also now remaps
+  `session.instanceGroups` project-wide (new step 3b)**, not just the
+  resident `frameGroups` window: on a lazy session, `instanceGroups` is
+  populated for the WHOLE project at reopen with its own lightweight
+  per-camera `Instance` members (`reconstructInstanceGroupsFromSessionLazy`,
+  `import-export/slp-import.js`) — separate objects from `frameGroups` until
+  a frame is scrubbed to, and `finalizeLazyFrameGroup`
+  (`pose/triangulation.js`) never refreshes `trackIdx` on that hydration.
+  Leaving those members' `trackIdx` stale after `session.tracks` is replaced
+  with a new (usually shorter) list broke three things at once: the 3D
+  viewport (colors via `group.instances.get(cam).trackIdx`, `ui/overlays.js`
+  `getGroupColor`) kept showing old colors, the Instance Info panel's track
+  `<select>` went blank (no option matches an out-of-range value), and the
+  Timeline showed old track bars overlaid with new ones (`_buildTrackSegments`
+  scans `instanceGroups` directly, independent of the `trackOccupancy`-derived
+  segments that already reflected the new assignment). `ui/ui-wiring.js`'s
+  propagate handlers also now call `update3DViewport(state.currentFrame)`
+  (previously missing — only `drawAllOverlays`/`updateInfoPanel`/
+  `timeline.refreshTracks` ran), matching the "recolor 3D instances instantly"
+  pattern already used by the Color-by-Track/Identity toolbar toggles.
+  Separately, the auto-generated track-name fallback changed from `'id_' +
+  ident.id` to the app's normal `'track_' + index` convention (a genuinely
+  custom identity name like "Alice" is still preserved verbatim; only a
+  placeholder name matching the `getOrCreateIdentityForTrack` pattern
+  `id_<n>` is treated as "no real name" and replaced) — otherwise a
+  Tracks→IDs→Tracks round trip renamed `track_0`/`track_1` to `id_0`/`id_1`
+  instead of restoring the original naming. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
   group editing (`createGroupFromUnlinked` — when no identity is passed it
   derives one from the first member's track, but only if that member HAS a
@@ -2320,6 +2395,43 @@ rebuilds a dropped frame on next access, so release is safe. These use the publi
 frame-release API from sleap-io.js PR #208 — replacing the earlier private
 `_lazyFrameList.cache` reach-in and manual `capInternalCaches` (now redundant, so
 `evictLazyFrames` no longer calls it).
+
+**Project-wide identity/track propagation primitives** (fix for "Propagate
+IDs → Tracks only affects a handful of frames near the cursor" on a large
+project): `forEachInstanceRow(visitFn)` — read-only sweep over every
+`(camName, frameIdx, trackIdx)` instance triple in the WHOLE project, straight
+from each camera's columnar store (`framesData.instance_id_start/end` +
+`instancesData.track`) — zero frame/instance materialization, independent of
+what's resident. Used by `Session.propagateTracksToIdentities`
+(`pose/pose-data.js`) so an unvisited frame's track still gets stamped to
+identity. `remapTracksFromIdentity(newTrackNames, remapFn)` — the write-side
+companion, used by `Session.propagateIdentitiesToTracks`: rebuilds each
+underlying `labels.tracks` (shared by reference with its
+`_lazyDataStore.tracks` — mutated in place, so both stay in sync; a shared
+project-`.slp` store is only rebuilt once) to `newTrackNames`, then for every
+instance row calls `remapFn(camName, frameIdx, oldTrackIdx)` and writes the
+result into `instancesData.track` in place — the same array `appendStore`
+(export, `import-export/slp-streaming-write.js`) and `materializeFrame`
+(re-materializing an evicted/revisited frame) both read by reference, so the
+propagated track survives eviction/reload and is exported correctly with no
+new writer plumbing. Also rebuilds THIS camera's `trackOccupancy` entry (via
+`_computeSparseOccupancy`) from the just-remapped column — fixes a bug where
+the Tracks Timeline never reflected a propagate on a lazy session: `session.
+trackOccupancy` is the SAME Map object as `this.trackOccupancy` (aliased by
+reference in `session-loader.js`), and `ui/timeline.js:_buildTrackSegments`
+trusts it for every unmaterialized frame, so leaving it stale (as before)
+meant the Timeline kept showing pre-propagate track bars for almost the whole
+project while the 2D viewer (which reads the mutated columnar store directly)
+was already correct. Invalidates the loader's own adapted-dict cache and each
+camera's underlying sleap-io.js typed-frame cache afterward — via
+`_lazyFrameList.clearCache()` (drops the whole cache in one call), not the
+old per-row `releaseFrame(row)` looped over every frame row in the project
+(up to ~900k calls on a 180k-frame × 5-camera project just to invalidate a
+~512-entry cache — the dominant cost behind "Propagate IDs → Tracks takes
+forever"); falls back to the old per-row loop if `clearCache` isn't present
+on the bundle. Both are duck-typed feature checks from the `Session` side
+(`typeof … === 'function'`), so the worker-backed `LazyFrameLoader` (SLEAP
+analysis `.h5`, no columnar store) is unaffected.
 
 **Imports.** `window.SleapIO.readSlpStreaming` (via the index.html bridge) and the
 local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).

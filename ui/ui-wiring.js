@@ -530,6 +530,7 @@ export function setupMenus() {
         state.colorByIdentity = true;
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(session, { cap: true });
         setStatus('Propagate Tracks → IDs: ' + res.identities + ' identities from tracks (' +
@@ -548,6 +549,7 @@ export function setupMenus() {
             return;
         }
         drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks from identities (' +

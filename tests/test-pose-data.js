@@ -507,6 +507,259 @@
         });
     });
 
+    describe('Session.propagateIdentitiesToTracks — whole-project correctness under lazy eviction', function () {
+        // Regression for the "ID view goes gray after Propagate IDs -> Tracks"
+        // bug on large lazy-loaded sessions: frameIdentityMap is the single,
+        // always-resident, WHOLE-PROJECT identity record (Track All writes it
+        // for every frame it processes; nothing ever evicts it). `frameGroups`,
+        // by contrast, is only a resident window on a lazy session — most
+        // frames are evicted/never-visited. The old implementation derived its
+        // replacement frameIdentityMap ONLY from a `frameGroups` walk, so
+        // committing it silently destroyed identity data for every frame
+        // outside whatever was resident at click time.
+        function buildSession() {
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            return new Session([cam], sk, ['t0', 't1'], 'S');
+        }
+
+        it('does not destroy identity data for frames absent from frameGroups (simulated eviction)', function () {
+            const session = buildSession();
+            const idA = session.addIdentity('Alice');
+            const idB = session.addIdentity('Bob');
+
+            // Frame 50 is "resident" (has a real FrameGroup/Instance).
+            const fg50 = new FrameGroup(50);
+            fg50.addInstance('cam0', new Instance([[0, 0]], 0, 'user', 0));  // track 0
+            session.frameGroups.set(50, fg50);
+            session.setFrameIdentity(50, 'cam0', 0, idA.id);
+
+            // Frame 90000 is "evicted" — identity was assigned when it WAS
+            // resident (e.g. during Track All), but nothing keeps a lazy
+            // session's predicted-only FrameGroup around forever, so by the
+            // time the user clicks Propagate, frame 90000 has no FrameGroup at
+            // all. Only frameIdentityMap remembers it.
+            session.setFrameIdentity(90000, 'cam0', 1, idB.id);
+            assertFalse(session.frameGroups.has(90000), 'precondition: frame 90000 is NOT resident');
+
+            const res = session.propagateIdentitiesToTracks();
+
+            assertEqual(res.tracks, 2, 'both used identities become tracks');
+            assertEqual(session.frameIdentityMap.size, 2,
+                'frameIdentityMap still has an entry for BOTH frames, not just the resident one');
+
+            const aliceTrack = session.tracks.indexOf('Alice');
+            const bobTrack = session.tracks.indexOf('Bob');
+            assertTrue(aliceTrack >= 0 && bobTrack >= 0, 'both identity names became track names');
+            assertEqual(session.frameIdentityMap.get('90000:cam0:' + bobTrack), idB.id,
+                'the evicted frame\'s identity survives, remapped to its new trackIdx');
+            assertEqual(session.frameIdentityMap.get('50:cam0:' + aliceTrack), idA.id,
+                'the resident frame\'s identity also survives, remapped consistently');
+
+            // Resident instance gets its live trackIdx updated too (GUI feedback).
+            const inst = session.frameGroups.get(50).instances.get('cam0')[0];
+            assertEqual(inst.trackIdx, aliceTrack, 'resident instance trackIdx mutated to match its identity');
+        });
+
+        it('delegates a project-wide columnar remap to a lazy loader when present', function () {
+            const session = buildSession();
+            const idA = session.addIdentity('Alice');
+            session.setFrameIdentity(90000, 'cam0', 3, idA.id);  // frame never resident at all
+
+            const calls = [];
+            session.lazyLoader = {
+                remapTracksFromIdentity: function (newTrackNames, remapFn) {
+                    calls.push(newTrackNames.slice());
+                    // Exercise remapFn the way SioLazyLoader would: one row,
+                    // camera cam0, frame 90000, old track 3. Compare against
+                    // newTrackNames (not session.tracks — that only commits
+                    // AFTER this call returns, in step 5).
+                    const newTrk = remapFn('cam0', 90000, 3);
+                    assertEqual(newTrk, newTrackNames.indexOf('Alice'),
+                        'remapFn resolves the evicted frame\'s new track from identity alone');
+                    return 1; // pretend one row changed
+                },
+            };
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(calls.length, 1, 'lazyLoader.remapTracksFromIdentity was invoked exactly once');
+            assertDeepEqual(calls[0], ['Alice'], 'lazy loader gets the same new-track-names list as session.tracks');
+            assertEqual(res.instances, 1, 'lazy-remapped row count is folded into the returned instance count');
+        });
+
+        it('remaps session.instanceGroups member trackIdx project-wide, not just resident frameGroups', function () {
+            // Regression for "2D viewer updates but 3D viewport/Timeline/info
+            // panel stay stale after Propagate IDs -> Tracks": on a lazy
+            // session, instanceGroups is populated PROJECT-WIDE at reopen with
+            // its OWN lightweight per-camera Instance members — separate
+            // objects from whatever's in frameGroups until that frame is
+            // scrubbed to (and even then, hydration never refreshes trackIdx).
+            // The 3D viewport, info panel, and Timeline's instanceGroups scan
+            // all read trackIdx off THESE objects, so leaving them stale after
+            // session.tracks is replaced with a new (shorter) list points them
+            // at wrong/out-of-range tracks.
+            const session = buildSession();
+            const idB = session.addIdentity('Bob');
+
+            // Frame 90000 has NO FrameGroup at all (never materialized) — only
+            // an instanceGroups entry, exactly the lazy "reopened but not
+            // scrubbed to" shape.
+            const group = new InstanceGroup(1, -1);
+            const member = new Instance([[3, 3]], 1, 'predicted', 0.9);  // OLD track 1
+            group.addInstance('cam0', member);
+            session.instanceGroups.set(90000, [group]);
+            session.setFrameIdentity(90000, 'cam0', 1, idB.id);
+            assertFalse(session.frameGroups.has(90000), 'precondition: frame 90000 is NOT resident');
+
+            session.propagateIdentitiesToTracks();
+
+            const bobTrack = session.tracks.indexOf('Bob');
+            assertTrue(bobTrack >= 0, 'Bob became a track');
+            assertEqual(member.trackIdx, bobTrack,
+                'the instanceGroups member (never touched by the frameGroups walk) got remapped too');
+        });
+
+        it('replaces an auto-generated "id_N" identity name with the app\'s track_N convention; custom names survive', function () {
+            // Regression: propagating IDs -> Tracks after a prior Tracks -> IDs
+            // pass (which names identities "id_<n>" via getOrCreateIdentityForTrack)
+            // used to carry that literal "id_N" string over as the new track
+            // name — so a round trip renamed track_0/track_1 to id_0/id_1
+            // instead of restoring the app's normal track_N naming. A
+            // genuinely custom identity name (e.g. "Alice") must still be
+            // preserved verbatim.
+            const session = buildSession();
+            const idAuto = session.addIdentity('id_7');   // mimics getOrCreateIdentityForTrack's placeholder
+            const idCustom = session.addIdentity('Alice');
+            session.setFrameIdentity(10, 'cam0', 0, idAuto.id);
+            session.setFrameIdentity(10, 'cam0', 1, idCustom.id);
+
+            session.propagateIdentitiesToTracks();
+
+            assertEqual(session.tracks.indexOf('id_7'), -1, 'the placeholder "id_7" name is NOT carried over literally');
+            assertTrue(session.tracks.some(function (t) { return /^track_\d+$/.test(t); }),
+                'the auto-named identity falls back to the track_N convention');
+            assertTrue(session.tracks.indexOf('Alice') >= 0, 'a genuinely custom identity name is preserved');
+        });
+    });
+
+    describe('Session.propagateTracksToIdentities — lazy sessions', function () {
+        it('sweeps a lazy loader for instances outside frameGroups', function () {
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam], sk, ['t0', 't1'], 'S');
+
+            const rows = [
+                ['cam0', 90000, 0],
+                ['cam0', 90001, 1],
+                ['cam0', 90002, -1],  // trackless — must be skipped
+            ];
+            session.lazyLoader = {
+                forEachInstanceRow: function (visitFn) {
+                    rows.forEach(function (r) { visitFn(r[0], r[1], r[2]); });
+                },
+            };
+
+            const res = session.propagateTracksToIdentities();
+
+            assertEqual(session.getIdentityIdForTrack('cam0', 0, 90000), session.getOrCreateIdentityForTrack(0).id,
+                'evicted frame 90000 got its identity stamped from the lazy sweep');
+            assertEqual(session.getIdentityIdForTrack('cam0', 1, 90001), session.getOrCreateIdentityForTrack(1).id,
+                'evicted frame 90001 got its identity stamped from the lazy sweep');
+            assertFalse(session.frameIdentityMap.has('90002:cam0:-1'), 'trackless row produces no identity entry');
+        });
+
+        it('aligns instanceGroups.identityId across many frames without O(frames^2) blowup (freeze regression)', function () {
+            // Regression: the "Align grouped frames' group.identityId" pass
+            // at the end of propagateTracksToIdentities walks EVERY frame of
+            // session.instanceGroups (project-wide on a lazy session, not
+            // just the resident frameGroups window) and used to call
+            // assignIdentityToGroup(group, id) with no frame hint — which
+            // itself re-derives the host frame by scanning ALL of
+            // instanceGroups per call. Doing that once per group while
+            // already iterating every frame is O(frames^2); this test builds
+            // enough frames that the fix must still complete correctly (and
+            // fast) with NO frameGroups populated at all — the exact lazy
+            // "instanceGroups populated, frameGroups mostly empty" shape.
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam], sk, [], 'S');
+
+            const N_FRAMES = 300;
+            let nextGroupId = 1;
+            for (let f = 0; f < N_FRAMES; f++) {
+                const gEven = new InstanceGroup(nextGroupId++, -1);
+                gEven.addInstance('cam0', new Instance([[1, 1]], 0, 'predicted', 0.9));   // track 0
+                const gOdd = new InstanceGroup(nextGroupId++, -1);
+                gOdd.addInstance('cam0', new Instance([[2, 2]], 1, 'predicted', 0.9));    // track 1
+                session.instanceGroups.set(f, [gEven, gOdd]);
+            }
+            assertEqual(session.frameGroups.size, 0, 'precondition: frameGroups is empty (nothing materialized)');
+
+            const res = session.propagateTracksToIdentities();
+
+            const idTrack0 = session.getOrCreateIdentityForTrack(0).id;
+            const idTrack1 = session.getOrCreateIdentityForTrack(1).id;
+            assertEqual(res.identities, 2, 'exactly 2 identities created (one per distinct track)');
+            for (let f = 0; f < N_FRAMES; f++) {
+                const [gEven, gOdd] = session.instanceGroups.get(f);
+                assertEqual(gEven.identityId, idTrack0, 'frame ' + f + ' track-0 group aligned to its track\'s identity');
+                assertEqual(gOdd.identityId, idTrack1, 'frame ' + f + ' track-1 group aligned to its track\'s identity');
+            }
+        });
+
+        it('does not create a duplicate identity per repeated row for the same track (freeze regression)', function () {
+            // Regression for "Propagate Tracks -> IDs freezes on a large
+            // heavily-tracked project": getOrCreateIdentityForTrack does a
+            // LINEAR SCAN over session.identities. Before the fix, the lazy
+            // sweep called it once per INSTANCE ROW — with many distinct
+            // tracks repeated across many frames that's O(rows x identities).
+            // This drives many rows per track through the sweep and asserts
+            // exactly one identity gets created per distinct track (proving
+            // the memoized lookup still finds/reuses the same identity
+            // instead of scanning-and-recreating), not a timing assertion
+            // (unreliable in CI) — the fix's complexity change is what
+            // eliminates the freeze, not something a small unit test can
+            // directly clock.
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam], sk, [], 'S');
+
+            const N_TRACKS = 50, REPEATS_PER_TRACK = 20;
+            const rows = [];
+            let frameIdx = 0;
+            for (let t = 0; t < N_TRACKS; t++) {
+                for (let r = 0; r < REPEATS_PER_TRACK; r++) {
+                    rows.push(['cam0', frameIdx++, t]);
+                }
+            }
+            session.lazyLoader = {
+                forEachInstanceRow: function (visitFn) {
+                    rows.forEach(function (row) { visitFn(row[0], row[1], row[2]); });
+                },
+            };
+
+            const res = session.propagateTracksToIdentities();
+
+            assertEqual(session.identities.length, N_TRACKS,
+                'exactly one identity per distinct track, not one per row (' + rows.length + ' rows)');
+            assertEqual(res.identities, N_TRACKS, 'returned identity count matches');
+            // Every row's frame got the SAME identity as every other row for
+            // that track (not a fresh/duplicate identity per occurrence).
+            for (let t = 0; t < N_TRACKS; t++) {
+                const expectedId = session.getOrCreateIdentityForTrack(t).id;
+                for (let r = 0; r < REPEATS_PER_TRACK; r++) {
+                    const f = t * REPEATS_PER_TRACK + r;
+                    assertEqual(session.getIdentityIdForTrack('cam0', t, f), expectedId,
+                        'track ' + t + ' frame ' + f + ' stamped with its track\'s single identity');
+                }
+            }
+        });
+    });
+
     describe('Session.createGroupFromUnlinked — trackless grouping', function () {
         function build() {
             const sk = new Skeleton('test', ['a'], []);
@@ -603,6 +856,20 @@
             session.assignIdentityToGroup(gA, -1);
             assertEqual(gA.identityId, -1);
             assertEqual(gB.identityId, 2); // unchanged
+        });
+
+        it('passing hostFrameIdx explicitly (propagate\'s fast path) matches the fallback-search behavior', function () {
+            // Regression for the O(frames^2) freeze: propagateTracksToIdentities
+            // now passes the already-known frameIdx as a 3rd arg instead of
+            // making assignIdentityToGroup re-derive it by scanning ALL of
+            // instanceGroups. Same swap/collision scenario as "swaps when
+            // assigning an identity already held by a sibling group" above,
+            // but with the frame passed explicitly — must produce the
+            // identical outcome.
+            const { session, gA, gB } = buildSessionWithGroups();
+            session.assignIdentityToGroup(gA, 2, 100);   // 100 = the real host frame
+            assertEqual(gA.identityId, 2);
+            assertEqual(gB.identityId, 1, 'swap still fires correctly with an explicit hostFrameIdx');
         });
     });
 
