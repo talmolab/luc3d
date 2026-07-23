@@ -333,6 +333,18 @@ export class SioLazyLoader {
         }
         this.nFrames = maxFrameIdx + 1;
 
+        // Sparse per-track occupancy for the timeline's presence bars — same
+        // as open()'s per-camera call, but every camera here shares ONE
+        // interleaved store, so each needs its OWN rowMap passed to scope the
+        // scan to just its rows (see _computeSparseOccupancy's doc).
+        for (var occCamName of this.labelsByCam.keys()) {
+            try {
+                var occRowMap = this.frameRowByCam.get(occCamName);
+                var occ = this._computeSparseOccupancy(labels, this.nFrames, occRowMap);
+                if (occ) this.trackOccupancy.set(occCamName, occ);
+            } catch (e) { /* occupancy is optional; ignore */ }
+        }
+
         return {
             labels: labels,
             typedSession: typedSession,
@@ -355,7 +367,7 @@ export class SioLazyLoader {
      * @param {number} nFrames   this camera's video frame span (maxFrameIdx + 1).
      * @returns {Object|null} `{ sparse, nTracks, nFrames, segments, counts }` or null.
      */
-    _computeSparseOccupancy(labels, nFrames) {
+    _computeSparseOccupancy(labels, nFrames, rowMap) {
         var store = labels && labels._lazyDataStore;
         if (!store || !store.framesData) return null;
         var fd = store.framesData;
@@ -364,14 +376,28 @@ export class SioLazyLoader {
         var startCol = fd.instance_id_start || [];
         var endCol = fd.instance_id_end || [];
         var trackCol = idn.track || [];
-        var nRows = frameIdxCol.length;
         var nTracks = (labels.tracks || []).length;
+
+        // A shared multi-camera store (openProjectSlp) interleaves every
+        // camera's rows together — scoping to just this camera's rows via
+        // rowMap keeps occupancy from mixing cameras' data. Per-camera open()
+        // has no shared store, so it scans every row as before.
+        var rows;
+        if (rowMap) {
+            rows = Array.from(rowMap.values()).sort(function (a, b) {
+                return Number(frameIdxCol[a]) - Number(frameIdxCol[b]);
+            });
+        } else {
+            rows = frameIdxCol.length;
+        }
+        var nRows = rowMap ? rows.length : rows;
 
         var segments = new Map();   // trackIdx -> [{start,end}]
         var counts = new Map();     // trackIdx -> occupied-frame count
         var open = new Map();       // trackIdx -> {start,last}: the run in progress
 
-        for (var r = 0; r < nRows; r++) {
+        for (var ri = 0; ri < nRows; ri++) {
+            var r = rowMap ? rows[ri] : ri;
             var f = Number(frameIdxCol[r]);
             if (!(f >= 0)) continue;
             var s = Number(startCol[r]) || 0;
@@ -654,7 +680,7 @@ export class SioLazyLoader {
             // scrubbed to — the "Tracks Timeline doesn't update after
             // Propagate IDs → Tracks" bug.
             try {
-                var newOcc = this._computeSparseOccupancy(labels, this.nFrames);
+                var newOcc = this._computeSparseOccupancy(labels, this.nFrames, this.frameRowByCam.get(camName));
                 if (newOcc) this.trackOccupancy.set(camName, newOcc);
                 else this.trackOccupancy.delete(camName);
             } catch (e) { /* occupancy is optional; ignore */ }
