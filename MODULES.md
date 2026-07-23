@@ -2580,6 +2580,25 @@ passes `this.frameRowByCam.get(camName)`. Regression:
 `tests/test-lazy-reopen.js`'s "propagateIdentitiesToTracks rebuilds the lazy
 loader's trackOccupancy (Tracks Timeline bug)" test.
 
+**Sort-skip optimization (now that occupancy is actually computed on every
+reopen).** `_computeSparseOccupancy`'s shared-store branch used to
+unconditionally `.sort()` the per-camera row list by frame index before
+scanning it — an O(n log n) cost with a lookup-heavy comparator, real at
+180k+ rows/camera on a large project (previously invisible since
+`openProjectSlp` never called this function at all — see above). A single
+camera's own rows are already in on-disk frame order: `openProjectSlp`
+scans the shared store's native row order and appends to each camera's
+`frameRowByCam` map in that same order — the same frame-ordering invariant
+`appendStore`/#161 rely on elsewhere — so the sort is normally a no-op.
+Fixed to verify with one cheap O(n) linear pass first, and only pay for the
+actual `.sort()` when a row is genuinely out of order (never trades
+correctness for speed — same result either way). Verified on a real
+`openProjectSlp` round trip (3 cameras × 3000 on-disk-ordered frames): zero
+`Array.prototype.sort()` calls. Regression test:
+`tests/e2e/occupancy-sort-skip-optimization.mjs` (asserts zero sort calls
+for real ordered data, confirms the fallback sort still engages and
+produces the IDENTICAL correct segments for a deliberately shuffled rowMap).
+
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds
 its internal typed-frame cache automatically. `releaseFrame(frameIdx)` /

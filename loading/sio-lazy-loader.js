@@ -397,24 +397,24 @@ export class SioLazyLoader {
         // per-camera, even though a single-camera store's rows already are.
         var rows;
         if (rowMap) {
-            rows = Array.from(rowMap.values()).sort(function (a, b) {
-                return Number(frameIdxCol[a]) - Number(frameIdxCol[b]);
-            });
+            rows = Array.from(rowMap.values());
+            // A single camera's own rows are already in on-disk frame order
+            // (openProjectSlp scans the shared store's native row order and
+            // appends to each camera's map in that same order — the same
+            // frame-ordering invariant `appendStore` relies on elsewhere), so
+            // sorting is usually a no-op. Verify with one cheap linear pass
+            // instead of unconditionally paying an O(n log n) sort — a real
+            // cost at 180k+ rows/camera on a large project — and only sort
+            // when a row is genuinely out of order.
+            var alreadySorted = true;
+            for (var ci = 1; ci < rows.length; ci++) {
+                if (Number(frameIdxCol[rows[ci]]) < Number(frameIdxCol[rows[ci - 1]])) { alreadySorted = false; break; }
+            }
+            if (!alreadySorted) {
+                rows.sort(function (a, b) { return Number(frameIdxCol[a]) - Number(frameIdxCol[b]); });
+            }
         } else {
             rows = frameIdxCol.length;   // sentinel: iterate 0..rows-1 below
-        }
-
-        // A shared multi-camera store (openProjectSlp) interleaves every
-        // camera's rows together — scoping to just this camera's rows via
-        // rowMap keeps occupancy from mixing cameras' data. Per-camera open()
-        // has no shared store, so it scans every row as before.
-        var rows;
-        if (rowMap) {
-            rows = Array.from(rowMap.values()).sort(function (a, b) {
-                return Number(frameIdxCol[a]) - Number(frameIdxCol[b]);
-            });
-        } else {
-            rows = frameIdxCol.length;
         }
         var nRows = rowMap ? rows.length : rows;
 
