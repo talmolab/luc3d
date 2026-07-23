@@ -1219,17 +1219,6 @@ export async function trackAll() {
         return;
     }
 
-    var frameIndices = session.frameIndices;
-    if (frameIndices.length === 0) {
-        setStatus('No frames to track', 'error');
-        return;
-    }
-
-    // Prompt for number of animals
-    if (trackerNumAnimals == null) {
-        if (!promptNumAnimals()) return;
-    }
-
     // Lazy sessions (large .slp session folders, #132) keep only a resident window
     // in `frameGroups`, so `session.frameIndices` covers just the VISITED frames —
     // but the cross-view tracker is sequential and needs EVERY frame in order.
@@ -1240,6 +1229,26 @@ export async function trackAll() {
     // non-lazy session, where it's already a no-op).
     var loader = session.lazyLoader;
     var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
+
+    var frameIndices = session.frameIndices;
+    // A freshly-opened large project has ZERO resident frameGroups (nothing
+    // visited/scrubbed to yet) — session.frameIndices.length is 0 even though
+    // the project has 180k+ frames waiting in the lazy loader. Checking
+    // frameIndices alone here made Track All immediately bail with "No frames
+    // to track" on every large lazy project the very first time it was run,
+    // before ever reaching the windowed sweep below that doesn't need any
+    // frame pre-visited. Use the loader's real total when windowed.
+    var hasFrames = windowed ? loader.nFrames > 0 : frameIndices.length > 0;
+    if (!hasFrames) {
+        setStatus('No frames to track', 'error');
+        return;
+    }
+
+    // Prompt for number of animals
+    if (trackerNumAnimals == null) {
+        if (!promptNumAnimals()) return;
+    }
+
     if (loader && !windowed) {
         showLoading('Loading all ' + session.numFrames + ' frames for tracking…');
         await new Promise(function (r) { setTimeout(r, 0); });
