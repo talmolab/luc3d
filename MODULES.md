@@ -222,6 +222,35 @@ session graph that holds them.
   (previously missing — only `drawAllOverlays`/`updateInfoPanel`/
   `timeline.refreshTracks` ran), matching the "recolor 3D instances instantly"
   pattern already used by the Color-by-Track/Identity toolbar toggles.
+  **First-frame Track/Identity Timeline regression (raw-trackIdx collision):**
+  `commitTrackedFrame`'s (`pose/tracker.js`) `writtenThisFrame` collision guard
+  marks a (frame,cam,rawTrackIdx) key `-1`/ambiguous in `frameIdentityMap` when
+  the raw per-camera tracker briefly assigns the SAME trackIdx to two
+  different animals on one frame — most common on frame 0, before the tracker
+  has history to differentiate them. Correct for its original purpose (stops
+  the 2D overlay's per-camera-per-frame color lookup from confidently showing
+  the wrong animal's color) — but `propagateIdentitiesToTracks` resolved each
+  instance's new track PURELY through that same ambiguous per-camera key, so
+  on a collision frame BOTH colliding instances went trackless (`null`)
+  instead of falling back to the one signal that stays unambiguous through a
+  collision: each instance's own `group.identityId` (set once per group at
+  creation, never shared across two colliding groups). That silently emptied
+  the Timeline's Track view AND Identity view for that one frame (self-
+  correcting on later frames once the raw tracker differentiates them) — the
+  reported symptom was literally "frame 1 [index 0] remains unchanged in
+  track view... same is happening with IDs now." Fixed with two additions:
+  a **new step 2b** that repairs/supplements `newFrameMap` directly from
+  `session.instanceGroups` (so `frameIdentityMap`-only consumers like
+  `_buildIdentitySegments` see the correct identity too, not just resident
+  in-memory instances), and an `instanceToIdentity` per-instance-object
+  fallback Map (built from `instanceGroups` before any remap runs) that
+  `remapInstance` (steps 3/3b) checks before falling back to the raw
+  per-camera `getIdentityIdForTrack` lookup. Regression test:
+  `tests/e2e/first-frame-track-identity-collision.mjs` (builds a synthetic
+  raw-trackIdx collision on frame 0 only, propagates, and asserts both
+  Timeline display modes cover frame 0 identically to frame 1 — confirmed it
+  fails pre-fix with `[null, null]` on the colliding camera's frame-0
+  instances and passes post-fix).
   Separately, the auto-generated track-name fallback changed from `'id_' +
   ident.id` to the app's normal `'track_' + index` convention (a genuinely
   custom identity name like "Alice" is still preserved verbatim; only a
