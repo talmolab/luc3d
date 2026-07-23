@@ -449,5 +449,130 @@
                 }
             }
         });
+
+        it('propagateIdentitiesToTracks rewrites the columnar store and survives export, with ZERO frames materialized', async function () {
+            // Regression for the "Propagate IDs -> Tracks only affects a
+            // handful of frames near the cursor" bug: the fix must not depend
+            // on session.frameGroups residency at all for a lazy session. This
+            // test never calls reconstructLazy/buildLazyFrameGroupSync — no
+            // FrameGroup is ever built — proving the store-level remap alone
+            // (SioLazyLoader.remapTracksFromIdentity) carries the whole
+            // project, independent of what's been visited/scrubbed.
+            const S = window.SleapIO;
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js');
+
+            const bytes = await buildProjectFixtureBytes(S);
+            const { loader, opened } = await openProjectFixture(bytes, 'lazy-reopen-propagate.slp');
+            const session = buildLucidSession(loader);
+            assertEqual(session.frameGroups.size, 0, 'precondition: nothing materialized whatsoever');
+
+            // Simulate a completed Track All: identity stamped per (frame,cam,
+            // track) across the whole project, straight into frameIdentityMap
+            // — exactly what Track All itself does, without ever touching
+            // frameGroups for frames the tracker's window already released.
+            const idA = session.addIdentity('Alice');
+            const idB = session.addIdentity('Bob');
+            for (let f = 0; f < N_FIXTURE_FRAMES; f++) {
+                CAMS.forEach(function (camName) {
+                    session.setFrameIdentity(f, camName, 0, idA.id);  // fixture track t0 -> Alice
+                    session.setFrameIdentity(f, camName, 1, idB.id);  // fixture track t1 -> Bob
+                });
+            }
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(res.tracks, 2, 'two tracks created from the two used identities');
+            assertDeepEqual(session.tracks.slice().sort(), ['Alice', 'Bob'], 'session.tracks renamed to identity names');
+            assertEqual(session.frameIdentityMap.size, N_FIXTURE_FRAMES * CAMS.length * 2,
+                'frameIdentityMap still covers every frame/camera/track in the project');
+
+            // The underlying columnar store (shared by BOTH cameras here, per
+            // openProjectSlp) must be rewritten — this is what export and any
+            // future re-materialization actually read for a lazy session.
+            const storeA = loader.labelsByCam.get('Camera_A')._lazyDataStore;
+            assertTrue(storeA === loader.labelsByCam.get('Camera_B')._lazyDataStore, 'shared store, rebuilt once');
+            assertDeepEqual(storeA.tracks.map(function (t) { return t.name; }).sort(), ['Alice', 'Bob'],
+                'labels.tracks (== store.tracks) rebuilt to the identity names');
+            for (let j = 0; j < storeA.instancesData.track.length; j++) {
+                assertTrue(Number(storeA.instancesData.track[j]) >= 0,
+                    'store row ' + j + ' got a real identity-derived track (not left at the old t0/t1 id)');
+            }
+
+            // Re-materializing (as scrubbing to a frame would, post-eviction)
+            // must reflect the NEW assignment — proves this survives
+            // eviction/revisit without keeping anything resident.
+            const frameMap = loader.getFrameSync(0);
+            const camAInsts = frameMap.get('Camera_A');
+            assertEqual(camAInsts.length, 2, 'both instances still present after the remap');
+            const gotNames = camAInsts.map(function (inst) { return session.tracks[inst.trackIdx]; }).sort();
+            assertDeepEqual(gotNames, ['Alice', 'Bob'], 'materialized instances carry the identity-derived track');
+
+            // Export (streaming writer, what a lazy session actually uses to
+            // save) must carry it too — the whole point of the fix.
+            const out = await buildSessionSlpBytesStreaming(session, [], []);
+            const rb = await S.readSlpStreaming(new File([out], 'lazy-reopen-propagate-resave.slp'),
+                { lazy: true, openVideos: false, rawSessions: true, h5wasmUrl: h5wasmUrl });
+            assertDeepEqual(rb.tracks.map(function (t) { return t.name; }).sort(), ['Alice', 'Bob'],
+                'exported file carries the new, identity-derived track names');
+            for (let j = 0; j < rb._lazyDataStore.instancesData.track.length; j++) {
+                assertTrue(Number(rb._lazyDataStore.instancesData.track[j]) >= 0,
+                    'exported row ' + j + ' has a real track (not the untouched original t0/t1 ids)');
+            }
+        });
+
+        it('propagateIdentitiesToTracks rebuilds the lazy loader\'s trackOccupancy (Tracks Timeline bug)', async function () {
+            // Regression for "the 2D viewer shows the propagated tracks
+            // correctly but the Tracks Timeline never updates": the Timeline's
+            // _buildTrackSegments (ui/timeline.js) trusts session.trackOccupancy
+            // (== loader.trackOccupancy, same Map by reference) for every frame
+            // outside frameGroups — which is almost the whole project on a
+            // large lazy session. That occupancy is a one-time snapshot from
+            // SioLazyLoader.open()/_computeSparseOccupancy; if propagate doesn't
+            // refresh it, the timeline keeps showing PRE-propagate track bars
+            // forever for anything unvisited.
+            //
+            // Collapsing both fixture tracks (t0, t1) onto the SAME identity
+            // changes the track count from 2 -> 1, which a stale occupancy
+            // snapshot cannot coincidentally match — a strong signal the
+            // rebuild actually ran (a same-count remap could pass even with
+            // no rebuild, by accident).
+            const S = window.SleapIO;
+            const bytes = await buildProjectFixtureBytes(S);
+            const { loader, opened } = await openProjectFixture(bytes, 'lazy-reopen-propagate-occupancy.slp');
+            const session = buildLucidSession(loader);
+            assertEqual(session.frameGroups.size, 0, 'precondition: nothing materialized whatsoever');
+
+            const preOcc = loader.trackOccupancy.get('Camera_A');
+            assertTrue(!!preOcc, 'precondition: occupancy was computed at open()');
+            assertEqual(preOcc.nTracks, 2, 'precondition: pre-propagate occupancy still reflects the raw t0/t1 tracks');
+
+            const idA = session.addIdentity('Alice');
+            for (let f = 0; f < N_FIXTURE_FRAMES; f++) {
+                CAMS.forEach(function (camName) {
+                    session.setFrameIdentity(f, camName, 0, idA.id);   // t0 -> Alice
+                    session.setFrameIdentity(f, camName, 1, idA.id);   // t1 -> Alice too (collapse)
+                });
+            }
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(res.tracks, 1, 'both old tracks collapse onto the single used identity');
+
+            const postOcc = loader.trackOccupancy.get('Camera_A');
+            assertTrue(!!postOcc, 'occupancy entry still present after remap');
+            assertTrue(postOcc !== preOcc, 'occupancy object was rebuilt, not left as the same stale reference');
+            assertEqual(postOcc.nTracks, 1, 'occupancy nTracks now matches the collapsed 1-track project, not the stale 2');
+            assertTrue(postOcc.segments.has(0), 'rebuilt occupancy has a segment entry for the single new track');
+            const segs0 = postOcc.segments.get(0);
+            assertEqual(segs0.length, 1, 'both cameras present every fixture frame -> one contiguous run');
+            assertEqual(segs0[0].start, 0, 'run starts at frame 0');
+            assertEqual(segs0[0].end, N_FIXTURE_FRAMES - 1, 'run covers every fixture frame');
+
+            // Same Map object as session.trackOccupancy would be after the real
+            // session-loader.js wiring (state.session.trackOccupancy =
+            // lazyLoader.trackOccupancy) — asserting identity here proves the
+            // Timeline picks this up with zero extra plumbing.
+            session.trackOccupancy = loader.trackOccupancy;
+            assertTrue(session.trackOccupancy.get('Camera_A') === postOcc,
+                'session.trackOccupancy (aliased to the loader\'s Map) sees the rebuilt entry');
+        });
     });
 })();

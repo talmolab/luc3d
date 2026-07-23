@@ -512,6 +512,150 @@ export class SioLazyLoader {
         for (var f = startFrameIdx; f < endFrameIdx; f++) this.releaseFrame(f);
     }
 
+    /**
+     * Read-only sweep over every (camera, frameIdx, trackIdx) instance triple
+     * in the WHOLE project, straight from each camera's columnar store
+     * (`labels._lazyDataStore.framesData`/`.instancesData`) — no frame or
+     * instance object materialization, independent of what's currently
+     * resident/cached. Used by project-wide identity/track propagation
+     * (`Session.propagateTracksToIdentities`, pose/pose-data.js) so it isn't
+     * limited to whatever's in `session.frameGroups` (a lazy session's small
+     * resident window).
+     * @param {(camName: string, frameIdx: number, trackIdx: number) => void} visitFn
+     *   `trackIdx` is -1 for a trackless instance.
+     */
+    forEachInstanceRow(visitFn) {
+        for (var camName of this.labelsByCam.keys()) {
+            var labels = this.labelsByCam.get(camName);
+            var store = labels && labels._lazyDataStore;
+            var rowMap = this.frameRowByCam.get(camName);
+            if (!store || !rowMap) continue;
+            var fd = store.framesData || {};
+            var idn = store.instancesData || {};
+            for (var [frameIdx, frameRow] of rowMap) {
+                var iStart = Number(fd.instance_id_start ? fd.instance_id_start[frameRow] : 0) || 0;
+                var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[frameRow] : 0) || 0;
+                for (var j = iStart; j < iEnd; j++) {
+                    var trk = idn.track ? Number(idn.track[j]) : -1;
+                    if (!Number.isFinite(trk)) trk = -1;
+                    visitFn(camName, frameIdx, trk);
+                }
+            }
+        }
+    }
+
+    /**
+     * Rewrite every camera's persistent columnar track assignment to match a
+     * new identity-derived track list, so the change survives eviction/reload
+     * and is picked up natively by SLP export — `appendStore` reads
+     * `instancesData.track` by reference (see import-export/slp-streaming-
+     * write.js) — without materializing a single extra frame. Companion to
+     * `forEachInstanceRow`; used by `Session.propagateIdentitiesToTracks`
+     * ("Propagate IDs → Tracks").
+     *
+     * Each underlying `labels` object's `tracks` array (shared by reference
+     * with its `_lazyDataStore.tracks` — mutated in place, never reassigned,
+     * so both stay in sync) is rebuilt to exactly `newTrackNames`; a shared
+     * store (one project `.slp` interleaving multiple cameras, see
+     * `openProjectSlp`) is only rebuilt once even though several camera names
+     * point at the same `labels`.
+     *
+     * @param {string[]} newTrackNames - the new project-wide track name list
+     *   (mirrors `session.tracks` after propagate).
+     * @param {(camName: string, frameIdx: number, oldTrackIdx: number) => number} remapFn
+     *   Returns the new track index (into `newTrackNames`), or a negative
+     *   number for "no track."
+     * @returns {number} instance rows whose track id actually changed.
+     */
+    remapTracksFromIdentity(newTrackNames, remapFn) {
+        var SIO = window.SleapIO;
+        var TrackCtor = SIO && SIO.Track;
+        var changed = 0;
+        var rebuiltLabels = new Set();   // labels whose .tracks array was rebuilt
+        var seenLabels = new Set();      // every labels object touched (cache-clear target)
+        for (var camName of this.labelsByCam.keys()) {
+            var labels = this.labelsByCam.get(camName);
+            var store = labels && labels._lazyDataStore;
+            var rowMap = this.frameRowByCam.get(camName);
+            if (!store || !rowMap) continue;
+            seenLabels.add(labels);
+
+            if (TrackCtor && !rebuiltLabels.has(labels)) {
+                rebuiltLabels.add(labels);
+                var tracksArr = store.tracks;   // === labels.tracks (shared ref)
+                if (Array.isArray(tracksArr)) {
+                    tracksArr.length = 0;
+                    for (var t = 0; t < newTrackNames.length; t++) {
+                        tracksArr.push(new TrackCtor(newTrackNames[t]));
+                    }
+                }
+            }
+
+            var fd = store.framesData || {};
+            var idn = store.instancesData || {};
+            if (!idn.track) continue;
+            for (var [frameIdx, frameRow] of rowMap) {
+                var iStart = Number(fd.instance_id_start ? fd.instance_id_start[frameRow] : 0) || 0;
+                var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[frameRow] : 0) || 0;
+                for (var j = iStart; j < iEnd; j++) {
+                    var oldTrk = Number(idn.track[j]);
+                    if (!Number.isFinite(oldTrk)) oldTrk = -1;
+                    var newTrk = remapFn(camName, frameIdx, oldTrk);
+                    newTrk = (newTrk == null || newTrk < 0) ? -1 : newTrk;
+                    if (idn.track[j] !== newTrk) { idn.track[j] = newTrk; changed++; }
+                }
+            }
+
+            // Rebuild THIS camera's sparse track-occupancy from the just-
+            // remapped column. `session.trackOccupancy` is the SAME Map
+            // object as `this.trackOccupancy` (set by reference in
+            // session-loader.js), so replacing this entry is picked up by the
+            // Timeline with no extra wiring. Without this, `_computeSparseOccupancy`'s
+            // one-time snapshot from `open()` keeps describing the
+            // PRE-propagate track ids forever, and `ui/timeline.js:
+            // _buildTrackSegments` trusts it for every frame the user hasn't
+            // scrubbed to — the "Tracks Timeline doesn't update after
+            // Propagate IDs → Tracks" bug.
+            try {
+                var newOcc = this._computeSparseOccupancy(labels, this.nFrames);
+                if (newOcc) this.trackOccupancy.set(camName, newOcc);
+                else this.trackOccupancy.delete(camName);
+            } catch (e) { /* occupancy is optional; ignore */ }
+        }
+
+        // Invalidate every resident cache layer — our own adapted-dict LRU
+        // and each camera's underlying sleap-io.js typed-frame cache — so a
+        // currently-cached or later-revisited frame re-materializes from the
+        // just-mutated columns instead of serving stale trackIdx values
+        // (adaptTypedInstance/`materializeFrame` both resolve trackIdx from
+        // `tracks`/`instancesData.track` fresh on each materialization, so
+        // simply dropping the cached copies is sufficient — no rebuild here).
+        //
+        // Reaches into `_lazyFrameList.clearCache()` (drops the WHOLE cache
+        // in one call) instead of the public per-row `releaseFrame(row)` API
+        // looped over every frame in the project: for a 180k-frame x 5-camera
+        // project that loop was up to ~900k calls just to invalidate what's
+        // normally a few hundred cached entries (`internalFrameCacheLimit`)
+        // — the dominant cost in the "Propagate IDs -> Tracks takes forever"
+        // report. Falls back to the old per-row loop on an older bundle
+        // without `clearCache`.
+        this.cache.clear();
+        this.cacheOrder = [];
+        for (var labels2 of seenLabels) {
+            if (labels2._lazyFrameList && typeof labels2._lazyFrameList.clearCache === 'function') {
+                labels2._lazyFrameList.clearCache();
+            } else if (typeof labels2.releaseFrame === 'function') {
+                for (var camName2 of this.labelsByCam.keys()) {
+                    if (this.labelsByCam.get(camName2) !== labels2) continue;
+                    var rowMap2 = this.frameRowByCam.get(camName2);
+                    if (!rowMap2) continue;
+                    for (var frameRow2 of rowMap2.values()) labels2.releaseFrame(frameRow2);
+                }
+            }
+        }
+        return changed;
+    }
+
     close() {
         // Dropping the labels refs lets each camera's lazy Labels (and its
         // `frameCacheLimit`-bounded internal cache) be GC'd — no manual clear.
