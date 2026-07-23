@@ -565,12 +565,27 @@ export class SioLazyLoader {
      * @param {(camName: string, frameIdx: number, oldTrackIdx: number) => number} remapFn
      *   Returns the new track index (into `newTrackNames`), or a negative
      *   number for "no track."
-     * @returns {number} instance rows whose track id actually changed.
+     * @returns {{changed: number, errorRows: number, firstError: Error|null}}
+     *   `changed` is instance rows whose track id actually changed;
+     *   `errorRows`/`firstError` surface any per-row failures (see the
+     *   diagnostic note above) instead of silently swallowing them.
      */
     remapTracksFromIdentity(newTrackNames, remapFn) {
         var SIO = window.SleapIO;
         var TrackCtor = SIO && SIO.Track;
         var changed = 0;
+        // Regression diagnostic (see "only the first frame(s) have tracks after
+        // export" report): this function used to have NO error handling at all
+        // — an exception thrown mid-row would silently abort the rest of the
+        // ENTIRE remap for every camera not yet processed, while the live
+        // session (frameIdentityMap/instanceGroups/resident Instance.trackIdx,
+        // all mutated BEFORE this function runs) would already look completely
+        // correct in the GUI. That mismatch — correct on screen, broken in the
+        // export — is exactly what silently swallowing an error here would
+        // produce. `errorRows`/`firstError` surface any such failure instead of
+        // eating it; `propagateIdentitiesToTracks` reports both in its status.
+        var errorRows = 0;
+        var firstError = null;
         var rebuiltLabels = new Set();   // labels whose .tracks array was rebuilt
         var seenLabels = new Set();      // every labels object touched (cache-clear target)
         for (var camName of this.labelsByCam.keys()) {
@@ -594,17 +609,39 @@ export class SioLazyLoader {
             var fd = store.framesData || {};
             var idn = store.instancesData || {};
             if (!idn.track) continue;
+            // Per-camera diagnostic counters (see the note above this method) —
+            // logged after this camera's loop so a scan of the console
+            // immediately shows whether coverage suspiciously drops to ~0 for
+            // some camera/frame range instead of scaling with the columnar
+            // store's actual row count.
+            var camRowsVisited = 0;
+            var camRowsChanged = 0;
             for (var [frameIdx, frameRow] of rowMap) {
                 var iStart = Number(fd.instance_id_start ? fd.instance_id_start[frameRow] : 0) || 0;
                 var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[frameRow] : 0) || 0;
                 for (var j = iStart; j < iEnd; j++) {
-                    var oldTrk = Number(idn.track[j]);
-                    if (!Number.isFinite(oldTrk)) oldTrk = -1;
-                    var newTrk = remapFn(camName, frameIdx, oldTrk);
-                    newTrk = (newTrk == null || newTrk < 0) ? -1 : newTrk;
-                    if (idn.track[j] !== newTrk) { idn.track[j] = newTrk; changed++; }
+                    camRowsVisited++;
+                    // Isolated per-row: one malformed row/frame must not abort
+                    // the remap for every frame after it (see the diagnostic
+                    // note above this method).
+                    try {
+                        var oldTrk = Number(idn.track[j]);
+                        if (!Number.isFinite(oldTrk)) oldTrk = -1;
+                        var newTrk = remapFn(camName, frameIdx, oldTrk);
+                        newTrk = (newTrk == null || newTrk < 0) ? -1 : newTrk;
+                        if (idn.track[j] !== newTrk) { idn.track[j] = newTrk; changed++; camRowsChanged++; }
+                    } catch (rowErr) {
+                        errorRows++;
+                        if (!firstError) firstError = rowErr;
+                        if (errorRows <= 5) {
+                            console.error('[remapTracksFromIdentity] row ' + j + ' (camera=' + camName +
+                                ', frame=' + frameIdx + ') failed — leaving its track unchanged:', rowErr);
+                        }
+                    }
                 }
             }
+            console.log('[remapTracksFromIdentity] camera=' + camName + ': ' + camRowsChanged + '/' +
+                camRowsVisited + ' rows remapped (rest already matched, or had no identity to remap to).');
 
             // Rebuild THIS camera's sparse track-occupancy from the just-
             // remapped column. `session.trackOccupancy` is the SAME Map
@@ -653,7 +690,12 @@ export class SioLazyLoader {
                 }
             }
         }
-        return changed;
+        if (errorRows > 0) {
+            console.error('[remapTracksFromIdentity] ' + errorRows + ' row(s) failed and were left with their ' +
+                'OLD (now likely out-of-range) track index — those rows will show as trackless once ' +
+                'session.tracks is replaced with the shorter identity-derived list. First error:', firstError);
+        }
+        return { changed: changed, errorRows: errorRows, firstError: firstError };
     }
 
     close() {
