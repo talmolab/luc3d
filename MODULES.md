@@ -174,7 +174,20 @@ session graph that holds them.
   identity for instances outside the resident window) — see
   `loading/sio-lazy-loader.js`. Both are duck-typed (`typeof … === 'function'`)
   so a non-lazy session or the worker-backed `LazyFrameLoader` (which lacks
-  these methods) is unaffected. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  these methods) is unaffected. **Perf/correctness follow-up (large lazy
+  projects):** `propagateIdentitiesToTracks` now also builds
+  `oldKeyToNewTrackIdx` (a "frame:cam:oldTrackIdx" → newTrackIdx map) for free
+  while it already walks `frameIdentityMap` in step 2, so its
+  `remapTracksFromIdentity` callback is one direct `Map.get` per instance row
+  instead of re-deriving the same fact via `getIdentityIdForTrack` +
+  `idToTrackIdx.get` (two hash lookups) on every row.
+  `propagateTracksToIdentities`'s lazy sweep now memoizes
+  `getOrCreateIdentityForTrack` per distinct `trackIdx` (a local
+  `identityForTrack` Map) — that lookup is a LINEAR SCAN over
+  `session.identities`, and the sweep calls it once per **instance row**
+  (millions on a large project); with many distinct tracks the unmemoized
+  version is O(rows × identities), which was observed to freeze the tab on
+  "Propagate Tracks → IDs" for a heavily-tracked project. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
   group editing (`createGroupFromUnlinked` — when no identity is passed it
   derives one from the first member's track, but only if that member HAS a
@@ -2360,12 +2373,24 @@ result into `instancesData.track` in place — the same array `appendStore`
 (export, `import-export/slp-streaming-write.js`) and `materializeFrame`
 (re-materializing an evicted/revisited frame) both read by reference, so the
 propagated track survives eviction/reload and is exported correctly with no
-new writer plumbing. Invalidates the loader's own adapted-dict cache and each
-camera's underlying sleap-io.js typed-frame cache afterward (`releaseFrame`)
-so anything already cached re-materializes from the mutated columns. Both are
-duck-typed feature checks from the `Session` side (`typeof … === 'function'`),
-so the worker-backed `LazyFrameLoader` (SLEAP analysis `.h5`, no columnar
-store) is unaffected.
+new writer plumbing. Also rebuilds THIS camera's `trackOccupancy` entry (via
+`_computeSparseOccupancy`) from the just-remapped column — fixes a bug where
+the Tracks Timeline never reflected a propagate on a lazy session: `session.
+trackOccupancy` is the SAME Map object as `this.trackOccupancy` (aliased by
+reference in `session-loader.js`), and `ui/timeline.js:_buildTrackSegments`
+trusts it for every unmaterialized frame, so leaving it stale (as before)
+meant the Timeline kept showing pre-propagate track bars for almost the whole
+project while the 2D viewer (which reads the mutated columnar store directly)
+was already correct. Invalidates the loader's own adapted-dict cache and each
+camera's underlying sleap-io.js typed-frame cache afterward — via
+`_lazyFrameList.clearCache()` (drops the whole cache in one call), not the
+old per-row `releaseFrame(row)` looped over every frame row in the project
+(up to ~900k calls on a 180k-frame × 5-camera project just to invalidate a
+~512-entry cache — the dominant cost behind "Propagate IDs → Tracks takes
+forever"); falls back to the old per-row loop if `clearCache` isn't present
+on the bundle. Both are duck-typed feature checks from the `Session` side
+(`typeof … === 'function'`), so the worker-backed `LazyFrameLoader` (SLEAP
+analysis `.h5`, no columnar store) is unaffected.
 
 **Imports.** `window.SleapIO.readSlpStreaming` (via the index.html bridge) and the
 local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).
