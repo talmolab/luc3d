@@ -202,7 +202,33 @@ session graph that holds them.
   it and keeps the original O(project) search, which is fine as a one-off
   per user click. Together these were observed to freeze the tab outright on
   "Propagate Tracks → IDs" for a large heavily-tracked/grouped project — not
-  just slow. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
+  just slow. **`propagateIdentitiesToTracks` also now remaps
+  `session.instanceGroups` project-wide (new step 3b)**, not just the
+  resident `frameGroups` window: on a lazy session, `instanceGroups` is
+  populated for the WHOLE project at reopen with its own lightweight
+  per-camera `Instance` members (`reconstructInstanceGroupsFromSessionLazy`,
+  `import-export/slp-import.js`) — separate objects from `frameGroups` until
+  a frame is scrubbed to, and `finalizeLazyFrameGroup`
+  (`pose/triangulation.js`) never refreshes `trackIdx` on that hydration.
+  Leaving those members' `trackIdx` stale after `session.tracks` is replaced
+  with a new (usually shorter) list broke three things at once: the 3D
+  viewport (colors via `group.instances.get(cam).trackIdx`, `ui/overlays.js`
+  `getGroupColor`) kept showing old colors, the Instance Info panel's track
+  `<select>` went blank (no option matches an out-of-range value), and the
+  Timeline showed old track bars overlaid with new ones (`_buildTrackSegments`
+  scans `instanceGroups` directly, independent of the `trackOccupancy`-derived
+  segments that already reflected the new assignment). `ui/ui-wiring.js`'s
+  propagate handlers also now call `update3DViewport(state.currentFrame)`
+  (previously missing — only `drawAllOverlays`/`updateInfoPanel`/
+  `timeline.refreshTracks` ran), matching the "recolor 3D instances instantly"
+  pattern already used by the Color-by-Track/Identity toolbar toggles.
+  Separately, the auto-generated track-name fallback changed from `'id_' +
+  ident.id` to the app's normal `'track_' + index` convention (a genuinely
+  custom identity name like "Alice" is still preserved verbatim; only a
+  placeholder name matching the `getOrCreateIdentityForTrack` pattern
+  `id_<n>` is treated as "no real name" and replaced) — otherwise a
+  Tracks→IDs→Tracks round trip renamed `track_0`/`track_1` to `id_0`/`id_1`
+  instead of restoring the original naming. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
   group editing (`createGroupFromUnlinked` — when no identity is passed it
   derives one from the first member's track, but only if that member HAS a

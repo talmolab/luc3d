@@ -587,6 +587,60 @@
             assertDeepEqual(calls[0], ['Alice'], 'lazy loader gets the same new-track-names list as session.tracks');
             assertEqual(res.instances, 1, 'lazy-remapped row count is folded into the returned instance count');
         });
+
+        it('remaps session.instanceGroups member trackIdx project-wide, not just resident frameGroups', function () {
+            // Regression for "2D viewer updates but 3D viewport/Timeline/info
+            // panel stay stale after Propagate IDs -> Tracks": on a lazy
+            // session, instanceGroups is populated PROJECT-WIDE at reopen with
+            // its OWN lightweight per-camera Instance members — separate
+            // objects from whatever's in frameGroups until that frame is
+            // scrubbed to (and even then, hydration never refreshes trackIdx).
+            // The 3D viewport, info panel, and Timeline's instanceGroups scan
+            // all read trackIdx off THESE objects, so leaving them stale after
+            // session.tracks is replaced with a new (shorter) list points them
+            // at wrong/out-of-range tracks.
+            const session = buildSession();
+            const idB = session.addIdentity('Bob');
+
+            // Frame 90000 has NO FrameGroup at all (never materialized) — only
+            // an instanceGroups entry, exactly the lazy "reopened but not
+            // scrubbed to" shape.
+            const group = new InstanceGroup(1, -1);
+            const member = new Instance([[3, 3]], 1, 'predicted', 0.9);  // OLD track 1
+            group.addInstance('cam0', member);
+            session.instanceGroups.set(90000, [group]);
+            session.setFrameIdentity(90000, 'cam0', 1, idB.id);
+            assertFalse(session.frameGroups.has(90000), 'precondition: frame 90000 is NOT resident');
+
+            session.propagateIdentitiesToTracks();
+
+            const bobTrack = session.tracks.indexOf('Bob');
+            assertTrue(bobTrack >= 0, 'Bob became a track');
+            assertEqual(member.trackIdx, bobTrack,
+                'the instanceGroups member (never touched by the frameGroups walk) got remapped too');
+        });
+
+        it('replaces an auto-generated "id_N" identity name with the app\'s track_N convention; custom names survive', function () {
+            // Regression: propagating IDs -> Tracks after a prior Tracks -> IDs
+            // pass (which names identities "id_<n>" via getOrCreateIdentityForTrack)
+            // used to carry that literal "id_N" string over as the new track
+            // name — so a round trip renamed track_0/track_1 to id_0/id_1
+            // instead of restoring the app's normal track_N naming. A
+            // genuinely custom identity name (e.g. "Alice") must still be
+            // preserved verbatim.
+            const session = buildSession();
+            const idAuto = session.addIdentity('id_7');   // mimics getOrCreateIdentityForTrack's placeholder
+            const idCustom = session.addIdentity('Alice');
+            session.setFrameIdentity(10, 'cam0', 0, idAuto.id);
+            session.setFrameIdentity(10, 'cam0', 1, idCustom.id);
+
+            session.propagateIdentitiesToTracks();
+
+            assertEqual(session.tracks.indexOf('id_7'), -1, 'the placeholder "id_7" name is NOT carried over literally');
+            assertTrue(session.tracks.some(function (t) { return /^track_\d+$/.test(t); }),
+                'the auto-named identity falls back to the track_N convention');
+            assertTrue(session.tracks.indexOf('Alice') >= 0, 'a genuinely custom identity name is preserved');
+        });
     });
 
     describe('Session.propagateTracksToIdentities — lazy sessions', function () {
