@@ -95,6 +95,19 @@ export function createProjectWriterContext() {
         skeletonByName: new Map(),
         allVideos: [],             // SIO.Video[], global index = videoIndexOffset for appendStore
         allTracks: [],             // SIO.Track[], global index = trackOffset for appendStore
+        // Dedup key (this camera's track NAME list, joined) -> the trackBase
+        // it was first added at. Needed for the non-shared-store branch below:
+        // separate per-camera prediction .slp files normally have genuinely
+        // DISJOINT track lists (each camera's own raw SLEAP tracker), so
+        // concatenating is correct — but after `Session.propagateIdentitiesToTracks`
+        // every camera's `labels.tracks` becomes the SAME identity-derived list
+        // (see `remapTracksFromIdentity`, `loading/sio-lazy-loader.js`). Without
+        // this dedup, each additional camera re-appended its own copy of that
+        // now-identical list under an increasing `trackOffset`, so every camera
+        // after the first pointed its instances at a DIFFERENT duplicate Track
+        // object sharing the same name — same failure class the analogous
+        // `skeletonByName` dedup above already guards against for skeletons.
+        trackBaseByNameSig: new Map(),
         allIdentities: [],         // SIO.Identity[], concatenated across sessions
     };
 }
@@ -263,10 +276,25 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
             }
             trackBase = _sharedTrackBase;
         } else {
-            trackBase = ctx.allTracks.length;
             var camTracks = (labels.tracks || []);
-            for (var ti = 0; ti < camTracks.length; ti++) {
-                ctx.allTracks.push(new SIO.Track(camTracks[ti].name));
+            // Name-list signature ('|~|'-joined — a track/identity name
+            // containing this exact 3-char sequence is not a realistic
+            // concern): if this camera's track list is IDENTICAL (by name,
+            // in order) to one already added, reuse that trackBase instead
+            // of appending a duplicate copy. Two DIFFERENT cameras' raw
+            // prediction tracks are essentially never identical by
+            // coincidence, so this only ever fires for the genuinely-
+            // identical case: every camera sharing the SAME identity-derived
+            // list post-propagate.
+            var camTrackSig = camTracks.map(function (t) { return t.name; }).join('|~|');
+            if (ctx.trackBaseByNameSig.has(camTrackSig)) {
+                trackBase = ctx.trackBaseByNameSig.get(camTrackSig);
+            } else {
+                trackBase = ctx.allTracks.length;
+                ctx.trackBaseByNameSig.set(camTrackSig, trackBase);
+                for (var ti = 0; ti < camTracks.length; ti++) {
+                    ctx.allTracks.push(new SIO.Track(camTracks[ti].name));
+                }
             }
         }
 

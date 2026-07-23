@@ -552,8 +552,18 @@ export function setupMenus() {
         update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
-        setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks from identities (' +
-            res.instances + ' instances updated)', 'success');
+        if (res.lazyErrorRows > 0) {
+            // Surfaced, not silently eaten: some rows in the persistent
+            // columnar store failed to remap (see console for exactly which)
+            // and were left with their OLD track index — those will show as
+            // trackless in the exported .slp once session.tracks is replaced
+            // with the shorter identity-derived list.
+            setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks, but ' + res.lazyErrorRows +
+                ' row(s) failed to remap — export will be INCOMPLETE. See console for details.', 'error');
+        } else {
+            setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks from identities (' +
+                res.instances + ' instances updated)', 'success');
+        }
     });
 
     // Color by Tracks / ID toolbar toggle
