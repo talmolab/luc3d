@@ -1605,20 +1605,45 @@ export function frameHasGroupedUserInstances(frameIdx) {
  * instances (currently all in `fg.instances`) into this frame's pre-existing
  * InstanceGroups vs the unlinked pool.
  *
- * Default (per-camera lazy load / Track All): no reopened grouping → every raw
- * instance goes to the unlinked pool (the original behavior).
+ * No pre-existing groups for this frame (fresh, untracked session, or a
+ * frame Track All hasn't reached yet): every raw instance goes to the
+ * unlinked pool (the original behavior).
  *
- * Reopened lazy project (`session._lazyReopened`, from
- * `reconstructInstanceGroupsFromSessionLazy`): the groups already exist with
- * LIGHTWEIGHT members (null 2D, tagged `_rawInstIndex`/`_lazy2d`). Here we
- * **hydrate** each member's 2D from the matching raw store instance (by
- * `_rawInstIndex`) and place the member in `fg.instances` (grouped); only the
- * non-member raw instances go to the unlinked pool — mirroring an eager-loaded
- * frame so rendering / the 3D view / reprojection all work unchanged.
+ * Pre-existing groups for this frame — from EITHER a reopened lazy project
+ * (`reconstructInstanceGroupsFromSessionLazy`, lightweight members tagged
+ * `_rawInstIndex`/`_lazy2d`) OR a fresh Track All run on this same session
+ * (`commitTrackedFrame` reuses the SAME already-`_rawInstIndex`-tagged
+ * Instance objects it found resident in `fg.instances`/`fg.unlinkedInstances`
+ * at tracking time — see `buildLazyFrameGroupSync`/`ensureLazyFrameData`,
+ * which both tag `_rawInstIndex` on every instance they materialize, so a
+ * Track-All group's members carry it too, not just a reopen's): **hydrate**
+ * each member's 2D from the matching raw store instance (by `_rawInstIndex`,
+ * a no-op when the member already has real points, as a fresh Track-All
+ * group's do) and place the member in `fg.instances` (grouped); only the
+ * non-member raw instances go to the unlinked pool — mirroring an
+ * eager-loaded frame so rendering / the 3D view / reprojection all work
+ * unchanged.
+ *
+ * BUG FIXED (reported: grouped instances AND duplicate unlinked instances
+ * for the same animals on every frame except the current one, after Track
+ * All): this used to gate the hydration branch on `session._lazyReopened`
+ * specifically — true ONLY for a reopened project, never for a session
+ * that was tracked fresh in this same session. A fresh Track-All sweep
+ * evicts every frame except the current one from `session.frameGroups`
+ * (`sweepTrackAllFrames`'s windowed release), but `session.instanceGroups`
+ * is never evicted — so when the user later scrubbed to any OTHER frame,
+ * it re-materialized here, always took the "no pre-existing groups" branch
+ * (since `_lazyReopened` was never set), and dumped every instance into the
+ * unlinked pool even though `session.instanceGroups` already had real
+ * groups for it — rendering each tracked animal twice: once via its
+ * (still-resident) InstanceGroup, once again as a freshly-unlinked
+ * duplicate. Only the current frame (kept resident throughout Track All,
+ * never evicted/rebuilt) was unaffected. Fixed by checking
+ * `session.instanceGroups` directly instead of gating on `_lazyReopened` —
+ * the hydration logic below already works for both origins unchanged.
  */
 function finalizeLazyFrameGroup(session, fg, frameIdx) {
-    var groups = (session._lazyReopened && session.instanceGroups)
-        ? session.instanceGroups.get(frameIdx) : null;
+    var groups = session.instanceGroups ? session.instanceGroups.get(frameIdx) : null;
 
     if (!groups || groups.length === 0) {
         for (var [cn, camInsts] of fg.instances) {

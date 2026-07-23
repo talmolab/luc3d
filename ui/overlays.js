@@ -152,14 +152,29 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
     // fires, so consulting it here would show stale colors for any group
     // whose past-frame instances still carry the old trackIdx.
     var effectiveTrackIdx = null;
+    var effectiveTrackCam = null;
     if (cameraName && group.instances.has(cameraName)) {
         var camInst = group.instances.get(cameraName);
-        if (camInst && camInst.trackIdx != null) effectiveTrackIdx = camInst.trackIdx;
+        if (camInst && camInst.trackIdx != null) { effectiveTrackIdx = camInst.trackIdx; effectiveTrackCam = cameraName; }
     }
     if (effectiveTrackIdx == null) {
-        for (var [, inst] of group.instances) {
-            if (inst && inst.trackIdx != null) { effectiveTrackIdx = inst.trackIdx; break; }
+        for (var [otherCam, inst] of group.instances) {
+            if (inst && inst.trackIdx != null) { effectiveTrackIdx = inst.trackIdx; effectiveTrackCam = otherCam; break; }
         }
+    }
+    // Same-frame raw-trackIdx collision: `commitTrackedFrame`'s
+    // `writtenThisFrame` guard marks a (frame,cam,trackIdx) key -1/ambiguous
+    // in frameIdentityMap ONLY when the raw per-camera tracker briefly
+    // assigned that exact trackIdx to two DIFFERENT groups this one frame
+    // (most common on frame 0, before it has history to differentiate them —
+    // -1 is written nowhere else, so this check is unambiguous). Coloring
+    // purely by that (collided) trackIdx would paint both groups identically
+    // on this one frame — fall back to this group's own `identityId`
+    // (unambiguous, never shared between two colliding groups) just for this
+    // frame, exactly like the "no trackIdx at all" fallback below.
+    if (effectiveTrackIdx != null && effectiveTrackCam && session &&
+        session.isExplicitNoIdentity && session.isExplicitNoIdentity(effectiveTrackCam, effectiveTrackIdx, frameIdx)) {
+        effectiveTrackIdx = null;
     }
     if (effectiveTrackIdx == null) {
         effectiveTrackIdx = group.identityId != null && group.identityId >= 0 ? group.identityId : 0;
@@ -1444,6 +1459,36 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
 
     const typeFilter = options.typeFilter || null;
 
+    // Same-trackIdx collision among UNLINKED instances: unlike linked/grouped
+    // instances (which have a `group.identityId` fallback — see getGroupColor
+    // — for the analogous collision `commitTrackedFrame`'s writtenThisFrame
+    // guard flags), an unlinked instance has no group and no identity at all,
+    // so `getInstanceColor` colors it purely by its raw per-camera `trackIdx`
+    // — a property of the raw prediction data itself, not something LUCID's
+    // tracker assigns. Two DIFFERENT unlinked instances in the same (camera,
+    // frame) can legitimately share that raw trackIdx (upstream tracking
+    // ambiguity, most common early in a video before per-camera track
+    // numbering has settled) and would otherwise render as the exact same
+    // color with nothing to tell them apart. Give every occurrence after the
+    // first a brightness-shifted variant of the shared base color so they
+    // stay visually distinct — computed over the type-filtered set actually
+    // drawn together in this call, not the whole unfiltered array.
+    var dupIndexByInstance = new Map();  // Instance -> occurrence index (0 = first)
+    (function computeDupIndices() {
+        var seenCount = new Map();  // trackIdx -> count so far
+        for (let u2 = 0; u2 < unlinkedInstances.length; u2++) {
+            const ul2 = unlinkedInstances[u2];
+            const inst2 = ul2.instance;
+            if (!inst2 || !inst2.points || inst2.points.length === 0) continue;
+            const type2 = inst2.type || 'user';
+            if (typeFilter && type2 !== typeFilter) continue;
+            if (inst2.trackIdx == null) continue;
+            const count = seenCount.get(inst2.trackIdx) || 0;
+            dupIndexByInstance.set(inst2, count);
+            seenCount.set(inst2.trackIdx, count + 1);
+        }
+    })();
+
     for (let u = 0; u < unlinkedInstances.length; u++) {
         const ul = unlinkedInstances[u];
         const instance = ul.instance;
@@ -1465,6 +1510,14 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
         var baseTrackColor = getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity, ulFrameIdx) || (isPredicted ? '#888888' : UNGROUPED_USER_COLOR);
+        var dupIdx = dupIndexByInstance.get(instance) || 0;
+        if (dupIdx > 0) {
+            // adjustColorBrightness clamps each RGB channel at 255, so a
+            // factor > 1 has little/no visible effect on already-saturated
+            // palette colors — darken monotonically instead, floored so
+            // several duplicates never converge to pure black.
+            baseTrackColor = adjustColorBrightness(baseTrackColor, Math.max(0.35, 1 - 0.22 * dupIdx));
+        }
         const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
         const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
