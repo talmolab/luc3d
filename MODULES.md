@@ -688,6 +688,40 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `_rawInstIndex` resolved all 35611 refs with zero collisions. Regression
   test: `tests/e2e/save-multiinstance-ref-integrity.mjs`
   (`npm run test:ref-integrity`).
+  **`finalizeLazyFrameGroup` fresh-Track-All duplicate-render fix.** This
+  function (splits a freshly-(re)materialized lazy FrameGroup's raw
+  instances into "already grouped" vs "unlinked", using `_rawInstIndex` to
+  match a raw instance to an existing group's member) used to gate its
+  "does this frame already have groups?" check on `session._lazyReopened` —
+  a flag set ONLY by `handleLoadProjectSlpLazy` (reopening a saved project),
+  never by a fresh Track All run in the current session. A fresh Track-All
+  sweep evicts every frame except the current one from `session.frameGroups`
+  (`sweepTrackAllFrames`'s windowed release) but never evicts
+  `session.instanceGroups` — so scrubbing to any other frame afterward
+  re-materialized it here, always took the "no groups" branch (since
+  `_lazyReopened` was never true), and dumped every instance into the
+  unlinked pool even though `session.instanceGroups` already had real groups
+  for that exact frame — rendering each tracked animal TWICE: once via its
+  still-resident InstanceGroup, once again as a freshly-unlinked duplicate.
+  Only the current frame (kept resident throughout Track All, never
+  evicted/rebuilt) was unaffected — matching the report exactly ("frame 1 is
+  correct... all other frames have duplicate ungrouped instances"). Fixed by
+  checking `session.instanceGroups` directly instead of gating on
+  `_lazyReopened` — the existing `_rawInstIndex`-keyed hydration logic
+  already works for both a reopened project's lightweight members and a
+  fresh Track-All group's real members (both get `_rawInstIndex` tagged by
+  whichever materialization site created them, per the tagging note above).
+  Also verified the reverse direction still works: ungrouping an instance
+  (`Session.unlinkGroup`) correctly makes it reappear in the unlinked pool
+  (not missing, not still shown as linked) on the next re-materialization —
+  the same hydration logic naturally handles "not claimed by any remaining
+  group → unlinked." Regression test:
+  `tests/e2e/lazy-frame-rematerialize-duplicate.mjs` (mirrors
+  `commitTrackedFrame`'s real grouping across several frames, evicts all but
+  the current one exactly like the windowed sweep, re-materializes one, and
+  asserts no duplication; then ungroups one animal and confirms it correctly
+  reappears unlinked while the other stays linked with no duplicate —
+  confirmed all 4 assertions fail pre-fix and pass post-fix).
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,
