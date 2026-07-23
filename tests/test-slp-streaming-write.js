@@ -191,6 +191,98 @@
             });
         });
 
+        it('propagateIdentitiesToTracks then export: EVERY frame from BOTH (non-shared-store) cameras carries correct tracks, not just the first', async function () {
+            // Regression for "export only has tracks on the first frame, the rest
+            // are empty": two SEPARATE per-camera prediction files (session-folder
+            // load — NOT SioLazyLoader.openProjectSlp's single shared store) each
+            // have their OWN `labels.tracks` array. After
+            // Session.propagateIdentitiesToTracks rewrites every camera's tracks
+            // to the SAME identity-derived list (loading/sio-lazy-loader.js
+            // remapTracksFromIdentity), buildSessionRefGraph's non-shared-store
+            // branch (import-export/slp-streaming-write.js) used to blindly
+            // re-append each camera's now-identical track list as a FRESH
+            // duplicate copy under an increasing trackOffset instead of
+            // recognizing they're the same list and reusing one shared base —
+            // this test would have caught that (asserted via `rb.tracks.length`
+            // below), and separately proves every frame from every camera
+            // resolves to a valid, correctly-named track after a real
+            // propagate + real streaming export + real readback — not a mock.
+            const S = window.SleapIO;
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js');
+
+            const N = 5; // >1 frame is the whole point — must catch "only frame 0 survives"
+            const labA = await openLazy(S, await storeBytes(S, 'cam0.mp4', N), 'pa.slp');
+            const labB = await openLazy(S, await storeBytes(S, 'cam1.mp4', N), 'pb.slp');
+
+            const loader = new window.SioLazyLoader();
+            [['cam0', labA], ['cam1', labB]].forEach(function (pair) {
+                const cn = pair[0], lab = pair[1];
+                loader.labelsByCam.set(cn, lab);
+                const st = lab._lazyDataStore;
+                const rm = new Map();
+                const fc = st.framesData.frame_idx;
+                for (let r = 0; r < fc.length; r++) rm.set(Number(fc[r]), r);
+                loader.frameRowByCam.set(cn, rm);
+            });
+            loader.nFrames = N;
+
+            const { Camera, Skeleton, Session } = window;
+            const sk = new Skeleton('sk', ['nose', 'tail'], [[0, 1]]);
+            const c0 = new Camera('cam0', [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+            const c1 = new Camera('cam1', [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0.1, 0, 0, 0, 0], [0.1, 0.2, 0.3], [1, 2, 3], [640, 480]);
+            const session = new Session([c0, c1], sk, ['t0', 't1'], 'S2');
+            session.lazyLoader = loader;
+
+            // Simulate Track All's cross-view identity assignment: the fixture's
+            // raw per-camera track 0 -> Alice, track 1 -> Bob, consistently
+            // across BOTH cameras and EVERY frame (exactly what
+            // commitTrackedFrame's per-frame setFrameIdentity calls do for a
+            // real cross-view match).
+            const idA = session.addIdentity('Alice');
+            const idB = session.addIdentity('Bob');
+            for (let f = 0; f < N; f++) {
+                ['cam0', 'cam1'].forEach(function (cam) {
+                    session.setFrameIdentity(f, cam, 0, idA.id);
+                    session.setFrameIdentity(f, cam, 1, idB.id);
+                });
+            }
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(res.tracks, 2, 'two tracks from the two used identities');
+            assertEqual(res.lazyErrorRows || 0, 0, 'no row-remap errors during propagate');
+
+            const bytes = await buildSessionSlpBytesStreaming(session, [], []);
+            const rb = await S.readSlpStreaming(new File([bytes], 'prb.slp'), { lazy: true, openVideos: false, h5wasmUrl: h5wasmUrl });
+
+            assertEqual(rb.tracks.length, 2,
+                'exactly 2 tracks in the exported file — NOT 4 (one duplicate pair per camera, the exact bug: ' +
+                'each non-shared-store camera re-appending its own copy of the now-identical post-propagate list)');
+            assertDeepEqual(rb.tracks.map(function (t) { return t.name; }).sort(), ['Alice', 'Bob'],
+                'track names are the identity names, unduplicated');
+
+            const store = rb._lazyDataStore;
+            const fd = store.framesData;
+            const idn = store.instancesData;
+            let checkedRows = 0;
+            for (let r = 0; r < fd.frame_idx.length; r++) {
+                const frameIdx = Number(fd.frame_idx[r]);
+                const iStart = Number(fd.instance_id_start[r]);
+                const iEnd = Number(fd.instance_id_end[r]);
+                assertEqual(iEnd - iStart, 2, 'row ' + r + ' (frame ' + frameIdx + ') has both instances');
+                const namesHere = [];
+                for (let j = iStart; j < iEnd; j++) {
+                    const trk = Number(idn.track[j]);
+                    assertTrue(trk >= 0 && trk < rb.tracks.length,
+                        'row ' + r + ' frame ' + frameIdx + ' instance ' + j + ' has a VALID track index — ' +
+                        'this is the exact "only the first frame has tracks, the rest are empty" regression');
+                    namesHere.push(rb.tracks[trk].name);
+                }
+                assertDeepEqual(namesHere.sort(), ['Alice', 'Bob'], 'frame ' + frameIdx + ' resolves both identity tracks');
+                checkedRows++;
+            }
+            assertEqual(checkedRows, N * 2, 'checked every frame row from BOTH cameras (' + N + ' frames x 2 cameras), not just the first');
+        });
+
         it('tolerates calibration-only cameras with no loaded store (video-id offset)', async function () {
             // Real sessions calibrate N cameras but load videos for a subset. The
             // builder must still emit a header camera+video for the unloaded ones

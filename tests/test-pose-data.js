@@ -578,7 +578,11 @@
                     const newTrk = remapFn('cam0', 90000, 3);
                     assertEqual(newTrk, newTrackNames.indexOf('Alice'),
                         'remapFn resolves the evicted frame\'s new track from identity alone');
-                    return 1; // pretend one row changed
+                    // Real SioLazyLoader.remapTracksFromIdentity returns
+                    // {changed, errorRows, firstError}, not a bare number (see
+                    // its diagnostic note — surfacing row-level failures
+                    // instead of silently swallowing them).
+                    return { changed: 1, errorRows: 0, firstError: null };
                 },
             };
 
@@ -586,6 +590,39 @@
             assertEqual(calls.length, 1, 'lazyLoader.remapTracksFromIdentity was invoked exactly once');
             assertDeepEqual(calls[0], ['Alice'], 'lazy loader gets the same new-track-names list as session.tracks');
             assertEqual(res.instances, 1, 'lazy-remapped row count is folded into the returned instance count');
+            assertEqual(res.lazyErrorRows, 0, 'no row errors reported');
+        });
+
+        it('surfaces lazyLoader row-remap errors instead of silently swallowing them', function () {
+            // Regression for "export only has tracks on the first frame(s)":
+            // if remapTracksFromIdentity fails partway through the columnar
+            // store (any reason), that must be visible on the result, not
+            // just quietly absorbed while the live session already looks
+            // fully correct (frameIdentityMap/instanceGroups/resident
+            // trackIdx are all fixed up BEFORE this call, in steps 1-3b).
+            const session = buildSession();
+            const idA = session.addIdentity('Alice');
+            session.setFrameIdentity(50, 'cam0', 0, idA.id);
+
+            session.lazyLoader = {
+                remapTracksFromIdentity: function () {
+                    return { changed: 3, errorRows: 41, firstError: new Error('boom') };
+                },
+            };
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(res.lazyErrorRows, 41, 'row-error count from the lazy loader is passed through, not dropped');
+            assertEqual(res.instances, 3, 'changed count still folds in normally alongside the error count');
+        });
+
+        it('back-compat: a lazyLoader.remapTracksFromIdentity returning a bare number still works', function () {
+            const session = buildSession();
+            const idA = session.addIdentity('Alice');
+            session.setFrameIdentity(50, 'cam0', 0, idA.id);
+            session.lazyLoader = { remapTracksFromIdentity: function () { return 7; } };
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(res.lazyErrorRows, 0, 'no error count available from a bare-number return — defaults to 0');
         });
 
         it('remaps session.instanceGroups member trackIdx project-wide, not just resident frameGroups', function () {
