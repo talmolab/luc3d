@@ -481,7 +481,19 @@ count, `instanceGroups` count) against the old full-materialization path on
 real data. A worker-backed lazy loader (small analysis `.h5`, no windowing)
 or a non-lazy session still take the old path: `await loadAllLazyFrames()` to
 materialize the whole project, then re-read the full frame list — otherwise it
-would silently track only the visited frames. Hyperparameters come from the
+would silently track only the visited frames. **Fresh-open guard fix:**
+`trackAll`'s upfront "any frames?" check used to read `session.frameIndices.length`
+(== resident `frameGroups.size`) *before* the windowed-vs-full branch above ever
+ran — so a freshly-opened large lazy project (zero frames visited/scrubbed yet,
+which is every large project the first time Track All is clicked) always had
+`frameIndices.length === 0` and immediately bailed with "No frames to track",
+even though `session.lazyLoader.nFrames` correctly reported the whole project.
+Found via a real end-to-end run against a 180k-frame×5-camera project. Fixed by
+computing `loader`/`windowed` first and checking `loader.nFrames > 0` instead of
+`frameIndices.length` when a windowed loader is present. Regression test:
+`tests/e2e/track-all-fresh-lazy-session.mjs` (reopens a real saved lazy project
+with 0 resident frameGroups and asserts Track All finds identities instead of
+bailing). Hyperparameters come from the
 `corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`
 tracking thresholds (`ui/settings.js`; defaults are the `G_keeptrack_3d6`
 champion values). Track Frame/Track All pass the user's animal count as
