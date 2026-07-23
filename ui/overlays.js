@@ -152,14 +152,29 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
     // fires, so consulting it here would show stale colors for any group
     // whose past-frame instances still carry the old trackIdx.
     var effectiveTrackIdx = null;
+    var effectiveTrackCam = null;
     if (cameraName && group.instances.has(cameraName)) {
         var camInst = group.instances.get(cameraName);
-        if (camInst && camInst.trackIdx != null) effectiveTrackIdx = camInst.trackIdx;
+        if (camInst && camInst.trackIdx != null) { effectiveTrackIdx = camInst.trackIdx; effectiveTrackCam = cameraName; }
     }
     if (effectiveTrackIdx == null) {
-        for (var [, inst] of group.instances) {
-            if (inst && inst.trackIdx != null) { effectiveTrackIdx = inst.trackIdx; break; }
+        for (var [otherCam, inst] of group.instances) {
+            if (inst && inst.trackIdx != null) { effectiveTrackIdx = inst.trackIdx; effectiveTrackCam = otherCam; break; }
         }
+    }
+    // Same-frame raw-trackIdx collision: `commitTrackedFrame`'s
+    // `writtenThisFrame` guard marks a (frame,cam,trackIdx) key -1/ambiguous
+    // in frameIdentityMap ONLY when the raw per-camera tracker briefly
+    // assigned that exact trackIdx to two DIFFERENT groups this one frame
+    // (most common on frame 0, before it has history to differentiate them —
+    // -1 is written nowhere else, so this check is unambiguous). Coloring
+    // purely by that (collided) trackIdx would paint both groups identically
+    // on this one frame — fall back to this group's own `identityId`
+    // (unambiguous, never shared between two colliding groups) just for this
+    // frame, exactly like the "no trackIdx at all" fallback below.
+    if (effectiveTrackIdx != null && effectiveTrackCam && session &&
+        session.isExplicitNoIdentity && session.isExplicitNoIdentity(effectiveTrackCam, effectiveTrackIdx, frameIdx)) {
+        effectiveTrackIdx = null;
     }
     if (effectiveTrackIdx == null) {
         effectiveTrackIdx = group.identityId != null && group.identityId >= 0 ? group.identityId : 0;

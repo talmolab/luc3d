@@ -1280,6 +1280,27 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   case, the own-camera-authoritative-over-a-sibling case, multi-camera
   fallthrough with 3+ cameras, null-trackIdx instances, and a fully empty
   group).**
+  **First-frame Track-color collision (2D viewer, not the Timeline):**
+  `commitTrackedFrame`'s (`pose/tracker.js`) `writtenThisFrame` guard marks a
+  (frame,cam,rawTrackIdx) key `-1`/ambiguous in `frameIdentityMap` when the raw
+  per-camera tracker briefly assigns the SAME trackIdx to two DIFFERENT
+  animals on one frame — most common on frame 0, before it has history to
+  differentiate them (`-1` is written nowhere else, so this is unambiguous).
+  The Track-color path used to color purely by that raw trackIdx with no
+  awareness of the collision, so on a collision frame two different animals
+  resolved to the exact same `getTrackColor(sharedTrackIdx)` — reproducible
+  immediately after Track All, with no Propagate step needed (the
+  Identity-color path above was already fine — its own `group.identityId`
+  fallback happened to cover this case). Fixed: when the group's own resolved
+  `(camera, trackIdx)` is flagged `isExplicitNoIdentity` for this exact frame,
+  fall back to the group's own `identityId` (unambiguous, never shared
+  between two colliding groups) — mirroring the existing "no trackIdx at all"
+  fallback a few lines below it. Regression test:
+  `tests/e2e/first-frame-viewer-color-collision.mjs` (forces the exact
+  collision on frame 0 only, asserts both display modes give the two animals
+  distinct colors on frame 0 and that each animal's Track-color matches
+  between frame 0 and frame 1 — confirmed it fails pre-fix, showing both
+  animals as the identical color on frame 0, and passes post-fix).
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
   `computeLabelOffset`, `getLineDashPattern`.
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,
