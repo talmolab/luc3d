@@ -257,6 +257,19 @@
          side effects out of the other suites. -->
     <script src="test-lazy-reopen.js"></script>
 
+    <!-- estimateLazySaveRiskBytes (save-load.js): same dynamic-import
+         side-effect consideration as test-lazy-reopen.js above (save-load.js
+         transitively imports pose/initialization.js too) — kept right after
+         it for the same reason. -->
+    <script src="test-save-load-lazy-risk.js"></script>
+
+    <!-- file-io.js lazy export fast-path gating (Per-Session / By-Cam
+         export "only the first frame has tracks" regression). file-io.js
+         only imports pose-data.js/slp-merge.js (no pose/initialization.js in
+         its graph), so no ordering constraint — placed here for proximity to
+         the other lazy-export tests above. -->
+    <script src="test-lazy-export-instance-filter.js"></script>
+
     <!-- Pass 2 transitional bridge + test runner.
          Loads ESM-converted modules (pose/, ui/) and exposes their exports on
          window so the test files (loaded as classic scripts above) can find

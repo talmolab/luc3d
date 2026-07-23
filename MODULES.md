@@ -435,7 +435,30 @@ the counter steps rather than streams, keeping Track All fast. `buildTrackerDete
 `commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
 (with `identityId` + `points3d`), maps each target's stable trackId to a session
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
-linked pool. Both Track All and Track Frame pass `propagate:false`: the tracker
+linked pool. **Raw-trackIdx collision guard** (regression: 2D-viewer identity
+color diverges from the info panel/3D viewport, usually only on the first
+frame or two, self-correcting after): per-camera prediction files number
+tracks independently PER CAMERA, and a camera's own raw tracker is commonly
+less differentiated right at the start of a video. If it briefly assigns the
+SAME trackIdx to two DIFFERENT physical animals in the same camera on the
+same frame, `commitTrackedFrame` used to write both animals' `setFrameIdentity`
+calls to the identical `frameIdentityMap` key — the second silently
+overwrote the first. `ui/overlays.js`'s 2D color path queries that exact
+per-camera-per-frame key (`getIdentityForTrack`), so it would confidently
+show the wrong identity's color for whichever animal lost the race, while
+`group.identityId` — read by the info panel and the 3D viewport's
+any-camera-fallback color lookup (`getGroupColor` called with no
+`cameraName`) — stayed correct the whole time, since it's set once per
+group, never through this shared map key. `commitTrackedFrame` now tracks
+every `camName:trackIdx` key it writes within a single frame
+(`writtenThisFrame`); a second, DIFFERENT identity claiming the same key
+marks that key explicit "no identity" (-1) instead of letting either side
+silently win — the 2D lookup then correctly misses and falls through to
+`group.identityId`, matching what the info panel/3D viewport already show.
+`commitTrackedFrame` is exported specifically so this guard is directly
+unit-testable; covered by `tests/test-tracker-collision-guard.mjs` (Node,
+`scripts/bench/hooks.mjs`-stubbed — drives the real function with two
+synthetic colliding targets, not a mock of the guard logic itself). Both Track All and Track Frame pass `propagate:false`: the tracker
 assigns **identities only** (per-frame identity map + InstanceGroups). It does NOT
 rewrite `Instance.trackIdx` — propagation is a deliberate, user-chosen step via
 **Tracks ▸ Propagate IDs → Tracks** (`propagateIdentitiesToTracks`) or **Tracks →
@@ -465,7 +488,9 @@ champion values). Track Frame/Track All pass the user's animal count as
 `maxTargets` so the tracker caps live targets at that number (a LUCID divergence
 from the reference — see `pose/cross-view-tracker.js`; `null`/omitted =
 uncapped/faithful). Covered by `tests/test-crossview-populate.mjs` (data-structure
-population) and `tests/test-cross-view-tracker.mjs` (algorithm).
+population), `tests/test-cross-view-tracker.mjs` (algorithm), and
+`tests/test-tracker-collision-guard.mjs` (`commitTrackedFrame`'s raw-trackIdx
+collision guard).
 
 **Legacy `matchFrameInstances` (bench-only).** The original per-frame matcher +
 4-signal reorder is retained and exported but **no longer used by the app** —
@@ -2432,6 +2457,24 @@ forever"); falls back to the old per-row loop if `clearCache` isn't present
 on the bundle. Both are duck-typed feature checks from the `Session` side
 (`typeof … === 'function'`), so the worker-backed `LazyFrameLoader` (SLEAP
 analysis `.h5`, no columnar store) is unaffected.
+**Error handling (regression for "export only has tracks on the first
+frame(s), rest are trackless"):** the per-row remap loop and the whole
+function used to have NO error handling — an exception thrown mid-row would
+silently abort the remap for every camera/frame not yet processed, while
+`frameIdentityMap`/`instanceGroups`/resident `Instance.trackIdx` (all fixed
+up by `propagateIdentitiesToTracks` steps 1-3b, which run BEFORE this method)
+would already be fully correct — exactly "GUI looks right, export is
+broken past some point," with nothing in the console to explain why. Now:
+each row's remap is wrapped in its own try/catch (one bad row is skipped,
+logged, and left with its OLD track index rather than aborting every
+subsequent row/frame); a per-camera console summary logs rows
+visited/changed; the method returns `{changed, errorRows, firstError}`
+instead of a bare number. `Session.propagateIdentitiesToTracks` logs
+`frameIdentityMap.size` vs `oldKeyToNewTrackIdx.size` right before calling
+this (a sparse `oldKeyToNewTrackIdx` relative to a dense `frameIdentityMap`
+points at step 2's filtering, not this method) and folds `errorRows` into its
+own return value; `ui/ui-wiring.js`'s propagate handler reports a nonzero
+`lazyErrorRows` as an error status instead of a false "success".
 
 **Imports.** `window.SleapIO.readSlpStreaming` (via the index.html bridge) and the
 local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).
@@ -2663,13 +2706,38 @@ layer.
   a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`. For a **lazy session** these route a plain
-  per-camera export (no reprojection/instance filter) through
-  `lazyCameraExportBytes` → `saveSlpToBytes` on the camera's already-lazy
-  `Labels` (the lazy fast-path — all frames, memory-bounded), instead of the
-  eager `buildSlpLabels*` which iterates only the resident `frameGroups`
-  (silent-drop) and would re-materialize. The multi-view project save uses the
-  streaming writer via `slp-streaming-write.js` (see `save-load.js` /
-  `buildSlpBytes`).
+  per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
+  camera's already-lazy `Labels` (the lazy fast-path — all frames,
+  memory-bounded), instead of the eager `buildSlpLabels*` which iterates only
+  the resident `frameGroups` (silent-drop) and would re-materialize. The
+  multi-view project save uses the streaming writer via
+  `slp-streaming-write.js` (see `save-load.js` / `buildSlpBytes`).
+  **Regression fix ("Export SLEAP File Per Session"/"By Cam": after
+  Propagate IDs → Tracks, the exported file only had track labels on the
+  first frame):** the fast path used to be gated on a literal
+  `!instanceFilter` check — but every export-modal call site
+  (`ui/export-modals.js`) unconditionally builds a non-null `instanceFilter`
+  object (`{ user: true, predicted, reprojected }`) to carry the
+  Include-Predicted/Include-Reprojections checkbox state, even at DEFAULT
+  settings — so that condition was never true and both export modals always
+  silently fell through to the eager, frameGroups-only path (whatever's
+  resident — often just the current frame right after Track All +
+  Propagate). `instanceFilterAllowsLazyFastPath(instanceFilter)` replaces the
+  literal check: the fast path now runs whenever the filter doesn't actually
+  need anything it can't provide (no reprojections requested, predicted/user
+  not explicitly excluded) — covering the default/common case, while still
+  correctly falling back to the eager path when the user explicitly requests
+  reprojections or excludes predicted/user instances.
+  **Data-safety guard (never silently drop a manual correction):**
+  `lazyCameraExportBytes` re-emits the RAW columnar store verbatim, with no
+  notion of a live-edited `Instance` sitting in a resident `FrameGroup` — so
+  it now checks every resident frame via a local `frameGroupHasUserInstances`
+  (copied from the identical helper in `pose/tracker.js`/
+  `ui/export-modals.js`) and returns `null` (falls back to the eager,
+  correction-aware path) if ANY resident frame carries a user-type instance,
+  rather than risk silently exporting the original uncorrected prediction in
+  its place. Covered by `tests/test-lazy-export-instance-filter.js` (all-frame
+  coverage via the fast path, and the correction-preservation fallback).
 - `buildSlpLabelsAllViews` builds the full typed graph (RecordingSession /
   FrameGroup / InstanceGroup with `instance3d`, `identity`, and `metadata.lucid`)
   that `saveSlpToBytes` serializes — as of sleap-io.js 0.5.5 this is **SLP 2.8**:
@@ -2734,8 +2802,9 @@ flat, file-wide labeled-frames table, never per-session) — must be complete
 lazy sessions that can never all be resident at once, this forces two passes,
 each holding only one session's data at a time:
 - **`createProjectWriterContext()`** — a fresh shared context
-  (`{ runningOut, allSkeletons, allVideos, allTracks, allIdentities }`) threaded
-  through every session so refs stay file-global (never reset per session).
+  (`{ runningOut, allSkeletons, allVideos, allTracks, allIdentities,
+  trackBaseByNameSig }`) threaded through every session so refs stay
+  file-global (never reset per session).
 - **`buildSessionRefGraph(session, views, videoFiles, ctx)`** — PASS 1, per
   session: prunes `session.frameGroups` to user-edited frames only (frees the
   bulk of Track All's per-frame materialization before the rest of this
@@ -2746,6 +2815,29 @@ each holding only one session's data at a time:
   no writer. Returns `{ sioSession, overlayLfs, cam }` — small enough that the
   caller can safely evict the session's lazy loader/`frameGroups`/
   `instanceGroups` right after this returns.
+  **Non-shared-store track dedup (regression: "export only has tracks on the
+  first frame, the rest are empty"):** for separate per-camera prediction
+  files (session-folder load, `loader._sharedStore` false), each camera's
+  `labels.tracks` used to be blindly re-appended onto `ctx.allTracks` as a
+  fresh copy under an ever-increasing `trackOffset` — correct when every
+  camera's raw per-camera tracker genuinely has its own disjoint track list,
+  but `Session.propagateIdentitiesToTracks` (`pose/pose-data.js`, via
+  `remapTracksFromIdentity`, `loading/sio-lazy-loader.js`) rewrites EVERY
+  camera's `labels.tracks` to the SAME identity-derived list — so every
+  camera after the first re-appended a DUPLICATE copy of that now-identical
+  list, and its instances pointed at that duplicate rather than the shared
+  one. `ctx.trackBaseByNameSig` (a `'|~|'`-joined track-name-list signature →
+  the `trackBase` it was first added at) dedups this the same way
+  `skeletonByName` already dedups skeletons above — a camera whose track list
+  exactly matches one already added reuses that base instead of duplicating.
+  Two genuinely-different cameras' raw prediction tracks essentially never
+  collide by coincidence, so this only ever fires for the real case: every
+  camera sharing one identity-derived list post-propagate. Covered by
+  `tests/test-slp-streaming-write.js`'s "propagateIdentitiesToTracks then
+  export" test — two separate (non-shared-store) per-camera fixtures, a real
+  propagate, a real streaming export, and a real readback asserting every
+  frame from both cameras (not just the first) resolves a valid, correctly-
+  named track.
 - **`openProjectWriter(ctx, allSioSessions, provenance)`** — the single
   `SIO.openSlpWriter(...)` call, made once every session's ref graph is final.
 - **`streamSessionIntoWriter(writer, session, refGraphResult)`** — PASS 2, per
