@@ -1396,6 +1396,36 @@ export function storeReprojectedInstances(group, triangulationResult, allCameras
     }
 }
 
+/**
+ * Get a group's reprojected Instance for `camName`, synthesizing one on
+ * demand from the already-cached `group.reprojections[camName]` (raw points)
+ * when `reprojectedInstances` was never eagerly built for this group.
+ *
+ * Bulk sweeps (`triangulateAllFrames`, `triangulateMultiFrameInstances`) stop
+ * calling `storeReprojectedInstances` — building a full `Instance` (with its
+ * own `occluded` array) per camera per group for the WHOLE project was a
+ * major, provably-unneeded memory cost (nothing in the SLP save/export path
+ * reads `reprojectedInstances`; only live 2D/3D display and the opt-in
+ * "Save Reprojections" export do, and both can be served from the much
+ * cheaper `.reprojections` raw-points object those sweeps still populate).
+ * Single-frame paths (`triangulateCurrentFrame`, `reTriangulateGroup`) still
+ * call `storeReprojectedInstances` eagerly — bounded cost, immediate feedback
+ * while the user is actively working on that frame — so this only needs to
+ * cover the bulk-sweep gap. Never mutates/caches onto the group; a caller
+ * that wants the result retained should use `storeReprojectedInstances`
+ * instead (as the single-frame paths already do).
+ * @param {InstanceGroup} group
+ * @param {string} camName
+ * @returns {Instance|null}
+ */
+export function getOrComputeReprojectedInstance(group, camName) {
+    var existing = group.getReprojectedInstance ? group.getReprojectedInstance(camName) : null;
+    if (existing) return existing;
+    var pts = group.reprojections ? group.reprojections[camName] : null;
+    if (!pts) return null;
+    return new Instance(pts, group.identityId, 'reprojected', 1.0);
+}
+
 // ============================================
 // Lazy H5 Frame Loader
 // ============================================
@@ -1987,7 +2017,12 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
 
                 group.reprojections = result.reprojections;
                 group.points3d = result.points3d;
-                storeReprojectedInstances(group, result, cameras);
+                // NOT storeReprojectedInstances here — this is a bulk, whole-
+                // range sweep (can span the entire project); eagerly building a
+                // full Instance (+ its own `occluded` array) per camera per
+                // group here was a major memory cost never needed by SLP save/
+                // export. Display and export instead resolve on demand via
+                // getOrComputeReprojectedInstance, from `.reprojections` above.
                 group.observedPoints = {};
                 group.usedCameras = new Set();
                 for (var ck = 0; ck < groupCameras.length; ck++) {
@@ -2482,7 +2517,12 @@ export async function triangulateAllFrames(method) {
 
                 group.reprojections = result.reprojections;
                 group.points3d = result.points3d;
-                storeReprojectedInstances(group, result, cameras);
+                // NOT storeReprojectedInstances here — "Triangulate All" sweeps
+                // the WHOLE project; eagerly building a full Instance (+ its
+                // own `occluded` array) per camera per group here was a major
+                // memory cost never needed by SLP save/export (see
+                // getOrComputeReprojectedInstance's doc comment). Display and
+                // export instead resolve on demand from `.reprojections` above.
                 group.observedPoints = {};
                 group.usedCameras = new Set();
                 for (var ck = 0; ck < groupCameras2.length; ck++) {

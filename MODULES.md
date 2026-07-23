@@ -519,6 +519,32 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
+  **`storeReprojectedInstances` eagerly builds a full `Instance` (+ its own
+  `occluded` array) per camera per group — a real memory cost when called for
+  the WHOLE project.** `triangulateAllFrames` and `triangulateMultiFrameInstances`
+  (both whole/large-range bulk sweeps) no longer call it — they still set
+  `group.reprojections`/`.points3d` (needed by `buildReprojH5` and the display
+  fallback below), just not the heavier `reprojectedInstances` Map. Single-frame
+  paths (`triangulateCurrentFrame`, `reTriangulateGroup`) and the identity-based
+  bulk path (`groupByIdentityAndTriangulateAll`, `ui/export-modals.js` — already
+  only stores `.points3d` via `triangulateOnly`, was never part of this cost)
+  are unaffected. `getOrComputeReprojectedInstance(group, camName)` — the
+  read-side companion: returns the cached `reprojectedInstances` entry if
+  present, else synthesizes an equivalent `Instance` on demand from
+  `group.reprojections[camName]` (never mutates/caches onto the group). Every
+  consumer that used to call `group.getReprojectedInstance` directly now goes
+  through this instead: `import-export/file-io.js`'s three export sites,
+  `pose/initialization.js`'s double-click-to-promote and
+  `onClonePredictedGroup`, `ui/interaction.js`'s click hit-testing and
+  `_convertToUserInstance`. `ui/rendering.js`'s `drawAllOverlays` already had
+  its own independent, coarser-grained lazy-fill (computes AND permanently
+  caches `reprojectedInstances`/`.reprojections`/`state.triangulationResults`
+  for whatever frame is currently being viewed) — unchanged, still the reason
+  scrubbing to any frame shows correct reprojections regardless of which sweep
+  triangulated it. `ui/overlays.js`'s 2D-display code already had its own
+  fallback straight to `.reprojections[viewName]` (via `drawReprojectedSkeleton`,
+  no Instance wrapper needed) — also unchanged. Covered by
+  `tests/test-reprojection-lifecycle.js`'s "getOrComputeReprojectedInstance" block.
   **Two robustness features:** (1) views excluded in the Tracking Wizard's Camera
   Views panel (`isCameraTracked`, or `options.includedCameras` override) never
   contribute to the 3D solve, but are still reprojected INTO — an excluded view

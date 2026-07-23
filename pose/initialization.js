@@ -14,7 +14,7 @@ import { state, videoController, interactionManager, viewport3d, timeline, paneM
 import { Instance, UnlinkedInstance } from './pose-data.js';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
-    reTriangulateGroup, sessionHasCalibration,
+    reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
 } from './triangulation.js';
 import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 import { rebuildVideoController } from '../loading/session-loader.js';
@@ -492,7 +492,7 @@ export function setupInteraction() {
             }
 
             // Get reprojected points to use as initial position
-            var reprojInst = group.getReprojectedInstance(viewName);
+            var reprojInst = getOrComputeReprojectedInstance(group, viewName);
             if (!reprojInst) return;
             var clonedPoints = reprojInst.points.map(function(pt) {
                 return pt != null ? [pt[0], pt[1]] : null;
@@ -590,8 +590,7 @@ export function setupInteraction() {
             // Convert predicted instances to user IN PLACE — no new group
             // Fill null points from reprojection and mark as occluded
             for (var [camName, inst] of predGroup.instances) {
-                var reprojInst = predGroup.getReprojectedInstance
-                    ? predGroup.getReprojectedInstance(camName) : null;
+                var reprojInst = getOrComputeReprojectedInstance(predGroup, camName);
                 var nulled = inst.nulledNodes || new Set();
                 // Centroid of visible points as fallback for missing nodes
                 var cx = 0, cy = 0, cCount = 0;

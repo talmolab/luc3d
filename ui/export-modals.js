@@ -12,7 +12,6 @@ import { state, viewport3d, timeline, getActiveSession } from './app-state.js';
 import { InstanceGroup, UnlinkedInstance } from '../pose/pose-data.js';
 import {
     triangulateAndReproject,
-    storeReprojectedInstances,
     frameHasGroupedUserInstances,
     loadAllLazyFrames,
     batchLoadLazyFrames,
@@ -654,8 +653,12 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
             group.reprojections = result.reprojections;
             group.points3d = result.points3d;
-            // Reproject to ALL cameras (including excluded ones) so they show reprojections
-            storeReprojectedInstances(group, result, allCameras);
+            // NOT storeReprojectedInstances here — "Group by Track" sweeps the
+            // WHOLE project; eagerly building a full Instance (+ its own
+            // `occluded` array) per camera per group here was a major memory
+            // cost never needed by SLP save/export (see triangulation.js's
+            // getOrComputeReprojectedInstance doc comment). Display and export
+            // instead resolve on demand from `.reprojections` above.
             group.observedPoints = {};
             group.usedCameras = new Set();
             for (var ck = 0; ck < groupCameras.length; ck++) {

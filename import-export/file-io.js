@@ -13,6 +13,7 @@
 
 import { Camera, Skeleton, Instance, Identity } from '../pose/pose-data.js';
 import { validateSkeletonCompatibility } from './slp-merge.js';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js';
 
 // ============================================
 // Generic file picker
@@ -950,7 +951,7 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
         var groups = session.instanceGroups.get(frameIdx);
         if (groups) {
             for (var gi = 0; gi < groups.length; gi++) {
-                var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                var reprojInst = getOrComputeReprojectedInstance(groups[gi], cameraName);
                 if (reprojInst) {
                     reprojInstances.push(reprojInst);
                 }
@@ -1155,7 +1156,7 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
             var groups = session.instanceGroups.get(frameIdx);
             if (groups) {
                 for (var gi = 0; gi < groups.length; gi++) {
-                    var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                    var reprojInst = getOrComputeReprojectedInstance(groups[gi], cameraName);
                     if (reprojInst) {
                         // Find track from the group's instance for this camera (or any camera)
                         var grpTrackIdx = -1;
@@ -1557,7 +1558,7 @@ export function buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFil
                 var groups = session.instanceGroups.get(frameIdx);
                 if (groups) {
                     for (var gi = 0; gi < groups.length; gi++) {
-                        var reprojInst = groups[gi].getReprojectedInstance(cameraName);
+                        var reprojInst = getOrComputeReprojectedInstance(groups[gi], cameraName);
                         if (reprojInst) reprojInstances.push(reprojInst);
                     }
                 }

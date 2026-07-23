@@ -316,4 +316,62 @@
         });
     });
 
+    describe('getOrComputeReprojectedInstance — on-demand fallback for bulk triangulation', function () {
+        // Regression for the 180k-frame x 5-camera save OOM: the bulk
+        // triangulation sweeps (triangulateAllFrames, triangulateMultiFrame
+        // Instances) stopped eagerly building `reprojectedInstances` (a full
+        // Instance + its own `occluded` array per camera per group) for the
+        // WHOLE project — nothing in the SLP save/export path reads it, only
+        // live display and the opt-in "Save Reprojections" export do, and
+        // both can be served from the much cheaper `.reprojections` raw-points
+        // object those sweeps still populate. This helper is what makes that
+        // safe: every consumer that used to call `group.getReprojectedInstance`
+        // directly (file-io.js exports, the double-click-to-promote handler,
+        // click hit-testing, predicted->user conversion) now goes through it.
+        it('returns the cached instance when reprojectedInstances is already populated', function () {
+            var group = new InstanceGroup(1, 0);
+            var cached = makeInstance([[1, 2], [3, 4], [5, 6]], 0, 'reprojected');
+            group.addReprojectedInstance('CamA', cached);
+
+            var got = getOrComputeReprojectedInstance(group, 'CamA');
+            assertEqual(got, cached, 'returns the exact cached instance, no recompute');
+        });
+
+        it('synthesizes an equivalent Instance from .reprojections when reprojectedInstances is empty', function () {
+            var group = new InstanceGroup(1, 5); // identityId = 5
+            group.reprojections = { CamA: [[10, 20], [30, 40], null] };
+            assertEqual(group.reprojectedInstances.size, 0, 'precondition: nothing eagerly built');
+
+            var got = getOrComputeReprojectedInstance(group, 'CamA');
+            assertNotNull(got, 'a reprojected instance is synthesized on demand');
+            assertEqual(got.type, 'reprojected');
+            assertEqual(got.trackIdx, 5, 'carries the group\'s identityId, matching storeReprojectedInstances');
+            assertDeepEqualPoints(got.points, [[10, 20], [30, 40], null]);
+        });
+
+        it('returns null when neither reprojectedInstances nor .reprojections has this camera', function () {
+            var group = new InstanceGroup(1, 0);
+            group.reprojections = { CamA: [[10, 20]] };
+            assertNull(getOrComputeReprojectedInstance(group, 'CamB'), 'CamB has no data either way');
+        });
+
+        it('returns null when the group has no .reprojections at all (e.g. groupByIdentityAndTriangulateAll, triangulateOnly)', function () {
+            var group = new InstanceGroup(1, 0);
+            group.points3d = [[0, 0, 40], [1, 1, 41]]; // has 3D, but no cached 2D reprojection
+            assertNull(getOrComputeReprojectedInstance(group, 'CamA'),
+                'no .reprojections and no cached instance — this matches the PRE-EXISTING behavior ' +
+                'of groupByIdentityAndTriangulateAll\'s groups before ever being viewed (drawAllOverlays ' +
+                'lazily fills this in once the frame is scrubbed to), not something this fix changed');
+        });
+
+        function assertDeepEqualPoints(a, b) {
+            assertEqual(a.length, b.length);
+            for (var i = 0; i < a.length; i++) {
+                if (a[i] == null || b[i] == null) { assertEqual(a[i], b[i]); continue; }
+                assertEqual(a[i][0], b[i][0]);
+                assertEqual(a[i][1], b[i][1]);
+            }
+        }
+    });
+
 })();

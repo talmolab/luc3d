@@ -15,6 +15,7 @@
  */
 
 import { Instance } from '../pose/pose-data.js';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js';
 
 // ============================================
 // InteractionManager
@@ -343,7 +344,7 @@ export class InteractionManager {
                     var visReprojEl2 = document.getElementById('visReprojections');
                     if (typePassFilters[pass]('reprojected') &&
                         (!visReprojEl2 || visReprojEl2.checked)) {
-                        var reprojInst = group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null;
+                        var reprojInst = getOrComputeReprojectedInstance(group, viewName);
                         if (reprojInst && reprojInst.points) {
                             candidates.push({ inst: reprojInst, isReproj: true });
                         }
@@ -1693,8 +1694,7 @@ export class InteractionManager {
         for (const [camName, instance] of group.instances) {
             if (instance.type === 'predicted') {
                 // For null points, try to fill from reprojected instance and mark occluded
-                var reprojInst = group.getReprojectedInstance
-                    ? group.getReprojectedInstance(camName) : null;
+                var reprojInst = getOrComputeReprojectedInstance(group, camName);
                 var nulled = instance.nulledNodes || new Set();
 
                 // Compute centroid of visible points as fallback for missing nodes
