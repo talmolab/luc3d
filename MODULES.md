@@ -2752,6 +2752,26 @@ loading-overlay/status-text UI helpers.
   eager `buildSlpLabelsAllViews` + `saveSlpToBytes` (which would re-OOM and
   silently drop every unvisited frame). A mixed project (any session without a
   `lazyLoader`, e.g. hand-labeled) still falls through to the eager path.
+  **Large-project size warning:** before entering the streaming path,
+  `estimateLazySaveRiskBytes(sessionsToExport)` computes a rough proxy for
+  PASS-1's peak JS memory (total frame x camera pairs across every lazy
+  session being exported, times a bytes-per-pair constant calibrated against
+  the one real measurement in this codebase's history — a 108k-frame
+  x 3-camera session peaking PASS 1 at ~3.7 GB, see
+  `slp-streaming-write.js`). Past `LAZY_SAVE_WARN_BYTES` (~1.5 GB, with real
+  margin below that single reference point since other tab state shares the
+  same budget), `window.confirm(...)` warns the user and offers to cancel in
+  favor of per-camera export ("Export SLEAP File Per Session"/"By Cam", far
+  less likely to crash) instead of silently attempting a merged save that's
+  likely to OOM and lose all unsaved work. Declining throws
+  `SaveCancelledError`, which `quickSave`/`saveProjectSlp` report as "Save
+  cancelled" (not "Save failed") — `quickSave` additionally calls
+  `writable.abort()` on the already-open `FileSystemWritableFileStream`
+  instead of `close()`, so a cancelled save doesn't overwrite the destination
+  file with zero bytes. Bypass via `opts.skipSizeWarning` on `buildSlpBytes`.
+  This is a single-data-point estimate, not a calibrated model — it exists to
+  warn before a likely crash, not to precisely predict one. Covered by
+  `tests/test-save-load-lazy-risk.js`.
 - **`saveAllSessionsStreaming(sessions)`** / **`beginMultiSessionSave()`** +
   **`commitSessionForMultiSessionSave(handle, session)`** +
   **`finalizeMultiSessionSave(handle, opts)`** — the multi-session

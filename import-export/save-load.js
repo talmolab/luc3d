@@ -392,6 +392,50 @@ async function encourageGC(totalMB) {
     await yieldToEventLoop(50);
 }
 
+/** Thrown by `buildSlpBytes` when the user declines the large-project size
+ * warning below — callers should report this as a cancellation, not a
+ * failure (mirrors the existing `pickErr.name === 'AbortError'` handling for
+ * a declined save-file-picker). */
+class SaveCancelledError extends Error {
+    constructor(message) {
+        super(message || 'Save cancelled');
+        this.name = 'SaveCancelledError';
+    }
+}
+
+/**
+ * Rough proxy for a lazy multi-camera project's PASS-1 (`buildSessionRefGraph`)
+ * peak JS memory: total (frame x camera) pairs across every lazy session being
+ * exported, times a bytes-per-pair constant calibrated against the ONE real
+ * measurement in this codebase's history — a 108k-frame x 3-camera session
+ * peaked PASS 1 at ~3.7 GB (see `slp-streaming-write.js`'s docs) — so
+ * ~3.7e9 / (108000*3) ~= 11.4 KB/pair. This is a single-data-point estimate,
+ * not a calibrated model: it exists to warn BEFORE a likely crash (which
+ * loses all unsaved work), not to precisely predict one. `nFrames` and camera
+ * count are already-resident cheap fields (no extra I/O).
+ * @param {Array} sessionsToExport
+ * @returns {number} estimated peak bytes
+ */
+export function estimateLazySaveRiskBytes(sessionsToExport) {
+    var BYTES_PER_FRAME_CAMERA_PAIR = 3.7e9 / (108000 * 3);
+    var pairs = 0;
+    for (var i = 0; i < sessionsToExport.length; i++) {
+        var sess = sessionsToExport[i];
+        var loader = sess && sess.lazyLoader;
+        if (!loader) continue;
+        var nCams = loader.labelsByCam ? loader.labelsByCam.size
+            : ((sess.cameras && sess.cameras.length) || 0);
+        pairs += (loader.nFrames || 0) * nCams;
+    }
+    return pairs * BYTES_PER_FRAME_CAMERA_PAIR;
+}
+
+// Warn with real margin below the single real reference point above — other
+// state (video decode buffers, UI, whatever Track All/Triangulate All left
+// resident) shares the same tab budget, so the actual ceiling in practice is
+// lower than PASS 1's cost measured in isolation.
+var LAZY_SAVE_WARN_BYTES = 1.5e9; // ~1.5 GB estimated PASS-1 peak
+
 async function buildSlpBytes(opts) {
     opts = opts || {};
     await ensureSleapIO();
@@ -420,6 +464,23 @@ async function buildSlpBytes(opts) {
     // themselves haven't been reclaimed yet. Returns `null` when streamed to a sink.
     if (sessionsToExport.length > 0 && SIO && typeof SIO.openSlpWriter === 'function' &&
         sessionsToExport.every(function (s) { return !!s.lazyLoader; })) {
+
+        if (!opts.skipSizeWarning) {
+            var estBytes = estimateLazySaveRiskBytes(sessionsToExport);
+            if (estBytes > LAZY_SAVE_WARN_BYTES) {
+                var estGB = (estBytes / 1e9).toFixed(1);
+                var proceed = window.confirm(
+                    'This project is very large (a rough estimate suggests saving it as one ' +
+                    'merged file may need ~' + estGB + ' GB of browser memory) and could crash ' +
+                    'this tab before finishing.\n\n' +
+                    'Click OK to attempt the save anyway, or Cancel and use ' +
+                    '"Export SLEAP File Per Session" / "By Cam" instead — those write one ' +
+                    'smaller file per camera and are far less likely to crash.'
+                );
+                if (!proceed) throw new SaveCancelledError();
+            }
+        }
+
         if (sessionsToExport.length === 1) {
             var lazySess = sessionsToExport[0];
             var lazyViews = state.views.filter(function (v) {
@@ -733,6 +794,17 @@ export async function quickSave() {
         setStatus('Saved (' + sizeMB + ' MB)', 'success');
     } catch (err) {
         state.isSaving = false;
+        if (err && err.name === 'SaveCancelledError') {
+            // `writable` (if it got that far) already has an open swap file —
+            // abort() discards it WITHOUT touching the original file at
+            // `state.slpFileHandle`, unlike close(), which would overwrite it
+            // with zero bytes.
+            if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
+                try { await writable.abort(); } catch (e) { /* best effort */ }
+            }
+            setStatus('Save cancelled', 'warning');
+            return;
+        }
         console.error('Quick save failed:', err);
         setStatus('Save failed: ' + err.message, 'error');
     }
@@ -771,6 +843,10 @@ export async function saveProjectSlp() {
 
         setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        if (err && err.name === 'SaveCancelledError') {
+            setStatus('Save cancelled', 'warning');
+            return;
+        }
         console.error('Save project SLP failed:', err);
         setStatus('Save failed: ' + err.message, 'error');
     }
