@@ -1368,9 +1368,67 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
 async function lazyCameraExportBytes(SIO, session, cameraName) {
     var loader = session && session.lazyLoader;
     if (!loader || !loader.labelsByCam || typeof loader.labelsByCam.get !== 'function') return null;
+    // Safety guard: this path re-emits the RAW columnar store verbatim — it
+    // has no notion of a live, manually-corrected Instance object sitting in
+    // a resident FrameGroup. If any resident frame carries a user-type
+    // instance, that correction lives only in session.frameGroups and is
+    // NOT yet reflected in the lazy store, so taking this fast path would
+    // silently export the ORIGINAL uncorrected prediction for that frame
+    // instead — a worse bug than the one this fast path exists to fix.
+    // Mirrors the identical `frameGroupHasUserInstances` check in
+    // pose/tracker.js / ui/export-modals.js (copied, not imported — this
+    // file is deliberately import-free vanilla JS besides pose-data.js/
+    // slp-merge.js).
+    for (var fg of session.frameGroups.values()) {
+        if (frameGroupHasUserInstances(fg)) return null;
+    }
     var lazyLabels = loader.labelsByCam.get(cameraName);
     if (!lazyLabels || !lazyLabels.isLazy || typeof SIO.saveSlpToBytes !== 'function') return null;
     return await SIO.saveSlpToBytes(lazyLabels);
+}
+
+/** Copied from pose/tracker.js's identical helper — see that file's doc. */
+function frameGroupHasUserInstances(fg) {
+    for (var [, insts] of fg.instances) {
+        for (var i = 0; i < insts.length; i++) {
+            if (insts[i] && insts[i].type === 'user') return true;
+        }
+    }
+    for (var [, uInsts] of fg.unlinkedInstances) {
+        for (var j = 0; j < uInsts.length; j++) {
+            if (uInsts[j] && uInsts[j].instance && uInsts[j].instance.type === 'user') return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * True when `instanceFilter` doesn't require anything the lazy fast-path
+ * (`lazyCameraExportBytes`, above — re-emits the columnar store verbatim,
+ * whole project, no per-frame filtering) can't provide: no reprojections
+ * requested (the raw store has none — those are LUCID-side derived data),
+ * and predicted/user instances aren't being explicitly EXCLUDED.
+ *
+ * REGRESSION (reported: "Export SLEAP File Per Session"/"By Cam" — after
+ * Propagate IDs → Tracks, the exported file only has track labels on the
+ * first frame): every export-modal call site (`ui/export-modals.js`)
+ * constructs a non-null `instanceFilter` object UNCONDITIONALLY — even at
+ * default checkbox settings (`{ user: true, predicted: includePred,
+ * reprojected: saveReproj }`) — to carry the Include-Predicted/Include-
+ * Reprojections checkbox state. Gating the fast path on plain `!instanceFilter`
+ * (as it originally was) meant that condition was NEVER true for these
+ * modals, so every export silently fell through to the eager, `session.
+ * frameGroups`-only builder (`buildSlpLabels`/`buildSlpLabelsMultiSession`)
+ * — which only sees whatever's currently resident in memory on a lazy
+ * session (a small scrubbed-to window, often just the current frame right
+ * after Track All + Propagate), silently omitting every other frame from
+ * the file entirely.
+ */
+function instanceFilterAllowsLazyFastPath(instanceFilter) {
+    if (!instanceFilter) return true;
+    return instanceFilter.reprojected !== true &&
+        instanceFilter.predicted !== false &&
+        instanceFilter.user !== false;
 }
 
 export async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename, instanceFilter) {
@@ -1379,8 +1437,10 @@ export async function exportSlpClientSide(session, cameraName, reprojAsUser, vid
 
     // Lazy session, plain predicted export → lazy fast-path (all frames, bounded).
     // Skipped when a reprojection/instance transform is requested (the fast-path
-    // re-emits the store verbatim and can't apply those).
-    if (!reprojAsUser && !instanceFilter) {
+    // re-emits the store verbatim and can't apply those) — see
+    // instanceFilterAllowsLazyFastPath's doc for why this must NOT be a plain
+    // `!instanceFilter` check.
+    if (!reprojAsUser && instanceFilterAllowsLazyFastPath(instanceFilter)) {
         var lazyBytes = await lazyCameraExportBytes(SIO, session, cameraName);
         if (lazyBytes) return new Blob([lazyBytes], { type: 'application/x-hdf5' });
     }
@@ -1654,7 +1714,9 @@ export async function exportSlpMultiSession(selections, reprojAsUser, instanceFi
 
     // Single lazy-session camera (the per-camera Download-All case), plain export →
     // lazy fast-path (all frames, bounded) instead of the eager multi-session build.
-    if (selections && selections.length === 1 && !reprojAsUser && !instanceFilter) {
+    // See instanceFilterAllowsLazyFastPath's doc for why this must NOT be a plain
+    // `!instanceFilter` check.
+    if (selections && selections.length === 1 && !reprojAsUser && instanceFilterAllowsLazyFastPath(instanceFilter)) {
         var lazyBytes = await lazyCameraExportBytes(SIO, selections[0].session, selections[0].cameraName);
         if (lazyBytes) return new Blob([lazyBytes], { type: 'application/x-hdf5' });
     }

@@ -2706,13 +2706,38 @@ layer.
   a (frame, track) pair). Reprojections still export trackless.
 - SLP export (client-side): `exportSlpClientSide`,
   `exportSlpMultiSession`. For a **lazy session** these route a plain
-  per-camera export (no reprojection/instance filter) through
-  `lazyCameraExportBytes` → `saveSlpToBytes` on the camera's already-lazy
-  `Labels` (the lazy fast-path — all frames, memory-bounded), instead of the
-  eager `buildSlpLabels*` which iterates only the resident `frameGroups`
-  (silent-drop) and would re-materialize. The multi-view project save uses the
-  streaming writer via `slp-streaming-write.js` (see `save-load.js` /
-  `buildSlpBytes`).
+  per-camera export through `lazyCameraExportBytes` → `saveSlpToBytes` on the
+  camera's already-lazy `Labels` (the lazy fast-path — all frames,
+  memory-bounded), instead of the eager `buildSlpLabels*` which iterates only
+  the resident `frameGroups` (silent-drop) and would re-materialize. The
+  multi-view project save uses the streaming writer via
+  `slp-streaming-write.js` (see `save-load.js` / `buildSlpBytes`).
+  **Regression fix ("Export SLEAP File Per Session"/"By Cam": after
+  Propagate IDs → Tracks, the exported file only had track labels on the
+  first frame):** the fast path used to be gated on a literal
+  `!instanceFilter` check — but every export-modal call site
+  (`ui/export-modals.js`) unconditionally builds a non-null `instanceFilter`
+  object (`{ user: true, predicted, reprojected }`) to carry the
+  Include-Predicted/Include-Reprojections checkbox state, even at DEFAULT
+  settings — so that condition was never true and both export modals always
+  silently fell through to the eager, frameGroups-only path (whatever's
+  resident — often just the current frame right after Track All +
+  Propagate). `instanceFilterAllowsLazyFastPath(instanceFilter)` replaces the
+  literal check: the fast path now runs whenever the filter doesn't actually
+  need anything it can't provide (no reprojections requested, predicted/user
+  not explicitly excluded) — covering the default/common case, while still
+  correctly falling back to the eager path when the user explicitly requests
+  reprojections or excludes predicted/user instances.
+  **Data-safety guard (never silently drop a manual correction):**
+  `lazyCameraExportBytes` re-emits the RAW columnar store verbatim, with no
+  notion of a live-edited `Instance` sitting in a resident `FrameGroup` — so
+  it now checks every resident frame via a local `frameGroupHasUserInstances`
+  (copied from the identical helper in `pose/tracker.js`/
+  `ui/export-modals.js`) and returns `null` (falls back to the eager,
+  correction-aware path) if ANY resident frame carries a user-type instance,
+  rather than risk silently exporting the original uncorrected prediction in
+  its place. Covered by `tests/test-lazy-export-instance-filter.js` (all-frame
+  coverage via the fast path, and the correction-preservation fallback).
 - `buildSlpLabelsAllViews` builds the full typed graph (RecordingSession /
   FrameGroup / InstanceGroup with `instance3d`, `identity`, and `metadata.lucid`)
   that `saveSlpToBytes` serializes — as of sleap-io.js 0.5.5 this is **SLP 2.8**:
