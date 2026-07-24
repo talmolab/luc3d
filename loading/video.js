@@ -883,6 +883,18 @@ export class OnDemandVideoDecoder {
             this.decoder = null;
         }
 
+        // Release the frame-accurate mediabunny backend bound to the OLD
+        // source (issue #115 regression). Without this, `_mbBackend` keeps
+        // pointing at the previous video after a pooled-decoder session
+        // switch, so every subsequent getFrame() silently decodes from the
+        // WRONG video — frame-accurate for a video nobody is looking at
+        // anymore, which reads as the pose overlay drifting off the video.
+        // Re-initialized below, after the new element's metadata loads.
+        if (this._mbBackend) {
+            try { this._mbBackend.close(); } catch (_) {}
+            this._mbBackend = null;
+        }
+
         this._source = source;
         this.file = source;
         this.sourceType = "file";
@@ -960,7 +972,22 @@ export class OnDemandVideoDecoder {
             this._emitProgress({ phase: 'mp4box', error: e });
         }
 
-        videoLog("Source switched: " + (source.name || "file") + " (" + width + "x" + height + ", ~" + totalFrames + " frames)");
+        // Re-initialize the frame-accurate mediabunny backend for the NEW
+        // source (issue #115) — mirrors init()'s setup. Must happen for every
+        // switchSource(), not just the first init(), or a reused pooled
+        // decoder keeps stepping through the previous video after a session
+        // switch/reopen.
+        if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
+            try {
+                await this._initMediabunny(source);
+            } catch (e) {
+                videoLog("Mediabunny backend init failed on source switch (HTML5 seek will be used): " + e.message, "warn");
+                this._mbBackend = null;
+            }
+        }
+
+        videoLog("Source switched: " + (source.name || "file") + " (" + width + "x" + height + ", ~" + totalFrames + " frames)"
+            + (this._mbBackend ? " [mediabunny frame-accurate]" : ""));
     }
 
     close() {

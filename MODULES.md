@@ -2699,6 +2699,25 @@ decode is itself frame-inaccurate — every WebCodecs decoder, incl.
 mediabunny and a raw `<video>`, shows the same offset). Pose data imports
 and exports correctly regardless — this bug is display-only.
 
+**`switchSource()` must refresh `_mbBackend` too (issue #115 regression,
+`eric/seeking-regression`).** `switchSource(source)` — used by the pooled-
+decoder session-switch/reopen path (`ui/sessions-panes.js`'s
+`switchSession()`, "reuse pool decoder — swap source without creating new
+video element", added to dodge Chrome browser-process crashes from repeated
+`<video>` element churn) — predates the mediabunny backend and was never
+updated when it landed: it closed the WebCodecs `this.decoder` but left
+`_mbBackend` untouched, still bound to the PREVIOUS video. Every
+frame-accurate `getFrame()` after a pooled-decoder session switch/reopen
+(stepping, the `pausePlayback()` snap) then silently decoded from the wrong,
+stale video — reproducing the exact pose/video misalignment #141 fixed, but
+only on switch/reopen (a fresh `init()` was always fine, which is why this
+was hard to pin down from a fresh-load repro). Fixed by closing the old
+`_mbBackend` and re-running `_initMediabunny(source)` for the new source at
+the end of `switchSource()`, mirroring `init()`'s setup. Covered by
+`tests/e2e/switchsource-mediabunny-refresh.mjs` (proves it via decoded pixel
+content, not just the backend's `filename`, since the fixture videos happen
+to share a frame count).
+
 **Playback overlay/video sync — native default + per-frame throttling
 (issue #115 follow-up).** During playback the pose overlay drifted a few
 frames AHEAD of the video ("the tracking leads the video"; stepping one
