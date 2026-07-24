@@ -2478,13 +2478,25 @@ refines the frame counter via `updateTotalFrames`. Skippable (Esc / Skip
 button, or all videos unmatched/failed) — the session then stays video-less
 and File → Load Videos still works later. `pickedFilesOverride` bypasses the
 prompt for tests/automation. Covered by `tests/test-lazy-reopen.js`.
+Before drawing the first grouped frame, calls `setReprojErrorVisible(true)`
+(`ui/rendering.js`) whenever the reconstructed session has any
+`instanceGroups` — every OTHER path that populates 3D/reprojection data
+(Triangulate All, slp-import.js, save-load.js, identity-assignment.js, …)
+already did this, but the lazy-reopen path didn't, so `#reprojErrorSection`
+stayed at its HTML `display:none` default forever after a reopen even though
+`drawAllOverlays`'s lazy-reproject block was silently computing a real error
+underneath (visible only via the 2D/3D viewers, which don't gate on this
+section) — the Instance panel's reprojection-error readout looked permanently
+blank until the user manually re-ran Triangulate All. Covered by
+`tests/e2e/reopen-reprojection-panel-autopopulate.mjs`.
 
 **Imports from project modules.**
 - `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
   `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
   (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
-  `../import-export/save-load.js`, `../ui/rendering.js`,
+  `../import-export/save-load.js`,
+  `../ui/rendering.js` (`drawAllOverlays`, `setReprojErrorVisible`),
   `../ui/info-panel.js` (`updateInfoPanel`),
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
   `../import-export/slp-import.js`, `../ui/loading-progress-modal.js`,
