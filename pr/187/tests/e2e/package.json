@@ -19,7 +19,8 @@
     "test:lazy-rematerialize-dup": "node lazy-frame-rematerialize-duplicate.mjs",
     "test:switchsource-mediabunny": "node switchsource-mediabunny-refresh.mjs",
     "test:mediabunny-fallback-warning": "node mediabunny-fallback-status-warning.mjs",
-    "test:arrow-key-coalesced": "node arrow-key-coalesced-stepping.mjs"
+    "test:arrow-key-coalesced": "node arrow-key-coalesced-stepping.mjs",
+    "test:mediabunny-bframe-order": "node mediabunny-bframe-decode-order.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"
