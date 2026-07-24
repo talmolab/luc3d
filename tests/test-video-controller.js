@@ -180,6 +180,40 @@
             // Should end at last target (40), possibly skipping intermediate
             assertEqual(state.currentFrame, 40, 'Should end at last scrub target');
         });
+
+        // Issue #115 followup: arrow-key stepping (and the transport
+        // Next/Prev buttons) call scrubToFrame(state.currentFrame + 1), NOT
+        // seekToFrame directly, precisely so rapid presses (faster than one
+        // real decode round-trip) coalesce to the final target instead of
+        // queuing/decoding/painting every intermediate frame in order — which
+        // visibly lags the display behind the input and can even paint stale
+        // frames out of order. This uses a decoder with artificial decode
+        // latency (a real per-frame WebCodecs decode isn't instant) to prove
+        // that firing several rapid relative "+1" steps (the exact call
+        // pattern ui-wiring.js's arrow handler uses) settles correctly
+        // WITHOUT decoding every intermediate frame one-by-one.
+        it('coalesces rapid relative "+1" steps (arrow-key stepping pattern) instead of decoding every intermediate frame', async function () {
+            var decodeCalls = [];
+            var slowState = createTestState(1, 100);
+            slowState.views[0].decoder.getFrame = function (frameIndex) {
+                decodeCalls.push(frameIndex);
+                return new Promise(function (resolve) {
+                    setTimeout(function () { resolve(slowState.views[0].decoder._mockCanvas); }, 20);
+                });
+            };
+            var slowCtrl = new VideoController(slowState, { updateSeekbar: function () {} });
+
+            // Mirror the real arrow-key handler exactly: read state.currentFrame
+            // at call time, request +1, fired rapidly without awaiting.
+            for (var i = 0; i < 6; i++) {
+                slowCtrl.scrubToFrame(slowState.currentFrame + 1);
+                await new Promise(function (r) { setTimeout(r, 3); }); // faster than the 20ms decode
+            }
+            await new Promise(function (r) { setTimeout(r, 200); }); // let everything settle
+
+            assertTrue(decodeCalls.length < 6, 'fewer decode calls than requests — intermediate frames were coalesced, not all individually decoded (got ' + decodeCalls.length + ' calls: ' + JSON.stringify(decodeCalls) + ')');
+            assertTrue(slowState.currentFrame > 0, 'still advanced forward from frame 0 (got ' + slowState.currentFrame + ')');
+        });
     });
 
     describe('VideoController - Playback', function () {

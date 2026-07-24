@@ -462,25 +462,55 @@ export class OnDemandVideoDecoder {
             return null;
         }
 
-        // Check cache first
-        if (this.cache.has(frameIndex)) {
-            var cached = this.cache.get(frameIndex);
-            this.cache.delete(frameIndex);
-            this.cache.set(frameIndex, cached);
-            return cached;
-        }
-
-        // Frame-accurate mediabunny backend (opt-in, issue #115). It owns its
-        // own cache; on any miss/error we fall through to the HTML5 seek path so
-        // a frame is always returned.
+        // Frame-accurate mediabunny backend (opt-in, issue #115) — tried
+        // BEFORE the shared this.cache below, not after. That cache is ALSO
+        // written by the HTML5/WebCodecs fallback paths (_getFrameHTML5's
+        // addToCache); if this exact frame EVER fell through to HTML5 for any
+        // reason (a transient decode hiccup, the brief window before
+        // mediabunny finished initializing, anything) it would get cached
+        // there, and EVERY future request for that same index — even a
+        // single, deliberate, non-racing re-visit — would return the cached,
+        // frame-INACCURATE HTML5 bitmap forever, permanently bypassing
+        // mediabunny for that one index. Mediabunny keeps its own internal
+        // cache (`_mbBackend.cache`), so checking it first costs nothing extra
+        // once it already has the frame, and guarantees a poisoned HTML5
+        // cache entry can never permanently shadow the correct decode.
+        //
+        // Serialize concurrent calls into the backend (issue #115 followup) —
+        // mirrors _getFrameHTML5's _html5SeekLock a few lines down, and for the
+        // same reason. Rapid arrow-key stepping (or auto-repeat) fires overlapping
+        // getFrame() calls before the previous one resolves; the mediabunny
+        // backend's single-frame decode has no internal queue (only its
+        // multi-frame decodeRange does), so two overlapping decodes racing the
+        // same underlying WebCodecs decoder can return the WRONG frame or fail
+        // outright for one of them — which then falls through to the HTML5 path
+        // below for that one frame, i.e. it briefly LOOKS like the pre-#115
+        // frame-inaccurate behavior for a single frame, then "snaps back" once
+        // the race clears on the next step (unless the wrong result gets
+        // cached below, per the above).
         if (this._mbBackend) {
+            while (this._mbSeekLock) { await this._mbSeekLock; }
+            var resolveMbLock;
+            this._mbSeekLock = new Promise(function (r) { resolveMbLock = r; });
             try {
                 var mbFrame = await this._mbBackend.getFrame(frameIndex);
                 if (mbFrame) return mbFrame;
                 videoLog("Mediabunny returned no frame for " + frameIndex + ", falling back to HTML5", "warn");
             } catch (e) {
                 videoLog("Mediabunny decode failed for frame " + frameIndex + ": " + e.message + ", falling back to HTML5", "warn");
+            } finally {
+                this._mbSeekLock = null;
+                resolveMbLock();
             }
+        }
+
+        // Shared HTML5/WebCodecs cache — mediabunny never writes here, so a
+        // hit here only ever means a PRIOR fallback decode for this index.
+        if (this.cache.has(frameIndex)) {
+            var cached = this.cache.get(frameIndex);
+            this.cache.delete(frameIndex);
+            this.cache.set(frameIndex, cached);
+            return cached;
         }
 
         // Try WebCodecs path if mp4box is initialized
@@ -883,6 +913,18 @@ export class OnDemandVideoDecoder {
             this.decoder = null;
         }
 
+        // Release the frame-accurate mediabunny backend bound to the OLD
+        // source (issue #115 regression). Without this, `_mbBackend` keeps
+        // pointing at the previous video after a pooled-decoder session
+        // switch, so every subsequent getFrame() silently decodes from the
+        // WRONG video — frame-accurate for a video nobody is looking at
+        // anymore, which reads as the pose overlay drifting off the video.
+        // Re-initialized below, after the new element's metadata loads.
+        if (this._mbBackend) {
+            try { this._mbBackend.close(); } catch (_) {}
+            this._mbBackend = null;
+        }
+
         this._source = source;
         this.file = source;
         this.sourceType = "file";
@@ -960,7 +1002,22 @@ export class OnDemandVideoDecoder {
             this._emitProgress({ phase: 'mp4box', error: e });
         }
 
-        videoLog("Source switched: " + (source.name || "file") + " (" + width + "x" + height + ", ~" + totalFrames + " frames)");
+        // Re-initialize the frame-accurate mediabunny backend for the NEW
+        // source (issue #115) — mirrors init()'s setup. Must happen for every
+        // switchSource(), not just the first init(), or a reused pooled
+        // decoder keeps stepping through the previous video after a session
+        // switch/reopen.
+        if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
+            try {
+                await this._initMediabunny(source);
+            } catch (e) {
+                videoLog("Mediabunny backend init failed on source switch (HTML5 seek will be used): " + e.message, "warn");
+                this._mbBackend = null;
+            }
+        }
+
+        videoLog("Source switched: " + (source.name || "file") + " (" + width + "x" + height + ", ~" + totalFrames + " frames)"
+            + (this._mbBackend ? " [mediabunny frame-accurate]" : ""));
     }
 
     close() {

@@ -973,7 +973,11 @@ export function update3DViewport(frameIdx) {
  * navigable.
  */
 export function navigateToFrame(frameIdx) {
-    if (hasRealVideo()) { videoController.seekToFrame(frameIdx); return; }
+    // scrubToFrame (not seekToFrame directly): transport-button clicks/holds
+    // fire faster than one decode round-trip just like arrow-key stepping —
+    // scrubToFrame coalesces to the latest target instead of queuing every
+    // intermediate frame (issue #115 followup).
+    if (hasRealVideo()) { videoController.scrubToFrame(frameIdx); return; }
     var maxF = Math.max(0, (state.totalFrames || 1) - 1);
     if (frameIdx < 0) frameIdx = 0;
     if (frameIdx > maxF) frameIdx = maxF;
