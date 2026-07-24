@@ -2727,6 +2727,28 @@ the end of `switchSource()`, mirroring `init()`'s setup. Covered by
 content, not just the backend's `filename`, since the fixture videos happen
 to share a frame count).
 
+**A cached HTML5 fallback permanently shadowed mediabunny for that frame
+index (issue #115 followup, `eric/seeking-regression`).** `getFrame()`
+checked the shared `this.cache` BEFORE trying `_mbBackend`. That cache is
+ALSO written by `_getFrameHTML5` (`addToCache`) — so if a frame EVER fell
+through to HTML5 for any reason (a transient decode hiccup, the brief window
+before mediabunny finished initializing, the `_mbSeekLock` race described
+below before it was fixed, anything at all), it got cached there
+PERMANENTLY, and every future request for that exact index — even a single,
+deliberate, non-racing re-visit, no stepping speed involved — returned the
+stale, frame-inaccurate HTML5 bitmap forever, never retrying mediabunny
+again for that one index. This was the actual root cause behind "frame
+seeking is definitely pulling the wrong frame, no doubt about it" reports
+that persisted even after the race-condition fixes below, and even with
+single deliberate taps (no concurrency to race in the first place). Fixed
+by checking `_mbBackend` FIRST — mediabunny keeps its own internal cache, so
+this costs nothing once it already has the frame — and only falling through
+to the shared `this.cache` (now understood to hold ONLY prior HTML5/WebCodecs
+fallback results, never a mediabunny result) afterward. Covered by a unit
+test in `tests/test-mediabunny-backend.js` that seeds a poisoned cache entry
+via the real `addToCache` path, then proves a later request for the same
+index gets mediabunny's answer once it "recovers."
+
 **`getFrame()` serializes calls into `_mbBackend` (issue #115 followup,
 `eric/seeking-regression`).** Rapid arrow-key stepping (or key auto-repeat)
 fires overlapping `getFrame()` calls before the previous one resolves

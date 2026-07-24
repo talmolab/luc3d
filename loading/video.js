@@ -462,17 +462,19 @@ export class OnDemandVideoDecoder {
             return null;
         }
 
-        // Check cache first
-        if (this.cache.has(frameIndex)) {
-            var cached = this.cache.get(frameIndex);
-            this.cache.delete(frameIndex);
-            this.cache.set(frameIndex, cached);
-            return cached;
-        }
-
-        // Frame-accurate mediabunny backend (opt-in, issue #115). It owns its
-        // own cache; on any miss/error we fall through to the HTML5 seek path so
-        // a frame is always returned.
+        // Frame-accurate mediabunny backend (opt-in, issue #115) — tried
+        // BEFORE the shared this.cache below, not after. That cache is ALSO
+        // written by the HTML5/WebCodecs fallback paths (_getFrameHTML5's
+        // addToCache); if this exact frame EVER fell through to HTML5 for any
+        // reason (a transient decode hiccup, the brief window before
+        // mediabunny finished initializing, anything) it would get cached
+        // there, and EVERY future request for that same index — even a
+        // single, deliberate, non-racing re-visit — would return the cached,
+        // frame-INACCURATE HTML5 bitmap forever, permanently bypassing
+        // mediabunny for that one index. Mediabunny keeps its own internal
+        // cache (`_mbBackend.cache`), so checking it first costs nothing extra
+        // once it already has the frame, and guarantees a poisoned HTML5
+        // cache entry can never permanently shadow the correct decode.
         //
         // Serialize concurrent calls into the backend (issue #115 followup) —
         // mirrors _getFrameHTML5's _html5SeekLock a few lines down, and for the
@@ -484,7 +486,8 @@ export class OnDemandVideoDecoder {
         // outright for one of them — which then falls through to the HTML5 path
         // below for that one frame, i.e. it briefly LOOKS like the pre-#115
         // frame-inaccurate behavior for a single frame, then "snaps back" once
-        // the race clears on the next step.
+        // the race clears on the next step (unless the wrong result gets
+        // cached below, per the above).
         if (this._mbBackend) {
             while (this._mbSeekLock) { await this._mbSeekLock; }
             var resolveMbLock;
@@ -499,6 +502,15 @@ export class OnDemandVideoDecoder {
                 this._mbSeekLock = null;
                 resolveMbLock();
             }
+        }
+
+        // Shared HTML5/WebCodecs cache — mediabunny never writes here, so a
+        // hit here only ever means a PRIOR fallback decode for this index.
+        if (this.cache.has(frameIndex)) {
+            var cached = this.cache.get(frameIndex);
+            this.cache.delete(frameIndex);
+            this.cache.set(frameIndex, cached);
+            return cached;
         }
 
         // Try WebCodecs path if mp4box is initialized
