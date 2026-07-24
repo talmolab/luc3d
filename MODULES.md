@@ -2376,6 +2376,15 @@ filesystem enumeration, decoder rebuild.
   `import-export/import-track-resolve.js` (moved there so it's unit-testable;
   session-loader pulls app.js and can't be bridged into the test runner).
 
+`rebuildVideoController()` surfaces frame-accurate mediabunny backend
+failures in the status bar (issue #115) — previously a decoder that fell
+back to HTML5 seeking only logged a `console.warn`, invisible without
+opening devtools. Any view with a real decoder but no `_mbBackend` (its
+`_initMediabunny`/`switchSource` init silently failed) now triggers
+`setStatus('N of M camera(s) fell back to HTML5 seeking...', 'warning')` so
+it's visible at a glance right after every load/session-switch, without
+needing to check the console or set anything manually.
+
 Fresh-session creation sites (video-only, calibration-only, multi-cam directory)
 seed the skeleton from `buildRememberedSkeleton()` (falling back to an empty
 skeleton), so a skeleton built/imported earlier in the app session carries over to
