@@ -2708,6 +2708,38 @@ decode is itself frame-inaccurate — every WebCodecs decoder, incl.
 mediabunny and a raw `<video>`, shows the same offset). Pose data imports
 and exports correctly regardless — this bug is display-only.
 
+**ROOT CAUSE of persistent wrong-frame reports, finally found (issue #115,
+`eric/seeking-regression`): the vendored `MediaBunnyVideoBackend` built its
+frame index in decode order, not presentation order.** Every fix below this
+one (`switchSource`, the shared-cache check order, `_mbSeekLock`,
+`scrubToFrame` coalescing) was real and independently verified, but none of
+them explained a report of "the frame number looks correct but it pulls the
+wrong video frame" on a single, deliberate, non-racing step. The actual bug
+lives in the VENDORED library: `MediaBunnyVideoBackend.initialize()`
+(`lib/sleap-io/chunk-X76PRJK6.js`) built `_frameTimes` by pushing
+`EncodedPacketSink.packets()`'s timestamps in *iteration* order — but per
+mediabunny's own docs, `packets()` yields packets in **decode** order, not
+presentation order (each packet's `.timestamp` is its real PTS; only the
+iteration order is unsorted). For any B-frame-encoded video — routine for
+real camera recordings, and exactly what the original #115 report suspected
+("keyframes versus B-frames") — decode order != presentation order, so
+`_frameTimes[i]` was NOT the i-th frame in playback order: `decodeSingleFrame(i)`
+looked up the WRONG timestamp for any `i` displaced by B-frame reordering,
+**deterministically** returning the wrong frame's pixel content for a
+correctly-requested index. This is why it reproduced identically on single
+deliberate taps (no concurrency involved) and why it never showed up against
+`sample_session/*.mp4` (simple test clips almost certainly encoded without
+B-frames, so decode order happened to equal presentation order there,
+masking the bug in every prior test). Confirmed unchanged since PR #141
+(byte-identical `MediaBunnyVideoBackend` logic before and after the 0.5.5
+re-vendor that only renamed the chunk) — this was a latent bug from day one
+of #141, not a regression from anything touched later. Fixed by sorting
+`_frameTimes` ascending by timestamp at the end of `initialize()` — see
+CLAUDE.md's sleap-io.js "LOCAL PATCH (issue #115, decode-order)" entry.
+Verified with a real ffmpeg-generated B-frame video (`-bf 3 -g 10`,
+`tests/fixtures/bframes-test/`): 18 of 30 frames (60%) decoded wrong before
+the patch, 0 after. Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`.
+
 **`switchSource()` must refresh `_mbBackend` too (issue #115 regression,
 `eric/seeking-regression`).** `switchSource(source)` — used by the pooled-
 decoder session-switch/reopen path (`ui/sessions-panes.js`'s
