@@ -18,7 +18,8 @@
     "test:unlinked-color-collision": "node unlinked-instance-color-collision.mjs",
     "test:lazy-rematerialize-dup": "node lazy-frame-rematerialize-duplicate.mjs",
     "test:switchsource-mediabunny": "node switchsource-mediabunny-refresh.mjs",
-    "test:mediabunny-fallback-warning": "node mediabunny-fallback-status-warning.mjs"
+    "test:mediabunny-fallback-warning": "node mediabunny-fallback-status-warning.mjs",
+    "test:arrow-key-coalesced": "node arrow-key-coalesced-stepping.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"
