@@ -2747,6 +2747,30 @@ around calls into `_mbBackend.getFrame`. Covered by two unit tests in
 serialization contract; the real WebCodecs race itself isn't reproducible
 headlessly).
 
+**Callers must coalesce rapid single-frame steps via `scrubToFrame`, never
+call `seekToFrame` directly for repeatable user input (issue #115
+followup-followup, `eric/seeking-regression`).** Adding `_mbSeekLock` above
+made every individual `getFrame()` call correct, but every caller that
+requested single-frame steps from rapid, repeatable user input — the arrow
+keys and Home/End in `ui/ui-wiring.js`, `seekToLabeledFrame` (alt+arrow),
+and `navigateToFrame`'s real-video branch (`pose/initialization.js`, backing
+the transport Next/Prev/First/Last buttons) — called
+`videoController.seekToFrame(...)` directly, with NO coalescing. Once calls
+into the backend serialize, rapid presses (faster than one real decode
+round-trip on a real, large video) now queue up FULLY IN ORDER instead of
+racing: every intermediate frame decodes and paints before the display can
+catch up to wherever the user actually is — reported as look worse than
+before the serialization fix, "pulling frames in the wrong order," badly
+misaligned. `scrubToFrame()` (used by the seekbar drag) already solves
+exactly this class of problem — it coalesces to only the LATEST requested
+target, dropping stale intermediate ones via `_scrubTarget`/`_isSeeking` —
+but arrow-key/button stepping never used it. Fixed by routing all of the
+above through `scrubToFrame` instead of `seekToFrame`. Covered by a new test
+in `tests/test-video-controller.js` (rapid relative `"+1"` steps against an
+artificially slow decoder decode fewer frames than requests) and
+`tests/e2e/arrow-key-coalesced-stepping.mjs` (drives the REAL keydown
+handler, proves every ArrowRight press routes through `scrubToFrame`).
+
 **Playback overlay/video sync — native default + per-frame throttling
 (issue #115 follow-up).** During playback the pose overlay drifted a few
 frames AHEAD of the video ("the tracking leads the video"; stepping one
