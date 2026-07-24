@@ -473,13 +473,31 @@ export class OnDemandVideoDecoder {
         // Frame-accurate mediabunny backend (opt-in, issue #115). It owns its
         // own cache; on any miss/error we fall through to the HTML5 seek path so
         // a frame is always returned.
+        //
+        // Serialize concurrent calls into the backend (issue #115 followup) —
+        // mirrors _getFrameHTML5's _html5SeekLock a few lines down, and for the
+        // same reason. Rapid arrow-key stepping (or auto-repeat) fires overlapping
+        // getFrame() calls before the previous one resolves; the mediabunny
+        // backend's single-frame decode has no internal queue (only its
+        // multi-frame decodeRange does), so two overlapping decodes racing the
+        // same underlying WebCodecs decoder can return the WRONG frame or fail
+        // outright for one of them — which then falls through to the HTML5 path
+        // below for that one frame, i.e. it briefly LOOKS like the pre-#115
+        // frame-inaccurate behavior for a single frame, then "snaps back" once
+        // the race clears on the next step.
         if (this._mbBackend) {
+            while (this._mbSeekLock) { await this._mbSeekLock; }
+            var resolveMbLock;
+            this._mbSeekLock = new Promise(function (r) { resolveMbLock = r; });
             try {
                 var mbFrame = await this._mbBackend.getFrame(frameIndex);
                 if (mbFrame) return mbFrame;
                 videoLog("Mediabunny returned no frame for " + frameIndex + ", falling back to HTML5", "warn");
             } catch (e) {
                 videoLog("Mediabunny decode failed for frame " + frameIndex + ": " + e.message + ", falling back to HTML5", "warn");
+            } finally {
+                this._mbSeekLock = null;
+                resolveMbLock();
             }
         }
 
