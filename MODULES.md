@@ -2727,6 +2727,26 @@ the end of `switchSource()`, mirroring `init()`'s setup. Covered by
 content, not just the backend's `filename`, since the fixture videos happen
 to share a frame count).
 
+**`getFrame()` serializes calls into `_mbBackend` (issue #115 followup,
+`eric/seeking-regression`).** Rapid arrow-key stepping (or key auto-repeat)
+fires overlapping `getFrame()` calls before the previous one resolves
+(`ui/ui-wiring.js`'s arrow handler doesn't await `seekToFrame`). The
+mediabunny backend's single-frame decode (`decodeSingleFrame`) has no
+internal queue — only its multi-frame `decodeRange` does — so two
+overlapping decodes racing the same underlying WebCodecs decoder could
+return the wrong frame or fail outright for one of them, which then fell
+through to the HTML5 path for that ONE frame: briefly, visibly, the
+pre-#115 frame-inaccurate behavior for a single frame, "snapping back" once
+the race cleared on the next step — reported as "every 3 or so frames it
+goes out of sync then back in sync." `_getFrameHTML5` already had this exact
+protection (`_html5SeekLock`, with a comment explaining concurrent seeks on
+one element serve stale frames) but the mediabunny path never got the
+equivalent lock when it was added. Fixed with a matching `_mbSeekLock`
+around calls into `_mbBackend.getFrame`. Covered by two unit tests in
+`tests/test-mediabunny-backend.js` (stubbed backend — proves the
+serialization contract; the real WebCodecs race itself isn't reproducible
+headlessly).
+
 **Playback overlay/video sync — native default + per-frame throttling
 (issue #115 follow-up).** During playback the pose overlay drifted a few
 frames AHEAD of the video ("the tracking leads the video"; stepping one

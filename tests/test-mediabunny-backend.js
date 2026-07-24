@@ -120,6 +120,54 @@
         });
     });
 
+    describe('Issue #115 followup: concurrent getFrame() calls serialize into the mediabunny backend', function () {
+        it('never has more than one call into _mbBackend.getFrame in flight at once', async function () {
+            var d = makeDecoder();
+            var activeCalls = 0;
+            var maxConcurrent = 0;
+            d._mbBackend = {
+                getFrame: function (i) {
+                    activeCalls++;
+                    maxConcurrent = Math.max(maxConcurrent, activeCalls);
+                    return new Promise(function (resolve) {
+                        setTimeout(function () {
+                            activeCalls--;
+                            resolve({ src: 'mb', i: i });
+                        }, 10);
+                    });
+                },
+            };
+
+            // Rapid arrow-key stepping fires overlapping getFrame() calls without
+            // awaiting the previous one (ui-wiring.js's arrow handler doesn't
+            // await videoController.seekToFrame()) — reproduce that here.
+            var results = await Promise.all([0, 1, 2, 3, 4].map(function (i) { return d.getFrame(i); }));
+
+            assertEqual(maxConcurrent, 1, 'at most one call into the backend in flight at a time');
+            for (var i = 0; i < results.length; i++) {
+                assertEqual(results[i].i, i, 'call ' + i + ' resolved with its own requested frame index, not a racing one');
+            }
+        });
+
+        it('preserves call order even when later calls would otherwise decode faster', async function () {
+            var d = makeDecoder();
+            var order = [];
+            d._mbBackend = {
+                getFrame: function (i) {
+                    return new Promise(function (resolve) {
+                        setTimeout(function () { order.push(i); resolve({ src: 'mb', i: i }); }, (5 - i) * 5);
+                    });
+                },
+            };
+            // Even though later-requested frames (3, 4) have SHORTER simulated
+            // decode latency than earlier ones (0, 1), the lock forces strict
+            // call-order execution — this is what prevents an out-of-order
+            // completion from painting a stale frame over a newer one.
+            await Promise.all([0, 1, 2, 3, 4].map(function (i) { return d.getFrame(i); }));
+            assertEqual(order.join(','), '0,1,2,3,4', 'backend calls execute strictly in call order despite varying simulated latency');
+        });
+    });
+
     describe('Issue #115: close() releases the mediabunny backend', function () {
         it('calls backend.close() and clears the reference', function () {
             var d = makeDecoder();
