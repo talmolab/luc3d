@@ -2414,6 +2414,15 @@ filesystem enumeration, decoder rebuild.
   `import-export/import-track-resolve.js` (moved there so it's unit-testable;
   session-loader pulls app.js and can't be bridged into the test runner).
 
+`rebuildVideoController()` surfaces frame-accurate mediabunny backend
+failures in the status bar (issue #115) — previously a decoder that fell
+back to HTML5 seeking only logged a `console.warn`, invisible without
+opening devtools. Any view with a real decoder but no `_mbBackend` (its
+`_initMediabunny`/`switchSource` init silently failed) now triggers
+`setStatus('N of M camera(s) fell back to HTML5 seeking...', 'warning')` so
+it's visible at a glance right after every load/session-switch, without
+needing to check the console or set anything manually.
+
 Fresh-session creation sites (video-only, calibration-only, multi-cam directory)
 seed the skeleton from `buildRememberedSkeleton()` (falling back to an empty
 skeleton), so a skeleton built/imported earlier in the app session carries over to
@@ -2782,6 +2791,123 @@ hardware; note it couldn't be validated headless (headless *software*
 decode is itself frame-inaccurate — every WebCodecs decoder, incl.
 mediabunny and a raw `<video>`, shows the same offset). Pose data imports
 and exports correctly regardless — this bug is display-only.
+
+**ROOT CAUSE of persistent wrong-frame reports, finally found (issue #115,
+`eric/seeking-regression`): the vendored `MediaBunnyVideoBackend` built its
+frame index in decode order, not presentation order.** Every fix below this
+one (`switchSource`, the shared-cache check order, `_mbSeekLock`,
+`scrubToFrame` coalescing) was real and independently verified, but none of
+them explained a report of "the frame number looks correct but it pulls the
+wrong video frame" on a single, deliberate, non-racing step. The actual bug
+lives in the VENDORED library: `MediaBunnyVideoBackend.initialize()`
+(`lib/sleap-io/chunk-X76PRJK6.js`) built `_frameTimes` by pushing
+`EncodedPacketSink.packets()`'s timestamps in *iteration* order — but per
+mediabunny's own docs, `packets()` yields packets in **decode** order, not
+presentation order (each packet's `.timestamp` is its real PTS; only the
+iteration order is unsorted). For any B-frame-encoded video — routine for
+real camera recordings, and exactly what the original #115 report suspected
+("keyframes versus B-frames") — decode order != presentation order, so
+`_frameTimes[i]` was NOT the i-th frame in playback order: `decodeSingleFrame(i)`
+looked up the WRONG timestamp for any `i` displaced by B-frame reordering,
+**deterministically** returning the wrong frame's pixel content for a
+correctly-requested index. This is why it reproduced identically on single
+deliberate taps (no concurrency involved) and why it never showed up against
+`sample_session/*.mp4` (simple test clips almost certainly encoded without
+B-frames, so decode order happened to equal presentation order there,
+masking the bug in every prior test). Confirmed unchanged since PR #141
+(byte-identical `MediaBunnyVideoBackend` logic before and after the 0.5.5
+re-vendor that only renamed the chunk) — this was a latent bug from day one
+of #141, not a regression from anything touched later. Fixed by sorting
+`_frameTimes` ascending by timestamp at the end of `initialize()` — see
+CLAUDE.md's sleap-io.js "LOCAL PATCH (issue #115, decode-order)" entry.
+Verified with a real ffmpeg-generated B-frame video (`-bf 3 -g 10`,
+`tests/fixtures/bframes-test/`): 18 of 30 frames (60%) decoded wrong before
+the patch, 0 after. Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`.
+
+**`switchSource()` must refresh `_mbBackend` too (issue #115 regression,
+`eric/seeking-regression`).** `switchSource(source)` — used by the pooled-
+decoder session-switch/reopen path (`ui/sessions-panes.js`'s
+`switchSession()`, "reuse pool decoder — swap source without creating new
+video element", added to dodge Chrome browser-process crashes from repeated
+`<video>` element churn) — predates the mediabunny backend and was never
+updated when it landed: it closed the WebCodecs `this.decoder` but left
+`_mbBackend` untouched, still bound to the PREVIOUS video. Every
+frame-accurate `getFrame()` after a pooled-decoder session switch/reopen
+(stepping, the `pausePlayback()` snap) then silently decoded from the wrong,
+stale video — reproducing the exact pose/video misalignment #141 fixed, but
+only on switch/reopen (a fresh `init()` was always fine, which is why this
+was hard to pin down from a fresh-load repro). Fixed by closing the old
+`_mbBackend` and re-running `_initMediabunny(source)` for the new source at
+the end of `switchSource()`, mirroring `init()`'s setup. Covered by
+`tests/e2e/switchsource-mediabunny-refresh.mjs` (proves it via decoded pixel
+content, not just the backend's `filename`, since the fixture videos happen
+to share a frame count).
+
+**A cached HTML5 fallback permanently shadowed mediabunny for that frame
+index (issue #115 followup, `eric/seeking-regression`).** `getFrame()`
+checked the shared `this.cache` BEFORE trying `_mbBackend`. That cache is
+ALSO written by `_getFrameHTML5` (`addToCache`) — so if a frame EVER fell
+through to HTML5 for any reason (a transient decode hiccup, the brief window
+before mediabunny finished initializing, the `_mbSeekLock` race described
+below before it was fixed, anything at all), it got cached there
+PERMANENTLY, and every future request for that exact index — even a single,
+deliberate, non-racing re-visit, no stepping speed involved — returned the
+stale, frame-inaccurate HTML5 bitmap forever, never retrying mediabunny
+again for that one index. This was the actual root cause behind "frame
+seeking is definitely pulling the wrong frame, no doubt about it" reports
+that persisted even after the race-condition fixes below, and even with
+single deliberate taps (no concurrency to race in the first place). Fixed
+by checking `_mbBackend` FIRST — mediabunny keeps its own internal cache, so
+this costs nothing once it already has the frame — and only falling through
+to the shared `this.cache` (now understood to hold ONLY prior HTML5/WebCodecs
+fallback results, never a mediabunny result) afterward. Covered by a unit
+test in `tests/test-mediabunny-backend.js` that seeds a poisoned cache entry
+via the real `addToCache` path, then proves a later request for the same
+index gets mediabunny's answer once it "recovers."
+
+**`getFrame()` serializes calls into `_mbBackend` (issue #115 followup,
+`eric/seeking-regression`).** Rapid arrow-key stepping (or key auto-repeat)
+fires overlapping `getFrame()` calls before the previous one resolves
+(`ui/ui-wiring.js`'s arrow handler doesn't await `seekToFrame`). The
+mediabunny backend's single-frame decode (`decodeSingleFrame`) has no
+internal queue — only its multi-frame `decodeRange` does — so two
+overlapping decodes racing the same underlying WebCodecs decoder could
+return the wrong frame or fail outright for one of them, which then fell
+through to the HTML5 path for that ONE frame: briefly, visibly, the
+pre-#115 frame-inaccurate behavior for a single frame, "snapping back" once
+the race cleared on the next step — reported as "every 3 or so frames it
+goes out of sync then back in sync." `_getFrameHTML5` already had this exact
+protection (`_html5SeekLock`, with a comment explaining concurrent seeks on
+one element serve stale frames) but the mediabunny path never got the
+equivalent lock when it was added. Fixed with a matching `_mbSeekLock`
+around calls into `_mbBackend.getFrame`. Covered by two unit tests in
+`tests/test-mediabunny-backend.js` (stubbed backend — proves the
+serialization contract; the real WebCodecs race itself isn't reproducible
+headlessly).
+
+**Callers must coalesce rapid single-frame steps via `scrubToFrame`, never
+call `seekToFrame` directly for repeatable user input (issue #115
+followup-followup, `eric/seeking-regression`).** Adding `_mbSeekLock` above
+made every individual `getFrame()` call correct, but every caller that
+requested single-frame steps from rapid, repeatable user input — the arrow
+keys and Home/End in `ui/ui-wiring.js`, `seekToLabeledFrame` (alt+arrow),
+and `navigateToFrame`'s real-video branch (`pose/initialization.js`, backing
+the transport Next/Prev/First/Last buttons) — called
+`videoController.seekToFrame(...)` directly, with NO coalescing. Once calls
+into the backend serialize, rapid presses (faster than one real decode
+round-trip on a real, large video) now queue up FULLY IN ORDER instead of
+racing: every intermediate frame decodes and paints before the display can
+catch up to wherever the user actually is — reported as look worse than
+before the serialization fix, "pulling frames in the wrong order," badly
+misaligned. `scrubToFrame()` (used by the seekbar drag) already solves
+exactly this class of problem — it coalesces to only the LATEST requested
+target, dropping stale intermediate ones via `_scrubTarget`/`_isSeeking` —
+but arrow-key/button stepping never used it. Fixed by routing all of the
+above through `scrubToFrame` instead of `seekToFrame`. Covered by a new test
+in `tests/test-video-controller.js` (rapid relative `"+1"` steps against an
+artificially slow decoder decode fewer frames than requests) and
+`tests/e2e/arrow-key-coalesced-stepping.mjs` (drives the REAL keydown
+handler, proves every ArrowRight press routes through `scrubToFrame`).
 
 **Playback overlay/video sync — native default + per-frame throttling
 (issue #115 follow-up).** During playback the pose overlay drifted a few

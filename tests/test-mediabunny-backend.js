@@ -118,6 +118,91 @@
             assertEqual(frame.src, 'html5', 'no backend → HTML5');
             assertEqual(used, 'html5', 'HTML5 path invoked');
         });
+
+        // Regression: getFrame() used to check the shared this.cache BEFORE
+        // trying the mediabunny backend. That cache is ALSO written by
+        // _getFrameHTML5 (real addToCache). So a frame that EVER fell through
+        // to HTML5 once — a transient decode hiccup, mediabunny not ready
+        // yet, anything — got permanently cached, and every FUTURE request
+        // for that exact index (even a single, deliberate, non-racing
+        // re-visit) returned the stale, frame-INACCURATE HTML5 bitmap
+        // forever, never retrying mediabunny again for that index. Reported
+        // live as "frame seeking is definitely pulling the wrong frame, no
+        // doubt about it" even on single deliberate taps (no concurrency).
+        it('does not let a cached HTML5 fallback permanently shadow mediabunny once it recovers', async function () {
+            var d = makeDecoder();
+            var mbShouldFail = true;
+            var mbCallCount = 0;
+            d._mbBackend = {
+                getFrame: function (i) {
+                    mbCallCount++;
+                    return Promise.resolve(mbShouldFail ? null : { src: 'mb', i: i });
+                },
+            };
+            // Real addToCache behavior (unlike the plain-stub HTML5 mocks
+            // above) — this is the exact mechanism that poisons this.cache.
+            d._getFrameHTML5 = function (i) {
+                var bitmap = { src: 'html5', i: i };
+                this.addToCache(i, bitmap);
+                return Promise.resolve(bitmap);
+            };
+
+            var first = await d.getFrame(7); // mediabunny fails → HTML5 fallback, cached
+            assertEqual(first.src, 'html5', 'first call falls through to HTML5 as expected');
+
+            mbShouldFail = false; // mediabunny "recovers"
+            var second = await d.getFrame(7); // same index, single deliberate re-request
+            assertEqual(second.src, 'mb', 'second request for the SAME index gets the correct mediabunny frame, not the stale cached HTML5 one');
+            assertEqual(mbCallCount, 2, 'mediabunny was retried on the second request — the cache never short-circuited past it');
+        });
+    });
+
+    describe('Issue #115 followup: concurrent getFrame() calls serialize into the mediabunny backend', function () {
+        it('never has more than one call into _mbBackend.getFrame in flight at once', async function () {
+            var d = makeDecoder();
+            var activeCalls = 0;
+            var maxConcurrent = 0;
+            d._mbBackend = {
+                getFrame: function (i) {
+                    activeCalls++;
+                    maxConcurrent = Math.max(maxConcurrent, activeCalls);
+                    return new Promise(function (resolve) {
+                        setTimeout(function () {
+                            activeCalls--;
+                            resolve({ src: 'mb', i: i });
+                        }, 10);
+                    });
+                },
+            };
+
+            // Rapid arrow-key stepping fires overlapping getFrame() calls without
+            // awaiting the previous one (ui-wiring.js's arrow handler doesn't
+            // await videoController.seekToFrame()) — reproduce that here.
+            var results = await Promise.all([0, 1, 2, 3, 4].map(function (i) { return d.getFrame(i); }));
+
+            assertEqual(maxConcurrent, 1, 'at most one call into the backend in flight at a time');
+            for (var i = 0; i < results.length; i++) {
+                assertEqual(results[i].i, i, 'call ' + i + ' resolved with its own requested frame index, not a racing one');
+            }
+        });
+
+        it('preserves call order even when later calls would otherwise decode faster', async function () {
+            var d = makeDecoder();
+            var order = [];
+            d._mbBackend = {
+                getFrame: function (i) {
+                    return new Promise(function (resolve) {
+                        setTimeout(function () { order.push(i); resolve({ src: 'mb', i: i }); }, (5 - i) * 5);
+                    });
+                },
+            };
+            // Even though later-requested frames (3, 4) have SHORTER simulated
+            // decode latency than earlier ones (0, 1), the lock forces strict
+            // call-order execution — this is what prevents an out-of-order
+            // completion from painting a stale frame over a newer one.
+            await Promise.all([0, 1, 2, 3, 4].map(function (i) { return d.getFrame(i); }));
+            assertEqual(order.join(','), '0,1,2,3,4', 'backend calls execute strictly in call order despite varying simulated latency');
+        });
     });
 
     describe('Issue #115: close() releases the mediabunny backend', function () {

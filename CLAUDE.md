@@ -74,6 +74,25 @@ python3 -m http.server 8080
   marked `// LUCID local patch (#115)`. **Re-apply after any re-vendor** (grep the
   marker) and report upstream to sleap-io. (The chunk moved `M65RB7KH`→`X76PRJK6`
   in the 0.5.5 re-vendor.)
+  **LOCAL PATCH (issue #115, decode-order):** `lib/sleap-io/chunk-X76PRJK6.js`
+  `MediaBunnyVideoBackend.initialize()` builds its frame-index → timestamp map
+  (`_frameTimes`) by pushing `EncodedPacketSink.packets()`'s timestamps in
+  *iteration* order — but mediabunny's own docs state `packets()` yields
+  packets in **decode** order, not presentation order (each packet's
+  `.timestamp` is its real PTS; only the *iteration* order is unsorted). For
+  any B-frame-encoded video (routine for real camera recordings — this is
+  exactly what the original #115 report suspected, "keyframes versus
+  B-frames"), decode order != presentation order, so `_frameTimes[i]` was NOT
+  the i-th frame in playback order: `decodeSingleFrame(i)` looked up the
+  WRONG timestamp for any `i` displaced by B-frame reordering, **deterministically
+  returning the wrong frame's pixel content for a correctly-requested index —
+  not a race, reproducible on a single, non-concurrent step.** Verified with a
+  real ffmpeg-generated B-frame video (`tests/fixtures/bframes-test/`,
+  `-bf 3 -g 10`): 18 of 30 frames (60%) decoded wrong before this patch, 0
+  after. Fixed by sorting `_frameTimes` ascending by timestamp at the end of
+  `initialize()`, marked `// LUCID local patch (#115)`. **Re-apply after any
+  re-vendor** (grep the marker) and report upstream to sleap-io/mediabunny.
+  Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`.
   **LOCAL PATCH (sleap-io.js#231):** `lib/sleap-io/chunk-X76PRJK6.js` writes the
   SLP `instances` table with dtype `"<d"` (h5wasm float64) instead of upstream's
   `"<f8"` — h5wasm does NOT speak numpy dtype strings and parses `"<f8"` as

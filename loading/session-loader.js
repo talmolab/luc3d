@@ -1039,6 +1039,22 @@ export function rebuildVideoController() {
 
     document.getElementById('totalFrames').textContent = state.totalFrames;
     document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
+
+    // Surface frame-accurate mediabunny backend failures in the status bar
+    // (issue #115) — previously only a console.warn, invisible without
+    // opening devtools. `_mediabunnyEnabled()` defaults ON for every decoder,
+    // so a decoder with a real video but no `_mbBackend` means its init
+    // silently failed and it's falling back to less-precise HTML5 seeking;
+    // this makes that visible at a glance instead of requiring the user to
+    // dig through the console to confirm which backend is actually active.
+    var decodersMissingMediabunny = state.views.filter(function (v) {
+        return v.decoder && !v.decoder._mbBackend;
+    }).length;
+    if (decodersMissingMediabunny > 0) {
+        setStatus(decodersMissingMediabunny + ' of ' + state.views.length
+            + ' camera(s) fell back to HTML5 seeking (frame-accurate mediabunny init failed) — stepping may be a frame or two off',
+            'warning');
+    }
 }
 
 export function updateTotalFrames() {

@@ -1480,13 +1480,13 @@ export function setupUI() {
                 if (e.shiftKey) return; // Shift+Arrow is unbound
                 e.preventDefault();
                 if (e.altKey) { seekToLabeledFrame(1); }
-                else { videoController.seekToFrame(state.currentFrame + 1); }
+                else { videoController.scrubToFrame(state.currentFrame + 1); }
                 break;
             case 'ArrowLeft':
                 if (e.shiftKey) return; // Shift+Arrow is unbound
                 e.preventDefault();
                 if (e.altKey) { seekToLabeledFrame(-1); }
-                else { videoController.seekToFrame(state.currentFrame - 1); }
+                else { videoController.scrubToFrame(state.currentFrame - 1); }
                 break;
             case ' ':
                 e.preventDefault();
@@ -1499,11 +1499,11 @@ export function setupUI() {
                 break;
             case 'Home':
                 e.preventDefault();
-                videoController.seekToFrame(0);
+                videoController.scrubToFrame(0);
                 break;
             case 'End':
                 e.preventDefault();
-                videoController.seekToFrame(state.totalFrames - 1);
+                videoController.scrubToFrame(state.totalFrames - 1);
                 break;
             case '+':
             case '=':
@@ -2523,7 +2523,7 @@ export function seekToLabeledFrame(direction) {
         // frames at once.
         if (timeline) timeline.setCurrentFrame(target);
         updateSeekbarVisual(target);
-        videoController.seekToFrame(target);
+        videoController.scrubToFrame(target);
         setStatus('Frame ' + (target + 1), 'info');
     }
 }
