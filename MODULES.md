@@ -3174,10 +3174,14 @@ each holding only one session's data at a time:
   (`{ runningOut, allSkeletons, allVideos, allTracks, allIdentities,
   trackBaseByNameSig }`) threaded through every session so refs stay
   file-global (never reset per session).
-- **`buildSessionRefGraph(session, views, videoFiles, ctx)`** — PASS 1, per
+- **`buildSessionRefGraph(session, views, videoFiles, ctx)`** — **`async`** (both
+  call sites must `await`: `buildSessionSlpBytesStreaming` here and
+  `commitSessionForMultiSessionSave` in `save-load.js`). PASS 1, per
   session: prunes `session.frameGroups` to user-edited frames only (frees the
   bulk of Track All's per-frame materialization before the rest of this
-  function runs), builds the overlay plan / `storeOutIndex` / per-`InstanceGroup`
+  function runs — note this only releases the `FrameGroup` wrappers, since every
+  grouped `Instance` stays reachable via `session.instanceGroups`), builds the
+  overlay plan / `storeOutIndex` / per-`InstanceGroup`
   refs against `ctx`'s running counter (advancing it for the next session), and
   accumulates this session's cameras/tracks/skeleton into `ctx`. Requires
   `session.lazyLoader` open and Track All/Triangulate All already run. Touches
@@ -3207,6 +3211,28 @@ each holding only one session's data at a time:
   propagate, a real streaming export, and a real readback asserting every
   frame from both cameras (not just the first) resolves a valid, correctly-
   named track.
+
+  Three memory measures in the ref-resolution loop, which runs once per grouped
+  frame (180,210 on the real bug project) and is the PASS-1 hot path:
+  - **`CamRefMap`** replaces the per-`InstanceGroup` `new Map()` for
+    `instanceRefsByCamera` with a two-parallel-array container (a real `Map`
+    allocates a hash table regardless of size, and there are 531,799 of these).
+    It is **duck-typed against the vendored writer** — only `get`/`set`/`has`/
+    `keys()`/`for...of` are implemented, which is exactly what
+    `instanceGroupMemberRows` + the `InstanceGroup` constructor use as of
+    sleap-io.js 0.5.5. **Re-check on every re-vendor**; a new `.size`/`.forEach`/
+    `.values()`/`.entries()`/`.delete()` call would silently read `undefined`.
+  - **`labeledFrameRefsByCamera` is no longer built** (it was one extra `Map`
+    per frame, written and never read). Verified in the vendored writer:
+    `instanceGroupMemberRows` derives `lfByCamera` only when a group carries
+    CONCRETE instances (`_instanceByCamera`), which LUCID's ref-based groups
+    never set, and otherwise takes the pair from `instRefs.get(camera)`.
+  - **`await yieldToBrowser()` every 2,000 frames** so the save progress modal
+    paints and V8 gets collection points for the loop's per-group temporaries —
+    this is why the function is `async`.
+  Together with the vendored `luc3d #185` typed 3D-point sink, this is the
+  configuration measured as writing the real project's 1,404,804,682-byte
+  merged `.slp` successfully.
 - **`openProjectWriter(ctx, allSioSessions, provenance)`** — the single
   `SIO.openSlpWriter(...)` call, made once every session's ref graph is final.
 - **`streamSessionIntoWriter(writer, session, refGraphResult)`** — PASS 2, per

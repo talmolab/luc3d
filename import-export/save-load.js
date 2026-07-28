@@ -659,7 +659,7 @@ export async function commitSessionForMultiSessionSave(handle, session) {
     });
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
     var wasSharedStore = !!session.lazyLoader._sharedStore;
-    var refGraph = buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
+    var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
     handle.pending.push({ session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
