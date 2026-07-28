@@ -61,6 +61,67 @@ function numAt(arr, i, dflt) {
     return isNaN(v) ? (dflt === undefined ? 0 : dflt) : v;
 }
 
+// Yield a real macrotask. `buildSessionRefGraph`'s ref-resolution loop runs over
+// every grouped frame in the project (180,210 of them on the real 5-camera bug
+// project — a ~2.5 s unbroken synchronous burst), so it periodically awaits this
+// for two reasons: the save progress modal can actually paint, and V8 gets
+// collection points between chunks for the loop's per-group temporaries. The
+// latter is not cosmetic — the merged save runs with under 900 MB of headroom
+// below the renderer's hard ~4 GB JS-heap cap (luc3d #185), and the verified-
+// working configuration measured on the real project included these yields.
+function yieldToBrowser() {
+    return new Promise(function (resolve) { setTimeout(resolve, 0); });
+}
+
+/**
+ * Minimal Map-compatible container for the small (<=camera-count) per-group
+ * camera->ref lookup every triangulated `InstanceGroup` carries
+ * (`instanceRefsByCamera`). A real `Map` allocates a hash-table backing store
+ * regardless of size; on a large multi-camera project `buildSessionRefGraph`
+ * builds one of these PER instance-group (500k+ on a 180k-frame x 5-camera
+ * project), so that per-instance overhead was a real slice of PASS-1 peak
+ * memory. This implements only the subset of Map's interface sleap-io.js's
+ * write/clone paths actually use against `_instanceRefsByCamera`: get/set/has,
+ * `.keys()`, and `for...of` [key, value] iteration.
+ *
+ * CAUTION — this is duck-typed against the VENDORED writer, so it is only safe
+ * as long as that subset holds. As of sleap-io.js 0.5.5 the consumers are
+ * `instanceGroupMemberRows` (`chunk-X76PRJK6.js`: `instRefs?.keys()` spread into
+ * a Set, then `.has()`/`.get()` per camera) and the `InstanceGroup` constructor.
+ * **Re-check on every re-vendor** (`grep -n '_instanceRefsByCamera'
+ * lib/sleap-io/`): a new `.size`, `.forEach`, `.values()`, `.entries()` or
+ * `.delete()` call would silently get `undefined` and break the save. Exercised
+ * by `tests/e2e/save-multiinstance-ref-integrity.mjs`.
+ */
+function CamRefMap() {
+    this._k = [];
+    this._v = [];
+}
+CamRefMap.prototype.set = function (k, v) {
+    var i = this._k.indexOf(k);
+    if (i >= 0) this._v[i] = v; else { this._k.push(k); this._v.push(v); }
+    return this;
+};
+CamRefMap.prototype.get = function (k) {
+    var i = this._k.indexOf(k);
+    return i >= 0 ? this._v[i] : undefined;
+};
+CamRefMap.prototype.has = function (k) {
+    return this._k.indexOf(k) >= 0;
+};
+CamRefMap.prototype.keys = function () {
+    return this._k.slice();
+};
+CamRefMap.prototype[Symbol.iterator] = function () {
+    var k = this._k, v = this._v, i = 0;
+    return {
+        next: function () {
+            if (i >= k.length) return { done: true, value: undefined };
+            return { done: false, value: [k[i], v[i++]] };
+        }
+    };
+};
+
 /**
  * Resolve the output video path for a camera (mirrors buildSlpLabelsAllViews).
  * `lazyVid` is the loader's `{filename, shape}` record for this camera from the
@@ -124,7 +185,7 @@ export function createProjectWriterContext() {
  *
  * @returns {{ sioSession: Object, overlayLfs: Array, cam: Array<{name:string, videoIndex:number, trackBase:number}> }}
  */
-export function buildSessionRefGraph(session, views, videoFiles, ctx) {
+export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     var SIO = window.SleapIO;
     var loader = session.lazyLoader;
     if (!loader) throw new Error('buildSessionRefGraph requires a lazy session with a lazyLoader');
@@ -501,13 +562,15 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
 
     var groupedFrameIdxs = Array.from(session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
     for (var gf = 0; gf < groupedFrameIdxs.length; gf++) {
+        if (gf % 2000 === 0) {
+            await yieldToBrowser();
+        }
         var frameIdx = groupedFrameIdxs[gf];
         var groups = session.instanceGroups.get(frameIdx) || [];
         var sioInstanceGroups = [];
         for (var gi = 0; gi < groups.length; gi++) {
             var group = groups[gi];
-            var instanceRefsByCamera = new Map();
-            var labeledFrameRefsByCamera = new Map();
+            var instanceRefsByCamera = new CamRefMap();
             var igLucidMeta = {
                 instanceMeta: {},
                 identityId: (group.identityId != null && group.identityId >= 0) ? group.identityId : -1,
@@ -521,7 +584,6 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
                 var ref = refFor(gCamName, frameIdx, gInst);
                 if (!ref) continue;
                 instanceRefsByCamera.set(sioCamRef, ref);
-                labeledFrameRefsByCamera.set(sioCamRef, ref[0]);
                 refCount++;
                 // Slim metadata (#134): only non-reconstructable fields, only
                 // when set (trackIdx/type/score/occluded derive from the
@@ -549,13 +611,20 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
             }));
         }
         if (sioInstanceGroups.length === 0) continue;
-        var fgRefs = new Map();
-        for (var ig2 = 0; ig2 < sioInstanceGroups.length; ig2++) {
-            var m = sioInstanceGroups[ig2]._instanceRefsByCamera;
-            if (m) for (var e2 of m) fgRefs.set(e2[0], e2[1][0]);
-        }
+        // No `labeledFrameRefsByCamera` here: the write path
+        // (`writeSessions`/`instanceGroupMemberRows` in the vendored writer)
+        // only reads `frameGroup.labeledFrameByCamera` when a group carries
+        // CONCRETE instances (`_instanceByCamera`) — LUCID's ref-based groups
+        // never set that, so building this map was pure dead weight (one
+        // extra Map per frame, discarded unread) on top of the per-group
+        // `instanceRefsByCamera` above that the writer actually consumes.
+        // Verified in sleap-io.js 0.5.5: `instanceGroupMemberRows` computes
+        // `lfByCamera` only as `concreteInst && ... ? frameGroup.labeledFrameByCamera
+        // : void 0`, reads it only inside `if (instance && lfByCamera)` where
+        // `instance = concreteInst?.get(camera)`, and otherwise takes the pair
+        // straight from `instRefs.get(camera)`. Re-check on re-vendor.
         sioSession.frameGroups.set(frameIdx, new SIO.FrameGroup({
-            frameIdx: frameIdx, instanceGroups: sioInstanceGroups, labeledFrameRefsByCamera: fgRefs,
+            frameIdx: frameIdx, instanceGroups: sioInstanceGroups,
         }));
     }
 
@@ -727,7 +796,7 @@ export async function finalizeProjectWriter(writer, opts) {
  */
 export async function buildSessionSlpBytesStreaming(session, views, videoFiles, opts) {
     var ctx = createProjectWriterContext();
-    var refGraph = buildSessionRefGraph(session, views, videoFiles, ctx);
+    var refGraph = await buildSessionRefGraph(session, views, videoFiles, ctx);
     var writer = await openProjectWriter(ctx, [refGraph.sioSession], (opts || {}).provenance);
     try {
         streamSessionIntoWriter(writer, session, refGraph);
