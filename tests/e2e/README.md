@@ -50,3 +50,18 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   grouping, and 3D points survive. (Fails against the pre-fix session-folder
   loader, which rebuilt flat poses and dropped all of it; passes with the shared
   `restoreGroupingAndUnlink` path.)
+
+- **`save-session-3d-typed-sink.mjs`** — guards the `luc3d #185` local patch to
+  the vendored writer, which accumulates `/session_data/points_3d` and
+  `pred_points_3d` into a pre-sized `Float64Array` instead of one boxed
+  `Array(3|4)` per 3D keypoint (531,799 instance groups x 15 nodes = 7,976,985 of
+  them, an estimated ~400 MB of V8 pointer-compressed heap, on the real
+  180,210-frame x 5-camera project whose merged Save As OOM'd the renderer). Pins
+  the exact values written — a fully-null 3D row, an individually-null
+  coordinate, a missing point score — plus a 4,000-frame-group scenario
+  interleaving user and predicted 3D instances, since the patch's sizing
+  pre-pass must stay in lockstep with the write loop. Writes past the end of a
+  typed array are silently discarded, so an undercount would corrupt 3D points
+  with no error; the sink throws instead, and this test proves it. Every
+  assertion was validated against the pre-patch writer first, so it pins
+  equivalence rather than merely current behavior.

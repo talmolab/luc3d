@@ -3130,6 +3130,37 @@ pipeline) — the write-side companion to `SioLazyLoader`. The eager builder
 frame; on a ~108k×N lazy prediction session that re-OOMs and silently drops every
 unvisited frame (it only iterates the resident `frameGroups`).
 
+**Merged-save OOM: the binding constraint is V8, not WASM (luc3d #185).** A
+Chrome renderer hard-caps its JS heap near 4 GB (measured `jsHeapSizeLimit`
+3.76 GB headless; `--max-old-space-size` does **not** raise it, and the host's
+free RAM is irrelevant). On the real 180,210-frame × 5-camera project, Track All
+alone reaches **3,105 MB**, and Track All + Triangulate All leave a **2,891 MB**
+pre-save baseline — so the merged save has under 900 MB of headroom. A
+strip-and-GC attribution of that baseline (measured, own run at 2,877 MB):
+**2,276 MB (79%)** is the live `Instance` objects pinned by
+`session.instanceGroups` (see `pose/tracker.js` `commitTrackedFrame`, which
+defeats `sweepTrackAllFrames`' `releaseWindow`), 411 MB (14%) `group.points3d`
+as 15 boxed `[x,y,z]` per group, 132 MB (5%) `frameIdentityMap` +
+`trackOccupancy` at 2,627,453 string-keyed entries, 74 MB (3%)
+`group.observedPoints`. (`group.reprojections` and `state.triangulationResults`
+cost ~0 on this path — `groupByIdentityAndTriangulateAll` triangulates with
+`triangulateOnly`, so only 3 of 531,799 groups carry reprojections.)
+
+`writeSessions` in the vendored writer used to allocate an estimated ~400 MB on
+top of that as one boxed `Array(3)` per 3D keypoint (531,799 × 15 = 7,976,985 of
+them) purely to flatten them moments later; it now accumulates into a pre-sized
+`Float64Array` (~191 MB) whose backing store lives **outside** the capped heap
+(`// LUCID local patch (luc3d #185)`, documented in `CLAUDE.md`, guarded by
+`tests/e2e/save-session-3d-typed-sink.mjs`). Controlled A/B on the real project,
+same harness and baselines within 3 MB: **unpatched → renderer crash 13 s in
+(last checkpoint `after refGraph, before openProjectWriter`, i.e. inside
+`writeSessions`, not `buildSessionRefGraph`); patched → 1,404,804,682 bytes
+written in 49.5 s.** The h5wasm WASM heap was never the constraint (capped at
+2 GiB, only ~300 MB used) — the "hard ~4 GB WASM32 ceiling" diagnosis in PR #185
+is incorrect. Remaining headroom is thin, so the durable fix is still to stop
+pinning live `Instance`s per grouped frame and to store `group.points3d` /
+`frameIdentityMap` compactly.
+
 **Multi-session two-pass split (eric/fix-save follow-up).** `SIO.openSlpWriter`
 serializes `sessions_json`/`identities_json` (+ the SLP 2.8 columnar `/session_data`
 group holding 3D points + grouping) **synchronously at open time** (not

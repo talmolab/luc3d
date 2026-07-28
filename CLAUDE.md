@@ -105,6 +105,38 @@ python3 -m http.server 8080
   deliberately (coordinates only — f64 would add ~50% file size). Guarded by a
   dtype regression test in `tests/test-lazy-reopen.js`. **Re-apply after any
   re-vendor until upstream fixes #231** (grep the marker).
+  **LOCAL PATCH (luc3d #185):** `lib/sleap-io/chunk-X76PRJK6.js` `writeSessions`
+  accumulates the `/session_data` 3D-point tables (`points_3d`,
+  `pred_points_3d`) into a **pre-sized `Float64Array`** (`Float64RowSink` +
+  `createGzipFloatMatrixTyped`, sized by an exact counting pre-pass) instead of
+  pushing one boxed `Array(3|4)` per 3D keypoint (`coerce3dRow`) into a plain JS
+  array and holding them all live until `createGzipFloatMatrix` flattened them.
+  On the real 180,210-frame × 5-camera project that is 531,799 instance groups ×
+  15 nodes = **7,976,985** rows — an estimated **~400 MB** of boxed arrays (~48 B
+  per 3-double JSArray plus outer element pointers) sitting in V8's
+  **pointer-compressed heap, which a Chrome renderer hard-caps near 4 GB**
+  (measured `jsHeapSizeLimit` 3.76 GB headless; `--max-old-space-size` does NOT
+  raise it). A typed array's backing store is allocated OUTSIDE that cap, so
+  this moves the cost off the scarce resource — the table becomes one
+  7,976,985 × 3 × 8 B ≈ **191 MB** buffer. Measured end-to-end via a controlled
+  A/B (same harness, pre-save baselines within 3 MB — 2,891 MB unpatched vs
+  2,894 MB patched): merged "Save As" went from a **renderer OOM crash 13 s in**
+  to **succeeding — 1,404,804,682 bytes in 49.5 s**. The crash's last progress
+  checkpoint was `after refGraph, before openProjectWriter`, placing it inside
+  `writeSessions` rather than `buildSessionRefGraph`.
+  NOTE the WASM heap was never the constraint here: it is capped at
+  2 GiB (`getHeapMax` in `lib/h5wasm/h5wasm.iife.js`) and only ever holds
+  ~300 MB on this path — the "hard ~4 GB WASM32 ceiling" diagnosis in PR #185 is
+  wrong. Four patched sites, all marked `// LUCID local patch (luc3d #185)`;
+  `createGzipFloatMatrix` is retained because the `embeddings/*` writer still
+  uses it. The sink **throws on overflow** rather than letting an undercount
+  silently truncate 3D points (out-of-range typed-array writes are discarded
+  with no error). Guarded by `tests/e2e/save-session-3d-typed-sink.mjs` (exact
+  values incl. null rows / null coords / missing point scores, plus a
+  4,000-frame-group interleaved user+predicted scenario); those assertions were
+  validated against the pre-patch writer first, so they pin equivalence rather
+  than just current behavior. **Re-apply after any re-vendor** (grep the marker)
+  and report upstream to sleap-io.js.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
