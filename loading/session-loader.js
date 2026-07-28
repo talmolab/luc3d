@@ -2245,7 +2245,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
                 return new Identity(i, id.name || ('id_' + i), id.color || null);
             });
         }
-        if (lucid.frameIdentityMap) session.frameIdentityMap = new Map(lucid.frameIdentityMap);
+        if (lucid.frameIdentityMap) session.ingestFrameIdentityEntries(lucid.frameIdentityMap);
         if (lucid.trustTracks != null) session.trustTracks = lucid.trustTracks;
 
         session.lazyLoader = loader;

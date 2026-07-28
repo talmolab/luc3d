@@ -884,7 +884,7 @@ export function saveProject() {
                     }),
                     trustTracks: sess.trustTracks || false,
                     frameIdentityMap: sess.frameIdentityMap
-                        ? Array.from(sess.frameIdentityMap.entries())
+                        ? sess.exportFrameIdentityEntries()
                         : [],
                     videoManifest: sess.videoFileIndices.map(function(vfIdx) {
                         var vf = state.videoFiles[vfIdx];
@@ -930,7 +930,7 @@ export function saveProject() {
         }),
         trustTracks: state.session.trustTracks || false,
         frameIdentityMap: state.session.frameIdentityMap
-            ? Array.from(state.session.frameIdentityMap.entries())
+            ? state.session.exportFrameIdentityEntries()
             : [],
         videoManifest: (state.videoFiles || []).map(function (vf) {
             return { filename: vf.name, assignedCamera: vf.assignedCamera || null };
@@ -1498,10 +1498,7 @@ function _restoreProjectV2(data) {
     // per-frame entries after frame groups load (see end of this function).
     var legacyGlobalIdentities = data.trackIdentityMap || null;
     if (data.frameIdentityMap && data.frameIdentityMap.length > 0) {
-        if (!session.frameIdentityMap) session.frameIdentityMap = new Map();
-        for (var fmi = 0; fmi < data.frameIdentityMap.length; fmi++) {
-            session.frameIdentityMap.set(data.frameIdentityMap[fmi][0], data.frameIdentityMap[fmi][1]);
-        }
+        session.ingestFrameIdentityEntries(data.frameIdentityMap);
     }
 
     if (data.frames) {

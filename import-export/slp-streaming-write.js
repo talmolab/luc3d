@@ -381,7 +381,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     sioSession.metadata.lucid = {
         sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
-        frameIdentityMap: session.frameIdentityMap ? Array.from(session.frameIdentityMap.entries()) : [],
+        frameIdentityMap: session.frameIdentityMap ? session.exportFrameIdentityEntries() : [],
         identities: sessIdentitiesJson,
         skeleton: { name: session.skeleton.name || 'skeleton', nodes: session.skeleton.nodes, edges: session.skeleton.edges },
         tracks: session.tracks,

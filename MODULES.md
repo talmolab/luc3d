@@ -93,6 +93,47 @@ edit-group remove/add).
 
 ### pose/pose-data.js
 
+**`frameIdentityMap` packed keys (luc3d #185 follow-up #3).** `frameIdentityMap`
+maps (frameIdx, camera, raw trackIdx) → identityId with **one entry per 2D
+detection project-wide** — 2,627,447 of them on the real 180,210-frame ×
+5-camera project, a measured **132 MB** of a renderer JS heap that is hard-capped
+near 4 GB (the ceiling behind both the merged-save and project-reload failures).
+Keys are therefore packed into a single exact-integer `Number`:
+`frameIdx * 2^23 + camIdx * 2^17 + (trackIdx + 1)` — 30 bits of frame, 6 of
+camera index, 17 of `trackIdx + 1` (so the `-1` untracked sentinel packs as 0),
+53 total. Codec: `_fimPack`/`_fimUnpack`/`_fimIsPacked` (module-private) plus
+`Session._fimKey`/`_fimDecode`/`_fimCamIdx`.
+
+Every read/write goes through `Session` so the layout lives in one place:
+`setFrameIdentity`, `getFrameIdentityValue`, `hasFrameIdentity`,
+`deleteFrameIdentity`, and `frameIdentityEntries()` (a generator of decoded
+`{frameIdx, camName, trackIdx, identityId, key}` records, for the consumers that
+used to parse keys themselves — the ID timeline, `track-identity-ops`, the
+propagate remap). **Do not index `frameIdentityMap` directly**; a raw
+`"frame:cam:track"` string will simply miss.
+
+Tuples that cannot be packed (trackIdx > 131070, or a camera absent from
+`session.cameras`) fall back to the legacy string key so such a project keeps
+working rather than silently losing identities; `_fimDecode` handles both forms.
+
+**On-disk format is unchanged.** `exportFrameIdentityEntries()` emits the
+original `[["frameIdx:camName:trackIdx", identityId], ...]`, and
+`ingestFrameIdentityEntries()` accepts BOTH that and packed numbers — so every
+already-saved project (including the real 1.4 GB one) still loads, and files
+written now stay readable by older builds. Callers: the write side in
+`save-load.js`, `file-io.js`, `slp-streaming-write.js`; the read side in
+`save-load.js`, `slp-import.js`, `session-loader.js`. Guarded by the
+`frameIdentityMap packed-key codec` block in `tests/test-identity.js` (round-trip,
+-1 vs 0, cross-tuple collisions, unpackable fallback, dual-format ingest, export
+shape, colon-containing camera names) and by `tests/e2e/save-golden-digest.mjs`
+at the byte level.
+
+One deliberate exception: `track-identity-ops.js` `deleteTrackAt` still writes the
+legacy `"frame:cam:null"` STRING for entries on the deleted track. That is not
+representable in the packed space and consumers have always skipped it
+(`parseInt('null')` is `NaN`), so packing it would be a behaviour change rather
+than a refactor.
+
 **Purpose.** Pure data-model classes — no DOM, no I/O. The single source of
 truth for skeletons, cameras, instances, frame groups, identities, and the
 session graph that holds them.

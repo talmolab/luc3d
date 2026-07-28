@@ -1851,7 +1851,7 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
         frameIdentityMap: session.frameIdentityMap
-            ? Array.from(session.frameIdentityMap.entries())
+            ? session.exportFrameIdentityEntries()
             : [],
         identities: sessIdentitiesJson,
         skeleton: {
