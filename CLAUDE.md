@@ -165,6 +165,26 @@ python3 -m http.server 8080
   and `tests/test-slp-streaming-write.js`, and at the byte level by
   `tests/e2e/save-golden-digest.mjs` (the conversion is numerically bit-exact, so
   the digest MUST NOT move).
+  **LOCAL PATCH (luc3d #190):** `lib/sleap-io/chunk-X76PRJK6.js` `writeSessions`
+  accumulates the `/session_data` **struct** tables (`frame_groups`,
+  `instance_groups`, `instance_group_members`) into growable flat
+  `Float64GrowSink`s instead of pushing one boxed `Array` per row and holding
+  them all live until `createMatrixDataset` flattens them — the same fix #185
+  applied to the 3D-point tables, extended to the struct tables. On the real
+  project that is 531,799 + 531,799 + **2,627,453** rows. `instanceGroupMemberRows`
+  gained an allocation-free twin, `instanceGroupMemberRowsInto`, that appends
+  straight into the sink (the original is retained as module surface — **keep the
+  two in sync**). Measured with `tests/e2e/_bench-writesessions.mjs` at 400,000
+  groups / 2,000,000 members: writer peak heap **1,190 MB -> 1,008 MB** and write
+  time 3,767 -> 3,285 ms; ~240 MB at the real project's scale. Time was never the
+  problem — that bench shows `writeSessions` is **linear** (25.2 -> 9.4 us/group
+  as fixed costs amortize) — this targets the allocation, because the writer's
+  ~1 GB of temporaries landing on top of an already-large baseline pushes the
+  renderer past its hard ~4 GB cap into a GC death spiral (a save that ran 30+
+  minutes without finishing). Six patched sites plus `Float64GrowSink` /
+  `createMatrixDatasetTyped`, all marked `// LUCID local patch (luc3d #190)`.
+  Flushed bytes are unchanged — guarded by `tests/e2e/save-golden-digest.mjs`.
+  **Re-apply after any re-vendor** (grep the marker) and report upstream.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
