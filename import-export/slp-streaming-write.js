@@ -62,6 +62,12 @@ function numAt(arr, i, dflt) {
     return isNaN(v) ? (dflt === undefined ? 0 : dflt) : v;
 }
 
+/** Monotonic clock, tolerant of environments without `performance`. */
+function _now() {
+    return (typeof performance !== 'undefined' && performance.now)
+        ? performance.now() : Date.now();
+}
+
 // Yield a real macrotask. `buildSessionRefGraph`'s ref-resolution loop runs over
 // every grouped frame in the project (180,210 of them on the real 5-camera bug
 // project — a ~2.5 s unbroken synchronous burst), so it periodically awaits this
@@ -800,12 +806,30 @@ export async function finalizeProjectWriter(writer, opts) {
  * @returns {Promise<Uint8Array|null>}
  */
 export async function buildSessionSlpBytesStreaming(session, views, videoFiles, opts) {
+    // Per-phase timing. A merged save of a fully tracked+triangulated project is
+    // inherently slow (tens of seconds on the real 180,210-frame x 5-camera one),
+    // which is indistinguishable from a hang without this. Each line prints as
+    // its phase COMPLETES, so the phase currently running is the one after the
+    // last line printed.
+    var _t0 = _now(), _tPhase = _t0;
+    var _lap = function (label) {
+        var now = _now();
+        console.log('[slp-streaming-write] phase: ' + label + ' — ' +
+            Math.round(now - _tPhase) + ' ms (total ' + Math.round(now - _t0) + ' ms)');
+        _tPhase = now;
+    };
+
     var ctx = createProjectWriterContext();
     var refGraph = await buildSessionRefGraph(session, views, videoFiles, ctx);
+    _lap('1/4 buildSessionRefGraph');
     var writer = await openProjectWriter(ctx, [refGraph.sioSession], (opts || {}).provenance);
+    _lap('2/4 openProjectWriter (writes /session_data + sessions_json)');
     try {
         streamSessionIntoWriter(writer, session, refGraph);
-        return await finalizeProjectWriter(writer, opts);
+        _lap('3/4 streamSessionIntoWriter (2D frames)');
+        var out = await finalizeProjectWriter(writer, opts);
+        _lap('4/4 finalizeProjectWriter (flush to disk)');
+        return out;
     } catch (err) {
         try { if (typeof writer.dispose === 'function') writer.dispose(); } catch (e) { /* ignore */ }
         throw err;
