@@ -631,7 +631,7 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
         if (lucidMeta.trustTracks != null) session.trustTracks = lucidMeta.trustTracks;
         var legacyGlobalIdentities = lucidMeta.trackIdentityMap || null;
         if (lucidMeta.frameIdentityMap) {
-            session.frameIdentityMap = new Map(lucidMeta.frameIdentityMap);
+            session.ingestFrameIdentityEntries(lucidMeta.frameIdentityMap);
         }
 
         var camKeyToName = {};

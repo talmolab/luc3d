@@ -41,6 +41,26 @@
             frameIdentityMap: new Map(),
             _hiddenTracks: new Set(),
             _hiddenIdentities: new Set(),
+            // Mirrors Session's frameIdentityMap key plumbing. Deliberately
+            // keeps the LEGACY string keys, so these ops tests exercise the
+            // codec's legacy-key branch (`_fimDecode` falling back to string
+            // parsing) rather than only the packed path.
+            _fimKey: function (frameIdx, cameraName, trackIdx) {
+                return frameIdx + ':' + cameraName + ':' + trackIdx;
+            },
+            frameIdentityEntries: function* () {
+                for (var e of this.frameIdentityMap) {
+                    var k = String(e[0]);
+                    var i1 = k.indexOf(':'), i2 = k.lastIndexOf(':');
+                    if (i1 < 0 || i2 <= i1) continue;
+                    yield {
+                        frameIdx: parseInt(k.substring(0, i1), 10),
+                        camName: k.substring(i1 + 1, i2),
+                        trackIdx: parseInt(k.substring(i2 + 1), 10),
+                        identityId: e[1], key: e[0],
+                    };
+                }
+            },
             // Same contract as Session.getIdentityIdForTrack.
             getIdentityIdForTrack: function (cameraName, trackIdx, frameIdx) {
                 if (frameIdx == null) return null;

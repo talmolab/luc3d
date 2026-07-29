@@ -168,15 +168,19 @@ export function deleteTrackAt(session, idx) {
     // instances also carry identity on `group.identityId`, left untouched.)
     if (session.frameIdentityMap) {
         var remapped = new Map();
-        for (var [key, val] of session.frameIdentityMap) {
-            var parts = key.split(':');
-            var t = parseInt(parts[parts.length - 1], 10);
-            var newT;
-            if (t === idx) newT = 'null';
-            else if (t > idx) newT = String(t - 1);
-            else newT = String(t);
-            var prefix = parts.slice(0, parts.length - 1).join(':');
-            remapped.set(prefix + ':' + newT, val);
+        for (var rec of session.frameIdentityEntries()) {
+            var t = rec.trackIdx;
+            if (t === idx) {
+                // Deleted track: entries move to the trackless key. Kept as the
+                // legacy `"frame:cam:null"` STRING exactly as before — it is not
+                // representable in the packed space, and consumers have always
+                // skipped it (parseInt('null') is NaN), so packing it would be a
+                // behaviour change, not a refactor.
+                remapped.set(rec.frameIdx + ':' + rec.camName + ':null', rec.identityId);
+            } else {
+                remapped.set(session._fimKey(rec.frameIdx, rec.camName, t > idx ? t - 1 : t),
+                    rec.identityId);
+            }
         }
         session.frameIdentityMap = remapped;
     }

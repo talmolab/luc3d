@@ -1714,17 +1714,16 @@ export class Timeline {
             // everything (>=0 → identityId, <0 → explicit no-identity), no
             // per-key helper calls needed.
             if (session.frameIdentityMap) {
-                for (var [fiKey, fiVal] of session.frameIdentityMap) {
-                    var parsed = _parseFrameIdentityKey(fiKey);
-                    if (!parsed || materializedFrames.has(parsed.frameIdx)) continue;
-                    if (fiVal < 0) {
-                        var fbNKey = NO_ID_KEY + ':' + parsed.camName;
+                for (var rec of session.frameIdentityEntries()) {
+                    if (materializedFrames.has(rec.frameIdx)) continue;
+                    if (rec.identityId < 0) {
+                        var fbNKey = NO_ID_KEY + ':' + rec.camName;
                         if (!idCamFrames[fbNKey]) idCamFrames[fbNKey] = new Set();
-                        idCamFrames[fbNKey].add(parsed.frameIdx);
+                        idCamFrames[fbNKey].add(rec.frameIdx);
                     } else {
-                        var fbKey = fiVal + ':' + parsed.camName;
+                        var fbKey = rec.identityId + ':' + rec.camName;
                         if (!idCamFrames[fbKey]) idCamFrames[fbKey] = new Set();
-                        idCamFrames[fbKey].add(parsed.frameIdx);
+                        idCamFrames[fbKey].add(rec.frameIdx);
                     }
                 }
             }

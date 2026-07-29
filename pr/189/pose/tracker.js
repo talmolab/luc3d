@@ -359,7 +359,7 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
                 var aTrack = aInsts[aii].trackIdx;
                 if (assignments.has(acn + ':' + aTrack)) continue;
                 if (session.frameIdentityMap &&
-                    session.frameIdentityMap.has(fi + ':' + acn + ':' + aTrack)) continue;
+                    session.hasFrameIdentity(fi, acn, aTrack)) continue;
                 session.setFrameIdentity(fi, acn, aTrack, EXPLICIT_NONE);
             }
         }

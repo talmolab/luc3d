@@ -24,7 +24,9 @@
     "test:mediabunny-fallback-warning": "node mediabunny-fallback-status-warning.mjs",
     "test:arrow-key-coalesced": "node arrow-key-coalesced-stepping.mjs",
     "test:mediabunny-bframe-order": "node mediabunny-bframe-decode-order.mjs",
-    "test:save-3d-typed-sink": "node save-session-3d-typed-sink.mjs"
+    "test:save-3d-typed-sink": "node save-session-3d-typed-sink.mjs",
+    "test:save-golden": "node save-golden-digest.mjs",
+    "test:save-golden:record": "node save-golden-digest.mjs --write-golden"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

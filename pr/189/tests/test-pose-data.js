@@ -428,8 +428,8 @@
 
             // propagateIdentity starts at frame 50, so it must not write any
             // per-frame entry for the earlier frame 10.
-            assertFalse(session.frameIdentityMap.has('10:cam0:0'));
-            assertFalse(session.frameIdentityMap.has('10:cam0:1'));
+            assertFalse(session.hasFrameIdentity(10, 'cam0', 0));
+            assertFalse(session.hasFrameIdentity(10, 'cam0', 1));
         });
 
         it('does nothing for frames where the trackIdx is absent', function () {
@@ -445,8 +445,8 @@
 
             // Frame 200: t0 written (B), but t1 doesn't exist there
             // so no per-frame override is created for it.
-            assertEqual(session.frameIdentityMap.get('200:cam0:0'), 2);
-            assertFalse(session.frameIdentityMap.has('200:cam0:1'));
+            assertEqual(session.getFrameIdentityValue(200, 'cam0', 0), 2);
+            assertFalse(session.hasFrameIdentity(200, 'cam0', 1));
         });
 
         it('returns the count of frames updated', function () {
@@ -552,9 +552,9 @@
             const aliceTrack = session.tracks.indexOf('Alice');
             const bobTrack = session.tracks.indexOf('Bob');
             assertTrue(aliceTrack >= 0 && bobTrack >= 0, 'both identity names became track names');
-            assertEqual(session.frameIdentityMap.get('90000:cam0:' + bobTrack), idB.id,
+            assertEqual(session.getFrameIdentityValue(90000, 'cam0', bobTrack), idB.id,
                 'the evicted frame\'s identity survives, remapped to its new trackIdx');
-            assertEqual(session.frameIdentityMap.get('50:cam0:' + aliceTrack), idA.id,
+            assertEqual(session.getFrameIdentityValue(50, 'cam0', aliceTrack), idA.id,
                 'the resident frame\'s identity also survives, remapped consistently');
 
             // Resident instance gets its live trackIdx updated too (GUI feedback).
@@ -704,7 +704,7 @@
                 'evicted frame 90000 got its identity stamped from the lazy sweep');
             assertEqual(session.getIdentityIdForTrack('cam0', 1, 90001), session.getOrCreateIdentityForTrack(1).id,
                 'evicted frame 90001 got its identity stamped from the lazy sweep');
-            assertFalse(session.frameIdentityMap.has('90002:cam0:-1'), 'trackless row produces no identity entry');
+            assertFalse(session.hasFrameIdentity(90002, 'cam0', -1), 'trackless row produces no identity entry');
         });
 
         it('aligns instanceGroups.identityId across many frames without O(frames^2) blowup (freeze regression)', function () {
