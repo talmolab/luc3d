@@ -1525,9 +1525,9 @@ function _restoreProjectV2(data) {
                     if (groupData.reprojections) {
                         group.reprojections = groupData.reprojections;
                     }
-                    if (groupData.observedPoints) {
-                        group.observedPoints = groupData.observedPoints;
-                    }
+                    // groupData.observedPoints is ignored on restore: it is now
+                    // DERIVED from the group's instances, which are rebuilt just
+                    // below. Still written on save for backward compat (luc3d #189).
 
                     for (var camName in groupData.instances) {
                         var instData = groupData.instances[camName];
@@ -1628,8 +1628,10 @@ function _restoreProjectV2(data) {
                     // the Undistorted headline isn't blank for loaded projects.
                     var trErrorsUndist = {};
                     var trTotalErrU = 0, trTotalCountU = 0;
+                    // Derived (luc3d #189) — hoist, it allocates per access.
+                    var trObserved = trGroup.observedPoints;
                     for (var trCamName in trGroup.reprojections) {
-                        var trObs = trGroup.observedPoints ? trGroup.observedPoints[trCamName] : null;
+                        var trObs = trObserved[trCamName] || null;
                         var trRep = trGroup.reprojections[trCamName];
                         if (!trObs || !trRep) continue;
                         trErrors[trCamName] = [];

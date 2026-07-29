@@ -478,10 +478,6 @@ export async function groupByIdentityAndTriangulateAll() {
             var triResult = triangulateAndReproject(group, cameras, { triangulateOnly: true });
             group.points3d = triResult.points3d;
             group.triangulationMethod = triResult.method;
-            group.observedPoints = {};
-            for (var _oci = 0; _oci < camNames.length; _oci++) {
-                group.observedPoints[camNames[_oci]] = bucket[camNames[_oci]].points;
-            }
             group.markClean();
 
             totalGrouped++;
@@ -659,12 +655,10 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             // cost never needed by SLP save/export (see triangulation.js's
             // getOrComputeReprojectedInstance doc comment). Display and export
             // instead resolve on demand from `.reprojections` above.
-            group.observedPoints = {};
             group.usedCameras = new Set();
             for (var ck = 0; ck < groupCameras.length; ck++) {
                 var camInst = group.getInstance(groupCameras[ck].name);
                 if (camInst) {
-                    group.observedPoints[groupCameras[ck].name] = camInst.points;
                     if (camInst.points.some(function (p) { return p != null; })) {
                         group.usedCameras.add(groupCameras[ck].name);
                     }

@@ -695,12 +695,12 @@ export function computeInstanceDistance(pointsA, pointsB, weights) {
  *   - each Camera has .name and .projectionMatrix (3x4)
  *
  * @returns {{
- *   points3d: (number[]|null)[],
+ *   points3d: Float64Array,
  *   reprojections: Object.<string, (number[]|null)[]>,
  *   errors: Object.<string, (number|null)[]>,
  *   meanError: number|null
  * }}
- *   points3d: [X,Y,Z] or null for each keypoint
+ *   points3d: flat [X,Y,Z] per keypoint, all-NaN triple where untriangulable
  *   reprojections: { cameraName: [[x,y], ...] } reprojected 2D points per camera
  *   errors: { cameraName: [error, ...] } per-keypoint reprojection errors per camera
  *   meanError: scalar mean error across all cameras and keypoints
@@ -2061,12 +2061,10 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
                 // group here was a major memory cost never needed by SLP save/
                 // export. Display and export instead resolve on demand via
                 // getOrComputeReprojectedInstance, from `.reprojections` above.
-                group.observedPoints = {};
                 group.usedCameras = new Set();
                 for (var ck = 0; ck < groupCameras.length; ck++) {
                     var camInst = group.getInstance(groupCameras[ck].name);
                     if (camInst) {
-                        group.observedPoints[groupCameras[ck].name] = camInst.points;
                         if (camInst.points.some(function (p) { return p != null; })) {
                             group.usedCameras.add(groupCameras[ck].name);
                         }
@@ -2146,14 +2144,6 @@ export function reTriangulateGroup(instanceGroup) {
         instanceGroup.points3d = oldPoints3d;
         instanceGroup.reprojections = oldReprojections;
         if (oldReprojInstances) instanceGroup.reprojectedInstances = oldReprojInstances;
-    }
-    instanceGroup.observedPoints = {};
-    for (var ci = 0; ci < groupCameras.length; ci++) {
-        var cam = groupCameras[ci];
-        var inst = instanceGroup.getInstance(cam.name);
-        if (inst) {
-            instanceGroup.observedPoints[cam.name] = inst.points;
-        }
     }
     instanceGroup.markClean();
 
@@ -2267,10 +2257,6 @@ export function ensureGroupsFromIdentities(session, frameIdx) {
         var _group = new InstanceGroup(Date.now() + _identityId, _identityId);
         for (var _ci = 0; _ci < _camNames.length; _ci++) {
             _group.addInstance(_camNames[_ci], _bucket[_camNames[_ci]]);
-        }
-        _group.observedPoints = {};
-        for (var _ci2 = 0; _ci2 < _camNames.length; _ci2++) {
-            _group.observedPoints[_camNames[_ci2]] = _bucket[_camNames[_ci2]].points;
         }
         if (!session.instanceGroups.has(frameIdx)) {
             session.instanceGroups.set(frameIdx, []);
@@ -2404,12 +2390,10 @@ export function triangulateCurrentFrame(method) {
             group.reprojections = result.reprojections;
             group.points3d = result.points3d;
             storeReprojectedInstances(group, result, cameras);
-            group.observedPoints = {};
             group.usedCameras = new Set();
             for (const cam of groupCameras) {
                 const inst = group.getInstance(cam.name);
                 if (inst) {
-                    group.observedPoints[cam.name] = inst.points;
                     const hasAny = inst.points.some(function (p) { return p != null; });
                     if (hasAny) group.usedCameras.add(cam.name);
                 }
@@ -2576,12 +2560,10 @@ export async function triangulateAllFrames(method) {
                 // memory cost never needed by SLP save/export (see
                 // getOrComputeReprojectedInstance's doc comment). Display and
                 // export instead resolve on demand from `.reprojections` above.
-                group.observedPoints = {};
                 group.usedCameras = new Set();
                 for (var ck = 0; ck < groupCameras2.length; ck++) {
                     var camInst = group.getInstance(groupCameras2[ck].name);
                     if (camInst) {
-                        group.observedPoints[groupCameras2[ck].name] = camInst.points;
                         if (camInst.points.some(function (p) { return p != null; })) {
                             group.usedCameras.add(groupCameras2[ck].name);
                         }

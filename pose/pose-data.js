@@ -678,6 +678,36 @@ export class InstanceGroup {
     }
 
     /**
+     * The 2D points paired with this group's reprojections, per camera —
+     * `{ cameraName: Instance.points }` for every member instance.
+     *
+     * DERIVED, not stored (luc3d #189). It was previously an own property that
+     * nine sites rebuilt as exactly this object right after triangulating, and
+     * that two more hand-patched on member add/remove to "keep observedPoints in
+     * sync" — the sync a getter does for free. As a stored object it was 531,799
+     * plain objects on the real project, a measured 74 MB of the ~4 GB
+     * pointer-compressed heap that both the merged save and the project reload
+     * run out of.
+     *
+     * Read-only ON PURPOSE: there is no setter, so a leftover
+     * `group.observedPoints = ...` throws a TypeError in strict mode (all ES
+     * modules) rather than silently reintroducing a stored copy that can drift
+     * from `instances`.
+     *
+     * ALLOCATES a fresh object per access — hoist it into a local before reading
+     * it per camera in a loop.
+     *
+     * @returns {Object.<string, (number[]|null)[]>}
+     */
+    get observedPoints() {
+        var out = {};
+        for (var [camName, inst] of this.instances) {
+            if (inst && inst.points) out[camName] = inst.points;
+        }
+        return out;
+    }
+
+    /**
      * Mark this group as needing re-triangulation.
      */
     markDirty() {

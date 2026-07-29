@@ -129,12 +129,6 @@ export function drawAllOverlays(frameIdx) {
                 var _triRes = triangulateAndReproject(_grp, state.session.cameras);
                 _grp.reprojections = _triRes.reprojections;
                 storeReprojectedInstances(_grp, _triRes, state.session.cameras);
-                _grp.observedPoints = {};
-                for (var _rc = 0; _rc < state.session.cameras.length; _rc++) {
-                    var _cam = state.session.cameras[_rc];
-                    var _inst = _grp.getInstance(_cam.name);
-                    if (_inst) _grp.observedPoints[_cam.name] = _inst.points;
-                }
                 // Store in triangulationResults for info panel
                 if (!_lazyFrameResults) _lazyFrameResults = [];
                 _lazyFrameResults.push({

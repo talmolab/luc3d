@@ -163,7 +163,6 @@ export function purgeTriangulationDataForGroup(frameIdx, group) {
         group.reprojectedInstances.clear();
     }
     group.reprojections = null;
-    group.observedPoints = null;
     group.points3d = null;
     var existing = state.triangulationResults.get(frameIdx);
     if (existing) {
@@ -570,12 +569,6 @@ export function runAutomaticAssignment(selectedViewNames) {
             group.points3d = result.points3d;
             group.reprojections = result.reprojections;
             storeReprojectedInstances(group, result, cameras);
-            group.observedPoints = {};
-            for (var cc = 0; cc < groupCameras.length; cc++) {
-                var cam = groupCameras[cc];
-                var inst = group.getInstance(cam.name);
-                if (inst) group.observedPoints[cam.name] = inst.points;
-            }
             group.markClean();
         }
     }
@@ -773,12 +766,6 @@ export function runTrackedAssignment(viewNames, prevGroups) {
                 group.points3d = result.points3d;
                 group.reprojections = result.reprojections;
                 storeReprojectedInstances(group, result, cameras);
-                group.observedPoints = {};
-                for (var cci = 0; cci < groupCameras.length; cci++) {
-                    var cam2 = groupCameras[cci];
-                    var inst2 = group.getInstance(cam2.name);
-                    if (inst2) group.observedPoints[cam2.name] = inst2.points;
-                }
                 group.markClean();
             }
 

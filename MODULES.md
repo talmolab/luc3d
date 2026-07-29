@@ -167,6 +167,29 @@ the distinction. `null` is still accepted on the way in (`fromBoxedPoints3d`,
 the JSON project format (`save-load.js`) and the `points3d.h5` export
 (`file-io.js`) both go through `toBoxedPoints3d`.
 
+**`observedPoints` is derived, not stored (luc3d #189).**
+`InstanceGroup.observedPoints` — the 2D points paired with the group's
+reprojections, `{cameraName: Instance.points}` — is a **getter over
+`instances`**, not an own property. Nine sites used to rebuild exactly that
+object right after triangulating, and two more hand-patched it on member
+add/remove "to keep observedPoints in sync"; the getter does that sync by
+construction. As stored objects it was 531,799 of them on the real project, a
+measured **74 MB** of the ~4 GB cage.
+
+There is **no setter**: a stray `group.observedPoints = ...` throws a TypeError
+in the app (ES modules are always strict) and is silently discarded in the
+classic-script test harness — either way it cannot reinstate a stored copy that
+drifts from `instances`, which was a real bug class (see
+`tests/test-edit-group-fixes.js`).
+
+It **allocates a fresh object per access** — hoist it into a local before reading
+per-camera in a loop (`slp-import.js`, `save-load.js` do); the per-frame overlay
+draw goes straight to `group.getInstance(view).points` instead.
+
+`purgeTriangulationDataForGroup` no longer nulls it: every consumer gates on
+`points3d && reprojections`, which the purge still clears. The JSON project
+format still WRITES it for backward compat, but ignores it on restore.
+
 **Purpose.** Pure data-model classes — no DOM, no I/O. The single source of
 truth for skeletons, cameras, instances, frame groups, identities, and the
 session graph that holds them.

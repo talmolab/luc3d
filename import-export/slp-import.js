@@ -455,7 +455,8 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  * (a real cage5 project is 108k frames / 427k groups / 1.25M members / 7.26M 3D
  * points — the eager reopen OOMs a 4.4 GB tab; this reproduces the ~2.2 GB
  * save-time footprint instead):
- *  - **Reuses** each `Instance3D.points` array in place (`group.points3d = i3d.points`)
+ *  - **Reuses** each `Instance3D.points` array in place (`asPoints3d` passes the
+ *    reader's flat Float64Array through uncopied)
  *    rather than copying — avoids a second 7.26M-coord allocation.
  *  - **Releases** each typed `FrameGroup` from `typedSession.frameGroups` right
  *    after building its LUCID groups, so the typed graph shrinks as the LUCID one
@@ -1098,19 +1099,16 @@ export async function handleLoadSlpFile(slpFile) {
                         grp.reprojections = reprojResult.reprojections;
                         storeReprojectedInstances(grp, reprojResult, session.cameras);
 
-                        // Build observedPoints from group's 2D instances
-                        grp.observedPoints = {};
-                        for (var ci3 = 0; ci3 < session.cameras.length; ci3++) {
-                            var obsInst = grp.getInstance(session.cameras[ci3].name);
-                            if (obsInst) grp.observedPoints[session.cameras[ci3].name] = obsInst.points;
-                        }
+                        // `observedPoints` is derived from grp.instances — hoist
+                        // it once, it allocates per access (luc3d #189).
+                        var grpObserved = grp.observedPoints;
 
                         // Compute per-camera reprojection errors (distorted/native
                         // pixel space): re-distorted reprojection vs raw observation.
                         var trErrors = {};
                         var trTotalErr = 0, trTotalCount = 0;
                         for (var trCamName in grp.reprojections) {
-                            var trObs = grp.observedPoints[trCamName];
+                            var trObs = grpObserved[trCamName];
                             var trRep = grp.reprojections[trCamName];
                             if (trObs && trRep) {
                                 trErrors[trCamName] = computeReprojectionErrors(trObs, trRep);
@@ -1132,7 +1130,7 @@ export async function handleLoadSlpFile(slpFile) {
                         for (var ciu = 0; ciu < session.cameras.length; ciu++) {
                             var camU = session.cameras[ciu];
                             if (!camU.projectionMatrix) continue;
-                            var rawObsU = grp.observedPoints[camU.name];
+                            var rawObsU = grpObserved[camU.name];
                             if (!rawObsU) continue;
                             var idealRep = reprojectPoints(grp.points3d, camU.projectionMatrix);
                             var obsUndist = [];

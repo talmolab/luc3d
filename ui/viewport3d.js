@@ -812,7 +812,7 @@ export class Viewport3D {
      *   - Colors determined by track index via getTrackColor
      *
      * @param {InstanceGroup[]} instanceGroups - Array of InstanceGroup objects
-     *        for the current frame. Each should have .points3d (array of [x,y,z]
+     *        for the current frame. Each should have .points3d (flat Float64Array
      *        or null per node) and .trackIdx.
      */
     updateSkeleton(instanceGroups) {

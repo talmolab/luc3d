@@ -557,7 +557,6 @@ export function setupInteraction() {
                     }
                     group.reprojections = predGroup.reprojections || {};
                     group.points3d = predGroup.points3d;
-                    group.observedPoints = predGroup.observedPoints;
                     predGroup.reprojections = null;
                     predGroup.points3d = null;
                 }
@@ -758,11 +757,9 @@ export function setupInteraction() {
             // Remove from group
             group.instances.delete(viewName);
 
-            // Keep observedPoints in sync so the reprojection error
-            // vector for this view stops drawing immediately.
-            if (group.observedPoints) {
-                delete group.observedPoints[viewName];
-            }
+            // (`observedPoints` is derived from `group.instances`, so the
+            // reprojection-error vector for this view stops drawing as soon as
+            // the member is deleted above — no hand-sync needed. luc3d #189.)
 
             // Remove from FrameGroup linked instances
             if (fg) {
@@ -790,11 +787,10 @@ export function setupInteraction() {
             // Add to group (keep instance's original trackIdx for color consistency)
             group.addInstance(viewName, inst);
 
-            // Record the new instance's points as observed so the
-            // reprojection error vector connecting this view to its
-            // (existing) reprojected projection draws immediately.
-            group.observedPoints = group.observedPoints || {};
-            group.observedPoints[viewName] = inst.points;
+            // (The new instance's points become `observedPoints` automatically —
+            // it is derived from `group.instances` — so the reprojection error
+            // vector connecting this view to its existing reprojected projection
+            // draws immediately. luc3d #189.)
 
             // If the add introduces mixed state (e.g., a user added
             // to an all-predicted group, or a predicted added to a

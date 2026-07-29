@@ -1685,8 +1685,9 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
  * @param {Object} frameGroup - FrameGroup for the current frame; has per-camera
  *        instance arrays, e.g. frameGroup.instances[viewName] = [Instance, ...]
  * @param {Array}  instanceGroups - InstanceGroup[] for current frame; each has:
- *        .trackIdx, .reprojections[viewName] = [x,y][] or null,
- *        .observedPoints[viewName] = [x,y][] or null
+ *        .trackIdx, .reprojections[viewName] = [x,y][] or null, and
+ *        .observedPoints[viewName] = [x,y][] or null (a DERIVED getter over
+ *        .instances — allocates per access, so hoist it out of loops)
  * @param {Object} session - Session object with .cameras, .skeleton
  * @param {Object} [options]
  * @param {boolean} [options.showDetected]    - Show original 2D detections (default true)
@@ -1979,7 +1980,11 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             // Error vectors: need both observed and reprojected
             const reprojPtsForErrors = group.reprojections ? group.reprojections[viewName] : null;
             if (showErrors && reprojPtsForErrors) {
-                const observedPts = group.observedPoints ? group.observedPoints[viewName] : null;
+                // Straight to the member instance rather than group.observedPoints,
+                // which is derived and would allocate a whole object per view
+                // inside this per-frame draw loop (luc3d #189).
+                const observedInst = group.getInstance(viewName);
+                const observedPts = observedInst ? observedInst.points : null;
                 if (observedPts) {
                     drawReprojectionErrors(ctx, observedPts, reprojPtsForErrors, reprojRender);
                 }
@@ -2361,8 +2366,11 @@ export function getFrameStats(frameGroup, instanceGroups, cameras) {
         const group = instanceGroups[g];
         const trackIdx = group.identityId >= 0 ? group.identityId : g;
         const reproj = group.reprojections;
+        // Derived (luc3d #189) — hoisted, since each access rebuilds the object.
+        // It is never null now, so the old `!observed` skip becomes an emptiness
+        // check: a group with no member instances contributes no errors.
         const observed = group.observedPoints;
-        if (!reproj || !observed) continue;
+        if (!reproj || Object.keys(observed).length === 0) continue;
 
         if (!stats.perTrackErrors[trackIdx]) {
             stats.perTrackErrors[trackIdx] = { sum: 0, max: 0, count: 0 };
