@@ -238,3 +238,45 @@ One caveat worth stating explicitly, because it misled us for a while:
 ~4 GB cap does not apply to them.** Once data moves into typed arrays,
 `usedJSHeapSize` stops being a proxy for crash risk and understates the benefit
 of exactly the change you want to make.
+
+---
+
+## 7. `openFromFile` takes the WORKERFS branch on the main thread, where it aborts
+
+**File:** `chunk-X76PRJK6.js` (`openFromFile`)
+**Severity:** hard abort of the h5wasm module; currently latent for LUCID.
+
+```js
+if (fs.mount && fs.filesystems && fs.filesystems.WORKERFS) {
+  fs.mount(fs.filesystems.WORKERFS, { files: [file] }, mountPath);   // <-- aborts
+  ...
+}
+const buffer = new Uint8Array(await file.arrayBuffer());             // <-- never reached
+fs.writeFile(localPath, buffer);
+```
+
+`FS.filesystems.WORKERFS` is **present** on the main thread — it is in the
+`filesystems` table regardless — but mounting it there aborts the module.
+Measured with `tests/e2e/_diag-h5-mount.mjs`:
+
+```
+filesystems : [ "MEMFS", "IDBFS", "WORKERFS" ]
+hasWORKERFS : true
+mountWorks  : false     Aborted(undefined). Build with -sASSERTIONS for more info.
+```
+
+So the guard is testing the wrong thing: availability in the table does not imply
+mountability on this thread, and because the `fs.mount(...)` call is not wrapped
+in `try`, the buffer fallback below it is unreachable. Any caller that reaches
+`openFromFile` from the main thread with a `File` kills the module rather than
+falling back.
+
+**Fix:** gate on the execution context (`typeof WorkerGlobalScope !== 'undefined'`)
+or wrap the mount in `try/catch` and fall through to the buffer path on failure.
+The second is strictly better — it also covers future environments where WORKERFS
+exists but refuses a particular file.
+
+Worth noting the fallback is not free either: it copies the whole file into the
+WASM heap, which `getHeapMax()` caps at 2 GiB. For a 1.4 GB project that leaves
+very little room for anything else, so the WORKERFS path is the one you want to
+actually work.

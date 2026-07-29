@@ -249,6 +249,8 @@ try {
     if (upto >= 5 && (bytesWritten > 0 || RELOAD_FILE)) {
         log(`\n[${el()}] === STAGE reload ===`);
         const servedName = RELOAD_FILE ? path.basename(RELOAD_FILE) : path.basename(OUT_SLP);
+        const RELOAD_ABS = path.isAbsolute(RELOAD_FILE || '')
+            ? RELOAD_FILE : path.join(repoRoot, servedName);
         const page2 = await browser.newPage();
         page2.on('pageerror', e => log(`  [${el()}] [p2 pageerror] ` + String(e).slice(0, 300)));
         page2.on('crash', () => { log(`  [${el()}] *** p2 RENDERER CRASHED ***`); fails++; });
@@ -261,7 +263,10 @@ try {
             setInterval(() => {
                 for (const b of Array.from(document.querySelectorAll('button'))) {
                     const t = b.textContent.trim();
-                    if ((t === 'Continue' || t === 'Skip' || t === 'Skip Videos' ||
+                    // "Skip \u2014 Load Videos Later" is the one that lets
+                    // handleLoadProjectSlpLazy actually RETURN. Until it does, the
+                    // suspended async frame pins every local it holds (~2.5 GB).
+                    if ((t === 'Continue' || t.startsWith('Skip') ||
                          t === 'Cancel' || t === 'Close') && b.offsetParent !== null) b.click();
                 }
             }, 250);
@@ -271,20 +276,32 @@ try {
         // attach-videos modal that never resolves headlessly. Everything under
         // test (grouping + 3D reconstruction) completes before that await, so
         // poll the resulting state instead of blocking on the whole chain.
-        await page2.evaluate((name) => {
+        // Hand the loader a DISK-BACKED File via a real <input type=file>, the
+        // way the user's file picker does. Fetching the 1.4 GB into an
+        // ArrayBuffer and wrapping it in `new File([buf])` would pin the whole
+        // file in renderer memory for the entire run — ~1.4 GB of pressure the
+        // real app never carries, and enough on its own to decide whether a
+        // subsequent save survives.
+        await page2.evaluate(() => {
+            const inp = document.createElement('input');
+            inp.type = 'file';
+            inp.id = '__reloadPicker';
+            inp.style.cssText = 'position:fixed;left:-9999px';
+            document.body.appendChild(inp);
+        });
+        await page2.setInputFiles('#__reloadPicker', RELOAD_ABS);
+        await page2.evaluate(() => {
             window.__reload = { done: false, err: null, t0: performance.now() };
             (async () => {
                 try {
                     const sl = await import('/loading/session-loader.js');
-                    const resp = await fetch('/' + name);
-                    const buf = await resp.arrayBuffer();
-                    const f = new File([buf], name);
+                    const f = document.getElementById('__reloadPicker').files[0];
                     sl.handleLoadProjectSlpLazy(f)
                         .then(() => { window.__reload.done = true; })
                         .catch(e => { window.__reload.err = String(e && e.stack || e).slice(0, 400); });
                 } catch (e) { window.__reload.err = String(e && e.stack || e).slice(0, 400); }
             })();
-        }, servedName);
+        });
 
         const probe = () => page2.evaluate(() => {
             const s = window.__lucid.state.session;
@@ -310,6 +327,15 @@ try {
             await new Promise(r => setTimeout(r, 5000));
             r2 = await probe();
         }
+        // Wait for the loader to RETURN, not just to have produced groups —
+        // a suspended async frame retains all of its locals.
+        const doneDeadline = Date.now() + 5 * 60 * 1000;
+        while (!r2.err && !r2.done && Date.now() < doneDeadline) {
+            await new Promise(r => setTimeout(r, 3000));
+            r2 = await probe();
+        }
+        log(`[${el()}] loader returned: ${r2.done}`);
+
         // Groups appear incrementally — wait for the count to stop moving.
         let prev = -1;
         while (!r2.err && r2.groups !== prev && Date.now() - pollStart < RELOAD_TIMEOUT_MS) {
@@ -321,6 +347,144 @@ try {
         check(!r2.err, `reload completed${r2.err ? ' — ' + r2.err : ''}`);
         check(r2.groups > 100000, `grouping round-tripped (${r2.groups.toLocaleString()} groups)`);
         check(r2.with3d > 100000, `3D round-tripped (${r2.with3d.toLocaleString()})`);
+        // ---- post-reload heap attribution (strip one structure at a time) ----
+        if (process.env.ATTRIBUTE) {
+            const attr = await page2.evaluate(async () => {
+                const gc = async () => {
+                    for (let i = 0; i < 5; i++) window.gc && window.gc();
+                    await new Promise(r => setTimeout(r, 200));
+                };
+                const mb = () => +(performance.memory.usedJSHeapSize / 1048576).toFixed(0);
+                const st = window.__lucid.state, s = st.session;
+                const out = [];
+                await gc(); out.push(['baseline', mb()]);
+                s.instanceGroups = new Map();
+                await gc(); out.push(['- instanceGroups', mb()]);
+                s.frameIdentityMap = new Map();
+                await gc(); out.push(['- frameIdentityMap', mb()]);
+                s.frameGroups = new Map();
+                await gc(); out.push(['- frameGroups', mb()]);
+                const loader = s.lazyLoader;
+                let storeInfo = null;
+                if (loader) {
+                    storeInfo = { cams: loader.labelsByCam ? loader.labelsByCam.size : 0 };
+                    s.lazyLoader = null;
+                    if (loader.close) { try { loader.close(); } catch (e) {} }
+                }
+                await gc(); out.push(['- lazyLoader', mb()]);
+                st.triangulationResults = new Map();
+                await gc(); out.push(['- triangulationResults', mb()]);
+
+                // Widen the sweep: anything else the page still holds.
+                const sess0 = st.sessions && st.sessions[0];
+                out.push(['(sessions[0] === session)', (sess0 === s) ? 1 : 0]);
+                if (st.sessions) for (const ss of st.sessions) {
+                    ss.instanceGroups = new Map(); ss.frameGroups = new Map();
+                    ss.frameIdentityMap = new Map();
+                    if (ss.lazyLoader) { try { ss.lazyLoader.close(); } catch (e) {} ss.lazyLoader = null; }
+                    ss.triangulationResults = new Map();
+                    ss._views = null; ss._videoController = null;
+                }
+                await gc(); out.push(['- all sessions[] state', mb()]);
+
+                st.views = []; st.videoFiles = []; st.slpFileHandle = null;
+                await gc(); out.push(['- views/videoFiles/handle', mb()]);
+
+                st.sessions = []; st.session = null;
+                await gc(); out.push(['- sessions[] itself', mb()]);
+                // Where is the rest? h5wasm keeps the opened file in its WASM
+                // heap (hard-capped at 2 GiB by getHeapMax), and that ArrayBuffer
+                // is counted by usedJSHeapSize.
+                let wasmMB = null, wasmWho = null;
+                try {
+                    let m = window.h5wasm;
+                    if (m && m.ready && typeof m.ready.then === 'function') m = await m.ready;
+                    if (m && m.HEAPU8) { wasmMB = +(m.HEAPU8.length / 1048576).toFixed(0); wasmWho = 'global-iife'; }
+                } catch (e) {}
+                out.push(['h5wasm WASM heap (global IIFE)', wasmMB]);
+                // There are TWO h5wasm instances in the page: the IIFE global from
+                // index.html, and the ESM one the importmap resolves for
+                // readSlpStreaming / SioLazyLoader. They have SEPARATE WASM heaps.
+                let esmMB = null;
+                try {
+                    const em = await import('/lib/h5wasm/hdf5_hl.js');
+                    const mod = await em.ready;
+                    if (mod && mod.HEAPU8) esmMB = +(mod.HEAPU8.length / 1048576).toFixed(0);
+                } catch (e) { esmMB = 'err:' + String(e).slice(0, 80); }
+                out.push(['h5wasm WASM heap (ESM)', esmMB]);
+                return { steps: out, storeInfo, wasmMB, wasmWho, limitMB: +(performance.memory.jsHeapSizeLimit/1048576).toFixed(0) };
+            });
+            log(`\n[${el()}] === post-reload heap attribution ===`);
+            let prev = null;
+            for (const [label, v] of attr.steps) {
+                log(`     ${String(v).padStart(5)} MB  ${label}` + (prev !== null ? `   (freed ${prev - v} MB)` : ''));
+                prev = v;
+            }
+            log(`     limit ${attr.limitMB} MB; stores: ${JSON.stringify(attr.storeInfo)}`);
+        }
+
+        // ---------------- STAGE 6: modify the reloaded project, save again ----
+        // The round trip the user actually needs is not just save->load, it is
+        // load -> track -> triangulate -> save -> RELOAD -> EDIT -> SAVE AGAIN.
+        if (!r2.err && r2.groups > 0 && process.env.MODIFY_RESAVE) {
+            log(`\n[${el()}] === STAGE modify + resave ===`);
+            const edited = await page2.evaluate(() => {
+                const st = window.__lucid.state;
+                const s = st.session;
+                // Find a resident group with a member carrying real coordinates.
+                for (const [frameIdx, gs] of s.instanceGroups) {
+                    for (const g of gs) {
+                        for (const [camName, inst] of g.instances) {
+                            if (!inst.hasPoint(0)) continue;
+                            const before = inst.getPoint(0);
+                            inst.setPoint(0, before[0] + 7.5, before[1] - 3.25);
+                            inst.type = 'user';
+                            inst.modified = true;
+                            g.markDirty();
+                            return { frameIdx, camName, before, after: inst.getPoint(0) };
+                        }
+                    }
+                }
+                return null;
+            });
+            check(!!edited, `edited a keypoint on the reloaded project (${JSON.stringify(edited)})`);
+
+            let bytes2 = 0;
+            let fd2 = null;
+            const OUT2 = OUT_SLP.replace(/\.slp$/, '-resave.slp');
+            await page2.exposeFunction('__appendChunk2', (b64) => {
+                if (fd2 === null) fd2 = fs.openSync(OUT2, 'w');
+                const buf = Buffer.from(b64, 'base64');
+                fs.writeSync(fd2, buf); bytes2 += buf.length;
+            });
+            const r3 = await page2.evaluate(async () => {
+                const saveLoad = await import('/import-export/save-load.js');
+                function toB64(u8) {
+                    let s = ''; const C = 0x8000;
+                    for (let o = 0; o < u8.length; o += C) s += String.fromCharCode.apply(null, u8.subarray(o, o + C));
+                    return btoa(s);
+                }
+                window.showSaveFilePicker = async () => ({
+                    createWritable: async () => ({
+                        write: async (chunk) => {
+                            const u8 = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+                            await window.__appendChunk2(toB64(u8));
+                        },
+                        close: async () => {},
+                    }),
+                });
+                const t = performance.now();
+                let err = null;
+                try { await saveLoad.saveAs({ skipSizeWarning: true }); }
+                catch (e) { err = String(e && e.stack || e).slice(0, 600); }
+                return { ms: Math.round(performance.now() - t), err };
+            });
+            if (fd2 !== null) fs.closeSync(fd2);
+            log(`[${el()}] resave: ${r3.ms} ms  err=${r3.err || 'none'}`);
+            check(!r3.err, `resave completed${r3.err ? ' — ' + r3.err : ''}`);
+            check(bytes2 > 100e6, `resave wrote a real file (${(bytes2 / 1e6).toFixed(1)} MB)`);
+            try { fs.unlinkSync(OUT2); } catch (e) {}
+        }
         await page2.close();
     }
 
