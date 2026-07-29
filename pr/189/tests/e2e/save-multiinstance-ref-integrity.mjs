@@ -50,6 +50,7 @@ try {
   const browser = await chromium.launch();
   const page = await browser.newPage();
   page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
+  if (process.env.SHOW_PHASES) page.on('console', m => { const t = m.text(); if (t.includes('phase:')) console.log('  [page]', t); });
   await page.goto(`http://localhost:${PORT}/index.html`);
   await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
 

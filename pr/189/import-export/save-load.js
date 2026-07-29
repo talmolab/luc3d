@@ -397,6 +397,12 @@ async function encourageGC(totalMB) {
  * warning below — callers should report this as a cancellation, not a
  * failure (mirrors the existing `pickErr.name === 'AbortError'` handling for
  * a declined save-file-picker). */
+/** Monotonic clock, tolerant of environments without `performance`. */
+function _saveNow() {
+    return (typeof performance !== 'undefined' && performance.now)
+        ? performance.now() : Date.now();
+}
+
 class SaveCancelledError extends Error {
     constructor(message) {
         super(message || 'Save cancelled');
@@ -404,38 +410,101 @@ class SaveCancelledError extends Error {
     }
 }
 
+// Per-object cost in the CAGE — V8's pointer-compressed heap, which a Chrome
+// renderer hard-caps near 4 GB and which is the resource a big merged save
+// actually runs out of. MEASURED in a real renderer by
+// `tests/e2e/_diag-repr-sizing.mjs`, not modelled.
+//
+// Only in-cage bytes are counted. A typed array's backing store is allocated
+// OUTSIDE the cap — verified by `tests/e2e/_diag-cage-vs-external.mjs`, which
+// allocates 6,272 MB of Float64Array against a reported 4,192 MB
+// `jsHeapSizeLimit` without failing — so `points3d`'s coordinates cost only
+// their wrapper objects here, and `usedJSHeapSize` (which DOES count backing
+// stores) is not a valid substitute for this estimate.
+var CAGE_B_PER_INSTANCE = 824;      // boxed points[][] + occluded[] + object shell
+var CAGE_B_PER_GROUP = 130;         // InstanceGroup shell + its instances Map entry
+var CAGE_B_PER_GROUP_PTS3D = 116;   // flat Float64Array wrapper (coords are external)
+var CAGE_B_PER_FIM_ENTRY = 16;      // packed-Number key -> identityId, in a Map
+var CAGE_B_PER_REFGRAPH_MEMBER = 24; // PASS-1 CamRefMap parallel arrays, per (group, camera)
+
 /**
- * Rough proxy for a lazy multi-camera project's PASS-1 (`buildSessionRefGraph`)
- * peak JS memory: total (frame x camera) pairs across every lazy session being
- * exported, times a bytes-per-pair constant calibrated against the ONE real
- * measurement in this codebase's history — a 108k-frame x 3-camera session
- * peaked PASS 1 at ~3.7 GB (see `slp-streaming-write.js`'s docs) — so
- * ~3.7e9 / (108000*3) ~= 11.4 KB/pair. This is a single-data-point estimate,
- * not a calibrated model: it exists to warn BEFORE a likely crash (which
- * loses all unsaved work), not to precisely predict one. `nFrames` and camera
- * count are already-resident cheap fields (no extra I/O).
+ * Estimate the peak CAGE pressure of a merged save, by pricing the state that
+ * is actually resident rather than extrapolating from the project's shape.
+ *
+ * WHY THIS WAS REWRITTEN (luc3d #189). The previous version returned
+ * `frames x cameras x 11.4 KB`, a single-data-point extrapolation. Two things
+ * were wrong with it:
+ *
+ *   1. It never looked at the data. On the real bug-report project it reported
+ *      "~10.3 GB" (180,210 x 5 x 11.4 KB) — and would have reported the very
+ *      same 10.3 GB for a project with ZERO instances in it, or after any
+ *      amount of memory optimisation, because neither term is in the formula.
+ *   2. The shape was wrong. O(frames x cameras) is the cost of Track All /
+ *      Triangulate All, both of which have already COMPLETED by the time Save
+ *      As is clicked. What the save adds is O(instance_groups x cameras) for
+ *      the ref graph, on top of a baseline dominated by the live `Instance`
+ *      objects that grouping pins.
+ *
+ * The merged save of that project has since been measured succeeding —
+ * 1,404,804,682 bytes in 49.5 s — while the old estimate still claimed 10.3 GB
+ * and a likely crash, so the dialog was actively steering users away from an
+ * operation that works.
+ *
+ * Walks `session.instanceGroups` (O(groups), a few ms even at 531,799 groups).
+ *
  * @param {Array} sessionsToExport
- * @returns {number} estimated peak bytes
+ * @returns {number} estimated peak cage bytes
  */
-export function estimateLazySaveRiskBytes(sessionsToExport) {
-    var BYTES_PER_FRAME_CAMERA_PAIR = 3.7e9 / (108000 * 3);
-    var pairs = 0;
+export function estimateSaveCagePressureBytes(sessionsToExport) {
+    var total = 0;
     for (var i = 0; i < sessionsToExport.length; i++) {
         var sess = sessionsToExport[i];
-        var loader = sess && sess.lazyLoader;
-        if (!loader) continue;
-        var nCams = loader.labelsByCam ? loader.labelsByCam.size
-            : ((sess.cameras && sess.cameras.length) || 0);
-        pairs += (loader.nFrames || 0) * nCams;
+        if (!sess) continue;
+        var nGroups = 0, nMembers = 0, nWith3d = 0;
+        if (sess.instanceGroups) {
+            for (var entry of sess.instanceGroups) {
+                var groups = entry[1] || [];
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var g = groups[gi];
+                    nGroups++;
+                    nMembers += (g.instances && g.instances.size) || 0;
+                    if (g.points3d) nWith3d++;
+                }
+            }
+        }
+        var nFim = (sess.frameIdentityMap && sess.frameIdentityMap.size) || 0;
+        total += nGroups * CAGE_B_PER_GROUP
+               + nMembers * CAGE_B_PER_INSTANCE
+               + nWith3d * CAGE_B_PER_GROUP_PTS3D
+               + nFim * CAGE_B_PER_FIM_ENTRY
+               + nMembers * CAGE_B_PER_REFGRAPH_MEMBER;
     }
-    return pairs * BYTES_PER_FRAME_CAMERA_PAIR;
+    return total;
 }
 
-// Warn with real margin below the single real reference point above — other
-// state (video decode buffers, UI, whatever Track All/Triangulate All left
-// resident) shares the same tab budget, so the actual ceiling in practice is
-// lower than PASS 1's cost measured in isolation.
-var LAZY_SAVE_WARN_BYTES = 1.5e9; // ~1.5 GB estimated PASS-1 peak
+/**
+ * The tab's hard JS-heap ceiling. Chrome reports it via `performance.memory`
+ * (measured 3,760-4,192 MB depending on build); anything else gets a
+ * conservative 4 GB. `--max-old-space-size` does NOT raise this.
+ * @returns {number} bytes
+ */
+export function getCageLimitBytes() {
+    try {
+        var m = (typeof performance !== 'undefined') && performance.memory;
+        if (m && m.jsHeapSizeLimit > 0) return m.jsHeapSizeLimit;
+    } catch (e) { /* not Chrome, or blocked */ }
+    return 4e9;
+}
+
+// Warn once the estimated peak reaches this share of the tab's hard JS-heap
+// ceiling. Video decode buffers, the UI, and whatever Track All / Triangulate
+// All left resident share the same budget, so leave real margin.
+//
+// Reference point for the tuning: the real 180,210-frame x 5-camera project
+// SUCCEEDS at a measured 2,891 MB pre-save baseline against a 3,760 MB ceiling
+// (77%). So the threshold has to sit above that — warning on a save that is
+// known to work is what the old heuristic did wrong.
+var CAGE_WARN_FRACTION = 0.85;
 
 async function buildSlpBytes(opts) {
     opts = opts || {};
@@ -467,13 +536,16 @@ async function buildSlpBytes(opts) {
         sessionsToExport.every(function (s) { return !!s.lazyLoader; })) {
 
         if (!opts.skipSizeWarning) {
-            var estBytes = estimateLazySaveRiskBytes(sessionsToExport);
-            if (estBytes > LAZY_SAVE_WARN_BYTES) {
+            var estBytes = estimateSaveCagePressureBytes(sessionsToExport);
+            var capBytes = getCageLimitBytes();
+            if (estBytes > capBytes * CAGE_WARN_FRACTION) {
                 var estGB = (estBytes / 1e9).toFixed(1);
+                var capGB = (capBytes / 1e9).toFixed(1);
                 var proceed = window.confirm(
-                    'This project is very large (a rough estimate suggests saving it as one ' +
-                    'merged file may need ~' + estGB + ' GB of browser memory) and could crash ' +
-                    'this tab before finishing.\n\n' +
+                    'This project is very large. Its triangulated grouping is estimated to ' +
+                    'occupy ~' + estGB + ' GB of this tab\'s ~' + capGB + ' GB JavaScript memory ' +
+                    'limit, leaving little headroom for a merged save, which could crash the ' +
+                    'tab before finishing.\n\n' +
                     'Click OK to attempt the save anyway, or Cancel and use ' +
                     '"Export SLEAP File Per Session" / "By Cam" instead — those write one ' +
                     'smaller file per camera and are far less likely to crash.'
@@ -685,7 +757,20 @@ export async function commitSessionForMultiSessionSave(handle, session) {
  * (or null if `opts.sink` was given).
  */
 export async function finalizeMultiSessionSave(handle, opts) {
+    // Per-phase timing — a merged save of a tracked+triangulated project takes
+    // tens of seconds, which is indistinguishable from a hang without it. Each
+    // line prints as its phase COMPLETES, so the phase still running is the one
+    // after the last line printed. (Single-session path: see
+    // `buildSessionSlpBytesStreaming` in slp-streaming-write.js.)
+    var _t0 = _saveNow(), _tp = _t0;
+    var _lap = function (label) {
+        var n = _saveNow();
+        console.log('[save-slp] phase: ' + label + ' — ' + Math.round(n - _tp) +
+            ' ms (total ' + Math.round(n - _t0) + ' ms)');
+        _tp = n;
+    };
     var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }));
+    _lap('openProjectWriter (writes /session_data + sessions_json)');
     try {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
@@ -694,9 +779,12 @@ export async function finalizeMultiSessionSave(handle, opts) {
             p.session.lazyLoader.close();
             p.session.lazyLoader = null;
             console.log('[save-slp] pass 2/2: streamed session', p.session.name || j, 'into the project writer');
+            _lap('stream session ' + (p.session.name || j));
             await encourageGC(1000);
         }
-        return await finalizeProjectWriter(writer, opts);
+        var _out = await finalizeProjectWriter(writer, opts);
+        _lap('finalizeProjectWriter (flush to disk)');
+        return _out;
     } catch (err) {
         try { if (typeof writer.dispose === 'function') writer.dispose(); } catch (e) { /* ignore */ }
         throw err;
