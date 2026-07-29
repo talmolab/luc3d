@@ -470,11 +470,8 @@
             });
 
             // Pre-populate observedPoints so we can also verify the B2 invariant.
-            env.group.observedPoints = {
-                cam1: env.instances.cam1.points,
-                cam2: env.instances.cam2.points,
-                cam3: env.instances.cam3.points,
-            };
+            // (observedPoints is DERIVED from env.group.instances since luc3d #189 —
+            // the members added above already supply it; no fixture assignment.)
 
             var removed = editGroupRemoveBranch(env.group, 'cam2', env.fg);
 
@@ -572,11 +569,8 @@
                 cam2: 'predicted',
                 cam3: 'predicted',
             });
-            env.group.observedPoints = {
-                cam1: env.instances.cam1.points,
-                cam2: env.instances.cam2.points,
-                cam3: env.instances.cam3.points,
-            };
+            // (observedPoints is DERIVED from env.group.instances since luc3d #189 —
+            // the members added above already supply it; no fixture assignment.)
             var cam1Pts = env.group.observedPoints.cam1;
             var cam3Pts = env.group.observedPoints.cam3;
 

@@ -195,7 +195,6 @@
             group.reprojectedInstances.clear();
         }
         group.reprojections = null;
-        group.observedPoints = null;
         group.points3d = null;
     }
 
@@ -318,7 +317,8 @@
             var env = buildGroupedEnv({ cameras: ['cam1', 'cam2'] });
             try {
                 // Pre-populate triangulation-y fields so purge has something to clear.
-                env.group.observedPoints = { cam1: env.instances.cam1.points, cam2: env.instances.cam2.points };
+                // (observedPoints is DERIVED from env.group.instances since luc3d #189 —
+                // the members added above already supply it; no fixture assignment.)
                 env.group.reprojections = { cam1: [[1, 1]], cam2: [[2, 2]] };
                 env.group.points3d = [[0, 0, 0], [1, 1, 1]];
 
@@ -336,7 +336,9 @@
                 try { purgeTriangulationDataForGroup(0, env.group); } catch (e) { threw = true; }
                 assertFalse(threw, 'second purge call must not throw');
 
-                assertNull(env.group.observedPoints, 'observedPoints cleared');
+                // (observedPoints is DERIVED from members since luc3d #189 — the purge
+                // clears reprojections/points3d, asserted here, and nothing reads
+                // observedPoints without them.)
                 assertNull(env.group.reprojections, 'reprojections cleared');
                 assertNull(env.group.points3d, 'points3d cleared');
             } finally {
@@ -346,113 +348,112 @@
     });
 
     // ============================================================
-    // Suite 2 — observedPoints sync during edit (B2)
+    // Suite 2 — observedPoints tracks membership (B2)
     //
-    // Recreates the fix logic from onEditGroupAdd / onEditGroupRemove
-    // (index.html ~3328-3395). Reference equality matters — overlays.js draws
-    // from the same array reference live-mutated by drag, so the fix MUST
-    // store a reference, not a copy.
+    // `observedPoints` used to be a stored object that onEditGroupAdd /
+    // onEditGroupRemove hand-patched to keep in step with `group.instances`;
+    // this suite mirrored those two snippets. Since luc3d #189 it is a DERIVED
+    // getter over `instances`, so the sync cannot drift by construction and
+    // there is no snippet left to mirror.
+    //
+    // The tests below therefore assert the INVARIANT the sync existed to
+    // maintain, directly against the real InstanceGroup — a stronger check than
+    // re-testing a copy of the old fix. Reference equality still matters:
+    // overlays.js draws from the same array that drag mutates in place, so the
+    // getter must expose the live `inst.points`, never a copy.
     // ============================================================
 
-    /** Mirrors the fix snippet inside onEditGroupRemove (index.html ~3340-3347). */
-    function syncObservedOnRemove(group, viewName) {
-        // Caller is responsible for `group.instances.delete(viewName)`; this
-        // helper isolates the fix line we are testing.
-        if (group.observedPoints) {
-            delete group.observedPoints[viewName];
-        }
-    }
+    describe('observedPoints B2 — derived from group membership', function () {
 
-    /** Mirrors the fix snippet inside onEditGroupAdd (index.html ~3375-3379). */
-    function syncObservedOnAdd(group, viewName, inst) {
-        // Caller is responsible for `group.addInstance(viewName, inst)`; this
-        // helper isolates the fix line we are testing.
-        group.observedPoints = group.observedPoints || {};
-        group.observedPoints[viewName] = inst.points;
-    }
+        it('a fresh group with no members observes nothing', function () {
+            var group = new InstanceGroup(1, 0);
+            assertNotNull(group.observedPoints, 'always an object, never null');
+            assertEqual(Object.keys(group.observedPoints).length, 0, 'no entries');
+        });
 
-    describe('onEditGroupAdd / onEditGroupRemove B2 — observedPoints sync', function () {
-
-        it('Add: when no observedPoints yet, initializes object and sets viewName entry by reference', function () {
+        it('adding a member exposes its points by reference', function () {
             var group = new InstanceGroup(1, 0);
             var inst = new Instance([[10, 20], [30, 40]], 0, 'user', 1.0);
 
-            assertTrue(group.observedPoints == null, 'precondition: no observedPoints');
+            group.addInstance('cam1', inst);
 
-            syncObservedOnAdd(group, 'cam1', inst);
-
-            assertNotNull(group.observedPoints, 'observedPoints object initialized');
-            assertEqual(typeof group.observedPoints, 'object', 'is object');
             assertTrue(group.observedPoints.cam1 === inst.points,
-                'reference equality: observedPoints[cam1] is the same array as inst.points');
+                'reference equality: observedPoints[cam1] IS inst.points, not a copy');
         });
 
-        it('Add: when observedPoints already exists, preserves other-view entries', function () {
+        it('adding a second member preserves the first', function () {
             var group = new InstanceGroup(1, 0);
-            var existingPts = [[100, 200], [110, 210]];
-            group.observedPoints = { cam1: existingPts };
+            var inst1 = new Instance([[100, 200], [110, 210]], 0, 'user', 1.0);
             var inst2 = new Instance([[1, 2], [3, 4]], 0, 'user', 1.0);
 
-            syncObservedOnAdd(group, 'cam2', inst2);
+            group.addInstance('cam1', inst1);
+            group.addInstance('cam2', inst2);
 
-            assertTrue(group.observedPoints.cam1 === existingPts, 'cam1 entry untouched');
+            assertTrue(group.observedPoints.cam1 === inst1.points, 'cam1 entry untouched');
             assertTrue(group.observedPoints.cam2 === inst2.points, 'cam2 entry added by reference');
             assertEqual(Object.keys(group.observedPoints).length, 2, 'two entries total');
         });
 
-        it('Remove: deletes only the named view, leaves others intact', function () {
+        it('removing a member drops only that view', function () {
             var group = new InstanceGroup(1, 0);
-            var ptsA = [[1, 1]];
-            var ptsB = [[2, 2]];
-            var ptsC = [[3, 3]];
-            group.observedPoints = { camA: ptsA, camB: ptsB, camC: ptsC };
+            var instA = new Instance([[1, 1]], 0, 'user', 1.0);
+            var instB = new Instance([[2, 2]], 0, 'user', 1.0);
+            var instC = new Instance([[3, 3]], 0, 'user', 1.0);
+            group.addInstance('camA', instA);
+            group.addInstance('camB', instB);
+            group.addInstance('camC', instC);
 
-            syncObservedOnRemove(group, 'camB');
+            group.instances.delete('camB');
 
             assertEqual(group.observedPoints.camB, undefined, 'camB entry gone');
-            assertTrue(group.observedPoints.camA === ptsA, 'camA entry untouched');
-            assertTrue(group.observedPoints.camC === ptsC, 'camC entry untouched');
+            assertTrue(group.observedPoints.camA === instA.points, 'camA entry untouched');
+            assertTrue(group.observedPoints.camC === instC.points, 'camC entry untouched');
             assertEqual(Object.keys(group.observedPoints).length, 2, 'two entries left');
         });
 
-        it('Remove: when observedPoints is null, the guard prevents a TypeError', function () {
+        it('removing a view that was never a member is a no-op, not a TypeError', function () {
             var group = new InstanceGroup(1, 0);
-            group.observedPoints = null;
-
             var threw = false;
             try {
-                syncObservedOnRemove(group, 'camX');
+                group.instances.delete('camX');
+                void group.observedPoints;
             } catch (e) {
                 threw = true;
             }
-            assertFalse(threw, 'no exception when observedPoints is null');
-            assertNull(group.observedPoints, 'still null');
+            assertFalse(threw, 'no exception');
+            assertEqual(Object.keys(group.observedPoints).length, 0, 'still observes nothing');
         });
 
-        it('Remove: when observedPoints is undefined, the guard prevents a TypeError', function () {
+        it('is read-only: an assignment can never shadow the derived value', function () {
+            // A stored copy could drift from `instances` — the whole bug class
+            // this suite was originally written for. There is no setter, so a
+            // stray assignment CANNOT reinstate one. In the app (ES modules, always
+            // strict) it throws a TypeError; here, in a classic <script>, sloppy
+            // mode silently discards it. Either way the getter still wins, which
+            // is the property that actually matters.
             var group = new InstanceGroup(1, 0);
-            // Default state: no observedPoints field set explicitly.
-            assertTrue(group.observedPoints == null, 'precondition: nullish');
+            var inst = new Instance([[10, 20]], 0, 'user', 1.0);
+            group.addInstance('cam1', inst);
 
-            var threw = false;
             try {
-                syncObservedOnRemove(group, 'camX');
+                group.observedPoints = { bogusCam: [[1, 2]] };
             } catch (e) {
-                threw = true;
+                /* strict mode: TypeError — also fine */
             }
-            assertFalse(threw, 'no exception when observedPoints is undefined');
+
+            assertEqual(group.observedPoints.bogusCam, undefined, 'the assignment did not stick');
+            assertTrue(group.observedPoints.cam1 === inst.points, 'still derived from members');
         });
 
-        it('Reference invariant: mutating inst.points is visible through group.observedPoints', function () {
-            // overlays.js reads group.observedPoints[viewName] live during
-            // draw. If a user drags a node, inst.points[i] is mutated in place
-            // and the connector line MUST follow the cursor.
+        it('Reference invariant: mutating inst.points is visible through observedPoints', function () {
+            // overlays.js reads the observed points live during draw. If a user
+            // drags a node, inst.points[i] is mutated in place and the connector
+            // line MUST follow the cursor.
             var group = new InstanceGroup(1, 0);
             var inst = new Instance([[10, 20], [30, 40]], 0, 'user', 1.0);
 
-            syncObservedOnAdd(group, 'cam1', inst);
+            group.addInstance('cam1', inst);
 
-            // Mutate inst.points after the sync.
             inst.points[0][0] = 999;
             inst.points[0][1] = 888;
 
@@ -477,11 +478,8 @@
             try {
                 var group = env.group;
                 // Pre-populate post-triangulation state.
-                group.observedPoints = {
-                    cam1: env.instances.cam1.points,
-                    cam2: env.instances.cam2.points,
-                    cam3: env.instances.cam3.points,
-                };
+                // (observedPoints is DERIVED from group.instances since luc3d #189 —
+                // the members added above already supply it; no fixture assignment.)
                 group.reprojections = {
                     cam1: [[1.5, 1.5], [2.5, 2.5]],
                     cam2: [[3.5, 3.5], [4.5, 4.5]],
@@ -534,11 +532,8 @@
             var env = buildGroupedEnv({ cameras: ['cam1', 'cam2', 'cam3'] });
             try {
                 var group = env.group;
-                group.observedPoints = {
-                    cam1: env.instances.cam1.points,
-                    cam2: env.instances.cam2.points,
-                    cam3: env.instances.cam3.points,
-                };
+                // (observedPoints is DERIVED from group.instances since luc3d #189 —
+                // the members added above already supply it; no fixture assignment.)
                 group.reprojections = { cam1: [[1, 1]], cam2: [[2, 2]], cam3: [[3, 3]] };
 
                 env.mgr.select(group, -1);
@@ -568,10 +563,8 @@
             var env = buildGroupedEnv({ cameras: ['cam1', 'cam2'] });
             try {
                 var group = env.group;
-                group.observedPoints = {
-                    cam1: env.instances.cam1.points,
-                    cam2: env.instances.cam2.points,
-                };
+                // (observedPoints is DERIVED from group.instances since luc3d #189 —
+                // the members added above already supply it; no fixture assignment.)
 
                 env.mgr.select(group, -1);
                 env.mgr.lastInteractedView = 'cam1';
@@ -607,8 +600,8 @@
             var env = buildGroupedEnv({ cameras: ['cam1', 'cam2'] });
             try {
                 var group = env.group;
-                // Explicitly null — fresh (un-triangulated) state.
-                group.observedPoints = null;
+                // Fresh (un-triangulated) state: no reprojections to pair with.
+                group.reprojections = null;
 
                 env.mgr.select(group, -1);
                 env.mgr.lastInteractedView = 'cam1';
@@ -622,7 +615,9 @@
                 assertFalse(threw, 'guard prevents TypeError on null observedPoints');
 
                 assertEqual(group.instances.size, 1, 'cam1 still removed from group');
-                assertNull(group.observedPoints, 'still null after delete (no implicit init)');
+                // Derived: the deleted view is gone, the surviving one remains.
+                assertEqual(group.observedPoints.cam1, undefined, 'deleted view no longer observed');
+                assertEqual(Object.keys(group.observedPoints).length, 1, 'only the survivor observed');
             } finally {
                 env.cleanup();
             }
@@ -634,9 +629,10 @@
             var env = buildGroupedEnv({ cameras: ['cam1', 'cam2'] });
             try {
                 var group = env.group;
-                // Force undefined (default for a new InstanceGroup).
-                delete group.observedPoints;
-                assertTrue(group.observedPoints == null, 'precondition: observedPoints is nullish');
+                // A group that was never triangulated: observedPoints still derives
+                // from its members, it is simply never read without reprojections.
+                group.reprojections = null;
+                assertEqual(Object.keys(group.observedPoints).length, 2, 'precondition: both members observed');
 
                 env.mgr.select(group, -1);
                 env.mgr.lastInteractedView = 'cam2';

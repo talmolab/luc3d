@@ -11,7 +11,7 @@
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
          hasRealVideo, VIEW_NAMES } from '../ui/app-state.js';
-import { Instance, UnlinkedInstance } from './pose-data.js';
+import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d } from './pose-data.js';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
     reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
@@ -557,7 +557,6 @@ export function setupInteraction() {
                     }
                     group.reprojections = predGroup.reprojections || {};
                     group.points3d = predGroup.points3d;
-                    group.observedPoints = predGroup.observedPoints;
                     predGroup.reprojections = null;
                     predGroup.points3d = null;
                 }
@@ -758,11 +757,9 @@ export function setupInteraction() {
             // Remove from group
             group.instances.delete(viewName);
 
-            // Keep observedPoints in sync so the reprojection error
-            // vector for this view stops drawing immediately.
-            if (group.observedPoints) {
-                delete group.observedPoints[viewName];
-            }
+            // (`observedPoints` is derived from `group.instances`, so the
+            // reprojection-error vector for this view stops drawing as soon as
+            // the member is deleted above — no hand-sync needed. luc3d #189.)
 
             // Remove from FrameGroup linked instances
             if (fg) {
@@ -790,11 +787,10 @@ export function setupInteraction() {
             // Add to group (keep instance's original trackIdx for color consistency)
             group.addInstance(viewName, inst);
 
-            // Record the new instance's points as observed so the
-            // reprojection error vector connecting this view to its
-            // (existing) reprojected projection draws immediately.
-            group.observedPoints = group.observedPoints || {};
-            group.observedPoints[viewName] = inst.points;
+            // (The new instance's points become `observedPoints` automatically —
+            // it is derived from `group.instances` — so the reprojection error
+            // vector connecting this view to its existing reprojected projection
+            // draws immediately. luc3d #189.)
 
             // If the add introduces mixed state (e.g., a user added
             // to an all-predicted group, or a predicted added to a
@@ -951,11 +947,12 @@ export function update3DViewport(frameIdx) {
     // Debug logs gated behind a flag — these ran on EVERY frame, so during
     // playback they spammed the console (a real cost with DevTools open).
     if (typeof window !== 'undefined' && window.LUCID_3D_DEBUG) {
-        const groupsWithPts = groups.filter(g => g.points3d && g.points3d.length > 0);
+        const groupsWithPts = groups.filter(g => points3dNodeCount(g.points3d) > 0);
         console.log('[3D] update3DViewport frame', frameIdx,
             '| groups:', groups.length, '| with points3d:', groupsWithPts.length);
         if (groupsWithPts.length > 0) {
-            var samplePt = groupsWithPts[0].points3d.find(function(p) { return p != null; });
+            var _sp = groupsWithPts[0].points3d, samplePt = null;
+            for (var _si = 0; _si < points3dNodeCount(_sp) && !samplePt; _si++) samplePt = getPoint3d(_sp, _si);
             console.log('[3D] Sample 3D point:', samplePt);
         }
     }

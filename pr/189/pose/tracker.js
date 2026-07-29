@@ -18,7 +18,7 @@ import {
     hungarianAlgorithm
 } from './triangulation.js';
 import { CrossViewTracker, Detection } from './cross-view-tracker.js';
-import { InstanceGroup } from './pose-data.js';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
 import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
@@ -423,14 +423,15 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
             // Signal 2: 3D distance
             if (prevPts3d && currPts3d) {
                 var totalDist3d = 0, count3d = 0;
-                var numKp = Math.min(prevPts3d.length, currPts3d.length);
+                var numKp = Math.min(points3dNodeCount(prevPts3d), points3dNodeCount(currPts3d));
+                var _pp = [0, 0, 0], _cp = [0, 0, 0];
                 for (var k = 0; k < numKp; k++) {
-                    if (prevPts3d[k] && currPts3d[k]) {
+                    if (readPoint3d(prevPts3d, k, _pp) && readPoint3d(currPts3d, k, _cp)) {
                         var w3d = nodeWeight(k);
                         if (w3d <= 0) continue;
-                        var dx = prevPts3d[k][0] - currPts3d[k][0];
-                        var dy = prevPts3d[k][1] - currPts3d[k][1];
-                        var dz = prevPts3d[k][2] - currPts3d[k][2];
+                        var dx = _pp[0] - _cp[0];
+                        var dy = _pp[1] - _cp[1];
+                        var dz = _pp[2] - _cp[2];
                         totalDist3d += w3d * Math.sqrt(dx*dx + dy*dy + dz*dz);
                         count3d += w3d;
                     }
@@ -743,17 +744,18 @@ function getTrackerHyperparams() {
 
 // Count null (non-triangulated) 3D nodes across the groups a tracking run
 // produced. `targets3d` is the per-frame array returned by matchFrameInstances;
-// each entry's `points3d` is a per-node array (null entry ⇒ that node could not
-// be triangulated). Single-view groups (points3d === null) are skipped — they
-// were never triangulated, so they are not "null nodes" in the 3D sense.
+// each entry's `points3d` is a flat Float64Array (an all-NaN triple ⇒ that node
+// could not be triangulated). Single-view groups (points3d === null) are skipped
+// — they were never triangulated, so they are not "null nodes" in the 3D sense.
 function countNullNodesInTargets(targets3d) {
     var nulls = 0;
     if (!targets3d) return 0;
     for (var i = 0; i < targets3d.length; i++) {
         var p = targets3d[i] && targets3d[i].points3d;
         if (!p) continue;
-        for (var k = 0; k < p.length; k++) {
-            if (p[k] == null) nulls++;
+        var n = points3dNodeCount(p);
+        for (var k = 0; k < n; k++) {
+            if (!hasPoint3d(p, k)) nulls++;
         }
     }
     return nulls;

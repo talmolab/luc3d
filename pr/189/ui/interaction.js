@@ -1865,13 +1865,11 @@ export class InteractionManager {
             if (instance) {
                 group.instances.delete(viewName);
 
-                // Drop the reprojection-error connector lines for this
-                // view immediately. overlays.js draws them from
-                // group.observedPoints[viewName] → group.reprojections[viewName],
-                // so clearing observedPoints stops the draw on next refresh.
-                if (group.observedPoints) {
-                    delete group.observedPoints[viewName];
-                }
+                // Drops the reprojection-error connector lines for this view
+                // immediately: overlays.js draws them from the member instance's
+                // points → group.reprojections[viewName], and `observedPoints` is
+                // derived from `group.instances` (luc3d #189), so deleting the
+                // member above is what stops the draw.
 
                 // Remove from FrameGroup too
                 const fg = state.session.getFrameGroup(frameIdx);

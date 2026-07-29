@@ -8,6 +8,7 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
+    toBoxedPoints3d, asPoints3d, someValidPoint3d,
 } from '../pose/pose-data.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
@@ -257,7 +258,7 @@ function serializeSessionFrames(session) {
                 id: group.id,
                 identityId: group.identityId != null ? group.identityId : -1,
                 instances: {},
-                points3d: group.points3d || null,
+                points3d: toBoxedPoints3d(group.points3d),
                 reprojections: group.reprojections || null,
                 observedPoints: group.observedPoints || null,
                 dirty: group.dirty || false,
@@ -504,7 +505,7 @@ async function buildSlpBytes(opts) {
         for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
             for (var _dbgG of _dbgGroups) {
                 dbgGroupCount++;
-                if (_dbgG.points3d && _dbgG.points3d.some(function(p) { return p != null; })) dbgWith3d++;
+                if (someValidPoint3d(_dbgG.points3d)) dbgWith3d++;
             }
         }
         console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
@@ -952,7 +953,7 @@ export function saveProject() {
                 id: group.id,
                 identityId: group.identityId != null ? group.identityId : -1,
                 instances: {},
-                points3d: group.points3d || null,
+                points3d: toBoxedPoints3d(group.points3d),
                 reprojections: group.reprojections || null,
                 observedPoints: group.observedPoints || null,
                 dirty: group.dirty || false,
@@ -1519,14 +1520,14 @@ function _restoreProjectV2(data) {
                         : (groupData.trackIdx != null ? groupData.trackIdx : -1);
                     var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                     if (groupData.points3d) {
-                        group.points3d = groupData.points3d;
+                        group.points3d = asPoints3d(groupData.points3d);
                     }
                     if (groupData.reprojections) {
                         group.reprojections = groupData.reprojections;
                     }
-                    if (groupData.observedPoints) {
-                        group.observedPoints = groupData.observedPoints;
-                    }
+                    // groupData.observedPoints is ignored on restore: it is now
+                    // DERIVED from the group's instances, which are rebuilt just
+                    // below. Still written on save for backward compat (luc3d #189).
 
                     for (var camName in groupData.instances) {
                         var instData = groupData.instances[camName];
@@ -1627,8 +1628,10 @@ function _restoreProjectV2(data) {
                     // the Undistorted headline isn't blank for loaded projects.
                     var trErrorsUndist = {};
                     var trTotalErrU = 0, trTotalCountU = 0;
+                    // Derived (luc3d #189) — hoist, it allocates per access.
+                    var trObserved = trGroup.observedPoints;
                     for (var trCamName in trGroup.reprojections) {
-                        var trObs = trGroup.observedPoints ? trGroup.observedPoints[trCamName] : null;
+                        var trObs = trObserved[trCamName] || null;
                         var trRep = trGroup.reprojections[trCamName];
                         if (!trObs || !trRep) continue;
                         trErrors[trCamName] = [];

@@ -678,6 +678,36 @@ export class InstanceGroup {
     }
 
     /**
+     * The 2D points paired with this group's reprojections, per camera —
+     * `{ cameraName: Instance.points }` for every member instance.
+     *
+     * DERIVED, not stored (luc3d #189). It was previously an own property that
+     * nine sites rebuilt as exactly this object right after triangulating, and
+     * that two more hand-patched on member add/remove to "keep observedPoints in
+     * sync" — the sync a getter does for free. As a stored object it was 531,799
+     * plain objects on the real project, a measured 74 MB of the ~4 GB
+     * pointer-compressed heap that both the merged save and the project reload
+     * run out of.
+     *
+     * Read-only ON PURPOSE: there is no setter, so a leftover
+     * `group.observedPoints = ...` throws a TypeError in strict mode (all ES
+     * modules) rather than silently reintroducing a stored copy that can drift
+     * from `instances`.
+     *
+     * ALLOCATES a fresh object per access — hoist it into a local before reading
+     * it per camera in a loop.
+     *
+     * @returns {Object.<string, (number[]|null)[]>}
+     */
+    get observedPoints() {
+        var out = {};
+        for (var [camName, inst] of this.instances) {
+            if (inst && inst.points) out[camName] = inst.points;
+        }
+        return out;
+    }
+
+    /**
      * Mark this group as needing re-triangulation.
      */
     markDirty() {
@@ -2040,6 +2070,178 @@ export function clonePoints(points) {
         cloned[i] = pt != null ? [pt[0], pt[1]] : null;
     }
     return cloned;
+}
+
+
+// --------------------------------------------------------------------------
+// 3D point arrays (`InstanceGroup.points3d`)
+// --------------------------------------------------------------------------
+//
+// A triangulated pose is stored as a FLAT `Float64Array` of `3 * nNodes`
+// coordinates — node k occupies [3k, 3k+1, 3k+2] — rather than as an array of
+// boxed `[x,y,z]|null` triples.
+//
+// WHY: on the real 180,210-frame project there are 531,799 instance groups x 15
+// nodes = 7,976,985 keypoints. As boxed rows that measured 808 B per group
+// (410 MB) held entirely in V8's pointer-compressed heap, which a Chrome
+// renderer hard-caps near 4 GB. Flat, the same data is ~116 B per group in the
+// cage (59 MB) plus a backing store that lives OUTSIDE the cap. Measured, not
+// estimated: see `tests/e2e/_diag-repr-sizing.mjs`.
+//
+// f64 (not f32) is deliberate: it costs nothing in the cage — only the external
+// backing store doubles — and keeps every coordinate bit-identical to the boxed
+// representation, so `tests/e2e/save-golden-digest.mjs` stays byte-for-byte
+// unchanged across the conversion.
+//
+// A missing / un-triangulated node is an ALL-NaN triple, replacing the old
+// `null` row. This collapses "null" and "NaN-valued" into one state, which the
+// SLP format has always done anyway (it writes NaN for missing 3D keypoints),
+// so a save/reload round-trip already erased the distinction.
+
+/** Coordinates per node in a `points3d` array. */
+export var POINT3D_STRIDE = 3;
+
+/**
+ * Allocate a `points3d` array with every node marked missing (all-NaN).
+ * @param {number} nNodes
+ * @returns {Float64Array}
+ */
+export function makePoints3d(nNodes) {
+    var pts = new Float64Array(nNodes * POINT3D_STRIDE);
+    pts.fill(NaN);
+    return pts;
+}
+
+/** Number of nodes a `points3d` array holds. @param {Float64Array} pts */
+export function points3dNodeCount(pts) {
+    return pts ? (pts.length / POINT3D_STRIDE) | 0 : 0;
+}
+
+/**
+ * Is node `k` triangulated? A node counts as present only when all three
+ * coordinates are finite — a partially-NaN triple is meaningless in 3D.
+ * @param {Float64Array} pts
+ * @param {number} k
+ */
+export function hasPoint3d(pts, k) {
+    if (!pts) return false;
+    var o = k * POINT3D_STRIDE;
+    return !Number.isNaN(pts[o]) && !Number.isNaN(pts[o + 1]) && !Number.isNaN(pts[o + 2]);
+}
+
+/**
+ * Read node `k` as a boxed `[x,y,z]`, or null when missing. ALLOCATES — for
+ * one-off reads. Use `readPoint3d` in a loop.
+ * @param {Float64Array} pts
+ * @param {number} k
+ * @returns {number[]|null}
+ */
+export function getPoint3d(pts, k) {
+    if (!hasPoint3d(pts, k)) return null;
+    var o = k * POINT3D_STRIDE;
+    return [pts[o], pts[o + 1], pts[o + 2]];
+}
+
+/**
+ * Allocation-free read of node `k` into a caller-owned 3-element `out`.
+ * @param {Float64Array} pts
+ * @param {number} k
+ * @param {number[]} out
+ * @returns {number[]|null} `out` when the node is present, else null
+ */
+export function readPoint3d(pts, k, out) {
+    if (!hasPoint3d(pts, k)) return null;
+    var o = k * POINT3D_STRIDE;
+    out[0] = pts[o]; out[1] = pts[o + 1]; out[2] = pts[o + 2];
+    return out;
+}
+
+/**
+ * Write node `k`. A null/undefined `xyz` marks the node missing.
+ * @param {Float64Array} pts
+ * @param {number} k
+ * @param {number[]|null} xyz
+ */
+export function setPoint3d(pts, k, xyz) {
+    var o = k * POINT3D_STRIDE;
+    if (xyz == null) {
+        pts[o] = NaN; pts[o + 1] = NaN; pts[o + 2] = NaN;
+    } else {
+        pts[o] = xyz[0]; pts[o + 1] = xyz[1]; pts[o + 2] = xyz[2];
+    }
+}
+
+/** Mark node `k` missing. @param {Float64Array} pts @param {number} k */
+export function clearPoint3d(pts, k) {
+    var o = k * POINT3D_STRIDE;
+    pts[o] = NaN; pts[o + 1] = NaN; pts[o + 2] = NaN;
+}
+
+/** Does any node have a triangulated position? @param {Float64Array} pts */
+export function someValidPoint3d(pts) {
+    if (!pts) return false;
+    for (var k = 0, n = points3dNodeCount(pts); k < n; k++) {
+        if (hasPoint3d(pts, k)) return true;
+    }
+    return false;
+}
+
+/** How many nodes are triangulated. @param {Float64Array} pts */
+export function countPoints3d(pts) {
+    var c = 0;
+    for (var k = 0, n = points3dNodeCount(pts); k < n; k++) {
+        if (hasPoint3d(pts, k)) c++;
+    }
+    return c;
+}
+
+/** Copy a `points3d` array. @param {Float64Array} pts */
+export function clonePoints3d(pts) {
+    return pts ? new Float64Array(pts) : null;
+}
+
+/**
+ * Boxed `[[x,y,z]|null, ...]` view, for the serialization boundaries that must
+ * keep emitting the legacy shape (the JSON project format, the points3d.h5
+ * export). ALLOCATES the whole boxed structure — never call it on a whole
+ * project's worth of groups at once.
+ * @param {Float64Array} pts
+ * @returns {(number[]|null)[]|null}
+ */
+export function toBoxedPoints3d(pts) {
+    if (!pts) return null;
+    var n = points3dNodeCount(pts);
+    var out = new Array(n);
+    for (var k = 0; k < n; k++) out[k] = getPoint3d(pts, k);
+    return out;
+}
+
+/**
+ * Build a `points3d` array from boxed `[[x,y,z]|null, ...]` rows.
+ * @param {(number[]|null)[]} boxed
+ * @returns {Float64Array|null}
+ */
+export function fromBoxedPoints3d(boxed) {
+    if (!boxed) return null;
+    var pts = new Float64Array(boxed.length * POINT3D_STRIDE);
+    for (var k = 0; k < boxed.length; k++) setPoint3d(pts, k, boxed[k]);
+    return pts;
+}
+
+/**
+ * Normalize whatever a reader handed us into the flat representation: a
+ * `Float64Array` passes through untouched (no copy), boxed rows are converted,
+ * null stays null. Use this at every ingest boundary — the SLP reader emits
+ * flat arrays on the columnar path but boxed rows on the legacy fallback, and
+ * restored JSON projects are always boxed.
+ * @param {Float64Array|(number[]|null)[]|null} v
+ * @returns {Float64Array|null}
+ */
+export function asPoints3d(v) {
+    if (v == null) return null;
+    if (v instanceof Float64Array) return v;
+    if (ArrayBuffer.isView(v)) return new Float64Array(v);
+    return fromBoxedPoints3d(v);
 }
 
 

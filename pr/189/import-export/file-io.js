@@ -11,7 +11,8 @@
  * Depends on pose-data.js (Camera class).
  */
 
-import { Camera, Skeleton, Instance, Identity } from '../pose/pose-data.js';
+import { Camera, Skeleton, Instance, Identity,
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js';
 import { validateSkeletonCompatibility } from './slp-merge.js';
 import { getOrComputeReprojectedInstance } from '../pose/triangulation.js';
 
@@ -670,7 +671,7 @@ export function buildSlpExportData(session, views, videoFiles) {
                 score: 1.0,
             };
             if (group.points3d) {
-                igData.points = group.points3d;
+                igData.points = toBoxedPoints3d(group.points3d);
             }
             if (group.identityId != null && group.identityId >= 0) {
                 // Map identityId to index in session.identities array
@@ -779,10 +780,11 @@ export function buildPoints3dExportData(session) {
                 if (idIdx < 0 || idIdx >= numTracks) continue;
                 if (group.points3d) {
                     hasData = true;
-                    for (let n = 0; n < Math.min(numNodes, group.points3d.length); n++) {
-                        // Missing nodes are null in the data model; leave the
+                    const _nPts = Math.min(numNodes, points3dNodeCount(group.points3d));
+                    for (let n = 0; n < _nPts; n++) {
+                        // Missing nodes are all-NaN in the data model; leave the
                         // [NaN,NaN,NaN] default so they round-trip back to NaN.
-                        var p = group.points3d[n];
+                        var p = getPoint3d(group.points3d, n);
                         if (p != null) framePts[idIdx][n] = p;
                     }
                 }
@@ -1960,6 +1962,10 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
 
             // Build Instance3D from group.points3d
             var instance3d = undefined;
+            // Shape-agnostic on purpose: LUCID always produces a flat
+            // Float64Array now, and the vendored writer consumes that directly
+            // (LUCID local patch, luc3d #189) with no boxing — but it still
+            // accepts boxed rows, so don't reject them here.
             if (group.points3d && group.points3d.length > 0) {
                 instance3d = new SIO.Instance3D({ points: group.points3d, skeleton: skeleton });
             }

@@ -7,6 +7,7 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
+    asPoints3d, points3dNodeCount, someValidPoint3d,
 } from '../pose/pose-data.js';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
@@ -229,8 +230,9 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             }
 
             // Restore 3D points
-            if (igDict.points && Array.isArray(igDict.points)) {
-                group.points3d = igDict.points;
+            var _igPts = asPoints3d(igDict.points);
+            if (points3dNodeCount(_igPts) > 0) {
+                group.points3d = _igPts;
                 restoredWith3d++;
             }
 
@@ -413,10 +415,14 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 fg3.addInstance(igCamName, inst);
             }
 
-            // Restore 3D points from the typed Instance3D.
+            // Restore 3D points from the typed Instance3D. `asPoints3d` accepts
+            // BOTH forms the reader can produce: the columnar path emits a flat
+            // Float64Array (passed through with NO copy), the legacy fallback
+            // emits boxed rows.
             var i3d = typedIG.instance3d;
-            if (i3d && Array.isArray(i3d.points) && i3d.points.length > 0) {
-                group.points3d = i3d.points;
+            var _i3dPts = asPoints3d(i3d && i3d.points);
+            if (points3dNodeCount(_i3dPts) > 0) {
+                group.points3d = _i3dPts;
                 restoredWith3d++;
             }
 
@@ -449,7 +455,8 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
  * (a real cage5 project is 108k frames / 427k groups / 1.25M members / 7.26M 3D
  * points — the eager reopen OOMs a 4.4 GB tab; this reproduces the ~2.2 GB
  * save-time footprint instead):
- *  - **Reuses** each `Instance3D.points` array in place (`group.points3d = i3d.points`)
+ *  - **Reuses** each `Instance3D.points` array in place (`asPoints3d` passes the
+ *    reader's flat Float64Array through uncopied)
  *    rather than copying — avoids a second 7.26M-coord allocation.
  *  - **Releases** each typed `FrameGroup` from `typedSession.frameGroups` right
  *    after building its LUCID groups, so the typed graph shrinks as the LUCID one
@@ -551,8 +558,9 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             }
 
             var i3d = typedIG.instance3d;
-            if (i3d && Array.isArray(i3d.points) && i3d.points.length > 0) {
-                group.points3d = i3d.points; // REUSE — do not copy 7.26M coords
+            var _i3dPts = asPoints3d(i3d && i3d.points);
+            if (points3dNodeCount(_i3dPts) > 0) {
+                group.points3d = _i3dPts; // REUSE — asPoints3d passes a flat array through uncopied
                 restoredWith3d++;
             }
 
@@ -1064,7 +1072,7 @@ export async function handleLoadSlpFile(slpFile) {
             var hasAny3d = false;
             for (var [, groups3d] of session.instanceGroups) {
                 for (var g3d of groups3d) {
-                    if (g3d.points3d && g3d.points3d.some(function (p) { return p != null; })) {
+                    if (someValidPoint3d(g3d.points3d)) {
                         hasAny3d = true;
                         break;
                     }
@@ -1078,7 +1086,7 @@ export async function handleLoadSlpFile(slpFile) {
                 for (var [frameIdx3, groups3] of session.instanceGroups) {
                     var frameTriResults = [];
                     for (var grp of groups3) {
-                        if (!grp.points3d || !grp.points3d.some(function (p) { return p != null; })) continue;
+                        if (!someValidPoint3d(grp.points3d)) continue;
                         // Build reprojections from 3D points for each camera
                         var reprojResult = { reprojections: {}, points3d: grp.points3d };
                         for (var ci2 = 0; ci2 < session.cameras.length; ci2++) {
@@ -1091,19 +1099,16 @@ export async function handleLoadSlpFile(slpFile) {
                         grp.reprojections = reprojResult.reprojections;
                         storeReprojectedInstances(grp, reprojResult, session.cameras);
 
-                        // Build observedPoints from group's 2D instances
-                        grp.observedPoints = {};
-                        for (var ci3 = 0; ci3 < session.cameras.length; ci3++) {
-                            var obsInst = grp.getInstance(session.cameras[ci3].name);
-                            if (obsInst) grp.observedPoints[session.cameras[ci3].name] = obsInst.points;
-                        }
+                        // `observedPoints` is derived from grp.instances — hoist
+                        // it once, it allocates per access (luc3d #189).
+                        var grpObserved = grp.observedPoints;
 
                         // Compute per-camera reprojection errors (distorted/native
                         // pixel space): re-distorted reprojection vs raw observation.
                         var trErrors = {};
                         var trTotalErr = 0, trTotalCount = 0;
                         for (var trCamName in grp.reprojections) {
-                            var trObs = grp.observedPoints[trCamName];
+                            var trObs = grpObserved[trCamName];
                             var trRep = grp.reprojections[trCamName];
                             if (trObs && trRep) {
                                 trErrors[trCamName] = computeReprojectionErrors(trObs, trRep);
@@ -1125,7 +1130,7 @@ export async function handleLoadSlpFile(slpFile) {
                         for (var ciu = 0; ciu < session.cameras.length; ciu++) {
                             var camU = session.cameras[ciu];
                             if (!camU.projectionMatrix) continue;
-                            var rawObsU = grp.observedPoints[camU.name];
+                            var rawObsU = grpObserved[camU.name];
                             if (!rawObsU) continue;
                             var idealRep = reprojectPoints(grp.points3d, camU.projectionMatrix);
                             var obsUndist = [];
@@ -2080,12 +2085,12 @@ export async function handleLoadPoints3dH5() {
                 }
                 if (existingGroup) {
                     // Assign 3D points to existing group
-                    existingGroup.points3d = pts3d;
+                    existingGroup.points3d = asPoints3d(pts3d);
                     existingGroup.markClean();
                 } else {
                     // Create a new InstanceGroup with just 3D data
                     var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
-                    newGroup.points3d = pts3d;
+                    newGroup.points3d = asPoints3d(pts3d);
                     newGroup.markClean();
                     frameGroupsList.push(newGroup);
                 }

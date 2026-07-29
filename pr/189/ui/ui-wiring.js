@@ -22,7 +22,8 @@ import {
     getCachedTimelineHeight,
     setCachedTimelineHeight,
 } from './timeline-controller.js';
-import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session } from '../pose/pose-data.js';
+import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
+         someValidPoint3d } from '../pose/pose-data.js';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject } from '../pose/triangulation.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
@@ -800,7 +801,7 @@ export function setupMenus() {
             if (groupCams.length < 2) continue;
             var result = triangulateAndReproject(group, groupCams);
             group.points3d = result.points3d;
-            if (group.points3d && group.points3d.some(function (p) { return p != null; })) {
+            if (someValidPoint3d(group.points3d)) {
                 envGroups.push(group);
             }
         }

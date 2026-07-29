@@ -7,7 +7,7 @@
 // every grouping workflow needs after unlinking/removing a group.
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager } from './app-state.js';
-import { InstanceGroup, UnlinkedInstance } from '../pose/pose-data.js';
+import { InstanceGroup, UnlinkedInstance, someValidPoint3d } from '../pose/pose-data.js';
 import {
     frameHasGroupedUserInstances, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
@@ -163,7 +163,6 @@ export function purgeTriangulationDataForGroup(frameIdx, group) {
         group.reprojectedInstances.clear();
     }
     group.reprojections = null;
-    group.observedPoints = null;
     group.points3d = null;
     var existing = state.triangulationResults.get(frameIdx);
     if (existing) {
@@ -570,12 +569,6 @@ export function runAutomaticAssignment(selectedViewNames) {
             group.points3d = result.points3d;
             group.reprojections = result.reprojections;
             storeReprojectedInstances(group, result, cameras);
-            group.observedPoints = {};
-            for (var cc = 0; cc < groupCameras.length; cc++) {
-                var cam = groupCameras[cc];
-                var inst = group.getInstance(cam.name);
-                if (inst) group.observedPoints[cam.name] = inst.points;
-            }
             group.markClean();
         }
     }
@@ -658,10 +651,7 @@ export function runTrackedAssignment(viewNames, prevGroups) {
     // Filter to prev groups that have valid 3D points
     var validPrevGroups = [];
     for (var pi = 0; pi < prevGroups.length; pi++) {
-        if (prevGroups[pi].points3d) {
-            var hasValid = prevGroups[pi].points3d.some(function (p) { return p != null; });
-            if (hasValid) validPrevGroups.push(prevGroups[pi]);
-        }
+        if (someValidPoint3d(prevGroups[pi].points3d)) validPrevGroups.push(prevGroups[pi]);
     }
 
     if (validPrevGroups.length === 0) {
@@ -776,12 +766,6 @@ export function runTrackedAssignment(viewNames, prevGroups) {
                 group.points3d = result.points3d;
                 group.reprojections = result.reprojections;
                 storeReprojectedInstances(group, result, cameras);
-                group.observedPoints = {};
-                for (var cci = 0; cci < groupCameras.length; cci++) {
-                    var cam2 = groupCameras[cci];
-                    var inst2 = group.getInstance(cam2.name);
-                    if (inst2) group.observedPoints[cam2.name] = inst2.points;
-                }
                 group.markClean();
             }
 

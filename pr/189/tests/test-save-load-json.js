@@ -72,10 +72,8 @@
             'CamA': [[101, 151], [201, 251], null],
             'CamB': [[111, 161], [211, 261], null],
         };
-        group0.observedPoints = {
-            'CamA': instA0.points,
-            'CamB': instB0.points,
-        };
+        // (observedPoints is DERIVED from group0.instances since luc3d #189 —
+        // the members added above already supply it; no fixture assignment.)
         group0.usedCameras = new Set(['CamA', 'CamB']);
         group0.markClean();
 
@@ -250,7 +248,8 @@
                         if (groupData.identityId != null) group.identityId = groupData.identityId;
                         if (groupData.points3d) group.points3d = groupData.points3d;
                         if (groupData.reprojections) group.reprojections = groupData.reprojections;
-                        if (groupData.observedPoints) group.observedPoints = groupData.observedPoints;
+                        // groupData.observedPoints ignored — DERIVED from the
+                        // instances rebuilt below (luc3d #189), mirroring production.
                         if (groupData.usedCameras) group.usedCameras = new Set(groupData.usedCameras);
 
                         for (var camName in groupData.instances) {
