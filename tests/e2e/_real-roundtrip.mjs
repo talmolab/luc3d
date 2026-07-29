@@ -36,6 +36,7 @@ const NCAM = Number(process.env.NCAM || process.argv[4] || ALL_CAMS.length);
 const CAMS = ALL_CAMS.slice(0, NCAM);
 const OUT_SLP = path.join(repoRoot, `_real-roundtrip-${process.pid}.slp`);
 
+const RELOAD_FILE = process.env.RELOAD_FILE || null;   // skip straight to the reload stage
 const STAGE_ORDER = ['load', 'track', 'tri', 'save', 'reload'];
 const upto = STAGE === 'all' ? STAGE_ORDER.length : (STAGE_ORDER.indexOf(STAGE) + 1);
 if (upto < 1) { console.error('unknown stage', STAGE); process.exit(2); }
@@ -59,6 +60,10 @@ try {
     const page = await browser.newPage();
     page.on('pageerror', e => log(`  [${el()}] [pageerror] ` + String(e).slice(0, 300)));
     page.on('crash', () => { log(`  [${el()}] *** RENDERER CRASHED ***`); fails++; });
+    // Track All asks for the animal count via window.prompt(); Playwright
+    // auto-DISMISSES dialogs, which makes promptNumAnimals() return false and
+    // trackAll() bail in 2 ms. Answer it. 3 matches the real run's identity count.
+    page.on('dialog', async d => { await d.accept(process.env.NANIMALS || '3'); });
     page.on('console', m => {
         const t = m.text();
         if (/phase:|\[slp-streaming-write\]|\[save-slp\]|MEM:|FETCH|\[session-folder\]/.test(t)) log(`  [${el()}] ${t.slice(0, 220)}`);
@@ -114,7 +119,24 @@ try {
     const mem = (label) => page.evaluate(l => window.__mem(l), label);
 
     // ---------------- STAGE 1: load ----------------
+    if (!RELOAD_FILE) {
     log(`\n[${el()}] === STAGE load ===`);
+    // The folder loader opens a blocking "Missing Camera Directories / Missing
+    // Video Files" popup whenever calibration lists a camera we did not supply,
+    // or a camera has annotations but no video — and we deliberately defer the
+    // 1.9 GB of mp4s. Headlessly nothing ever clicks Continue, so auto-dismiss it.
+    await page.evaluate(() => {
+        window.__dismissed = 0;
+        window.__autoDismiss = setInterval(() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            for (const b of btns) {
+                if (b.textContent.trim() === 'Continue' && b.offsetParent !== null) {
+                    b.click(); window.__dismissed++;
+                }
+            }
+        }, 250);
+    });
+
     const loadRes = await page.evaluate(async ({ PROJ, CAMS }) => {
         const sl = await import('/loading/session-loader.js');
         const files = [];
@@ -151,9 +173,12 @@ try {
         };
     }, { PROJ, CAMS });
     log(`[${el()}] load: ${loadRes.ms} ms ` + JSON.stringify(loadRes).slice(0, 240));
+    log(`[${el()}] auto-dismissed ${await page.evaluate(() => window.__dismissed)} modal(s)`);
     check(loadRes.hasSession, 'session loaded');
     check(loadRes.nFrames >= 180000, `lazy loader sees all frames (${loadRes.nFrames})`);
-    check((loadRes.cameras || []).length === CAMS.length, `${CAMS.length} cameras (${(loadRes.cameras || []).length})`);
+    // Cameras come from the calibration TOML (always 5), independent of how
+    // many camera directories were supplied.
+    check((loadRes.cameras || []).length === 5, `5 cameras from calibration (${(loadRes.cameras || []).length})`);
     await mem('after load');
 
     // ---------------- STAGE 2: Track All ----------------
@@ -218,25 +243,50 @@ try {
         await mem('after save');
     }
 
+    } // end of the load->save prefix (skipped when RELOAD_FILE is set)
+
     // ---------------- STAGE 5: reload the saved file ----------------
-    if (upto >= 5 && bytesWritten > 0) {
+    if (upto >= 5 && (bytesWritten > 0 || RELOAD_FILE)) {
         log(`\n[${el()}] === STAGE reload ===`);
-        const servedName = path.basename(OUT_SLP);
+        const servedName = RELOAD_FILE ? path.basename(RELOAD_FILE) : path.basename(OUT_SLP);
         const page2 = await browser.newPage();
         page2.on('pageerror', e => log(`  [${el()}] [p2 pageerror] ` + String(e).slice(0, 300)));
         page2.on('crash', () => { log(`  [${el()}] *** p2 RENDERER CRASHED ***`); fails++; });
         page2.on('console', m => { const t = m.text(); if (/MEM:|phase:/.test(t)) log(`  [${el()}] ${t.slice(0, 220)}`); });
         await page2.goto(`http://localhost:${PORT}/index.html`);
         await page2.waitForFunction(() => window.__lucid && window.SleapIO, { timeout: 30000 });
-        const r2 = await page2.evaluate(async (name) => {
-            const sl = await import('/loading/session-loader.js');
-            const resp = await fetch('/' + name);
-            const buf = await resp.arrayBuffer();
-            const f = new File([buf], name);
-            const t = performance.now();
-            let err = null;
-            try { await sl.handleLoadProjectSlpLazy(f); }
-            catch (e) { err = String(e && e.stack || e).slice(0, 400); }
+        // Auto-dismiss the missing-files popup and the "attach videos" modal
+        // that handleLoadProjectSlpLazy awaits near its end.
+        await page2.evaluate(() => {
+            setInterval(() => {
+                for (const b of Array.from(document.querySelectorAll('button'))) {
+                    const t = b.textContent.trim();
+                    if ((t === 'Continue' || t === 'Skip' || t === 'Skip Videos' ||
+                         t === 'Cancel' || t === 'Close') && b.offsetParent !== null) b.click();
+                }
+            }, 250);
+        });
+
+        // Fire the loader WITHOUT awaiting it: it ends in an interactive
+        // attach-videos modal that never resolves headlessly. Everything under
+        // test (grouping + 3D reconstruction) completes before that await, so
+        // poll the resulting state instead of blocking on the whole chain.
+        await page2.evaluate((name) => {
+            window.__reload = { done: false, err: null, t0: performance.now() };
+            (async () => {
+                try {
+                    const sl = await import('/loading/session-loader.js');
+                    const resp = await fetch('/' + name);
+                    const buf = await resp.arrayBuffer();
+                    const f = new File([buf], name);
+                    sl.handleLoadProjectSlpLazy(f)
+                        .then(() => { window.__reload.done = true; })
+                        .catch(e => { window.__reload.err = String(e && e.stack || e).slice(0, 400); });
+                } catch (e) { window.__reload.err = String(e && e.stack || e).slice(0, 400); }
+            })();
+        }, servedName);
+
+        const probe = () => page2.evaluate(() => {
             const s = window.__lucid.state.session;
             let groups = 0, with3d = 0;
             if (s && s.instanceGroups) {
@@ -245,12 +295,28 @@ try {
                 }
             }
             return {
-                ms: Math.round(performance.now() - t), err,
                 groups, with3d,
                 fim: s && s.frameIdentityMap ? s.frameIdentityMap.size : 0,
+                err: window.__reload.err, done: window.__reload.done,
+                ms: Math.round(performance.now() - window.__reload.t0),
                 usedMB: +(performance.memory.usedJSHeapSize / 1048576).toFixed(0),
             };
-        }, servedName);
+        });
+
+        const RELOAD_TIMEOUT_MS = 40 * 60 * 1000;
+        const pollStart = Date.now();
+        let r2 = await probe();
+        while (Date.now() - pollStart < RELOAD_TIMEOUT_MS && !r2.err && r2.groups === 0 && !r2.done) {
+            await new Promise(r => setTimeout(r, 5000));
+            r2 = await probe();
+        }
+        // Groups appear incrementally — wait for the count to stop moving.
+        let prev = -1;
+        while (!r2.err && r2.groups !== prev && Date.now() - pollStart < RELOAD_TIMEOUT_MS) {
+            prev = r2.groups;
+            await new Promise(r => setTimeout(r, 10000));
+            r2 = await probe();
+        }
         log(`[${el()}] reload: ${r2.ms} ms ` + JSON.stringify(r2).slice(0, 260));
         check(!r2.err, `reload completed${r2.err ? ' — ' + r2.err : ''}`);
         check(r2.groups > 100000, `grouping round-tripped (${r2.groups.toLocaleString()} groups)`);
