@@ -72,8 +72,12 @@ export function Detection(instance, cam, frameIdx, slot) {
     this.cam = cam;                                    // Camera (has extrinsicMatrix, name, matrix)
     this.frameIdx = frameIdx;
     this.slot = slot;                                  // detection index within (cam, frame)
-    this.pointsPixel = instance.points;                // raw pixel keypoints ([x,y]|null)
-    this.pointsNorm = instance.points.map(function (p) { return normalizePoint(p, cam); });
+    // Boxed snapshots taken ONCE per detection. `Instance` stores coords flat
+    // (luc3d #189 follow-up #1); epipolarErrorMatrix and the matching loops below
+    // want boxed rows, and a Detection is created once per (cam, frame, slot),
+    // so materializing here is cheaper than converting at every read.
+    this.pointsPixel = instance.toPointsArray();       // raw pixel keypoints ([x,y]|null)
+    this.pointsNorm = this.pointsPixel.map(function (p) { return normalizePoint(p, cam); });
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +136,7 @@ export class CrossViewTracker {
      *   user-supplied animal count. null (default) == faithful reference
      *   behavior; a positive integer stops births once that many targets exist.
      *   nodeWeights (null) — DIVERGENCE FROM REFERENCE. Per-node weight array
-     *   (indexed to match `Instance.points`) from the Tracking Wizard. Each
+     *   (indexed to match the skeleton's nodes) from the Tracking Wizard. Each
      *   node's contribution to the 2D + 3D association cost is scaled by its
      *   weight; a weight of 0 drops the node from matching entirely. null
      *   (default) == every node weighted 1 (faithful reference behavior).

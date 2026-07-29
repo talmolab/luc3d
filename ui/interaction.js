@@ -325,7 +325,7 @@ export class InteractionManager {
                 // Collect candidate instances for this group in this view
                 var candidates = [];
                 var mainInst = group.getInstance(viewName);
-                if (mainInst && mainInst.points) {
+                if (mainInst && mainInst.numNodes > 0) {
                     var mainType = mainInst.type || 'user';
                     var visUserEl = document.getElementById('visUser');
                     var visPredEl = document.getElementById('visPredicted');
@@ -340,12 +340,12 @@ export class InteractionManager {
                 // Also consider reprojected instance, but ONLY if there's no main
                 // instance for this view — reprojected should never block clicking
                 // the main instance (user or predicted)
-                if (!mainInst || !mainInst.points) {
+                if (!mainInst || mainInst.numNodes === 0) {
                     var visReprojEl2 = document.getElementById('visReprojections');
                     if (typePassFilters[pass]('reprojected') &&
                         (!visReprojEl2 || visReprojEl2.checked)) {
                         var reprojInst = getOrComputeReprojectedInstance(group, viewName);
-                        if (reprojInst && reprojInst.points) {
+                        if (reprojInst && reprojInst.numNodes > 0) {
                             candidates.push({ inst: reprojInst, isReproj: true });
                         }
                     }
@@ -356,12 +356,11 @@ export class InteractionManager {
                     var hitReprojected = candidates[ci].isReproj;
 
                     // --- Node hit testing ---
-                    for (let n = 0; n < instance.points.length; n++) {
-                        const pt = instance.points[n];
-                        if (pt == null) continue;
+                    for (let n = 0; n < instance.numNodes; n++) {
+                        if (!instance.hasPoint(n)) continue;
 
-                        const dx = pt[0] - videoX;
-                        const dy = pt[1] - videoY;
+                        const dx = instance.getX(n) - videoX;
+                        const dy = instance.getY(n) - videoY;
                         const dist = Math.sqrt(dx * dx + dy * dy);
 
                         if (dist < nodeThreshold && dist < bestDist) {
@@ -381,12 +380,12 @@ export class InteractionManager {
                     if (edges && !best) {
                         for (let ei = 0; ei < edges.length; ei++) {
                             const edge = edges[ei];
-                            const ptA = instance.points[edge[0]];
-                            const ptB = instance.points[edge[1]];
-                            if (ptA == null || ptB == null) continue;
+                            if (!instance.hasPoint(edge[0]) || !instance.hasPoint(edge[1])) continue;
 
                             const edgeDist = this._pointToSegmentDist(
-                                videoX, videoY, ptA[0], ptA[1], ptB[0], ptB[1]);
+                                videoX, videoY,
+                                instance.getX(edge[0]), instance.getY(edge[0]),
+                                instance.getX(edge[1]), instance.getY(edge[1]));
 
                             if (edgeDist < edgeThreshold && edgeDist < bestDist) {
                                 bestDist = edgeDist;
@@ -458,8 +457,7 @@ export class InteractionManager {
         for (let pass = 0; pass < ulTypePassFilters.length; pass++) {
             for (let u = 0; u < unlinkedList.length; u++) {
                 const ul = unlinkedList[u];
-                const points = ul.instance.points;
-                if (!points) continue;
+                if (ul.instance.numNodes === 0) continue;
 
                 var ulType = ul.instance.type || 'user';
                 var visUserChk = document.getElementById('visUser');
@@ -472,12 +470,11 @@ export class InteractionManager {
                 // --- Node hit testing ---
                 // Use <= so later (newer) instances in the array win ties,
                 // matching the render order where newer instances draw on top.
-                for (let n = 0; n < points.length; n++) {
-                    const pt = points[n];
-                    if (pt == null) continue;
+                for (let n = 0; n < ul.instance.numNodes; n++) {
+                    if (!ul.instance.hasPoint(n)) continue;
 
-                    const dx = pt[0] - videoX;
-                    const dy = pt[1] - videoY;
+                    const dx = ul.instance.getX(n) - videoX;
+                    const dy = ul.instance.getY(n) - videoY;
                     const dist = Math.sqrt(dx * dx + dy * dy);
 
                     if (dist < nodeThreshold && dist <= bestDist) {
@@ -494,12 +491,12 @@ export class InteractionManager {
                 if (edges && !best) {
                     for (let ei = 0; ei < edges.length; ei++) {
                         const edge = edges[ei];
-                        const ptA = points[edge[0]];
-                        const ptB = points[edge[1]];
-                        if (ptA == null || ptB == null) continue;
+                        if (!ul.instance.hasPoint(edge[0]) || !ul.instance.hasPoint(edge[1])) continue;
 
                         const edgeDist = this._pointToSegmentDist(
-                            videoX, videoY, ptA[0], ptA[1], ptB[0], ptB[1]);
+                            videoX, videoY,
+                            ul.instance.getX(edge[0]), ul.instance.getY(edge[0]),
+                            ul.instance.getX(edge[1]), ul.instance.getY(edge[1]));
 
                         if (edgeDist < edgeThreshold && edgeDist <= bestDist) {
                             bestDist = edgeDist;
@@ -925,19 +922,19 @@ export class InteractionManager {
             var predInst = ulHit.unlinked.instance;
             // Compute centroid of visible points for placing missing nodes
             var _cx = 0, _cy = 0, _cc = 0;
-            for (var _pi = 0; _pi < predInst.points.length; _pi++) {
-                if (predInst.points[_pi] != null) {
-                    _cx += predInst.points[_pi][0]; _cy += predInst.points[_pi][1]; _cc++;
+            for (var _pi = 0; _pi < predInst.numNodes; _pi++) {
+                if (predInst.hasPoint(_pi)) {
+                    _cx += predInst.getX(_pi); _cy += predInst.getY(_pi); _cc++;
                 }
             }
             if (_cc > 0) { _cx = Math.round(_cx / _cc); _cy = Math.round(_cy / _cc); }
             var _nulled = new Set();
             var _nullCount = 0;
-            for (var _ni = 0; _ni < predInst.points.length; _ni++) {
-                if (predInst.points[_ni] == null) _nullCount++;
+            for (var _ni = 0; _ni < predInst.numNodes; _ni++) {
+                if (!predInst.hasPoint(_ni)) _nullCount++;
             }
             var _nullIdx = 0;
-            var clonedPoints = predInst.points.map(function(pt, idx) {
+            var clonedPoints = predInst.toPointsArray().map(function(pt, idx) {
                 if (pt != null) return [pt[0], pt[1]];
                 // Missing point — fan out from centroid so they don't overlap
                 if (_cc > 0) {
@@ -1156,23 +1153,22 @@ export class InteractionManager {
                 }
             }
 
-            if (instance && instance.points) {
+            if (instance && instance.numNodes > 0) {
                 if (info.mode === 'instance' && info.originalPoints) {
                     // Whole-instance drag: finalize all translated points
                     const fdx = info.currentPos[0] - info.startPos[0];
                     const fdy = info.currentPos[1] - info.startPos[1];
-                    for (var fi = 0; fi < instance.points.length; fi++) {
+                    for (var fi = 0; fi < instance.numNodes; fi++) {
                         if (info.originalPoints[fi]) {
-                            instance.points[fi] = [
+                            instance.setPoint(fi,
                                 info.originalPoints[fi][0] + fdx,
-                                info.originalPoints[fi][1] + fdy
-                            ];
+                                info.originalPoints[fi][1] + fdy);
                         }
                     }
                     instance.type = 'user';
-                } else if (info.nodeIdx >= 0 && instance.points.length > info.nodeIdx) {
+                } else if (info.nodeIdx >= 0 && instance.numNodes > info.nodeIdx) {
                     // Single-node drag: finalize the single point
-                    instance.points[info.nodeIdx] = [info.currentPos[0], info.currentPos[1]];
+                    instance.setPoint(info.nodeIdx, info.currentPos[0], info.currentPos[1]);
                     instance.type = 'user';
                 }
 
@@ -1390,14 +1386,13 @@ export class InteractionManager {
      * @private
      */
     _resolveNearestNode(instance, vx, vy) {
-        if (!instance || !instance.points) return -1;
+        if (!instance || instance.numNodes === 0) return -1;
         var bestIdx = -1;
         var bestDist = Infinity;
-        for (var ni = 0; ni < instance.points.length; ni++) {
-            var pt = instance.points[ni];
-            if (pt == null) continue;
-            var dx = pt[0] - vx;
-            var dy = pt[1] - vy;
+        for (var ni = 0; ni < instance.numNodes; ni++) {
+            if (!instance.hasPoint(ni)) continue;
+            var dx = instance.getX(ni) - vx;
+            var dy = instance.getY(ni) - vy;
             var d = Math.sqrt(dx * dx + dy * dy);
             if (d < bestDist) {
                 bestDist = d;
@@ -1479,8 +1474,8 @@ export class InteractionManager {
         if (altDragSource) {
             mode = 'instance';
             var srcInst = unlinked ? unlinked.instance : altDragSource;
-            if (srcInst && srcInst.points) {
-                originalPoints = srcInst.points.map(function (p) { return p ? [p[0], p[1]] : null; });
+            if (srcInst && srcInst.numNodes > 0) {
+                originalPoints = srcInst.toPointsArray();
             }
         }
 
@@ -1566,20 +1561,19 @@ export class InteractionManager {
             }
         }
 
-        if (instance && instance.points) {
+        if (instance && instance.numNodes > 0) {
             if (info.mode === 'instance' && info.originalPoints) {
                 var dx = vx - info.startPos[0];
                 var dy = vy - info.startPos[1];
-                for (var pi = 0; pi < instance.points.length; pi++) {
+                for (var pi = 0; pi < instance.numNodes; pi++) {
                     if (info.originalPoints[pi]) {
-                        instance.points[pi] = [
+                        instance.setPoint(pi,
                             info.originalPoints[pi][0] + dx,
-                            info.originalPoints[pi][1] + dy
-                        ];
+                            info.originalPoints[pi][1] + dy);
                     }
                 }
-            } else if (info.nodeIdx >= 0 && instance.points.length > info.nodeIdx) {
-                instance.points[info.nodeIdx] = [vx, vy];
+            } else if (info.nodeIdx >= 0 && instance.numNodes > info.nodeIdx) {
+                instance.setPoint(info.nodeIdx, vx, vy);
             }
         }
 
@@ -1660,7 +1654,7 @@ export class InteractionManager {
      */
     _toggleNodeNull(viewName, group, nodeIdx) {
         const instance = group.getInstance(viewName);
-        if (!instance || !instance.points) return;
+        if (!instance || instance.numNodes === 0) return;
 
         if (!instance.nulledNodes) instance.nulledNodes = new Set();
 
@@ -1699,10 +1693,10 @@ export class InteractionManager {
 
                 // Compute centroid of visible points as fallback for missing nodes
                 var cx = 0, cy = 0, cCount = 0;
-                for (var ci = 0; ci < instance.points.length; ci++) {
-                    if (instance.points[ci] != null) {
-                        cx += instance.points[ci][0];
-                        cy += instance.points[ci][1];
+                for (var ci = 0; ci < instance.numNodes; ci++) {
+                    if (instance.hasPoint(ci)) {
+                        cx += instance.getX(ci);
+                        cy += instance.getY(ci);
                         cCount++;
                     }
                 }
@@ -1710,18 +1704,18 @@ export class InteractionManager {
 
                 // Count null points for fan-out spacing
                 var nullTotal = 0;
-                for (var ni = 0; ni < instance.points.length; ni++) {
-                    if (instance.points[ni] == null) nullTotal++;
+                for (var ni = 0; ni < instance.numNodes; ni++) {
+                    if (!instance.hasPoint(ni)) nullTotal++;
                 }
                 var nullSeq = 0;
 
                 // Deep copy the points array, filling nulls from reprojection or centroid
-                instance.points = instance.points.map(function (pt, idx) {
+                instance.setPointsFrom(instance.toPointsArray().map(function (pt, idx) {
                     if (pt != null) return [pt[0], pt[1]];
                     // Point is null — try reprojection first
-                    if (reprojInst && reprojInst.points && reprojInst.points[idx] != null) {
+                    if (reprojInst && reprojInst.hasPoint(idx)) {
                         nulled.add(idx);
-                        return [reprojInst.points[idx][0], reprojInst.points[idx][1]];
+                        return reprojInst.getPoint(idx);
                     }
                     // No reprojection — fan out from centroid so nodes don't overlap
                     if (cCount > 0) {
@@ -1733,7 +1727,7 @@ export class InteractionManager {
                                 Math.round(cy + Math.sin(angle) * spread)];
                     }
                     return null;
-                });
+                }));
                 if (nulled.size > 0) {
                     instance.nulledNodes = nulled;
                 }

@@ -205,8 +205,8 @@
             var i2 = g.getInstance('cam2');
             assert(i1 != null, 'should have cam1 instance');
             assert(i2 != null, 'should have cam2 instance');
-            assertEqual(i1.points[0][0], 100);
-            assertEqual(i2.points[0][0], 110);
+            assertEqual(i1.getX(0), 100);
+            assertEqual(i2.getX(0), 110);
         });
 
         it('restores unlinked instances', function () {
@@ -218,7 +218,7 @@
             var uls = fg.getUnlinkedInstances('cam1');
             assertEqual(uls.length, 1);
             assertEqual(uls[0].cameraName, 'cam1');
-            assertEqual(uls[0].instance.points[0][0], 50);
+            assertEqual(uls[0].instance.getX(0), 50);
         });
 
         it('restores points3d on groups', function () {
@@ -331,8 +331,8 @@
             var cam3Inst = group.getInstance('cam3');
             assert(cam3Inst != null, 'cam3 should now have an instance');
             assertEqual(cam3Inst.type, 'predicted');
-            assert(cam3Inst.points[0] != null, 'filled point should not be null');
-            assert(!isNaN(cam3Inst.points[0][0]), 'filled point X should not be NaN');
+            assert(cam3Inst.hasPoint(0), 'filled point should not be null');
+            assert(!isNaN(cam3Inst.getX(0)), 'filled point X should not be NaN');
         });
 
         it('skips groups with fewer than 2 labeled views', function () {
@@ -344,7 +344,7 @@
             var viewsWithLabels = 0;
             for (var ci = 0; ci < session.cameras.length; ci++) {
                 var inst = group.getInstance(session.cameras[ci].name);
-                if (inst && inst.points && inst.points.some(function (p) { return p != null; })) {
+                if (inst && inst.hasAnyPoint()) {
                     viewsWithLabels++;
                 }
             }
@@ -521,7 +521,7 @@
             var viewsBefore = 0;
             for (var ci = 0; ci < cameras.length; ci++) {
                 var inst = group.getInstance(cameras[ci].name);
-                if (inst && inst.points && inst.points.some(function (p) { return p != null; })) {
+                if (inst && inst.hasAnyPoint()) {
                     viewsBefore++;
                 }
             }
@@ -535,7 +535,7 @@
             var viewsAfter = 0;
             for (var ci2 = 0; ci2 < cameras.length; ci2++) {
                 var inst2 = group.getInstance(cameras[ci2].name);
-                if (inst2 && inst2.points && inst2.points.some(function (p) { return p != null; })) {
+                if (inst2 && inst2.hasAnyPoint()) {
                     viewsAfter++;
                 }
             }

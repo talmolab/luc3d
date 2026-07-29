@@ -1248,10 +1248,11 @@ function copySelectedInstance() {
     var skel = state.session.skeleton;
     var pointsByName = {};
     for (var i = 0; i < skel.nodes.length; i++) {
-        var p = inst.points[i];
+        // hasPoint/getX/getY instead of getPoint: the boxed row would be
+        // thrown away immediately (the clipboard entry gets its own array).
         pointsByName[skel.nodes[i]] = {
-            point: p ? [p[0], p[1]] : null,
-            occluded: !!(inst.occluded && inst.occluded[i])
+            point: inst.hasPoint(i) ? [inst.getX(i), inst.getY(i)] : null,
+            occluded: inst.isOccluded(i)
         };
     }
     setInstanceClipboard({

@@ -1927,8 +1927,8 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
 
                 const tdPoints = document.createElement('td');
                 tdPoints.className = 'mono';
-                const validPts = ul.instance.points.filter(function (p) { return p !== null; }).length;
-                tdPoints.textContent = validPts + '/' + ul.instance.points.length;
+                const validPts = ul.instance.countPoints();
+                tdPoints.textContent = validPts + '/' + ul.instance.numNodes;
 
                 const tdScore = document.createElement('td');
                 tdScore.className = 'mono';

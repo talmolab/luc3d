@@ -119,7 +119,7 @@ try {
             recovered0: pd.getPoint3d(g0.points3d, 0),
             // observedPoints must still expose the LIVE member arrays
             observedKeys: Object.keys(g0.observedPoints).sort(),
-            observedIsLive: g0.observedPoints.camA === g0.getInstance('camA').points,
+            observedMatches: JSON.stringify(g0.observedPoints.camA) === JSON.stringify(g0.getInstance('camA').toPointsArray()),
             hasReprojections: !!g0.reprojections && Object.keys(g0.reprojections).length === 3,
             usedCameras: g0.usedCameras ? Array.from(g0.usedCameras).sort() : null,
         };
@@ -138,7 +138,7 @@ try {
     check(err0 < 1e-6, `triangulation recovers the true 3D point (err=${err0.toExponential(2)})`);
     check(JSON.stringify(built.observedKeys) === '["camA","camB","camC"]',
         `observedPoints derives all 3 members (got ${JSON.stringify(built.observedKeys)})`);
-    check(built.observedIsLive, 'observedPoints exposes the LIVE inst.points array, not a copy');
+    check(built.observedMatches, 'observedPoints mirrors the member coordinates');
     check(built.hasReprojections, 'reprojections present for all 3 cameras');
     // NOT a regression: groupByIdentityAndTriangulateAll uses {triangulateOnly}
     // and has never populated usedCameras (verified against HEAD~). Asserted so a
@@ -365,18 +365,20 @@ try {
         const inst = new pd.Instance([[1, 2], [3, 4], [5, 6]], 0, 'user', 1);
         g.addInstance('camB', inst);
         const afterAdd = Object.keys(g.observedPoints).sort();
-        const liveAfterAdd = g.observedPoints.camB === inst.points;
-        // Live mutation (drag) must be visible through the derived getter.
-        inst.points[0][0] = 999;
+        const matchesMember = JSON.stringify(g.observedPoints.camB) === JSON.stringify(inst.toPointsArray());
+        // Live mutation (drag) must still be visible: the getter re-derives on
+        // every read, even though it now returns a snapshot rather than the
+        // member's own array (luc3d #189 follow-up #1).
+        inst.setPoint(0, 999, 2);
         const seesDrag = g.observedPoints.camB[0][0] === 999;
-        return { before, afterRemove, afterAdd, liveAfterAdd, seesDrag };
+        return { before, afterRemove, afterAdd, matchesMember, seesDrag };
     });
     console.log('\n-- edit-group membership sync (was hand-patched, now derived) --');
     check(JSON.stringify(edit.afterRemove) === '["camA","camC"]',
         `removing a member drops it from observedPoints (got ${JSON.stringify(edit.afterRemove)})`);
     check(JSON.stringify(edit.afterAdd) === '["camA","camB","camC"]',
         `adding a member restores it (got ${JSON.stringify(edit.afterAdd)})`);
-    check(edit.liveAfterAdd, 'added member exposed by reference');
+    check(edit.matchesMember, 'added member is reflected in observedPoints');
     check(edit.seesDrag, 'live drag mutation visible through observedPoints');
 
     // ---------------------------------------------------------------

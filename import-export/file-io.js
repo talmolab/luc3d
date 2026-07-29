@@ -592,12 +592,12 @@ export function buildSlpExportData(session, views, videoFiles) {
                 // Write points
                 const numNodes = session.skeleton.nodes.length;
                 for (let n = 0; n < numNodes; n++) {
-                    const pt = inst.points[n];
+                    const hasPt = inst.hasPoint(n);
                     const entry = {
-                        x: pt ? pt[0] : NaN,
-                        y: pt ? pt[1] : NaN,
-                        visible: pt != null && !(inst.occluded && inst.occluded[n]),
-                        complete: pt != null,
+                        x: hasPt ? inst.getX(n) : NaN,
+                        y: hasPt ? inst.getY(n) : NaN,
+                        visible: hasPt && !inst.isOccluded(n),
+                        complete: hasPt,
                     };
                     if (isUser) {
                         points.push(entry);
@@ -972,12 +972,12 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
             var pointIdStart = isUser ? points.length : predPoints.length;
 
             for (var n = 0; n < numNodes; n++) {
-                var pt = inst.points[n];
+                var hasPt = inst.hasPoint(n);
                 var entry = {
-                    x: pt ? pt[0] : null,
-                    y: pt ? pt[1] : null,
-                    visible: pt != null && !(inst.occluded && inst.occluded[n]),
-                    complete: pt != null,
+                    x: hasPt ? inst.getX(n) : null,
+                    y: hasPt ? inst.getY(n) : null,
+                    visible: hasPt && !inst.isOccluded(n),
+                    complete: hasPt,
                 };
                 if (isUser) {
                     points.push(entry);
@@ -1011,12 +1011,12 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
             var rPointIdStart = asUser ? points.length : predPoints.length;
 
             for (var rn = 0; rn < numNodes; rn++) {
-                var rpt = rInst.points[rn];
+                var hasRpt = rInst.hasPoint(rn);
                 var rEntry = {
-                    x: rpt ? rpt[0] : null,
-                    y: rpt ? rpt[1] : null,
-                    visible: rpt != null,
-                    complete: rpt != null,
+                    x: hasRpt ? rInst.getX(rn) : null,
+                    y: hasRpt ? rInst.getY(rn) : null,
+                    visible: hasRpt,
+                    complete: hasRpt,
                 };
                 if (asUser) {
                     points.push(rEntry);
@@ -1331,10 +1331,10 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
     var nulledNodes = inst.nulledNodes || null;
     for (var n = 0; n < numNodes; n++) {
         var src = nodeOrder ? nodeOrder[n] : n;   // canonical → local point index
-        var pt = (src == null) ? undefined : inst.points[src];
+        var hasPt = (src != null) && inst.hasPoint(src);
         var isNulled = nulledNodes && src != null && nulledNodes.has(src);
         var entry;
-        if (pt == null) {
+        if (!hasPt) {
             // Genuinely missing point → NaN / invisible.
             entry = { xy: [NaN, NaN], visible: false, complete: false };
         } else if (isNulled) {
@@ -1345,10 +1345,10 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
             // positioned and flagged occluded. Writing NaN here (the old
             // behavior) discarded the position, so an occluded node reloaded as
             // null and vanished from the skeleton (SLP round-trip occlusion loss).
-            entry = { xy: [pt[0], pt[1]], visible: false, complete: true };
+            entry = { xy: [inst.getX(src), inst.getY(src)], visible: false, complete: true };
         } else {
-            var occ = inst.occluded && inst.occluded[src];
-            entry = { xy: [pt[0], pt[1]], visible: !occ, complete: true };
+            var occ = inst.isOccluded(src);
+            entry = { xy: [inst.getX(src), inst.getY(src)], visible: !occ, complete: true };
         }
         if (perPointScore != null) entry.score = perPointScore;
         pts.push(entry);
@@ -2661,6 +2661,31 @@ export function instancePointsMatch(ptsA, ptsB) {
     return haveMatch;
 }
 
+/**
+ * `instancePointsMatch` with a LUCID `Instance` on the left-hand side, without
+ * materializing its boxed points array. `Instance` stores 2D keypoints in a flat
+ * `Float64Array`, so `inst.toPointsArray()` allocates one array per node on every
+ * comparison — and these comparisons run once per grouped instance per frame on
+ * the SLP load dedup passes. Semantics are identical to `instancePointsMatch`.
+ *
+ * @param {Instance} inst - LUCID Instance (left side)
+ * @param {Array<number[]|null>} pts - boxed points array (right side)
+ * @returns {boolean}
+ */
+export function instanceMatchesPoints(inst, pts) {
+    if (!inst || !pts) return false;
+    if (inst.numNodes !== pts.length) return false;
+    var haveMatch = false;
+    for (var i = 0; i < pts.length; i++) {
+        var b = pts[i];
+        if (b == null || !inst.hasPoint(i)) continue;
+        if (Math.abs(inst.getX(i) - b[0]) > 0.5 || Math.abs(inst.getY(i) - b[1]) > 0.5) return false;
+        haveMatch = true;
+    }
+    return haveMatch;
+}
+
 if (typeof window !== 'undefined') {
     window.instancePointsMatch = instancePointsMatch;
+    window.instanceMatchesPoints = instanceMatchesPoints;
 }

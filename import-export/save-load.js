@@ -268,12 +268,12 @@ function serializeSessionFrames(session) {
             }
             for (var [camName, inst] of group.instances) {
                 var instData = {
-                    points: inst.points,
+                    points: inst.toPointsArray(),
                     trackIdx: inst.trackIdx,
                     type: inst.type,
                     score: inst.score,
                     modified: inst.modified,
-                    occluded: inst.occluded,
+                    occluded: inst.toOccludedArray(),
                 };
                 if (inst.nulledNodes && inst.nulledNodes.size > 0) {
                     instData.nulledNodes = Array.from(inst.nulledNodes);
@@ -287,12 +287,12 @@ function serializeSessionFrames(session) {
                 var ulType = unlinked.instance.type || 'user';
                 var ulData = {
                     cameraName: camName2,
-                    points: unlinked.instance.points,
+                    points: unlinked.instance.toPointsArray(),
                     trackIdx: unlinked.instance.trackIdx,
                     type: ulType,
                     score: unlinked.instance.score || 1.0,
                     modified: unlinked.instance.modified || false,
-                    occluded: unlinked.instance.occluded,
+                    occluded: unlinked.instance.toOccludedArray(),
                 };
                 if (unlinked.instance.nulledNodes && unlinked.instance.nulledNodes.size > 0) {
                     ulData.nulledNodes = Array.from(unlinked.instance.nulledNodes);
@@ -1051,12 +1051,12 @@ export function saveProject() {
             }
             for (const [camName, inst] of group.instances) {
                 const instData = {
-                    points: inst.points,
+                    points: inst.toPointsArray(),
                     trackIdx: inst.trackIdx,
                     type: inst.type,
                     score: inst.score,
                     modified: inst.modified,
-                    occluded: inst.occluded,
+                    occluded: inst.toOccludedArray(),
                 };
                 if (inst.nulledNodes && inst.nulledNodes.size > 0) {
                     instData.nulledNodes = Array.from(inst.nulledNodes);
@@ -1071,12 +1071,12 @@ export function saveProject() {
             for (const unlinked of unlinkedList) {
                 const ulData = {
                     cameraName: camName,
-                    points: unlinked.instance.points,
+                    points: unlinked.instance.toPointsArray(),
                     trackIdx: unlinked.instance.trackIdx,
                     type: unlinked.instance.type || 'user',
                     score: unlinked.instance.score || 1.0,
                     modified: unlinked.instance.modified || false,
-                    occluded: unlinked.instance.occluded,
+                    occluded: unlinked.instance.toOccludedArray(),
                 };
                 if (unlinked.instance.nulledNodes && unlinked.instance.nulledNodes.size > 0) {
                     ulData.nulledNodes = Array.from(unlinked.instance.nulledNodes);
@@ -1627,7 +1627,7 @@ function _restoreProjectV2(data) {
                             instData.score || 1.0
                         );
                         inst.modified = instData.modified || false;
-                        if (instData.occluded) inst.occluded = instData.occluded;
+                        if (instData.occluded) inst.setOccludedFrom(instData.occluded);
                         if (instData.nulledNodes && instData.nulledNodes.length > 0) {
                             inst.nulledNodes = new Set(instData.nulledNodes);
                         }
@@ -1670,7 +1670,7 @@ function _restoreProjectV2(data) {
                         ulData.score || 1.0
                     );
                     ulInst.modified = ulData.modified || false;
-                    if (ulData.occluded) ulInst.occluded = ulData.occluded;
+                    if (ulData.occluded) ulInst.setOccludedFrom(ulData.occluded);
                     if (ulData.nulledNodes && ulData.nulledNodes.length > 0) {
                         ulInst.nulledNodes = new Set(ulData.nulledNodes);
                     }

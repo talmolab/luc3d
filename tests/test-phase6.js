@@ -75,7 +75,7 @@
             assertNotNull(fg, 'FrameGroup should exist');
             var unlinked = fg.getUnlinkedInstances('cam1');
             assertEqual(unlinked.length, 1, 'Should have 1 unlinked instance on cam1');
-            assertEqual(unlinked[0].instance.points.length, 3, 'Should have 3 points');
+            assertEqual(unlinked[0].instance.numNodes, 3, 'Should have 3 points');
 
             // cam2 should have no unlinked instances
             var unlinked2 = fg.getUnlinkedInstances('cam2');
@@ -108,10 +108,10 @@
             var inst = unlinked[0].instance;
 
             // Points should be near center (400, 300)
-            for (var i = 0; i < inst.points.length; i++) {
-                assert(Math.abs(inst.points[i][0] - 400) < 100,
+            for (var i = 0; i < inst.numNodes; i++) {
+                assert(Math.abs(inst.getX(i) - 400) < 100,
                     'Point ' + i + ' x should be near center (400)');
-                assert(Math.abs(inst.points[i][1] - 300) < 100,
+                assert(Math.abs(inst.getY(i) - 300) < 100,
                     'Point ' + i + ' y should be near center (300)');
             }
         });

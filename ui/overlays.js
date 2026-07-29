@@ -437,7 +437,7 @@ export function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, f
  * Draw a single skeleton (edges + nodes) for one instance.
  *
  * @param {CanvasRenderingContext2D} ctx - Overlay canvas context
- * @param {Object} instance - Instance with .points (array of [x,y] or null) and .trackIdx
+ * @param {Object} instance - Instance (flat coords; read via hasPoint/getX/getY) with .trackIdx
  * @param {Object} skeleton - Skeleton with .nodes (array of { name }) and .edges (array of [srcIdx, dstIdx])
  * @param {Object} [options]
  * @param {string}  [options.color]        - Override color (default: track color)
@@ -505,8 +505,8 @@ export function drawNodeShape(ctx, x, y, shape, size, color) {
 
 export function drawSkeleton(ctx, instance, skeleton, options) {
     options = options || {};
-    const points = instance.points;
-    if (!points || points.length === 0) return;
+    const nPts = instance.numNodes;
+    if (nPts === 0) return;
 
     const color = options.color || (instance.trackIdx != null ? getTrackColor(instance.trackIdx) : UNGROUPED_USER_COLOR);
     const edgeColor = options.edgeColor || color;
@@ -540,26 +540,21 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
     const lineWidth = baseLineWidth;
     const nulledNodes = instance.nulledNodes || null;
 
-    // Pre-compute canvas positions for each point
-    const canvasPoints = new Array(points.length);
-    for (let i = 0; i < points.length; i++) {
-        const pt = points[i];
-        if (pt == null) {
+    // Pre-compute canvas positions for each point. Read straight out of the
+    // flat coords (luc3d #189 follow-up #1) — this is the per-frame draw path,
+    // so no boxed [x,y] row is materialized on the way.
+    const canvasPoints = new Array(nPts);
+    for (let i = 0; i < nPts; i++) {
+        if (!instance.hasPoint(i)) {
             canvasPoints[i] = null;
             continue;
         }
-        if (toCanvas) {
-            canvasPoints[i] = toCanvas(pt[0], pt[1]);
-        } else {
-            canvasPoints[i] = { x: pt[0], y: pt[1] };
-        }
+        const px = instance.getX(i), py = instance.getY(i);
+        canvasPoints[i] = toCanvas ? toCanvas(px, py) : { x: px, y: py };
     }
 
     ctx.save();
     ctx.globalAlpha = alpha;
-
-    // Check for occluded array on the instance
-    const occluded = instance.occluded || [];
 
     // --- 1. Draw edges ---
     if (skeleton.edges) {
@@ -1208,18 +1203,14 @@ export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) 
 
     for (let instIdx = 0; instIdx < instances.length; instIdx++) {
         const inst = instances[instIdx];
-        if (!inst.points || inst.points.length === 0) continue;
+        if (inst.numNodes === 0) continue;
 
         // Find first non-null point for track label placement
         let firstCp = null;
-        for (let i = 0; i < inst.points.length; i++) {
-            const pt = inst.points[i];
-            if (pt == null) continue;
-            if (toCanvas) {
-                firstCp = toCanvas(pt[0], pt[1]);
-            } else {
-                firstCp = { x: pt[0], y: pt[1] };
-            }
+        for (let i = 0; i < inst.numNodes; i++) {
+            if (!inst.hasPoint(i)) continue;
+            const px = inst.getX(i), py = inst.getY(i);
+            firstCp = toCanvas ? toCanvas(px, py) : { x: px, y: py };
             break;
         }
 
@@ -1268,18 +1259,14 @@ export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) 
             ctx.textBaseline = 'bottom';
             ctx.textAlign = 'left';
             // Build canvasPoints for label offset computation
-            var instCanvasPoints = new Array(inst.points.length);
-            for (let n = 0; n < inst.points.length; n++) {
-                const pt = inst.points[n];
-                if (pt == null) { instCanvasPoints[n] = null; continue; }
-                if (toCanvas) {
-                    instCanvasPoints[n] = toCanvas(pt[0], pt[1]);
-                } else {
-                    instCanvasPoints[n] = { x: pt[0], y: pt[1] };
-                }
+            var instCanvasPoints = new Array(inst.numNodes);
+            for (let n = 0; n < inst.numNodes; n++) {
+                if (!inst.hasPoint(n)) { instCanvasPoints[n] = null; continue; }
+                const npx = inst.getX(n), npy = inst.getY(n);
+                instCanvasPoints[n] = toCanvas ? toCanvas(npx, npy) : { x: npx, y: npy };
             }
             var instNulled = inst.nulledNodes || null;
-            for (let n = 0; n < inst.points.length; n++) {
+            for (let n = 0; n < inst.numNodes; n++) {
                 var cp = instCanvasPoints[n];
                 if (!cp) continue;
                 const nodeName = typeof skeleton.nodes[n] === 'string'
@@ -1479,7 +1466,7 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
         for (let u2 = 0; u2 < unlinkedInstances.length; u2++) {
             const ul2 = unlinkedInstances[u2];
             const inst2 = ul2.instance;
-            if (!inst2 || !inst2.points || inst2.points.length === 0) continue;
+            if (!inst2 || inst2.numNodes === 0) continue;
             const type2 = inst2.type || 'user';
             if (typeFilter && type2 !== typeFilter) continue;
             if (inst2.trackIdx == null) continue;
@@ -1492,8 +1479,8 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
     for (let u = 0; u < unlinkedInstances.length; u++) {
         const ul = unlinkedInstances[u];
         const instance = ul.instance;
-        const points = instance.points;
-        if (!points || points.length === 0) continue;
+        const nUlPts = instance.numNodes;
+        if (nUlPts === 0) continue;
 
         // Filter by type if typeFilter is set
         const instType = instance.type || 'user';
@@ -1523,15 +1510,11 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
 
         // Pre-compute canvas positions
-        const canvasPoints = new Array(points.length);
-        for (let i = 0; i < points.length; i++) {
-            const pt = points[i];
-            if (pt == null) { canvasPoints[i] = null; continue; }
-            if (toCanvas) {
-                canvasPoints[i] = toCanvas(pt[0], pt[1]);
-            } else {
-                canvasPoints[i] = { x: pt[0], y: pt[1] };
-            }
+        const canvasPoints = new Array(nUlPts);
+        for (let i = 0; i < nUlPts; i++) {
+            if (!instance.hasPoint(i)) { canvasPoints[i] = null; continue; }
+            const upx = instance.getX(i), upy = instance.getY(i);
+            canvasPoints[i] = toCanvas ? toCanvas(upx, upy) : { x: upx, y: upy };
         }
 
         const nulledNodes = instance.nulledNodes || null;
@@ -1800,15 +1783,14 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
                 ? adjustColorBrightness(getInstanceColor(inst, session, viewName, colorByIdentity, windowIdx[k]), stepBright[k])
                 : null);
         }
-        if (!sample || !sample.points) return;
+        if (!sample || sample.numNodes === 0) return;
 
-        for (var n = 0; n < sample.points.length; n++) {
+        for (var n = 0; n < sample.numNodes; n++) {
             var prev = null;
             for (var k2 = 0; k2 < W; k2++) {
                 var inst2 = byFrame[k2].get(tk);
-                var pt = inst2 && inst2.points ? inst2.points[n] : null;
-                if (pt == null) { prev = null; continue; }   // gap — break the line
-                var cp = toCanvas(pt[0], pt[1]);
+                if (!inst2 || !inst2.hasPoint(n)) { prev = null; continue; }   // gap — break the line
+                var cp = toCanvas(inst2.getX(n), inst2.getY(n));
                 // Segment prev(newer) → cp(older) is styled/colored by its older
                 // endpoint (index k2), so older segments fade and keep their color.
                 if (prev && colAtK[k2]) {
@@ -1984,7 +1966,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                 // which is derived and would allocate a whole object per view
                 // inside this per-frame draw loop (luc3d #189).
                 const observedInst = group.getInstance(viewName);
-                const observedPts = observedInst ? observedInst.points : null;
+                const observedPts = observedInst ? observedInst.toPointsArray() : null;
                 if (observedPts) {
                     drawReprojectionErrors(ctx, observedPts, reprojPtsForErrors, reprojRender);
                 }
@@ -2122,8 +2104,8 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         const selInst = selectedInstanceGroup.getInstance
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
-        if (selInst && selInst.points) {
-            drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, userRender, {
+        if (selInst && selInst.numNodes > 0) {
+            drawSelectionHighlight(ctx, selInst.toPointsArray(), skeleton, Object.assign({}, userRender, {
                 color: '#ffffff',
                 selectedNodeIdx: selectedNodeIdx,
                 nulledNodes: selInst.nulledNodes || null,
@@ -2137,8 +2119,8 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         var egInst = editGroupTarget.getInstance
             ? editGroupTarget.getInstance(viewName)
             : null;
-        if (egInst && egInst.points) {
-            drawSelectionHighlight(ctx, egInst.points, skeleton, Object.assign({}, userRender, {
+        if (egInst && egInst.numNodes > 0) {
+            drawSelectionHighlight(ctx, egInst.toPointsArray(), skeleton, Object.assign({}, userRender, {
                 color: '#ffffff',
                 selectedNodeIdx: -1,
                 nulledNodes: egInst.nulledNodes || null,
@@ -2153,8 +2135,8 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         const dragInst = selectedInstanceGroup.getInstance
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
-        if (dragInst && dragInst.points) {
-            drawDragPreview(ctx, dragInst.points, dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
+        if (dragInst && dragInst.numNodes > 0) {
+            drawDragPreview(ctx, dragInst.toPointsArray(), dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
                 Object.assign({}, userRender, { color: '#ffffff' }));
         }
     }

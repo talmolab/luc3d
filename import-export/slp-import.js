@@ -14,7 +14,7 @@ import {
     storeReprojectedInstances, getInstanceGroupsForFrame,
 } from '../pose/triangulation.js';
 import {
-    parseSlpH5, parseSlpViaSleapIO, instancePointsMatch, parsePoints3dH5, pickFiles,
+    parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
 } from './file-io.js';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
@@ -191,13 +191,13 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 var instScore = instMeta.score || 0;
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
-                inst.occluded = occluded;
+                inst.setOccludedFrom(occluded);
                 inst.modified = instMeta.modified || false;
                 if (instMeta.nulledNodes) {
                     inst.nulledNodes = new Set(instMeta.nulledNodes);
                 }
                 if (instMeta.occluded) {
-                    inst.occluded = instMeta.occluded;
+                    inst.setOccludedFrom(instMeta.occluded);
                 }
 
                 // Pass 1 (above) already added a raw-SLP instance
@@ -216,7 +216,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 var _dupCamInsts = fg3.instances.get(igCamName);
                 if (_dupCamInsts && _dupCamInsts.length > 0) {
                     for (var _dpi = 0; _dpi < _dupCamInsts.length; _dpi++) {
-                        if (instancePointsMatch(_dupCamInsts[_dpi].points, points)) {
+                        if (instanceMatchesPoints(_dupCamInsts[_dpi], points)) {
                             _dupCamInsts.splice(_dpi, 1);
                             break;
                         }
@@ -393,7 +393,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 var instScore = instMeta.score != null ? instMeta.score : (_isPred ? (typedInst.score || 0) : 0);
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
-                inst.occluded = occluded;
+                inst.setOccludedFrom(occluded);
                 inst.modified = instMeta.modified || false;
                 if (instMeta.nulledNodes) {
                     inst.nulledNodes = new Set(instMeta.nulledNodes);
@@ -404,7 +404,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 var _dupCamInsts = fg3.instances.get(igCamName);
                 if (_dupCamInsts && _dupCamInsts.length > 0) {
                     for (var _dpi = 0; _dpi < _dupCamInsts.length; _dpi++) {
-                        if (instancePointsMatch(_dupCamInsts[_dpi].points, points)) {
+                        if (instanceMatchesPoints(_dupCamInsts[_dpi], points)) {
                             _dupCamInsts.splice(_dpi, 1);
                             break;
                         }
@@ -524,10 +524,11 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 // (~324k times on a real cage5 project) and degrades to hours. The
                 // 2D is instead hydrated on scrub from the lazy store by
                 // `_rawInstIndex` (see `hydrateLazyFrameGroups` in triangulation.js).
-                // A null-filled placeholder keeps the Instance valid until then;
-                // `points`/`occluded` cost ~one slot per node, not an [x,y] per node.
+                // A null-filled placeholder keeps the Instance valid until then; the
+                // constructor turns it into a NaN-filled Float64Array of the right
+                // node count (and an all-clear occlusion set), so nothing else is
+                // needed to make the placeholder node-aligned.
                 var points = new Array(numNodes).fill(null);
-                var occluded = new Array(numNodes).fill(false);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
                 var _isPred = PredI ? (typedInst instanceof PredI)
@@ -539,7 +540,6 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 var instScore = instMeta.score != null ? instMeta.score : (_isPred ? (typedInst.score || 0) : 0);
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
-                inst.occluded = occluded;
                 inst.modified = instMeta.modified || false;
                 if (instMeta.nulledNodes) inst.nulledNodes = new Set(instMeta.nulledNodes);
 
@@ -734,7 +734,7 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
         for (var ddGi = 0; ddGi < ddGroups.length; ddGi++) {
             for (var [ddCam, ddInst] of ddGroups[ddGi].instances) {
                 if (!groupedByCam[ddCam]) groupedByCam[ddCam] = [];
-                groupedByCam[ddCam].push(ddInst.points);
+                groupedByCam[ddCam].push(ddInst.toPointsArray());
             }
         }
         for (var [ddUlCam, ddUls] of ddFg.unlinkedInstances) {
@@ -744,7 +744,7 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
             for (var ddUi = 0; ddUi < ddUls.length; ddUi++) {
                 var dup = false;
                 for (var ddGp = 0; ddGp < camGrouped.length; ddGp++) {
-                    if (instancePointsMatch(ddUls[ddUi].instance.points, camGrouped[ddGp])) {
+                    if (instanceMatchesPoints(ddUls[ddUi].instance, camGrouped[ddGp])) {
                         dup = true;
                         break;
                     }
@@ -1043,7 +1043,7 @@ export async function handleLoadSlpFile(slpFile) {
                     instData.type || 'user',
                     instData.score || 0
                 );
-                if (instData.occluded) inst.occluded = instData.occluded;
+                if (instData.occluded) inst.setOccludedFrom(instData.occluded);
                 // Rebuild the occlusion flag for a user label whose occluded
                 // node was saved as finite-xy + not-visible. Grouped instances
                 // get their explicit nulledNodes back from metadata below (and

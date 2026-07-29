@@ -11,7 +11,7 @@ import { InstanceGroup, UnlinkedInstance, someValidPoint3d } from '../pose/pose-
 import {
     frameHasGroupedUserInstances, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-    reprojectPointsCamera, computeInstanceDistance, hungarianAlgorithm,
+    reprojectPointsCamera, computeInstanceDistanceTo, hungarianAlgorithm,
     updateTimelineForFrame,
     triangulateCurrentFrame,
 } from '../pose/triangulation.js';
@@ -709,8 +709,11 @@ export function runTrackedAssignment(viewNames, prevGroups) {
             var proj = projected[ti][vName];
             for (var di = 0; di < nDet; di++) {
                 if (proj) {
-                    costMatrix[ti][di] = computeInstanceDistance(
-                        proj, detections[di].instance.points
+                    // Instance-aware distance: the per-view cost matrix is
+                    // nTracks x nDet, so materializing the detection's boxed
+                    // points here would allocate nNodes arrays per cell.
+                    costMatrix[ti][di] = computeInstanceDistanceTo(
+                        proj, detections[di].instance
                     );
                 } else {
                     costMatrix[ti][di] = 1e6;

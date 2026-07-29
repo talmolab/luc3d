@@ -247,8 +247,8 @@ export function addNewInstanceSmart() {
         var scanGroups = getInstanceGroupsForFrame(frameIdx);
         for (var sg = 0; sg < scanGroups.length && !cached; sg++) {
             var si = scanGroups[sg].getInstance(viewName);
-            if (si && si.type === 'user' && si.points) {
-                recordUserPoints(viewName, si.points);
+            if (si && si.type === 'user' && si.numNodes > 0) {
+                recordUserPoints(viewName, si.toPointsArray());
                 cached = state.lastUserPoints.get(viewName);
             }
         }
@@ -257,8 +257,8 @@ export function addNewInstanceSmart() {
             if (scanFg) {
                 var scanUl = scanFg.getUnlinkedInstances(viewName) || [];
                 for (var su = 0; su < scanUl.length && !cached; su++) {
-                    if (scanUl[su].instance.type === 'user' && scanUl[su].instance.points) {
-                        recordUserPoints(viewName, scanUl[su].instance.points);
+                    if (scanUl[su].instance.type === 'user' && scanUl[su].instance.numNodes > 0) {
+                        recordUserPoints(viewName, scanUl[su].instance.toPointsArray());
                         cached = state.lastUserPoints.get(viewName);
                     }
                 }
@@ -276,16 +276,16 @@ export function addNewInstanceSmart() {
             var prevGroups = getInstanceGroupsForFrame(pf);
             for (var pg = 0; pg < prevGroups.length && !cached; pg++) {
                 var pInst = prevGroups[pg].getInstance(viewName);
-                if (pInst && pInst.type === 'user' && pInst.points) {
-                    recordUserPoints(viewName, pInst.points);
+                if (pInst && pInst.type === 'user' && pInst.numNodes > 0) {
+                    recordUserPoints(viewName, pInst.toPointsArray());
                     cached = state.lastUserPoints.get(viewName);
                 }
             }
             if (!cached) {
                 var prevUl = fgPrev.getUnlinkedInstances(viewName) || [];
                 for (var pu = 0; pu < prevUl.length && !cached; pu++) {
-                    if (prevUl[pu].instance.type === 'user' && prevUl[pu].instance.points) {
-                        recordUserPoints(viewName, prevUl[pu].instance.points);
+                    if (prevUl[pu].instance.type === 'user' && prevUl[pu].instance.numNodes > 0) {
+                        recordUserPoints(viewName, prevUl[pu].instance.toPointsArray());
                         cached = state.lastUserPoints.get(viewName);
                     }
                 }
@@ -304,7 +304,7 @@ export function addNewInstanceSmart() {
         var curGroups = getInstanceGroupsForFrame(frameIdx);
         for (var g of curGroups) {
             var inst = g.getInstance(viewName);
-            if (inst && inst.type === 'predicted' && inst.points) {
+            if (inst && inst.type === 'predicted' && inst.numNodes > 0) {
                 allPredicted.push(inst);
             }
         }
@@ -313,7 +313,7 @@ export function addNewInstanceSmart() {
         if (fg) {
             var unlinked = fg.getUnlinkedInstances(viewName) || [];
             for (var ul of unlinked) {
-                if (ul.instance.type === 'predicted' && ul.instance.points) {
+                if (ul.instance.type === 'predicted' && ul.instance.numNodes > 0) {
                     allPredicted.push(ul.instance);
                 }
             }
@@ -326,10 +326,10 @@ export function addNewInstanceSmart() {
                 var pred = allPredicted[pi];
                 // Compute centroid
                 var sx = 0, sy = 0, count = 0;
-                for (var ni = 0; ni < pred.points.length; ni++) {
-                    if (pred.points[ni]) {
-                        sx += pred.points[ni][0];
-                        sy += pred.points[ni][1];
+                for (var ni = 0; ni < pred.numNodes; ni++) {
+                    if (pred.hasPoint(ni)) {
+                        sx += pred.getX(ni);
+                        sy += pred.getY(ni);
                         count++;
                     }
                 }
@@ -348,7 +348,7 @@ export function addNewInstanceSmart() {
                 }
             }
             if (bestPred) {
-                points = bestPred.points.map(function(p) { return p ? [p[0], p[1]] : null; });
+                points = bestPred.toPointsArray();
             }
         }
     }
@@ -418,7 +418,7 @@ export function setupInteraction() {
             const inst = instanceGroup.getInstance(viewName);
             if (inst) {
                 inst.modified = true;
-                recordUserPoints(viewName, inst.points);
+                recordUserPoints(viewName, inst.toPointsArray());
             }
             instanceGroup.markDirty();
 
@@ -435,8 +435,8 @@ export function setupInteraction() {
 
         onUnlinkedNodeMoved: function (viewName, instance) {
             markDirty();
-            if (instance && instance.points) {
-                recordUserPoints(viewName, instance.points);
+            if (instance && instance.numNodes > 0) {
+                recordUserPoints(viewName, instance.toPointsArray());
             }
             if (timeline) {
                 timeline.setFrameModified(state.currentFrame, true);
@@ -449,7 +449,7 @@ export function setupInteraction() {
             setStatus('Converted ' + trackName + ' to user instance', 'success');
             // Record all view points from the converted group
             for (var [vn, inst] of instanceGroup.instances) {
-                if (inst.type === 'user' && inst.points) recordUserPoints(vn, inst.points);
+                if (inst.type === 'user' && inst.numNodes > 0) recordUserPoints(vn, inst.toPointsArray());
             }
 
             if (timeline) {
@@ -494,7 +494,7 @@ export function setupInteraction() {
             // Get reprojected points to use as initial position
             var reprojInst = getOrComputeReprojectedInstance(group, viewName);
             if (!reprojInst) return;
-            var clonedPoints = reprojInst.points.map(function(pt) {
+            var clonedPoints = reprojInst.toPointsArray().map(function(pt) {
                 return pt != null ? [pt[0], pt[1]] : null;
             });
 
@@ -526,11 +526,11 @@ export function setupInteraction() {
                 for (var [camName, inst] of predGroup.instances) {
                     if (inst.type === 'predicted') {
                         var userClone = new Instance(
-                            inst.points.map(function(pt) { return pt != null ? [pt[0], pt[1]] : null; }),
+                            inst.toPointsArray(),
                             inst.trackIdx, 'user', 1.0
                         );
                         userClone.modified = true;
-                        recordUserPoints(camName, userClone.points);
+                        recordUserPoints(camName, userClone.toPointsArray());
                         var ul = state.session.addUnlinkedInstance(frameIdx, camName, userClone);
                         unlinkedList.push(ul);
                     }
@@ -593,23 +593,23 @@ export function setupInteraction() {
                 var nulled = inst.nulledNodes || new Set();
                 // Centroid of visible points as fallback for missing nodes
                 var cx = 0, cy = 0, cCount = 0;
-                for (var ci = 0; ci < inst.points.length; ci++) {
-                    if (inst.points[ci] != null) {
-                        cx += inst.points[ci][0];
-                        cy += inst.points[ci][1];
+                for (var ci = 0; ci < inst.numNodes; ci++) {
+                    if (inst.hasPoint(ci)) {
+                        cx += inst.getX(ci);
+                        cy += inst.getY(ci);
                         cCount++;
                     }
                 }
                 if (cCount > 0) { cx = Math.round(cx / cCount); cy = Math.round(cy / cCount); }
                 var nullTotal = 0, nullSeq = 0;
-                for (var nci = 0; nci < inst.points.length; nci++) {
-                    if (inst.points[nci] == null) nullTotal++;
+                for (var nci = 0; nci < inst.numNodes; nci++) {
+                    if (!inst.hasPoint(nci)) nullTotal++;
                 }
-                inst.points = inst.points.map(function (pt, idx) {
+                inst.setPointsFrom(inst.toPointsArray().map(function (pt, idx) {
                     if (pt != null) return [pt[0], pt[1]];
-                    if (reprojInst && reprojInst.points && reprojInst.points[idx] != null) {
+                    if (reprojInst && reprojInst.hasPoint(idx)) {
                         nulled.add(idx);
-                        return [reprojInst.points[idx][0], reprojInst.points[idx][1]];
+                        return reprojInst.getPoint(idx);
                     }
                     if (cCount > 0) {
                         nulled.add(idx);
@@ -620,11 +620,11 @@ export function setupInteraction() {
                                 Math.round(cy + Math.sin(angle) * spread)];
                     }
                     return null;
-                });
+                }));
                 if (nulled.size > 0) inst.nulledNodes = nulled;
                 inst.type = 'user';
                 inst.modified = true;
-                recordUserPoints(camName, inst.points);
+                recordUserPoints(camName, inst.toPointsArray());
             }
             // Reprojections stay — they'll update on next triangulate
             predGroup.markDirty();

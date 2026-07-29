@@ -190,6 +190,44 @@ draw goes straight to `group.getInstance(view).points` instead.
 `points3d && reprojections`, which the purge still clears. The JSON project
 format still WRITES it for backward compat, but ignores it on restore.
 
+**`Instance` flat coordinate storage (luc3d #189 follow-up #1).** `Instance`
+holds 2D keypoints in a flat **`Float64Array(2 * nNodes)`** (`_xy`, node `k` at
+`[2k, 2k+1]`, **NaN x = no point**) and occlusion in a **bit set** (`_occ`: a
+plain Number at <=32 nodes, else a `Uint32Array`).
+
+The real workload holds **2,630,632** Instances (5 cameras x ~526k) over
+39,459,480 keypoints. Measured in a live renderer by
+`tests/e2e/_diag-instance-size.mjs`: **824 B/instance of cage before, 172 B after
+(240 B moves to an external backing store, outside the cap) — 2,067 MB -> 432 MB,
+freeing 1,636 MB.**
+
+**`points` and `occluded` are DELETED, not kept as getters.** Two of the three
+ways this refactor could break are silent: `inst.points.length` meant *nNodes* at
+~30 sites and would have doubled on a `Float64Array(2n)`, and `inst.occluded[k]`
+against a Number bitmask yields `undefined` (falsy), which would have dropped
+occlusion from every export with no error. Removing the fields turns both into an
+immediate `TypeError`.
+
+Accessors: `numNodes`, `hasPoint`, `getX`/`getY`, `getPoint` (allocates),
+`readPoint(k, out)` (allocation-free), `setPoint`, `setPointFrom`, `clearPoint`,
+`isOccluded`, `setOccluded`, `anyOccluded`, `countPoints`, `hasAnyPoint`,
+`hasAnyUsablePoint`, `toPointsArray`/`toOccludedArray` (serialization),
+`setPointsFrom`/`setOccludedFrom`, `adoptPointsFrom` (deliberate buffer sharing,
+for lazy-2D hydration), `insertNodeAt`/`removeNodeAt` (skeleton edits — these
+resize any backup alongside, so `restorePoints()` stays node-aligned),
+`backupPoints`/`restorePoints`/`hasBackup`.
+
+**The constructor is unchanged** — it still takes boxed `[[x,y]|null, ...]` (or a
+`Float64Array`, adopted by reference) and normalizes, so all 23 construction
+sites were untouched. Only readers changed.
+
+f64 rather than f32 is deliberate: identical cage cost, and bit-exact values keep
+`tests/e2e/save-golden-digest.mjs` byte-for-byte unchanged across the conversion.
+
+One behavior change, unavoidable in the representation: a boxed row could
+previously hold `[NaN, NaN]` and count as *present*; NaN-x now means absent. No
+producer emits such a row (every construction site writes `null`).
+
 **Purpose.** Pure data-model classes — no DOM, no I/O. The single source of
 truth for skeletons, cameras, instances, frame groups, identities, and the
 session graph that holds them.
@@ -3224,7 +3262,10 @@ layer.
   identity / occlusion) verified in-browser.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`.
-- Misc: `downloadJSON`, `instancePointsMatch`.
+- Misc: `downloadJSON`, `instancePointsMatch`, `instanceMatchesPoints`
+  (the same comparison with a LUCID `Instance` on the left, read through the flat
+  typed accessors so the SLP-load dedup passes don't allocate a boxed points array
+  per candidate).
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Camera`, `Skeleton`, `Instance`, `Identity`.

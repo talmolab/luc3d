@@ -1820,7 +1820,7 @@ export async function handleLoadSessionFolderSingleSlp() {
                 var instData = fd.instances[ii];
                 var resolvedTrackIdx = resolveImportTrackIdx(session, instData.trackIdx, instData.type);
                 var inst = new Instance(instData.points, resolvedTrackIdx, instData.type || 'user', instData.score || 0);
-                if (instData.occluded) inst.occluded = instData.occluded;
+                if (instData.occluded) inst.setOccludedFrom(instData.occluded);
                 // Restore the occlusion flag for an unlinked user label (its
                 // occluded node was saved finite-xy + not-visible; the
                 // nulledNodes flag itself isn't persisted for ungrouped
@@ -2722,7 +2722,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             var instType = inst.type || (inst.from_predicted !== undefined ? 'predicted' : 'user');
                             var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
                             var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
-                            if (inst.occluded) instance.occluded = inst.occluded;
+                            if (inst.occluded) instance.setOccludedFrom(inst.occluded);
                             fg.addInstance(camName, instance);
                         }
                     }

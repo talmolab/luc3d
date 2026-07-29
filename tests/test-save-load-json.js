@@ -57,7 +57,7 @@
 
         var instA0 = new Instance([[100, 150], [200, 250], [300, 350]], 0, 'user', 1.0);
         instA0.modified = true;
-        instA0.occluded = [false, false, true]; // wrist occluded in SLP sense
+        instA0.setOccludedFrom([false, false, true]); // wrist occluded in SLP sense
         instA0.nulledNodes = new Set([2]); // wrist excluded from triangulation
 
         var instB0 = new Instance([[110, 160], [210, 260], [310, 360]], 0, 'user', 0.95);
@@ -102,7 +102,7 @@
         var ulInst = new Instance([[50, 60], [70, 80], [90, 100]], 0, 'user', 1.0);
         ulInst.modified = true;
         ulInst.nulledNodes = new Set([1]); // ear nulled
-        ulInst.occluded = [false, true, false];
+        ulInst.setOccludedFrom([false, true, false]);
         session.addUnlinkedInstance(0, 'CamA', ulInst);
 
         // --- Frame 5: empty group for testing sparse frames ---
@@ -165,12 +165,12 @@
                 }
                 for (var [camName, inst] of group.instances) {
                     var instData = {
-                        points: inst.points,
+                        points: inst.toPointsArray(),
                         trackIdx: inst.trackIdx,
                         type: inst.type,
                         score: inst.score,
                         modified: inst.modified,
-                        occluded: inst.occluded,
+                        occluded: inst.toOccludedArray(),
                     };
                     if (inst.nulledNodes && inst.nulledNodes.size > 0) {
                         instData.nulledNodes = Array.from(inst.nulledNodes);
@@ -185,12 +185,12 @@
                     {
                         var ulData = {
                             cameraName: camName2,
-                            points: unlinked.instance.points,
+                            points: unlinked.instance.toPointsArray(),
                             trackIdx: unlinked.instance.trackIdx,
                             type: ulType,
                             score: unlinked.instance.score || 1.0,
                             modified: unlinked.instance.modified || false,
-                            occluded: unlinked.instance.occluded,
+                            occluded: unlinked.instance.toOccludedArray(),
                         };
                         if (unlinked.instance.nulledNodes && unlinked.instance.nulledNodes.size > 0) {
                             ulData.nulledNodes = Array.from(unlinked.instance.nulledNodes);
@@ -263,7 +263,7 @@
                                 instData.score || 1.0
                             );
                             inst.modified = instData.modified || false;
-                            if (instData.occluded) inst.occluded = instData.occluded;
+                            if (instData.occluded) inst.setOccludedFrom(instData.occluded);
                             if (instData.nulledNodes && instData.nulledNodes.length > 0) {
                                 inst.nulledNodes = new Set(instData.nulledNodes);
                             }
@@ -304,7 +304,7 @@
                             ulData.score || 1.0
                         );
                         ulInst.modified = ulData.modified || false;
-                        if (ulData.occluded) ulInst.occluded = ulData.occluded;
+                        if (ulData.occluded) ulInst.setOccludedFrom(ulData.occluded);
                         if (ulData.nulledNodes && ulData.nulledNodes.length > 0) {
                             ulInst.nulledNodes = new Set(ulData.nulledNodes);
                         }
@@ -462,9 +462,9 @@
             var r = roundtrip();
             var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             var inst = g0.getInstance('CamA');
-            assertDeepEqual(inst.points[0], [100, 150]);
-            assertDeepEqual(inst.points[1], [200, 250]);
-            assertDeepEqual(inst.points[2], [300, 350]);
+            assertDeepEqual(inst.getPoint(0), [100, 150]);
+            assertDeepEqual(inst.getPoint(1), [200, 250]);
+            assertDeepEqual(inst.getPoint(2), [300, 350]);
         });
 
         it('instance type survives', function () {
@@ -497,14 +497,14 @@
         it('null points survive', function () {
             var r = roundtrip();
             var g1 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 1; });
-            assertNull(g1.getInstance('CamA').points[2], 'CamA wrist is null');
-            assertNull(g1.getInstance('CamB').points[1], 'CamB ear is null');
+            assertNull(g1.getInstance('CamA').getPoint(2), 'CamA wrist is null');
+            assertNull(g1.getInstance('CamB').getPoint(1), 'CamB ear is null');
         });
 
         it('occluded array survives', function () {
             var r = roundtrip();
             var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
-            var occ = g0.getInstance('CamA').occluded;
+            var occ = g0.getInstance('CamA').toOccludedArray();
             assertDeepEqual(occ, [false, false, true]);
         });
     });
@@ -621,8 +621,8 @@
             var g0 = r.restored.getInstanceGroupsForFrame(0).find(function(g) { return g.identityId === 0; });
             var ri = g0.getReprojectedInstance('CamA');
             assertEqual(ri.type, 'reprojected', 'type is reprojected');
-            assertDeepEqual(ri.points[0], [101, 151], 'reproj point 0');
-            assertDeepEqual(ri.points[1], [201, 251], 'reproj point 1');
+            assertDeepEqual(ri.getPoint(0), [101, 151], 'reproj point 0');
+            assertDeepEqual(ri.getPoint(1), [201, 251], 'reproj point 1');
         });
     });
 
@@ -636,7 +636,7 @@
             var fg = r.restored.getFrameGroup(0);
             var ulList = fg.getUnlinkedInstances('CamA');
             assertTrue(ulList.length > 0, 'has unlinked');
-            assertDeepEqual(ulList[0].instance.points[0], [50, 60]);
+            assertDeepEqual(ulList[0].instance.getPoint(0), [50, 60]);
         });
 
         it('unlinked instance type and score survive', function () {
@@ -651,7 +651,7 @@
             var r = roundtrip();
             var fg = r.restored.getFrameGroup(0);
             var ul = fg.getUnlinkedInstances('CamA')[0].instance;
-            assertDeepEqual(ul.occluded, [false, true, false]);
+            assertDeepEqual(ul.toOccludedArray(), [false, true, false]);
         });
 
         it('unlinked instance modified flag survives', function () {
@@ -749,6 +749,47 @@
             assertTrue('score' in inst, 'has score');
             assertTrue('modified' in inst, 'has modified');
             assertTrue('nulledNodes' in inst, 'has nulledNodes');
+        });
+
+        // The Instance class stores 2D keypoints in a flat Float64Array, but the
+        // on-disk project format must NOT change: `points` stays a boxed
+        // [[x,y]|null, ...] array and `occluded` stays a boolean[] (the app
+        // produces both via toPointsArray()/toOccludedArray()). A typed array
+        // leaking through JSON.stringify would silently become {"0":100,...},
+        // so pin the serialized shape after a real stringify/parse round-trip.
+        it('serialized points stay boxed [x,y]|null arrays (not typed/object)', function () {
+            var r = roundtrip();
+            var inst = r.parsed.frames['0'].instanceGroups[0].instances['CamA'];
+            assertTrue(Array.isArray(inst.points), 'points is a plain array');
+            assertEqual(inst.points.length, 3, 'one entry per node (not 2*n flat)');
+            assertDeepEqual(inst.points, [[100, 150], [200, 250], [300, 350]],
+                'boxed per-node [x,y] rows');
+
+            // A null point must serialize as JSON null, not NaN/0/[NaN,NaN].
+            var g1 = r.parsed.frames['0'].instanceGroups[1];
+            var predA = g1.instances['CamA'];
+            assertDeepEqual(predA.points, [[400, 450], [500, 550], null],
+                'missing node serializes as null');
+
+            var ul = r.parsed.frames['0'].unlinkedInstances[0];
+            assertTrue(Array.isArray(ul.points), 'unlinked points is a plain array');
+            assertDeepEqual(ul.points, [[50, 60], [70, 80], [90, 100]],
+                'unlinked boxed rows');
+        });
+
+        it('serialized occluded stays a boolean[] of length numNodes', function () {
+            var r = roundtrip();
+            var inst = r.parsed.frames['0'].instanceGroups[0].instances['CamA'];
+            assertTrue(Array.isArray(inst.occluded), 'occluded is a plain array');
+            assertEqual(inst.occluded.length, 3, 'one flag per node');
+            assertDeepEqual(inst.occluded, [false, false, true], 'boolean flags');
+            for (var i = 0; i < inst.occluded.length; i++) {
+                assertEqual(typeof inst.occluded[i], 'boolean',
+                    'occluded[' + i + '] is a boolean (not 0/1)');
+            }
+
+            var ul = r.parsed.frames['0'].unlinkedInstances[0];
+            assertDeepEqual(ul.occluded, [false, true, false], 'unlinked boolean flags');
         });
 
         it('nulledNodes serialized as array of indices', function () {

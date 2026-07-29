@@ -674,6 +674,34 @@ export function computeInstanceDistance(pointsA, pointsB, weights) {
     return count > 0 ? totalDist / count : Infinity;
 }
 
+/**
+ * Mean weighted distance between boxed 2D points and an `Instance`'s coords.
+ * Instance-aware sibling of `computeInstanceDistance` — every caller had an
+ * `Instance` on one side, and materializing `inst.toPointsArray()` just to
+ * measure a distance would allocate nNodes arrays per comparison inside the
+ * tracker's per-frame matching loops (luc3d #189 follow-up #1).
+ *
+ * @param {(number[]|null)[]} pointsA
+ * @param {Instance} instB
+ * @param {(number|null)[]} [weights]
+ * @returns {number} mean distance, or Infinity when nothing overlaps
+ */
+export function computeInstanceDistanceTo(pointsA, instB, weights) {
+    var totalDist = 0, count = 0;
+    var len = Math.min(pointsA.length, instB.numNodes);
+    for (var i = 0; i < len; i++) {
+        var a = pointsA[i];
+        if (a == null || !instB.hasPoint(i)) continue;
+        var w = weights ? (weights[i] != null ? weights[i] : 1) : 1;
+        if (w <= 0) continue;
+        var dx = a[0] - instB.getX(i);
+        var dy = a[1] - instB.getY(i);
+        totalDist += w * Math.sqrt(dx * dx + dy * dy);
+        count += w;
+    }
+    return count > 0 ? totalDist / count : Infinity;
+}
+
 // ============================================
 // Triangulation + Reprojection pipeline
 // ============================================
@@ -690,7 +718,7 @@ export function computeInstanceDistance(pointsA, pointsB, weights) {
  *
  * @param {InstanceGroup} instanceGroup
  *   - has .instances Map<cameraName, Instance>
- *   - each Instance has .points array of [x,y] or null
+ *   - each Instance stores flat coords; read via inst.hasPoint(k)/getPoint(k)
  * @param {Camera[]} cameras
  *   - each Camera has .name and .projectionMatrix (3x4)
  *
@@ -733,8 +761,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     let numKeypoints = 0;
     for (let c = 0; c < cameraNames.length; c++) {
         const inst = instanceGroup.getInstance(cameraNames[c]);
-        if (inst && inst.points) {
-            numKeypoints = inst.points.length;
+        if (inst && inst.numNodes > 0) {
+            numKeypoints = inst.numNodes;
             break;
         }
     }
@@ -759,12 +787,13 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             const inst = instanceGroup.getInstance(cameraNames[c]);
             // Skip nulled nodes — they are excluded from triangulation
             const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
-            if (included[c] && inst && inst.points && inst.points[k] != null && !isNulled) {
+            if (included[c] && inst && inst.hasPoint(k) && !isNulled) {
                 const cam = cameraMap[cameraNames[c]];
+                const raw2d = inst.getPoint(k);
                 if (cam && cam.undistortPoint) {
-                    obsForKeypoint.push(cam.undistortPoint(inst.points[k]));
+                    obsForKeypoint.push(cam.undistortPoint(raw2d));
                 } else {
-                    obsForKeypoint.push(inst.points[k]);
+                    obsForKeypoint.push(raw2d);
                 }
             } else {
                 obsForKeypoint.push(null);
@@ -805,7 +834,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             if (allObservations[k][c] == null) return -1;
             if (!readPoint3d(points3d, k, _nodeErrBuf)) return -1;
             const inst = instanceGroup.getInstance(cameraNames[c]);
-            const raw = inst && inst.points ? inst.points[k] : null;
+            const raw = inst ? inst.getPoint(k) : null;
             if (raw == null) return -1;
             const rep = reprojectPointCamera(_nodeErrBuf, cameraMap[cameraNames[c]]);
             if (rep == null) return -1;
@@ -868,8 +897,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         const observed = [];
         for (let k = 0; k < numKeypoints; k++) {
             const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
-            if (inst && inst.points && inst.points[k] != null && !isNulled) {
-                observed.push(inst.points[k]);
+            if (inst && inst.hasPoint(k) && !isNulled) {
+                observed.push(inst.getPoint(k));
             } else {
                 observed.push(null);
             }
@@ -1400,7 +1429,7 @@ export function storeReprojectedInstances(group, triangulationResult, allCameras
             var existing = group.getReprojectedInstance
                 ? group.getReprojectedInstance(cam.name) : null;
             if (existing) {
-                existing.points = reprojPts;
+                existing.setPointsFrom(reprojPts);
             } else {
                 var reprojInstance = new Instance(reprojPts, group.identityId, 'reprojected', 1.0);
                 group.addReprojectedInstance(cam.name, reprojInstance);
@@ -1716,8 +1745,7 @@ function finalizeLazyFrameGroup(session, fg, frameIdx) {
             if (member) {
                 if (member._lazy2d) {
                     // Hydrate the member's 2D from the store instance at this row.
-                    member.points = built[bi].points;
-                    member.occluded = built[bi].occluded;
+                    member.adoptPointsFrom(built[bi]);
                     member._lazy2d = false;
                 }
                 grouped.push(member);
@@ -2042,7 +2070,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
                 var viewsWithLabels = 0;
                 for (var cj = 0; cj < cameras.length; cj++) {
                     var inst2 = group.getInstance(cameras[cj].name);
-                    if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
+                    if (inst2 && inst2.hasAnyUsablePoint()) {
                         viewsWithLabels++;
                     }
                 }
@@ -2065,7 +2093,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
                 for (var ck = 0; ck < groupCameras.length; ck++) {
                     var camInst = group.getInstance(groupCameras[ck].name);
                     if (camInst) {
-                        if (camInst.points.some(function (p) { return p != null; })) {
+                        if (camInst.hasAnyPoint()) {
                             group.usedCameras.add(groupCameras[ck].name);
                         }
                     }
@@ -2326,8 +2354,8 @@ export function triangulateCurrentFrame(method) {
             const camStatus = {};
             for (const cam of cameras) {
                 const inst = group.getInstance(cam.name);
-                if (inst && inst.points) {
-                    const hasAny = inst.points.some((p, idx) => p != null && !(inst.nulledNodes && inst.nulledNodes.has(idx)));
+                if (inst && inst.numNodes > 0) {
+                    const hasAny = inst.hasAnyUsablePoint();
                     if (hasAny) viewsWithLabels++;
                     camStatus[cam.name] = hasAny ? 'labeled' : 'empty';
                 } else {
@@ -2394,7 +2422,7 @@ export function triangulateCurrentFrame(method) {
             for (const cam of groupCameras) {
                 const inst = group.getInstance(cam.name);
                 if (inst) {
-                    const hasAny = inst.points.some(function (p) { return p != null; });
+                    const hasAny = inst.hasAnyPoint();
                     if (hasAny) group.usedCameras.add(cam.name);
                 }
             }
@@ -2538,7 +2566,7 @@ export async function triangulateAllFrames(method) {
                 var viewsWithLabels = 0;
                 for (var cj = 0; cj < cameras.length; cj++) {
                     var inst2 = group.getInstance(cameras[cj].name);
-                    if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
+                    if (inst2 && inst2.hasAnyUsablePoint()) {
                         viewsWithLabels++;
                     }
                 }
@@ -2564,7 +2592,7 @@ export async function triangulateAllFrames(method) {
                 for (var ck = 0; ck < groupCameras2.length; ck++) {
                     var camInst = group.getInstance(groupCameras2[ck].name);
                     if (camInst) {
-                        if (camInst.points.some(function (p) { return p != null; })) {
+                        if (camInst.hasAnyPoint()) {
                             group.usedCameras.add(groupCameras2[ck].name);
                         }
                     }

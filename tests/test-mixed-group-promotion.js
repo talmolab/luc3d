@@ -30,6 +30,7 @@
     var it         = TestFramework.it;
     var assertEqual       = TestFramework.assertEqual;
     var assertTrue        = TestFramework.assertTrue;
+    var assertDeepEqual   = TestFramework.assertDeepEqual;
     var assertFalse       = TestFramework.assertFalse;
     var assertNotNull     = TestFramework.assertNotNull;
 
@@ -579,11 +580,14 @@
             // Removed view's observedPoints entry is gone.
             assertEqual(env.group.observedPoints.cam2, undefined,
                 'observedPoints.cam2 deleted (B2 invariant)');
-            // Other views' entries preserved by reference.
-            assertTrue(env.group.observedPoints.cam1 === cam1Pts,
-                'observedPoints.cam1 untouched (reference)');
-            assertTrue(env.group.observedPoints.cam3 === cam3Pts,
-                'observedPoints.cam3 untouched (reference)');
+            // Other views' entries preserved. Compared BY VALUE: since luc3d
+            // #189 `observedPoints` is a derived getter that returns a fresh
+            // boxed snapshot per access, so reference identity across two reads
+            // no longer holds (and no stored copy exists to drift).
+            assertDeepEqual(env.group.observedPoints.cam1, cam1Pts,
+                'observedPoints.cam1 untouched (by value)');
+            assertDeepEqual(env.group.observedPoints.cam3, cam3Pts,
+                'observedPoints.cam3 untouched (by value)');
 
             // And the Issue 2 promotion still happened.
             assertEqual(env.instances.cam2.type, 'user',

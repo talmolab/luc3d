@@ -377,8 +377,10 @@
 
             group.addInstance('cam1', inst);
 
-            assertTrue(group.observedPoints.cam1 === inst.points,
-                'reference equality: observedPoints[cam1] IS inst.points, not a copy');
+            // A fresh boxed snapshot per access since luc3d #189 follow-up #1
+            // (the member stores coords in a flat Float64Array).
+            assertDeepEqual(group.observedPoints.cam1, [[10, 20], [30, 40]],
+                'observedPoints[cam1] mirrors the member coordinates');
         });
 
         it('adding a second member preserves the first', function () {
@@ -389,8 +391,8 @@
             group.addInstance('cam1', inst1);
             group.addInstance('cam2', inst2);
 
-            assertTrue(group.observedPoints.cam1 === inst1.points, 'cam1 entry untouched');
-            assertTrue(group.observedPoints.cam2 === inst2.points, 'cam2 entry added by reference');
+            assertDeepEqual(group.observedPoints.cam1, [[100, 200], [110, 210]], 'cam1 entry untouched');
+            assertDeepEqual(group.observedPoints.cam2, [[1, 2], [3, 4]], 'cam2 entry added');
             assertEqual(Object.keys(group.observedPoints).length, 2, 'two entries total');
         });
 
@@ -406,8 +408,8 @@
             group.instances.delete('camB');
 
             assertEqual(group.observedPoints.camB, undefined, 'camB entry gone');
-            assertTrue(group.observedPoints.camA === instA.points, 'camA entry untouched');
-            assertTrue(group.observedPoints.camC === instC.points, 'camC entry untouched');
+            assertDeepEqual(group.observedPoints.camA, [[1, 1]], 'camA entry untouched');
+            assertDeepEqual(group.observedPoints.camC, [[3, 3]], 'camC entry untouched');
             assertEqual(Object.keys(group.observedPoints).length, 2, 'two entries left');
         });
 
@@ -442,7 +444,7 @@
             }
 
             assertEqual(group.observedPoints.bogusCam, undefined, 'the assignment did not stick');
-            assertTrue(group.observedPoints.cam1 === inst.points, 'still derived from members');
+            assertDeepEqual(group.observedPoints.cam1, [[10, 20]], 'still derived from members');
         });
 
         it('Reference invariant: mutating inst.points is visible through observedPoints', function () {
@@ -454,13 +456,15 @@
 
             group.addInstance('cam1', inst);
 
-            inst.points[0][0] = 999;
-            inst.points[0][1] = 888;
+            inst.setPoint(0, 999, 888);
 
+            // The getter re-derives on every read, so a live edit is still
+            // visible even though it now returns a snapshot rather than the
+            // member's own array (luc3d #189 follow-up #1).
             assertEqual(group.observedPoints.cam1[0][0], 999,
-                'mutation visible via observedPoints (shared array reference)');
+                'mutation visible via observedPoints (re-derived on read)');
             assertEqual(group.observedPoints.cam1[0][1], 888,
-                'mutation visible via observedPoints (shared array reference)');
+                'mutation visible via observedPoints (re-derived on read)');
         });
     });
 
@@ -506,10 +510,10 @@
                     'observedPoints.cam2 deleted (no stale connector line)');
 
                 // Untouched views:
-                assertTrue(group.observedPoints.cam1 === observedCam1,
-                    'observedPoints.cam1 untouched (reference)');
-                assertTrue(group.observedPoints.cam3 === observedCam3,
-                    'observedPoints.cam3 untouched (reference)');
+                assertDeepEqual(group.observedPoints.cam1, observedCam1,
+                    'observedPoints.cam1 untouched (by value)');
+                assertDeepEqual(group.observedPoints.cam3, observedCam3,
+                    'observedPoints.cam3 untouched (by value)');
 
                 // Reprojections are intentionally preserved (X-mark survives
                 // because it represents the still-valid 3D point projected

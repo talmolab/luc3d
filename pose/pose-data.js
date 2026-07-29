@@ -216,9 +216,9 @@ export class Skeleton {
         var names = nodes.slice().sort();
         var edges = this.edges.map(function (e) {
             var a = nodes[e[0]], b = nodes[e[1]];
-            return a < b ? a + '' + b : b + '' + a;
+            return a < b ? a + '\u0001' + b : b + '\u0001' + a;
         }).sort();
-        return names.join(' ') + '' + edges.join(' ');
+        return names.join('\u0000') + '\u0002' + edges.join('\u0000');
     }
 }
 
@@ -447,78 +447,388 @@ export class Camera {
 }
 
 
+/**
+ * A 2D pose in one camera view.
+ *
+ * ## Storage (luc3d #189 follow-up #1)
+ *
+ * Coordinates live in a flat **`Float64Array(2 * nNodes)`** (`_xy`) — node `k`
+ * at `[2k, 2k+1]` — with **NaN in the x slot meaning "no point"**, replacing the
+ * old `null` row. Occlusion lives in a **bit set** (`_occ`): a plain Number when
+ * `nNodes <= 32`, else a `Uint32Array`.
+ *
+ * WHY: this project's real workload holds 2,630,632 Instances (5 cameras x
+ * ~526,000 each) covering 39,459,480 keypoints. As boxed `[u,v]|null` rows plus
+ * a `boolean[]`, that measured **824 B per instance = 2,065 MB**, all of it in
+ * V8's pointer-compressed heap, which a Chrome renderer hard-caps near 4 GB.
+ * Flat, it is **168 B per instance in the cage (421 MB)** plus a backing store
+ * allocated outside the cap. Measured, not modelled:
+ * `tests/e2e/_diag-repr-sizing.mjs`.
+ *
+ * f64 rather than f32 is deliberate — identical cage cost (only the external
+ * store doubles), and every coordinate stays bit-identical, so
+ * `tests/e2e/save-golden-digest.mjs` gates the conversion byte-for-byte.
+ *
+ * ## The `points` / `occluded` fields are GONE, on purpose
+ *
+ * They are not kept as compatibility getters. Two of the three ways this
+ * refactor could go wrong are SILENT rather than loud:
+ *   - `inst.points.length` meant *nNodes* at ~30 sites; on a `Float64Array(2n)`
+ *     it silently DOUBLES instead of throwing.
+ *   - `inst.occluded[k]` on a Number bitmask silently yields `undefined`
+ *     (falsy), so occlusion would vanish from every export with no error.
+ * Removing the fields converts both classes of bug into an immediate
+ * `TypeError: Cannot read properties of undefined`. Use the accessors below.
+ *
+ * The CONSTRUCTOR still takes the boxed form (or a `Float64Array`) and
+ * normalizes, so the ~23 construction sites are unchanged.
+ */
 export class Instance {
     /**
-     * @param {(number[]|null)[]} points - Array of [u, v] 2D keypoints (null if not visible)
+     * @param {(number[]|null)[]|Float64Array} points - Boxed `[u,v]|null` rows
+     *   (normalized to the flat form) or an already-flat `Float64Array(2n)`,
+     *   which is ADOPTED by reference.
      * @param {number} trackIdx - Track index
      * @param {'user'|'predicted'|'reprojected'} type
      * @param {number} score - Confidence 0-1
      */
     constructor(points, trackIdx, type, score) {
-        this.points = points;
+        /** @type {Float64Array} Flat [u,v] per node; NaN x = no point. */
+        this._xy = xyFromPoints(points);
+        /** @type {number|Uint32Array} Occlusion bit set. */
+        this._occ = makeOccSet(this._xy.length >> 1);
         this.trackIdx = trackIdx;
         this.type = type;
         this.score = score;
         /** @type {boolean} Whether the user has edited this instance */
         this.modified = false;
-        /** @type {(number[]|null)[]|null} Backup of original points before editing */
-        this._originalPoints = null;
-        /** @type {boolean[]} Per-node occlusion state (true = occluded but position known) */
-        this.occluded = new Array(points.length).fill(false);
+        /** @type {Float64Array|null} Backup of original coords before editing */
+        this._originalXY = null;
+        /** @type {number|Uint32Array|null} Backup of original occlusion */
+        this._originalOcc = null;
+    }
+
+    /** Number of skeleton nodes this instance covers. @returns {number} */
+    get numNodes() { return this._xy.length >> 1; }
+
+    /** Does node `k` have a position? @param {number} k @returns {boolean} */
+    hasPoint(k) {
+        return k >= 0 && k < this.numNodes && !Number.isNaN(this._xy[k << 1]);
+    }
+
+    /** X of node `k` (NaN when absent). @param {number} k @returns {number} */
+    getX(k) { return this._xy[k << 1]; }
+    /** Y of node `k` (NaN when absent). @param {number} k @returns {number} */
+    getY(k) { return this._xy[(k << 1) + 1]; }
+
+    /**
+     * Node `k` as a boxed `[u,v]`, or null when absent. ALLOCATES — use
+     * `readPoint` inside loops.
+     * @param {number} k @returns {number[]|null}
+     */
+    getPoint(k) {
+        if (!this.hasPoint(k)) return null;
+        const o = k << 1;
+        return [this._xy[o], this._xy[o + 1]];
+    }
+
+    /**
+     * Allocation-free read of node `k` into a caller-owned 2-element `out`.
+     * @param {number} k @param {number[]} out @returns {number[]|null}
+     */
+    readPoint(k, out) {
+        if (!this.hasPoint(k)) return null;
+        const o = k << 1;
+        out[0] = this._xy[o]; out[1] = this._xy[o + 1];
+        return out;
+    }
+
+    /** Set node `k`. @param {number} k @param {number} x @param {number} y */
+    setPoint(k, x, y) {
+        if (k < 0 || k >= this.numNodes) return;
+        const o = k << 1;
+        this._xy[o] = x; this._xy[o + 1] = y;
+    }
+
+    /**
+     * Set node `k` from a boxed `[u,v]`, or clear it when null/undefined.
+     * @param {number} k @param {number[]|null} xy
+     */
+    setPointFrom(k, xy) {
+        if (xy == null) this.clearPoint(k);
+        else this.setPoint(k, xy[0], xy[1]);
+    }
+
+    /** Remove node `k`'s position (and its occlusion flag). @param {number} k */
+    clearPoint(k) {
+        if (k < 0 || k >= this.numNodes) return;
+        const o = k << 1;
+        this._xy[o] = NaN; this._xy[o + 1] = NaN;
+        this._occ = occSet(this._occ, k, false);
+    }
+
+    /** Is node `k` occluded? @param {number} k @returns {boolean} */
+    isOccluded(k) { return occGet(this._occ, k); }
+
+    /** Set node `k`'s occlusion. @param {number} k @param {boolean} v */
+    setOccluded(k, v) {
+        if (k < 0 || k >= this.numNodes) return;
+        this._occ = occSet(this._occ, k, !!v);
+    }
+
+    /** Does any node carry the occluded flag? @returns {boolean} */
+    anyOccluded() {
+        for (let k = 0, n = this.numNodes; k < n; k++) if (occGet(this._occ, k)) return true;
+        return false;
+    }
+
+    /** Any node with a position at all. @returns {boolean} */
+    hasAnyPoint() {
+        for (let k = 0, n = this.numNodes; k < n; k++) if (this.hasPoint(k)) return true;
+        return false;
+    }
+
+    /**
+     * Any node with a position that is NOT flagged in `nulledNodes` — i.e. a
+     * point that may contribute to triangulation. Collapses the repeated
+     * `points.some((p, i) => p != null && !nulledNodes.has(i))` idiom.
+     * @returns {boolean}
+     */
+    hasAnyUsablePoint() {
+        for (let k = 0, n = this.numNodes; k < n; k++) {
+            if (this.hasPoint(k) && !(this.nulledNodes && this.nulledNodes.has(k))) return true;
+        }
+        return false;
+    }
+
+    /** How many nodes have a position. @returns {number} */
+    countPoints() {
+        let c = 0;
+        for (let k = 0, n = this.numNodes; k < n; k++) if (this.hasPoint(k)) c++;
+        return c;
+    }
+
+    /**
+     * Boxed `[[u,v]|null, ...]` view, for the serialization boundaries that must
+     * keep emitting the legacy shape (the JSON project format, the JSON label
+     * export). ALLOCATES the whole structure.
+     * @returns {(number[]|null)[]}
+     */
+    toPointsArray() {
+        const n = this.numNodes, out = new Array(n);
+        for (let k = 0; k < n; k++) out[k] = this.getPoint(k);
+        return out;
+    }
+
+    /** Boxed `boolean[]` occlusion view, for serialization. @returns {boolean[]} */
+    toOccludedArray() {
+        const n = this.numNodes, out = new Array(n);
+        for (let k = 0; k < n; k++) out[k] = occGet(this._occ, k);
+        return out;
+    }
+
+    /**
+     * Replace every coordinate (the old `inst.points = ...`). Accepts boxed rows
+     * or a flat `Float64Array`, which is adopted by reference.
+     * @param {(number[]|null)[]|Float64Array} points
+     */
+    setPointsFrom(points) {
+        const next = xyFromPoints(points);
+        if ((next.length >> 1) !== this.numNodes) this._occ = makeOccSet(next.length >> 1);
+        this._xy = next;
+    }
+
+    /**
+     * Replace occlusion (the old `inst.occluded = ...`) from a boolean/0-1 array.
+     * @param {ArrayLike<boolean|number>} arr
+     */
+    setOccludedFrom(arr) {
+        this._occ = makeOccSet(this.numNodes);
+        if (!arr) return;
+        for (let k = 0, n = Math.min(this.numNodes, arr.length); k < n; k++) {
+            if (arr[k]) this._occ = occSet(this._occ, k, true);
+        }
+    }
+
+    /**
+     * Share another instance's coordinate + occlusion buffers BY REFERENCE.
+     * Preserves the deliberate aliasing in the lazy-2D hydration path, where a
+     * placeholder member adopts the freshly-decoded instance's arrays.
+     * @param {Instance} other
+     */
+    adoptPointsFrom(other) {
+        this._xy = other._xy;
+        this._occ = other._occ;
     }
 
     /**
      * Toggle the occluded state of a node.
-     * Only works if the point has valid coordinates (non-null).
+     * Only works if the point has valid coordinates.
      * @param {number} nodeIdx
      */
     toggleOccluded(nodeIdx) {
-        if (nodeIdx < 0 || nodeIdx >= this.points.length) return;
-        if (this.points[nodeIdx] == null) return;
-        this.occluded[nodeIdx] = !this.occluded[nodeIdx];
+        if (nodeIdx < 0 || nodeIdx >= this.numNodes) return;
+        if (!this.hasPoint(nodeIdx)) return;
+        this._occ = occSet(this._occ, nodeIdx, !occGet(this._occ, nodeIdx));
     }
 
     /**
      * Set visibility of a specific point by node index.
-     * When hiding, the point is set to null. When showing, it is restored
-     * from the backup (_originalPoints) if available.
+     * When hiding, the point is cleared. When showing, it is restored
+     * from the backup if available.
      * @param {number} nodeIdx
      * @param {boolean} visible
      */
     setPointVisible(nodeIdx, visible) {
-        if (nodeIdx < 0 || nodeIdx >= this.points.length) return;
+        if (nodeIdx < 0 || nodeIdx >= this.numNodes) return;
         if (visible) {
-            // Restore from backup if available
-            if (!this.points[nodeIdx] && this._originalPoints && this._originalPoints[nodeIdx]) {
-                this.points[nodeIdx] = clonePoints([this._originalPoints[nodeIdx]])[0];
+            const o = nodeIdx << 1;
+            if (!this.hasPoint(nodeIdx) && this._originalXY &&
+                    !Number.isNaN(this._originalXY[o])) {
+                this._xy[o] = this._originalXY[o];
+                this._xy[o + 1] = this._originalXY[o + 1];
             }
         } else {
-            this.points[nodeIdx] = null;
-            this.occluded[nodeIdx] = false;
+            this.clearPoint(nodeIdx);
         }
     }
 
     /**
-     * Save a backup of the current points as _originalPoints.
+     * Save a backup of the current coordinates + occlusion.
      * Subsequent calls overwrite the previous backup.
      */
     backupPoints() {
-        this._originalPoints = clonePoints(this.points);
-        this._originalOccluded = this.occluded.slice();
+        this._originalXY = new Float64Array(this._xy);
+        this._originalOcc = (typeof this._occ === 'number') ? this._occ : new Uint32Array(this._occ);
+    }
+
+    /** Restore coordinates + occlusion from the backup. Does nothing without one. */
+    restorePoints() {
+        if (this._originalXY) this._xy = new Float64Array(this._originalXY);
+        if (this._originalOcc != null) {
+            this._occ = (typeof this._originalOcc === 'number')
+                ? this._originalOcc : new Uint32Array(this._originalOcc);
+        }
+    }
+
+    /** Does a backup exist? @returns {boolean} */
+    hasBackup() { return this._originalXY != null; }
+
+    /**
+     * Insert an empty node at `idx` (skeleton node added). Grows every buffer,
+     * including any backup, so a later `restorePoints()` stays node-aligned.
+     * @param {number} idx
+     */
+    insertNodeAt(idx) {
+        const n = this.numNodes;
+        if (idx < 0 || idx > n) return;
+        this._xy = spliceXY(this._xy, idx, 0);
+        this._occ = spliceOcc(this._occ, n, idx, 0);
+        if (this._originalXY) {
+            this._originalOcc = spliceOcc(this._originalOcc, n, idx, 0);
+            this._originalXY = spliceXY(this._originalXY, idx, 0);
+        }
     }
 
     /**
-     * Restore points from the _originalPoints backup.
-     * Does nothing if no backup exists.
+     * Remove node `idx` (skeleton node removed). Shrinks every buffer.
+     * @param {number} idx
      */
-    restorePoints() {
-        if (this._originalPoints) {
-            this.points = clonePoints(this._originalPoints);
-        }
-        if (this._originalOccluded) {
-            this.occluded = this._originalOccluded.slice();
+    removeNodeAt(idx) {
+        const n = this.numNodes;
+        if (idx < 0 || idx >= n) return;
+        this._xy = spliceXY(this._xy, idx, 1);
+        this._occ = spliceOcc(this._occ, n, idx, 1);
+        if (this._originalXY) {
+            this._originalOcc = spliceOcc(this._originalOcc, n, idx, 1);
+            this._originalXY = spliceXY(this._originalXY, idx, 1);
         }
     }
+}
+
+
+// --------------------------------------------------------------------------
+// Instance storage helpers (module-private)
+// --------------------------------------------------------------------------
+
+/**
+ * Normalize a constructor/setter `points` argument into the flat form.
+ * A `Float64Array` is ADOPTED (no copy); boxed rows are converted; a plain
+ * number is read as a node count.
+ * @param {(number[]|null)[]|Float64Array|number} points
+ * @returns {Float64Array}
+ */
+function xyFromPoints(points) {
+    if (points instanceof Float64Array) return points;
+    if (typeof points === 'number') {
+        const a = new Float64Array(points * 2); a.fill(NaN); return a;
+    }
+    if (points == null) return new Float64Array(0);
+    if (ArrayBuffer.isView(points)) return new Float64Array(points);
+    const n = points.length;
+    const xy = new Float64Array(n * 2);
+    for (let k = 0; k < n; k++) {
+        const p = points[k];
+        const o = k << 1;
+        if (p == null) { xy[o] = NaN; xy[o + 1] = NaN; }
+        else { xy[o] = p[0]; xy[o + 1] = p[1]; }
+    }
+    return xy;
+}
+
+/** Fresh all-clear occlusion set for `n` nodes. */
+function makeOccSet(n) {
+    return n <= 32 ? 0 : new Uint32Array((n + 31) >> 5);
+}
+
+/** Read bit `k` from an occlusion set. */
+function occGet(occ, k) {
+    if (k < 0) return false;
+    if (typeof occ === 'number') return k < 32 && (occ & (1 << k)) !== 0;
+    const w = k >> 5;
+    return w < occ.length && (occ[w] & (1 << (k & 31))) !== 0;
+}
+
+/** Write bit `k`; returns the (possibly new) occlusion set. */
+function occSet(occ, k, v) {
+    if (k < 0) return occ;
+    if (typeof occ === 'number') {
+        if (k >= 32) return occ;              // unreachable: >32 nodes uses Uint32Array
+        return v ? (occ | (1 << k)) : (occ & ~(1 << k));
+    }
+    const w = k >> 5;
+    if (w >= occ.length) return occ;
+    if (v) occ[w] |= (1 << (k & 31));
+    else occ[w] &= ~(1 << (k & 31));
+    return occ;
+}
+
+/** Insert (`del`=0) or delete (`del`=1) one node slot in a flat xy buffer. */
+function spliceXY(xy, idx, del) {
+    const n = xy.length >> 1;
+    const out = new Float64Array((n + (del ? -1 : 1)) * 2);
+    out.fill(NaN);
+    for (let k = 0, w = 0; k < n; k++) {
+        if (del && k === idx) continue;
+        if (!del && k === idx) w++;           // leave the inserted slot NaN
+        out[w << 1] = xy[k << 1];
+        out[(w << 1) + 1] = xy[(k << 1) + 1];
+        w++;
+    }
+    return out;
+}
+
+/** Insert/delete one node slot in an occlusion set of `n` nodes. */
+function spliceOcc(occ, n, idx, del) {
+    const nextN = n + (del ? -1 : 1);
+    let out = makeOccSet(nextN);
+    for (let k = 0, w = 0; k < n; k++) {
+        if (del && k === idx) continue;
+        if (!del && k === idx) w++;           // inserted slot starts un-occluded
+        out = occSet(out, w, occGet(occ, k));
+        w++;
+    }
+    return out;
 }
 
 
@@ -679,7 +989,7 @@ export class InstanceGroup {
 
     /**
      * The 2D points paired with this group's reprojections, per camera —
-     * `{ cameraName: Instance.points }` for every member instance.
+     * `{ cameraName: [[x,y]|null, ...] }` for every member instance.
      *
      * DERIVED, not stored (luc3d #189). It was previously an own property that
      * nine sites rebuilt as exactly this object right after triangulating, and
@@ -697,12 +1007,19 @@ export class InstanceGroup {
      * ALLOCATES a fresh object per access — hoist it into a local before reading
      * it per camera in a loop.
      *
+     * Since luc3d #189 follow-up #1 the per-camera value is a fresh BOXED
+     * SNAPSHOT (`Instance.toPointsArray()`), not the member's live array — the
+     * member stores coordinates in a flat `Float64Array` now. Liveness is
+     * unaffected in practice because the getter re-derives on every read, so a
+     * drag in progress is reflected the next time a consumer asks; what is gone
+     * is reference IDENTITY (`observedPoints[cam] === someArray`).
+     *
      * @returns {Object.<string, (number[]|null)[]>}
      */
     get observedPoints() {
         var out = {};
         for (var [camName, inst] of this.instances) {
-            if (inst && inst.points) out[camName] = inst.points;
+            if (inst) out[camName] = inst.toPointsArray();
         }
         return out;
     }
@@ -1852,68 +2169,36 @@ export class Session {
 
     /**
      * Propagate a skeleton node addition to all instances.
-     * Adds a null point at the end of every Instance.points array.
+     * Appends one empty node slot to every Instance.
      */
     propagateNodeAdded() {
-        // Update all instances in FrameGroups
+        // Update all instances in FrameGroups. `insertNodeAt` grows the flat
+        // coordinate/occlusion buffers AND any backup together, so a later
+        // restorePoints() stays node-aligned (luc3d #189 follow-up #1).
         for (const fg of this.frameGroups.values()) {
             for (const instances of fg.instances.values()) {
-                for (const inst of instances) {
-                    inst.points.push(null);
-                    inst.occluded.push(false);
-                    if (inst._originalPoints) inst._originalPoints.push(null);
-                    if (inst._originalOccluded) inst._originalOccluded.push(false);
-                }
+                for (const inst of instances) inst.insertNodeAt(inst.numNodes);
             }
             for (const unlinkedList of fg.unlinkedInstances.values()) {
-                for (const ul of unlinkedList) {
-                    ul.instance.points.push(null);
-                    ul.instance.occluded.push(false);
-                    if (ul.instance._originalPoints) ul.instance._originalPoints.push(null);
-                    if (ul.instance._originalOccluded) ul.instance._originalOccluded.push(false);
-                }
+                for (const ul of unlinkedList) ul.instance.insertNodeAt(ul.instance.numNodes);
             }
         }
     }
 
     /**
      * Propagate a skeleton node removal to all instances.
-     * Splices out the point at nodeIdx from every Instance.points array.
+     * Removes node `nodeIdx` from every Instance.
      * @param {number} nodeIdx - The index of the removed node
      */
     propagateNodeRemoved(nodeIdx) {
+        // `removeNodeAt` shrinks the flat coordinate/occlusion buffers AND any
+        // backup together (luc3d #189 follow-up #1).
         for (const fg of this.frameGroups.values()) {
             for (const instances of fg.instances.values()) {
-                for (const inst of instances) {
-                    if (inst.points.length > nodeIdx) {
-                        inst.points.splice(nodeIdx, 1);
-                    }
-                    if (inst.occluded.length > nodeIdx) {
-                        inst.occluded.splice(nodeIdx, 1);
-                    }
-                    if (inst._originalPoints && inst._originalPoints.length > nodeIdx) {
-                        inst._originalPoints.splice(nodeIdx, 1);
-                    }
-                    if (inst._originalOccluded && inst._originalOccluded.length > nodeIdx) {
-                        inst._originalOccluded.splice(nodeIdx, 1);
-                    }
-                }
+                for (const inst of instances) inst.removeNodeAt(nodeIdx);
             }
             for (const unlinkedList of fg.unlinkedInstances.values()) {
-                for (const ul of unlinkedList) {
-                    if (ul.instance.points.length > nodeIdx) {
-                        ul.instance.points.splice(nodeIdx, 1);
-                    }
-                    if (ul.instance.occluded.length > nodeIdx) {
-                        ul.instance.occluded.splice(nodeIdx, 1);
-                    }
-                    if (ul.instance._originalPoints && ul.instance._originalPoints.length > nodeIdx) {
-                        ul.instance._originalPoints.splice(nodeIdx, 1);
-                    }
-                    if (ul.instance._originalOccluded && ul.instance._originalOccluded.length > nodeIdx) {
-                        ul.instance._originalOccluded.splice(nodeIdx, 1);
-                    }
-                }
+                for (const ul of unlinkedList) ul.instance.removeNodeAt(nodeIdx);
             }
         }
         // Mark all instance groups as dirty (triangulation needs recomputing)
