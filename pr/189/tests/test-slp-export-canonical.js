@@ -69,7 +69,7 @@
         session.trustTracks = true;
         session.identities = [new Identity(0, 'idA', '#ff0000'), new Identity(1, 'idB', '#00ff00')];
         const instA = new Instance([[10, 11], [12, 13]], 0, 'user', 0.9);
-        instA.occluded = [false, true];
+        instA.setOccludedFrom([false, true]);
         const instB = new Instance([[20, 21], [22, 23]], null, 'predicted', 0.5);
         const fg = new FrameGroup(0);
         fg.addInstance('cam0', instA);

@@ -72,10 +72,10 @@
 
             // Simulate in-place update (what storeReprojectedInstances does)
             var existing = group.getReprojectedInstance('CamA');
-            existing.points = [[11, 21], [31, 41], [51, 61]];
+            existing.setPointsFrom([[11, 21], [31, 41], [51, 61]]);
 
             assertEqual(group.reprojectedInstances.size, 1, 'size should not change');
-            assertEqual(group.getReprojectedInstance('CamA').points[0][0], 11, 'points should be updated');
+            assertEqual(group.getReprojectedInstance('CamA').getX(0), 11, 'points should be updated');
         });
     });
 
@@ -138,7 +138,7 @@
 
             // User double-clicks reprojection in CamC → add user instance to same group
             var userInst = new Instance(
-                reproj.points.map(function (p) { return p ? [p[0], p[1]] : null; }),
+                reproj.toPointsArray(),
                 0, 'user', 1.0
             );
             group.addInstance('CamC', userInst);
@@ -214,15 +214,15 @@
 
             // Simulate re-triangulation: update existing
             var existingA = group.getReprojectedInstance('CamA');
-            existingA.points = [[11, 21], [31, 41], [51, 61]];
+            existingA.setPointsFrom([[11, 21], [31, 41], [51, 61]]);
 
             var existingB = group.getReprojectedInstance('CamB');
-            existingB.points = [[16, 26], [36, 46], [56, 66]];
+            existingB.setPointsFrom([[16, 26], [36, 46], [56, 66]]);
 
             // Still 2, not 4
             assertEqual(group.reprojectedInstances.size, 2, 'should still be 2 after update');
-            assertEqual(group.getReprojectedInstance('CamA').points[0][0], 11);
-            assertEqual(group.getReprojectedInstance('CamB').points[0][0], 16);
+            assertEqual(group.getReprojectedInstance('CamA').getX(0), 11);
+            assertEqual(group.getReprojectedInstance('CamB').getX(0), 16);
         });
 
         it('new camera reprojection is added during re-triangulation', function () {
@@ -346,7 +346,7 @@
             assertNotNull(got, 'a reprojected instance is synthesized on demand');
             assertEqual(got.type, 'reprojected');
             assertEqual(got.trackIdx, 5, 'carries the group\'s identityId, matching storeReprojectedInstances');
-            assertDeepEqualPoints(got.points, [[10, 20], [30, 40], null]);
+            assertDeepEqualPoints(got.toPointsArray(), [[10, 20], [30, 40], null]);
         });
 
         it('returns null when neither reprojectedInstances nor .reprojections has this camera', function () {

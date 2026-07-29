@@ -158,7 +158,7 @@ describe('SLP Merge Helpers', function () {
             var sideInsts = fg.getInstances('side');
             assertEqual(backInsts.length, 1, 'Frame 0 should have 1 back instance');
             assertEqual(sideInsts.length, 1, 'Frame 0 should have 1 side instance');
-            assertDeepEqual(sideInsts[0].points[0], [150, 250], 'Side instance point 0 should be correct');
+            assertDeepEqual(sideInsts[0].getPoint(0), [150, 250], 'Side instance point 0 should be correct');
 
             // Check frame 5 was created
             var fg5 = session.frameGroups.get(5);
@@ -197,9 +197,9 @@ describe('SLP Merge Helpers', function () {
             // After reorder: position 0 (A) = incoming[1] = [20,21]
             //                position 1 (B) = incoming[2] = [30,31]
             //                position 2 (C) = incoming[0] = [10,11]
-            assertDeepEqual(insts[0].points[0], [20, 21], 'Node A should be at position 0');
-            assertDeepEqual(insts[0].points[1], [30, 31], 'Node B should be at position 1');
-            assertDeepEqual(insts[0].points[2], [10, 11], 'Node C should be at position 2');
+            assertDeepEqual(insts[0].getPoint(0), [20, 21], 'Node A should be at position 0');
+            assertDeepEqual(insts[0].getPoint(1), [30, 31], 'Node B should be at position 1');
+            assertDeepEqual(insts[0].getPoint(2), [10, 11], 'Node C should be at position 2');
         });
     });
 
@@ -375,9 +375,9 @@ describe('SLP Merge Helpers', function () {
             var fgCheck = session.frameGroups.get(0);
             var cam2Insts = fgCheck.getInstances('cam2');
             assertEqual(cam2Insts.length, 1, 'Should have 1 cam2 instance');
-            assertDeepEqual(cam2Insts[0].points[0], [110, 111], 'Node A at position 0');
-            assertDeepEqual(cam2Insts[0].points[1], [120, 121], 'Node B at position 1');
-            assertDeepEqual(cam2Insts[0].points[2], [130, 131], 'Node C at position 2');
+            assertDeepEqual(cam2Insts[0].getPoint(0), [110, 111], 'Node A at position 0');
+            assertDeepEqual(cam2Insts[0].getPoint(1), [120, 121], 'Node B at position 1');
+            assertDeepEqual(cam2Insts[0].getPoint(2), [130, 131], 'Node C at position 2');
         });
     });
 });

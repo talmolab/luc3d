@@ -82,16 +82,16 @@
 
                 var inst = addedInstance(env.session);
                 assertTrue(!!inst, 'an instance was created');
-                assertEqual(inst.points.length, 3, 'instance has one slot per skeleton node');
+                assertEqual(inst.numNodes, 3, 'instance has one slot per skeleton node');
 
                 // DESIRED: node 1 is positioned (so it draws a marker and can be
                 // clicked to un-occlude), not an unreachable null.
-                assertTrue(inst.points[1] != null,
+                assertTrue(inst.hasPoint(1),
                     'occluded template node must be given a position (placeable), not left null');
 
                 // The other nodes keep the template positions.
-                assertEqual(inst.points[0][0], 100, 'node 0 keeps template x');
-                assertEqual(inst.points[2][0], 200, 'node 2 keeps template x');
+                assertEqual(inst.getX(0), 100, 'node 0 keeps template x');
+                assertEqual(inst.getX(2), 200, 'node 2 keeps template x');
 
                 // Occluded node should be FLAGGED (occluded style) rather than dropped.
                 assertTrue(inst.nulledNodes && inst.nulledNodes.has(1),
@@ -110,7 +110,7 @@
                 var inst = addedInstance(env.session);
                 assertTrue(!!inst, 'an instance was created');
                 for (var i = 0; i < 3; i++) {
-                    assertTrue(inst.points[i] != null, 'node ' + i + ' present');
+                    assertTrue(inst.hasPoint(i), 'node ' + i + ' present');
                 }
             } finally {
                 cleanupCanvases();
@@ -126,7 +126,7 @@
                 var inst = addedInstance(env.session);
                 assertTrue(!!inst, 'an instance was created');
                 for (var i = 0; i < 3; i++) {
-                    assertTrue(inst.points[i] != null,
+                    assertTrue(inst.hasPoint(i),
                         'topology layout places node ' + i + ' (why save+reload restores full instances)');
                 }
             } finally {
@@ -144,11 +144,11 @@
                 // Because every slot is now filled, when this instance seeds the
                 // NEXT smart-add template (recordUserPoints), it carries no null —
                 // so the missing-node no longer propagates frame to frame.
-                for (var i = 0; i < inst.points.length; i++) {
-                    assertTrue(inst.points[i] != null, 'node ' + i + ' is placed (no null to re-inherit)');
+                for (var i = 0; i < inst.numNodes; i++) {
+                    assertTrue(inst.hasPoint(i), 'node ' + i + ' is placed (no null to re-inherit)');
                 }
                 // occluded array stays sized to the node count (Instance invariant).
-                assertEqual(inst.occluded.length, inst.points.length, 'occluded array matches node count');
+                assertEqual(inst.toOccludedArray().length, inst.numNodes, 'occlusion covers every node');
             } finally {
                 cleanupCanvases();
             }
@@ -162,11 +162,11 @@
                 env.mgr._addNewInstance([null, [300, 240], null], [300, 240]);
                 var inst = addedInstance(env.session);
                 assertTrue(!!inst, 'created');
-                assertTrue(inst.points[0] != null && inst.points[2] != null, 'both null slots placed');
+                assertTrue(inst.hasPoint(0) && inst.hasPoint(2), 'both null slots placed');
                 assertTrue(inst.nulledNodes && inst.nulledNodes.has(0) && inst.nulledNodes.has(2),
                     'both filled nodes flagged occluded');
                 // Fanned out from the centroid → the two placeholders are not identical.
-                assertTrue(inst.points[0][0] !== inst.points[2][0] || inst.points[0][1] !== inst.points[2][1],
+                assertTrue(inst.getX(0) !== inst.getX(2) || inst.getY(0) !== inst.getY(2),
                     'the two placeholders do not overlap');
             } finally {
                 cleanupCanvases();
@@ -180,7 +180,7 @@
                 env.mgr._addNewInstance([null, null, null], [320, 240]);
                 var inst = addedInstance(env.session);
                 assertTrue(!!inst, 'created');
-                for (var i = 0; i < 3; i++) assertTrue(inst.points[i] != null, 'node ' + i + ' placed by topology');
+                for (var i = 0; i < 3; i++) assertTrue(inst.hasPoint(i), 'node ' + i + ' placed by topology');
             } finally {
                 cleanupCanvases();
             }

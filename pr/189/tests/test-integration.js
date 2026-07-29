@@ -196,24 +196,24 @@
 
             // Create instances
             var inst1 = session.addNewInstance(0, 'cam1', skeleton, 0);
-            inst1.points[0] = [10, 20];
-            inst1.points[1] = [30, 40];
+            inst1.setPoint(0, 10, 20);
+            inst1.setPoint(1, 30, 40);
 
             var inst2 = session.addNewInstance(5, 'cam1', skeleton, 0);
-            inst2.points[0] = [50, 60];
-            inst2.points[1] = [70, 80];
+            inst2.setPoint(0, 50, 60);
+            inst2.setPoint(1, 70, 80);
 
             // Add node to skeleton
             skeleton.addNode('c');
             session.propagateNodeAdded();
 
             // Verify all instances have 3 points now
-            assertEqual(inst1.points.length, 3, 'Instance 1 should have 3 points');
-            assertNull(inst1.points[2], 'New point should be null');
-            assertDeepEqual(inst1.points[0], [10, 20], 'Existing points preserved');
+            assertEqual(inst1.numNodes, 3, 'Instance 1 should have 3 points');
+            assertNull(inst1.getPoint(2), 'New point should be null');
+            assertDeepEqual(inst1.getPoint(0), [10, 20], 'Existing points preserved');
 
-            assertEqual(inst2.points.length, 3, 'Instance 2 should have 3 points');
-            assertNull(inst2.points[2], 'New point should be null');
+            assertEqual(inst2.numNodes, 3, 'Instance 2 should have 3 points');
+            assertNull(inst2.getPoint(2), 'New point should be null');
         });
 
         it('removing a node splices all instance point arrays', function () {
@@ -224,9 +224,9 @@
             var session = new Session(cameras, skeleton, ['track_0']);
 
             var inst = session.addNewInstance(0, 'cam1', skeleton, 0);
-            inst.points[0] = [10, 20];
-            inst.points[1] = [30, 40];
-            inst.points[2] = [50, 60];
+            inst.setPoint(0, 10, 20);
+            inst.setPoint(1, 30, 40);
+            inst.setPoint(2, 50, 60);
 
             // Add an InstanceGroup so we can verify dirty marking
             var group = new InstanceGroup(1, 0);
@@ -239,9 +239,9 @@
             session.propagateNodeRemoved(1);
 
             // Verify instance points updated
-            assertEqual(inst.points.length, 2);
-            assertDeepEqual(inst.points[0], [10, 20]);
-            assertDeepEqual(inst.points[1], [50, 60]);
+            assertEqual(inst.numNodes, 2);
+            assertDeepEqual(inst.getPoint(0), [10, 20]);
+            assertDeepEqual(inst.getPoint(1), [50, 60]);
 
             // Verify skeleton edges updated
             assertEqual(skeleton.edges.length, 0, 'Both edges referenced node 1, should be removed');
@@ -315,7 +315,7 @@
 
             // Add instance data
             var inst = session.addNewInstance(0, 'cam1', skeleton, 0);
-            inst.points = [[100, 200], [150, 180], [200, 250], [280, 300]];
+            inst.setPointsFrom([[100, 200], [150, 180], [200, 250], [280, 300]]);
 
             var views = [{ name: 'cam1', videoWidth: 640, videoHeight: 480 }];
             var data = buildSlpExportData(session, views);

@@ -177,9 +177,9 @@
         it('_onDragMove updates node position during drag', function () {
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 100, 100), env.camName);
             env.mgr._onDragMove(makeMouseEvent('mousemove', 150, 160));
-            assertEqual(env.unlinked.instance.points[0][0], 150, 'Node 0 x=150');
-            assertEqual(env.unlinked.instance.points[0][1], 160, 'Node 0 y=160');
-            assertEqual(env.unlinked.instance.points[1][0], 200, 'Node 1 unchanged');
+            assertEqual(env.unlinked.instance.getX(0), 150, 'Node 0 x=150');
+            assertEqual(env.unlinked.instance.getY(0), 160, 'Node 0 y=160');
+            assertEqual(env.unlinked.instance.getX(1), 200, 'Node 1 unchanged');
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 150, 160), env.camName);
         });
 
@@ -195,8 +195,8 @@
             // Drag node 0: (100,100) -> (150,160)
             simulateDrag(env.mgr, env.camName, 100, 100, 150, 160);
             assertFalse(env.mgr.isDragging, 'Clean after drag 1');
-            assertEqual(env.unlinked.instance.points[0][0], 150, 'Node 0 x=150');
-            assertEqual(env.unlinked.instance.points[0][1], 160, 'Node 0 y=160');
+            assertEqual(env.unlinked.instance.getX(0), 150, 'Node 0 x=150');
+            assertEqual(env.unlinked.instance.getY(0), 160, 'Node 0 y=160');
 
             // Drag node 1: (200,200) -> (250,270)
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 200, 200), env.camName);
@@ -204,16 +204,16 @@
             assertEqual(env.mgr.dragInfo.nodeIdx, 1, 'Should drag node 1');
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 250, 270));
-            assertEqual(env.unlinked.instance.points[1][0], 250, 'Node 1 x=250');
-            assertEqual(env.unlinked.instance.points[1][1], 270, 'Node 1 y=270');
+            assertEqual(env.unlinked.instance.getX(1), 250, 'Node 1 x=250');
+            assertEqual(env.unlinked.instance.getY(1), 270, 'Node 1 y=270');
 
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 250, 270), env.camName);
             assertFalse(env.mgr.isDragging, 'Clean after drag 2');
 
             // Verify final positions
-            assertDeepEqual(env.unlinked.instance.points[0], [150, 160], 'Final node 0');
-            assertDeepEqual(env.unlinked.instance.points[1], [250, 270], 'Final node 1');
-            assertDeepEqual(env.unlinked.instance.points[2], [300, 300], 'Final node 2 unchanged');
+            assertDeepEqual(env.unlinked.instance.getPoint(0), [150, 160], 'Final node 0');
+            assertDeepEqual(env.unlinked.instance.getPoint(1), [250, 270], 'Final node 1');
+            assertDeepEqual(env.unlinked.instance.getPoint(2), [300, 300], 'Final node 2 unchanged');
         });
     });
 
@@ -232,14 +232,14 @@
 
         it('can drag same node a second time after release', function () {
             simulateDrag(env.mgr, env.camName, 100, 100, 120, 130);
-            assertEqual(env.unlinked.instance.points[0][0], 120, 'After drag 1: x=120');
+            assertEqual(env.unlinked.instance.getX(0), 120, 'After drag 1: x=120');
 
             env.mgr.onMouseDown(makeMouseEvent('mousedown', 120, 130), env.camName);
             assertTrue(env.mgr.isDragging, 'Drag 2 started');
             assertEqual(env.mgr.dragInfo.nodeIdx, 0, 'Same node 0');
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 180, 190));
-            assertEqual(env.unlinked.instance.points[0][0], 180, 'After drag 2: x=180');
+            assertEqual(env.unlinked.instance.getX(0), 180, 'After drag 2: x=180');
 
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 180, 190), env.camName);
             assertFalse(env.mgr.isDragging, 'Clean after drag 2');
@@ -260,7 +260,7 @@
         });
 
         it('Alt+drag translates all, then normal drag moves single node', function () {
-            var origPts = env.unlinked.instance.points.map(function (p) {
+            var origPts = env.unlinked.instance.toPointsArray().map(function (p) {
                 return [p[0], p[1]];
             });
 
@@ -269,10 +269,10 @@
             assertEqual(env.mgr.dragInfo.mode, 'instance', 'Alt+drag = instance mode');
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', origPts[0][0] + 20, origPts[0][1] + 30, { altKey: true }));
-            var pts = env.unlinked.instance.points;
-            for (var i = 0; i < pts.length; i++) {
-                assertEqual(pts[i][0], origPts[i][0] + 20, 'Node ' + i + ' x shifted');
-                assertEqual(pts[i][1], origPts[i][1] + 30, 'Node ' + i + ' y shifted');
+            var inst = env.unlinked.instance;
+            for (var i = 0; i < inst.numNodes; i++) {
+                assertEqual(inst.getX(i), origPts[i][0] + 20, 'Node ' + i + ' x shifted');
+                assertEqual(inst.getY(i), origPts[i][1] + 30, 'Node ' + i + ' y shifted');
             }
 
             env.mgr.onMouseUp(makeMouseEvent('mouseup', origPts[0][0] + 20, origPts[0][1] + 30), env.camName);
@@ -284,9 +284,9 @@
             assertEqual(env.mgr.dragInfo.nodeIdx, 2, 'Dragging node 2');
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 400, 400));
-            assertEqual(pts[2][0], 400, 'Node 2 moved to 400');
-            assertEqual(pts[0][0], origPts[0][0] + 20, 'Node 0 unchanged');
-            assertEqual(pts[1][0], origPts[1][0] + 20, 'Node 1 unchanged');
+            assertEqual(inst.getX(2), 400, 'Node 2 moved to 400');
+            assertEqual(inst.getX(0), origPts[0][0] + 20, 'Node 0 unchanged');
+            assertEqual(inst.getX(1), origPts[1][0] + 20, 'Node 1 unchanged');
 
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 400, 400), env.camName);
         });
@@ -323,7 +323,7 @@
             assertEqual(env.mgr.dragInfo.nodeIdx, 1, 'Node 1');
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 220, 230));
-            assertEqual(env.unlinked.instance.points[1][0], 220, 'Moved to 220');
+            assertEqual(env.unlinked.instance.getX(1), 220, 'Moved to 220');
 
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 220, 230), env.camName);
         });
@@ -371,20 +371,20 @@
 
         it('drag all three nodes in rapid sequence', function () {
             simulateDrag(env.mgr, env.camName, 100, 100, 110, 115);
-            assertEqual(env.unlinked.instance.points[0][0], 110, 'Node 0 x=110');
+            assertEqual(env.unlinked.instance.getX(0), 110, 'Node 0 x=110');
             assertFalse(env.mgr.isDragging, 'Clean after drag 1');
 
             simulateDrag(env.mgr, env.camName, 200, 200, 210, 225);
-            assertEqual(env.unlinked.instance.points[1][0], 210, 'Node 1 x=210');
+            assertEqual(env.unlinked.instance.getX(1), 210, 'Node 1 x=210');
             assertFalse(env.mgr.isDragging, 'Clean after drag 2');
 
             simulateDrag(env.mgr, env.camName, 300, 300, 350, 360);
-            assertEqual(env.unlinked.instance.points[2][0], 350, 'Node 2 x=350');
+            assertEqual(env.unlinked.instance.getX(2), 350, 'Node 2 x=350');
             assertFalse(env.mgr.isDragging, 'Clean after drag 3');
 
-            assertDeepEqual(env.unlinked.instance.points[0], [110, 115], 'Final node 0');
-            assertDeepEqual(env.unlinked.instance.points[1], [210, 225], 'Final node 1');
-            assertDeepEqual(env.unlinked.instance.points[2], [350, 360], 'Final node 2');
+            assertDeepEqual(env.unlinked.instance.getPoint(0), [110, 115], 'Final node 0');
+            assertDeepEqual(env.unlinked.instance.getPoint(1), [210, 225], 'Final node 1');
+            assertDeepEqual(env.unlinked.instance.getPoint(2), [350, 360], 'Final node 2');
         });
     });
 
@@ -453,7 +453,7 @@
             assertTrue(env.mgr.isDragging, 'First click selects and starts drag');
             env.mgr._onDragMove(makeMouseEvent('mousemove', 130, 140));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 130, 140), env.camName);
-            assertEqual(env.inst.points[0][0], 130, 'Node 0 x=130');
+            assertEqual(env.inst.getX(0), 130, 'Node 0 x=130');
             assertFalse(env.mgr.isDragging, 'Clean after drag 1');
             env.mgr._canDrag = true;
 
@@ -465,8 +465,8 @@
             env.mgr._onDragMove(makeMouseEvent('mousemove', 240, 260));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 240, 260), env.camName);
 
-            assertEqual(env.inst.points[1][0], 240, 'Node 1 x=240');
-            assertEqual(env.inst.points[2][0], 300, 'Node 2 unchanged');
+            assertEqual(env.inst.getX(1), 240, 'Node 1 x=240');
+            assertEqual(env.inst.getX(2), 300, 'Node 2 unchanged');
         });
 
         it('edge hit resolves to nearest node and starts drag', function () {
@@ -479,8 +479,8 @@
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 160, 170));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 160, 170), env.camName);
-            assertEqual(env.inst.points[0][0], 160, 'Node 0 moved to x=160');
-            assertEqual(env.inst.points[1][0], 200, 'Node 1 unchanged');
+            assertEqual(env.inst.getX(0), 160, 'Node 0 moved to x=160');
+            assertEqual(env.inst.getX(1), 200, 'Node 1 unchanged');
         });
 
         it('edge hit closer to node 1 resolves to node 1', function () {
@@ -508,7 +508,7 @@
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 130, 140));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 130, 140), env.camName);
-            assertEqual(env.inst.points[0][0], 130, 'Node 0 moved to x=130');
+            assertEqual(env.inst.getX(0), 130, 'Node 0 moved to x=130');
         });
     });
 
@@ -578,14 +578,14 @@
 
             // Drag moves the node
             env.mgr._onDragMove(makeMouseEvent('mousemove', 150, 160));
-            assertEqual(env.inst.points[0][0], 150, 'Node 0 moved to x=150');
-            assertEqual(env.inst.points[0][1], 160, 'Node 0 moved to y=160');
+            assertEqual(env.inst.getX(0), 150, 'Node 0 moved to x=150');
+            assertEqual(env.inst.getY(0), 160, 'Node 0 moved to y=160');
 
             // Release finalizes
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 150, 160), env.camName);
             assertFalse(env.mgr.isDragging, 'Drag ended');
-            assertDeepEqual(env.inst.points[0], [150, 160], 'Final position correct');
-            assertDeepEqual(env.inst.points[1], [200, 200], 'Other nodes unchanged');
+            assertDeepEqual(env.inst.getPoint(0), [150, 160], 'Final position correct');
+            assertDeepEqual(env.inst.getPoint(1), [200, 200], 'Other nodes unchanged');
         });
 
         it('single mousedown+drag works on each node without prior selection', function () {
@@ -597,7 +597,7 @@
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 350, 370));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 350, 370), env.camName);
-            assertDeepEqual(env.inst.points[2], [350, 370], 'Node 2 moved');
+            assertDeepEqual(env.inst.getPoint(2), [350, 370], 'Node 2 moved');
 
             // Drag node 0 — no extra click needed
             env.mgr._canDrag = false;
@@ -608,7 +608,7 @@
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 120, 130));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 120, 130), env.camName);
-            assertDeepEqual(env.inst.points[0], [120, 130], 'Node 0 moved');
+            assertDeepEqual(env.inst.getPoint(0), [120, 130], 'Node 0 moved');
         });
     });
 
@@ -633,14 +633,14 @@
 
             // Drag moves the node
             env.mgr._onDragMove(makeMouseEvent('mousemove', 140, 155));
-            assertEqual(env.instance.points[0][0], 140, 'Node 0 moved to x=140');
-            assertEqual(env.instance.points[0][1], 155, 'Node 0 moved to y=155');
+            assertEqual(env.instance.getX(0), 140, 'Node 0 moved to x=140');
+            assertEqual(env.instance.getY(0), 155, 'Node 0 moved to y=155');
 
             // Release finalizes
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 140, 155), env.camName);
             assertFalse(env.mgr.isDragging, 'Drag ended');
-            assertDeepEqual(env.instance.points[0], [140, 155], 'Final position correct');
-            assertDeepEqual(env.instance.points[1], [200, 200], 'Other nodes unchanged');
+            assertDeepEqual(env.instance.getPoint(0), [140, 155], 'Final position correct');
+            assertDeepEqual(env.instance.getPoint(1), [200, 200], 'Other nodes unchanged');
         });
 
         it('single mousedown+drag works on each unlinked node without prior selection', function () {
@@ -652,7 +652,7 @@
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 230, 240));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 230, 240), env.camName);
-            assertDeepEqual(env.instance.points[1], [230, 240], 'Node 1 moved');
+            assertDeepEqual(env.instance.getPoint(1), [230, 240], 'Node 1 moved');
 
             // Drag node 2 — clear selection first to simulate fresh click
             env.mgr._canDrag = false;
@@ -664,7 +664,7 @@
 
             env.mgr._onDragMove(makeMouseEvent('mousemove', 310, 320));
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 310, 320), env.camName);
-            assertDeepEqual(env.instance.points[2], [310, 320], 'Node 2 moved');
+            assertDeepEqual(env.instance.getPoint(2), [310, 320], 'Node 2 moved');
         });
     });
 
@@ -743,11 +743,11 @@
 
             // Call _onDragMove directly (simulating document-level event)
             env.mgr._onDragMove(makeMouseEvent('mousemove', 150, 160));
-            assertEqual(env.unlinked.instance.points[0][0], 150, 'Node moved via _onDragMove');
+            assertEqual(env.unlinked.instance.getX(0), 150, 'Node moved via _onDragMove');
 
             // Canvas-level onMouseMove should be a no-op during drag
             env.mgr.onMouseMove(makeMouseEvent('mousemove', 999, 999), env.camName);
-            assertEqual(env.unlinked.instance.points[0][0], 150, 'Canvas mousemove ignored during drag');
+            assertEqual(env.unlinked.instance.getX(0), 150, 'Canvas mousemove ignored during drag');
 
             env.mgr.onMouseUp(makeMouseEvent('mouseup', 150, 160), env.camName);
         });

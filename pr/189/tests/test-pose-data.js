@@ -134,7 +134,7 @@
     describe('Instance', function () {
         it('constructor sets properties', function () {
             const inst = new Instance([[10, 20], null, [30, 40]], 0, 'predicted', 0.95);
-            assertEqual(inst.points.length, 3);
+            assertEqual(inst.numNodes, 3);
             assertEqual(inst.trackIdx, 0);
             assertEqual(inst.type, 'predicted');
             assertEqual(inst.score, 0.95);
@@ -145,16 +145,18 @@
             const inst = new Instance([[10, 20], [30, 40]], 0, 'user', 1);
             inst.backupPoints();
             inst.setPointVisible(0, false);
-            assertNull(inst.points[0]);
+            assertNull(inst.getPoint(0));
             inst.setPointVisible(0, true);
-            assertDeepEqual(inst.points[0], [10, 20]);
+            assertDeepEqual(inst.getPoint(0), [10, 20]);
         });
 
-        it('backupPoints creates deep copy', function () {
+        it('backupPoints creates a deep copy', function () {
             const inst = new Instance([[10, 20]], 0, 'user', 1);
             inst.backupPoints();
-            inst.points[0][0] = 999;
-            assertEqual(inst._originalPoints[0][0], 10);
+            inst.setPoint(0, 999, 20);
+            assertEqual(inst.getX(0), 999, 'live value moved');
+            inst.restorePoints();
+            assertEqual(inst.getX(0), 10, 'backup was an independent copy');
         });
     });
 
@@ -261,7 +263,7 @@
         it('addNewInstance creates and stores instance', function () {
             const inst = session.addNewInstance(0, 'cam1', session.skeleton, 0);
             assertNotNull(inst);
-            assertEqual(inst.points.length, 3); // 3 nodes
+            assertEqual(inst.numNodes, 3); // 3 nodes
             assertEqual(inst.type, 'user');
             assertTrue(inst.modified);
             assertEqual(session.getFrameGroup(0).getInstances('cam1').length, 1);
@@ -312,23 +314,23 @@
 
         it('propagateNodeAdded extends all instance points', function () {
             const inst = session.addNewInstance(0, 'cam1', session.skeleton, 0);
-            assertEqual(inst.points.length, 3);
+            assertEqual(inst.numNodes, 3);
             session.skeleton.addNode('new_node');
             session.propagateNodeAdded();
-            assertEqual(inst.points.length, 4);
-            assertNull(inst.points[3]);
+            assertEqual(inst.numNodes, 4);
+            assertNull(inst.getPoint(3));
         });
 
         it('propagateNodeRemoved splices all instance points', function () {
             const inst = session.addNewInstance(0, 'cam1', session.skeleton, 0);
-            inst.points[0] = [10, 20];
-            inst.points[1] = [30, 40];
-            inst.points[2] = [50, 60];
+            inst.setPoint(0, 10, 20);
+            inst.setPoint(1, 30, 40);
+            inst.setPoint(2, 50, 60);
             session.skeleton.removeNode(1); // removes 'b'
             session.propagateNodeRemoved(1);
-            assertEqual(inst.points.length, 2);
-            assertDeepEqual(inst.points[0], [10, 20]);
-            assertDeepEqual(inst.points[1], [50, 60]);
+            assertEqual(inst.numNodes, 2);
+            assertDeepEqual(inst.getPoint(0), [10, 20]);
+            assertDeepEqual(inst.getPoint(1), [50, 60]);
         });
 
         it('createGroupFromUnlinked creates a group', function () {
@@ -1182,6 +1184,224 @@
                 state.sessions = savedSessions;
                 state.session = savedSession;
             }
+        });
+    });
+
+    // ---- Instance flat coordinate storage ----
+    //
+    // `Instance` stores 2D keypoints in a flat Float64Array(2n) with NaN = no
+    // point, and occlusion in a bit set. The public `points`/`occluded` fields
+    // are GONE on purpose (a missed call site must throw, not silently read a
+    // doubled length or an undefined occlusion flag), so these pin the accessor
+    // contract that replaced them.
+
+    describe('Instance flat coordinate storage', function () {
+        it('constructs from the legacy boxed shape', function () {
+            var i = new Instance([[1, 2], null, [5, 6]], 0, 'user', 1);
+            assertEqual(i.numNodes, 3, 'numNodes is NODES, not 2*nodes');
+            assertTrue(i.hasPoint(0));
+            assertFalse(i.hasPoint(1), 'a null row becomes "no point"');
+            assertTrue(i.hasPoint(2));
+            assertDeepEqual(i.getPoint(0), [1, 2]);
+            assertNull(i.getPoint(1));
+            assertEqual(i.getX(2), 5);
+            assertEqual(i.getY(2), 6);
+        });
+
+        it('adopts an already-flat Float64Array without copying', function () {
+            var xy = new Float64Array([1, 2, 3, 4]);
+            var i = new Instance(xy, 0, 'user', 1);
+            assertEqual(i.numNodes, 2);
+            assertDeepEqual(i.getPoint(1), [3, 4]);
+            xy[0] = 99;
+            assertEqual(i.getX(0), 99, 'adopted by reference, not copied');
+        });
+
+        it('round-trips through the boxed form', function () {
+            var boxed = [[1.5, 2.5], null, [-3, 0]];
+            assertDeepEqual(new Instance(boxed, 0, 'user', 1).toPointsArray(), boxed);
+        });
+
+        it('keeps full f64 precision', function () {
+            var v = 0.1 + 0.2;                 // not representable in f32
+            var i = new Instance([[v, 12345678.90123456]], 0, 'user', 1);
+            assertTrue(i.getX(0) === v, 'x exact');
+            assertTrue(i.getY(0) === 12345678.90123456, 'y exact');
+        });
+
+        it('set / clear a point', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            i.setPoint(0, 9, 8);
+            assertDeepEqual(i.getPoint(0), [9, 8]);
+            i.clearPoint(0);
+            assertFalse(i.hasPoint(0));
+            assertNull(i.getPoint(0));
+            i.setPointFrom(0, [7, 7]);
+            assertDeepEqual(i.getPoint(0), [7, 7]);
+            i.setPointFrom(0, null);
+            assertFalse(i.hasPoint(0), 'setPointFrom(null) clears');
+        });
+
+        it('readPoint fills a caller buffer without allocating', function () {
+            var i = new Instance([[1, 2], null], 0, 'user', 1);
+            var out = [0, 0];
+            assertTrue(i.readPoint(0, out) === out, 'returns the same buffer');
+            assertDeepEqual(out, [1, 2]);
+            assertNull(i.readPoint(1, out), 'missing node returns null');
+        });
+
+        it('counts and predicates', function () {
+            var i = new Instance([[1, 2], null, [5, 6]], 0, 'user', 1);
+            assertEqual(i.countPoints(), 2);
+            assertTrue(i.hasAnyPoint());
+            var empty = new Instance([null, null], 0, 'user', 1);
+            assertEqual(empty.countPoints(), 0);
+            assertFalse(empty.hasAnyPoint());
+        });
+
+        it('hasAnyUsablePoint honours nulledNodes', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            assertTrue(i.hasAnyUsablePoint());
+            i.nulledNodes = new Set([0, 1]);
+            assertFalse(i.hasAnyUsablePoint(), 'all positioned nodes are nulled');
+            i.nulledNodes = new Set([0]);
+            assertTrue(i.hasAnyUsablePoint(), 'node 1 still usable');
+        });
+
+        it('occlusion round-trips through the bit set', function () {
+            var i = new Instance([[1, 2], [3, 4], [5, 6]], 0, 'user', 1);
+            assertFalse(i.isOccluded(1));
+            assertFalse(i.anyOccluded());
+            i.setOccluded(1, true);
+            assertTrue(i.isOccluded(1));
+            assertFalse(i.isOccluded(0), 'neighbours unaffected');
+            assertFalse(i.isOccluded(2));
+            assertTrue(i.anyOccluded());
+            assertDeepEqual(i.toOccludedArray(), [false, true, false]);
+            i.setOccluded(1, false);
+            assertFalse(i.anyOccluded());
+        });
+
+        it('occlusion works past 32 nodes (Uint32Array path)', function () {
+            // <=32 nodes uses a Number bitmask; beyond that a Uint32Array. Bit 40
+            // lands in the second word, which is where an off-by-one would show.
+            var boxed = [];
+            for (var k = 0; k < 50; k++) boxed.push([k, k]);
+            var i = new Instance(boxed, 0, 'user', 1);
+            assertEqual(i.numNodes, 50);
+            i.setOccluded(40, true);
+            i.setOccluded(3, true);
+            assertTrue(i.isOccluded(40), 'bit in the second word');
+            assertTrue(i.isOccluded(3), 'bit in the first word');
+            assertFalse(i.isOccluded(41));
+            assertFalse(i.isOccluded(39));
+            assertEqual(i.toOccludedArray().filter(Boolean).length, 2);
+        });
+
+        it('setOccludedFrom ingests a boolean array', function () {
+            var i = new Instance([[1, 2], [3, 4], [5, 6]], 0, 'user', 1);
+            i.setOccludedFrom([false, true, true]);
+            assertDeepEqual(i.toOccludedArray(), [false, true, true]);
+            i.setOccludedFrom(null);
+            assertFalse(i.anyOccluded(), 'null clears');
+        });
+
+        it('clearing a point clears its occlusion flag', function () {
+            var i = new Instance([[1, 2]], 0, 'user', 1);
+            i.setOccluded(0, true);
+            i.clearPoint(0);
+            assertFalse(i.isOccluded(0), 'an absent point cannot be occluded');
+        });
+
+        it('toggleOccluded only applies to positioned nodes', function () {
+            var i = new Instance([[1, 2], null], 0, 'user', 1);
+            i.toggleOccluded(0);
+            assertTrue(i.isOccluded(0));
+            i.toggleOccluded(1);
+            assertFalse(i.isOccluded(1), 'no position => no toggle');
+        });
+
+        it('setPointsFrom replaces every coordinate', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            i.setPointsFrom([[9, 9], null]);
+            assertDeepEqual(i.getPoint(0), [9, 9]);
+            assertFalse(i.hasPoint(1));
+        });
+
+        it('adoptPointsFrom shares buffers (lazy-2D hydration)', function () {
+            var a = new Instance([[1, 2]], 0, 'predicted', 1);
+            var b = new Instance([null], 0, 'predicted', 1);
+            b.adoptPointsFrom(a);
+            assertDeepEqual(b.getPoint(0), [1, 2]);
+            a.setPoint(0, 7, 7);
+            assertDeepEqual(b.getPoint(0), [7, 7], 'shares the same buffer');
+        });
+
+        it('backup / restore covers coordinates AND occlusion', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            i.setOccluded(1, true);
+            i.backupPoints();
+            assertTrue(i.hasBackup());
+            i.setPoint(0, 99, 99);
+            i.setOccluded(1, false);
+            i.restorePoints();
+            assertDeepEqual(i.getPoint(0), [1, 2], 'coords restored');
+            assertTrue(i.isOccluded(1), 'occlusion restored');
+        });
+
+        it('setPointVisible(false) clears, (true) restores from backup', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            i.backupPoints();
+            i.setPointVisible(0, false);
+            assertFalse(i.hasPoint(0));
+            i.setPointVisible(0, true);
+            assertDeepEqual(i.getPoint(0), [1, 2], 'restored from the backup');
+        });
+
+        it('insertNodeAt / removeNodeAt keep coords, occlusion and backup aligned', function () {
+            var i = new Instance([[1, 1], [2, 2], [3, 3]], 0, 'user', 1);
+            i.setOccluded(2, true);
+            i.backupPoints();
+
+            i.insertNodeAt(3);                       // append, as propagateNodeAdded does
+            assertEqual(i.numNodes, 4);
+            assertFalse(i.hasPoint(3), 'new node starts empty');
+            assertTrue(i.isOccluded(2), 'existing occlusion survives');
+
+            i.removeNodeAt(1);                       // drop the middle node
+            assertEqual(i.numNodes, 3);
+            assertDeepEqual(i.getPoint(0), [1, 1]);
+            assertDeepEqual(i.getPoint(1), [3, 3], 'node 2 shifted down to 1');
+            assertTrue(i.isOccluded(1), 'its occlusion bit shifted with it');
+            assertFalse(i.hasPoint(2), 'the appended empty node is now last');
+
+            i.restorePoints();
+            assertEqual(i.numNodes, 3, 'backup was resized alongside');
+        });
+
+        it('out-of-range access is safe', function () {
+            var i = new Instance([[1, 2]], 0, 'user', 1);
+            assertFalse(i.hasPoint(5));
+            assertNull(i.getPoint(5));
+            assertFalse(i.isOccluded(5));
+            i.setPoint(5, 1, 1);
+            i.setOccluded(5, true);
+            i.clearPoint(-1);
+            assertEqual(i.numNodes, 1, 'no growth from out-of-range writes');
+        });
+
+        it('a zero-node instance is inert', function () {
+            var i = new Instance([], 0, 'user', 1);
+            assertEqual(i.numNodes, 0);
+            assertFalse(i.hasAnyPoint());
+            assertDeepEqual(i.toPointsArray(), []);
+            assertDeepEqual(i.toOccludedArray(), []);
+        });
+
+        it('the removed fields really are gone (missed call sites must throw)', function () {
+            var i = new Instance([[1, 2]], 0, 'user', 1);
+            assertEqual(i.points, undefined, 'no `points` field');
+            assertEqual(i.occluded, undefined, 'no `occluded` field');
         });
     });
 

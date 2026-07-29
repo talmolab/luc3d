@@ -14,7 +14,7 @@ import {
     triangulatePoints,
     reprojectPoint,
     reprojectPoints,
-    computeInstanceDistance,
+    computeInstanceDistanceTo,
     hungarianAlgorithm
 } from './triangulation.js';
 import { CrossViewTracker, Detection } from './cross-view-tracker.js';
@@ -40,7 +40,7 @@ var EXPLICIT_NONE = -1;
 var _fMatrixCache = {};   // "cam1:cam2" → F matrix
 var _undistortCache = new WeakMap();  // Instance → undistorted points
 
-// Per-node weights for the current track run (parallel to Instance.points), set
+// Per-node weights for the current track run (parallel to skeleton nodes), set
 // at the start of matchFrameInstances from the user's Tracking Wizard settings.
 // null ⇒ every node weighted 1. A node weighted 0 is excluded from all costs.
 var _nodeWeights = null;
@@ -76,14 +76,10 @@ function getUndistortedPoints(inst, cam) {
     var cached = _undistortCache.get(inst);
     if (cached) return cached;
     var pts = [];
-    for (var k = 0; k < inst.points.length; k++) {
-        if (inst.points[k] == null) {
-            pts.push(null);
-        } else if (cam.undistortPoint) {
-            pts.push(cam.undistortPoint(inst.points[k]));
-        } else {
-            pts.push(inst.points[k]);
-        }
+    for (var k = 0, nK = inst.numNodes; k < nK; k++) {
+        var p = inst.getPoint(k);
+        if (p == null) pts.push(null);
+        else pts.push(cam.undistortPoint ? cam.undistortPoint(p) : p);
     }
     _undistortCache.set(inst, pts);
     return pts;
@@ -104,15 +100,15 @@ function clearFrameCache() {
  */
 function epipolarScore(instA, camA, instB, camB) {
     var F = getCachedF(camA, camB);
-    var ptsA = instA.points, ptsB = instB.points;
-    var numKp = Math.min(ptsA.length, ptsB.length);
+    var numKp = Math.min(instA.numNodes, instB.numNodes);
+    var ptA = [0, 0], ptB = [0, 0];
     var totalErr = 0, validCount = 0;
 
     for (var k = 0; k < numKp; k++) {
-        if (ptsA[k] == null || ptsB[k] == null) continue;
+        if (!instA.readPoint(k, ptA) || !instB.readPoint(k, ptB)) continue;
         var w = nodeWeight(k);
         if (w <= 0) continue;
-        var x1 = ptsA[k][0], y1 = ptsA[k][1];
+        var x1 = ptA[0], y1 = ptA[1];
         var x2 = ptsB[k][0], y2 = ptsB[k][1];
         var l0 = F[0][0]*x1 + F[0][1]*y1 + F[0][2];
         var l1 = F[1][0]*x1 + F[1][1]*y1 + F[1][2];
@@ -146,8 +142,8 @@ function reprojectionScore(instA, camA, instB, camB) {
         if (pt3d == null) continue;
         var repA = reprojectPoint(pt3d, PA);
         var repB = reprojectPoint(pt3d, PB);
-        var dxA = instA.points[k][0] - repA[0], dyA = instA.points[k][1] - repA[1];
-        var dxB = instB.points[k][0] - repB[0], dyB = instB.points[k][1] - repB[1];
+        var dxA = instA.getX(k) - repA[0], dyA = instA.getY(k) - repA[1];
+        var dxB = instB.getX(k) - repB[0], dyB = instB.getY(k) - repB[1];
         totalOks += w * (Math.exp(-(dxA*dxA + dyA*dyA) / sigma2x2) +
                      Math.exp(-(dxB*dxB + dyB*dyB) / sigma2x2)) / 2;
         validCount += w;
@@ -170,20 +166,13 @@ function crossViewScore(instA, camA, instB, camB) {
 
 // Number of present (non-null) keypoints in an instance — the geometry half of
 // the detection filter. Missing keypoints are stored as null (see getUndistortedPoints).
-function countVisibleNodes(points) {
-    if (!points) return 0;
-    var n = 0;
-    for (var k = 0; k < points.length; k++) if (points[k] != null) n++;
-    return n;
-}
-
 // Detection-pool gate: drop garbage/low-confidence instances before they enter
 // cross-view matching. Both gates default to 0 (no-op), so behavior is unchanged
 // unless the Tracking Wizard / bench sets them.
 //   filterMinVisibleNodes — geometry gate, needs no per-detection score (sleap-3d Stage-1 = 8)
 //   filterMinInstanceScore — confidence gate, only applies when inst.score is available (sleap-3d = 0.85)
 function passesDetectionFilter(inst, minVis, minScore) {
-    if (minVis > 0 && countVisibleNodes(inst.points) < minVis) return false;
+    if (minVis > 0 && inst.countPoints() < minVis) return false;
     if (minScore > 0 && inst.score != null && inst.score < minScore) return false;
     return true;
 }
@@ -241,7 +230,7 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
     var prevTargets3d = opts.prevTargets3d || null;
 
     // Resolve user-defined per-node weights for this run (Tracking Wizard).
-    // Indexed to match Instance.points; null ⇒ all nodes weighted 1.
+    // Indexed to match skeleton nodes; null ⇒ all nodes weighted 1.
     _nodeWeights = (session && session.skeleton && Array.isArray(session.skeleton.nodes))
         ? getNodeWeightArray(session.skeleton.nodes)
         : null;
@@ -411,7 +400,7 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     var cam = camMap[camName];
                     if (!cam) return;
                     var reproj = reprojectPoints(prevPts3d, cam.projectionMatrix);
-                    var d = computeInstanceDistance(reproj, inst.points, _nodeWeights);
+                    var d = computeInstanceDistanceTo(reproj, inst, _nodeWeights);
                     if (d < Infinity) { reprojTotal += d; reprojCount++; }
                 });
                 if (reprojCount > 0) {
@@ -452,7 +441,7 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     var cam = camMap[camName];
                     if (!cam || !prevInst) return;
                     var reproj = reprojectPoints(currPts3d, cam.projectionMatrix);
-                    var d = computeInstanceDistance(reproj, prevInst.points, _nodeWeights);
+                    var d = computeInstanceDistanceTo(reproj, prevInst, _nodeWeights);
                     if (d < Infinity) { oksTotal += Math.exp(-d / 50.0); oksCount++; }
                 });
                 if (oksCount > 0) { score += oksTotal / oksCount; scoreCount++; }
@@ -658,7 +647,7 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
                 var costRow = [];
                 for (var ii = 0; ii < insts3.length; ii++) {
                     costRow[ii] = used.has(ii) ? Infinity
-                        : computeInstanceDistance(reproj3, insts3[ii].points, _nodeWeights);
+                        : computeInstanceDistanceTo(reproj3, insts3[ii], _nodeWeights);
                 }
                 rows.push({ gi: gi, gate: reprojectionGate(groups[gi].size) });
                 cost3.push(costRow);
@@ -707,12 +696,12 @@ function triangulateGroup(group, camMap) {
     group.forEach(function(inst, cn) { cams.push(camMap[cn]); entries.push(inst); });
     if (cams.length < 2) return null;
 
-    var numKp = entries[0].points.length;
+    var numKp = entries[0].numNodes;
     var allObs = [];
     for (var k = 0; k < numKp; k++) {
         var obs = [];
         for (var c = 0; c < entries.length; c++) {
-            var pt = entries[c].points[k];
+            var pt = entries[c].getPoint(k);
             obs.push(pt && cams[c].undistortPoint ? cams[c].undistortPoint(pt) : pt);
         }
         allObs.push(obs);

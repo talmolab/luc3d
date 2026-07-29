@@ -384,8 +384,8 @@
             // Edit: correct cam1 / frame 1, track 0 (a user instance); keep track 1
             // predicted+unlinked so the overlay carries the full camera-frame.
             const userInst = session.addNewInstance(1, 'cam1', sk, 0);   // track 0, user
-            userInst.points = [[999, 888], [777, 666]];
-            userInst.occluded = [false, false];
+            userInst.setPointsFrom([[999, 888], [777, 666]]);
+            userInst.setOccludedFrom([false, false]);
             const predSibling = new Instance([[11, 12], [13, 14]], 1, 'predicted', 0.9);   // track 1
             session.addUnlinkedInstance(1, 'cam1', predSibling);
 

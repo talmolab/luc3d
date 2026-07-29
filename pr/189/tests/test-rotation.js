@@ -333,15 +333,15 @@
     describe('Rotation - instance data integrity', function () {
         it('instance point data is not modified by rotation state', function () {
             var inst = makeInstance([[100, 200], [150, 250], [200, 300]], 0);
-            var originalPoints = JSON.parse(JSON.stringify(inst.points));
+            var originalPoints = inst.toPointsArray();
 
             // Simulate rotation by setting a rotation value on a mock view
             var view = { name: 'cam1', rotation: 45 };
 
             // Points should be unchanged — rotation is CSS-only
-            for (var i = 0; i < inst.points.length; i++) {
-                assertEqual(inst.points[i][0], originalPoints[i][0], 'point ' + i + ' X unchanged');
-                assertEqual(inst.points[i][1], originalPoints[i][1], 'point ' + i + ' Y unchanged');
+            for (var i = 0; i < inst.numNodes; i++) {
+                assertEqual(inst.getX(i), originalPoints[i][0], 'point ' + i + ' X unchanged');
+                assertEqual(inst.getY(i), originalPoints[i][1], 'point ' + i + ' Y unchanged');
             }
         });
 

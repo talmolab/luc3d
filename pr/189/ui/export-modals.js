@@ -636,9 +636,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             var viewsWithLabels = 0;
             for (var cj = 0; cj < groupCameras.length; cj++) {
                 var gInst = group.getInstance(groupCameras[cj].name);
-                if (gInst && gInst.points && gInst.points.some(function (p, idx) {
-                    return p != null && !(gInst.nulledNodes && gInst.nulledNodes.has(idx));
-                })) {
+                if (gInst && gInst.hasAnyUsablePoint()) {
                     viewsWithLabels++;
                 }
             }
@@ -659,7 +657,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             for (var ck = 0; ck < groupCameras.length; ck++) {
                 var camInst = group.getInstance(groupCameras[ck].name);
                 if (camInst) {
-                    if (camInst.points.some(function (p) { return p != null; })) {
+                    if (camInst.hasAnyPoint()) {
                         group.usedCameras.add(groupCameras[ck].name);
                     }
                 }
@@ -2460,7 +2458,8 @@ export function exportLabels() {
         for (const [camName, instances] of fg.instances) {
             frameData[camName] = instances.map(function (inst) {
                 return {
-                    points: inst.points,
+                    // JSON boundary: must emit the legacy boxed [[x,y]|null] shape.
+                    points: inst.toPointsArray(),
                     trackIdx: inst.trackIdx,
                     type: inst.type,
                     score: inst.score,
