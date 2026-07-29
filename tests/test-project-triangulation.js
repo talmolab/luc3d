@@ -247,7 +247,7 @@
             var result = triangulateAndReproject(group, session.cameras);
 
             assert(result.points3d != null, 'should have points3d');
-            assertEqual(result.points3d.length, 2, 'should have 2 keypoints');
+            assertEqual(points3dNodeCount(result.points3d), 2, 'should have 2 keypoints');
             assert(result.reprojections != null, 'should have reprojections');
             assert(result.reprojections.cam1 != null, 'should have cam1 reprojections');
             assert(result.reprojections.cam2 != null, 'should have cam2 reprojections');
@@ -266,8 +266,8 @@
 
             var result = triangulateAndReproject(group, session.cameras);
 
-            for (var i = 0; i < result.points3d.length; i++) {
-                var pt = result.points3d[i];
+            for (var i = 0; i < points3dNodeCount(result.points3d); i++) {
+                var pt = getPoint3d(result.points3d, i);
                 assert(pt != null, 'point ' + i + ' should not be null');
                 assert(!isNaN(pt[0]) && !isNaN(pt[1]) && !isNaN(pt[2]),
                     'point ' + i + ' should not have NaN: ' + JSON.stringify(pt));
@@ -544,10 +544,10 @@
             // Now triangulate
             var result = triangulateAndReproject(group, cameras);
             assert(result.points3d != null, 'should have points3d');
-            assertEqual(result.points3d.length, 3, 'should have 3 keypoints (shoulder, elbow, wrist)');
+            assertEqual(points3dNodeCount(result.points3d), 3, 'should have 3 keypoints (shoulder, elbow, wrist)');
 
             // At least some 3D points should be non-null (the cameras have real calibration)
-            var validPts = result.points3d.filter(function (p) { return p != null; }).length;
+            var validPts = countPoints3d(result.points3d);
             assert(validPts > 0, 'should have at least 1 valid 3D point, got ' + validPts);
 
             // Should have reprojections for all 3 cameras including C (missing view)
@@ -642,9 +642,9 @@
                 '2D point should be finite: ' + JSON.stringify(pt2d));
         });
 
-        it('reprojectPoints handles null entries', function () {
+        it('reprojectPoints handles missing (all-NaN) entries', function () {
             var P = makeStereoCamera('c1', 0).projectionMatrix;
-            var result = reprojectPoints([[0, 0, 100], null, [10, 10, 100]], P);
+            var result = reprojectPoints(fromBoxedPoints3d([[0, 0, 100], null, [10, 10, 100]]), P);
             assertEqual(result.length, 3);
             assert(result[0] != null, 'first should not be null');
             assert(result[1] === null, 'second should be null');

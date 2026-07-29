@@ -137,6 +137,34 @@ python3 -m http.server 8080
   validated against the pre-patch writer first, so they pin equivalence rather
   than just current behavior. **Re-apply after any re-vendor** (grep the marker)
   and report upstream to sleap-io.js.
+  **LOCAL PATCH (luc3d #189):** the **read-side mirror** of #185, plus the write
+  side's other half. LUCID's `InstanceGroup.points3d` is now a flat
+  `Float64Array(3N)` (see MODULES.md `pose/pose-data.js`), and the bundle was
+  patched to speak that representation end to end:
+  - **Read** — `lib/sleap-io/chunk-H7G4PJNA.js` `reconstructColumnarFrameGroups`
+    built one boxed `[x,y,z]` Array per keypoint out of `flat`, which is ALREADY
+    a `Float64Array` from h5wasm. On the real project that is **7,976,985 boxed
+    rows (~410 MB)** allocated in the pointer-compressed heap on *every reopen* —
+    the load-side counterpart of the save OOM, and the reason reopening the
+    1.4 GB project sat 8+ minutes in a GC death spiral at the ceiling. Now emits
+    one compacted `Float64Array(3N)` per instance group (and a `Float64Array(N)`
+    of point scores). Compacted rather than a `subarray` view because the
+    predicted table is stride 4 (x,y,z,score) and a view would pin the whole
+    multi-hundred-MB matrix alive for as long as any one group survived.
+    `Instance3D.nVisible` was patched to handle the flat form too.
+  - **Write** — `chunk-X76PRJK6.js` gained `Float64RowSink.pushFlat` (flat-to-flat
+    row copy, no boxed intermediate) and `lucidCount3dRows` (keypoint count for
+    boxed OR flat), used by both the #185 counting pre-pass (`_p.length` would
+    otherwise over-count 3x on a flat array and mis-size the sink) and the write
+    loop. Both boxed and flat inputs are still accepted.
+  Six patched sites across the two chunks, all greppable as `luc3d #189` (the
+  shared write loop is marked `luc3d #185/#189` since both patches touch it).
+  **Re-apply after any re-vendor** (grep the
+  marker) and report upstream to sleap-io.js. Guarded by the flat-shape
+  assertions in `tests/test-slp-export-canonical.js`, `tests/test-lazy-reopen.js`
+  and `tests/test-slp-streaming-write.js`, and at the byte level by
+  `tests/e2e/save-golden-digest.mjs` (the conversion is numerically bit-exact, so
+  the digest MUST NOT move).
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar

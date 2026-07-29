@@ -1184,4 +1184,130 @@
             }
         });
     });
+
+    // ---- points3d flat-array codec ----
+    //
+    // `InstanceGroup.points3d` is a flat Float64Array(3*nNodes) with an all-NaN
+    // triple for a missing node, replacing boxed `[x,y,z]|null` rows. These pin
+    // the codec's edge cases: the NaN sentinel, partial-NaN triples, and the
+    // dual-format ingest that keeps legacy readers/projects loading.
+
+    describe('points3d codec', function () {
+        it('makePoints3d allocates all-missing nodes', function () {
+            var p = makePoints3d(4);
+            assertTrue(p instanceof Float64Array, 'flat Float64Array');
+            assertEqual(p.length, 12, '3 coords per node');
+            assertEqual(points3dNodeCount(p), 4);
+            assertFalse(someValidPoint3d(p), 'nothing triangulated yet');
+            assertEqual(countPoints3d(p), 0);
+        });
+
+        it('set/get/clear round-trips a node', function () {
+            var p = makePoints3d(3);
+            setPoint3d(p, 1, [1.5, -2.25, 300.125]);
+            assertTrue(hasPoint3d(p, 1));
+            assertDeepEqual(getPoint3d(p, 1), [1.5, -2.25, 300.125]);
+            assertNull(getPoint3d(p, 0), 'untouched node reads as missing');
+            assertEqual(countPoints3d(p), 1);
+            clearPoint3d(p, 1);
+            assertNull(getPoint3d(p, 1), 'cleared node reads as missing');
+            assertFalse(someValidPoint3d(p));
+        });
+
+        it('setPoint3d(null) marks a node missing', function () {
+            var p = makePoints3d(2);
+            setPoint3d(p, 0, [1, 2, 3]);
+            setPoint3d(p, 0, null);
+            assertFalse(hasPoint3d(p, 0));
+        });
+
+        it('preserves full f64 precision (bit-exact, so the golden digest holds)', function () {
+            var p = makePoints3d(1);
+            // A value that is NOT representable in f32 — would quantize if the
+            // backing store were Float32Array.
+            var v = 0.1 + 0.2; // 0.30000000000000004
+            setPoint3d(p, 0, [v, 1e-300, 12345678.90123456]);
+            var got = getPoint3d(p, 0);
+            assertTrue(got[0] === v, 'x survives exactly');
+            assertTrue(got[1] === 1e-300, 'denormal-ish y survives exactly');
+            assertTrue(got[2] === 12345678.90123456, 'z survives exactly');
+        });
+
+        it('a partially-NaN triple counts as missing, not present', function () {
+            // A node with a NaN in any coordinate has no meaningful 3D position;
+            // treating it as present would push NaN geometry into the 3D view.
+            var p = makePoints3d(1);
+            p[0] = 1; p[1] = NaN; p[2] = 3;
+            assertFalse(hasPoint3d(p, 0), 'NaN in y => missing');
+            assertNull(getPoint3d(p, 0));
+        });
+
+        it('readPoint3d fills a caller buffer without allocating', function () {
+            var p = makePoints3d(2);
+            setPoint3d(p, 1, [7, 8, 9]);
+            var out = [0, 0, 0];
+            assertTrue(readPoint3d(p, 1, out) === out, 'returns the same buffer');
+            assertDeepEqual(out, [7, 8, 9]);
+            assertNull(readPoint3d(p, 0, out), 'missing node returns null');
+        });
+
+        it('toBoxedPoints3d emits the legacy [x,y,z]|null shape', function () {
+            var p = makePoints3d(3);
+            setPoint3d(p, 0, [1, 2, 3]);
+            setPoint3d(p, 2, [4, 5, 6]);
+            assertDeepEqual(toBoxedPoints3d(p), [[1, 2, 3], null, [4, 5, 6]]);
+        });
+
+        it('fromBoxedPoints3d ingests the legacy shape', function () {
+            var p = fromBoxedPoints3d([[1, 2, 3], null, [4, 5, 6]]);
+            assertTrue(p instanceof Float64Array);
+            assertEqual(points3dNodeCount(p), 3);
+            assertDeepEqual(getPoint3d(p, 0), [1, 2, 3]);
+            assertNull(getPoint3d(p, 1));
+            assertDeepEqual(getPoint3d(p, 2), [4, 5, 6]);
+        });
+
+        it('boxed -> flat -> boxed round-trips', function () {
+            var boxed = [[1.25, 2.5, 3.75], null, [-4, 0, 6]];
+            assertDeepEqual(toBoxedPoints3d(fromBoxedPoints3d(boxed)), boxed);
+        });
+
+        it('asPoints3d normalizes every ingest form', function () {
+            var flat = makePoints3d(2);
+            assertTrue(asPoints3d(flat) === flat, 'flat passes through WITHOUT copying');
+            assertNull(asPoints3d(null));
+            var fromBoxed = asPoints3d([[1, 2, 3]]);
+            assertTrue(fromBoxed instanceof Float64Array, 'boxed rows convert');
+            assertDeepEqual(getPoint3d(fromBoxed, 0), [1, 2, 3]);
+            // A reader could hand back a different typed view (e.g. f32).
+            var f32 = asPoints3d(new Float32Array([1, 2, 3]));
+            assertTrue(f32 instanceof Float64Array, 'other typed views are widened');
+            assertDeepEqual(getPoint3d(f32, 0), [1, 2, 3]);
+        });
+
+        it('an explicit NaN row ingests as missing (matches what SLP stores)', function () {
+            // The SLP format writes NaN for missing 3D keypoints, so a reload has
+            // always erased the null-vs-NaN distinction. Ingest must agree.
+            var p = fromBoxedPoints3d([[NaN, NaN, NaN], [1, 2, 3]]);
+            assertFalse(hasPoint3d(p, 0));
+            assertTrue(hasPoint3d(p, 1));
+            assertEqual(countPoints3d(p), 1);
+        });
+
+        it('clonePoints3d copies rather than aliases', function () {
+            var p = makePoints3d(2);
+            setPoint3d(p, 0, [1, 2, 3]);
+            var c = clonePoints3d(p);
+            setPoint3d(c, 0, [9, 9, 9]);
+            assertDeepEqual(getPoint3d(p, 0), [1, 2, 3], 'original untouched');
+            assertNull(clonePoints3d(null));
+        });
+
+        it('handles a zero-node array', function () {
+            var p = makePoints3d(0);
+            assertEqual(points3dNodeCount(p), 0);
+            assertFalse(someValidPoint3d(p));
+            assertDeepEqual(toBoxedPoints3d(p), []);
+        });
+    });
 })();

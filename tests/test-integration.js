@@ -62,13 +62,14 @@
                 const result = triangulateAndReproject(group, [cam1, cam2],
                     { includedCameras: ['back', 'side'], reprojErrorThreshold: 0 });
                 assertNotNull(result.points3d, 'Should produce 3D points');
-                assertEqual(result.points3d.length, 3, 'Should have 3 keypoints');
+                assertEqual(points3dNodeCount(result.points3d), 3, 'Should have 3 keypoints');
 
                 // Verify 3D points are close to originals
                 for (let i = 0; i < 3; i++) {
-                    assertApprox(result.points3d[i][0], points3d[i][0], 2.0, 'Point ' + i + ' X');
-                    assertApprox(result.points3d[i][1], points3d[i][1], 2.0, 'Point ' + i + ' Y');
-                    assertApprox(result.points3d[i][2], points3d[i][2], 2.0, 'Point ' + i + ' Z');
+                    const got = getPoint3d(result.points3d, i);
+                    assertApprox(got[0], points3d[i][0], 2.0, 'Point ' + i + ' X');
+                    assertApprox(got[1], points3d[i][1], 2.0, 'Point ' + i + ' Y');
+                    assertApprox(got[2], points3d[i][2], 2.0, 'Point ' + i + ' Z');
                 }
 
                 group.points3d = result.points3d;

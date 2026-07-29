@@ -6,6 +6,7 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances).
 
 import { state, interactionManager, timeline } from './app-state.js';
+import { points3dNodeCount } from '../pose/pose-data.js';
 import {
     ensureLazyFrameData, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
@@ -122,7 +123,7 @@ export function drawAllOverlays(frameIdx) {
         var _lazyFrameResults = null;
         for (var _rg = 0; _rg < instanceGroups.length; _rg++) {
             var _grp = instanceGroups[_rg];
-            if (_grp.points3d && _grp.points3d.length > 0 &&
+            if (points3dNodeCount(_grp.points3d) > 0 &&
                 (!_grp.reprojectedInstances || _grp.reprojectedInstances.size === 0) &&
                 (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
                 var _triRes = triangulateAndReproject(_grp, state.session.cameras);

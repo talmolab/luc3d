@@ -177,8 +177,10 @@ try {
       groupA0HasCamB: !!(reGroupA0 && (reGroupA0.getInstance ? reGroupA0.getInstance(CAM_B) : reGroupA0.instances.get(CAM_B))),
       groupA0CamBPoint: reGroupA0 ? (reGroupA0.getInstance ? reGroupA0.getInstance(CAM_B) : reGroupA0.instances.get(CAM_B)).points[0][0] : null,
       groupA1HasCamB: !!(reGroupA1 && (reGroupA1.getInstance ? reGroupA1.getInstance(CAM_B) : reGroupA1.instances.get(CAM_B))),
-      groupA0Points3d: reGroupA0 ? reGroupA0.points3d : null,
-      groupA1Points3d: reGroupA1 ? reGroupA1.points3d : null,
+      // points3d is a flat Float64Array (luc3d #189) — boxed here so it
+      // survives the page->node structured-clone/JSON boundary readably.
+      groupA0Points3d: reGroupA0 ? pd.toBoxedPoints3d(reGroupA0.points3d) : null,
+      groupA1Points3d: reGroupA1 ? pd.toBoxedPoints3d(reGroupA1.points3d) : null,
     };
   });
 

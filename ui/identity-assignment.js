@@ -7,7 +7,7 @@
 // every grouping workflow needs after unlinking/removing a group.
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager } from './app-state.js';
-import { InstanceGroup, UnlinkedInstance } from '../pose/pose-data.js';
+import { InstanceGroup, UnlinkedInstance, someValidPoint3d } from '../pose/pose-data.js';
 import {
     frameHasGroupedUserInstances, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
@@ -658,10 +658,7 @@ export function runTrackedAssignment(viewNames, prevGroups) {
     // Filter to prev groups that have valid 3D points
     var validPrevGroups = [];
     for (var pi = 0; pi < prevGroups.length; pi++) {
-        if (prevGroups[pi].points3d) {
-            var hasValid = prevGroups[pi].points3d.some(function (p) { return p != null; });
-            if (hasValid) validPrevGroups.push(prevGroups[pi]);
-        }
+        if (someValidPoint3d(prevGroups[pi].points3d)) validPrevGroups.push(prevGroups[pi]);
     }
 
     if (validPrevGroups.length === 0) {

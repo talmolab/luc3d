@@ -27,6 +27,7 @@
     var it = TF.it;
     var assertEqual = TF.assertEqual;
     var assertTrue = TF.assertTrue;
+    var assertFalse = TF.assertFalse;
 
     function createMockCanvas(w, h) {
         var canvas = document.createElement('canvas');
@@ -206,10 +207,10 @@
             group.addInstance('CamB', instB);
 
             var res = triangulateAndReproject(group, cams, { includedCameras: ['CamA', 'CamB'] });
-            assertTrue(!!res && Array.isArray(res.points3d), 'triangulation ran');
-            assertTrue(res.points3d[1] == null,
+            assertTrue(!!res && res.points3d instanceof Float64Array, 'triangulation ran');
+            assertFalse(hasPoint3d(res.points3d, 1),
                 'the occluded (nulledNodes) node is NOT triangulated from its placeholder');
-            assertTrue(res.points3d[0] != null,
+            assertTrue(hasPoint3d(res.points3d, 0),
                 'the real node still triangulates from its two observations');
         });
     });

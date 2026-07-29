@@ -11,7 +11,7 @@
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
          hasRealVideo, VIEW_NAMES } from '../ui/app-state.js';
-import { Instance, UnlinkedInstance } from './pose-data.js';
+import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d } from './pose-data.js';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
     reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
@@ -951,11 +951,12 @@ export function update3DViewport(frameIdx) {
     // Debug logs gated behind a flag — these ran on EVERY frame, so during
     // playback they spammed the console (a real cost with DevTools open).
     if (typeof window !== 'undefined' && window.LUCID_3D_DEBUG) {
-        const groupsWithPts = groups.filter(g => g.points3d && g.points3d.length > 0);
+        const groupsWithPts = groups.filter(g => points3dNodeCount(g.points3d) > 0);
         console.log('[3D] update3DViewport frame', frameIdx,
             '| groups:', groups.length, '| with points3d:', groupsWithPts.length);
         if (groupsWithPts.length > 0) {
-            var samplePt = groupsWithPts[0].points3d.find(function(p) { return p != null; });
+            var _sp = groupsWithPts[0].points3d, samplePt = null;
+            for (var _si = 0; _si < points3dNodeCount(_sp) && !samplePt; _si++) samplePt = getPoint3d(_sp, _si);
             console.log('[3D] Sample 3D point:', samplePt);
         }
     }

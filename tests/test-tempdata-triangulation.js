@@ -127,10 +127,10 @@ TestFramework.describe('Tempdata Triangulation Pipeline', function () {
 
         var result = triangulateAndReproject(group, cameras);
 
-        TestFramework.assert(result.points3d.length === 3, 'Got 3 triangulated points');
+        TestFramework.assert(points3dNodeCount(result.points3d) === 3, 'Got 3 triangulated points');
 
         for (var i = 0; i < 3; i++) {
-            var pt = result.points3d[i];
+            var pt = getPoint3d(result.points3d, i);
             var exp = expectedPoints3d[i];
             TestFramework.assert(pt != null, 'Point ' + i + ' is not null');
 
@@ -173,8 +173,8 @@ TestFramework.describe('Tempdata Triangulation Pipeline', function () {
 
         var result = triangulateAndReproject(group, cameras);
 
-        for (var i = 0; i < result.points3d.length; i++) {
-            var pt = result.points3d[i];
+        for (var i = 0; i < points3dNodeCount(result.points3d); i++) {
+            var pt = getPoint3d(result.points3d, i);
             if (!pt) continue;
 
             // Points should be within reasonable range (not at infinity)
@@ -236,8 +236,8 @@ TestFramework.describe('Tempdata Triangulation Pipeline', function () {
             fg.addInstance(camName, inst);
         }
 
-        // Set points3d (simulating triangulation result)
-        group.points3d = expectedPoints3d;
+        // Set points3d (simulating triangulation result — flat, as triangulation emits)
+        group.points3d = fromBoxedPoints3d(expectedPoints3d);
 
         // Store in session
         if (!session.instanceGroups.has(0)) {
@@ -251,8 +251,8 @@ TestFramework.describe('Tempdata Triangulation Pipeline', function () {
 
         TestFramework.assertEqual(result.length, 1, 'Got 1 instance group');
         TestFramework.assert(result[0].points3d != null, 'points3d is preserved');
-        TestFramework.assertEqual(result[0].points3d.length, 3, 'points3d has 3 points');
-        TestFramework.assert(Math.abs(result[0].points3d[0][2] - 107.22) < 0.01,
+        TestFramework.assertEqual(points3dNodeCount(result[0].points3d), 3, 'points3d has 3 points');
+        TestFramework.assert(Math.abs(getPoint3d(result[0].points3d, 0)[2] - 107.22) < 0.01,
             'First point Z ≈ 107.22');
     });
 
@@ -305,7 +305,7 @@ TestFramework.describe('Tempdata Triangulation Pipeline', function () {
 
             // Create instance group with points3d
             var group = new InstanceGroup(999, 0);
-            group.points3d = expectedPoints3d;
+            group.points3d = fromBoxedPoints3d(expectedPoints3d);
 
             // Set frame - should create skeleton meshes
             viewport.setFrame([group]);

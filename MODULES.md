@@ -134,6 +134,39 @@ representable in the packed space and consumers have always skipped it
 (`parseInt('null')` is `NaN`), so packing it would be a behaviour change rather
 than a refactor.
 
+**`points3d` flat typed arrays (luc3d #189, follow-up #2).**
+`InstanceGroup.points3d` is a flat **`Float64Array(3 * nNodes)`** — node `k` at
+`[3k, 3k+1, 3k+2]` — replacing the old array of boxed `[x,y,z]|null` rows. A
+missing / un-triangulated node is an **all-NaN triple**, not a `null` row.
+
+Why: 531,799 instance groups × 15 nodes = 7,976,985 keypoints on the real
+180,210-frame project. Boxed, that measured **808 B per group (410 MB)** living
+entirely in V8's pointer-compressed heap, which a Chrome renderer hard-caps near
+4 GB. Flat, it is ~116 B per group in the cage (**59 MB**) plus a backing store
+allocated OUTSIDE the cap (verified: 6,272 MB of `Float64Array` allocates fine
+against a reported 4,192 MB `jsHeapSizeLimit` — `tests/e2e/_diag-cage-vs-external.mjs`).
+Sizes measured in a real renderer by `tests/e2e/_diag-repr-sizing.mjs`.
+
+**f64, not f32, is deliberate:** it costs the *same* in the cage (168 B/object
+either way — only the external backing store doubles), and keeps every
+coordinate bit-identical to the boxed representation. That is what lets
+`tests/e2e/save-golden-digest.mjs` stay byte-for-byte unchanged across the
+conversion, gating a change that touched ~105 call sites.
+
+Codec (exported here, used everywhere): `makePoints3d`, `points3dNodeCount`,
+`hasPoint3d`, `getPoint3d`, `readPoint3d` (allocation-free), `setPoint3d`,
+`clearPoint3d`, `someValidPoint3d`, `countPoints3d`, `clonePoints3d`,
+`toBoxedPoints3d`, `fromBoxedPoints3d`, `asPoints3d` (dual-format ingest —
+passes a `Float64Array` through UNCOPIED, converts boxed rows).
+**Do not index `points3d` directly**; `pts[k]` is now a coordinate, not a point.
+
+Collapsing `null` into NaN loses no information: the SLP format has always
+written NaN for missing 3D keypoints, so a save/reload round-trip already erased
+the distinction. `null` is still accepted on the way in (`fromBoxedPoints3d`,
+`setPoint3d`) and still emitted at the boundaries that need the legacy shape —
+the JSON project format (`save-load.js`) and the `points3d.h5` export
+(`file-io.js`) both go through `toBoxedPoints3d`.
+
 **Purpose.** Pure data-model classes — no DOM, no I/O. The single source of
 truth for skeletons, cameras, instances, frame groups, identities, and the
 session graph that holds them.
@@ -647,6 +680,20 @@ reused by passing the bare extrinsic + normalized points:
 math, fundamental-matrix / epipolar utilities, Hungarian assignment. Also
 hosts the lazy-H5 frame loader and the user-facing triangulation orchestration
 (single-frame, all-frames, multi-frame range).
+
+**3D points are flat (luc3d #189).** The array-level entry points speak the
+`Float64Array(3N)` `points3d` representation (see `pose/pose-data.js`):
+`triangulatePoints` and `triangulatePointsBA` **return** one, and
+`reprojectPoints`, `reprojectPointsCamera`, `pointsToRayDistances` and
+`triangulateAndReproject` (via `result.points3d`) **consume** one. The
+*per-point* helpers — `triangulatePointDLT`, `triangulatePointBA`,
+`reprojectPoint`, `reprojectPointCamera`, `pointToRayDistance` — still take and
+return boxed `[x,y,z]` / `[x,y]` triples; those are transient scratch values, not
+storage, and keeping them boxed kept the conversion to the array boundary. Use
+`readPoint3d(pts, k, buf)` to feed them without allocating per node.
+
+Reprojection *outputs* stay boxed `[x,y]|null` per node: they are per-frame and
+measured at ~0 MB, so there was nothing to win by converting them.
 
 **Triangulation methods.** `'dlt'` (default) is the fast linear DLT.
 `'ba'` initializes from DLT then runs per-point Levenberg–Marquardt bundle
@@ -2356,8 +2403,13 @@ via the options bag.
   Export 3D Video modal). A second `Viewport3D` can be mounted in the export
   modal's container, reusing this class rather than duplicating 3D code.
 
-**Imports from project modules.** None (uses the global `THREE` from CDN
-script tags).
+**Imports from project modules.** `../pose/pose-data.js` —
+`points3dNodeCount`, `getPoint3d` (luc3d #189). This is the module's only
+project import and it adds no cycle (`pose-data.js` is a leaf with no imports of
+its own): `InstanceGroup.points3d` is a flat `Float64Array(3N)` with all-NaN
+triples for missing nodes, so reading it needs the shared codec rather than
+array indexing. No app-state coupling — data still arrives via the options bag.
+Otherwise uses the global `THREE` from CDN script tags.
 
 **Imported by.** `pose/initialization.js`.
 

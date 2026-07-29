@@ -7,6 +7,7 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
+    asPoints3d, points3dNodeCount, someValidPoint3d,
 } from '../pose/pose-data.js';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
@@ -229,8 +230,9 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             }
 
             // Restore 3D points
-            if (igDict.points && Array.isArray(igDict.points)) {
-                group.points3d = igDict.points;
+            var _igPts = asPoints3d(igDict.points);
+            if (points3dNodeCount(_igPts) > 0) {
+                group.points3d = _igPts;
                 restoredWith3d++;
             }
 
@@ -413,10 +415,14 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
                 fg3.addInstance(igCamName, inst);
             }
 
-            // Restore 3D points from the typed Instance3D.
+            // Restore 3D points from the typed Instance3D. `asPoints3d` accepts
+            // BOTH forms the reader can produce: the columnar path emits a flat
+            // Float64Array (passed through with NO copy), the legacy fallback
+            // emits boxed rows.
             var i3d = typedIG.instance3d;
-            if (i3d && Array.isArray(i3d.points) && i3d.points.length > 0) {
-                group.points3d = i3d.points;
+            var _i3dPts = asPoints3d(i3d && i3d.points);
+            if (points3dNodeCount(_i3dPts) > 0) {
+                group.points3d = _i3dPts;
                 restoredWith3d++;
             }
 
@@ -551,8 +557,9 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             }
 
             var i3d = typedIG.instance3d;
-            if (i3d && Array.isArray(i3d.points) && i3d.points.length > 0) {
-                group.points3d = i3d.points; // REUSE — do not copy 7.26M coords
+            var _i3dPts = asPoints3d(i3d && i3d.points);
+            if (points3dNodeCount(_i3dPts) > 0) {
+                group.points3d = _i3dPts; // REUSE — asPoints3d passes a flat array through uncopied
                 restoredWith3d++;
             }
 
@@ -1064,7 +1071,7 @@ export async function handleLoadSlpFile(slpFile) {
             var hasAny3d = false;
             for (var [, groups3d] of session.instanceGroups) {
                 for (var g3d of groups3d) {
-                    if (g3d.points3d && g3d.points3d.some(function (p) { return p != null; })) {
+                    if (someValidPoint3d(g3d.points3d)) {
                         hasAny3d = true;
                         break;
                     }
@@ -1078,7 +1085,7 @@ export async function handleLoadSlpFile(slpFile) {
                 for (var [frameIdx3, groups3] of session.instanceGroups) {
                     var frameTriResults = [];
                     for (var grp of groups3) {
-                        if (!grp.points3d || !grp.points3d.some(function (p) { return p != null; })) continue;
+                        if (!someValidPoint3d(grp.points3d)) continue;
                         // Build reprojections from 3D points for each camera
                         var reprojResult = { reprojections: {}, points3d: grp.points3d };
                         for (var ci2 = 0; ci2 < session.cameras.length; ci2++) {
@@ -2080,12 +2087,12 @@ export async function handleLoadPoints3dH5() {
                 }
                 if (existingGroup) {
                     // Assign 3D points to existing group
-                    existingGroup.points3d = pts3d;
+                    existingGroup.points3d = asPoints3d(pts3d);
                     existingGroup.markClean();
                 } else {
                     // Create a new InstanceGroup with just 3D data
                     var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
-                    newGroup.points3d = pts3d;
+                    newGroup.points3d = asPoints3d(pts3d);
                     newGroup.markClean();
                     frameGroupsList.push(newGroup);
                 }

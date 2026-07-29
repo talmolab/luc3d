@@ -8,6 +8,7 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
+    toBoxedPoints3d, asPoints3d, someValidPoint3d,
 } from '../pose/pose-data.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
@@ -257,7 +258,7 @@ function serializeSessionFrames(session) {
                 id: group.id,
                 identityId: group.identityId != null ? group.identityId : -1,
                 instances: {},
-                points3d: group.points3d || null,
+                points3d: toBoxedPoints3d(group.points3d),
                 reprojections: group.reprojections || null,
                 observedPoints: group.observedPoints || null,
                 dirty: group.dirty || false,
@@ -504,7 +505,7 @@ async function buildSlpBytes(opts) {
         for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
             for (var _dbgG of _dbgGroups) {
                 dbgGroupCount++;
-                if (_dbgG.points3d && _dbgG.points3d.some(function(p) { return p != null; })) dbgWith3d++;
+                if (someValidPoint3d(_dbgG.points3d)) dbgWith3d++;
             }
         }
         console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
@@ -952,7 +953,7 @@ export function saveProject() {
                 id: group.id,
                 identityId: group.identityId != null ? group.identityId : -1,
                 instances: {},
-                points3d: group.points3d || null,
+                points3d: toBoxedPoints3d(group.points3d),
                 reprojections: group.reprojections || null,
                 observedPoints: group.observedPoints || null,
                 dirty: group.dirty || false,
@@ -1519,7 +1520,7 @@ function _restoreProjectV2(data) {
                         : (groupData.trackIdx != null ? groupData.trackIdx : -1);
                     var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                     if (groupData.points3d) {
-                        group.points3d = groupData.points3d;
+                        group.points3d = asPoints3d(groupData.points3d);
                     }
                     if (groupData.reprojections) {
                         group.reprojections = groupData.reprojections;

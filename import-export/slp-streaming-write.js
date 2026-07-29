@@ -54,6 +54,7 @@
  */
 
 import { _buildSioPoints } from './file-io.js';
+import { points3dNodeCount } from '../pose/pose-data.js';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -597,6 +598,10 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
             if (refCount === 0) continue;
 
             var instance3d = undefined;
+            // Shape-agnostic on purpose: LUCID always produces a flat
+            // Float64Array now, and the vendored writer consumes that directly
+            // (LUCID local patch, luc3d #189) with no boxing — but it still
+            // accepts boxed rows, so don't reject them here.
             if (group.points3d && group.points3d.length > 0) {
                 instance3d = new SIO.Instance3D({ points: group.points3d, skeleton: skeleton });
             }

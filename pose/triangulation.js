@@ -5,7 +5,9 @@
  * Uses the Jacobi eigenvalue algorithm for solving the 4x4 symmetric eigenproblem.
  */
 
-import { mat3x3Multiply, FrameGroup, Instance, UnlinkedInstance, InstanceGroup } from './pose-data.js';
+import { mat3x3Multiply, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
+         makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js';
 import { state, timeline, viewport3d } from '../ui/app-state.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js
 import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
@@ -308,16 +310,20 @@ export function triangulatePointDLT(observations, projectionMatrices) {
 /**
  * Triangulate multiple keypoints from multi-view observations.
  *
+ * Returns the flat `points3d` representation (see `pose-data.js`): a
+ * `Float64Array(3 * nKeypoints)` where an un-triangulable keypoint is an
+ * all-NaN triple rather than a `null` row.
+ *
  * @param {(number[]|null)[][]} allObservations - Array of arrays, one per keypoint.
  *   allObservations[k] = [[x1,y1], [x2,y2], ...] or [null, [x2,y2], ...]
  *   (null means the keypoint is not visible in that camera)
  * @param {number[][][]} projectionMatrices - [P1, P2, ...] one per camera
- * @returns {(number[]|null)[]} Array of [X,Y,Z] or null for each keypoint
+ * @returns {Float64Array} Flat [X,Y,Z] per keypoint; all-NaN where untriangulable
  */
 export function triangulatePoints(allObservations, projectionMatrices) {
-    const results = [];
+    const results = makePoints3d(allObservations.length);
     for (let k = 0; k < allObservations.length; k++) {
-        results.push(triangulatePointDLT(allObservations[k], projectionMatrices));
+        setPoint3d(results, k, triangulatePointDLT(allObservations[k], projectionMatrices));
     }
     return results;
 }
@@ -484,14 +490,18 @@ export function triangulatePointBA(observations, projectionMatrices, initial, op
  *
  * @param {(number[]|null)[][]} allObservations - one observation array per keypoint.
  * @param {number[][][]} projectionMatrices - [P1, P2, ...] one per camera.
- * @param {(number[]|null)[]} [initialPoints] - per-keypoint [X,Y,Z] initial guesses.
- * @returns {(number[]|null)[]} Refined [X,Y,Z] or null for each keypoint.
+ * @param {Float64Array|(number[]|null)[]} [initialPoints] - per-keypoint [X,Y,Z]
+ *   initial guesses, flat or boxed.
+ * @returns {Float64Array} Flat refined [X,Y,Z] per keypoint; all-NaN where unrefinable.
  */
 export function triangulatePointsBA(allObservations, projectionMatrices, initialPoints) {
-    const results = [];
+    const results = makePoints3d(allObservations.length);
+    const flatInit = initialPoints instanceof Float64Array ? initialPoints : null;
     for (let k = 0; k < allObservations.length; k++) {
-        const init = initialPoints ? initialPoints[k] : null;
-        results.push(triangulatePointBA(allObservations[k], projectionMatrices, init));
+        let init = null;
+        if (flatInit) init = getPoint3d(flatInit, k);
+        else if (initialPoints) init = initialPoints[k];
+        setPoint3d(results, k, triangulatePointBA(allObservations[k], projectionMatrices, init));
     }
     return results;
 }
@@ -526,18 +536,18 @@ export function reprojectPoint(point3d, projectionMatrix) {
 /**
  * Reproject an array of 3D points through a 3x4 projection matrix.
  *
- * @param {(number[]|null)[]} points3d - Array of [X,Y,Z] or null
+ * @param {Float64Array} points3d - Flat [X,Y,Z] per keypoint (all-NaN = missing)
  * @param {number[][]} projectionMatrix - 3x4 projection matrix
- * @returns {(number[]|null)[]} Array of [x,y] or null (if input point is null)
+ * @returns {(number[]|null)[]} Array of [x,y] or null (if the 3D point is missing)
  */
 export function reprojectPoints(points3d, projectionMatrix) {
-    const results = [];
-    for (let i = 0; i < points3d.length; i++) {
-        if (points3d[i] == null) {
-            results.push(null);
-        } else {
-            results.push(reprojectPoint(points3d[i], projectionMatrix));
-        }
+    const n = points3dNodeCount(points3d);
+    const results = new Array(n);
+    const p = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+        results[i] = readPoint3d(points3d, i, p)
+            ? reprojectPoint(p, projectionMatrix)
+            : null;
     }
     return results;
 }
@@ -565,18 +575,18 @@ export function reprojectPointCamera(point3d, camera) {
 /**
  * Reproject an array of 3D points into a camera's native (distorted) pixel space.
  *
- * @param {(number[]|null)[]} points3d - Array of [X,Y,Z] or null
+ * @param {Float64Array} points3d - Flat [X,Y,Z] per keypoint (all-NaN = missing)
  * @param {Camera} camera - camera with .projectionMatrix and .distortPoint
- * @returns {(number[]|null)[]} Array of [x,y] or null (if input point is null)
+ * @returns {(number[]|null)[]} Array of [x,y] or null (if the 3D point is missing)
  */
 export function reprojectPointsCamera(points3d, camera) {
-    const results = [];
-    for (let i = 0; i < points3d.length; i++) {
-        if (points3d[i] == null) {
-            results.push(null);
-        } else {
-            results.push(reprojectPointCamera(points3d[i], camera));
-        }
+    const n = points3dNodeCount(points3d);
+    const results = new Array(n);
+    const p = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+        results[i] = readPoint3d(points3d, i, p)
+            ? reprojectPointCamera(p, camera)
+            : null;
     }
     return results;
 }
@@ -731,7 +741,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
 
     if (numKeypoints === 0) {
         return {
-            points3d: [],
+            points3d: makePoints3d(0),
             reprojections: {},
             errors: {},
             meanError: null
@@ -790,12 +800,14 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         // error exceeds the threshold — re-triangulate that node from the views that
         // remain. This works PER NODE within a view; it never drops a whole view
         // (that is the Tracking Wizard's job). A node left with <2 views is null.
+        const _nodeErrBuf = [0, 0, 0];
         function nodeError(k, c) {
-            if (allObservations[k][c] == null || points3d[k] == null) return -1;
+            if (allObservations[k][c] == null) return -1;
+            if (!readPoint3d(points3d, k, _nodeErrBuf)) return -1;
             const inst = instanceGroup.getInstance(cameraNames[c]);
             const raw = inst && inst.points ? inst.points[k] : null;
             if (raw == null) return -1;
-            const rep = reprojectPointCamera(points3d[k], cameraMap[cameraNames[c]]);
+            const rep = reprojectPointCamera(_nodeErrBuf, cameraMap[cameraNames[c]]);
             if (rep == null) return -1;
             const dx = raw[0] - rep[0], dy = raw[1] - rep[1];
             return Math.sqrt(dx * dx + dy * dy);
@@ -808,7 +820,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         for (let iter = 0; iter < maxPasses; iter++) {
             let excludedAny = false;
             for (let k = 0; k < numKeypoints; k++) {
-                if (points3d[k] == null) continue;
+                if (!hasPoint3d(points3d, k)) continue;
                 let worstC = -1, worstErr = reprojThresh, kept = 0;
                 for (let c = 0; c < cameraNames.length; c++) {
                     if (!included[c] || allObservations[k][c] == null) continue;
@@ -824,10 +836,10 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         // If a node's remaining views still exceed the threshold, it has <2 views
         // under the threshold → drop it from 3D (null).
         for (let k = 0; k < numKeypoints; k++) {
-            if (points3d[k] == null) continue;
+            if (!hasPoint3d(points3d, k)) continue;
             for (let c = 0; c < cameraNames.length; c++) {
                 if (!included[c] || allObservations[k][c] == null) continue;
-                if (nodeError(k, c) > reprojThresh) { points3d[k] = null; break; }
+                if (nodeError(k, c) > reprojThresh) { clearPoint3d(points3d, k); break; }
             }
         }
     }
@@ -1234,19 +1246,20 @@ export function pointToRayDistance(point, rayOrigin, rayDir) {
  * Batch compute point-to-ray distances for arrays of points and directions.
  * Handles null entries in either array.
  *
- * @param {(number[]|null)[]} points - Array of [x,y,z] or null
+ * @param {Float64Array} points - Flat [x,y,z] per node (all-NaN = missing)
  * @param {number[]} rayOrigin - [x, y, z]
  * @param {(number[]|null)[]} rayDirs - Array of [dx,dy,dz] or null
- * @returns {(number|null)[]} distances, null where either input is null
+ * @returns {(number|null)[]} distances, null where either input is missing
  */
 export function pointsToRayDistances(points, rayOrigin, rayDirs) {
     var results = [];
-    var len = Math.min(points.length, rayDirs.length);
+    var len = Math.min(points3dNodeCount(points), rayDirs.length);
+    var p = [0, 0, 0];
     for (var i = 0; i < len; i++) {
-        if (points[i] == null || rayDirs[i] == null) {
+        if (rayDirs[i] == null || !readPoint3d(points, i, p)) {
             results.push(null);
         } else {
-            results.push(pointToRayDistance(points[i], rayOrigin, rayDirs[i]));
+            results.push(pointToRayDistance(p, rayOrigin, rayDirs[i]));
         }
     }
     return results;
@@ -2122,7 +2135,7 @@ export function reTriangulateGroup(instanceGroup) {
     instanceGroup.triangulationMethod = result.method;
 
     // Only update if we got valid results
-    var validPts = result.points3d && result.points3d.some(function (p) { return p != null; });
+    var validPts = someValidPoint3d(result.points3d);
     if (validPts) {
         instanceGroup.points3d = result.points3d;
         instanceGroup.reprojections = result.reprojections;
@@ -2351,14 +2364,29 @@ export function triangulateCurrentFrame(method) {
             const result = triangulateAndReproject(group, groupCameras, { method: method });
             group.triangulationMethod = result.method;
 
-            // Check for NaN in points3d
-            const hasNaN = result.points3d.some(p => p && (isNaN(p[0]) || isNaN(p[1]) || isNaN(p[2])));
-            const validPts = result.points3d.filter(p => p != null).length;
-            console.log('[triangulate] points3d:', validPts, 'valid /', result.points3d.length,
-                '| hasNaN:', hasNaN, '| meanError:', result.meanError,
+            // Watch for a NaN-poisoned solve. An all-NaN triple is now just the
+            // "missing" sentinel, so it can no longer stand in for corruption —
+            // check the actual root cause (a NaN in a projection matrix) plus the
+            // one NaN pattern a clean solve can never produce: a PARTIALLY NaN
+            // triple, where some but not all coordinates came back NaN.
+            const nPts = points3dNodeCount(result.points3d);
+            const validPts = countPoints3d(result.points3d);
+            let partialNaN = false;
+            for (let _k = 0; _k < nPts && !partialNaN; _k++) {
+                const _o = _k * 3;
+                let _nans = 0;
+                for (let _c = 0; _c < 3; _c++) if (isNaN(result.points3d[_o + _c])) _nans++;
+                if (_nans > 0 && _nans < 3) partialNaN = true;
+            }
+            const badCalib = groupCameras.some(c => !c.projectionMatrix ||
+                c.projectionMatrix.some(row => row.some(isNaN)));
+            let _sample = null;
+            for (let _k = 0; _k < nPts && !_sample; _k++) _sample = getPoint3d(result.points3d, _k);
+            console.log('[triangulate] points3d:', validPts, 'valid /', nPts,
+                '| partialNaN:', partialNaN, '| meanError:', result.meanError,
                 '| cameras used:', groupCamNames,
-                '| sample:', result.points3d.find(p => p != null));
-            if (hasNaN) {
+                '| sample:', _sample);
+            if (partialNaN || badCalib) {
                 console.error('[triangulate] WARNING: NaN in 3D points! Check calibration matrices.');
                 for (const cam of groupCameras) {
                     console.log('[triangulate] Camera', cam.name, 'P=', cam.projectionMatrix);
@@ -2412,7 +2440,7 @@ export function triangulateCurrentFrame(method) {
         console.log('[triangulate] Group result:',
             '| cameras in group:', fr.group.cameraNames,
             '| has reprojections:', Object.keys(fr.group.reprojections || {}),
-            '| points3d valid:', (fr.points3d || []).filter(p => p != null).length);
+            '| points3d valid:', countPoints3d(fr.points3d));
     }
 
     // Show reproj/error UI elements now that triangulation has been run
