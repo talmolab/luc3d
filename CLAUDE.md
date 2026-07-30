@@ -218,6 +218,43 @@ python3 -m http.server 8080
   as module surface but are no longer used by `writeSessions`. All sites marked
   `// LUCID local patch (luc3d #191)`. **Re-apply after any re-vendor** (grep the
   marker) and report upstream.
+  **LOCAL PATCH (luc3d #193):** `lib/sleap-io/chunk-X76PRJK6.js` builds the lazy
+  store's **columns as `Float64Array`s instead of plain JS arrays**. This is the
+  fix that actually made **save-after-reopen** work; #185/#189/#190/#191 were
+  necessary but not sufficient. LUCID writes `frames`/`instances`/`points`/
+  `pred_points` as **flat 2D matrices + a `field_names` attr**, while Python
+  sleap-io writes them as **HDF5 compound dtypes** — and those two shapes take
+  different column builders in the vendored reader:
+  compound → `readCompoundColumnsWorker`, which has **always** produced
+  `Float64Array` columns (its own comment: *"every SLEAP field — coords, scores,
+  and integer id/index columns up to 2^53 — is exact in f64"*); flat+`field_names`
+  → `normalizeStructData` (streaming/lazy reader) and `normalizeStructDataset`
+  (non-streaming), which built `[]`/`new Array(n)`. **So reopening LUCID's own
+  project was the one path that materialized every column as boxed numbers.**
+  Measured on the real project with `tests/e2e/_diag-post-reload-bytes.mjs`: the
+  reopened project's ONE shared store held **24 columns / 228,108,600 entries ≈
+  1.8 GB inside V8's pointer-compressed cage** (5 `frames` + 10 `instances` + 4
+  `points` + 5 `pred_points` fields). The save **cannot** evict it — pass 2
+  (`streamSessionIntoWriter`/`appendStore`) streams 2D straight out of that store —
+  so `openProjectWriter` opened with essentially no headroom and the renderer died
+  in phase 2/4. Typed columns hold the same 8 B/element in a backing store
+  allocated **outside** the cage, moving ~1.8 GB off the scarce resource (same
+  argument as #185/#190 on the write side, #189 on the read side). **f64
+  deliberately, not f32:** `point_id_start/end` reach 21.7M on this project and f32
+  is exact only to 2^24 = 16.7M — the sleap-io.js#231 failure class. Both sites
+  also convert explicitly when the source is a `BigInt64Array` (LUCID writes
+  `frames` as `"<i8"`): assigning a BigInt into a `Float64Array` throws, and
+  `readStructDatasetStreaming`'s catch-all would have **swallowed** that into a
+  silently EMPTY store. Verified end to end on the real 180,210-frame × 5-camera
+  project: reopen → edit → Save As previously crashed the renderer inside phase
+  2/4 every time; it now completes — phases 5.9 s / 15.2 s / 15.0 s / 105.9 s,
+  **1,405.1 MB in 142 s** — and the resaved file reopens. Written bytes are
+  unchanged (`save-golden-digest.mjs` does not move). Guarded by
+  `tests/e2e/reopen-store-columns-typed.mjs`, which was confirmed to FAIL on the
+  pre-patch bundle (naming all 24 plain-array columns) while its value assertions
+  pass in both states — so it pins the memory shape, not just current behavior.
+  Two patched sites, marked `// LUCID local patch (luc3d #193)`. **Re-apply after
+  any re-vendor** (grep the marker) and report upstream.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
