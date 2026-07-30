@@ -247,6 +247,35 @@ export function newProject(force) {
     setStatus('New project started', 'success');
 }
 
+/**
+ * Loud guard for the JSON project serializer (luc3d #195).
+ *
+ * `serializeSessionFrames` walks `session.frameGroups`, i.e. RESIDENT frames
+ * only. On a lazily reopened project that is a handful of frames — measured 31 of
+ * 180,210 — so a JSON project save would silently write ~0.02% of the labels into
+ * a structurally valid file. Unlike `exportLabels` (rewritten to stream in #195)
+ * this path is currently DEAD UI SURFACE: `saveProject` is imported by
+ * `ui/ui-wiring.js` but wired to no menu item, and the app saves `.slp` through
+ * `saveProjectSlp`/`saveAs`. Rather than restructure unreachable code, refuse
+ * loudly so it can never quietly truncate a project if it is ever re-wired.
+ *
+ * @returns {boolean} true when serialization is safe to proceed
+ */
+function assertJsonSaveCoversProject(session) {
+    var loader = session && session.lazyLoader;
+    if (!loader) return true;                       // fully-resident project: fine
+    var total = loader.nFrames || 0;
+    var resident = session.frameGroups ? session.frameGroups.size : 0;
+    if (total === 0 || resident >= total) return true;
+    var msg = 'JSON project save covers RESIDENT frames only (' +
+        resident.toLocaleString() + ' of ' + total.toLocaleString() +
+        '). This project is lazily loaded, so the JSON would be almost empty. ' +
+        'Use File → Save (.slp), which streams the whole project.';
+    console.error('[save-load] ' + msg);
+    setStatus(msg, 'error');
+    return false;
+}
+
 function serializeSessionFrames(session) {
     var frames = {};
     for (var [frameIdx, fg] of session.frameGroups) {
@@ -945,6 +974,12 @@ export function saveProject() {
     if (!state.session) {
         setStatus('No session to save', 'error');
         return;
+    }
+    // luc3d #195 — refuse rather than silently write a near-empty JSON for a
+    // lazily reopened project. See `assertJsonSaveCoversProject`.
+    if (!assertJsonSaveCoversProject(state.session)) return;
+    for (var _si = 0; _si < state.sessions.length; _si++) {
+        if (!assertJsonSaveCoversProject(state.sessions[_si])) return;
     }
 
     try {

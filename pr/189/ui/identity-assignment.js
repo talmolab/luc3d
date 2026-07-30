@@ -30,6 +30,57 @@ import { panelRenderers } from './sessions-panes.js';
 // ============================================
 
 /**
+ * Swap two track ids DURABLY across a frame range (luc3d #195).
+ *
+ * Editing `Instance.trackIdx` on resident frames is not enough on a lazily
+ * reopened project, for two compounding reasons:
+ *
+ *  1. Only a handful of frames are RESIDENT — measured 31 of 180,210 — because
+ *     2D materializes on scrub. A `for (... of session.frameGroups)` loop
+ *     therefore touches ~nothing and still returns a plausible count.
+ *  2. Even the frames it does touch do not keep the edit: a PREDICTED frame is
+ *     dropped on window release and rebuilt from the columnar store next time it
+ *     hydrates, so the new `trackIdx` evaporates. Hydrating more frames cannot
+ *     fix this — the edit has to land somewhere durable.
+ *
+ * The durable place is the store's own `instancesData.track` column, which is
+ * both what rehydration reads and what `appendStore` writes on save.
+ * `SioLazyLoader.remapTracksFromIdentity` is exactly that primitive (it is how
+ * "Propagate IDs → Tracks" works), and it also rebuilds each camera's sparse
+ * `trackOccupancy` so the Tracks Timeline follows. Cost is one pass over the
+ * track column — no frame materialization, no extra allocation.
+ *
+ * Identity follows automatically: `frameIdentityMap` is keyed by
+ * (frameIdx, camName, trackIdx), so an instance that moves from track A to track
+ * B now resolves to B's identity — which is what "swap these two animals" means.
+ *
+ * @param {Object} session
+ * @param {number} trackA
+ * @param {number} trackB
+ * @param {number} frameStart inclusive
+ * @param {number} frameEnd   inclusive
+ * @param {string|null} [camName] restrict to one camera (null = every camera)
+ * @returns {number} instance rows whose track id actually changed, or -1 when
+ *   there is no windowing loader (caller should fall back to resident-only).
+ */
+function swapTracksInStore(session, trackA, trackB, frameStart, frameEnd, camName) {
+    var loader = session.lazyLoader;
+    if (!loader || typeof loader.remapTracksFromIdentity !== 'function') return -1;
+    var res = loader.remapTracksFromIdentity(session.tracks, function (cam, frameIdx, oldTrk) {
+        if (camName != null && cam !== camName) return oldTrk;
+        if (frameIdx < frameStart || frameIdx > frameEnd) return oldTrk;
+        if (oldTrk === trackA) return trackB;
+        if (oldTrk === trackB) return trackA;
+        return oldTrk;
+    });
+    if (res && res.errorRows) {
+        console.error('[swapTracksInStore] ' + res.errorRows +
+            ' row(s) failed to remap; first error:', res.firstError);
+    }
+    return res ? res.changed : 0;
+}
+
+/**
  * Swap-assign a track: if another instance on the same frame/camera
  * already has the target track, swap their tracks instead of creating
  * a duplicate. Then propagate the swap forward.
@@ -58,8 +109,26 @@ export function swapAssignTrack(frameIdx, camName, instance, newTrack, session) 
     }
     instance.trackIdx = newTrack;
 
-    // Propagate swap to subsequent frames
-    var propagated = 0;
+    // DURABLE (luc3d #195): the current-frame swap above and the resident
+    // propagation below both mutate `Instance.trackIdx` only, which does NOT
+    // survive on a lazily reopened project — the instances are predicted, so
+    // their frames are dropped on window release and rebuilt from the columnar
+    // store, discarding the edit. (Nor does the resident loop even SEE most
+    // frames: 31 of 180,210 were resident in the measured case.)
+    //
+    // A blanket oldTrack<->newTrack swap on this camera from `frameIdx` forward
+    // is exactly equivalent to what the two resident passes compute: when some
+    // other instance holds `newTrack` both are exchanged, and when none does the
+    // swap degenerates to the one-way `oldTrack -> newTrack` reassign, which is
+    // the same result. So one store pass covers the current frame AND the
+    // propagation, durably.
+    var storeChanged = swapTracksInStore(session, oldTrack, newTrack, frameIdx, Infinity, camName);
+    var residentOnly = (storeChanged < 0);
+
+    // Propagate swap to subsequent frames — RESIDENT frames only, to keep the
+    // canvas/info panel in sync right now. Rows are already counted by the store
+    // pass above, so they must not be counted again.
+    var propagated = residentOnly ? 0 : storeChanged;
     for (var [fIdx, fgP] of session.frameGroups) {
         if (fIdx <= frameIdx) continue;
         var allInsts = [];
@@ -70,10 +139,10 @@ export function swapAssignTrack(frameIdx, camName, instance, newTrack, session) 
             if (cn2 === camName) for (var k = 0; k < ulL.length; k++) allInsts.push(ulL[k].instance);
         }
         for (var m = 0; m < allInsts.length; m++) {
-            if (allInsts[m].trackIdx === oldTrack) { allInsts[m].trackIdx = -99; propagated++; }
+            if (allInsts[m].trackIdx === oldTrack) { allInsts[m].trackIdx = -99; if (residentOnly) propagated++; }
         }
         for (var m = 0; m < allInsts.length; m++) {
-            if (allInsts[m].trackIdx === newTrack) { allInsts[m].trackIdx = oldTrack; propagated++; }
+            if (allInsts[m].trackIdx === newTrack) { allInsts[m].trackIdx = oldTrack; if (residentOnly) propagated++; }
         }
         for (var m = 0; m < allInsts.length; m++) {
             if (allInsts[m].trackIdx === -99) { allInsts[m].trackIdx = newTrack; }
@@ -1220,19 +1289,26 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
 export function swapTracks(trackA, trackB, frameStart, frameEnd) {
     if (!state.session) return 0;
     var swapped = 0;
+    // Durable, whole-range swap in the columnar store first (luc3d #195). The
+    // resident loop below then re-syncs the in-memory Instances that are already
+    // materialized, so the canvas/info panel update immediately — those rows are
+    // already counted by the store pass, so they must NOT be added again.
+    var storeSwapped = swapTracksInStore(state.session, trackA, trackB, frameStart, frameEnd, null);
+    var residentOnly = (storeSwapped < 0);
+    if (!residentOnly) swapped = storeSwapped;
     for (var [frameIdx, fg] of state.session.frameGroups) {
         if (frameIdx < frameStart || frameIdx > frameEnd) continue;
         for (var [camName, instances] of fg.instances) {
             for (var i = 0; i < instances.length; i++) {
-                if (instances[i].trackIdx === trackA) { instances[i].trackIdx = trackB; swapped++; }
-                else if (instances[i].trackIdx === trackB) { instances[i].trackIdx = trackA; swapped++; }
+                if (instances[i].trackIdx === trackA) { instances[i].trackIdx = trackB; if (residentOnly) swapped++; }
+                else if (instances[i].trackIdx === trackB) { instances[i].trackIdx = trackA; if (residentOnly) swapped++; }
             }
         }
         for (var [camName2, ulList] of fg.unlinkedInstances) {
             for (var u = 0; u < ulList.length; u++) {
                 var inst = ulList[u].instance;
-                if (inst.trackIdx === trackA) { inst.trackIdx = trackB; swapped++; }
-                else if (inst.trackIdx === trackB) { inst.trackIdx = trackA; swapped++; }
+                if (inst.trackIdx === trackA) { inst.trackIdx = trackB; if (residentOnly) swapped++; }
+                else if (inst.trackIdx === trackB) { inst.trackIdx = trackA; if (residentOnly) swapped++; }
             }
         }
     }

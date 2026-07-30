@@ -74,25 +74,44 @@ export function showGroupByTrackModal() {
     // Scan all frames to gather per-track stats
     var trackStats = {};  // trackIdx -> { frames: Set, cameras: Set, nodeCount }
     var numNodes = session.skeleton.nodes.length;
-    for (var [frameIdx, fg] of session.frameGroups) {
-        // Grouped instances
-        for (var [camName, instances] of fg.instances) {
-            for (var ii = 0; ii < instances.length; ii++) {
-                var tid = instances[ii].trackIdx;
-                if (tid == null || tid < 0) continue;
-                if (!trackStats[tid]) trackStats[tid] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
-                trackStats[tid].frames.add(frameIdx);
-                trackStats[tid].cameras.add(camName);
+    var statLoader = session.lazyLoader;
+    if (statLoader && typeof statLoader.forEachInstanceRow === 'function') {
+        // luc3d #195: read the persistent columnar track column, not
+        // `session.frameGroups`. Resident frames are a handful on a lazily
+        // reopened project (measured 31 of 180,210), so the old loop reported
+        // "track_0: 31 frames" for a track present on all 180,210 — a wildly
+        // misleading preview for a destructive grouping operation.
+        // `forEachInstanceRow` visits every instance row without materializing a
+        // single frame, so this is both complete and allocation-free apart from
+        // the per-track sets below (frame indices must be de-duplicated across
+        // cameras, and the modal only reads their `.size`).
+        statLoader.forEachInstanceRow(function (camName, frameIdx, trk) {
+            if (trk == null || trk < 0) return;
+            if (!trackStats[trk]) trackStats[trk] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
+            trackStats[trk].frames.add(frameIdx);
+            trackStats[trk].cameras.add(camName);
+        });
+    } else {
+        for (var [frameIdx, fg] of session.frameGroups) {
+            // Grouped instances
+            for (var [camName, instances] of fg.instances) {
+                for (var ii = 0; ii < instances.length; ii++) {
+                    var tid = instances[ii].trackIdx;
+                    if (tid == null || tid < 0) continue;
+                    if (!trackStats[tid]) trackStats[tid] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
+                    trackStats[tid].frames.add(frameIdx);
+                    trackStats[tid].cameras.add(camName);
+                }
             }
-        }
-        // Unlinked instances
-        for (var [camName2, ulList] of fg.unlinkedInstances) {
-            for (var ui = 0; ui < ulList.length; ui++) {
-                var tid2 = ulList[ui].instance.trackIdx;
-                if (tid2 == null || tid2 < 0) continue;
-                if (!trackStats[tid2]) trackStats[tid2] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
-                trackStats[tid2].frames.add(frameIdx);
-                trackStats[tid2].cameras.add(camName2);
+            // Unlinked instances
+            for (var [camName2, ulList] of fg.unlinkedInstances) {
+                for (var ui = 0; ui < ulList.length; ui++) {
+                    var tid2 = ulList[ui].instance.trackIdx;
+                    if (tid2 == null || tid2 < 0) continue;
+                    if (!trackStats[tid2]) trackStats[tid2] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
+                    trackStats[tid2].frames.add(frameIdx);
+                    trackStats[tid2].cameras.add(camName2);
+                }
             }
         }
     }
@@ -2321,54 +2340,147 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
 // Export Labels (simple JSON dump)
 // ============================================
 
-export function exportLabels() {
+/**
+ * Export every labeled frame as JSON.
+ *
+ * MEMORY + CORRECTNESS (luc3d #195). This used to iterate `state.session
+ * .frameGroups` directly and build one giant object, which broke twice over on a
+ * lazily reopened project:
+ *
+ *  - CORRECTNESS: only RESIDENT frames are in that map. Measured on the real
+ *    project, 31 of 180,210 — so the export silently emitted ~0.02% of the
+ *    labels into a structurally valid JSON file, with no warning. That is the
+ *    worst kind of failure: a file that looks fine and is almost empty.
+ *  - MEMORY: the naive fix (hydrate everything, then serialize) is worse — 2D for
+ *    180,210 frames x 5 cameras resident at once, plus a multi-GB JSON string and
+ *    the Blob copy of it, all inside the ~4 GB renderer cap.
+ *
+ * So it now STREAMS: `sweepLazyFrameWindows` hydrates a window, each frame is
+ * serialized and written straight out, and the window is released. Peak memory is
+ * one window plus one frame's JSON, independent of project size.
+ *
+ * Output goes through `showSaveFilePicker` when available (same as Save As). When
+ * it is not (older browsers), it falls back to accumulating a Blob download —
+ * correct, but it necessarily holds the whole document, so the user is warned
+ * first on a project large enough for that to matter.
+ */
+export async function exportLabels() {
     if (!state.session) {
         setStatus('No session to export', 'error');
         return;
     }
+    var session = state.session;
+    var loader = session.lazyLoader;
+    var totalFrames = loader ? loader.nFrames : session.frameGroups.size;
 
-    const exportData = {
+    // Header/footer are small; only `frames` is unbounded, so only it streams.
+    var header = {
         skeleton: {
-            name: state.session.skeleton.name,
-            nodes: state.session.skeleton.nodes,
-            edges: state.session.skeleton.edges,
+            name: session.skeleton.name,
+            nodes: session.skeleton.nodes,
+            edges: session.skeleton.edges,
         },
-        cameras: state.session.cameras.map(function (c) {
+        cameras: session.cameras.map(function (c) {
             return { name: c.name, matrix: c.matrix, dist: c.dist, rvec: c.rvec, tvec: c.tvec, size: c.size };
         }),
-        tracks: state.session.tracks,
-        frames: {},
+        tracks: session.tracks,
     };
 
-    for (const [frameIdx, fg] of state.session.frameGroups) {
-        const frameData = {};
-        for (const [camName, instances] of fg.instances) {
-            frameData[camName] = instances.map(function (inst) {
-                return {
-                    // JSON boundary: must emit the legacy boxed [[x,y]|null] shape.
-                    points: inst.toPointsArray(),
-                    trackIdx: inst.trackIdx,
-                    type: inst.type,
-                    score: inst.score,
-                    modified: inst.modified,
-                };
-            });
-        }
-        exportData.frames[frameIdx] = frameData;
+    var writer = null;          // FileSystemWritableFileStream, when picked
+    var parts = null;           // Blob-fallback accumulator
+    var enc = new TextEncoder();
+    var written = 0;
+    async function emit(str) {
+        written += str.length;
+        if (writer) await writer.write(enc.encode(str));
+        else parts.push(str);
     }
 
-    // Download as JSON
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'labels_export.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    if (typeof window.showSaveFilePicker === 'function') {
+        try {
+            var handle = await window.showSaveFilePicker({
+                suggestedName: 'labels_export.json',
+                types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+            });
+            writer = await handle.createWritable();
+        } catch (e) {
+            if (e && e.name === 'AbortError') { setStatus('Export cancelled', 'warning'); return; }
+            writer = null;   // fall through to the Blob path
+        }
+    }
+    if (!writer) {
+        // No streaming target: the whole document has to be held in memory.
+        var BIG = 20000;
+        if (totalFrames > BIG && !window.confirm(
+            'This project has ' + totalFrames.toLocaleString() + ' frames. Without a ' +
+            'save-file picker the whole JSON export must be built in memory, which ' +
+            'may crash the tab.\n\nExport anyway?')) {
+            setStatus('Export cancelled', 'warning');
+            return;
+        }
+        parts = [];
+    }
 
-    setStatus('Labels exported', 'success');
+    showLoading('Exporting labels...');
+    try {
+        var head = JSON.stringify(header, null, 2);
+        // Splice `"frames": { ... }` in as the last key so the streamed frames
+        // need no re-serialization of the header.
+        await emit(head.slice(0, head.length - 2) + ',\n  "frames": {');
+
+        var first = true;
+        var nFrames = 0;
+        await sweepLazyFrameWindows(session, async function (frameIdx, fg) {
+            var frameData = {};
+            var any = false;
+            for (var [camName, instances] of fg.instances) {
+                frameData[camName] = instances.map(function (inst) {
+                    return {
+                        // JSON boundary: must emit the legacy boxed [[x,y]|null] shape.
+                        points: inst.toPointsArray(),
+                        trackIdx: inst.trackIdx,
+                        type: inst.type,
+                        score: inst.score,
+                        modified: inst.modified,
+                    };
+                });
+                any = true;
+            }
+            if (!any) return;
+            await emit((first ? '\n    ' : ',\n    ') +
+                JSON.stringify(String(frameIdx)) + ': ' + JSON.stringify(frameData));
+            first = false;
+            nFrames++;
+        }, {
+            onProgress: function (done, tot) {
+                showLoading('Exporting labels... ' + done + '/' + tot + ' frames');
+            },
+        });
+
+        await emit('\n  }\n}\n');
+
+        if (writer) {
+            await writer.close();
+        } else {
+            var blob = new Blob(parts, { type: 'application/json' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'labels_export.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        }
+        hideLoading();
+        setStatus('Labels exported — ' + nFrames.toLocaleString() + ' frames, ' +
+            (written / 1e6).toFixed(1) + ' MB', 'success');
+    } catch (err) {
+        hideLoading();
+        try { if (writer) await writer.close(); } catch (e) { /* ignore */ }
+        console.error('[exportLabels] failed:', err);
+        setStatus('Label export failed: ' + (err && err.message ? err.message : String(err)), 'error');
+    }
 }
 
 
