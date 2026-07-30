@@ -2575,8 +2575,24 @@ function _triangulateGroupStep(group, cameras, method) {
  * import cycle is created.
  *
  * `onFrame(frameIdx, frameGroup)` is called once per frame that has data, with
- * that frame's 2D guaranteed hydrated. It may be async. Frames with no
- * `FrameGroup` after hydration are skipped (no data ⇒ nothing to do).
+ * that frame's 2D guaranteed hydrated. It may be async.
+ *
+ * "Has data" means a hydrated `FrameGroup` **or** an `instanceGroups` entry —
+ * NOT `FrameGroup` alone. `frameGroup` is therefore `undefined` for a frame that
+ * has 3D grouping but no resident 2D, and a callback that dereferences it must
+ * guard (`exportLabels` does; the triangulation callbacks read `instanceGroups`
+ * and do not care).
+ *
+ * That distinction is load-bearing, and getting it wrong caused a REGRESSION of
+ * luc3d #194 (fixed here). The consolidation that created this function gated on
+ * `session.frameGroups.get(fi)` alone, which the three lifted copies never did —
+ * `sweepTriangulateAllFrames` had called `ensureGroupsFromIdentities(session, fi)`
+ * for every index in the window unconditionally. So every frame whose 2D did not
+ * come back on hydration was silently skipped, while Triangulate All had ALREADY
+ * wiped `reprojections` project-wide up front: reprojections gone everywhere, 3D
+ * refreshed only where the sweep ran. Exactly the #194 symptom, one layer down.
+ * The synthetic harness could not see it — its fixture gives every frame 2D in
+ * every camera, so the two conditions coincide.
  *
  * IMPORTANT — what does NOT survive: after each window, non-user frames are
  * dropped from `session.frameGroups` and the loader window is released, so any
@@ -2594,6 +2610,12 @@ function _triangulateGroupStep(group, cameras, method) {
  *          gcEveryWindows?:number, gcMB?:number, start?:number, end?:number}} [opts]
  * @returns {Promise<number>} frames processed
  */
+function _hasFrameData(session, frameIdx) {
+    if (session.frameGroups.has(frameIdx)) return true;
+    var ig = session.instanceGroups && session.instanceGroups.get(frameIdx);
+    return !!(ig && ig.length > 0);
+}
+
 export async function sweepLazyFrameWindows(session, onFrame, opts) {
     opts = opts || {};
     var loader = session.lazyLoader;
@@ -2614,7 +2636,9 @@ export async function sweepLazyFrameWindows(session, onFrame, opts) {
             await batchLoadLazyFrames(start, end - start);
             for (var fi = start; fi < end; fi++) {
                 var fg = session.frameGroups.get(fi);
-                if (!fg) continue;
+                // A frame counts as HAVING DATA if it has 2D (a hydrated
+                // FrameGroup) *or* an `instanceGroups` entry — see `_hasFrameData`.
+                if (!fg && !_hasFrameData(session, fi)) continue;
                 await onFrame(fi, fg);
                 processed++;
                 if (processed % YIELD_EVERY === 0) {
@@ -2646,12 +2670,16 @@ export async function sweepLazyFrameWindows(session, onFrame, opts) {
     if (loader) await loadAllLazyFrames(opts.onStatus);
     var lo = opts.start != null ? opts.start : -Infinity;
     var hi = opts.end != null ? opts.end : Infinity;
-    var idxs = Array.from(session.frameGroups.keys())
+    // Union of both data maps, for the same reason the windowed branch checks
+    // both (see `_hasFrameData`): a 3D-only frame has an `instanceGroups` entry
+    // and no `FrameGroup`, and must still be visited.
+    var idxSet = new Set(session.frameGroups.keys());
+    for (var [igIdx] of session.instanceGroups) idxSet.add(igIdx);
+    var idxs = Array.from(idxSet)
         .filter(function (k) { return k >= lo && k <= hi; })
         .sort(function (a, b) { return a - b; });
     for (var j = 0; j < idxs.length; j++) {
         var fg2 = session.frameGroups.get(idxs[j]);
-        if (!fg2) continue;
         await onFrame(idxs[j], fg2);
         processed++;
         if (processed % YIELD_EVERY === 0) {

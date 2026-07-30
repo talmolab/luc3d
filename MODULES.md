@@ -769,6 +769,25 @@ in `ui/export-modals.js`, and the windowing inlined in `sweepTriangulateAllFrame
 those now delegate to it, and their local `frameGroupHasUserInstances`/
 `encourageGC` copies are gone.
 
+**Which frames it visits (`_hasFrameData`) — a hydrated `FrameGroup` OR an
+`instanceGroups` entry, never `FrameGroup` alone.** `onFrame(frameIdx, fg)`
+therefore receives `fg === undefined` for a frame that has 3D grouping but no
+resident 2D, and a callback that dereferences it must guard (`exportLabels` does;
+the triangulation callbacks read `instanceGroups` and do not care). This is
+load-bearing: the consolidation above originally gated on
+`session.frameGroups.get(fi)` alone, which none of the three lifted copies did —
+`sweepTriangulateAllFrames` called `ensureGroupsFromIdentities(session, fi)` for
+every index in the window unconditionally. That **regressed luc3d #194**: every
+frame whose 2D did not come back on hydration was skipped, while Triangulate All
+had already wiped `reprojections` project-wide up front, so reprojections
+disappeared everywhere and 3D was refreshed only where the sweep ran — the
+original #194 symptom, one layer down. The e2e harness is structurally blind to
+it (its fixture gives every frame 2D in every camera, so the two conditions
+coincide); `tests/test-sweep-frame-coverage.mjs` pulls them apart and pins the
+union rule for both the windowed and eager branches. It was confirmed to fail on
+the pre-fix code (6 of 12 assertions, including the pure 3D-only case visiting
+**zero** frames).
+
 Rule of thumb: a `for (... of session.frameGroups)` loop in a BULK operation is a
 bug. That map holds only RESIDENT frames — 31 of 180,210 on the real reopened
 project — so such a loop silently processes ~nothing and returns a plausible count.
