@@ -754,7 +754,44 @@ storage, and keeping them boxed kept the conversion to the array boundary. Use
 `readPoint3d(pts, k, buf)` to feed them without allocating per node.
 
 Reprojection *outputs* stay boxed `[x,y]|null` per node: they are per-frame and
-measured at ~0 MB, so there was nothing to win by converting them.
+measured at ~0 MB, so there was nothing to win by converting them. **That "~0 MB"
+holds PER FRAME only** — see the windowed Triangulate All note below, which must
+not retain them project-wide.
+
+**Triangulate All is windowed on a lazy project (luc3d #194).**
+`triangulateAllFrames` dispatches on the same `windowed` capability check
+`trackAll` uses (`lazyLoader.isSync && typeof releaseWindow === 'function'`). With
+a windowing loader it runs `sweepTriangulateAllFrames`: hydrate a 2,000-frame
+window (`batchLoadLazyFrames`) → triangulate its groups → drop the window's
+`session.frameGroups` entries (keeping the on-screen frame and any user-edited
+frame) → `loader.releaseWindow` → `_encourageGC` every 5 windows. Mirrors
+`sweepTrackAllFrames` in `pose/tracker.js`.
+
+Before this, the sweep never hydrated lazy 2D at all. A reopened project's group
+members are null-filled placeholder `Instance`s, so `hasAnyUsablePoint()` was
+false and almost everything was skipped: measured **31 frames / 93 groups of
+180,210 / 531,799** (0.02%) in 61 s on the real project, after which
+`setReprojErrorVisible(true)` left the other 99.98% rendering blank reprojection
+columns. Windowed: **180,210 frames / 531,799 groups, 0 skipped, 105 s.**
+`loadAllLazyFrames` is deliberately NOT used — materializing 2D for 180,210
+frames × 5 cameras at once is the OOM the memory work exists to prevent.
+
+The windowed path stores only `points3d` (flat `Float64Array`, the file's own
+representation) plus `usedCameras`; it does **not** set `group.reprojections` and
+does **not** accumulate `state.triangulationResults`. Retaining reprojections for
+531,799 groups is ~1.9 GB of boxed `[x,y]` pairs — larger than every allocation
+#185/#189/#190/#191/#193 removed. Both are derived and are recomputed on demand
+for the displayed frame by `drawAllOverlays` (`ui/rendering.js`), which runs after
+`ensureLazyFrameData` has hydrated that frame's real 2D. Stale derived state is
+cleared up front; `points3d` is deliberately *not* wiped up front but replaced
+per group as the sweep reaches it, so the peak matches a global wipe while an
+interrupted sweep never leaves groups with no 3D. The eager (small-project) path
+keeps its previous behavior, including retaining reprojections.
+`_triangulateGroupStep` holds the camera-name fixup + `>=2`-usable-view gate +
+triangulate/store shared by both paths so they cannot drift; `_fgHasUserInstances`
+and `_encourageGC` are local mirrors of `pose/tracker.js`'s privates (**keep in
+sync** — `tracker.js` already imports from this module, so a two-way import was
+avoided).
 
 **Triangulation methods.** `'dlt'` (default) is the fast linear DLT.
 `'ba'` initializes from DLT then runs per-point Levenberg–Marquardt bundle
