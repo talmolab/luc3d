@@ -1862,7 +1862,13 @@ export class Session {
      * @returns {number} Number of frames affected
      */
     propagateIdentity(startFrame, cameraName, trackIdx, identityId) {
+        var self = this;
         var count = 0;
+        // Frames handled by the resident pass. Resident frames WIN: they carry
+        // in-memory edits and unlinked instances that the columnar store does not
+        // know about yet, so the store pass must not re-derive them.
+        var handled = new Set();
+
         for (var [frameIdx, fg] of this.frameGroups) {
             if (frameIdx < startFrame) continue;
             // Collect all distinct trackIdx values present on this camera at
@@ -1885,35 +1891,87 @@ export class Session {
                     if (t2 === trackIdx) found = true;
                 }
             }
+            handled.add(frameIdx);
             if (!found) continue;
-
-            // Per-frame uniqueness: at most one trackIdx on this camera at
-            // this frame may resolve to identityId. If another track that
-            // physically exists here currently resolves to identityId, hand
-            // it the identity that (cameraName, trackIdx) currently has —
-            // a per-frame swap. This stops two instances in the same view
-            // from rendering as the same identity after the propagation.
-            var oldIdentityId = this.getIdentityIdForTrack(cameraName, trackIdx, frameIdx);
-            if (oldIdentityId !== identityId) {
-                for (var ot of presentTracks) {
-                    if (ot === trackIdx) continue;
-                    if (this.getIdentityIdForTrack(cameraName, ot, frameIdx) !== identityId) continue;
-                    // Collider — swap.
-                    if (oldIdentityId != null) {
-                        this.setFrameIdentity(frameIdx, cameraName, ot, oldIdentityId);
-                    } else {
-                        // No old identity to hand off; clear the per-frame
-                        // override so the collider falls back to its global
-                        // mapping rather than asserting a per-frame duplicate.
-                        this.deleteFrameIdentity(frameIdx, cameraName, ot);
-                    }
-                }
-            }
-
-            this.setFrameIdentity(frameIdx, cameraName, trackIdx, identityId);
+            this._applyIdentityAtFrame(frameIdx, cameraName, trackIdx, identityId, presentTracks);
             count++;
         }
+
+        // PROJECT-WIDE (luc3d #195 follow-up). The loop above sees only RESIDENT
+        // frames — 31 of 180,210 on the real reopened project — so "propagate this
+        // identity forward" silently stopped at the end of the current window.
+        // Nothing was corrupted (`frameIdentityMap` writes are durable); the
+        // operation just did almost nothing, which is the failure mode this whole
+        // bug class shares.
+        //
+        // `forEachInstanceRow` walks the columnar store's track column directly:
+        // no frame materialization, no allocation per frame. It visits each camera
+        // exactly once and each (camera, frameIdx) exactly once, with that frame's
+        // rows CONTIGUOUS — so a frame's track set can be accumulated in a single
+        // reused Set and flushed on the frame boundary, keeping this O(1) in memory
+        // rather than building a 180k-entry map of Sets.
+        var loader = this.lazyLoader;
+        if (loader && typeof loader.forEachInstanceRow === 'function') {
+            var curFrame = -1;
+            var curPresent = new Set();
+            var curFound = false;
+            var flush = function () {
+                if (curFrame >= startFrame && curFound && !handled.has(curFrame)) {
+                    self._applyIdentityAtFrame(curFrame, cameraName, trackIdx, identityId, curPresent);
+                    count++;
+                }
+            };
+            loader.forEachInstanceRow(function (cam, f, trk) {
+                if (cam !== cameraName) return;
+                if (f !== curFrame) {
+                    flush();
+                    curFrame = f;
+                    curPresent.clear();
+                    curFound = false;
+                }
+                // The store's trackless sentinel is -1; in-memory it is null.
+                if (trk != null && trk >= 0) {
+                    curPresent.add(trk);
+                    if (trk === trackIdx) curFound = true;
+                }
+            });
+            flush();
+        }
         return count;
+    }
+
+    /**
+     * Stamp `identityId` onto (cameraName, trackIdx) at one frame, preserving
+     * per-frame uniqueness. Shared by both passes of `propagateIdentity` so the
+     * resident and store-driven paths cannot drift.
+     *
+     * @param {Set<number>} presentTracks every trackIdx physically present on this
+     *   camera at this frame — the collider candidates.
+     */
+    _applyIdentityAtFrame(frameIdx, cameraName, trackIdx, identityId, presentTracks) {
+        // Per-frame uniqueness: at most one trackIdx on this camera at
+        // this frame may resolve to identityId. If another track that
+        // physically exists here currently resolves to identityId, hand
+        // it the identity that (cameraName, trackIdx) currently has —
+        // a per-frame swap. This stops two instances in the same view
+        // from rendering as the same identity after the propagation.
+        var oldIdentityId = this.getIdentityIdForTrack(cameraName, trackIdx, frameIdx);
+        if (oldIdentityId !== identityId) {
+            for (var ot of presentTracks) {
+                if (ot === trackIdx) continue;
+                if (this.getIdentityIdForTrack(cameraName, ot, frameIdx) !== identityId) continue;
+                // Collider — swap.
+                if (oldIdentityId != null) {
+                    this.setFrameIdentity(frameIdx, cameraName, ot, oldIdentityId);
+                } else {
+                    // No old identity to hand off; clear the per-frame
+                    // override so the collider falls back to its global
+                    // mapping rather than asserting a per-frame duplicate.
+                    this.deleteFrameIdentity(frameIdx, cameraName, ot);
+                }
+            }
+        }
+        this.setFrameIdentity(frameIdx, cameraName, trackIdx, identityId);
     }
 
     /**
@@ -2168,10 +2226,37 @@ export class Session {
     }
 
     /**
+     * Warn when a whole-project structural edit can only reach resident frames.
+     *
+     * Unlike the identity/track operations, these edits cannot be pushed into the
+     * columnar store: the store's point layout has a FIXED node count per
+     * instance, so adding or removing a skeleton node cannot be expressed there
+     * at all. A non-resident frame is rebuilt from the store on next hydration
+     * and comes back with the OLD node count. That is a genuine limitation, not
+     * an oversight to paper over — surface it instead of applying silently.
+     * @private
+     */
+    _warnResidentOnlyStructuralEdit(what) {
+        var loader = this.lazyLoader;
+        var total = loader ? (loader.nFrames || 0) : 0;
+        var resident = this.frameGroups ? this.frameGroups.size : 0;
+        if (total > 0 && resident < total) {
+            console.warn('[session] ' + what + ' applied to ' + resident.toLocaleString() +
+                ' resident frame(s) of ' + total.toLocaleString() + '. Frames not currently ' +
+                'in memory are rebuilt from the lazy store, which stores a fixed node count ' +
+                'per instance, so they will keep the previous skeleton. Skeleton edits are ' +
+                'reliable only on a fully-loaded project.');
+        }
+    }
+
+    /**
      * Propagate a skeleton node addition to all instances.
      * Appends one empty node slot to every Instance.
+     *
+     * RESIDENT-ONLY by necessity — see `_warnResidentOnlyStructuralEdit`.
      */
     propagateNodeAdded() {
+        this._warnResidentOnlyStructuralEdit('Skeleton node added');
         // Update all instances in FrameGroups. `insertNodeAt` grows the flat
         // coordinate/occlusion buffers AND any backup together, so a later
         // restorePoints() stays node-aligned (luc3d #189 follow-up #1).
@@ -2188,9 +2273,12 @@ export class Session {
     /**
      * Propagate a skeleton node removal to all instances.
      * Removes node `nodeIdx` from every Instance.
+     *
+     * RESIDENT-ONLY by necessity — see `_warnResidentOnlyStructuralEdit`.
      * @param {number} nodeIdx - The index of the removed node
      */
     propagateNodeRemoved(nodeIdx) {
+        this._warnResidentOnlyStructuralEdit('Skeleton node removed');
         // `removeNodeAt` shrinks the flat coordinate/occlusion buffers AND any
         // backup together (luc3d #189 follow-up #1).
         for (const fg of this.frameGroups.values()) {

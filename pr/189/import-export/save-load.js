@@ -598,6 +598,41 @@ async function buildSlpBytes(opts) {
         return await saveAllSessionsStreaming(sessionsToExport, opts.sink ? { sink: opts.sink } : undefined);
     }
 
+    // MIXED PROJECT GUARD. The eager builder below iterates only the RESIDENT
+    // `frameGroups`, which is correct for a fully-resident project and silently
+    // catastrophic for a lazy one. The streaming path above requires EVERY
+    // session to be lazy, so a project with one lazy session and one
+    // hand-labeled session falls through to here — and writes a structurally
+    // valid .slp containing the resident handful of the lazy session's frames
+    // (31 of 180,210 in the measured case) with no error. That is silent data
+    // loss on the primary save path, so refuse instead: same precedent as
+    // `assertJsonSaveCoversProject` above. Sessions that are merely SMALL are
+    // unaffected — a non-lazy session has every frame resident by definition,
+    // and an all-lazy project never reaches this line.
+    var _truncated = [];
+    for (var _gi = 0; _gi < sessionsToExport.length; _gi++) {
+        var _gs = sessionsToExport[_gi];
+        var _gl = _gs && _gs.lazyLoader;
+        if (!_gl) continue;
+        var _gTotal = _gl.nFrames || 0;
+        var _gResident = _gs.frameGroups ? _gs.frameGroups.size : 0;
+        if (_gTotal > 0 && _gResident < _gTotal) {
+            _truncated.push('"' + (_gs.name || 'session ' + _gi) + '" (' +
+                _gResident.toLocaleString() + ' of ' + _gTotal.toLocaleString() + ' frames resident)');
+        }
+    }
+    if (_truncated.length > 0) {
+        var _msg = 'Cannot save: this project mixes lazily-loaded and fully-loaded ' +
+            'sessions, and the combined save path can only write frames that are ' +
+            'currently in memory — ' + _truncated.join('; ') + '. Saving would ' +
+            'silently drop the rest. Export the lazy session(s) on their own ' +
+            '(File → Save As with only those sessions), or use "Export SLEAP File ' +
+            'Per Session".';
+        console.error('[save-slp] ' + _msg);
+        setStatus(_msg, 'error');
+        throw new Error(_msg);
+    }
+
     for (var si = 0; si < sessionsToExport.length; si++) {
         var sess = sessionsToExport[si];
 

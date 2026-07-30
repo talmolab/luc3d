@@ -211,16 +211,20 @@
             corrected.modified = true;
             fg1.addInstance('camC', corrected);
             session.addFrameGroup(fg1);
+            // Every frame is resident here, so the eager builder covers the whole
+            // project and `assertExportCoversProject` does not fire. That
+            // separation is the point: this test is about the fast path not
+            // silently swallowing a correction, NOT about truncation — the
+            // partially-resident case is the next test.
+            session.addFrameGroup(new FrameGroup(0));
+            session.addFrameGroup(new FrameGroup(2));
+            assertEqual(session.frameGroups.size, N, 'precondition: fully resident, so no truncation guard');
 
             const instanceFilter = { user: true, predicted: true, reprojected: false };
             const blob = await exportSlpClientSide(session, 'camC', false, null, 'out3.slp', instanceFilter);
             const bytes = new Uint8Array(await blob.arrayBuffer());
             const rb = await S.readSlpStreaming(new File([bytes], 'e3-rb.slp'), { lazy: true, openVideos: false, h5wasmUrl });
 
-            // The eager path is frameGroups-only, so it's expected to carry
-            // only frame 1 here (not a regression under test — the whole
-            // point is that it must NOT silently drop the correction by
-            // taking the verbatim fast path instead).
             const store = rb._lazyDataStore;
             const fd = store.framesData;
             const pts = store.pointsData;
@@ -238,6 +242,58 @@
             }
             assertTrue(foundCorrected, 'the manual correction ([999,999]) survived the export — NOT silently ' +
                 'replaced by the original uncorrected prediction');
+        });
+
+        it('a PARTIALLY resident lazy session refuses the eager export instead of truncating it', async function () {
+            // The two guards interact badly on their own: `lazyCameraExportBytes`
+            // bails whenever a resident frame carries a user correction (above),
+            // and the eager builder it falls back to walks `session.frameGroups`
+            // — the resident map. So "correct one instance, then export" silently
+            // produced a valid .slp holding the resident handful of frames (31 of
+            // 180,210 on the real project) with the correction in it and
+            // everything else gone. Correcting predictions is the entire point of
+            // the app, so that is the NORMAL path, not an edge case.
+            //
+            // Until a streaming correction-aware exporter exists, refuse. This
+            // asserts the refusal AND that the message says what to do instead.
+            const S = window.SleapIO;
+            const { exportSlpClientSide } = await import('../import-export/file-io.js');
+
+            const N = 3;
+            const lab = await openLazy(S, await storeBytes(S, 'camD.mp4', N), 'e4.slp');
+            const loader = new window.SioLazyLoader();
+            loader.labelsByCam.set('camD', lab);
+            const rm = new Map();
+            const fc = lab._lazyDataStore.framesData.frame_idx;
+            for (let r = 0; r < fc.length; r++) rm.set(Number(fc[r]), r);
+            loader.frameRowByCam.set('camD', rm);
+            loader.nFrames = N;
+
+            const { Camera, Skeleton, Session, FrameGroup, Instance } = window;
+            const sk = new Skeleton('sk', ['nose', 'tail'], [[0, 1]]);
+            const cD = new Camera('camD', [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+            const session = new Session([cD], sk, ['t0', 't1'], 'ExpS4');
+            session.lazyLoader = loader;
+
+            const fg1 = new FrameGroup(1);
+            const corrected = new Instance([[999, 999], [999, 999]], 0, 'user', 1.0);
+            corrected.modified = true;
+            fg1.addInstance('camD', corrected);
+            session.addFrameGroup(fg1);
+            assertTrue(session.frameGroups.size < N, 'precondition: only some frames resident');
+
+            const instanceFilter = { user: true, predicted: true, reprojected: false };
+            let threw = null;
+            try {
+                await exportSlpClientSide(session, 'camD', false, null, 'out4.slp', instanceFilter);
+            } catch (e) {
+                threw = e;
+            }
+            assertTrue(threw !== null, 'the truncating export was refused, not silently written');
+            assertTrue(/1 of 3 frames in memory/.test(threw.message),
+                'the error names the actual coverage: ' + (threw && threw.message));
+            assertTrue(/Save As/.test(threw.message),
+                'the error points at a way to get the whole project out');
         });
     });
 })();
