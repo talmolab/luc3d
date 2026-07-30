@@ -12945,10 +12945,57 @@ function normalizeStructData(value, shape, fieldNames) {
     const arr = value;
     if (fieldNames.length === colCount) {
       const result = {};
+      // Hoisted out of the per-column/per-element loops: 228M elements on the
+      // real project, so this must not be a per-element `typeof` check.
+      const isBig = (typeof BigInt64Array !== 'undefined' && arr instanceof BigInt64Array) ||
+        (typeof BigUint64Array !== 'undefined' && arr instanceof BigUint64Array);
       for (let col = 0; col < colCount; col++) {
-        const colData = [];
-        for (let row = 0; row < rowCount; row++) {
-          colData.push(arr[row * colCount + col]);
+        // LUCID local patch (luc3d #193): Float64Array column, pre-sized — NOT a
+        // plain `[]` grown by push. This is the LAZY/STREAMING reader's column
+        // builder (`readStructDatasetStreaming`), so it is what backs
+        // `labels._lazyDataStore` for a reopened LUCID project.
+        //
+        // A LUCID-written `.slp` stores `frames`/`instances`/`points`/`pred_points`
+        // as flat 2D matrices with a `field_names` attr, which lands here. A
+        // PYTHON-written file stores them as HDF5 compound dtypes, which take
+        // `readCompoundColumnsWorker` instead — and that path has always built
+        // Float64Array columns (its own comment: "every SLEAP field — coords,
+        // scores, and integer id/index columns up to 2^53 — is exact in f64").
+        // So reopening OUR OWN file was the one path that materialized these
+        // columns as boxed plain arrays.
+        //
+        // Measured on the real 180,210-frame x 5-camera project
+        // (`tests/e2e/_diag-post-reload-bytes.mjs`): the reopened project's ONE
+        // shared store held 24 plain-array columns totalling 228,108,600 entries
+        // — about 1.8 GB of FixedDoubleArray sitting INSIDE V8's
+        // pointer-compressed cage, which a Chrome renderer hard-caps near 4 GB.
+        // The save cannot drop it (pass 2 streams 2D straight out of this store),
+        // so the writer opened with almost no headroom and the renderer died in
+        // phase 2 — the save-after-reopen crash. A typed array holds the same
+        // 8 bytes per element in a backing store allocated OUTSIDE the cage, so
+        // this moves ~1.8 GB off the scarce resource. Same reasoning as #185/#190
+        // on the write side and #189 on the read side.
+        //
+        // f64 deliberately, not f32: `point_id_start/end` reach 21.7M on this
+        // project and f32 is only exact to 2^24 = 16.7M — the same silent
+        // quantization as sleap-io.js#231.
+        const colData = new Float64Array(rowCount);
+        if (isBig) {
+          // A BigInt cannot be assigned into a Float64Array — it throws
+          // TypeError, and this whole function sits inside
+          // `readStructDatasetStreaming`'s catch-all, which would SWALLOW that
+          // and hand back `{}`: a silently EMPTY store rather than a visible
+          // failure. LUCID writes `frames` with dtype "<i8", so whether this
+          // branch is live depends purely on how h5wasm chooses to surface
+          // 64-bit ints. Convert explicitly instead of depending on that.
+          // Exact for every id/index column (well under 2^53).
+          for (let row = 0; row < rowCount; row++) {
+            colData[row] = Number(arr[row * colCount + col]);
+          }
+        } else {
+          for (let row = 0; row < rowCount; row++) {
+            colData[row] = arr[row * colCount + col];
+          }
         }
         result[fieldNames[col]] = colData;
       }
@@ -19207,12 +19254,24 @@ function normalizeStructDataset(dataset, module) {
     const [rowCount, colCount] = dataset.shape;
     const flat = raw;
     if (fieldNames.length) {
-      const cols = fieldNames.map(() => new Array(rowCount));
+      // LUCID local patch (luc3d #193): typed columns — same reasoning as in
+      // `normalizeStructData` above, applied to the NON-streaming reader so both
+      // entry points agree. Note the `fillCols` clamp below: when there are more
+      // field names than columns, the surplus columns used to be arrays of
+      // `undefined` and are now zero-filled. Every consumer reads them as
+      // `Number(col?.[i] ?? 0)`, which already mapped `undefined` to 0, so the
+      // observable value is unchanged.
+      const cols = fieldNames.map(() => new Float64Array(rowCount));
       const fillCols = Math.min(fieldNames.length, colCount);
+      // See the BigInt note in `normalizeStructData`: assigning a BigInt into a
+      // Float64Array throws, so convert explicitly when the source is a 64-bit
+      // int view. Hoisted out of the loops.
+      const isBig = (typeof BigInt64Array !== 'undefined' && flat instanceof BigInt64Array) ||
+        (typeof BigUint64Array !== 'undefined' && flat instanceof BigUint64Array);
       for (let i = 0; i < rowCount; i += 1) {
         const base = i * colCount;
         for (let j = 0; j < fillCols; j += 1) {
-          cols[j][i] = flat[base + j];
+          cols[j][i] = isBig ? Number(flat[base + j]) : flat[base + j];
         }
       }
       const data = {};

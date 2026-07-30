@@ -492,7 +492,15 @@ try {
             log(`[${el()}] resave: ${r3.ms} ms  err=${r3.err || 'none'}`);
             check(!r3.err, `resave completed${r3.err ? ' — ' + r3.err : ''}`);
             check(bytes2 > 100e6, `resave wrote a real file (${(bytes2 / 1e6).toFixed(1)} MB)`);
-            try { fs.unlinkSync(OUT2); } catch (e) {}
+            // KEEP_RESAVE=1 leaves the resave output on disk so the NEXT cycle can
+            // be run against it (`RELOAD_FILE=<...>-resave.slp`). The workflow that
+            // matters is not one save — it is reopen -> edit -> save, repeatedly,
+            // so the file this stage produces has to be a valid INPUT too.
+            if (process.env.KEEP_RESAVE) {
+                log(`[${el()}] kept resave output: ${OUT2} (${bytes2} bytes)`);
+            } else {
+                try { fs.unlinkSync(OUT2); } catch (e) {}
+            }
         }
         await page2.close();
     }
