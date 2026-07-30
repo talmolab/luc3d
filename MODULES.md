@@ -273,7 +273,20 @@ session graph that holds them.
   identities whenever per-frame reality diverged from it. Identity methods:
   per-frame assignment (`setFrameIdentity`, `assignTrackToIdentity` — stamps
   per-frame entries on every frame where that (cam,trackIdx) instance exists;
-  `clearTrackIdentity`; `propagateIdentity`), group assignment
+  `clearTrackIdentity`; `propagateIdentity` — stamps an identity from a start
+  frame FORWARD, and is **project-wide on a lazy session**: a resident pass over
+  `frameGroups` (authoritative — it sees in-memory edits and unlinked instances)
+  followed by a `lazyLoader.forEachInstanceRow` pass over the columnar store for
+  every frame the first pass could not see. It previously walked `frameGroups`
+  alone, so on a reopened project "propagate forward" stopped at the edge of the
+  resident window — nothing corrupted, since `frameIdentityMap` writes are
+  durable, but almost nothing done. The store pass accumulates each frame's track
+  set in one reused `Set` flushed on the frame boundary (that helper visits each
+  (camera, frame) once, rows contiguous), so it is O(1) in memory rather than a
+  180k-entry map of Sets; the per-frame uniqueness/collider rule is shared by both
+  passes via `_applyIdentityAtFrame`. NOTE `assignTrackToIdentity` above is still
+  resident-only — it has **no callers** (dead since #155) and is left alone
+  deliberately), group assignment
   (`assignIdentityToGroup`), lookup (`getIdentityIdForTrack`/
   `getIdentityForTrack` — per-frame only, return null with no fallback;
   `isExplicitNoIdentity`; `isNoIdTrack(trackIdx)` — true for the dedicated
@@ -452,6 +465,18 @@ which was removed during the ESM migration).
 **Purpose.** Cross-view instance matching and identity assignment. Pairwise
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
+
+**Animal-count auto-detect is a resident SAMPLE, deliberately.**
+`computeMaxInstancesPerView` (used when the user has not set a count) reads
+`session.frameGroups`, so on a lazy project it samples the resident window rather
+than the project. It is NOT converted to a store sweep like the other
+resident-only defects: every animal is visible in most frames, so the max is hit
+almost immediately, and Track All is confirmed working on the real 180,210-frame
+project with this behaviour — changing how the animal count is derived would
+change tracking output on a path that currently works. The error is one-directional
+(too LOW, only if no sampled frame shows every animal at once) and surfaces as a
+too-small identity pool, so it now logs a warning naming the sample size and
+pointing at the explicit setting instead of inferring silently.
 
 **Node weights.** Both the app's CrossViewTracker and the bench-only
 `matchFrameInstances` honor per-node weights from the Tracking Wizard
@@ -3283,6 +3308,27 @@ unit-testable without a browser.
 SLP-LABELS bytes-builder used by export, points3d / reproj H5 builders,
 parser stubs that spawn `slp-import-worker.js`. The "low-level" file
 layer.
+
+**Export truncation guard (`assertExportCoversProject`).** The eager builders
+(`buildSlpLabels`, `buildSlpLabelsMultiSession`, `buildSlpLabelsAllViews`,
+`buildPerCameraSlpJson`, `buildSlpExportData`) all iterate `session.frameGroups`
+— the RESIDENT map — so on a lazy project they write a structurally valid `.slp`
+holding ~0.02% of the labels and report success. `lazyCameraExportBytes` is the
+whole-project alternative, but it re-emits the columnar store VERBATIM, so it is
+skipped for multi-selection exports, for reprojections-as-user, for filters that
+need reprojections, and — the common case — whenever any resident frame carries a
+USER correction, because the store has no notion of a live edit. Correcting
+predictions being the point of the app, "correct something, then export" fell
+straight through to the truncating path. `exportSlpClientSide` and
+`exportSlpMultiSession` now call `assertExportCoversProject` before the eager
+build and THROW (naming each session's resident/total and pointing at Save As)
+rather than truncate silently. Fully-resident sessions never trip it. The proper
+fix is a streaming per-camera exporter merging store predictions with the
+resident user-correction overlay — the machinery `slp-streaming-write.js` already
+runs for the project save, which needs a camera filter on `buildSessionRefGraph`
+to be reusable here; **not yet built.** Covered by
+`tests/test-lazy-export-instance-filter.js` (fully-resident correction still
+exports via the eager path; partially-resident refuses and says so).
 
 **Key exports.**
 - File pickers: `pickFiles`, `pickFolder`, `pickVideoFiles`.

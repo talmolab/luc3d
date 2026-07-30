@@ -789,6 +789,26 @@ function computeMaxInstancesPerView(session) {
             if (count > max) max = count;
         }
     }
+    // This reads `frameGroups`, i.e. the RESIDENT window — on a lazily reopened
+    // project that is a sample (31 of 180,210 frames measured), not the project.
+    // Deliberately NOT "fixed" to sweep the store: unlike the other resident-only
+    // defects this one is a SAMPLE, and it is usually right — every animal is
+    // visible in most frames, so the max is reached almost immediately, and Track
+    // All is confirmed working on the real project with this behaviour. Changing
+    // how the animal count is derived would change tracking output on a path that
+    // currently works, which is not a trade worth making blind. It can only be
+    // wrong in one direction (too LOW — if no sampled frame happens to show every
+    // animal at once), and that shows up as a too-small identity pool, so make the
+    // sampling visible instead of silent.
+    var loader = session.lazyLoader;
+    var total = loader ? (loader.nFrames || 0) : 0;
+    var resident = session.frameGroups ? session.frameGroups.size : 0;
+    if (total > 0 && resident < total) {
+        console.warn('[tracker] auto-detected ' + max + ' animals per view from ' +
+            resident.toLocaleString() + ' resident frame(s) of ' + total.toLocaleString() +
+            '. If that is lower than the real animal count, set it explicitly ' +
+            '(Track ▸ number of animals) before running Track All.');
+    }
     return max;
 }
 

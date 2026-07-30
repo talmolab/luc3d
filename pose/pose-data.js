@@ -2226,10 +2226,37 @@ export class Session {
     }
 
     /**
+     * Warn when a whole-project structural edit can only reach resident frames.
+     *
+     * Unlike the identity/track operations, these edits cannot be pushed into the
+     * columnar store: the store's point layout has a FIXED node count per
+     * instance, so adding or removing a skeleton node cannot be expressed there
+     * at all. A non-resident frame is rebuilt from the store on next hydration
+     * and comes back with the OLD node count. That is a genuine limitation, not
+     * an oversight to paper over — surface it instead of applying silently.
+     * @private
+     */
+    _warnResidentOnlyStructuralEdit(what) {
+        var loader = this.lazyLoader;
+        var total = loader ? (loader.nFrames || 0) : 0;
+        var resident = this.frameGroups ? this.frameGroups.size : 0;
+        if (total > 0 && resident < total) {
+            console.warn('[session] ' + what + ' applied to ' + resident.toLocaleString() +
+                ' resident frame(s) of ' + total.toLocaleString() + '. Frames not currently ' +
+                'in memory are rebuilt from the lazy store, which stores a fixed node count ' +
+                'per instance, so they will keep the previous skeleton. Skeleton edits are ' +
+                'reliable only on a fully-loaded project.');
+        }
+    }
+
+    /**
      * Propagate a skeleton node addition to all instances.
      * Appends one empty node slot to every Instance.
+     *
+     * RESIDENT-ONLY by necessity — see `_warnResidentOnlyStructuralEdit`.
      */
     propagateNodeAdded() {
+        this._warnResidentOnlyStructuralEdit('Skeleton node added');
         // Update all instances in FrameGroups. `insertNodeAt` grows the flat
         // coordinate/occlusion buffers AND any backup together, so a later
         // restorePoints() stays node-aligned (luc3d #189 follow-up #1).
@@ -2246,9 +2273,12 @@ export class Session {
     /**
      * Propagate a skeleton node removal to all instances.
      * Removes node `nodeIdx` from every Instance.
+     *
+     * RESIDENT-ONLY by necessity — see `_warnResidentOnlyStructuralEdit`.
      * @param {number} nodeIdx - The index of the removed node
      */
     propagateNodeRemoved(nodeIdx) {
+        this._warnResidentOnlyStructuralEdit('Skeleton node removed');
         // `removeNodeAt` shrinks the flat coordinate/occlusion buffers AND any
         // backup together (luc3d #189 follow-up #1).
         for (const fg of this.frameGroups.values()) {

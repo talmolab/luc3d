@@ -1455,6 +1455,9 @@ export async function exportSlpClientSide(session, cameraName, reprojAsUser, vid
         if (lazyBytes) return new Blob([lazyBytes], { type: 'application/x-hdf5' });
     }
 
+    // Same truncation hazard as the multi-session exporter below — this eager
+    // builder is resident-only too. See `assertExportCoversProject`.
+    assertExportCoversProject([{ session: session, cameraName: cameraName }]);
     var labels = buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter);
     // PR 5.2: export sleap-io.js's raw bytes directly. SLEAP >= 1.6.0 (sleap-io
     // >= 0.7.0) reads the flat-matrix `field_names` layout natively (#378), so
@@ -1734,9 +1737,62 @@ export async function exportSlpMultiSession(selections, reprojAsUser, instanceFi
         if (lazyBytes) return new Blob([lazyBytes], { type: 'application/x-hdf5' });
     }
 
+    assertExportCoversProject(selections);
     var labels = buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFilter);
     var bytes = await SIO.saveSlpToBytes(labels);   // PR 5.2: raw output (no v0.6 post-pass)
     return new Blob([bytes], { type: 'application/x-hdf5' });
+}
+
+/**
+ * Refuse an export that the eager builder would silently truncate.
+ *
+ * `buildSlpLabelsMultiSession` (and `buildSlpLabels`) iterate `session.frameGroups`
+ * — the RESIDENT map. On a lazily-loaded project that is a handful of frames (31
+ * of 180,210 measured), so the export writes a structurally valid `.slp` holding
+ * ~0.02% of the labels and reports success. `lazyCameraExportBytes` above avoids
+ * that by re-emitting the columnar store verbatim, but it only applies to a
+ * single plain selection, and it deliberately bails whenever a resident frame
+ * carries a USER instance — because the store has no notion of a live correction.
+ *
+ * That last case is the common one, not an edge case: correcting predictions is
+ * what this app is for, so "export after correcting anything" fell straight
+ * through to the truncating path. Worse, the large-project save warning in
+ * `import-export/save-load.js` actively recommends these exporters as the safe
+ * alternative to a merged save.
+ *
+ * The real fix is a streaming per-camera exporter that merges store predictions
+ * with the resident user-correction overlay — the machinery
+ * `slp-streaming-write.js` already runs for the project save, but it is built
+ * around a whole-session ref graph and needs a camera filter to be reusable here.
+ * Until that exists, refuse loudly rather than write a plausible, mostly-empty
+ * file (the precedent set by `assertJsonSaveCoversProject` and the mixed-project
+ * save guard).
+ *
+ * @param {Array<{session, cameraName}>} selections
+ */
+function assertExportCoversProject(selections) {
+    var truncated = [];
+    for (var i = 0; i < (selections || []).length; i++) {
+        var session = selections[i] && selections[i].session;
+        var loader = session && session.lazyLoader;
+        if (!loader) continue;                       // fully resident: nothing to lose
+        var total = loader.nFrames || 0;
+        var resident = session.frameGroups ? session.frameGroups.size : 0;
+        if (total > 0 && resident < total) {
+            truncated.push('"' + (session.name || 'session ' + i) + '" / ' +
+                selections[i].cameraName + ' (' + resident.toLocaleString() + ' of ' +
+                total.toLocaleString() + ' frames in memory)');
+        }
+    }
+    if (truncated.length === 0) return;
+    throw new Error(
+        'This export would only contain the frames currently in memory — ' +
+        truncated.join('; ') + ' — because it cannot use the whole-project fast ' +
+        'path. That happens when more than one camera/session is selected, when ' +
+        'reprojections are included, or when any loaded frame has a manual ' +
+        'correction. Export a single camera with reprojections turned off, or use ' +
+        'File → Save As to write the whole project.'
+    );
 }
 
 /**
