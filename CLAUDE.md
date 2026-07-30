@@ -303,7 +303,40 @@ in-progress export), `Esc` should cancel/stop that operation rather than tear th
 modal down. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
 
 ## Tests
-Browser-based tests in `tests/test-runner.html`. Open in browser to run.
+There are **three** test populations, each with its own runner. Run all three —
+they cover disjoint code, and a green run of one says nothing about the others.
+
+```bash
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1201 assertions
+node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
+node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
+```
+
+- `tests/*.js` — classic scripts, run in the browser via `tests/test-runner.html`
+  (open directly) or headless via `tests/e2e/run-unit-tests.mjs`; also runnable in
+  a `vm` sandbox by `tests/run-node.js`.
+- `tests/test-*.mjs` — native ES modules, run by **`tests/run-mjs-tests.mjs`**
+  (one child process per file, since several install module-loader hooks). These
+  were **orphaned for a long time**: no runner referenced them, so four had been
+  failing unnoticed — including a live `ReferenceError` in `pose/tracker.js` and
+  three files still asserting pre-luc3d-#185 shapes (boxed `Instance.points`,
+  boxed `points3d` rows, legacy string `frameIdentityMap` keys). **If you add a
+  `tests/test-*.mjs`, it is picked up automatically; do not add ESM tests
+  anywhere else.**
+- `tests/e2e/*.mjs` — Playwright, drive the real app. `_diag-*`/`_bench-*`/
+  `_real-*` are investigation tools, not assertions, and are excluded from suite
+  runs. Notable:
+  - `sequence-lazy-workflow.mjs` — **the lazy-project regression harness.** Builds
+    a synthetic project big enough (in FRAME COUNT) to come back mostly
+    non-resident, then drives real sequences — reopen → Triangulate All → save →
+    reopen → modify → save → reopen → export → swap → save → reopen — asserting
+    invariants after every step. This is what catches the resident-only bug class
+    (#194/#195), where an operation silently processes a handful of frames,
+    returns a plausible count, and only shows up a cycle later once the wrong
+    state has been saved. `FRAMES=`/`CAMS=`/`NODES=`/`KEEP=1` are configurable; it
+    asserts its own lazy precondition so it cannot silently stop testing that.
+  - `_real-roundtrip.mjs` — the real-data acceptance run (needs a large `.slp`);
+    `RELOAD_FILE=`, `MODIFY_RESAVE=1`, `KEEP_RESAVE=1`, `ATTRIBUTE=1`.
 
 ## Python Scripts
 - `scripts/json_to_slp.py` — Convert JSON export to SLEAP .slp format

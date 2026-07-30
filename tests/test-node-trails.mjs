@@ -26,7 +26,22 @@ function mockCtx() {
     };
 }
 
-function inst(trackIdx, x) { return { trackIdx, points: [[x, 10], [x + 1, 12]] }; }   // 2 nodes
+// 2 nodes. Mirrors the FLAT Instance read surface `drawNodeTrails` actually uses
+// (`numNodes` / `hasPoint(k)` / `getX(k)` / `getY(k)`) — see pose/pose-data.js.
+// This mock used to expose the pre-luc3d-#185 boxed `points: [[x,y],...]` array,
+// which the overlay stopped reading when instances moved to flat typed storage;
+// `numNodes` was then `undefined`, every trail loop ran zero times, and all five
+// drawing assertions failed against a perfectly healthy overlay.
+function inst(trackIdx, x) {
+    const xy = [x, 10, x + 1, 12];
+    return {
+        trackIdx,
+        numNodes: xy.length >> 1,
+        hasPoint(k) { return k >= 0 && k < (xy.length >> 1) && !Number.isNaN(xy[k << 1]); },
+        getX(k) { return xy[k << 1]; },
+        getY(k) { return xy[(k << 1) + 1]; },
+    };
+}
 
 // FrameGroup-like: linked instances in a Map; unlinked via getUnlinkedInstances.
 function fgLinked(x) { return { instances: new Map([['camA', [inst(7, x)]]]), getUnlinkedInstances() { return []; } }; }

@@ -103,10 +103,10 @@ group('commitTrackedFrame — raw-trackIdx collision guard');
     const idT2 = trackToIdentity.get('T2');
     ok(idT1 != null && idT2 != null && idT1 !== idT2, 'two distinct identities were created for the two targets');
 
-    eq(session.frameIdentityMap.get('0:cam0:5'), -1,
+    eq(session.getFrameIdentityValue(0, 'cam0', 5), -1,
         'the COLLIDING key (frame 0, cam0, trackIdx 5) is marked explicit "no identity" (-1), not silently won by whichever target processed last');
-    eq(session.frameIdentityMap.get('0:cam1:10'), idT1, 'target1\'s NON-colliding cam1 entry is untouched and correct');
-    eq(session.frameIdentityMap.get('0:cam2:20'), idT2, 'target2\'s NON-colliding cam2 entry is untouched and correct');
+    eq(session.getFrameIdentityValue(0, 'cam1', 10), idT1, 'target1\'s NON-colliding cam1 entry is untouched and correct');
+    eq(session.getFrameIdentityValue(0, 'cam2', 20), idT2, 'target2\'s NON-colliding cam2 entry is untouched and correct');
 
     const groups = session.instanceGroups.get(0) || [];
     eq(groups.length, 2, 'both groups were still created');
@@ -142,10 +142,10 @@ group('commitTrackedFrame — no collision, unchanged behavior');
 
     const idT1 = trackToIdentity.get('T1');
     const idT2 = trackToIdentity.get('T2');
-    eq(session.frameIdentityMap.get('0:cam0:1'), idT1, 'target1 cam0 entry correct');
-    eq(session.frameIdentityMap.get('0:cam1:2'), idT1, 'target1 cam1 entry correct');
-    eq(session.frameIdentityMap.get('0:cam0:3'), idT2, 'target2 cam0 entry correct (different trackIdx, no collision)');
-    eq(session.frameIdentityMap.get('0:cam2:4'), idT2, 'target2 cam2 entry correct');
+    eq(session.getFrameIdentityValue(0, 'cam0', 1), idT1, 'target1 cam0 entry correct');
+    eq(session.getFrameIdentityValue(0, 'cam1', 2), idT1, 'target1 cam1 entry correct');
+    eq(session.getFrameIdentityValue(0, 'cam0', 3), idT2, 'target2 cam0 entry correct (different trackIdx, no collision)');
+    eq(session.getFrameIdentityValue(0, 'cam2', 4), idT2, 'target2 cam2 entry correct');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
