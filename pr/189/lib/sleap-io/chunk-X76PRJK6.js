@@ -14866,9 +14866,195 @@ Float64GrowSink.prototype.push = function (a, b, c, d, e, f, g, h) {
   if (n > 6) D[o + 6] = g; if (n > 7) D[o + 7] = h;
   this.rows++;
 };
+// LUCID local patch (luc3d #191): INCREMENTAL-FLUSH row accumulator for the
+// `/session_data` tables.
+//
+// #185/#190 made these rows TYPED, but left the peak unchanged in SHAPE: every
+// row still had to be live at once, because createMatrixDatasetTyped /
+// createGzipFloatMatrixTyped write a whole table in a single create_dataset call.
+// At the real 180,210-frame x 5-camera project's scale that is
+//
+//     frame_groups       180,210 x 3 x 8 B =   4.3 MB
+//     instance_groups    531,799 x 8 x 8 B =  34.0 MB
+//     group members    2,627,453 x 3 x 8 B =  63.0 MB
+//     points_3d        7,976,985 x 3 x 8 B = 191.0 MB
+//                                            --------
+//                                            ~292 MB
+//
+// plus a same-sized copy into the WASM heap at flush time, plus up to 2x that for
+// the doubling grow-sinks. That fits under the 2,891 MB baseline a fresh Track All
+// + Triangulate All leaves — the FIRST save of a session succeeds. It does NOT fit
+// after a REOPEN, where the measured post-load baseline is 4,156 MB: the renderer
+// dies inside phase 2/4, which is `writeSessions`. Reproduce in ~94 s with
+// `RELOAD_FILE=<big.slp> MODIFY_RESAVE=1 node tests/e2e/_real-roundtrip.mjs reload`.
+//
+// These are exactly the allocations a large committed-but-dead V8 cage CANNOT
+// absorb: typed-array backing stores and h5wasm's heap live OUTSIDE the
+// pointer-compressed cage, so they add to total process memory even when the cage
+// has gigabytes of dead space to spare (after a reload plus a full strip of app
+// state, `Runtime.queryObjects` finds essentially nothing live yet ~2,518 MB stays
+// committed — see luc3d #189/#190).
+//
+// So a table now stages at most SESSION_FLUSH_ROWS rows in a FIXED buffer and
+// appends them into a chunked, unlimited-maxshape dataset, reusing the buffer.
+// Writer peak for these tables becomes CONSTANT in the project's size.
+//
+// Three deliberate consequences:
+//  - A table that OVERFLOWS its staging buffer becomes CHUNKED (it was
+//    contiguous) and is created in a different order, so the file LAYOUT changes
+//    for large projects. The VALUES are bit-identical either way. A table that
+//    never overflows is still written one-shot and contiguous (see `finish`), so
+//    small projects — including the save-golden-digest.mjs fixture — stay
+//    BYTE-IDENTICAL and that golden MUST NOT move.
+//  - The #185 counting pre-pass is GONE. Nothing needs pre-sizing, which also
+//    removes a full extra walk over every instance group — a small time win.
+//  - A dataset is created LAZILY, on first flush, so a table that never receives
+//    a row stays ABSENT from the file (`pred_points_3d` on a user-only project),
+//    exactly as the pre-#191 `if (rows > 0)` guards ensured.
+var SESSION_FLUSH_ROWS = WRITE_CHUNK_ROWS;
+function LucidAppendTable(file, name, ncols, dtype, fieldNames, gzip, onCreate) {
+  this.file = file;
+  this.name = name;
+  this.ncols = ncols;
+  this.dtype = dtype;
+  this.fieldNames = fieldNames || null;
+  this.gzip = !!gzip;
+  this.onCreate = onCreate || null;
+  // `total` counts every row PUSHED (flushed + staged), so it is always the
+  // global index of the NEXT row — which is what the [start, end) slice bounds
+  // recorded in instance_groups are relative to.
+  this.total = 0;
+  this.rows = 0;
+  this.buf = new Float64Array(ncols * SESSION_FLUSH_ROWS);
+  this.created = false;
+}
+LucidAppendTable.prototype._create = function () {
+  if (this.onCreate) this.onCreate();
+  const spec = {
+    name: this.name,
+    data: new Float64Array(0),
+    shape: [0, this.ncols],
+    maxshape: [null, this.ncols],
+    chunks: [SESSION_FLUSH_ROWS, this.ncols],
+    dtype: this.dtype
+  };
+  if (this.gzip) {
+    spec.compression = "gzip";
+    spec.compression_opts = 1;
+  }
+  this.file.create_dataset(spec);
+  if (this.fieldNames) {
+    setStringAttr(
+      this.file.get(this.name),
+      "field_names",
+      JSON.stringify(this.fieldNames)
+    );
+  }
+  this.created = true;
+};
+LucidAppendTable.prototype.flush = function () {
+  if (this.rows === 0) return;
+  if (!this.created) this._create();
+  const base = this.total - this.rows;
+  const ds = this.file.get(this.name);
+  ds.resize([this.total, this.ncols]);
+  ds.write_slice(
+    [[base, this.total], [0, this.ncols]],
+    this.buf.subarray(0, this.rows * this.ncols)
+  );
+  this.rows = 0;
+};
+/**
+ * Write whatever is left and close the table out.
+ *
+ * A table that NEVER overflowed its staging buffer has every row still in hand,
+ * so it is written as ONE CONTIGUOUS dataset — exactly what pre-#191 did. That
+ * matters for more than tidiness: a chunked dataset allocates whole chunks, and
+ * at SESSION_FLUSH_ROWS=8192 rows an 8-column table reserves 8192*8*8 = 512 KB
+ * even to hold two rows. Writing small tables one-shot keeps small projects
+ * BYTE-IDENTICAL to pre-#191 output (the golden-digest fixture is one) and keeps
+ * the constant-memory append path for the only case that needs it — the large
+ * project that overflows.
+ *
+ * `force` creates a 0-row dataset rather than leaving it absent. The three struct
+ * tables pass `force = (frame groups > 0)` because pre-#191 created all three
+ * unconditionally inside `if (fgRows.rows > 0)`; the 3D tables pass false, since
+ * those were guarded on their own row counts and must stay ABSENT when empty.
+ */
+LucidAppendTable.prototype.finish = function (force) {
+  if (this.created) {
+    this.flush();
+    return;
+  }
+  if (this.rows === 0 && !force) return;
+  if (this.onCreate) this.onCreate();
+  const n = this.rows;
+  const needed = n * this.ncols;
+  const data = this.buf.length === needed ? this.buf : this.buf.subarray(0, needed);
+  const spec = { name: this.name, data, shape: [n, this.ncols], dtype: this.dtype };
+  if (this.gzip) {
+    spec.chunks = [Math.min(WRITE_CHUNK_ROWS, Math.max(1, n)), this.ncols];
+    spec.compression = "gzip";
+    spec.compression_opts = 1;
+  }
+  this.file.create_dataset(spec);
+  if (this.fieldNames) {
+    setStringAttr(
+      this.file.get(this.name),
+      "field_names",
+      JSON.stringify(this.fieldNames)
+    );
+  }
+  this.created = true;
+  this.rows = 0;
+};
+// Reserve the next row, flushing first when the staging buffer is full. Returns
+// the row's offset into `buf`.
+LucidAppendTable.prototype._slot = function () {
+  if (this.rows === SESSION_FLUSH_ROWS) this.flush();
+  const off = this.rows * this.ncols;
+  this.rows++;
+  this.total++;
+  return off;
+};
+/** Append one row from up to 8 positional values — no boxed row at all. */
+LucidAppendTable.prototype.push = function (a, b, c, d, e, f, g, h) {
+  const o = this._slot(), n = this.ncols, D = this.buf;
+  if (n > 0) D[o] = a; if (n > 1) D[o + 1] = b; if (n > 2) D[o + 2] = c;
+  if (n > 3) D[o + 3] = d; if (n > 4) D[o + 4] = e; if (n > 5) D[o + 5] = f;
+  if (n > 6) D[o + 6] = g; if (n > 7) D[o + 7] = h;
+};
+// Writes `width` coerced values from `row` (a null row => all-NaN, matching
+// `coerce3dRow`), plus a trailing `extra` column when ncols > width.
+LucidAppendTable.prototype.pushCoerced = function (row, width, extra) {
+  const off = this._slot(), D = this.buf;
+  if (row == null) {
+    for (let i = 0; i < width; i++) D[off + i] = Number.NaN;
+  } else {
+    for (let i = 0; i < width; i++) {
+      const v = row[i];
+      D[off + i] = v == null ? Number.NaN : Number(v);
+    }
+  }
+  if (this.ncols > width) {
+    D[off + width] = extra == null ? Number.NaN : Number(extra);
+  }
+};
+// Append one row straight out of a caller's FLAT Float64Array (luc3d #189) —
+// `src[srcOff .. srcOff+width]`, no boxed row in between.
+LucidAppendTable.prototype.pushFlat = function (src, srcOff, width, extra) {
+  const off = this._slot(), D = this.buf;
+  for (let i = 0; i < width; i++) D[off + i] = src[srcOff + i];
+  if (this.ncols > width) {
+    D[off + width] = extra == null ? Number.NaN : Number(extra);
+  }
+};
 // LUCID local patch (luc3d #190): typed counterpart of createMatrixDataset —
 // identical dataset parameters and field_names attr, but takes the already-flat
 // sink instead of re-flattening an array of boxed rows.
+// NOTE (luc3d #191): no longer used by `writeSessions`, which now appends
+// incrementally. Retained as module surface alongside `Float64GrowSink` /
+// `Float64RowSink` / `createGzipFloatMatrixTyped`.
 function createMatrixDatasetTyped(file, name, sink, fieldNames, dtype) {
   const rowCount = sink.rows;
   const colCount = fieldNames.length;
@@ -14950,9 +15136,11 @@ function instanceGroupMemberRows(group, session, frameGroup, labeledFrameIndex) 
 }
 // LUCID local patch (luc3d #190): allocation-free counterpart of
 // `instanceGroupMemberRows` — identical selection logic, but appends
-// [camIdx, lf, inst] straight into a Float64GrowSink instead of returning an
-// array of boxed rows. Keep the two in sync; the original is retained because
-// it is part of the module's surface.
+// [camIdx, lf, inst] straight into a row sink instead of returning an array of
+// boxed rows. Keep the two in sync; the original is retained because it is part
+// of the module's surface.
+// (luc3d #191: `sink` is now a LucidAppendTable, which flushes as it fills. It
+// only needs a `.push(a, b, c)`, so either sink type works here.)
 function instanceGroupMemberRowsInto(group, session, frameGroup, labeledFrameIndex, sink) {
   const concreteInst = group._instanceByCamera;
   const instRefs = group._instanceRefsByCamera;
@@ -15001,48 +15189,55 @@ function writeSessions(file, sessions, videos, labeledFrames, identities) {
   labeledFrames.forEach((lf, idx) => {
     labeledFrameIndex.set(lf, idx);
   });
-  // LUCID local patch (luc3d #190): flat typed accumulators, not boxed rows.
-  const fgRows = new Float64GrowSink(SESSION_FRAME_GROUP_FIELDS.length);
-  const igRows = new Float64GrowSink(SESSION_INSTANCE_GROUP_FIELDS.length);
-  const memberRows = new Float64GrowSink(SESSION_INSTANCE_GROUP_MEMBER_FIELDS.length);
+  // LUCID local patch (luc3d #191): incremental-flush tables, not whole-table
+  // accumulators. Each stages at most SESSION_FLUSH_ROWS rows, then appends into a
+  // chunked/unlimited dataset — so the writer's peak for `/session_data` no longer
+  // scales with the project. The #185 counting pre-pass that used to precede this
+  // (to pre-size the two 3D sinks) is gone: nothing needs pre-sizing now.
+  //
+  // `session_data` is created on the first flush of ANY table, so a project with
+  // no frame groups still writes no group at all.
+  let _sdGroup = false;
+  const ensureSessionData = () => {
+    if (_sdGroup) return;
+    file.create_group("session_data");
+    _sdGroup = true;
+  };
+  const fgTable = new LucidAppendTable(
+    file, "session_data/frame_groups", SESSION_FRAME_GROUP_FIELDS.length,
+    "<d", SESSION_FRAME_GROUP_FIELDS, false, ensureSessionData
+  );
+  const igTable = new LucidAppendTable(
+    file, "session_data/instance_groups", SESSION_INSTANCE_GROUP_FIELDS.length,
+    "<d", SESSION_INSTANCE_GROUP_FIELDS, false, ensureSessionData
+  );
+  const memberTable = new LucidAppendTable(
+    file, "session_data/instance_group_members",
+    SESSION_INSTANCE_GROUP_MEMBER_FIELDS.length,
+    "<d", SESSION_INSTANCE_GROUP_MEMBER_FIELDS, false, ensureSessionData
+  );
+  // The 3D-point tables carry no field_names attr and ARE gzipped — matching what
+  // createGzipFloatMatrixTyped wrote before #191.
+  const pts3dTable = new LucidAppendTable(
+    file, "session_data/points_3d", 3, "<d", null, true, ensureSessionData
+  );
+  const predPts3dTable = new LucidAppendTable(
+    file, "session_data/pred_points_3d", 4, "<d", null, true, ensureSessionData
+  );
   const fgMeta = [];
   const igMeta = [];
   const sessionsJson = [];
-  // LUCID local patch (luc3d #185): exact counting pre-pass so the two 3D-point
-  // sinks below are allocated once at their final size. Mirrors the main loop's
-  // walk; its only skip (`!frameGroup.instanceGroups.length`) contributes zero
-  // rows either way, so it needs no counterpart here.
-  let _nPts3d = 0;
-  let _nPredPts3d = 0;
-  for (const session of sessions) {
-    for (const frameGroup of session.frameGroups.values()) {
-      for (const group of frameGroup.instanceGroups) {
-        const _i3d = group.instance3d;
-        const _p = _i3d?.points ?? group.points;
-        if (!_p) continue;
-        // LUCID local patch (luc3d #189): count KEYPOINTS, not array slots — `_p`
-        // may be a flat Float64Array of 3*nNodes.
-        if (_i3d instanceof PredictedInstance3D && _i3d.pointScores != null) {
-          _nPredPts3d += lucidCount3dRows(_p);
-        } else {
-          _nPts3d += lucidCount3dRows(_p);
-        }
-      }
-    }
-  }
-  const pts3dSink = new Float64RowSink(_nPts3d, 3);
-  const predPts3dSink = new Float64RowSink(_nPredPts3d, 4);
   for (const session of sessions) {
     const { calibration, camcorder_to_video_idx_map } = sessionCalibrationDict(
       session,
       videos
     );
-    const fgStart = fgRows.rows;
+    const fgStart = fgTable.total;
     for (const frameGroup of session.frameGroups.values()) {
       if (!frameGroup.instanceGroups.length) continue;
-      const igStart = igRows.rows;
+      const igStart = igTable.total;
       for (const group of frameGroup.instanceGroups) {
-        const memberStart = memberRows.rows;
+        const memberStart = memberTable.total;
         // LUCID local patch (luc3d #190): write members straight into the flat
         // sink. `instanceGroupMemberRows` returns one boxed Array per member —
         // 2,627,453 of them on the real project, all allocated inside this
@@ -15052,9 +15247,9 @@ function writeSessions(file, sessions, videos, labeledFrames, identities) {
           session,
           frameGroup,
           labeledFrameIndex,
-          memberRows
+          memberTable
         );
-        const memberEnd = memberRows.rows;
+        const memberEnd = memberTable.total;
         let identityIdx = -1;
         if (group.identity && identities) {
           identityIdx = identities.indexOf(group.identity);
@@ -15081,24 +15276,24 @@ function writeSessions(file, sessions, videos, labeledFrames, identities) {
           const n3dRows = lucidCount3dRows(points3d);
           if (isPred) {
             const scores = inst3d.pointScores;
-            pts3dStart = predPts3dSink.rows;
+            pts3dStart = predPts3dTable.total;
             for (let i = 0; i < n3dRows; i++) {
-              if (isFlat3d) predPts3dSink.pushFlat(points3d, i * 3, 3, scores[i]);
-              else predPts3dSink.pushCoerced(points3d[i], 3, scores[i]);
+              if (isFlat3d) predPts3dTable.pushFlat(points3d, i * 3, 3, scores[i]);
+              else predPts3dTable.pushCoerced(points3d[i], 3, scores[i]);
             }
-            pts3dEnd = predPts3dSink.rows;
+            pts3dEnd = predPts3dTable.total;
             pts3dPredicted = 1;
           } else {
-            pts3dStart = pts3dSink.rows;
+            pts3dStart = pts3dTable.total;
             for (let i = 0; i < n3dRows; i++) {
-              if (isFlat3d) pts3dSink.pushFlat(points3d, i * 3, 3);
-              else pts3dSink.pushCoerced(points3d[i], 3);
+              if (isFlat3d) pts3dTable.pushFlat(points3d, i * 3, 3);
+              else pts3dTable.pushCoerced(points3d[i], 3);
             }
-            pts3dEnd = pts3dSink.rows;
+            pts3dEnd = pts3dTable.total;
           }
           if (inst3d?.score != null) i3dScore = inst3d.score;
         }
-        igRows.push(
+        igTable.push(
           identityIdx,
           score,
           i3dScore,
@@ -15112,13 +15307,13 @@ function writeSessions(file, sessions, videos, labeledFrames, identities) {
           group.metadata && Object.keys(group.metadata).length ? JSON.stringify(group.metadata) : ""
         );
       }
-      const igEnd = igRows.rows;
-      fgRows.push(frameGroup.frameIdx, igStart, igEnd);
+      const igEnd = igTable.total;
+      fgTable.push(frameGroup.frameIdx, igStart, igEnd);
       fgMeta.push(
         frameGroup.metadata && Object.keys(frameGroup.metadata).length ? JSON.stringify(frameGroup.metadata) : ""
       );
     }
-    const fgEnd = fgRows.rows;
+    const fgEnd = fgTable.total;
     sessionsJson.push(
       JSON.stringify({
         calibration,
@@ -15130,42 +15325,21 @@ function writeSessions(file, sessions, videos, labeledFrames, identities) {
     );
   }
   file.create_dataset({ name: "sessions_json", data: sessionsJson });
-  if (fgRows.rows > 0) {
-    file.create_group("session_data");
-    // LUCID local patch (luc3d #190): typed writers — same datasets, no
-    // boxed-row intermediate.
-    createMatrixDatasetTyped(
-      file,
-      "session_data/frame_groups",
-      fgRows,
-      SESSION_FRAME_GROUP_FIELDS,
-      "<d"
-    );
-    createMatrixDatasetTyped(
-      file,
-      "session_data/instance_groups",
-      igRows,
-      SESSION_INSTANCE_GROUP_FIELDS,
-      "<d"
-    );
-    createMatrixDatasetTyped(
-      file,
-      "session_data/instance_group_members",
-      memberRows,
-      SESSION_INSTANCE_GROUP_MEMBER_FIELDS,
-      "<d"
-    );
-    if (pts3dSink.rows > 0) {
-      createGzipFloatMatrixTyped(file, "session_data/points_3d", pts3dSink, 3);
-    }
-    if (predPts3dSink.rows > 0) {
-      createGzipFloatMatrixTyped(
-        file,
-        "session_data/pred_points_3d",
-        predPts3dSink,
-        4
-      );
-    }
+  // LUCID local patch (luc3d #191): drain whatever is still staged, in the same
+  // dataset order pre-#191 wrote. The three STRUCT tables are force-created when
+  // the file has any frame group, because pre-#191 created all three
+  // unconditionally inside `if (fgRows.rows > 0)` — `instance_group_members`
+  // legitimately has 0 rows (ref-only groups with no resolvable member) and the
+  // reader expects the dataset to be present. The two 3D tables are NOT forced:
+  // they were guarded on their own row counts and must stay ABSENT when empty,
+  // which is how `pred_points_3d` is missing from a user-only project.
+  const hasFrameGroups = fgTable.total > 0;
+  fgTable.finish(hasFrameGroups);
+  igTable.finish(hasFrameGroups);
+  memberTable.finish(hasFrameGroups);
+  pts3dTable.finish(false);
+  predPts3dTable.finish(false);
+  if (hasFrameGroups) {
     if (fgMeta.some((s) => s.length > 0)) {
       file.create_dataset({
         name: "session_data/frame_group_meta",

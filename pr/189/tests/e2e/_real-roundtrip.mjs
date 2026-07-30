@@ -251,6 +251,15 @@ try {
         const servedName = RELOAD_FILE ? path.basename(RELOAD_FILE) : path.basename(OUT_SLP);
         const RELOAD_ABS = path.isAbsolute(RELOAD_FILE || '')
             ? RELOAD_FILE : path.join(repoRoot, servedName);
+        // CLOSE PAGE 1 FIRST. It still holds the entire post-Track-All +
+        // post-Triangulate-All + post-save heap (~2.9 GB on the real project), and
+        // it is same-origin with page 2, so Chrome puts both in ONE renderer
+        // process sharing ONE ~3.76 GB JS-heap cap. Leaving it open made every
+        // reload-stage heap number double-count, and made a save-after-reload look
+        // like it crashed on its own footprint when really it was competing with a
+        // page a user would never still have open. A user REFRESHES: one document
+        // at a time, same process — which is what closing page 1 here models.
+        await page.close();
         const page2 = await browser.newPage();
         page2.on('pageerror', e => log(`  [${el()}] [p2 pageerror] ` + String(e).slice(0, 300)));
         page2.on('crash', () => { log(`  [${el()}] *** p2 RENDERER CRASHED ***`); fails++; });
