@@ -2431,6 +2431,10 @@ export async function exportLabels() {
         var first = true;
         var nFrames = 0;
         await sweepLazyFrameWindows(session, async function (frameIdx, fg) {
+            // `fg` is undefined for a frame with 3D grouping but no resident 2D
+            // (see the sweep's contract). This exporter emits 2D, so such a frame
+            // has nothing to write.
+            if (!fg) return;
             var frameData = {};
             var any = false;
             for (var [camName, instances] of fg.instances) {
