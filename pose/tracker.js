@@ -24,7 +24,7 @@ import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pos
 import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
 import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
 import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
-import { loadAllLazyFrames, batchLoadLazyFrames } from './triangulation.js';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 
@@ -109,7 +109,16 @@ function epipolarScore(instA, camA, instB, camB) {
         var w = nodeWeight(k);
         if (w <= 0) continue;
         var x1 = ptA[0], y1 = ptA[1];
-        var x2 = ptsB[k][0], y2 = ptsB[k][1];
+        // `ptB` — the reusable buffer `instB.readPoint(k, ptB)` just filled.
+        // Was `ptsB[k]`, a leftover from the pre-#185 boxed per-node arrays that
+        // this loop replaced; `ptsB` has not existed since, so every call threw
+        // `ReferenceError: ptsB is not defined`. Unreachable from the app (the
+        // live tracker is `CrossViewTracker`; `matchFrameInstances` is
+        // bench/test-only surface with no app caller), which is how it survived —
+        // but `tests/test-tracker-luc3d.mjs` covers this path and was failing
+        // outright, and it is not part of the `test-runner.html` suite that
+        // `run-unit-tests.mjs` drives, so nothing reported it.
+        var x2 = ptB[0], y2 = ptB[1];
         var l0 = F[0][0]*x1 + F[0][1]*y1 + F[0][2];
         var l1 = F[1][0]*x1 + F[1][1]*y1 + F[1][2];
         var l2 = F[2][0]*x1 + F[2][1]*y1 + F[2][2];
@@ -987,104 +996,24 @@ export async function runCrossViewTrackerProgress(session, cameras, frameIndices
     return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
 
-/** Mirrors `ui/export-modals.js`'s private `frameGroupHasUserInstances` (kept
- * local rather than shared to avoid a new cross-module import for one small
- * pure helper) — true if a FrameGroup carries any user-authored instance. */
-function frameGroupHasUserInstances(fg) {
-    for (var [, insts] of fg.instances) {
-        for (var i = 0; i < insts.length; i++) {
-            if (insts[i] && insts[i].type === 'user') return true;
-        }
-    }
-    for (var [, uInsts] of fg.unlinkedInstances) {
-        for (var j = 0; j < uInsts.length; j++) {
-            if (uInsts[j] && uInsts[j].instance && uInsts[j].instance.type === 'user') return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Windowed sibling of `runCrossViewTrackerProgress` for a windowing-capable
- * lazy loader (`SioLazyLoader` — memory-bounded phase-5 sessions). The
- * cross-view tracker is sequential (`stepTrackerFrame` only ever reads the
- * CURRENT frame's `FrameGroup`; all cross-frame state lives in `run.trk`/
- * `run.trackToIdentity`, not in `session.frameGroups`), so — mirroring
- * `ui/export-modals.js`'s `sweepTriangulationFrames` — this walks
- * `0..loader.nFrames` in windows, materializes each window
- * (`batchLoadLazyFrames`), steps the tracker over it, then releases it
- * (dropping predicted-only `FrameGroup`s — they rebuild from the columnar
- * store on demand; identities/instanceGroups already live in
- * `session.identities`/`session.instanceGroups`, untouched by the release).
- *
- * This replaces `trackAll()`'s previous `loadAllLazyFrames()` (materializing
- * the WHOLE ~108k-frame project into `frameGroups` before tracking even
- * starts) with a bounded window — measured to cut a 108k-frame×3-camera
- * session's Track-All-time peak by roughly the full-materialization cost
- * (~1+ GB), critical headroom for sequential multi-session processing where
- * every GB matters (see `saveAllSessionsStreaming` / the multi-session save
- * plan).
- */
-/**
- * No `--expose-gc` in a real browser — a large, immediately-discarded
- * allocation typically forces V8 to prove it has room (or reclaim some)
- * before granting it, nudging a collection sooner than just waiting would.
- * Real-data testing showed a released window's garbage can otherwise pile up
- * across a whole ~108k-frame/~54-window sweep. Best-effort only.
- */
-async function encourageGC(totalMB) {
-    // See the identical helper in import-export/save-load.js for why this
-    // allocates toward the real heap ceiling rather than a token amount — a
-    // modest allocation is trivially satisfied from free space without V8
-    // bothering to run the mark-compact pass that actually reclaims a large,
-    // promoted-to-old-space object graph like a released window's data.
-    var junk = [];
-    try {
-        var chunkMB = 100;
-        var n = Math.ceil((totalMB || 800) / chunkMB);
-        for (var i = 0; i < n; i++) {
-            var buf = new ArrayBuffer(chunkMB * 1024 * 1024);
-            new Uint8Array(buf)[0] = 1;
-            junk.push(buf);
-        }
-    } catch (e) { /* ignore — hitting real pressure is the point */ }
-    junk = null;
-    await new Promise(function (r) { setTimeout(r, 50); });
-}
-
 async function sweepTrackAllFrames(session, cameras, maxTargets, onProgress, windowSize) {
     var run = createTrackerRun(session, cameras, maxTargets);
-    var loader = session.lazyLoader;
-    var total = loader.nFrames;
-    var W = windowSize || 2000;
+    var total = session.lazyLoader.nFrames;
     var done = 0;
-    var windowCount = 0;
     var stride = Math.max(1, Math.ceil(total / 20));
-    for (var start = 0; start < total; start += W) {
-        var end = Math.min(start + W, total);
-        await batchLoadLazyFrames(start, end - start);
-        for (var fi = start; fi < end; fi++) {
-            stepTrackerFrame(session, run, fi);
-            done++;
-            if (onProgress && (done % stride === 0 || done === total)) {
-                await onProgress(done, total);
-            }
+    // The hydrate-window/process/release/GC mechanics live in
+    // `sweepLazyFrameWindows` (luc3d #195) — this was one of three identical
+    // copies. Behaviour is preserved exactly: `stepTrackerFrame` already
+    // early-returns on a frame with no `FrameGroup`, which is the same set the
+    // sweep skips, and the release policy (pin the on-screen frame + any
+    // user-edited frame) and GC cadence are the ones lifted from here.
+    await sweepLazyFrameWindows(session, function (fi) {
+        stepTrackerFrame(session, run, fi);
+        done++;
+        if (onProgress && (done % stride === 0 || done === total)) {
+            return onProgress(done, total);
         }
-        // Release the window — keep the on-screen current frame and any
-        // user-edited frame; everything else is predicted-only and rebuildable.
-        for (var rf = start; rf < end; rf++) {
-            if (rf === state.currentFrame) continue;
-            var rfg = session.frameGroups.get(rf);
-            if (rfg && !frameGroupHasUserInstances(rfg)) session.frameGroups.delete(rf);
-        }
-        loader.releaseWindow(start, end);
-        windowCount++;
-        // Every few windows, nudge + yield so released windows don't just
-        // pile up as uncollected garbage across the whole sweep.
-        if (windowCount % 5 === 0) {
-            await encourageGC(800);
-        }
-    }
+    }, { window: windowSize || 2000 });
     return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
 

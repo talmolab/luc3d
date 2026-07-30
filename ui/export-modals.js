@@ -14,11 +14,11 @@ import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
     loadAllLazyFrames,
-    batchLoadLazyFrames,
     triangulateMultiFrameInstances,
     sessionHasCalibration,
     showCalibrationRequiredPopup,
     getInstanceGroupsForFrame,
+    sweepLazyFrameWindows,
 } from '../pose/triangulation.js';
 import { Viewport3D } from './viewport3d.js';
 import { getTrackColor, getGroupColor } from './overlays.js';
@@ -232,129 +232,16 @@ export function showGroupByTrackModal() {
 // ============================================
 
 /**
- * Group instances by their assigned Identity (from tracker), then triangulate.
- * Uses session.getIdentityIdForTrack (per-frame identity) per camera:trackIdx.
- * For each frame, groups instances that share the same identity into InstanceGroups,
- * then triangulates each group.
- */
-/**
- * True if a FrameGroup carries any user-authored instance (grouped or unlinked).
- * Decides which frames a windowed triangulation sweep may release: a predicted-only
- * frame's 2D data rebuilds on demand (its compact 3D result is kept in
- * session.instanceGroups), whereas a user-edited frame must stay resident.
- */
-function frameGroupHasUserInstances(fg) {
-    for (var [, insts] of fg.instances) {
-        for (var i = 0; i < insts.length; i++) {
-            if (insts[i] && insts[i].type === 'user') return true;
-        }
-    }
-    for (var [, uInsts] of fg.unlinkedInstances) {
-        for (var j = 0; j < uInsts.length; j++) {
-            if (uInsts[j] && uInsts[j].instance && uInsts[j].instance.type === 'user') return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Drive a bulk per-frame triangulation over an ENTIRE session — memory-bounded on
- * large lazy `.slp` sessions.
+ * Thin wrapper over the shared `sweepLazyFrameWindows` (luc3d #195).
  *
- * For a windowing-capable lazy loader (SioLazyLoader): walk 0..nFrames in windows,
- * materialize each window into session.frameGroups (batchLoadLazyFrames), invoke
- * `onFrame(frameIdx, fg)` per resident frame, then RELEASE the window — dropping
- * predicted-only frameGroups (they rebuild on navigation; their compact 3D result
- * lives in session.instanceGroups) and the loader's internal typed-frame caches via
- * releaseWindow. Peak stays at one window instead of the whole ~108k×3 graph, so
- * this no longer re-OOMs the way `loadAllLazyFrames` + full iteration did — and it
- * fixes the silent-drop bug (only resident/visited frames were processed before).
- *
- * For non-lazy sessions (all frames resident) and worker-backed lazy sessions
- * (small analysis `.h5`, materialized up front) it iterates the resident
- * frameGroups exactly as before.
- *
- * @returns {Promise<number>} number of frames processed.
+ * This used to be a full third copy of the hydrate-window/process/release
+ * mechanics — identical to `sweepTrackAllFrames` in `pose/tracker.js` and to the
+ * windowing inlined in `triangulateAllFrames`. Consolidated so the memory
+ * behaviour of every bulk sweep is defined in exactly one place; kept as a named
+ * local so this module's call sites read unchanged.
  */
-// No `--expose-gc` in a real browser — a large, immediately-discarded
-// allocation typically forces V8 to prove it has room (or reclaim some)
-// before granting it, nudging a collection sooner than just waiting would.
-// Real-data testing showed a released window's garbage can otherwise pile up
-// across a whole ~108k-frame sweep. Best-effort only — see pose/tracker.js's
-// identical helper (`sweepTrackAllFrames`), duplicated here to avoid a new
-// cross-module import for one small pure helper.
-async function encourageGC(totalMB) {
-    // See the identical helper in import-export/save-load.js for why this
-    // allocates toward the real heap ceiling rather than a token amount.
-    var junk = [];
-    try {
-        var chunkMB = 100;
-        var n = Math.ceil((totalMB || 800) / chunkMB);
-        for (var i = 0; i < n; i++) {
-            var buf = new ArrayBuffer(chunkMB * 1024 * 1024);
-            new Uint8Array(buf)[0] = 1;
-            junk.push(buf);
-        }
-    } catch (e) { /* ignore — hitting real pressure is the point */ }
-    junk = null;
-    await new Promise(function (r) { setTimeout(r, 50); });
-}
-
 async function sweepTriangulationFrames(session, onFrame, opts) {
-    opts = opts || {};
-    var loader = session.lazyLoader;
-    var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
-    var YIELD_EVERY = 100;
-    var processed = 0;
-
-    if (windowed) {
-        var W = opts.window || 2000;
-        var total = loader.nFrames;
-        var windowCount = 0;
-        for (var start = 0; start < total; start += W) {
-            var end = Math.min(start + W, total);
-            await batchLoadLazyFrames(start, end - start);
-            for (var fi = start; fi < end; fi++) {
-                var fg = session.frameGroups.get(fi);
-                if (!fg) continue;
-                onFrame(fi, fg);
-                processed++;
-                if (processed % YIELD_EVERY === 0) {
-                    if (opts.onProgress) opts.onProgress(processed, total);
-                    await new Promise(function (r) { setTimeout(r, 0); });
-                }
-            }
-            // Release the window. Keep the on-screen current frame and any
-            // user-edited frame; everything else is predicted-only and rebuildable.
-            for (var rf = start; rf < end; rf++) {
-                if (rf === state.currentFrame) continue;
-                var rfg = session.frameGroups.get(rf);
-                if (rfg && !frameGroupHasUserInstances(rfg)) session.frameGroups.delete(rf);
-            }
-            loader.releaseWindow(start, end);
-            windowCount++;
-            if (windowCount % 5 === 0) {
-                await encourageGC(800);
-            }
-        }
-        return processed;
-    }
-
-    // Worker-backed lazy sessions (small analysis .h5) still materialize up front;
-    // non-lazy sessions already hold every frame.
-    if (loader) await loadAllLazyFrames(opts.onStatus);
-    var idxs = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
-    for (var j2 = 0; j2 < idxs.length; j2++) {
-        var fg2 = session.frameGroups.get(idxs[j2]);
-        if (!fg2) continue;
-        onFrame(idxs[j2], fg2);
-        processed++;
-        if (processed % YIELD_EVERY === 0) {
-            if (opts.onProgress) opts.onProgress(processed, idxs.length);
-            await new Promise(function (r) { setTimeout(r, 0); });
-        }
-    }
-    return processed;
+    return await sweepLazyFrameWindows(session, onFrame, opts);
 }
 
 export async function groupByIdentityAndTriangulateAll() {

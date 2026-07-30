@@ -2038,99 +2038,63 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     var totalGroups = 0;
     var totalErrors = [];
 
-    for (var f = startFrame; f <= endFrame; f++) {
+    // MEMORY / CORRECTNESS (luc3d #195): sweep the range through
+    // `sweepLazyFrameWindows` so each frame's 2D is HYDRATED before it is
+    // triangulated. This loop used to read `session.instanceGroups.get(f)`
+    // directly and triangulate from whatever 2D happened to be resident — which
+    // on a lazily reopened project is a handful of frames, so a range
+    // re-triangulation silently did almost nothing (the same defect as
+    // `triangulateAllFrames`, luc3d #194). The sweep hydrates and releases in
+    // 2,000-frame windows, so a range covering the whole project is bounded.
+    await sweepLazyFrameWindows(session, function (f) {
         var frameGroupsList2 = session.instanceGroups.get(f);
-        if (frameGroupsList2) {
-            var frameResults = [];
+        if (!frameGroupsList2) return;
+        var frameResults = [];
 
-            for (var gi = 0; gi < frameGroupsList2.length; gi++) {
-                var group = frameGroupsList2[gi];
+        for (var gi = 0; gi < frameGroupsList2.length; gi++) {
+            var group = frameGroupsList2[gi];
+            // Camera-name fixup + >=2-usable-view gate + points3d/usedCameras
+            // stores are shared with the other two paths (see
+            // `_triangulateGroupStep`).
+            var step = _triangulateGroupStep(group, cameras, method);
+            if (!step) continue;
+            var result = step.result;
 
-                // Resolve camera name mismatches
-                var groupKeys = group.cameraNames;
-                for (var ki = 0; ki < groupKeys.length; ki++) {
-                    var gk = groupKeys[ki];
-                    if (!cameras.some(function (c) { return c.name === gk; })) {
-                        var gkLower = gk.toLowerCase();
-                        for (var ci = 0; ci < cameras.length; ci++) {
-                            var camLower = cameras[ci].name.toLowerCase();
-                            if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
-                                if (!group.getInstance(cameras[ci].name)) {
-                                    var inst = group.getInstance(gk);
-                                    group.instances.delete(gk);
-                                    group.instances.set(cameras[ci].name, inst);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+            group.reprojections = result.reprojections;
+            // NOT storeReprojectedInstances here — this is a bulk sweep (the range
+            // can span the entire project); eagerly building a full Instance (+ its
+            // own `occluded` array) per camera per group here was a major memory
+            // cost never needed by SLP save/export. Display and export instead
+            // resolve on demand via getOrComputeReprojectedInstance.
+            group.markClean();
+            totalGroups++;
 
-                // Count views with labels
-                var viewsWithLabels = 0;
-                for (var cj = 0; cj < cameras.length; cj++) {
-                    var inst2 = group.getInstance(cameras[cj].name);
-                    if (inst2 && inst2.hasAnyUsablePoint()) {
-                        viewsWithLabels++;
-                    }
-                }
-                if (viewsWithLabels < 2) continue;
+            frameResults.push({
+                group: group,
+                points3d: result.points3d,
+                reprojections: result.reprojections,
+                errors: result.errors,
+                errorsUndistorted: result.errorsUndistorted,
+                meanError: result.meanError,
+                meanErrorUndistorted: result.meanErrorUndistorted,
+                method: result.method,
+            });
 
-                var groupCamNames = group.cameraNames;
-                var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
-                var result = triangulateAndReproject(group, groupCameras, { method: method });
-                group.triangulationMethod = result.method;
-
-                group.reprojections = result.reprojections;
-                group.points3d = result.points3d;
-                // NOT storeReprojectedInstances here — this is a bulk, whole-
-                // range sweep (can span the entire project); eagerly building a
-                // full Instance (+ its own `occluded` array) per camera per
-                // group here was a major memory cost never needed by SLP save/
-                // export. Display and export instead resolve on demand via
-                // getOrComputeReprojectedInstance, from `.reprojections` above.
-                group.usedCameras = new Set();
-                for (var ck = 0; ck < groupCameras.length; ck++) {
-                    var camInst = group.getInstance(groupCameras[ck].name);
-                    if (camInst) {
-                        if (camInst.hasAnyPoint()) {
-                            group.usedCameras.add(groupCameras[ck].name);
-                        }
-                    }
-                }
-                group.markClean();
-                totalGroups++;
-
-                frameResults.push({
-                    group: group,
-                    points3d: result.points3d,
-                    reprojections: result.reprojections,
-                    errors: result.errors,
-                    errorsUndistorted: result.errorsUndistorted,
-                    meanError: result.meanError,
-                    meanErrorUndistorted: result.meanErrorUndistorted,
-                    method: result.method,
-                });
-
-                if (result.meanError != null) {
-                    totalErrors.push(result.meanError);
-                }
-            }
-
-            if (frameResults.length > 0) {
-                state.triangulationResults.set(f, frameResults);
-                triangulated++;
+            if (result.meanError != null) {
+                totalErrors.push(result.meanError);
             }
         }
 
+        if (frameResults.length > 0) {
+            state.triangulationResults.set(f, frameResults);
+            triangulated++;
+        }
         completed++;
-        if (onProgress) onProgress(completed, totalFrames);
-
-        // Yield to UI for progress bar updates every 50 frames
-        if (completed % 50 === 0) {
-            await new Promise(function (r) { setTimeout(r, 0); });
-        }
-    }
+    }, {
+        start: startFrame,
+        end: endFrame,
+        onProgress: function () { if (onProgress) onProgress(completed, totalFrames); },
+    });
 
     return { triangulated: triangulated, totalGroups: totalGroups, totalErrors: totalErrors };
 }
@@ -2588,6 +2552,117 @@ function _triangulateGroupStep(group, cameras, method) {
 }
 
 /**
+ * THE memory-bounded frame sweep. Hydrate a window of lazy frames → run
+ * `onFrame` over it → release it → periodically force a real collection.
+ *
+ * Every bulk operation over "every frame" must go through this. A loop over
+ * `session.frameGroups` sees only what is RESIDENT, which on a lazily reopened
+ * project is a handful of frames (measured: 31 of 180,210) — so such a loop
+ * silently processes ~nothing, returns a plausible count, and its result gets
+ * saved. That single mistake has produced every bug in this class so far:
+ * `trackAll` (luc3d #185 notes), `triangulateAllFrames` (#194),
+ * `exportLabels`/`swapTracks` (#195). Conversely, `loadAllLazyFrames` +
+ * iterate-everything is the OTHER failure mode — materializing 2D for 180,210
+ * frames × 5 cameras at once is the renderer OOM the memory work exists to
+ * prevent. This is the shape that is neither.
+ *
+ * Consolidated from three previously-independent copies (`sweepTrackAllFrames`
+ * in `pose/tracker.js`, the private `sweepTriangulationFrames` in
+ * `ui/export-modals.js`, and the windowing formerly inlined in
+ * `sweepTriangulateAllFrames` below) — they had identical mechanics, and a
+ * fourth was about to be written for the #195 fixes. Lives here because
+ * `tracker.js` and `export-modals.js` already import from this module, so no new
+ * import cycle is created.
+ *
+ * `onFrame(frameIdx, frameGroup)` is called once per frame that has data, with
+ * that frame's 2D guaranteed hydrated. It may be async. Frames with no
+ * `FrameGroup` after hydration are skipped (no data ⇒ nothing to do).
+ *
+ * IMPORTANT — what does NOT survive: after each window, non-user frames are
+ * dropped from `session.frameGroups` and the loader window is released, so any
+ * mutation `onFrame` made to a *predicted* instance's fields is LOST (the frame
+ * is rebuilt from the columnar store on next hydration). Mutations must either
+ * land in a durable structure (the store's own columns, `frameIdentityMap`,
+ * `instanceGroups`) or mark the instance user-edited so its frame is pinned.
+ *
+ * `opts.start`/`opts.end` (inclusive) restrict the sweep to a frame range — used
+ * by the range operations (Triangulate Range). Omit both to sweep everything.
+ *
+ * @param {Object} session                LUCID Session
+ * @param {(frameIdx:number, fg:Object)=>void|Promise<void>} onFrame
+ * @param {{window?:number, onProgress?:Function, yieldEvery?:number,
+ *          gcEveryWindows?:number, gcMB?:number, start?:number, end?:number}} [opts]
+ * @returns {Promise<number>} frames processed
+ */
+export async function sweepLazyFrameWindows(session, onFrame, opts) {
+    opts = opts || {};
+    var loader = session.lazyLoader;
+    var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
+    var YIELD_EVERY = opts.yieldEvery || 100;
+    var gcEvery = opts.gcEveryWindows || 5;
+    var gcMB = opts.gcMB || 800;
+    var processed = 0;
+
+    if (windowed) {
+        var W = opts.window || 2000;
+        var from = opts.start != null ? Math.max(0, opts.start) : 0;
+        var to = opts.end != null ? Math.min(loader.nFrames - 1, opts.end) : loader.nFrames - 1;
+        var total = Math.max(0, to - from + 1);
+        var windowCount = 0;
+        for (var start = from; start <= to; start += W) {
+            var end = Math.min(start + W, to + 1);
+            await batchLoadLazyFrames(start, end - start);
+            for (var fi = start; fi < end; fi++) {
+                var fg = session.frameGroups.get(fi);
+                if (!fg) continue;
+                await onFrame(fi, fg);
+                processed++;
+                if (processed % YIELD_EVERY === 0) {
+                    // Awaited: Track All's progress callback repaints a live
+                    // counter and must be allowed to finish before the next chunk.
+                    if (opts.onProgress) await opts.onProgress(processed, total);
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+            }
+            // Release the window. Keep the on-screen current frame and any
+            // user-edited frame; everything else is predicted-only and rebuildable.
+            for (var rf = start; rf < end; rf++) {
+                if (rf === state.currentFrame) continue;
+                var rfg = session.frameGroups.get(rf);
+                if (rfg && !_fgHasUserInstances(rfg)) session.frameGroups.delete(rf);
+            }
+            loader.releaseWindow(start, end);
+            windowCount++;
+            // `end` is an absolute frame index; progress is a COUNT within the
+            // (possibly offset) range, so subtract the range start.
+            if (opts.onProgress) await opts.onProgress(Math.min(end - from, total), total);
+            if (windowCount % gcEvery === 0) await _encourageGC(gcMB);
+        }
+        return processed;
+    }
+
+    // Worker-backed lazy sessions (small analysis .h5, no windowing) still
+    // materialize up front; non-lazy sessions already hold every frame.
+    if (loader) await loadAllLazyFrames(opts.onStatus);
+    var lo = opts.start != null ? opts.start : -Infinity;
+    var hi = opts.end != null ? opts.end : Infinity;
+    var idxs = Array.from(session.frameGroups.keys())
+        .filter(function (k) { return k >= lo && k <= hi; })
+        .sort(function (a, b) { return a - b; });
+    for (var j = 0; j < idxs.length; j++) {
+        var fg2 = session.frameGroups.get(idxs[j]);
+        if (!fg2) continue;
+        await onFrame(idxs[j], fg2);
+        processed++;
+        if (processed % YIELD_EVERY === 0) {
+            if (opts.onProgress) opts.onProgress(processed, idxs.length);
+            await new Promise(function (r) { setTimeout(r, 0); });
+        }
+    }
+    return processed;
+}
+
+/**
  * Memory-bounded Triangulate All for a lazily-reopened project.
  *
  * ## Why this exists
@@ -2633,9 +2708,7 @@ function _triangulateGroupStep(group, cameras, method) {
  * with no 3D at all.
  */
 async function sweepTriangulateAllFrames(session, cameras, method) {
-    var loader = session.lazyLoader;
-    var total = loader.nFrames;
-    var W = 2000;
+    // Windowing/hydration/release all live in `sweepLazyFrameWindows`.
 
     // Clear derived state project-wide before starting (see docstring).
     state.triangulationResults.clear();
@@ -2648,41 +2721,28 @@ async function sweepTriangulateAllFrames(session, cameras, method) {
     }
 
     var stats = { frames: 0, groups: 0, skipped: 0, errSum: 0, errN: 0 };
-    var windowCount = 0;
-    for (var start = 0; start < total; start += W) {
-        var end = Math.min(start + W, total);
-        await batchLoadLazyFrames(start, end - start);
-        for (var fi = start; fi < end; fi++) {
-            var list = ensureGroupsFromIdentities(session, fi);
-            if (!list || list.length === 0) continue;
-            var anyInFrame = false;
-            for (var gi = 0; gi < list.length; gi++) {
-                var step = _triangulateGroupStep(list[gi], cameras, method);
-                if (!step) { stats.skipped++; continue; }
-                list[gi].markClean();
-                stats.groups++;
-                anyInFrame = true;
-                if (step.result.meanError != null) {
-                    stats.errSum += step.result.meanError;
-                    stats.errN++;
-                }
+    await sweepLazyFrameWindows(session, function (fi) {
+        var list = ensureGroupsFromIdentities(session, fi);
+        if (!list || list.length === 0) return;
+        var anyInFrame = false;
+        for (var gi = 0; gi < list.length; gi++) {
+            var step = _triangulateGroupStep(list[gi], cameras, method);
+            if (!step) { stats.skipped++; continue; }
+            list[gi].markClean();
+            stats.groups++;
+            anyInFrame = true;
+            if (step.result.meanError != null) {
+                stats.errSum += step.result.meanError;
+                stats.errN++;
             }
-            if (anyInFrame) stats.frames++;
         }
-        // Release the window — keep the on-screen frame and any user-edited
-        // frame; everything else is rebuildable from the store.
-        for (var rf = start; rf < end; rf++) {
-            if (rf === state.currentFrame) continue;
-            var rfg = session.frameGroups.get(rf);
-            if (rfg && !_fgHasUserInstances(rfg)) session.frameGroups.delete(rf);
-        }
-        loader.releaseWindow(start, end);
-        windowCount++;
-        showLoading('Triangulating... ' + end + '/' + total + ' frames (' +
-            stats.groups.toLocaleString() + ' groups)');
-        await new Promise(function (r) { setTimeout(r, 0); });
-        if (windowCount % 5 === 0) await _encourageGC(800);
-    }
+        if (anyInFrame) stats.frames++;
+    }, {
+        onProgress: function (done, tot) {
+            showLoading('Triangulating... ' + done + '/' + tot + ' frames (' +
+                stats.groups.toLocaleString() + ' groups)');
+        },
+    });
     return stats;
 }
 
