@@ -758,6 +758,32 @@ measured at ~0 MB, so there was nothing to win by converting them. **That "~0 MB
 holds PER FRAME only** — see the windowed Triangulate All note below, which must
 not retain them project-wide.
 
+**THE bulk-sweep primitive: `sweepLazyFrameWindows` (luc3d #195).** Exported from
+this module and used by EVERY operation that must touch every frame. Hydrate a
+2,000-frame window (`batchLoadLazyFrames`) → run the callback → drop the window's
+non-user `frameGroups` (pinning the on-screen frame and any user-edited frame) →
+`releaseWindow` → force a real collection every 5 windows. `opts.start`/`opts.end`
+restrict it to a range. It replaced three byte-identical copies
+(`sweepTrackAllFrames` in `pose/tracker.js`, the private `sweepTriangulationFrames`
+in `ui/export-modals.js`, and the windowing inlined in `sweepTriangulateAllFrames`);
+those now delegate to it, and their local `frameGroupHasUserInstances`/
+`encourageGC` copies are gone.
+
+Rule of thumb: a `for (... of session.frameGroups)` loop in a BULK operation is a
+bug. That map holds only RESIDENT frames — 31 of 180,210 on the real reopened
+project — so such a loop silently processes ~nothing and returns a plausible count.
+The opposite mistake is `loadAllLazyFrames` + iterate, which materializes 2D for
+every frame × camera at once and OOMs the renderer. `sweepLazyFrameWindows` is the
+shape that is neither.
+
+**IMPORTANT — mutations do not survive the sweep.** After each window, non-user
+frames are dropped and rebuilt from the columnar store on next hydration, so
+mutating a PREDICTED instance's fields inside `onFrame` is lost. Durable edits must
+land in the store's own columns (see `SioLazyLoader.remapTracksFromIdentity`),
+in `frameIdentityMap`, or in `instanceGroups` — or must mark the instance
+user-edited so its frame is pinned. This is why the track-swap fixes
+(`ui/identity-assignment.js`, luc3d #195) write the store rather than sweeping.
+
 **Triangulate All is windowed on a lazy project (luc3d #194).**
 `triangulateAllFrames` dispatches on the same `windowed` capability check
 `trackAll` uses (`lazyLoader.isSync && typeof releaseWindow === 'function'`). With

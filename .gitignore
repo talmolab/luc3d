@@ -50,3 +50,5 @@ scripts/bench/node_modules/
 .sleap-io-build/
 _bugdata
 _real-roundtrip-*.slp
+# sequence-workflow harness fixtures/outputs (tests/e2e/sequence-lazy-workflow.mjs)
+_seq-*.slp

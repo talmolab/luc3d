@@ -1042,7 +1042,12 @@ export function setupMenus() {
 
     document.getElementById('menuExportLabels').addEventListener('click', function () {
         closeMenus();
-        exportLabels();
+        // `exportLabels` became async when it started streaming through a windowed
+        // sweep (luc3d #195) — catch here so a failure surfaces instead of becoming
+        // an unhandled rejection.
+        Promise.resolve(exportLabels()).catch(function (e) {
+            console.error('[menuExportLabels] export failed:', e);
+        });
     });
 
     // Deprecated: "Export 2D SLP (All Views)" was removed from the File menu.
