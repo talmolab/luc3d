@@ -115,10 +115,25 @@ function identityNearest(result, centroid) {
     }
     return best ? best.identityId : null;
 }
+// `targets3d[].points3d` comes from `triangulatePoints`, which returns a FLAT
+// `Float64Array(3N)` (luc3d #189) with NaN for a missing keypoint — not boxed
+// `[x,y,z]` rows. `for (const p of pts3d)` iterates NUMBERS over a typed array, so
+// `p[0]` was `undefined` and every centroid came out NaN. That is what broke
+// "targets separated in X" and "identities resolved in both frames"; the tracker
+// itself was fine. Boxed input still accepted.
 function centroidOf(pts3d) {
     if (!pts3d) return null;
     let sx = 0, sy = 0, sz = 0, n = 0;
-    for (const p of pts3d) { if (p) { sx += p[0]; sy += p[1]; sz += p[2]; n++; } }
+    if (ArrayBuffer.isView(pts3d)) {
+        for (let k = 0; k + 2 < pts3d.length; k += 3) {
+            const x = pts3d[k], y = pts3d[k + 1], z = pts3d[k + 2];
+            if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+                sx += x; sy += y; sz += z; n++;
+            }
+        }
+    } else {
+        for (const p of pts3d) { if (p) { sx += p[0]; sy += p[1]; sz += p[2]; n++; } }
+    }
     return n ? [sx / n, sy / n, sz / n] : null;
 }
 
