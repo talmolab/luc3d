@@ -590,6 +590,75 @@ try {
     }
 
     // =========================================================
+    // CYCLE 5b — DELETE A TRACK (durable re-index)
+    // =========================================================
+    // `deleteTrackAt` splices the name out of `session.tracks` and re-indexes
+    // instances (deleted -> trackless, higher -> shift down one). On a lazy
+    // project the persistent assignment is the store's track column, so without
+    // the #195 store re-index this was silent project-wide CORRUPTION: every
+    // instance above the deleted index would be saved pointing at the wrong track.
+    //
+    // Set up a third track and move every animal-1 instance onto it, then delete
+    // the now-empty track index 1 and require: (a) instances that were on track 2
+    // shifted down to 1, (b) no group was dissolved (nothing was on the deleted
+    // track), and (c) that survives save+reload.
+    //
+    // The move goes through the app's own `swapTracks`, NOT a raw
+    // `loader.remapTracksFromIdentity`. That distinction is the test: a raw store
+    // remap leaves the project-wide `instanceGroups` placeholders holding their
+    // old `trackIdx`, and `deleteTrackAt` decides what to DISSOLVE from exactly
+    // that field — so the bypass would have this step dissolve half the project's
+    // groups while the store says otherwise. The app must never reach that state,
+    // so the harness must not manufacture it; every store writer syncs memory.
+    const delRes = await runOp('DELETE TRACK (index 1 of 3)', async () => {
+        const ops = await import('/ui/track-identity-ops.js');
+        const ident = await import('/ui/identity-assignment.js');
+        const s = window.__lucid.state.session;
+        if (s.tracks.length < 3) s.tracks.push('track_2');
+        // Move every animal-1 instance to the new track 2 (store + memory).
+        ident.swapTracks(1, 2, 0, Infinity);
+        const before = { tracks: s.tracks.slice() };
+        let deleted = null;
+        try { deleted = ops.deleteTrackAt(s, 1); }
+        catch (e) { return { err: String(e && e.stack || e).slice(0, 400) }; }
+        // Count store rows per track AFTER the delete.
+        const counts = {};
+        const loader = s.lazyLoader;
+        if (loader && loader.forEachInstanceRow) {
+            loader.forEachInstanceRow((cam, f, trk) => { counts[trk] = (counts[trk] || 0) + 1; });
+        }
+        return { deleted, before, tracksAfter: s.tracks.slice(), storeCounts: counts };
+    });
+    check('deleteTrackAt did not throw', !(delRes.r && delRes.r.err), delRes.r && delRes.r.err);
+    if (delRes.r && !delRes.r.err) {
+        const c = delRes.r.storeCounts || {};
+        // Everything that was on track 2 must now be on track 1; nothing may be
+        // left referencing an index at/beyond the shortened list, and nothing may
+        // still sit on the old index 2.
+        const nTracks = delRes.r.tracksAfter.length;
+        const stale = Object.keys(c).map(Number).filter(t => t >= nTracks);
+        check('no store row references a track index past the shortened list',
+            stale.length === 0, { stale, nTracks, counts: c });
+        check('rows from the shifted track landed on the new index',
+            (c[1] || 0) > 0, { counts: c });
+    }
+    const save5b = await save('c5b');
+    const s6b = await reopen(save5b.target, 'after track delete');
+    check('groups survived track delete', s6b.groups === GROUPS, { got: s6b.groups, want: GROUPS });
+    const badDel = [];
+    for (const p of s6b.probes) {
+        for (const t of p.tracks) {
+            const v = t.split(':')[1];
+            if (v === 'undefined' || v === 'NaN') { badDel.push(`f${p.f} ${t}`); continue; }
+            if (v === 'null') continue;               // trackless is legitimate here
+            const n = Number(v);
+            if (!Number.isInteger(n) || n < 0 || n >= Math.max(1, s6b.tracks)) badDel.push(`f${p.f} ${t}`);
+        }
+    }
+    check('track indices remain in range after delete+save+reload',
+        badDel.length === 0, { bad: badDel.slice(0, 12), nTracks: s6b.tracks });
+
+    // =========================================================
     // CYCLE 6 — TRACK ALL on the reopened project
     // =========================================================
     // Direct coverage for `sweepTrackAllFrames`, which luc3d #195 re-pointed at the
