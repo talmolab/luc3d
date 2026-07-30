@@ -457,6 +457,73 @@
             const count = session.propagateIdentity(50, 'cam0', 0, 2);
             assertEqual(count, 2); // frames 50 and 100
         });
+
+        // RESIDENT-ONLY REGRESSION (the luc3d #194/#195 class). Assigning an
+        // identity in the info panel propagates it forward via this method, which
+        // walked `session.frameGroups` — the RESIDENT window (31 of 180,210 on the
+        // real project). So on a reopened project "propagate forward" silently
+        // stopped at the edge of the current window: nothing corrupted, almost
+        // nothing done. It now also sweeps the columnar store's track column.
+        it('propagates to NON-RESIDENT frames via the lazy store', function () {
+            const session = buildSession();          // resident: frames 50, 100
+            session.assignTrackToIdentity(0, 1, 'cam0');
+            session.assignTrackToIdentity(1, 2, 'cam0');
+            // `assignTrackToIdentity` is itself resident-only, so it wrote nothing
+            // for frame 4000. Set that frame's per-frame state explicitly: t0 → A,
+            // t1 → B, so propagating B onto t0 there is a genuine collider.
+            session.setFrameIdentity(4000, 'cam0', 0, 1);
+            session.setFrameIdentity(4000, 'cam0', 1, 2);
+            // The store knows about far more frames than are resident, including
+            // frames before startFrame and a trackless row.
+            const rows = [
+                ['cam0', 10, 0], ['cam0', 10, 1],       // before startFrame — untouched
+                ['cam0', 50, 0], ['cam0', 50, 1],       // resident — handled by the resident pass
+                ['cam0', 4000, 0], ['cam0', 4000, 1],   // non-resident, collider present
+                ['cam0', 4001, 0],                      // non-resident, no collider
+                ['cam0', 4002, -1],                     // trackless only — track absent
+                ['cam1', 4003, 0],                      // another camera — must be ignored
+            ];
+            session.lazyLoader = {
+                forEachInstanceRow: function (visitFn) {
+                    rows.forEach(function (r) { visitFn(r[0], r[1], r[2]); });
+                },
+            };
+
+            const count = session.propagateIdentity(50, 'cam0', 0, 2);
+
+            assertEqual(session.getIdentityIdForTrack('cam0', 0, 4000), 2,
+                'non-resident frame got the new identity');
+            assertEqual(session.getIdentityIdForTrack('cam0', 1, 4000), 1,
+                'collider on a non-resident frame was swapped, not duplicated');
+            assertEqual(session.getIdentityIdForTrack('cam0', 0, 4001), 2,
+                'non-resident frame with no collider got the new identity');
+            assertFalse(session.hasFrameIdentity(4002, 'cam0', 0),
+                'a frame where the track is absent is not written');
+            assertFalse(session.hasFrameIdentity(4003, 'cam1', 0),
+                'another camera is never touched');
+            assertFalse(session.hasFrameIdentity(10, 'cam0', 0),
+                'store frames before startFrame stay untouched');
+            assertEqual(count, 4, 'counts resident (50, 100) and non-resident (4000, 4001) frames once each');
+        });
+
+        it('resident state wins over the store for a frame that is both', function () {
+            // A resident frame can carry in-memory edits and unlinked instances the
+            // store does not know about, so the store pass must not re-derive it.
+            // Here the store claims frame 100 has only track 0, while the resident
+            // FrameGroup has both — the collider swap must still happen.
+            const session = buildSession();
+            session.assignTrackToIdentity(0, 1, 'cam0');
+            session.assignTrackToIdentity(1, 2, 'cam0');
+            session.lazyLoader = {
+                forEachInstanceRow: function (visitFn) { visitFn('cam0', 100, 0); },
+            };
+
+            session.propagateIdentity(50, 'cam0', 0, 2);
+
+            assertEqual(session.getIdentityIdForTrack('cam0', 0, 100), 2);
+            assertEqual(session.getIdentityIdForTrack('cam0', 1, 100), 1,
+                'the resident view of frame 100 drove the collider swap');
+        });
     });
 
     describe('Session.propagateIdentitiesToTracks — null IDs → null tracks', function () {
