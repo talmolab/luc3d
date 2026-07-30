@@ -185,6 +185,39 @@ python3 -m http.server 8080
   `createMatrixDatasetTyped`, all marked `// LUCID local patch (luc3d #190)`.
   Flushed bytes are unchanged — guarded by `tests/e2e/save-golden-digest.mjs`.
   **Re-apply after any re-vendor** (grep the marker) and report upstream.
+  **LOCAL PATCH (luc3d #191):** `lib/sleap-io/chunk-X76PRJK6.js` `writeSessions`
+  now **flushes the `/session_data` tables incrementally** instead of holding a
+  whole table live until one `create_dataset` call. #185/#190 made those rows
+  *typed*; they did not change the *shape* of the peak — every row still had to be
+  resident at once, which at the real project's scale is `frame_groups` 4.3 MB +
+  `instance_groups` 34 MB + `instance_group_members` 63 MB + `points_3d` 191 MB
+  ≈ **292 MB**, plus a same-sized copy into the WASM heap at flush time, plus up
+  to 2x for the doubling grow-sinks. That fits under the ~2,891 MB baseline a
+  fresh Track All + Triangulate All leaves — so the **first** save succeeds — but
+  NOT under the measured **4,156 MB post-reopen** baseline, where the renderer
+  dies inside save phase 2/4 (`writeSessions`). These are exactly the allocations
+  a large committed-but-dead V8 cage cannot absorb: typed-array backing stores and
+  h5wasm's heap live *outside* the pointer-compressed cage, so they add to total
+  process memory even when the cage has GBs of dead space (see
+  [[luc3d-save-oom-is-v8-heap-not-wasm]] and the #189/#190 notes). New
+  `LucidAppendTable` stages at most `SESSION_FLUSH_ROWS` (= `WRITE_CHUNK_ROWS`,
+  8192) rows in a **fixed, reused** buffer and `write_slice`s them into a
+  chunked/unlimited-`maxshape` dataset, making the writer's peak for these tables
+  **constant in project size**. Three consequences: the #185 counting pre-pass is
+  **gone** (nothing needs pre-sizing — also removes a full extra walk); datasets
+  are created **lazily on first flush**, so a table that never gets a row stays
+  absent (`pred_points_3d` on a user-only project), preserving the old
+  `if (rows > 0)` guards; and a table that **never overflows** is still written
+  one-shot and contiguous, so small projects stay **byte-identical** and
+  `tests/e2e/save-golden-digest.mjs` **MUST NOT move**. Guarded by
+  `tests/e2e/save-session-3d-typed-sink.mjs`, whose many-group scenario was raised
+  to 12,000 frame groups specifically so every table crosses a flush boundary and
+  the append path's running `[start, end)` bookkeeping is under test (it asserts
+  `NFG > 8192` so the coverage can't silently lapse). `createMatrixDatasetTyped` /
+  `Float64GrowSink` / `Float64RowSink` / `createGzipFloatMatrixTyped` are retained
+  as module surface but are no longer used by `writeSessions`. All sites marked
+  `// LUCID local patch (luc3d #191)`. **Re-apply after any re-vendor** (grep the
+  marker) and report upstream.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar

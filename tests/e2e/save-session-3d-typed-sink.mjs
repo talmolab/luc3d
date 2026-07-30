@@ -161,7 +161,15 @@ try {
     // group's slice still addresses its own points.
     const bulk = await page.evaluate(async () => {
         const SIO = window.SleapIO;
-        const NFG = 4000, NODES = 15;
+        // NFG must EXCEED the writer's SESSION_FLUSH_ROWS (8192, luc3d #191) so
+        // every table crosses a flush boundary and the INCREMENTAL-APPEND path is
+        // the one under test — at 12,000 frame groups that is 12,000 frame_group
+        // rows, 18,000 instance_group rows, 180,000 points_3d rows and 90,000
+        // pred_points_3d rows. Below 8,193 the writer takes its one-shot
+        // contiguous path instead and this scenario would silently stop covering
+        // the append path (and its running [start, end) slice bookkeeping across
+        // flushes, which is the part that can actually go wrong).
+        const NFG = 12000, NODES = 15;
         const skeleton = new SIO.Skeleton({
             name: 'sk', nodes: Array.from({ length: NODES }, (_, i) => 'n' + i),
         });
@@ -230,6 +238,10 @@ try {
     });
 
     LOG('  -- many-group scenario --');
+    // Guard the guard: if NFG ever drops to/below the flush threshold this
+    // scenario stops exercising the luc3d #191 append path at all.
+    check('scenario exceeds the writer flush threshold (8192 rows)',
+        bulk.NFG > 8192, bulk.NFG);
     check(`points_3d has exactly ${bulk.expUser} rows`,
         bulk.ptsShape[0] === bulk.expUser, bulk.ptsShape);
     check(`pred_points_3d has exactly ${bulk.expPred} rows`,
