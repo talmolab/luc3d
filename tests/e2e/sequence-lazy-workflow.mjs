@@ -590,6 +590,50 @@ try {
     }
 
     // =========================================================
+    // CYCLE 6 — TRACK ALL on the reopened project
+    // =========================================================
+    // Direct coverage for `sweepTrackAllFrames`, which luc3d #195 re-pointed at the
+    // shared `sweepLazyFrameWindows`. Track All is the most expensive path in the
+    // app and the one whose windowing must not regress: it RESETS
+    // `frameIdentityMap`/`instanceGroups` and rebuilds them for every frame, so if
+    // the sweep only visited resident frames the project would come back nearly
+    // empty — the original `trackAll` bug ("No frames to track"), one layer deeper.
+    const trackRes = await runOp('TRACK ALL', async () => {
+        // `trackerNumAnimals` is module-private and only settable through
+        // `promptNumAnimals()`, so drive the real path with a stubbed prompt
+        // rather than reaching into module state.
+        const origPrompt = window.prompt;
+        window.prompt = () => '2';
+        try {
+            const tk = await import('/pose/tracker.js');
+            const t = performance.now();
+            await tk.trackAll();
+            return { ms: Math.round(performance.now() - t) };
+        } catch (e) {
+            return { err: String(e && e.stack || e).slice(0, 400) };
+        } finally {
+            window.prompt = origPrompt;
+        }
+    });
+    check('Track All did not throw', !(trackRes.r && trackRes.r.err),
+        trackRes.r && trackRes.r.err);
+    check('Track All rebuilt grouping for ~every frame (not resident-only)',
+        trackRes.s.igFrames >= FRAMES * 0.95,
+        { igFrames: trackRes.s.igFrames, frames: FRAMES });
+    check('Track All rebuilt frameIdentityMap across the project',
+        trackRes.s.fim >= FRAMES * CAMS * 0.95,
+        { fim: trackRes.s.fim, expectAtLeast: Math.round(FRAMES * CAMS * 0.95) });
+    check('Track All released its windows (memory bounded)',
+        trackRes.s.resident < FRAMES / 10, { resident: trackRes.s.resident });
+
+    const save6 = await save('c6');
+    const s7 = await reopen(save6.target, 'after Track All');
+    check('grouping from Track All survived save+reload',
+        s7.igFrames >= FRAMES * 0.95, { igFrames: s7.igFrames, frames: FRAMES });
+    check('frameIdentityMap from Track All survived save+reload',
+        s7.fim >= FRAMES * CAMS * 0.95, { fim: s7.fim });
+
+    // =========================================================
     // Memory: the whole point is that N cycles do not grow without bound
     // =========================================================
     log('');
