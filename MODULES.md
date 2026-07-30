@@ -784,6 +784,22 @@ in `frameIdentityMap`, or in `instanceGroups` — or must mark the instance
 user-edited so its frame is pinned. This is why the track-swap fixes
 (`ui/identity-assignment.js`, luc3d #195) write the store rather than sweeping.
 
+**A store write must be mirrored into `instanceGroups`, not just `frameGroups`
+(luc3d #195).** The two in-memory maps have different lifetimes: `frameGroups`
+holds only the resident window (what the canvas reads), while `instanceGroups` is
+rebuilt PROJECT-WIDE at reopen by `reconstructInstanceGroupsFromSessionLazy`, and
+its members are lightweight placeholders whose `trackIdx` was copied from the
+store at reconstruction time and is never refreshed on hydration. Group-level
+operations read that copy rather than the store — `track-identity-ops.js`
+`deleteTrackAt` decides which groups to DISSOLVE from it — so a store rewrite that
+updates only the resident frames leaves the rest of the project claiming the old
+track, and the next track delete dissolves the wrong groups. `swapTracks` and
+`swapAssignTrack` therefore pair each `swapTracksInStore` with a
+`swapTracksInMemory` pass over BOTH maps, sharing one `seen` set: the two maps
+share instance objects for hydrated frames, and swapping such an instance twice
+silently restores its original value — a self-cancelling no-op that reads as "the
+operation never ran".
+
 **Triangulate All is windowed on a lazy project (luc3d #194).**
 `triangulateAllFrames` dispatches on the same `windowed` capability check
 `trackAll` uses (`lazyLoader.isSync && typeof releaseWindow === 'function'`). With
@@ -1215,6 +1231,15 @@ triangulation, multi-frame assignment modal, track/identity helpers.
 - Track helpers: `swapAssignTrack`, `assignTrackToSelected`,
   `propagateIdentityForward`, `assignIdentityToSelected`,
   `purgeTriangulationDataForGroup`, `swapTracks`.
+  `swapTracks` and `swapAssignTrack` are **durable on a lazy project** (luc3d
+  #195): each writes the columnar store through the private
+  `swapTracksInStore` (→ `SioLazyLoader.remapTracksFromIdentity`) and then mirrors
+  the swap into memory through `swapTracksInMemory`, which covers the resident
+  `frameGroups` AND the project-wide `instanceGroups` placeholders under one
+  `seen` set. See "A store write must be mirrored into `instanceGroups`" above for
+  why both maps are required and why the de-duplication is load-bearing. The
+  reported count is the durable row count when a store exists, the in-memory
+  changed count otherwise.
   `assignIdentityToSelected` (and the info-panel Identity dropdowns) propagate
   the identity from the CURRENT frame **forward only** via the swap-aware
   `propagateIdentity` — they no longer call `assignTrackToIdentity` (which
@@ -2320,6 +2345,13 @@ the test runner (app.js import graph).
   trackless (`null`) key, higher ones shift down — so an instance keeps its
   identity when it loses its track (instead of the per-frame entries orphaning
   or misattributing). Returns the name.
+  On a lazily reopened project it ALSO re-indexes the columnar store's
+  `instancesData.track` column via `session.lazyLoader.remapTracksFromIdentity`
+  (deleted → the store's -1 trackless sentinel, higher → shift down one), the same
+  mapping the resident pass applies. Without that, deleting a track was not merely
+  an unapplied update but silent project-wide CORRUPTION: `session.tracks` shrinks
+  while every non-resident instance keeps its old index, so on save each instance
+  above `idx` points at the WRONG track name.
 - `deleteIdentityAt(session, idx)` — **ungroups** every GroupedInstance carrying
   the id (matched via `group.identityId` OR, pre-triangulation, via the per-frame
   `getIdentityIdForTrack`; falls back to nulling `group.identityId` in sessions
@@ -2327,10 +2359,12 @@ the test runner (app.js import graph).
   at it (so instances resolve to "no identity"), splices the identity, and drops
   the hidden-identities entry. Returns the name.
 
-**Imports from project modules.** None (operates on the passed `session`).
+**Imports from project modules.** None (operates on the passed `session`) — it
+reaches the columnar store through the `session.lazyLoader` handle it is given.
 
 **Imported by.** `ui/ui-wiring.js`. Bridged into `tests/test-runner.html` and
-covered by `tests/test-track-identity-modals.js`.
+covered by `tests/test-track-identity-modals.js`; the lazy/durable half of
+`deleteTrackAt` is covered by `tests/e2e/sequence-lazy-workflow.mjs` (cycle 5b).
 
 ---
 

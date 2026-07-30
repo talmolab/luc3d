@@ -81,6 +81,64 @@ function swapTracksInStore(session, trackA, trackB, frameStart, frameEnd, camNam
 }
 
 /**
+ * Apply the same A<->B swap to the IN-MEMORY instances (luc3d #195).
+ *
+ * Covers two maps with different lifetimes:
+ *  - `instanceGroups` is WHOLE-PROJECT (rebuilt in full on reopen by
+ *    `reconstructInstanceGroupsFromSessionLazy`). Its members are lightweight
+ *    placeholders whose `trackIdx` came from the store at reconstruction time.
+ *    Group-level operations read that field — `ui/track-identity-ops.js`
+ *    `deleteTrackAt` decides which groups to DISSOLVE from it — so leaving it
+ *    stale after a store rewrite makes a later track delete dissolve the wrong
+ *    groups.
+ *  - `frameGroups` holds only the RESIDENT 2D frames, and is what the canvas and
+ *    info panel read, so it must be updated for the change to be visible now.
+ *
+ * A `seen` set is mandatory, not defensive: a resident frame's `fg.instances`
+ * entries are usually the SAME objects as that frame's `instanceGroups` members
+ * (the same sharing that forces `deleteTrackAt`'s own `seen` guard). Swapping such
+ * an instance in both passes would swap it TWICE and silently restore the original
+ * value — a self-cancelling no-op that looks like the operation never ran.
+ *
+ * @returns {number} distinct instances whose trackIdx actually changed
+ */
+function swapTracksInMemory(session, trackA, trackB, frameStart, frameEnd, camName) {
+    var seen = new Set();
+    var changed = 0;
+    function apply(inst) {
+        if (!inst || seen.has(inst)) return;
+        seen.add(inst);
+        if (inst.trackIdx === trackA) { inst.trackIdx = trackB; changed++; }
+        else if (inst.trackIdx === trackB) { inst.trackIdx = trackA; changed++; }
+    }
+    if (session.instanceGroups) {
+        for (var [gF, gList] of session.instanceGroups) {
+            if (gF < frameStart || gF > frameEnd) continue;
+            for (var gi = 0; gi < gList.length; gi++) {
+                for (var [gCam, gInst] of gList[gi].instances) {
+                    if (camName != null && gCam !== camName) continue;
+                    apply(gInst);
+                }
+            }
+        }
+    }
+    for (var [rF, fg] of session.frameGroups) {
+        if (rF < frameStart || rF > frameEnd) continue;
+        for (var [rCam, insts] of fg.instances) {
+            if (camName != null && rCam !== camName) continue;
+            for (var i = 0; i < insts.length; i++) apply(insts[i]);
+        }
+        if (fg.unlinkedInstances) {
+            for (var [uCam, ulList] of fg.unlinkedInstances) {
+                if (camName != null && uCam !== camName) continue;
+                for (var u = 0; u < ulList.length; u++) apply(ulList[u].instance);
+            }
+        }
+    }
+    return changed;
+}
+
+/**
  * Swap-assign a track: if another instance on the same frame/camera
  * already has the target track, swap their tracks instead of creating
  * a duplicate. Then propagate the swap forward.
@@ -125,30 +183,22 @@ export function swapAssignTrack(frameIdx, camName, instance, newTrack, session) 
     var storeChanged = swapTracksInStore(session, oldTrack, newTrack, frameIdx, Infinity, camName);
     var residentOnly = (storeChanged < 0);
 
-    // Propagate swap to subsequent frames — RESIDENT frames only, to keep the
-    // canvas/info panel in sync right now. Rows are already counted by the store
-    // pass above, so they must not be counted again.
-    var propagated = residentOnly ? 0 : storeChanged;
-    for (var [fIdx, fgP] of session.frameGroups) {
-        if (fIdx <= frameIdx) continue;
-        var allInsts = [];
-        for (var [cn, insts] of fgP.instances) {
-            if (cn === camName) for (var j = 0; j < insts.length; j++) allInsts.push(insts[j]);
-        }
-        for (var [cn2, ulL] of fgP.unlinkedInstances) {
-            if (cn2 === camName) for (var k = 0; k < ulL.length; k++) allInsts.push(ulL[k].instance);
-        }
-        for (var m = 0; m < allInsts.length; m++) {
-            if (allInsts[m].trackIdx === oldTrack) { allInsts[m].trackIdx = -99; if (residentOnly) propagated++; }
-        }
-        for (var m = 0; m < allInsts.length; m++) {
-            if (allInsts[m].trackIdx === newTrack) { allInsts[m].trackIdx = oldTrack; if (residentOnly) propagated++; }
-        }
-        for (var m = 0; m < allInsts.length; m++) {
-            if (allInsts[m].trackIdx === -99) { allInsts[m].trackIdx = newTrack; }
-        }
-    }
-    return propagated;
+    // Propagate the swap forward IN MEMORY. This covers the resident
+    // `frameGroups` (so the canvas and info panel update now) AND the
+    // project-wide `instanceGroups` placeholders — the latter matters because
+    // group-level operations read `trackIdx` off those members rather than off
+    // the store: leaving them stale here makes a later `deleteTrackAt` dissolve
+    // the WRONG groups (see `swapTracksInMemory`, and the store-vs-memory
+    // divergence it exists to prevent).
+    //
+    // The range starts at `frameIdx + 1` because the current frame was already
+    // swapped explicitly above; re-applying a blanket swap to it would undo that.
+    // (The current frame is displayed, hence hydrated, so its group members are
+    // the same objects as its `fg.instances` entries and were updated with them.)
+    // Rows are already counted by the store pass, so they must not be counted
+    // again.
+    var memChanged = swapTracksInMemory(session, oldTrack, newTrack, frameIdx + 1, Infinity, camName);
+    return residentOnly ? memChanged : storeChanged;
 }
 
 export function assignTrackToSelected(trackIdx) {
@@ -1288,29 +1338,13 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
 
 export function swapTracks(trackA, trackB, frameStart, frameEnd) {
     if (!state.session) return 0;
-    var swapped = 0;
-    // Durable, whole-range swap in the columnar store first (luc3d #195). The
-    // resident loop below then re-syncs the in-memory Instances that are already
-    // materialized, so the canvas/info panel update immediately — those rows are
-    // already counted by the store pass, so they must NOT be added again.
-    var storeSwapped = swapTracksInStore(state.session, trackA, trackB, frameStart, frameEnd, null);
-    var residentOnly = (storeSwapped < 0);
-    if (!residentOnly) swapped = storeSwapped;
-    for (var [frameIdx, fg] of state.session.frameGroups) {
-        if (frameIdx < frameStart || frameIdx > frameEnd) continue;
-        for (var [camName, instances] of fg.instances) {
-            for (var i = 0; i < instances.length; i++) {
-                if (instances[i].trackIdx === trackA) { instances[i].trackIdx = trackB; if (residentOnly) swapped++; }
-                else if (instances[i].trackIdx === trackB) { instances[i].trackIdx = trackA; if (residentOnly) swapped++; }
-            }
-        }
-        for (var [camName2, ulList] of fg.unlinkedInstances) {
-            for (var u = 0; u < ulList.length; u++) {
-                var inst = ulList[u].instance;
-                if (inst.trackIdx === trackA) { inst.trackIdx = trackB; if (residentOnly) swapped++; }
-                else if (inst.trackIdx === trackB) { inst.trackIdx = trackA; if (residentOnly) swapped++; }
-            }
-        }
-    }
-    return swapped;
+    var session = state.session;
+    // Durable first (the columnar store is what save writes and rehydration
+    // reads), then one de-duplicated in-memory pass so `instanceGroups` and the
+    // resident `frameGroups` agree with it. See both helpers above.
+    var storeSwapped = swapTracksInStore(session, trackA, trackB, frameStart, frameEnd, null);
+    var memChanged = swapTracksInMemory(session, trackA, trackB, frameStart, frameEnd, null);
+    // Report the durable row count when there is a store; otherwise the in-memory
+    // count is all there is.
+    return storeSwapped < 0 ? memChanged : storeSwapped;
 }
