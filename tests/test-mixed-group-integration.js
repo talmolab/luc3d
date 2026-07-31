@@ -473,11 +473,8 @@
                 env.session.instanceGroups.get(0).push(group);
 
                 // Pre-populate observedPoints so the B2 invariant is exercised too.
-                group.observedPoints = {
-                    cam1: userInst.points,
-                    cam2: pred1Inst.points,
-                    cam3: pred2Inst.points,
-                };
+                // (observedPoints is DERIVED from group.instances since luc3d #189 —
+                // the members added above already supply it; no fixture assignment.)
 
                 // ENTER edit-group mode → snapshot wasMixed=true.
                 var editGroupState = startEditGroupSnapshot(group);

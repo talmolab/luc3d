@@ -428,8 +428,8 @@
             var t = mkGroup();
             var res = triangulateAndReproject(t.group, t.cameras, { method: 'ba' });
             assertEqual(res.method, 'ba');
-            assertNotNull(res.points3d[0]);
-            assertApprox(res.points3d[0][2], t.pt[2], 1e-2, 'Z recovered by BA');
+            assertNotNull(getPoint3d(res.points3d, 0));
+            assertApprox(getPoint3d(res.points3d, 0)[2], t.pt[2], 1e-2, 'Z recovered by BA');
         });
 
         it('reports both distorted and undistorted reprojection error', function () {

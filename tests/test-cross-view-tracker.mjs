@@ -58,10 +58,39 @@ function frameDetections(frameIdx, centroids) {
     });
     return detsByCam;
 }
+// `Target.points3d` is a FLAT `Float64Array(3N)` (luc3d #189), not an array of
+// boxed `[x,y,z]` rows, and a missing keypoint is NaN rather than null. Iterating
+// it with `for (const p of pts3d)` yields NUMBERS, so `p[0]` was `undefined` and
+// every centroid came out NaN — which is why these assertions failed against a
+// perfectly healthy tracker. Boxed input is still accepted for older callers.
 function centroidOf(pts3d) {
+    if (!pts3d) return null;
     let sx = 0, sy = 0, sz = 0, n = 0;
-    for (const p of pts3d) if (p) { sx += p[0]; sy += p[1]; sz += p[2]; n++; }
+    if (ArrayBuffer.isView(pts3d)) {
+        for (let k = 0; k + 2 < pts3d.length; k += 3) {
+            const x = pts3d[k], y = pts3d[k + 1], z = pts3d[k + 2];
+            if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+                sx += x; sy += y; sz += z; n++;
+            }
+        }
+    } else {
+        for (const p of pts3d) if (p) { sx += p[0]; sy += p[1]; sz += p[2]; n++; }
+    }
     return n ? [sx / n, sy / n, sz / n] : null;
+}
+
+/** Count of fully-finite keypoints in a flat-or-boxed 3D point set. */
+function nFinite3d(pts3d) {
+    if (!pts3d) return 0;
+    let n = 0;
+    if (ArrayBuffer.isView(pts3d)) {
+        for (let k = 0; k + 2 < pts3d.length; k += 3) {
+            if (Number.isFinite(pts3d[k]) && Number.isFinite(pts3d[k + 1]) && Number.isFinite(pts3d[k + 2])) n++;
+        }
+    } else {
+        for (const p of pts3d) if (p && p.every(Number.isFinite)) n++;
+    }
+    return n;
 }
 function dist3(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); }
 const HP = { corr2dWeight: 1, corr3dWeight: 6, velocityThreshold: 10, distanceThreshold: 50, timePenalty: 0.1 };
@@ -76,7 +105,11 @@ group('Births — 2 animals × 3 views → 2 fused 3D targets');
     eq(trk.targets.length, 2, 'exactly two targets born');
     trk.targets.forEach((t, i) => {
         eq(t.detsByCam.size, 3, `target ${i} fused across all 3 views`);
-        ok(t.points3d && t.points3d.every(p => p != null), `target ${i} fully triangulated`);
+        // NOT `.every(p => p != null)`: on a Float64Array that iterates NUMBERS,
+        // and `NaN != null` is true — so an entirely NaN (i.e. completely
+        // un-triangulated) point set passed this check. Count finite keypoints.
+        ok(nFinite3d(t.points3d) === OFFSETS.length,
+            `target ${i} fully triangulated (${nFinite3d(t.points3d)}/${OFFSETS.length} finite)`);
     });
     // Triangulated centroids land on the two true animal locations.
     const cents = trk.targets.map(t => centroidOf(t.points3d));

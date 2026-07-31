@@ -43,6 +43,7 @@ import {
     computeFundamentalMatrix,
     epipolarErrorMatrix,
 } from './triangulation.js';
+import { points3dNodeCount, readPoint3d } from './pose-data.js';
 
 // ---------------------------------------------------------------------------
 // Normalized-coordinate helpers
@@ -71,8 +72,12 @@ export function Detection(instance, cam, frameIdx, slot) {
     this.cam = cam;                                    // Camera (has extrinsicMatrix, name, matrix)
     this.frameIdx = frameIdx;
     this.slot = slot;                                  // detection index within (cam, frame)
-    this.pointsPixel = instance.points;                // raw pixel keypoints ([x,y]|null)
-    this.pointsNorm = instance.points.map(function (p) { return normalizePoint(p, cam); });
+    // Boxed snapshots taken ONCE per detection. `Instance` stores coords flat
+    // (luc3d #189 follow-up #1); epipolarErrorMatrix and the matching loops below
+    // want boxed rows, and a Detection is created once per (cam, frame, slot),
+    // so materializing here is cheaper than converting at every read.
+    this.pointsPixel = instance.toPointsArray();       // raw pixel keypoints ([x,y]|null)
+    this.pointsNorm = this.pointsPixel.map(function (p) { return normalizePoint(p, cam); });
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +87,7 @@ export function Detection(instance, cam, frameIdx, slot) {
 function Target(trackId) {
     this.trackId = trackId;
     this.detsByCam = new Map();   // camName -> Detection (one current det per view)
-    this.points3d = null;         // [N] of [x,y,z]|null (world coords)
+    this.points3d = null;         // Float64Array(3N) world coords, all-NaN = missing
     this.identityId = null;       // filled at commit time
 }
 
@@ -131,7 +136,7 @@ export class CrossViewTracker {
      *   user-supplied animal count. null (default) == faithful reference
      *   behavior; a positive integer stops births once that many targets exist.
      *   nodeWeights (null) — DIVERGENCE FROM REFERENCE. Per-node weight array
-     *   (indexed to match `Instance.points`) from the Tracking Wizard. Each
+     *   (indexed to match the skeleton's nodes) from the Tracking Wizard. Each
      *   node's contribution to the 2D + 3D association cost is scaled by its
      *   weight; a weight of 0 drops the node from matching entirely. null
      *   (default) == every node weighted 1 (faithful reference behavior).
@@ -225,12 +230,13 @@ export class CrossViewTracker {
         var ext = det.cam.extrinsicMatrix;
         var decay = Math.exp(-this.timePenalty * dt);
         var sum = 0;
-        var n = Math.min(target.points3d.length, det.pointsNorm.length);
+        var n = Math.min(points3dNodeCount(target.points3d), det.pointsNorm.length);
+        var tp = [0, 0, 0];
         for (var k = 0; k < n; k++) {
             var w = this._nodeWeight(k);
             if (w === 0) continue;                               // node dropped from matching
-            var tp = target.points3d[k], dp = det.pointsNorm[k];
-            if (tp == null || dp == null) continue;             // np.nansum skips NaN
+            var dp = det.pointsNorm[k];
+            if (dp == null || !readPoint3d(target.points3d, k, tp)) continue;  // np.nansum skips NaN
             var proj = projectNorm(tp, ext);
             var dx = dp[0] - proj[0], dy = dp[1] - proj[1];
             var distance = Math.sqrt(dx * dx + dy * dy);

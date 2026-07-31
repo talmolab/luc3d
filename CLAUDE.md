@@ -105,6 +105,156 @@ python3 -m http.server 8080
   deliberately (coordinates only — f64 would add ~50% file size). Guarded by a
   dtype regression test in `tests/test-lazy-reopen.js`. **Re-apply after any
   re-vendor until upstream fixes #231** (grep the marker).
+  **LOCAL PATCH (luc3d #185):** `lib/sleap-io/chunk-X76PRJK6.js` `writeSessions`
+  accumulates the `/session_data` 3D-point tables (`points_3d`,
+  `pred_points_3d`) into a **pre-sized `Float64Array`** (`Float64RowSink` +
+  `createGzipFloatMatrixTyped`, sized by an exact counting pre-pass) instead of
+  pushing one boxed `Array(3|4)` per 3D keypoint (`coerce3dRow`) into a plain JS
+  array and holding them all live until `createGzipFloatMatrix` flattened them.
+  On the real 180,210-frame × 5-camera project that is 531,799 instance groups ×
+  15 nodes = **7,976,985** rows — an estimated **~400 MB** of boxed arrays (~48 B
+  per 3-double JSArray plus outer element pointers) sitting in V8's
+  **pointer-compressed heap, which a Chrome renderer hard-caps near 4 GB**
+  (measured `jsHeapSizeLimit` 3.76 GB headless; `--max-old-space-size` does NOT
+  raise it). A typed array's backing store is allocated OUTSIDE that cap, so
+  this moves the cost off the scarce resource — the table becomes one
+  7,976,985 × 3 × 8 B ≈ **191 MB** buffer. Measured end-to-end via a controlled
+  A/B (same harness, pre-save baselines within 3 MB — 2,891 MB unpatched vs
+  2,894 MB patched): merged "Save As" went from a **renderer OOM crash 13 s in**
+  to **succeeding — 1,404,804,682 bytes in 49.5 s**. The crash's last progress
+  checkpoint was `after refGraph, before openProjectWriter`, placing it inside
+  `writeSessions` rather than `buildSessionRefGraph`.
+  NOTE the WASM heap was never the constraint here: it is capped at
+  2 GiB (`getHeapMax` in `lib/h5wasm/h5wasm.iife.js`) and only ever holds
+  ~300 MB on this path — the "hard ~4 GB WASM32 ceiling" diagnosis in PR #185 is
+  wrong. Four patched sites, all marked `// LUCID local patch (luc3d #185)`;
+  `createGzipFloatMatrix` is retained because the `embeddings/*` writer still
+  uses it. The sink **throws on overflow** rather than letting an undercount
+  silently truncate 3D points (out-of-range typed-array writes are discarded
+  with no error). Guarded by `tests/e2e/save-session-3d-typed-sink.mjs` (exact
+  values incl. null rows / null coords / missing point scores, plus a
+  4,000-frame-group interleaved user+predicted scenario); those assertions were
+  validated against the pre-patch writer first, so they pin equivalence rather
+  than just current behavior. **Re-apply after any re-vendor** (grep the marker)
+  and report upstream to sleap-io.js.
+  **LOCAL PATCH (luc3d #189):** the **read-side mirror** of #185, plus the write
+  side's other half. LUCID's `InstanceGroup.points3d` is now a flat
+  `Float64Array(3N)` (see MODULES.md `pose/pose-data.js`), and the bundle was
+  patched to speak that representation end to end:
+  - **Read** — `lib/sleap-io/chunk-H7G4PJNA.js` `reconstructColumnarFrameGroups`
+    built one boxed `[x,y,z]` Array per keypoint out of `flat`, which is ALREADY
+    a `Float64Array` from h5wasm. On the real project that is **7,976,985 boxed
+    rows (~410 MB)** allocated in the pointer-compressed heap on *every reopen* —
+    the load-side counterpart of the save OOM, and the reason reopening the
+    1.4 GB project sat 8+ minutes in a GC death spiral at the ceiling. Now emits
+    one compacted `Float64Array(3N)` per instance group (and a `Float64Array(N)`
+    of point scores). Compacted rather than a `subarray` view because the
+    predicted table is stride 4 (x,y,z,score) and a view would pin the whole
+    multi-hundred-MB matrix alive for as long as any one group survived.
+    `Instance3D.nVisible` was patched to handle the flat form too.
+  - **Write** — `chunk-X76PRJK6.js` gained `Float64RowSink.pushFlat` (flat-to-flat
+    row copy, no boxed intermediate) and `lucidCount3dRows` (keypoint count for
+    boxed OR flat), used by both the #185 counting pre-pass (`_p.length` would
+    otherwise over-count 3x on a flat array and mis-size the sink) and the write
+    loop. Both boxed and flat inputs are still accepted.
+  Six patched sites across the two chunks, all greppable as `luc3d #189` (the
+  shared write loop is marked `luc3d #185/#189` since both patches touch it).
+  **Re-apply after any re-vendor** (grep the
+  marker) and report upstream to sleap-io.js. Guarded by the flat-shape
+  assertions in `tests/test-slp-export-canonical.js`, `tests/test-lazy-reopen.js`
+  and `tests/test-slp-streaming-write.js`, and at the byte level by
+  `tests/e2e/save-golden-digest.mjs` (the conversion is numerically bit-exact, so
+  the digest MUST NOT move).
+  **LOCAL PATCH (luc3d #190):** `lib/sleap-io/chunk-X76PRJK6.js` `writeSessions`
+  accumulates the `/session_data` **struct** tables (`frame_groups`,
+  `instance_groups`, `instance_group_members`) into growable flat
+  `Float64GrowSink`s instead of pushing one boxed `Array` per row and holding
+  them all live until `createMatrixDataset` flattens them — the same fix #185
+  applied to the 3D-point tables, extended to the struct tables. On the real
+  project that is 531,799 + 531,799 + **2,627,453** rows. `instanceGroupMemberRows`
+  gained an allocation-free twin, `instanceGroupMemberRowsInto`, that appends
+  straight into the sink (the original is retained as module surface — **keep the
+  two in sync**). Measured with `tests/e2e/_bench-writesessions.mjs` at 400,000
+  groups / 2,000,000 members: writer peak heap **1,190 MB -> 1,008 MB** and write
+  time 3,767 -> 3,285 ms; ~240 MB at the real project's scale. Time was never the
+  problem — that bench shows `writeSessions` is **linear** (25.2 -> 9.4 us/group
+  as fixed costs amortize) — this targets the allocation, because the writer's
+  ~1 GB of temporaries landing on top of an already-large baseline pushes the
+  renderer past its hard ~4 GB cap into a GC death spiral (a save that ran 30+
+  minutes without finishing). Six patched sites plus `Float64GrowSink` /
+  `createMatrixDatasetTyped`, all marked `// LUCID local patch (luc3d #190)`.
+  Flushed bytes are unchanged — guarded by `tests/e2e/save-golden-digest.mjs`.
+  **Re-apply after any re-vendor** (grep the marker) and report upstream.
+  **LOCAL PATCH (luc3d #191):** `lib/sleap-io/chunk-X76PRJK6.js` `writeSessions`
+  now **flushes the `/session_data` tables incrementally** instead of holding a
+  whole table live until one `create_dataset` call. #185/#190 made those rows
+  *typed*; they did not change the *shape* of the peak — every row still had to be
+  resident at once, which at the real project's scale is `frame_groups` 4.3 MB +
+  `instance_groups` 34 MB + `instance_group_members` 63 MB + `points_3d` 191 MB
+  ≈ **292 MB**, plus a same-sized copy into the WASM heap at flush time, plus up
+  to 2x for the doubling grow-sinks. That fits under the ~2,891 MB baseline a
+  fresh Track All + Triangulate All leaves — so the **first** save succeeds — but
+  NOT under the measured **4,156 MB post-reopen** baseline, where the renderer
+  dies inside save phase 2/4 (`writeSessions`). These are exactly the allocations
+  a large committed-but-dead V8 cage cannot absorb: typed-array backing stores and
+  h5wasm's heap live *outside* the pointer-compressed cage, so they add to total
+  process memory even when the cage has GBs of dead space (see
+  [[luc3d-save-oom-is-v8-heap-not-wasm]] and the #189/#190 notes). New
+  `LucidAppendTable` stages at most `SESSION_FLUSH_ROWS` (= `WRITE_CHUNK_ROWS`,
+  8192) rows in a **fixed, reused** buffer and `write_slice`s them into a
+  chunked/unlimited-`maxshape` dataset, making the writer's peak for these tables
+  **constant in project size**. Three consequences: the #185 counting pre-pass is
+  **gone** (nothing needs pre-sizing — also removes a full extra walk); datasets
+  are created **lazily on first flush**, so a table that never gets a row stays
+  absent (`pred_points_3d` on a user-only project), preserving the old
+  `if (rows > 0)` guards; and a table that **never overflows** is still written
+  one-shot and contiguous, so small projects stay **byte-identical** and
+  `tests/e2e/save-golden-digest.mjs` **MUST NOT move**. Guarded by
+  `tests/e2e/save-session-3d-typed-sink.mjs`, whose many-group scenario was raised
+  to 12,000 frame groups specifically so every table crosses a flush boundary and
+  the append path's running `[start, end)` bookkeeping is under test (it asserts
+  `NFG > 8192` so the coverage can't silently lapse). `createMatrixDatasetTyped` /
+  `Float64GrowSink` / `Float64RowSink` / `createGzipFloatMatrixTyped` are retained
+  as module surface but are no longer used by `writeSessions`. All sites marked
+  `// LUCID local patch (luc3d #191)`. **Re-apply after any re-vendor** (grep the
+  marker) and report upstream.
+  **LOCAL PATCH (luc3d #193):** `lib/sleap-io/chunk-X76PRJK6.js` builds the lazy
+  store's **columns as `Float64Array`s instead of plain JS arrays**. This is the
+  fix that actually made **save-after-reopen** work; #185/#189/#190/#191 were
+  necessary but not sufficient. LUCID writes `frames`/`instances`/`points`/
+  `pred_points` as **flat 2D matrices + a `field_names` attr**, while Python
+  sleap-io writes them as **HDF5 compound dtypes** — and those two shapes take
+  different column builders in the vendored reader:
+  compound → `readCompoundColumnsWorker`, which has **always** produced
+  `Float64Array` columns (its own comment: *"every SLEAP field — coords, scores,
+  and integer id/index columns up to 2^53 — is exact in f64"*); flat+`field_names`
+  → `normalizeStructData` (streaming/lazy reader) and `normalizeStructDataset`
+  (non-streaming), which built `[]`/`new Array(n)`. **So reopening LUCID's own
+  project was the one path that materialized every column as boxed numbers.**
+  Measured on the real project with `tests/e2e/_diag-post-reload-bytes.mjs`: the
+  reopened project's ONE shared store held **24 columns / 228,108,600 entries ≈
+  1.8 GB inside V8's pointer-compressed cage** (5 `frames` + 10 `instances` + 4
+  `points` + 5 `pred_points` fields). The save **cannot** evict it — pass 2
+  (`streamSessionIntoWriter`/`appendStore`) streams 2D straight out of that store —
+  so `openProjectWriter` opened with essentially no headroom and the renderer died
+  in phase 2/4. Typed columns hold the same 8 B/element in a backing store
+  allocated **outside** the cage, moving ~1.8 GB off the scarce resource (same
+  argument as #185/#190 on the write side, #189 on the read side). **f64
+  deliberately, not f32:** `point_id_start/end` reach 21.7M on this project and f32
+  is exact only to 2^24 = 16.7M — the sleap-io.js#231 failure class. Both sites
+  also convert explicitly when the source is a `BigInt64Array` (LUCID writes
+  `frames` as `"<i8"`): assigning a BigInt into a `Float64Array` throws, and
+  `readStructDatasetStreaming`'s catch-all would have **swallowed** that into a
+  silently EMPTY store. Verified end to end on the real 180,210-frame × 5-camera
+  project: reopen → edit → Save As previously crashed the renderer inside phase
+  2/4 every time; it now completes — phases 5.9 s / 15.2 s / 15.0 s / 105.9 s,
+  **1,405.1 MB in 142 s** — and the resaved file reopens. Written bytes are
+  unchanged (`save-golden-digest.mjs` does not move). Guarded by
+  `tests/e2e/reopen-store-columns-typed.mjs`, which was confirmed to FAIL on the
+  pre-patch bundle (naming all 24 plain-array columns) while its value assertions
+  pass in both states — so it pins the memory shape, not just current behavior.
+  Two patched sites, marked `// LUCID local patch (luc3d #193)`. **Re-apply after
+  any re-vendor** (grep the marker) and report upstream.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
@@ -153,7 +303,40 @@ in-progress export), `Esc` should cancel/stop that operation rather than tear th
 modal down. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
 
 ## Tests
-Browser-based tests in `tests/test-runner.html`. Open in browser to run.
+There are **three** test populations, each with its own runner. Run all three —
+they cover disjoint code, and a green run of one says nothing about the others.
+
+```bash
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1201 assertions
+node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
+node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
+```
+
+- `tests/*.js` — classic scripts, run in the browser via `tests/test-runner.html`
+  (open directly) or headless via `tests/e2e/run-unit-tests.mjs`; also runnable in
+  a `vm` sandbox by `tests/run-node.js`.
+- `tests/test-*.mjs` — native ES modules, run by **`tests/run-mjs-tests.mjs`**
+  (one child process per file, since several install module-loader hooks). These
+  were **orphaned for a long time**: no runner referenced them, so four had been
+  failing unnoticed — including a live `ReferenceError` in `pose/tracker.js` and
+  three files still asserting pre-luc3d-#185 shapes (boxed `Instance.points`,
+  boxed `points3d` rows, legacy string `frameIdentityMap` keys). **If you add a
+  `tests/test-*.mjs`, it is picked up automatically; do not add ESM tests
+  anywhere else.**
+- `tests/e2e/*.mjs` — Playwright, drive the real app. `_diag-*`/`_bench-*`/
+  `_real-*` are investigation tools, not assertions, and are excluded from suite
+  runs. Notable:
+  - `sequence-lazy-workflow.mjs` — **the lazy-project regression harness.** Builds
+    a synthetic project big enough (in FRAME COUNT) to come back mostly
+    non-resident, then drives real sequences — reopen → Triangulate All → save →
+    reopen → modify → save → reopen → export → swap → save → reopen — asserting
+    invariants after every step. This is what catches the resident-only bug class
+    (#194/#195), where an operation silently processes a handful of frames,
+    returns a plausible count, and only shows up a cycle later once the wrong
+    state has been saved. `FRAMES=`/`CAMS=`/`NODES=`/`KEEP=1` are configurable; it
+    asserts its own lazy precondition so it cannot silently stop testing that.
+  - `_real-roundtrip.mjs` — the real-data acceptance run (needs a large `.slp`);
+    `RELOAD_FILE=`, `MODIFY_RESAVE=1`, `KEEP_RESAVE=1`, `ATTRIBUTE=1`.
 
 ## Python Scripts
 - `scripts/json_to_slp.py` — Convert JSON export to SLEAP .slp format

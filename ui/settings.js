@@ -159,7 +159,7 @@ export function getNodeWeights() {
 }
 
 // Resolve a parallel weight array for an ordered list of node names — the form
-// the tracker consumes (indexed to match Instance.points). Unknown/invalid
+// the tracker consumes (indexed to match the skeleton's nodes). Unknown/invalid
 // entries fall back to DEFAULT_NODE_WEIGHT. Returns null for a non-array input.
 export function getNodeWeightArray(nodeNames) {
     if (!Array.isArray(nodeNames)) return null;

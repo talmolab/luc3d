@@ -144,7 +144,7 @@
                 const iB = new Instance([[5, 6], [7, 8]], 0, 'predicted', 0.9);
                 const g = new InstanceGroup(f + 1, 1);
                 g.addInstance('cam0', iA); g.addInstance('cam1', iB);
-                g.points3d = [[100 + f, 200, 300], [110, 210, 310]];
+                g.points3d = fromBoxedPoints3d([[100 + f, 200, 300], [110, 210, 310]]);
                 session.instanceGroups.set(f, [g]);
             });
 
@@ -182,8 +182,8 @@
                 assertTrue(!!g && g.length === 1, 'frame ' + f + ' has exactly 1 instance group');
                 const grp = g[0];
                 assertEqual(grp.identityId, 1, 'frame ' + f + ' identityId');
-                assertTrue(!!grp.points3d && grp.points3d.length === 2, 'frame ' + f + ' 3D points');
-                assertDeepEqual(grp.points3d[0], [100 + f, 200, 300], 'frame ' + f + ' 3D[0]');
+                assertTrue(points3dNodeCount(grp.points3d) === 2, 'frame ' + f + ' 3D points');
+                assertDeepEqual(getPoint3d(grp.points3d, 0), [100 + f, 200, 300], 'frame ' + f + ' 3D[0]');
                 const t0 = [[f * 10, f * 10 + 1], [f * 10 + 2, f * 10 + 3]];
                 assertDeepEqual(Object.keys(grp.cams).sort(), ['cam0', 'cam1'], 'frame ' + f + ' has both camera members');
                 assertDeepEqual(grp.cams.cam0.points, t0, 'frame ' + f + ' cam0 member resolves to store track0 row');
@@ -312,7 +312,7 @@
             const g = new InstanceGroup(1, -1);
             g.addInstance('cam0', new Instance([[1, 2], [3, 4]], 0, 'predicted', 0.9));
             g.addInstance('cam1', new Instance([[5, 6], [7, 8]], 0, 'predicted', 0.9));
-            g.points3d = [[100, 200, 300], [110, 210, 310]];
+            g.points3d = fromBoxedPoints3d([[100, 200, 300], [110, 210, 310]]);
             session.instanceGroups.set(0, [g]);
 
             const bytes = await buildSessionSlpBytesStreaming(session, [], []);
@@ -349,7 +349,7 @@
             // Refs resolve by track into each loaded store's frame-0 track-0 row.
             assertDeepEqual(g0[0].cams.cam0.points, [[0, 1], [2, 3]], 'cam0 member resolves to store track0 row');
             assertDeepEqual(g0[0].cams.cam1.points, [[0, 1], [2, 3]], 'cam1 member resolves to store track0 row');
-            assertTrue(!!g0[0].points3d && g0[0].points3d.length === 2, 'group 3D points round-trip');
+            assertTrue(points3dNodeCount(g0[0].points3d) === 2, 'group 3D points round-trip');
         });
 
         it('overlays 2D user corrections and reshifts store refs (edited frame)', async function () {
@@ -384,8 +384,8 @@
             // Edit: correct cam1 / frame 1, track 0 (a user instance); keep track 1
             // predicted+unlinked so the overlay carries the full camera-frame.
             const userInst = session.addNewInstance(1, 'cam1', sk, 0);   // track 0, user
-            userInst.points = [[999, 888], [777, 666]];
-            userInst.occluded = [false, false];
+            userInst.setPointsFrom([[999, 888], [777, 666]]);
+            userInst.setOccludedFrom([false, false]);
             const predSibling = new Instance([[11, 12], [13, 14]], 1, 'predicted', 0.9);   // track 1
             session.addUnlinkedInstance(1, 'cam1', predSibling);
 
@@ -396,7 +396,7 @@
                 const g = new InstanceGroup(f + 1, -1);
                 g.addInstance('cam0', iA);
                 g.addInstance('cam1', camInstB);
-                g.points3d = [[100 + f, 200, 300], [110, 210, 310]];
+                g.points3d = fromBoxedPoints3d([[100 + f, 200, 300], [110, 210, 310]]);
                 session.instanceGroups.set(f, [g]);
             }
             grp(0, new Instance([[5, 6], [7, 8]], 0, 'predicted', 0.9));
