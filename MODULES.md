@@ -563,6 +563,35 @@ rooted in `matchPairwise` dropping *visible* instances:
   `groupByIdentityAndTriangulateAll` (`ui/export-modals.js`, the "Triangulate
   All" path).
 
+**WHICH function the "Triangulate All" button calls.** `ui/ui-wiring.js:2146`
+routes the toolbar split-button by method AND by session state: `'ba'` →
+`triangulateAllFrames('ba')`; default/DLT with **any identities present** →
+`groupByIdentityAndTriangulateAll` (`ui/export-modals.js`); DLT with no
+identities → `triangulateAllFrames('dlt')`. Any real tracked project takes the
+MIDDLE branch, so `triangulateAllFrames` is NOT the function a user exercises —
+a distinction that cost five green end-to-end verifications of the wrong code
+path while the reported bug sat in the other one. Diagnostics must drive
+`groupByIdentityAndTriangulateAll` (see
+`tests/e2e/_diag-real-playback-overlays.mjs`).
+
+**It must never delete a frame's groups it cannot rebuild (the "Triangulate All
+deleted my 3D" bug).** `groupByIdentityAndTriangulateAll` calls
+`session.instanceGroups.delete(frameIdx)` and then rebuilds only those identity
+buckets resolving on >= 2 cameras via
+`getIdentityIdForTrack(cam, inst.trackIdx, frameIdx)`. On a reopened project that
+lookup can return null for every instance — identity is carried on
+`group.identityId`, and the per-frame track→identity entries do not necessarily
+key by the `trackIdx` rehydrated instances come back with — so each frame was
+emptied and nothing was put back. Measured on the real 180,210-frame project:
+groups **3 → 0** on every probe frame, the whole operation finishing in 50 s
+instead of 135 s because deleting was all it did. It now (a) seeds the buckets
+from the existing groups' `identityId` when the per-frame lookup yields nothing,
+and (b) returns early WITHOUT touching the frame when nothing would be rebuilt,
+warning instead. Verified on the real project: groups 3 → 3, reprojGroups 3 → 3.
+It also guards `fg === undefined` (the sweep's contract) — without it the first
+3D-only frame throws mid-sweep, after the deletes have already run on an
+arbitrary prefix of the project.
+
 **Null-node status.** After a run, `trackCurrentFrame` / `trackAll` count the
 null (non-triangulated) 3D nodes across the groups the tracker formed
 (`countNullNodesInTargets` over each frame's `targets3d`; single-view groups with

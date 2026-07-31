@@ -357,163 +357,201 @@ try {
         check(r2.groups > 100000, `grouping round-tripped (${r2.groups.toLocaleString()} groups)`);
         check(r2.with3d > 100000, `3D round-tripped (${r2.with3d.toLocaleString()})`);
 
-        // ================================================================
-        // TRIANGULATE ALL on the reopened REAL project, then ask what the
-        // UI would actually draw on frames other than the one on screen.
-        // ================================================================
-        // Reported: after Triangulate All the 3D/reprojections are gone from the
-        // instance panel and the IDs are gone from the 2D views, except on the
-        // first frame and (in one report) except for camera 21241563 — the FIRST
-        // camera in this project. The windowed sweep deliberately does not retain
-        // `group.reprojections` and relies on `drawAllOverlays` recomputing them
-        // per frame; the 6,000-frame synthetic fixture shows that recompute
-        // working for every camera on every probe frame, so whatever breaks here
-        // is specific to this project.
-        // ---- BEFORE state: what did the FILE give us? ----
-        // The gap in the earlier run: it only ever measured AFTER the sweep, so it
-        // could not see that the project arrives from disk with reprojections
-        // already populated project-wide (`ui/overlays.js`: "SLP-loaded groups
-        // populate `group.reprojections` without ever materializing
-        // `reprojectedInstances`"). If that is true here, then Triangulate All's
-        // up-front project-wide wipe DELETES data the user could already see, and
-        // the windowed sweep never rebuilds it — which is the reported symptom
-        // exactly, and makes the "reprojections are cheap to recompute on demand"
-        // assumption the load-bearing one.
-        const before = await page2.evaluate(() => {
-            const s = window.__lucid.state.session;
-            let groups = 0, withReproj = 0, reprojCamTotal = 0, withReprojInst = 0;
-            for (const [, gs] of s.instanceGroups) {
-                for (const g of gs) {
-                    groups++;
-                    const n = g.reprojections ? Object.keys(g.reprojections).length : 0;
-                    if (n) { withReproj++; reprojCamTotal += n; }
-                    if (g.reprojectedInstances && g.reprojectedInstances.size) withReprojInst++;
-                }
-            }
-            return {
-                groups, withReproj, withReprojInst,
-                avgCams: withReproj ? +(reprojCamTotal / withReproj).toFixed(2) : 0,
-                usedMB: +(performance.memory.usedJSHeapSize / 1048576).toFixed(0),
-            };
+        // =================================================================
+        // ATTACH THE VIDEOS, then measure what is actually PAINTED.
+        // =================================================================
+        // Every other harness in this repo defers the mp4s ("Skip — Load Videos
+        // Later"), which is why none of them can see this bug: the overlay-clear
+        // in loading/video.js (1287/1468/1602) only runs on the video path. With
+        // videos attached, every seek/playback repaint CLEARS each view's overlay
+        // canvas and then calls drawAllOverlays — which, on a lazy project, early-
+        // returns when the frame isn't resident (ui/rendering.js:104), leaving the
+        // canvas blank and deferring the repaint behind a
+        // `state.currentFrame === frameIdx` guard that playback invalidates.
+        //
+        // So this measures PIXELS, not data structures: a view whose overlay
+        // canvas has zero non-transparent pixels is a view the user sees empty.
+        const VIDEO_DIR = `${repoRoot}/_bugdata/20260709171244_labMeetingPrep`;
+        const videoPaths = CAMS.map(c => `${VIDEO_DIR}/${c}/${c}-20260709171244.mp4`);
+        for (const p of videoPaths) {
+            if (!fs.existsSync(p)) { log(`  MISSING VIDEO ${p}`); }
+        }
+        log(`\n[${el()}] === attaching ${videoPaths.length} videos (disk-backed, not fetched) ===`);
+        await page2.evaluate(() => {
+            const inp = document.createElement('input');
+            inp.type = 'file'; inp.id = '__vidPicker'; inp.multiple = true;
+            inp.style.cssText = 'position:fixed;left:-9999px';
+            document.body.appendChild(inp);
         });
-        log(`[${el()}] BEFORE Triangulate All: ${before.withReproj.toLocaleString()}/${before.groups.toLocaleString()} ` +
-            `groups already carry reprojections (avg ${before.avgCams} cameras each), ` +
-            `${before.withReprojInst.toLocaleString()} carry reprojectedInstances, heap=${before.usedMB} MB`);
+        await page2.setInputFiles('#__vidPicker', videoPaths);
+        const attachRes = await page2.evaluate(async () => {
+            try {
+                const sl = await import('/loading/session-loader.js');
+                const st = window.__lucid.state;
+                const files = Array.from(document.getElementById('__vidPicker').files);
+                await sl.attachVideosForLazyReopen(st.session, st.session.lazyLoader, files);
+                return {
+                    ok: true,
+                    views: st.views.map(v => ({
+                        name: v.name, hasDecoder: !!v.decoder,
+                        hasOverlay: !!(v.overlayCanvas && v.overlayCtx),
+                        w: v.overlayCanvas ? v.overlayCanvas.width : 0,
+                        h: v.overlayCanvas ? v.overlayCanvas.height : 0,
+                    })),
+                    hasController: !!window.__lucid.videoController,
+                };
+            } catch (e) { return { ok: false, err: String(e && e.stack || e).slice(0, 500) }; }
+        });
+        log(`[${el()}] attach: ` + JSON.stringify(attachRes).slice(0, 500));
+        check(attachRes.ok, `videos attached${attachRes.err ? ' — ' + attachRes.err : ''}`);
 
-        log(`\n[${el()}] === TRIANGULATE ALL (real project) ===`);
+        // Count painted overlay pixels per view, per frame, driving the SAME
+        // transport the user drives.
+        const paintProbe = async (frameIdx, how) => page2.evaluate(async ({ frameIdx, how }) => {
+            const st = window.__lucid.state;
+            const init = await import('/pose/initialization.js');
+            if (how === 'seek' && window.__lucid.videoController) {
+                await window.__lucid.videoController.seekToFrame(frameIdx);
+            } else {
+                await init.navigateToFrame(frameIdx);
+            }
+            await new Promise(r => setTimeout(r, 700));   // let hydration + repaint settle
+            const per = [];
+            for (const v of st.views) {
+                if (!v.overlayCanvas || !v.overlayCtx) { per.push({ name: v.name, painted: -1 }); continue; }
+                const w = v.overlayCanvas.width, h = v.overlayCanvas.height;
+                let painted = 0;
+                try {
+                    const d = v.overlayCtx.getImageData(0, 0, w, h).data;
+                    for (let i = 3; i < d.length; i += 4) if (d[i] !== 0) painted++;
+                } catch (e) { painted = -2; }
+                per.push({ name: v.name, painted });
+            }
+            const groups = st.session.instanceGroups.get(frameIdx) || [];
+            let withReproj = 0;
+            for (const g of groups) if (g.reprojections && Object.keys(g.reprojections).length) withReproj++;
+            return {
+                f: frameIdx, per, groups: groups.length, withReproj,
+                resident: st.session.frameGroups.has(frameIdx),
+            };
+        }, { frameIdx, how });
+
+        const fmt = (r) => `frame ${String(r.f).padStart(6)} [${r.resident ? 'res' : '   '}] ` +
+            `groups=${r.groups} reprojGroups=${r.withReproj} painted=` +
+            r.per.map(p => `${p.name}:${p.painted}`).join(' ');
+
+        const START = 1000;
+        log(`\n[${el()}] === BEFORE Triangulate All: warm the cache by stepping ===`);
+        const beforeRows = [];
+        for (const f of [START, START + 1, START + 2, START + 3]) {
+            const r = await paintProbe(f, 'seek');
+            beforeRows.push(r); log('  ' + fmt(r));
+        }
+        // Revisit the same frames — this is the "warm cache" case the user had.
+        log(`  -- revisiting the same frames (warm) --`);
+        const warmRows = [];
+        for (const f of [START, START + 1, START + 2, START + 3]) {
+            const r = await paintProbe(f, 'seek');
+            warmRows.push(r); log('  ' + fmt(r));
+        }
+
+        log(`\n[${el()}] === TRIANGULATE ALL ===`);
         const triStart = Date.now();
         await page2.evaluate(() => {
             window.__tri = { done: false, err: null };
             (async () => {
                 try {
-                    const tri = await import('/pose/triangulation.js');
-                    await tri.triangulateAllFrames('dlt');
+                    // THE FUNCTION THE TOOLBAR ACTUALLY CALLS. ui-wiring.js:2146
+                    // routes "Triangulate All" (default DLT) to
+                    // groupByIdentityAndTriangulateAll whenever the session has
+                    // identities — which the real project does. Every earlier
+                    // diagnostic called triangulateAllFrames('dlt') directly and
+                    // therefore never exercised this path at all.
+                    const em = await import('/ui/export-modals.js');
+                    await em.groupByIdentityAndTriangulateAll();
                     window.__tri.done = true;
                 } catch (e) { window.__tri.err = String(e && e.stack || e).slice(0, 500); }
             })();
         });
-        const TRI_TIMEOUT_MS = 45 * 60 * 1000;
-        let triState = { done: false, err: null };
-        while (Date.now() - triStart < TRI_TIMEOUT_MS) {
+        while (Date.now() - triStart < 45 * 60 * 1000) {
             await new Promise(r => setTimeout(r, 10000));
-            triState = await page2.evaluate(() => ({
-                done: window.__tri.done, err: window.__tri.err,
-                usedMB: +(performance.memory.usedJSHeapSize / 1048576).toFixed(0),
-            }));
-            if (triState.done || triState.err) break;
-            log(`  [${el()}] triangulating... heap=${triState.usedMB} MB`);
+            const s = await page2.evaluate(() => ({ done: window.__tri.done, err: window.__tri.err,
+                usedMB: +(performance.memory.usedJSHeapSize / 1048576).toFixed(0) }));
+            if (s.done || s.err) { check(!s.err, `Triangulate All completed${s.err ? ' — ' + s.err : ''}`); break; }
+            log(`  [${el()}] triangulating... heap=${s.usedMB} MB`);
         }
-        check(!triState.err, `Triangulate All completed${triState.err ? ' — ' + triState.err : ''}`);
         log(`[${el()}] Triangulate All finished in ${((Date.now() - triStart) / 1000).toFixed(1)}s`);
 
-        const post = await page2.evaluate(() => {
-            const s = window.__lucid.state.session;
-            let groups = 0, with3d = 0, withReproj = 0;
-            for (const [, gs] of s.instanceGroups) {
-                for (const g of gs) {
-                    groups++;
-                    if (g.points3d && g.points3d.length) {
-                        let any = false;
-                        for (let i = 0; i < g.points3d.length; i++) {
-                            if (Number.isFinite(g.points3d[i])) { any = true; break; }
-                        }
-                        if (any) with3d++;
-                    }
-                    if (g.reprojections && Object.keys(g.reprojections).length) withReproj++;
-                }
-            }
-            return {
-                groups, with3d, withReproj,
-                resident: s.frameGroups.size,
-                triResults: window.__lucid.state.triangulationResults.size,
-                nFrames: s.lazyLoader ? s.lazyLoader.nFrames : 0,
-                cams: s.cameras.map(c => c.name),
-            };
-        });
-        log(`[${el()}] after sweep: ${post.groups.toLocaleString()} groups, ` +
-            `${post.with3d.toLocaleString()} with finite 3D, ${post.withReproj.toLocaleString()} carrying reprojections, ` +
-            `resident=${post.resident}, triResults=${post.triResults}`);
-        check(post.with3d > post.groups * 0.95,
-            `3D present on ~every group after the sweep (${post.with3d.toLocaleString()}/${post.groups.toLocaleString()})`);
-
-        // ---- navigate like a user and read what the overlay/panel would draw ----
-        log(`\n[${el()}] === navigating to probe frames ===`);
-        const N = post.nFrames || 0;
-        const probeFrames = [0, 1, 2, Math.floor(N * 0.25), Math.floor(N * 0.5),
-                             Math.floor(N * 0.75), Math.max(0, N - 2)];
-        const rows = [];
-        for (const f of probeFrames) {
-            const row = await page2.evaluate(async (frameIdx) => {
-                const st = window.__lucid.state;
-                const init = await import('/pose/initialization.js');
-                await init.navigateToFrame(frameIdx);
-                for (let i = 0; i < 200; i++) {
-                    await new Promise(r => setTimeout(r, 50));
-                    if (st.session.frameGroups.has(frameIdx)) break;
-                }
-                await new Promise(r => setTimeout(r, 300));
-                const groups = st.session.instanceGroups.get(frameIdx) || [];
-                const reprojCams = new Set();
-                let withReproj = 0, with3d = 0, members = 0, membersWith2d = 0;
-                for (const g of groups) {
-                    if (g.points3d && g.points3d.length) {
-                        for (let i = 0; i < g.points3d.length; i++) {
-                            if (Number.isFinite(g.points3d[i])) { with3d++; break; }
-                        }
-                    }
-                    const rp = g.reprojections ? Object.keys(g.reprojections) : [];
-                    if (rp.length) { withReproj++; rp.forEach(c => reprojCams.add(c)); }
-                    for (const [cn, inst] of g.instances) {
-                        members++;
-                        if (inst && inst.hasAnyUsablePoint && inst.hasAnyUsablePoint()) membersWith2d++;
-                    }
-                }
-                return {
-                    f: frameIdx, resident: st.session.frameGroups.has(frameIdx),
-                    groups: groups.length, with3d, withReproj,
-                    reprojCams: Array.from(reprojCams).sort(),
-                    members, membersWith2d,
-                    triRes: (st.triangulationResults.get(frameIdx) || []).length,
-                };
-            }, f);
-            rows.push(row);
-            log(`  frame ${String(row.f).padStart(7)}: groups=${row.groups} 3D=${row.with3d} ` +
-                `reprojGroups=${row.withReproj} reprojCams=${row.reprojCams.length}/${post.cams.length} ` +
-                `members=${row.members}(2D:${row.membersWith2d}) triRes=${row.triRes}` +
-                (row.reprojCams.length && row.reprojCams.length < post.cams.length
-                    ? `  <-- ONLY [${row.reprojCams.join(', ')}]` : ''));
+        log(`\n[${el()}] === AFTER Triangulate All: same frames, same transport ===`);
+        const afterRows = [];
+        for (const f of [START, START + 1, START + 2, START + 3]) {
+            const r = await paintProbe(f, 'seek');
+            afterRows.push(r); log('  ' + fmt(r));
         }
 
-        const noReproj = rows.filter(r => r.groups > 0 && r.withReproj === 0);
-        const partial = rows.filter(r => r.withReproj > 0 && r.reprojCams.length < post.cams.length);
-        const no2d = rows.filter(r => r.members > 0 && r.membersWith2d === 0);
+        log(`\n[${el()}] === AFTER: press PLAY and sample ===`);
+        await page2.evaluate(async () => {
+            const st = window.__lucid.state;
+            if (window.__lucid.videoController) {
+                await window.__lucid.videoController.seekToFrame(2000);
+                if (window.__lucid.videoController.startPlayback) window.__lucid.videoController.startPlayback();
+                else if (window.__lucid.videoController.play) window.__lucid.videoController.play();
+            }
+        });
+        const playSamples = [];
+        for (let i = 0; i < 6; i++) {
+            await new Promise(r => setTimeout(r, 1200));
+            const s = await page2.evaluate(() => {
+                const st = window.__lucid.state;
+                const per = [];
+                for (const v of st.views) {
+                    if (!v.overlayCanvas || !v.overlayCtx) { per.push({ name: v.name, painted: -1 }); continue; }
+                    let painted = 0;
+                    try {
+                        const d = v.overlayCtx.getImageData(0, 0, v.overlayCanvas.width, v.overlayCanvas.height).data;
+                        for (let k = 3; k < d.length; k += 4) if (d[k] !== 0) painted++;
+                    } catch (e) { painted = -2; }
+                    per.push({ name: v.name, painted });
+                }
+                return { f: st.currentFrame, per };
+            });
+            playSamples.push(s);
+            log(`  play sample ${i}: frame ${s.f} painted=` + s.per.map(p => `${p.name}:${p.painted}`).join(' '));
+        }
+        await page2.evaluate(() => {
+            const vc = window.__lucid.videoController;
+            if (vc && vc.stopPlayback) vc.stopPlayback();
+        });
+
+        const anyPainted = (rows) => rows.filter(r => r.per.some(p => p.painted > 0)).length;
         log('');
-        log(`SUMMARY over ${rows.length} probe frames:`);
-        log(`  frames with NO reprojections at all : ${noReproj.length}  [${noReproj.map(r => r.f).join(', ')}]`);
-        log(`  frames with only SOME cameras       : ${partial.length}  [${partial.map(r => r.f).join(', ')}]`);
-        log(`  frames whose members have NO 2D     : ${no2d.length}  [${no2d.map(r => r.f).join(', ')}]`);
-        check(noReproj.length === 0, 'every probe frame recomputed its reprojections after navigation');
-        check(partial.length === 0, 'every probe frame recomputed reprojections for ALL cameras');
+        log(`SUMMARY (frames with ANY painted overlay pixels):`);
+        log(`  before triangulate, cold : ${anyPainted(beforeRows)}/${beforeRows.length}`);
+        log(`  before triangulate, warm : ${anyPainted(warmRows)}/${warmRows.length}`);
+        log(`  after  triangulate       : ${anyPainted(afterRows)}/${afterRows.length}`);
+        log(`  during playback after    : ${anyPainted(playSamples)}/${playSamples.length}`);
+        // PIXELS ARE NOT ENOUGH. The raw 2D skeletons keep drawing even when every
+        // group (and its 3D + reprojections) has been destroyed, so a
+        // "some pixels are painted" assertion passes straight through the bug this
+        // harness exists to catch — it did, on the run that first reproduced it.
+        // Assert on the GROUP COUNT, which is what actually vanished: 3 -> 0.
+        log('');
+        log('GROUP COUNTS per probe frame (before -> after):');
+        let lost = 0;
+        for (let i = 0; i < beforeRows.length; i++) {
+            const b = beforeRows[i], a = afterRows[i];
+            const bad = b.groups > 0 && a.groups < b.groups;
+            if (bad) lost++;
+            log(`  frame ${b.f}: groups ${b.groups} -> ${a.groups}, ` +
+                `reprojGroups ${b.withReproj} -> ${a.withReproj}${bad ? '   <-- LOST' : ''}`);
+        }
+        check(lost === 0, `no probe frame lost instance groups to Triangulate All (${lost} did)`);
+        check(afterRows.every(r => r.withReproj >= 1 || r.groups === 0),
+            'frames that still have groups also still resolve reprojections');
+        check(anyPainted(afterRows) === afterRows.length,
+            'every stepped frame still paints overlays AFTER Triangulate All');
+        check(anyPainted(playSamples) > 0,
+            'playback paints overlays AFTER Triangulate All');
 
         await page2.close();
     }

@@ -297,6 +297,13 @@ export async function groupByIdentityAndTriangulateAll() {
     // Memory-bounded sweep over every frame (windows + release on lazy sessions),
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
     var processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
+        // `fg` is undefined for a frame that has 3D grouping but no resident 2D
+        // (the sweep's contract — see `sweepLazyFrameWindows`). Without this guard
+        // the very next line throws a TypeError, which aborts the whole operation
+        // PART-WAY THROUGH — after step 2 below has already deleted the
+        // instanceGroups of every frame processed so far. Losing 3D on an
+        // arbitrary prefix of the project is the worst possible failure here.
+        if (!fg) return;
 
         // 1. Collect all instances, bucket by identityId
         //    identityId -> { camName -> Instance }
@@ -331,6 +338,48 @@ export async function groupByIdentityAndTriangulateAll() {
                 if (!idBuckets[identityId2]) idBuckets[identityId2] = {};
                 if (!idBuckets[identityId2][camName2]) idBuckets[identityId2][camName2] = ulInst;
             }
+        }
+
+        // 1b. IDENTITY FALLBACK + DESTRUCTION GUARD (the "Triangulate All deleted
+        //     my 3D" bug). Step 2 below deletes this frame's instanceGroups —
+        //     and with them their `points3d` — BEFORE knowing whether step 3 can
+        //     rebuild anything. Step 3 only builds a group when
+        //     `getIdentityIdForTrack(cam, inst.trackIdx, frameIdx)` resolves on
+        //     >= 2 cameras. On a reopened project that lookup can come back null
+        //     for every instance (identity is carried on `group.identityId`, and
+        //     the per-frame track->identity entries do not necessarily key by the
+        //     trackIdx the rehydrated instances carry), so the frame lost all of
+        //     its 3D, IDs and reprojections and got nothing back. Measured on the
+        //     real 180,210-frame project: groups 3 -> 0 on every probe frame.
+        //
+        //     So: (a) fall back to the identity already recorded on the existing
+        //     group for that instance, which is the same identity this operation
+        //     is trying to group by; and (b) if after that NOTHING would be
+        //     rebuilt, leave the frame completely alone rather than emptying it.
+        //     Grouping that cannot improve a frame must not destroy it.
+        var _existing = session.instanceGroups.get(frameIdx);
+        if (_existing && _existing.length) {
+            for (var _eg = 0; _eg < _existing.length; _eg++) {
+                var _grp = _existing[_eg];
+                if (_grp.identityId == null || _grp.identityId < 0) continue;
+                for (var [_ecam, _einst] of _grp.instances) {
+                    if (!_einst) continue;
+                    // Only fills gaps — a resolvable per-frame identity still wins.
+                    if (!idBuckets[_grp.identityId]) idBuckets[_grp.identityId] = {};
+                    if (!idBuckets[_grp.identityId][_ecam]) idBuckets[_grp.identityId][_ecam] = _einst;
+                }
+            }
+        }
+        var _wouldBuild = 0;
+        for (var _bk in idBuckets) {
+            if (Object.keys(idBuckets[_bk]).length >= 2) _wouldBuild++;
+        }
+        if (_wouldBuild === 0) {
+            if (_existing && _existing.length) {
+                console.warn('[groupByIdentity] frame ' + frameIdx + ': no identity resolved on >=2 ' +
+                    'cameras; keeping the ' + _existing.length + ' existing group(s) rather than deleting them.');
+            }
+            return;
         }
 
         // 2. Clear existing groups and instances for this frame
