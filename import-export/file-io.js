@@ -14,7 +14,7 @@
 import { Camera, Skeleton, Instance, Identity,
          toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js';
 import { validateSkeletonCompatibility } from './slp-merge.js';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js';
 
 // ============================================
 // Generic file picker
@@ -1080,6 +1080,184 @@ export function buildPerCameraSlpJson(session, cameraName, reprojAsUser, videoFi
  * @param {Object} videoFileInfo - { videoWidth, videoHeight, frameCount, videoPath, file }
  * @returns {Object} sleap-io.js Labels instance
  */
+/**
+ * Build ONE camera's `SIO.LabeledFrame` for one frame — the per-frame half of
+ * `buildSlpLabels`, extracted so the EAGER exporter (whole project resident, a
+ * from-scratch session) and the STREAMING exporter (windowed, a lazily reopened
+ * session) emit byte-identical frames from identical logic.
+ *
+ * Sharing this is the point, not a tidy-up: a from-scratch project exported fine
+ * only because every frame was resident, so the eager builder saw the whole
+ * project. Reimplementing the frame body for the lazy path would let the two
+ * drift, which is how "export works on a new project but not a loaded one" got
+ * here in the first place.
+ *
+ * @param {Object} env { skeleton, tracks, video, numNodes, instanceFilter, reprojAsUser }
+ * @returns {Object|null} the LabeledFrame, or null when this camera has nothing
+ *   on this frame (the caller skips it, exactly as the eager loop's `continue` did).
+ */
+function _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env) {
+    var SIO = window.SleapIO;
+    var skeleton = env.skeleton, tracks = env.tracks, video = env.video;
+    var numNodes = env.numNodes, instanceFilter = env.instanceFilter;
+    var reprojAsUser = env.reprojAsUser;
+    if (!fg) return null;
+
+    // Separate grouped instances from ungrouped for this camera
+    // Apply instanceFilter if provided: { user: bool, predicted: bool, reprojected: bool }
+    var groupedInstances = [];
+    var rawGrouped = fg.instances.get(cameraName) || [];
+    for (var gi2 = 0; gi2 < rawGrouped.length; gi2++) {
+        var gType = rawGrouped[gi2].type || 'user';
+        if (!instanceFilter || instanceFilter[gType] !== false) {
+            groupedInstances.push(rawGrouped[gi2]);
+        }
+    }
+
+    var ungroupedInstances = [];
+    if (!instanceFilter || instanceFilter.user !== false || instanceFilter.predicted !== false) {
+        var ulInstances = fg.getUnlinkedInstances(cameraName);
+        for (var ui = 0; ui < ulInstances.length; ui++) {
+            var ulType = ulInstances[ui].instance.type || 'user';
+            if (!instanceFilter || instanceFilter[ulType] !== false) {
+                ungroupedInstances.push(ulInstances[ui].instance);
+            }
+        }
+    }
+
+    // Collect reprojected instances with their group's trackIdx
+    var reprojInstances = [];
+    if (!instanceFilter || instanceFilter.reprojected !== false) {
+        var groups = session.instanceGroups.get(frameIdx);
+        if (groups) {
+            for (var gi = 0; gi < groups.length; gi++) {
+                var reprojInst = getOrComputeReprojectedInstance(groups[gi], cameraName);
+                if (reprojInst) {
+                    // Find track from the group's instance for this camera (or any camera)
+                    var grpTrackIdx = -1;
+                    var grpCamInst = groups[gi].getInstance(cameraName);
+                    if (grpCamInst && grpCamInst.trackIdx >= 0) {
+                        grpTrackIdx = grpCamInst.trackIdx;
+                    } else {
+                        for (var [, gInst] of groups[gi].instances) {
+                            if (gInst.trackIdx >= 0) { grpTrackIdx = gInst.trackIdx; break; }
+                        }
+                    }
+                    reprojInst._groupTrackIdx = grpTrackIdx;
+                    reprojInstances.push(reprojInst);
+                }
+            }
+        }
+    }
+
+    if (groupedInstances.length === 0 && ungroupedInstances.length === 0 && reprojInstances.length === 0) return null;
+
+    var frameInstances = [];
+    // Tracks already placed in THIS frame, so an ungrouped instance never
+    // duplicates a track a grouped instance holds (SLEAP forbids two
+    // instances sharing a (frame, track) pair).
+    var usedTrackIdx = {};
+
+    // 1. Grouped UserInstances first (retain their track)
+    for (var ii = 0; ii < groupedInstances.length; ii++) {
+        var inst = groupedInstances[ii];
+        var instIsPred = inst.type === 'predicted';
+        var instScore = inst.score != null ? inst.score : 1.0;
+        var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
+        // inst.trackIdx can be null (trackless UserInstance imported
+        // from a 2D SLP with track=null). `null >= 0` is true in JS
+        // so we need the explicit != null guard before the range check.
+        var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
+        if (track) usedTrackIdx[inst.trackIdx] = true;
+
+        if (inst.type === 'user') {
+            frameInstances.push(new SIO.Instance({
+                points: pts,
+                skeleton: skeleton,
+                track: track,
+            }));
+        } else {
+            frameInstances.push(new SIO.PredictedInstance({
+                points: pts,
+                skeleton: skeleton,
+                track: track,
+                score: instScore,
+            }));
+        }
+    }
+
+    // 2. Ungrouped (unlinked) instances next — keep their OWN track so a
+    //    flat 2D project's tracks survive export. Skip a track already held
+    //    by a grouped instance this frame (SLEAP forbids two instances on
+    //    the same (frame, track)).
+    for (var ugi = 0; ugi < ungroupedInstances.length; ugi++) {
+        var ugInst = ungroupedInstances[ugi];
+        var ugIsPred = ugInst.type === 'predicted';
+        var ugScore = ugInst.score != null ? ugInst.score : 1.0;
+        var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
+        var ugTrack = (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
+            ugInst.trackIdx < tracks.length && !usedTrackIdx[ugInst.trackIdx])
+            ? tracks[ugInst.trackIdx] : null;
+        if (ugTrack) usedTrackIdx[ugInst.trackIdx] = true;
+
+        if (ugInst.type === 'user') {
+            frameInstances.push(new SIO.Instance({
+                points: ugPts,
+                skeleton: skeleton,
+                track: ugTrack,
+            }));
+        } else {
+            frameInstances.push(new SIO.PredictedInstance({
+                points: ugPts,
+                skeleton: skeleton,
+                track: ugTrack,
+                score: ugScore,
+            }));
+        }
+    }
+
+    // 3/4. Reprojections — track is ALWAYS null regardless of output type.
+    //   - As UserInstance: SLEAP data model forbids two UserInstances on
+    //     the same (view, track) pair, and step 1 above already put the
+    //     grouped user instance on the group's track in this view.
+    //   - As PredictedInstance: sharing the group's track causes two
+    //     problems on LUCID re-import — the flat 2D SLP has no 3D points
+    //     so reprojections can't be reconstructed as such, and the
+    //     "group by trackIdx" import fallback buckets the prediction with
+    //     the user instance (same cam, same track), where Map-keyed-by-
+    //     camera-name means one overwrites the other.
+    //   Dropping the track on both sides loses per-track color in SLEAP
+    //   GUI but keeps the data safe for round-tripping.
+    if (reprojAsUser !== null) {
+        for (var ri = 0; ri < reprojInstances.length; ri++) {
+            var rInst = reprojInstances[ri];
+            var rScore = rInst.score != null ? rInst.score : 1.0;
+            var rPts = _buildSioPoints(rInst, numNodes, reprojAsUser ? undefined : rScore);
+
+            if (reprojAsUser) {
+                frameInstances.push(new SIO.Instance({
+                    points: rPts,
+                    skeleton: skeleton,
+                    track: null,
+                }));
+            } else {
+                frameInstances.push(new SIO.PredictedInstance({
+                    points: rPts,
+                    skeleton: skeleton,
+                    track: null,
+                    score: rScore,
+                }));
+            }
+        }
+    }
+
+    return new SIO.LabeledFrame({
+        video: video,
+        frameIdx: frameIdx,
+        instances: frameInstances,
+    });
+}
+
 export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
@@ -1137,159 +1315,11 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
         var frameIdx = allFrameIndices[fi];
         var fg = session.frameGroups.get(frameIdx);
 
-        // Separate grouped instances from ungrouped for this camera
-        // Apply instanceFilter if provided: { user: bool, predicted: bool, reprojected: bool }
-        var groupedInstances = [];
-        var rawGrouped = fg.instances.get(cameraName) || [];
-        for (var gi2 = 0; gi2 < rawGrouped.length; gi2++) {
-            var gType = rawGrouped[gi2].type || 'user';
-            if (!instanceFilter || instanceFilter[gType] !== false) {
-                groupedInstances.push(rawGrouped[gi2]);
-            }
-        }
-
-        var ungroupedInstances = [];
-        if (!instanceFilter || instanceFilter.user !== false || instanceFilter.predicted !== false) {
-            var ulInstances = fg.getUnlinkedInstances(cameraName);
-            for (var ui = 0; ui < ulInstances.length; ui++) {
-                var ulType = ulInstances[ui].instance.type || 'user';
-                if (!instanceFilter || instanceFilter[ulType] !== false) {
-                    ungroupedInstances.push(ulInstances[ui].instance);
-                }
-            }
-        }
-
-        // Collect reprojected instances with their group's trackIdx
-        var reprojInstances = [];
-        if (!instanceFilter || instanceFilter.reprojected !== false) {
-            var groups = session.instanceGroups.get(frameIdx);
-            if (groups) {
-                for (var gi = 0; gi < groups.length; gi++) {
-                    var reprojInst = getOrComputeReprojectedInstance(groups[gi], cameraName);
-                    if (reprojInst) {
-                        // Find track from the group's instance for this camera (or any camera)
-                        var grpTrackIdx = -1;
-                        var grpCamInst = groups[gi].getInstance(cameraName);
-                        if (grpCamInst && grpCamInst.trackIdx >= 0) {
-                            grpTrackIdx = grpCamInst.trackIdx;
-                        } else {
-                            for (var [, gInst] of groups[gi].instances) {
-                                if (gInst.trackIdx >= 0) { grpTrackIdx = gInst.trackIdx; break; }
-                            }
-                        }
-                        reprojInst._groupTrackIdx = grpTrackIdx;
-                        reprojInstances.push(reprojInst);
-                    }
-                }
-            }
-        }
-
-        if (groupedInstances.length === 0 && ungroupedInstances.length === 0 && reprojInstances.length === 0) continue;
-
-        var frameInstances = [];
-        // Tracks already placed in THIS frame, so an ungrouped instance never
-        // duplicates a track a grouped instance holds (SLEAP forbids two
-        // instances sharing a (frame, track) pair).
-        var usedTrackIdx = {};
-
-        // 1. Grouped UserInstances first (retain their track)
-        for (var ii = 0; ii < groupedInstances.length; ii++) {
-            var inst = groupedInstances[ii];
-            var instIsPred = inst.type === 'predicted';
-            var instScore = inst.score != null ? inst.score : 1.0;
-            var pts = _buildSioPoints(inst, numNodes, instIsPred ? instScore : undefined);
-            // inst.trackIdx can be null (trackless UserInstance imported
-            // from a 2D SLP with track=null). `null >= 0` is true in JS
-            // so we need the explicit != null guard before the range check.
-            var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
-            if (track) usedTrackIdx[inst.trackIdx] = true;
-
-            if (inst.type === 'user') {
-                frameInstances.push(new SIO.Instance({
-                    points: pts,
-                    skeleton: skeleton,
-                    track: track,
-                }));
-            } else {
-                frameInstances.push(new SIO.PredictedInstance({
-                    points: pts,
-                    skeleton: skeleton,
-                    track: track,
-                    score: instScore,
-                }));
-            }
-        }
-
-        // 2. Ungrouped (unlinked) instances next — keep their OWN track so a
-        //    flat 2D project's tracks survive export. Skip a track already held
-        //    by a grouped instance this frame (SLEAP forbids two instances on
-        //    the same (frame, track)).
-        for (var ugi = 0; ugi < ungroupedInstances.length; ugi++) {
-            var ugInst = ungroupedInstances[ugi];
-            var ugIsPred = ugInst.type === 'predicted';
-            var ugScore = ugInst.score != null ? ugInst.score : 1.0;
-            var ugPts = _buildSioPoints(ugInst, numNodes, ugIsPred ? ugScore : undefined);
-            var ugTrack = (ugInst.trackIdx != null && ugInst.trackIdx >= 0 &&
-                ugInst.trackIdx < tracks.length && !usedTrackIdx[ugInst.trackIdx])
-                ? tracks[ugInst.trackIdx] : null;
-            if (ugTrack) usedTrackIdx[ugInst.trackIdx] = true;
-
-            if (ugInst.type === 'user') {
-                frameInstances.push(new SIO.Instance({
-                    points: ugPts,
-                    skeleton: skeleton,
-                    track: ugTrack,
-                }));
-            } else {
-                frameInstances.push(new SIO.PredictedInstance({
-                    points: ugPts,
-                    skeleton: skeleton,
-                    track: ugTrack,
-                    score: ugScore,
-                }));
-            }
-        }
-
-        // 3/4. Reprojections — track is ALWAYS null regardless of output type.
-        //   - As UserInstance: SLEAP data model forbids two UserInstances on
-        //     the same (view, track) pair, and step 1 above already put the
-        //     grouped user instance on the group's track in this view.
-        //   - As PredictedInstance: sharing the group's track causes two
-        //     problems on LUCID re-import — the flat 2D SLP has no 3D points
-        //     so reprojections can't be reconstructed as such, and the
-        //     "group by trackIdx" import fallback buckets the prediction with
-        //     the user instance (same cam, same track), where Map-keyed-by-
-        //     camera-name means one overwrites the other.
-        //   Dropping the track on both sides loses per-track color in SLEAP
-        //   GUI but keeps the data safe for round-tripping.
-        if (reprojAsUser !== null) {
-            for (var ri = 0; ri < reprojInstances.length; ri++) {
-                var rInst = reprojInstances[ri];
-                var rScore = rInst.score != null ? rInst.score : 1.0;
-                var rPts = _buildSioPoints(rInst, numNodes, reprojAsUser ? undefined : rScore);
-
-                if (reprojAsUser) {
-                    frameInstances.push(new SIO.Instance({
-                        points: rPts,
-                        skeleton: skeleton,
-                        track: null,
-                    }));
-                } else {
-                    frameInstances.push(new SIO.PredictedInstance({
-                        points: rPts,
-                        skeleton: skeleton,
-                        track: null,
-                        score: rScore,
-                    }));
-                }
-            }
-        }
-
-        labeledFrames.push(new SIO.LabeledFrame({
-            video: video,
-            frameIdx: frameIdx,
-            instances: frameInstances,
-        }));
+        var _lf = _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, {
+            skeleton: skeleton, tracks: tracks, video: video, numNodes: numNodes,
+            instanceFilter: instanceFilter, reprojAsUser: reprojAsUser,
+        });
+        if (_lf) labeledFrames.push(_lf);
     }
 
     // 5. Create Labels. Do NOT pass identities — the sleap-io.js
@@ -1441,6 +1471,159 @@ function instanceFilterAllowsLazyFastPath(instanceFilter) {
         instanceFilter.user !== false;
 }
 
+/**
+ * Skeleton + tracks + video for a per-camera export. Shared by the eager
+ * (`buildSlpLabels`) and streaming (`exportCameraSlpStreaming`) paths so their
+ * headers cannot drift either.
+ */
+function _buildCameraExportHeader(session, cameraName, videoFileInfo) {
+    var SIO = window.SleapIO;
+    videoFileInfo = videoFileInfo || {};
+    var nodeNames = session.skeleton.nodes.map(function (n) {
+        return typeof n === 'string' ? n : (n.name || '');
+    });
+    var sioNodes = nodeNames.map(function (name) { return new SIO.Node(name); });
+    var sioEdges = (session.skeleton.edges || []).map(function (e) {
+        return new SIO.Edge(sioNodes[e[0]], sioNodes[e[1]]);
+    });
+    var skeleton = new SIO.Skeleton({
+        nodes: sioNodes, edges: sioEdges, name: session.skeleton.name || 'skeleton',
+    });
+    var tracks = session.tracks.map(function (name) { return new SIO.Track(name); });
+    var videoFilename = videoFileInfo.videoPath
+        || (videoFileInfo.file ? videoFileInfo.file.name : (cameraName + '.mp4'));
+    var vw = videoFileInfo.videoWidth || 0;
+    var vh = videoFileInfo.videoHeight || 0;
+    var fc = videoFileInfo.frameCount || 0;
+    var video = new SIO.Video({
+        filename: videoFilename,
+        backendMetadata: {
+            type: 'MediaVideo', shape: [fc, vh, vw, 1],
+            filename: videoFilename, grayscale: false, bgr: false,
+        },
+        openBackend: false,
+    });
+    video.shape = [fc, vh, vw, 1];
+    return { skeleton: skeleton, tracks: tracks, video: video,
+             numNodes: session.skeleton.nodes.length };
+}
+
+/**
+ * Per-camera SLP export for a LAZILY REOPENED project — the whole project,
+ * memory-bounded.
+ *
+ * ## Why this exists
+ *
+ * A from-scratch session exports correctly because every frame is RESIDENT, so
+ * `buildSlpLabels`'s loop over `session.frameGroups` sees the whole project. A
+ * reopened session materializes 2D on demand, so that same loop saw 5,447 of
+ * 180,210 frames on the real project and wrote a structurally valid `.slp`
+ * containing 3% of the labels. The `lazyCameraExportBytes` fast path avoids that
+ * by re-emitting the columnar store verbatim, but it cannot be used when any
+ * resident frame holds a manual correction (the store still has the original
+ * prediction), when reprojections are requested, or for a multi-camera
+ * selection — i.e. it is unavailable in exactly the situations that matter.
+ *
+ * ## The strategy
+ *
+ * Make the lazy path do what the resident path does, one window at a time:
+ * `sweepLazyFrameWindows` hydrates a window of real 2D, each frame goes through
+ * the SAME `_buildCameraLabeledFrame` the eager exporter uses, the frames are
+ * appended to the streaming writer, and the window is released. Peak memory is
+ * one window plus one batch of frames regardless of project size, and a
+ * from-scratch project and a reopened project produce the same output because
+ * they run the same frame builder over the same skeleton/tracks/video header.
+ *
+ * Corrections come along for free: the sweep hydrates the live 2D, including
+ * resident user-edited frames, which is precisely what the verbatim fast path
+ * could not express. `writer.appendFrames` dedups by `(video, frameIdx)`, so a
+ * frame can never be written twice.
+ *
+ * Identities are deliberately NOT passed to the writer, matching
+ * `buildSlpLabels`: a non-empty `identities` bumps the format to 1.9, which
+ * sleap-io Python <= 0.6.x cannot read. This is a flat per-camera dump, not a
+ * project round-trip.
+ *
+ * @param {Object} opts `{ sink }` streams straight to a
+ *   `FileSystemWritableFileStream` instead of returning bytes; `{ onProgress }`.
+ * @returns {Promise<Uint8Array|null>} bytes, or null when streamed to a sink.
+ */
+export async function exportCameraSlpStreaming(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter, opts) {
+    var SIO = window.SleapIO;
+    if (!SIO || typeof SIO.openSlpWriter !== 'function') {
+        throw new Error('sleap-io.js streaming writer (openSlpWriter) not available');
+    }
+    opts = opts || {};
+    var env = _buildCameraExportHeader(session, cameraName, videoFileInfo);
+    env.instanceFilter = instanceFilter;
+    env.reprojAsUser = reprojAsUser;
+
+    var writer = await SIO.openSlpWriter({
+        skeletons: [env.skeleton],
+        videos: [env.video],
+        tracks: env.tracks,
+        identities: [],
+        sessions: [],
+        provenance: { source: 'lucid', exported_at: new Date().toISOString() },
+    });
+
+    // COVERAGE PRECONDITION. `sweepLazyFrameWindows` hydrates through
+    // `batchLoadLazyFrames`, which operates on the ACTIVE `state.session`. For any
+    // other session (a multi-session project's non-active sessions) nothing
+    // hydrates, and this would emit a resident-only file — the very truncation it
+    // exists to prevent, just harder to notice. So count the frames the sweep
+    // actually offered and compare against the frames this camera HAS in the
+    // store; short means hydration did not happen and the export must fail loudly
+    // rather than write a plausible partial file.
+    var rowMap = session.lazyLoader && session.lazyLoader.frameRowByCam
+        ? session.lazyLoader.frameRowByCam.get(cameraName) : null;
+    var expectedFrames = rowMap ? rowMap.size : 0;
+
+    var BATCH = 256;
+    var batch = [];
+    var nFrames = 0;
+    var nVisited = 0;
+    try {
+        await sweepLazyFrameWindows(session, function (frameIdx, fg) {
+            // `fg` is undefined for a frame with 3D grouping but no resident 2D
+            // (the sweep's contract) — nothing to emit for a 2D export.
+            if (!fg) return;
+            nVisited++;
+            var lf = _buildCameraLabeledFrame(session, cameraName, frameIdx, fg, env);
+            // A frame with no instances for THIS camera (or none surviving
+            // `instanceFilter`) yields null — legitimately fewer written than
+            // visited, which is why the coverage check below uses `nVisited`.
+            if (!lf) return;
+            batch.push(lf);
+            nFrames++;
+            if (batch.length >= BATCH) {
+                writer.appendFrames(batch);
+                batch = [];
+            }
+        }, {
+            onProgress: opts.onProgress,
+        });
+        if (batch.length > 0) writer.appendFrames(batch);
+        console.log('[export-slp-streaming] camera', cameraName + ':', nFrames.toLocaleString(),
+            'labeled frames written,', nVisited.toLocaleString(), 'of', expectedFrames.toLocaleString(),
+            'store frames visited');
+        if (expectedFrames > 0 && nVisited < expectedFrames) {
+            throw new Error('Export aborted: only ' + nVisited.toLocaleString() + ' of ' +
+                expectedFrames.toLocaleString() + ' frames could be read for camera "' + cameraName +
+                '", so the file would be incomplete. This happens when exporting a session that is ' +
+                'not the one currently open — switch to that session and export again.');
+        }
+        if (opts.sink) {
+            await writer.writeToSink(opts.sink, { chunkBytes: opts.chunkBytes });
+            return null;
+        }
+        return writer.close();
+    } catch (err) {
+        try { if (typeof writer.dispose === 'function') writer.dispose(); } catch (e) { /* ignore */ }
+        throw err;
+    }
+}
+
 export async function exportSlpClientSide(session, cameraName, reprojAsUser, videoFileInfo, outputFilename, instanceFilter) {
     var SIO = window.SleapIO;
     if (!SIO) throw new Error('sleap-io.js not loaded');
@@ -1455,9 +1638,16 @@ export async function exportSlpClientSide(session, cameraName, reprojAsUser, vid
         if (lazyBytes) return new Blob([lazyBytes], { type: 'application/x-hdf5' });
     }
 
-    // Same truncation hazard as the multi-session exporter below — this eager
-    // builder is resident-only too. See `assertExportCoversProject`.
-    assertExportCoversProject([{ session: session, cameraName: cameraName }]);
+    // The eager builder below is RESIDENT-ONLY, which is correct for a
+    // from-scratch project (every frame resident) and silently truncating for a
+    // lazily reopened one. When the fast path above could not be used and the
+    // project would be truncated, stream the WHOLE project through the same
+    // per-frame builder instead — see `exportCameraSlpStreaming`.
+    if (_exportWouldTruncate(session)) {
+        var streamBytes = await exportCameraSlpStreaming(
+            session, cameraName, reprojAsUser, videoFileInfo, instanceFilter);
+        return new Blob([streamBytes], { type: 'application/x-hdf5' });
+    }
     var labels = buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo, instanceFilter);
     // PR 5.2: export sleap-io.js's raw bytes directly. SLEAP >= 1.6.0 (sleap-io
     // >= 0.7.0) reads the flat-matrix `field_names` layout natively (#378), so
@@ -1737,6 +1927,18 @@ export async function exportSlpMultiSession(selections, reprojAsUser, instanceFi
         if (lazyBytes) return new Blob([lazyBytes], { type: 'application/x-hdf5' });
     }
 
+    // One selection = one (session, camera) = exactly what the streaming
+    // per-camera exporter handles. This is the "Export Per Session" / "By Cam"
+    // shape for a single-session project, which is the case that was truncating.
+    if (selections.length === 1 && _exportWouldTruncate(selections[0].session)) {
+        var oneBytes = await exportCameraSlpStreaming(
+            selections[0].session, selections[0].cameraName, reprojAsUser,
+            selections[0].videoFileInfo, instanceFilter);
+        return new Blob([oneBytes], { type: 'application/x-hdf5' });
+    }
+    // Multi-selection (several sessions/cameras into ONE file) still has no
+    // streaming implementation — it needs a multi-video writer header and a
+    // per-selection sweep. Refuse rather than truncate.
     assertExportCoversProject(selections);
     var labels = buildSlpLabelsMultiSession(selections, reprojAsUser, instanceFilter);
     var bytes = await SIO.saveSlpToBytes(labels);   // PR 5.2: raw output (no v0.6 post-pass)
@@ -1770,6 +1972,14 @@ export async function exportSlpMultiSession(selections, reprojAsUser, instanceFi
  *
  * @param {Array<{session, cameraName}>} selections
  */
+function _exportWouldTruncate(session) {
+    var loader = session && session.lazyLoader;
+    if (!loader) return false;                       // fully resident: nothing to lose
+    var total = loader.nFrames || 0;
+    var resident = session.frameGroups ? session.frameGroups.size : 0;
+    return total > 0 && resident < total;
+}
+
 function assertExportCoversProject(selections) {
     var truncated = [];
     for (var i = 0; i < (selections || []).length; i++) {

@@ -3338,6 +3338,34 @@ SLP-LABELS bytes-builder used by export, points3d / reproj H5 builders,
 parser stubs that spawn `slp-import-worker.js`. The "low-level" file
 layer.
 
+**Per-camera export is STREAMED on a lazy project (`exportCameraSlpStreaming`).**
+The eager builders iterate `session.frameGroups` — the RESIDENT map. That is why a
+**from-scratch** project exported correctly (every frame resident, so the loop saw
+the whole project) while a **reopened** one silently wrote 5,447 of 180,210
+frames: same code, different residency. The fix makes the lazy path do what the
+resident path does, one window at a time. `_buildCameraExportHeader`
+(skeleton/tracks/video) and `_buildCameraLabeledFrame` (one camera's frame) are
+now SHARED by both paths — extracted precisely so they cannot drift, since a
+second implementation for the lazy path is how this divergence arose.
+`exportCameraSlpStreaming` opens `SIO.openSlpWriter`, drives
+`sweepLazyFrameWindows` (hydrate → build → `appendFrames` → release, 256-frame
+batches), and finalizes to bytes or a sink; peak is one window regardless of
+project size. Manual corrections survive because the sweep hydrates live 2D — the
+case the verbatim `lazyCameraExportBytes` fast path structurally cannot handle.
+Identities are deliberately NOT passed (matching `buildSlpLabels`: non-empty
+`identities` bumps the format to 1.9, unreadable by sleap-io Python <= 0.6.x).
+`exportSlpClientSide` and single-selection `exportSlpMultiSession` route here
+whenever `_exportWouldTruncate(session)`; fully-resident projects keep the eager
+path untouched. **Coverage precondition:** `sweepLazyFrameWindows` hydrates via
+`batchLoadLazyFrames`, which reads the ACTIVE `state.session` — so a non-active
+session in a multi-session project hydrates nothing and would emit a
+resident-only file. The exporter counts frames the sweep offered against that
+camera's store rows and THROWS if short, naming the numbers. Verified on the real
+project: camera 21241563 exported **180,209 of 180,210 frames** (524,829
+instances, 95 tracks, 203.7 MB, 75.7 s) versus 5,447 before, and the output
+reopens. Multi-selection into ONE file still refuses (needs a multi-video writer
+header) — see below.
+
 **Export truncation guard (`assertExportCoversProject`).** The eager builders
 (`buildSlpLabels`, `buildSlpLabelsMultiSession`, `buildSlpLabelsAllViews`,
 `buildPerCameraSlpJson`, `buildSlpExportData`) all iterate `session.frameGroups`

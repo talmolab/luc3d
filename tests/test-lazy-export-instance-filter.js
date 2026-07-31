@@ -244,18 +244,18 @@
                 'replaced by the original uncorrected prediction');
         });
 
-        it('a PARTIALLY resident lazy session refuses the eager export instead of truncating it', async function () {
-            // The two guards interact badly on their own: `lazyCameraExportBytes`
-            // bails whenever a resident frame carries a user correction (above),
-            // and the eager builder it falls back to walks `session.frameGroups`
-            // — the resident map. So "correct one instance, then export" silently
-            // produced a valid .slp holding the resident handful of frames (31 of
-            // 180,210 on the real project) with the correction in it and
-            // everything else gone. Correcting predictions is the entire point of
-            // the app, so that is the NORMAL path, not an edge case.
+        it('a PARTIALLY resident lazy session STREAMS the whole project (not just resident frames)', async function () {
+            // The bug this pins: a from-scratch project exported fine because every
+            // frame was resident, so `buildSlpLabels`'s loop over
+            // `session.frameGroups` saw everything; a reopened project materializes
+            // 2D on demand, so the same loop saw 5,447 of 180,210 frames on the real
+            // project and wrote a valid .slp holding 3% of the labels.
             //
-            // Until a streaming correction-aware exporter exists, refuse. This
-            // asserts the refusal AND that the message says what to do instead.
+            // The verbatim fast path (`lazyCameraExportBytes`) cannot rescue this
+            // case: a resident frame carries a USER CORRECTION, and re-emitting the
+            // store would export the original prediction over it. So the export must
+            // stream the whole project through the same per-frame builder the eager
+            // path uses — covering every frame AND keeping the correction.
             const S = window.SleapIO;
             const { exportSlpClientSide } = await import('../import-export/file-io.js');
 
@@ -275,6 +275,7 @@
             const session = new Session([cD], sk, ['t0', 't1'], 'ExpS4');
             session.lazyLoader = loader;
 
+            // Frame 1 corrected in memory; frames 0 and 2 exist only in the store.
             const fg1 = new FrameGroup(1);
             const corrected = new Instance([[999, 999], [999, 999]], 0, 'user', 1.0);
             corrected.modified = true;
@@ -282,18 +283,40 @@
             session.addFrameGroup(fg1);
             assertTrue(session.frameGroups.size < N, 'precondition: only some frames resident');
 
+            // The streaming path hydrates through `batchLoadLazyFrames`, which reads
+            // the ACTIVE session — so make this session active, as it is in the app
+            // when the user exports the project they are looking at.
+            const appState = await import('../ui/app-state.js');
+            const prevSession = appState.state.session;
+            appState.state.session = session;
+
             const instanceFilter = { user: true, predicted: true, reprojected: false };
-            let threw = null;
+            let blob;
             try {
-                await exportSlpClientSide(session, 'camD', false, null, 'out4.slp', instanceFilter);
-            } catch (e) {
-                threw = e;
+                blob = await exportSlpClientSide(session, 'camD', false, null, 'out4.slp', instanceFilter);
+            } finally {
+                appState.state.session = prevSession;
             }
-            assertTrue(threw !== null, 'the truncating export was refused, not silently written');
-            assertTrue(/1 of 3 frames in memory/.test(threw.message),
-                'the error names the actual coverage: ' + (threw && threw.message));
-            assertTrue(/Save As/.test(threw.message),
-                'the error points at a way to get the whole project out');
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            const rb = await S.readSlpStreaming(new File([bytes], 'e4-rb.slp'), { lazy: true, openVideos: false, h5wasmUrl });
+            const store = rb._lazyDataStore;
+
+            assertEqual(store.framesData.frame_idx.length, N,
+                'ALL ' + N + ' frames exported, not just the 1 resident one');
+
+            // ...and the manual correction is still the thing on frame 1.
+            let foundCorrected = false;
+            const fd = store.framesData, idn = store.instancesData, pts = store.pointsData;
+            for (let r = 0; r < fd.frame_idx.length; r++) {
+                if (Number(fd.frame_idx[r]) !== 1) continue;
+                for (let j2 = Number(fd.instance_id_start[r]); j2 < Number(fd.instance_id_end[r]); j2++) {
+                    if (Number(idn.instance_type[j2]) !== 0) continue;   // 0 = user
+                    const pStart = Number(idn.point_id_start[j2]);
+                    if (Number(pts.x[pStart]) === 999 && Number(pts.y[pStart]) === 999) foundCorrected = true;
+                }
+            }
+            assertTrue(foundCorrected,
+                'the manual correction survived the streaming export (not overwritten by the store prediction)');
         });
     });
 })();
