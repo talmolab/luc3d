@@ -46,7 +46,6 @@
                 group.reprojectedInstances.clear();
             }
             group.reprojections = null;
-            group.observedPoints = null;
             group.points3d = null;
             var existing = state.triangulationResults.get(frameIdx);
             if (existing) {
@@ -130,7 +129,7 @@
             group.addReprojectedInstance('cam2',
                 new Instance([[201, 201], [251, 251]], 0, 'reprojected', 1.0));
             group.reprojections = [[101, 101], [151, 151]];
-            group.observedPoints = [[100, 100], [150, 150]];
+            // (observedPoints is DERIVED from group.instances since luc3d #189.)
             group.points3d = [[1.0, 2.0, 3.0], [1.5, 2.5, 3.5]];
         }
 
@@ -293,13 +292,15 @@
             var purge = makePurgeHelper(state);
 
             assertNotNull(env.group.reprojections, 'reprojections set before');
-            assertNotNull(env.group.observedPoints, 'observedPoints set before');
+            assertTrue(Object.keys(env.group.observedPoints).length > 0, 'members observed before');
             assertNotNull(env.group.points3d, 'points3d set before');
 
             purge(0, env.group);
 
             assertNull(env.group.reprojections, 'reprojections nulled');
-            assertNull(env.group.observedPoints, 'observedPoints nulled');
+            // (observedPoints is DERIVED from members since luc3d #189 — the purge
+            // clears reprojections/points3d, asserted here, and nothing reads
+            // observedPoints without them.)
             assertNull(env.group.points3d, 'points3d nulled');
         });
 
@@ -364,7 +365,9 @@
 
             // The other null-out fields should still be assigned.
             assertNull(env.group.reprojections);
-            assertNull(env.group.observedPoints);
+            // (observedPoints is DERIVED from members since luc3d #189 — the purge
+            // clears reprojections/points3d, asserted here, and nothing reads
+            // observedPoints without them.)
             assertNull(env.group.points3d);
 
             // Now try with undefined.
@@ -381,13 +384,17 @@
 
             // Already null — purge should idempotently null them again.
             assertNull(env.group.reprojections);
-            assertNull(env.group.observedPoints);
+            // (observedPoints is DERIVED from members since luc3d #189 — the purge
+            // clears reprojections/points3d, asserted here, and nothing reads
+            // observedPoints without them.)
             assertNull(env.group.points3d);
 
             purge(0, env.group); // must not throw
 
             assertNull(env.group.reprojections, 'still null');
-            assertNull(env.group.observedPoints, 'still null');
+            // (observedPoints is DERIVED from members since luc3d #189 — the purge
+            // clears reprojections/points3d, asserted here, and nothing reads
+            // observedPoints without them.)
             assertNull(env.group.points3d, 'still null');
         });
 
@@ -468,7 +475,9 @@
                 // Reprojection state on the orphaned group is cleared.
                 assertEqual(env.group.reprojectedInstances.size, 0, 'reprojectedInstances cleared');
                 assertNull(env.group.reprojections, 'reprojections null');
-                assertNull(env.group.observedPoints, 'observedPoints null');
+                // (observedPoints is DERIVED from members since luc3d #189 — the purge
+                // clears reprojections/points3d, asserted here, and nothing reads
+                // observedPoints without them.)
                 assertNull(env.group.points3d,
                     'points3d null — proves triangulation did NOT re-run');
 
@@ -599,7 +608,9 @@
             // Confirm there is no reprojection state at all.
             assertEqual(env.group.reprojectedInstances.size, 0, 'no reprojections');
             assertNull(env.group.reprojections);
-            assertNull(env.group.observedPoints);
+            // (observedPoints is DERIVED from members since luc3d #189 — the purge
+            // clears reprojections/points3d, asserted here, and nothing reads
+            // observedPoints without them.)
             assertNull(env.group.points3d);
 
             var state = { triangulationResults: new Map() };

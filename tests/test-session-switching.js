@@ -143,8 +143,8 @@
 
             var s1inst = s1.getFrameGroup(0).getInstances('CamA')[0];
             var s2inst = s2.getFrameGroup(0).getInstances('CamA')[0];
-            assertEqual(s1inst.points[0][0], 10, 'S1 has its own instance');
-            assertEqual(s2inst.points[0][0], 50, 'S2 has its own instance');
+            assertEqual(s1inst.getX(0), 10, 'S1 has its own instance');
+            assertEqual(s2inst.getX(0), 50, 'S2 has its own instance');
         });
     });
 
@@ -179,7 +179,7 @@
             assertEqual(sessions[0].lastFrame, 100);
             assertEqual(sessions[0]._views.length, 1);
             var inst = sessions[0].getFrameGroup(100).getInstances('CamA')[0];
-            assertEqual(inst.points[0][0], 5, 'S1 instance data intact');
+            assertEqual(inst.getX(0), 5, 'S1 instance data intact');
         });
 
         it('videoFiles sessionIdx retagging after removal', function () {
@@ -294,7 +294,7 @@
             // Verify each session has unique data
             for (var si2 = 0; si2 < 3; si2++) {
                 var inst = sessions[si2].getFrameGroup(0).getInstances('CamA')[0];
-                assertEqual(inst.points[0][0], si2 * 100, 'Session ' + si2 + ' has unique point data');
+                assertEqual(inst.getX(0), si2 * 100, 'Session ' + si2 + ' has unique point data');
             }
 
             // Modify session 1 — others unaffected

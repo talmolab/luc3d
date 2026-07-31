@@ -22,7 +22,8 @@ import {
     getCachedTimelineHeight,
     setCachedTimelineHeight,
 } from './timeline-controller.js';
-import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session } from '../pose/pose-data.js';
+import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
+         someValidPoint3d } from '../pose/pose-data.js';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject } from '../pose/triangulation.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
@@ -800,7 +801,7 @@ export function setupMenus() {
             if (groupCams.length < 2) continue;
             var result = triangulateAndReproject(group, groupCams);
             group.points3d = result.points3d;
-            if (group.points3d && group.points3d.some(function (p) { return p != null; })) {
+            if (someValidPoint3d(group.points3d)) {
                 envGroups.push(group);
             }
         }
@@ -1041,7 +1042,12 @@ export function setupMenus() {
 
     document.getElementById('menuExportLabels').addEventListener('click', function () {
         closeMenus();
-        exportLabels();
+        // `exportLabels` became async when it started streaming through a windowed
+        // sweep (luc3d #195) — catch here so a failure surfaces instead of becoming
+        // an unhandled rejection.
+        Promise.resolve(exportLabels()).catch(function (e) {
+            console.error('[menuExportLabels] export failed:', e);
+        });
     });
 
     // Deprecated: "Export 2D SLP (All Views)" was removed from the File menu.
@@ -1247,10 +1253,11 @@ function copySelectedInstance() {
     var skel = state.session.skeleton;
     var pointsByName = {};
     for (var i = 0; i < skel.nodes.length; i++) {
-        var p = inst.points[i];
+        // hasPoint/getX/getY instead of getPoint: the boxed row would be
+        // thrown away immediately (the clipboard entry gets its own array).
         pointsByName[skel.nodes[i]] = {
-            point: p ? [p[0], p[1]] : null,
-            occluded: !!(inst.occluded && inst.occluded[i])
+            point: inst.hasPoint(i) ? [inst.getX(i), inst.getY(i)] : null,
+            occluded: inst.isOccluded(i)
         };
     }
     setInstanceClipboard({

@@ -69,7 +69,7 @@
         session.trustTracks = true;
         session.identities = [new Identity(0, 'idA', '#ff0000'), new Identity(1, 'idB', '#00ff00')];
         const instA = new Instance([[10, 11], [12, 13]], 0, 'user', 0.9);
-        instA.occluded = [false, true];
+        instA.setOccludedFrom([false, true]);
         const instB = new Instance([[20, 21], [22, 23]], null, 'predicted', 0.5);
         const fg = new FrameGroup(0);
         fg.addInstance('cam0', instA);
@@ -78,7 +78,7 @@
         const grp = new InstanceGroup(1, 1); // identityId 1 -> idB
         grp.addInstance('cam0', instA);
         grp.addInstance('cam1', instB);
-        grp.points3d = [[100, 200, 300], [110, 210, 310]];
+        grp.points3d = fromBoxedPoints3d([[100, 200, 300], [110, 210, 310]]);
         session.instanceGroups.set(0, [grp]);
         return window.buildSlpLabelsAllViews(session, [], []);
     }
@@ -165,8 +165,11 @@
             for (const [, fg] of sess.frameGroups) { for (const g of (fg.instanceGroups || [])) { ig = g; break; } if (ig) break; }
             assertTrue(!!ig, 'no instance group round-tripped');
             // 3D points came back from the columnar /session_data/points_3d matrix.
-            assertTrue(!!ig.instance3d && ig.instance3d.points.length === 2, '3D points did not round-trip');
-            assertDeepEqual(ig.instance3d.points[0], [100, 200, 300], 'first 3D point');
+            // The reader emits a FLAT Float64Array(3N) (LUCID local patch, luc3d
+            // #189) — 3 coords per keypoint, not one boxed row per keypoint.
+            assertTrue(!!ig.instance3d && points3dNodeCount(ig.instance3d.points) === 2,
+                '3D points did not round-trip');
+            assertDeepEqual(getPoint3d(ig.instance3d.points, 0), [100, 200, 300], 'first 3D point');
             // Per-session identityId (LUCID scopes identities per session) survives.
             const lucid = (ig.metadata && ig.metadata.lucid) || {};
             assertEqual(lucid.identityId, 1, 'per-session identityId round-trip (idB)');

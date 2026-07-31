@@ -183,8 +183,8 @@
 
             // Add an instance
             const inst = session.addNewInstance(0, 'cam1', skeleton, 0);
-            inst.points[0] = [100, 200];
-            inst.points[1] = [300, 400];
+            inst.setPoint(0, 100, 200);
+            inst.setPoint(1, 300, 400);
 
             const views = [{ name: 'cam1', videoWidth: 640, videoHeight: 480 }];
             const data = buildSlpExportData(session, views);
@@ -323,10 +323,13 @@
             var fg = new FrameGroup(5);
             fg.addInstance('cam1', pass1);
 
-            // In-loop dedup.
+            // In-loop dedup. Mirrors slp-import.js, which compares the boxed
+            // incoming SLP points against each existing Instance via the
+            // non-allocating `instanceMatchesPoints`.
             var camInsts = fg.instances.get('cam1');
+            var pass2Pts = pass2.toPointsArray();
             for (var i = 0; i < camInsts.length; i++) {
-                if (instancePointsMatch(camInsts[i].points, pass2.points)) {
+                if (instanceMatchesPoints(camInsts[i], pass2Pts)) {
                     camInsts.splice(i, 1);
                     break;
                 }
@@ -344,13 +347,13 @@
             var grp = new InstanceGroup(1, 1);
             grp.addInstance('cam1', pass2);
             var camGrouped = [];
-            for (var [, gInst] of grp.instances) camGrouped.push(gInst.points);
+            for (var [, gInst] of grp.instances) camGrouped.push(gInst.toPointsArray());
             var ulList = fg.unlinkedInstances.get('cam1');
             var kept = [];
             for (var u = 0; u < ulList.length; u++) {
                 var dup = false;
                 for (var gi = 0; gi < camGrouped.length; gi++) {
-                    if (instancePointsMatch(ulList[u].instance.points, camGrouped[gi])) {
+                    if (instanceMatchesPoints(ulList[u].instance, camGrouped[gi])) {
                         dup = true; break;
                     }
                 }

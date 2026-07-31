@@ -267,7 +267,9 @@
                 const groups = session.instanceGroups.get(f);
                 assertTrue(!!groups && groups.length === 1, 'frame ' + f + ' has exactly 1 group');
                 const g = groups[0];
-                assertDeepEqual(g.points3d,
+                assertTrue(g.points3d instanceof Float64Array,
+                    'frame ' + f + ' 3D points are the flat representation');
+                assertDeepEqual(toBoxedPoints3d(g.points3d),
                     [[f + 1, f + 2, f + 3], [f + 4, f + 5, f + 6], [f + 7, f + 8, f + 9]],
                     'frame ' + f + ' 3D points restored');
                 CAMS.forEach(function (camName) {
@@ -277,8 +279,7 @@
                     assertTrue(m._rawInstIndex != null, 'member carries _rawInstIndex');
                     assertEqual(m._rawInstIndex, f, 'ref [lf, inst] → _rawInstIndex = inst (' + camName + ')');
                     assertTrue(m._lazy2d === true, 'member awaits on-scrub hydration (_lazy2d)');
-                    assertTrue(m.points.length === NODES.length
-                        && m.points.every(function (p) { return p === null; }),
+                    assertTrue(m.numNodes === NODES.length && !m.hasAnyPoint(),
                         'lightweight member has NO 2D yet (null placeholders)');
                     assertEqual(m.trackIdx, f, 'trackIdx derived from the typed track ref');
                     assertEqual(m.type, 'predicted', 'type derived from PredictedInstance');
@@ -295,7 +296,7 @@
                 CAMS.forEach(function (camName) {
                     const m = g0.instances.get(camName);
                     assertTrue(m._lazy2d === false, camName + ' member hydrated (_lazy2d cleared)');
-                    assertDeepEqual(m.points, [
+                    assertDeepEqual(m.toPointsArray(), [
                         expectedXY(camName, 0, 0, 0),
                         expectedXY(camName, 0, 0, 1),
                         expectedXY(camName, 0, 0, 2),
@@ -307,7 +308,7 @@
                 assertTrue(tri.buildLazyFrameGroupSync(1) === true, 'buildLazyFrameGroupSync(1) built the frame');
                 const mB1 = session.instanceGroups.get(1)[0].instances.get('Camera_B');
                 assertTrue(mB1._lazy2d === false, 'frame 1 Camera_B member hydrated');
-                assertDeepEqual(mB1.points, [
+                assertDeepEqual(mB1.toPointsArray(), [
                     expectedXY('Camera_B', 1, 1, 0),
                     expectedXY('Camera_B', 1, 1, 1),
                     expectedXY('Camera_B', 1, 1, 2),

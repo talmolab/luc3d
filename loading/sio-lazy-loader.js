@@ -336,7 +336,11 @@ export class SioLazyLoader {
         // Sparse per-track occupancy for the timeline's presence bars — same
         // as open()'s per-camera call, but every camera here shares ONE
         // interleaved store, so each needs its OWN rowMap passed to scope the
-        // scan to just its rows (see _computeSparseOccupancy's doc).
+        // scan to just its rows (see _computeSparseOccupancy's doc). Missing
+        // entirely until now: reopening an already-saved project via
+        // openProjectSlp left the Tracks Timeline with no occupancy data at
+        // all for any camera, unlike the per-camera open() path. Best-effort,
+        // never blocks the load.
         for (var occCamName of this.labelsByCam.keys()) {
             try {
                 var occRowMap = this.frameRowByCam.get(occCamName);
@@ -365,6 +369,14 @@ export class SioLazyLoader {
      *
      * @param {Object} labels    lazy sleap-io.js Labels (with `_lazyDataStore`).
      * @param {number} nFrames   this camera's video frame span (maxFrameIdx + 1).
+     * @param {Map<number,number>} [rowMap] - Restricts the scan to THIS camera's
+     *   own rows (videoFrameIdx -> store row), required whenever `labels`'s
+     *   store is SHARED across multiple cameras (`openProjectSlp` — one
+     *   interleaved store, every camera's rows mixed together in file order).
+     *   Without it, scanning the whole table would attribute a DIFFERENT
+     *   camera's instances/tracks to this one. Omit for the per-camera
+     *   `open()` path, where `labels`'s store already belongs to exactly one
+     *   camera and every row is valid.
      * @returns {Object|null} `{ sparse, nTracks, nFrames, segments, counts }` or null.
      */
     _computeSparseOccupancy(labels, nFrames, rowMap) {
@@ -377,18 +389,32 @@ export class SioLazyLoader {
         var endCol = fd.instance_id_end || [];
         var trackCol = idn.track || [];
         var nTracks = (labels.tracks || []).length;
-
-        // A shared multi-camera store (openProjectSlp) interleaves every
-        // camera's rows together — scoping to just this camera's rows via
-        // rowMap keeps occupancy from mixing cameras' data. Per-camera open()
-        // has no shared store, so it scans every row as before.
+        // Row source: either every row in the table (single-camera store) or
+        // just this camera's own rows (shared multi-camera store), sorted by
+        // frame so the run-length segment logic below (which relies on
+        // encountering a track's frames in increasing order) stays correct —
+        // a shared store's rows are interleaved across cameras, not sorted
+        // per-camera, even though a single-camera store's rows already are.
         var rows;
         if (rowMap) {
-            rows = Array.from(rowMap.values()).sort(function (a, b) {
-                return Number(frameIdxCol[a]) - Number(frameIdxCol[b]);
-            });
+            rows = Array.from(rowMap.values());
+            // A single camera's own rows are already in on-disk frame order
+            // (openProjectSlp scans the shared store's native row order and
+            // appends to each camera's map in that same order — the same
+            // frame-ordering invariant `appendStore` relies on elsewhere), so
+            // sorting is usually a no-op. Verify with one cheap linear pass
+            // instead of unconditionally paying an O(n log n) sort — a real
+            // cost at 180k+ rows/camera on a large project — and only sort
+            // when a row is genuinely out of order.
+            var alreadySorted = true;
+            for (var ci = 1; ci < rows.length; ci++) {
+                if (Number(frameIdxCol[rows[ci]]) < Number(frameIdxCol[rows[ci - 1]])) { alreadySorted = false; break; }
+            }
+            if (!alreadySorted) {
+                rows.sort(function (a, b) { return Number(frameIdxCol[a]) - Number(frameIdxCol[b]); });
+            }
         } else {
-            rows = frameIdxCol.length;
+            rows = frameIdxCol.length;   // sentinel: iterate 0..rows-1 below
         }
         var nRows = rowMap ? rows.length : rows;
 
@@ -680,7 +706,13 @@ export class SioLazyLoader {
             // scrubbed to — the "Tracks Timeline doesn't update after
             // Propagate IDs → Tracks" bug.
             try {
-                var newOcc = this._computeSparseOccupancy(labels, this.nFrames, this.frameRowByCam.get(camName));
+                // Pass THIS camera's rowMap — required for a shared-store
+                // project (openProjectSlp, multiple cameras -> one `labels`);
+                // without it the scan would mix every camera's rows together
+                // (see _computeSparseOccupancy's doc). Harmless/no-op change
+                // for a per-camera open() store, where every row already
+                // belongs to this camera.
+                var newOcc = this._computeSparseOccupancy(labels, this.nFrames, rowMap);
                 if (newOcc) this.trackOccupancy.set(camName, newOcc);
                 else this.trackOccupancy.delete(camName);
             } catch (e) { /* occupancy is optional; ignore */ }

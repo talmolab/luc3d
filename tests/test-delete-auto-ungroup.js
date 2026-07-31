@@ -186,7 +186,6 @@
             group.reprojectedInstances.clear();
         }
         group.reprojections = null;
-        group.observedPoints = null;
         group.points3d = null;
     }
 
@@ -472,10 +471,8 @@
 
                 // Pre-populate triangulation data so purge has work to do.
                 group.points3d       = [[0, 0, 0], [1, 1, 1]];
-                group.observedPoints = {
-                    cam1: env.instances.cam1.points,
-                    cam2: env.instances.cam2.points,
-                };
+                // (observedPoints is DERIVED from group.instances since luc3d #189 —
+                // the members added above already supply it; no fixture assignment.)
                 group.reprojections  = {
                     cam1: [[1, 1], [2, 2]],
                     cam2: [[3, 3], [4, 4]],
@@ -497,7 +494,9 @@
                 assertFalse(threw, 'purge does not throw on demoted group');
 
                 assertNull(group.points3d, 'points3d cleared');
-                assertNull(group.observedPoints, 'observedPoints cleared');
+                // (observedPoints is DERIVED from members since luc3d #189 — the purge
+                // clears reprojections/points3d, asserted here, and nothing reads
+                // observedPoints without them.)
                 assertNull(group.reprojections, 'reprojections cleared');
             } finally {
                 env.cleanup();

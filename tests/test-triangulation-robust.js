@@ -41,8 +41,8 @@
             if (typeof triangulateAndReproject !== 'function') return;
             const g = buildGroup();
             // Corrupt node 0 badly in c3.
-            const p = g._byCam['c3'].points[0];
-            g._byCam['c3'].points[0] = [p[0] + 120, p[1] + 120];
+            const p = g._byCam['c3'].getPoint(0);
+            g._byCam['c3'].setPoint(0, p[0] + 120, p[1] + 120);
 
             const excl = triangulateAndReproject(g, cams, { includedCameras: ['c1', 'c2'] });
             const all = triangulateAndReproject(g, cams, {});   // all views, no threshold
@@ -62,8 +62,8 @@
             if (typeof triangulateAndReproject !== 'function') return;
             const g = buildGroup();
             // Move ONLY node 0's observation in view c3 far past the threshold.
-            const p = g._byCam['c3'].points[0];
-            g._byCam['c3'].points[0] = [p[0] + 120, p[1] + 120];
+            const p = g._byCam['c3'].getPoint(0);
+            g._byCam['c3'].setPoint(0, p[0] + 120, p[1] + 120);
 
             const robust = triangulateAndReproject(g, cams, { reprojErrorThreshold: 5 });
             // node0's c3 observation is excluded; node0 re-triangulated from c1/c2.

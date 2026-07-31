@@ -55,7 +55,7 @@ import {
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays } from '../ui/rendering.js';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
 import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
@@ -1820,7 +1820,7 @@ export async function handleLoadSessionFolderSingleSlp() {
                 var instData = fd.instances[ii];
                 var resolvedTrackIdx = resolveImportTrackIdx(session, instData.trackIdx, instData.type);
                 var inst = new Instance(instData.points, resolvedTrackIdx, instData.type || 'user', instData.score || 0);
-                if (instData.occluded) inst.occluded = instData.occluded;
+                if (instData.occluded) inst.setOccludedFrom(instData.occluded);
                 // Restore the occlusion flag for an unlinked user label (its
                 // occluded node was saved finite-xy + not-visible; the
                 // nulledNodes flag itself isn't persisted for ungrouped
@@ -2245,7 +2245,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
                 return new Identity(i, id.name || ('id_' + i), id.color || null);
             });
         }
-        if (lucid.frameIdentityMap) session.frameIdentityMap = new Map(lucid.frameIdentityMap);
+        if (lucid.frameIdentityMap) session.ingestFrameIdentityEntries(lucid.frameIdentityMap);
         if (lucid.trustTracks != null) session.trustTracks = lucid.trustTracks;
 
         session.lazyLoader = loader;
@@ -2298,6 +2298,17 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         var firstFrame = gk.length ? gk[0] : 0;
         state.currentFrame = firstFrame;
         await ensureLazyFrameData(firstFrame);
+        // Reveal the reprojection-error section BEFORE drawing — every other
+        // path that populates 3D/reprojection data (Triangulate All, group
+        // edits, propagate) calls this, but the lazy-reopen path never did.
+        // The underlying computation (drawAllOverlays's lazy-reproject block,
+        // driven by each group's restored points3d) was already correct —
+        // the section just stayed at its HTML default (display:none) forever
+        // after a reopen, so the error text was there but invisible. Matches
+        // the report: "reprojections show in the 2D/3D viewer [independent
+        // of this section] but the Instance panel's reprojection error never
+        // populates."
+        if (session.instanceGroups.size > 0) setReprojErrorVisible(true);
         drawAllOverlays(firstFrame);
         if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(firstFrame));
         if (typeof updateSeekbar === 'function') updateSeekbar();
@@ -2711,7 +2722,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             var instType = inst.type || (inst.from_predicted !== undefined ? 'predicted' : 'user');
                             var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
                             var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
-                            if (inst.occluded) instance.occluded = inst.occluded;
+                            if (inst.occluded) instance.setOccludedFrom(inst.occluded);
                             fg.addInstance(camName, instance);
                         }
                     }

@@ -175,7 +175,7 @@
 
             var fg = env.session.getFrameGroup(0);
             var unlinked = fg.getUnlinkedInstances('cam1');
-            assertEqual(unlinked[0].instance.points.length, 4, 'Should have 4 points for 4-node skeleton');
+            assertEqual(unlinked[0].instance.numNodes, 4, 'Should have 4 points for 4-node skeleton');
         });
 
         it('should place points near video center', function () {
@@ -185,10 +185,10 @@
 
             var fg = env.session.getFrameGroup(0);
             var inst = fg.getUnlinkedInstances('cam1')[0].instance;
-            for (var i = 0; i < inst.points.length; i++) {
-                assert(Math.abs(inst.points[i][0] - 400) < 100,
+            for (var i = 0; i < inst.numNodes; i++) {
+                assert(Math.abs(inst.getX(i) - 400) < 100,
                     'Point ' + i + ' x should be near center (400)');
-                assert(Math.abs(inst.points[i][1] - 300) < 100,
+                assert(Math.abs(inst.getY(i) - 300) < 100,
                     'Point ' + i + ' y should be near center (300)');
             }
         });
@@ -297,12 +297,12 @@
             env.mgr.dragInfo.currentPos = [newX, newY];
             // Replicate the onMouseMove logic for unlinked
             var dragInst = env.mgr.dragInfo.unlinked.instance;
-            dragInst.points[env.mgr.dragInfo.nodeIdx] = [newX, newY];
+            dragInst.setPoint(env.mgr.dragInfo.nodeIdx, newX, newY);
 
-            assertEqual(ul.instance.points[0][0], 150, 'Node x should be updated to 150');
-            assertEqual(ul.instance.points[0][1], 160, 'Node y should be updated to 160');
+            assertEqual(ul.instance.getX(0), 150, 'Node x should be updated to 150');
+            assertEqual(ul.instance.getY(0), 160, 'Node y should be updated to 160');
             // Node 1 should be unchanged
-            assertEqual(ul.instance.points[1][0], 200, 'Node 1 x should remain 200');
+            assertEqual(ul.instance.getX(1), 200, 'Node 1 x should remain 200');
 
             document.body.removeChild(fakeCanvas);
         });
@@ -605,7 +605,7 @@
                     var groupData = { id: g.id, identityId: g.identityId, instances: {} };
                     for (var iEntry of g.instances) {
                         groupData.instances[iEntry[0]] = {
-                            points: iEntry[1].points,
+                            points: iEntry[1].toPointsArray(),
                             trackIdx: iEntry[1].trackIdx,
                         };
                     }
@@ -616,7 +616,7 @@
                     for (var u of uEntry[1]) {
                         frameData.unlinkedInstances.push({
                             cameraName: uEntry[0],
-                            points: u.instance.points,
+                            points: u.instance.toPointsArray(),
                         });
                     }
                 }

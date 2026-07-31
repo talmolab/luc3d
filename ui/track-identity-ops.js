@@ -16,6 +16,9 @@
  *   - instanceGroups: Map<frameIdx, { identityId:number,
  *                                     instances: Map<cam, Instance> }[]>
  *   - _hiddenTracks?: Set<string>, _hiddenIdentities?: Set<string>
+ *   - lazyLoader?: SioLazyLoader — when present, the PERSISTENT track assignment
+ *     lives in its columnar store, not on the (mostly non-resident) Instances.
+ *     `deleteTrackAt` must re-index that column too; see its body.
  */
 
 /**
@@ -130,6 +133,35 @@ export function deleteTrackAt(session, idx) {
     }
 
     session.tracks.splice(idx, 1);
+
+    // DURABLE track re-index (luc3d #195). The resident passes below fix up
+    // `Instance.trackIdx` in memory, but on a lazily reopened project the
+    // persistent track assignment lives in the columnar store's
+    // `instancesData.track` column — that is what `appendStore` writes on save and
+    // what rehydration reads. Without this, deleting a track was silent,
+    // project-wide CORRUPTION rather than merely a missed update: `session.tracks`
+    // shrinks by one, but every non-resident instance keeps its old index, so on
+    // save each instance above `idx` ends up pointing at the WRONG track name and
+    // the ones on `idx` inherit whichever track shifted into the slot. (This is
+    // worse than the swap bug — that only failed to apply a change; this
+    // misattributes existing data.)
+    //
+    // The mapping is exactly the resident `retrack` below: deleted -> no track,
+    // higher -> shift down one. `remapTracksFromIdentity` normalizes any negative
+    // to the store's -1 "no track" sentinel, which reads back as trackless.
+    var _loader = session.lazyLoader;
+    if (_loader && typeof _loader.remapTracksFromIdentity === 'function') {
+        var _res = _loader.remapTracksFromIdentity(session.tracks, function (cam, frameIdx, oldTrk) {
+            if (oldTrk === idx) return -1;
+            if (oldTrk > idx) return oldTrk - 1;
+            return oldTrk;
+        });
+        if (_res && _res.errorRows) {
+            console.error('[deleteTrackAt] ' + _res.errorRows +
+                ' store row(s) failed to re-index; first error:', _res.firstError);
+        }
+    }
+
     // Instances on the deleted track become trackless (`null` — the app-wide
     // trackless sentinel; NOT -1, which would index past TRACK_COLORS and crash
     // the renderer). Higher trackIdx values shift down to stay aligned with the
@@ -168,15 +200,19 @@ export function deleteTrackAt(session, idx) {
     // instances also carry identity on `group.identityId`, left untouched.)
     if (session.frameIdentityMap) {
         var remapped = new Map();
-        for (var [key, val] of session.frameIdentityMap) {
-            var parts = key.split(':');
-            var t = parseInt(parts[parts.length - 1], 10);
-            var newT;
-            if (t === idx) newT = 'null';
-            else if (t > idx) newT = String(t - 1);
-            else newT = String(t);
-            var prefix = parts.slice(0, parts.length - 1).join(':');
-            remapped.set(prefix + ':' + newT, val);
+        for (var rec of session.frameIdentityEntries()) {
+            var t = rec.trackIdx;
+            if (t === idx) {
+                // Deleted track: entries move to the trackless key. Kept as the
+                // legacy `"frame:cam:null"` STRING exactly as before — it is not
+                // representable in the packed space, and consumers have always
+                // skipped it (parseInt('null') is NaN), so packing it would be a
+                // behaviour change, not a refactor.
+                remapped.set(rec.frameIdx + ':' + rec.camName + ':null', rec.identityId);
+            } else {
+                remapped.set(session._fimKey(rec.frameIdx, rec.camName, t > idx ? t - 1 : t),
+                    rec.identityId);
+            }
         }
         session.frameIdentityMap = remapped;
     }
