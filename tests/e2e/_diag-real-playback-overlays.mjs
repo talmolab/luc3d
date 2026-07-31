@@ -455,6 +455,29 @@ try {
             warmRows.push(r); log('  ' + fmt(r));
         }
 
+        // PROJECT-WIDE totals. The per-frame probes below only cover 4 frames; a
+        // regression that empties frames elsewhere would sail past them. This is
+        // the number that actually answers "did Triangulate All delete my 3D".
+        const totals = () => page2.evaluate(() => {
+            const s = window.__lucid.state.session;
+            let frames = 0, groups = 0, with3d = 0;
+            for (const [, gs] of s.instanceGroups) {
+                frames++;
+                for (const g of gs) {
+                    groups++;
+                    if (g.points3d && g.points3d.length) {
+                        for (let i = 0; i < g.points3d.length; i++) {
+                            if (Number.isFinite(g.points3d[i])) { with3d++; break; }
+                        }
+                    }
+                }
+            }
+            return { frames, groups, with3d };
+        });
+        const totBefore = await totals();
+        log(`[${el()}] PROJECT-WIDE before: ${totBefore.frames.toLocaleString()} frames, ` +
+            `${totBefore.groups.toLocaleString()} groups, ${totBefore.with3d.toLocaleString()} with 3D`);
+
         log(`\n[${el()}] === TRIANGULATE ALL ===`);
         const triStart = Date.now();
         await page2.evaluate(() => {
@@ -481,6 +504,14 @@ try {
             log(`  [${el()}] triangulating... heap=${s.usedMB} MB`);
         }
         log(`[${el()}] Triangulate All finished in ${((Date.now() - triStart) / 1000).toFixed(1)}s`);
+
+        const totAfter = await totals();
+        log(`[${el()}] PROJECT-WIDE after : ${totAfter.frames.toLocaleString()} frames, ` +
+            `${totAfter.groups.toLocaleString()} groups, ${totAfter.with3d.toLocaleString()} with 3D`);
+        check(totAfter.groups >= totBefore.groups * 0.99,
+            `project-wide group count preserved (${totBefore.groups.toLocaleString()} -> ${totAfter.groups.toLocaleString()})`);
+        check(totAfter.with3d >= totBefore.with3d * 0.99,
+            `project-wide 3D preserved (${totBefore.with3d.toLocaleString()} -> ${totAfter.with3d.toLocaleString()})`);
 
         log(`\n[${el()}] === AFTER Triangulate All: same frames, same transport ===`);
         const afterRows = [];
