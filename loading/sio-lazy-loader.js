@@ -573,8 +573,14 @@ export class SioLazyLoader {
      * (`Session.propagateTracksToIdentities`, pose/pose-data.js) so it isn't
      * limited to whatever's in `session.frameGroups` (a lazy session's small
      * resident window).
-     * @param {(camName: string, frameIdx: number, trackIdx: number) => void} visitFn
-     *   `trackIdx` is -1 for a trackless instance.
+     * @param {(camName: string, frameIdx: number, trackIdx: number, info: {offsetInFrame: number, storeRow: number, instanceRow: number, type: string}) => void} visitFn
+     *   `trackIdx` is -1 for a trackless instance. `info` is a 4th argument added
+     *   for Custom Instance Delete's session-wide scope, which has to filter by
+     *   type and address rows by their in-frame offset WITHOUT hydrating any
+     *   frame: `offsetInFrame` is the value an `Instance._rawInstIndex` carries,
+     *   and `type` is `'predicted'`/`'user'` decoded from `instance_type`
+     *   (1 = predicted, matching `appendStore`). Pre-existing callers take three
+     *   parameters and are unaffected.
      */
     forEachInstanceRow(visitFn) {
         for (var camName of this.labelsByCam.keys()) {
@@ -590,7 +596,12 @@ export class SioLazyLoader {
                 for (var j = iStart; j < iEnd; j++) {
                     var trk = idn.track ? Number(idn.track[j]) : -1;
                     if (!Number.isFinite(trk)) trk = -1;
-                    visitFn(camName, frameIdx, trk);
+                    visitFn(camName, frameIdx, trk, {
+                        offsetInFrame: j - iStart,
+                        storeRow: frameRow,
+                        instanceRow: j,
+                        type: (idn.instance_type && Number(idn.instance_type[j]) === 1) ? 'predicted' : 'user',
+                    });
                 }
             }
         }
@@ -754,6 +765,241 @@ export class SioLazyLoader {
                 'session.tracks is replaced with the shorter identity-derived list. First error:', firstError);
         }
         return { changed: changed, errorRows: errorRows, firstError: firstError };
+    }
+
+    /**
+     * Permanently remove instance rows from the persistent columnar store, so a
+     * bulk delete SURVIVES eviction, re-hydration, save and reload. Companion
+     * to `remapTracksFromIdentity` (same durability contract, same diagnostics),
+     * built for the Custom Instance Delete dialog.
+     *
+     * ## Why this has to exist
+     *
+     * Deleting from `session.frameGroups`/`session.instanceGroups` alone is not
+     * a delete on a lazy project — it fails in TWO independent ways:
+     *
+     *  1. **Without even saving.** `finalizeLazyFrameGroup` (pose/triangulation
+     *     .js) re-derives `fg.instances` from the store rows on every hydration
+     *     and puts any row with no matching `_rawInstIndex` member into the
+     *     UNLINKED pool. Scrub away and back and the instance is simply there
+     *     again, now ungrouped.
+     *  2. **On save.** The streaming writer ends in `appendStore`, which copies
+     *     the columns VERBATIM and has no per-instance filter or skip hook. Its
+     *     only escape hatch is LUCID's user-correction overlay, which skips any
+     *     camera-frame with no resident *user* instance and bails outright on
+     *     `lucidInsts.length === 0` — so an emptied camera-frame streams back
+     *     unchanged.
+     *
+     * Mutating the store fixes both at once, and is the only thing that does.
+     *
+     * ## What is and is not compacted
+     *
+     * `instancesData` columns are compacted; `pointsData`/`predPointsData` are
+     * deliberately LEFT ALONE. `appendStore` walks points PER SURVIVING
+     * INSTANCE (`[point_id_start[j], point_id_end[j])`) into a freshly-sized
+     * output buffer, so orphaned point rows are never visited and never written
+     * — compacting them would be pure risk for zero file-size benefit.
+     *
+     * Frame rows are NOT removed either: `frameRowByCam` is keyed by row index
+     * and `refFor`, `releaseFrame` and `_computeSparseOccupancy` all depend on
+     * that indexing. A frame whose range collapses to `start === end` is written
+     * by `appendStore` as an empty `LabeledFrame`, which is exactly right (and
+     * is LUCID's answer to SLEAP's "empty LabeledFrames are removed").
+     *
+     * Row renumbering uses a prefix sum (`survBefore`) rather than assuming
+     * frame rows are sorted by `instance_id_start`, so it is order-independent:
+     * the new index of surviving old row `i` is `survBefore[i]`, and a frame's
+     * new range is `[survBefore[oldStart], survBefore[oldEnd])`.
+     *
+     * `from_predicted` is remapped through the same table, degrading a link
+     * whose target was deleted to `-1` — mirroring what `appendStore`'s own
+     * `outIdxOf` already does for rows skipped by the overlay.
+     *
+     * CALLER CONTRACT: this only touches the store. The caller must also
+     * renumber `_rawInstIndex` on every surviving resident/group instance in
+     * each touched (camera, frame) — otherwise `refFor` writes grouping refs
+     * pointing at the wrong instances and hydration loads the wrong 2D — and
+     * mirror the removal into `frameGroups`/`instanceGroups` under one shared
+     * `seen` Set. See `ui/custom-delete-ops.js`.
+     *
+     * @param {(camName: string, frameIdx: number, offsetInFrame: number, storeRow: number) => boolean} shouldDeleteFn
+     *   Called once per instance row per camera. `offsetInFrame` is the row's
+     *   position within its (camera, frame) list — i.e. the value an
+     *   `Instance._rawInstIndex` would carry.
+     * @returns {{deleted: number, errorRows: number, firstError: Error|null, byCamera: Object.<string, number>}}
+     */
+    deleteInstanceRows(shouldDeleteFn) {
+        var deleted = 0;
+        var errorRows = 0;
+        var firstError = null;
+        var byCamera = {};
+        var seenLabels = new Set();
+
+        // Group cameras by their underlying `labels`. A SHARED store (one
+        // project .slp interleaving every camera — `openProjectSlp`, where
+        // `_sharedStore === true`) must be compacted EXACTLY ONCE even though
+        // several camera names point at the same object; compacting per camera
+        // would renumber already-renumbered rows and shred the file. This is
+        // the deletion analogue of `remapTracksFromIdentity`'s `rebuiltLabels`
+        // guard, but it has to cover the WHOLE mutation here, not just a
+        // one-time tracks rebuild, because compaction is global to a store.
+        var camsByLabels = new Map();
+        for (var camName of this.labelsByCam.keys()) {
+            var labelsForCam = this.labelsByCam.get(camName);
+            if (!labelsForCam || !labelsForCam._lazyDataStore) continue;
+            if (!this.frameRowByCam.get(camName)) continue;
+            if (!camsByLabels.has(labelsForCam)) camsByLabels.set(labelsForCam, []);
+            camsByLabels.get(labelsForCam).push(camName);
+        }
+
+        for (var [labels, camNames] of camsByLabels) {
+            var store = labels._lazyDataStore;
+            var fd = store.framesData || {};
+            var idn = store.instancesData || {};
+            var typeCol = idn.instance_type || idn.point_id_start;
+            var nInst = (typeCol && typeof typeCol.length === 'number') ? typeCol.length : 0;
+            var frameCol = fd.frame_id || fd.video;
+            var nFrameRows = (frameCol && typeof frameCol.length === 'number') ? frameCol.length : 0;
+            if (!nInst || !nFrameRows || !fd.instance_id_start || !fd.instance_id_end) continue;
+
+            // ---- 1. Mark rows, per camera, into ONE store-global flag array.
+            // A Uint8Array rather than a Set: a whole-project predicted delete
+            // on the real cage5 project marks ~1.3M rows, which as a Set of
+            // boxed numbers is tens of MB — the exact allocation class #189/#193
+            // spent two PRs removing.
+            var kill = new Uint8Array(nInst);
+            var storeDeleted = 0;
+            for (var ci = 0; ci < camNames.length; ci++) {
+                var cn = camNames[ci];
+                var rowMap = this.frameRowByCam.get(cn);
+                var camDeleted = 0;
+                for (var [frameIdx, frameRow] of rowMap) {
+                    var iStart = Number(fd.instance_id_start[frameRow]) || 0;
+                    var iEnd = Number(fd.instance_id_end[frameRow]) || 0;
+                    if (iStart < 0) iStart = 0;
+                    if (iEnd > nInst) iEnd = nInst;
+                    for (var j = iStart; j < iEnd; j++) {
+                        // Isolated per row: one malformed row must not abort the
+                        // delete for every frame after it, which would leave the
+                        // project half-deleted while the GUI showed success.
+                        try {
+                            if (!kill[j] && shouldDeleteFn(cn, frameIdx, j - iStart, j)) {
+                                kill[j] = 1;
+                                deleted++; storeDeleted++; camDeleted++;
+                            }
+                        } catch (rowErr) {
+                            errorRows++;
+                            if (!firstError) firstError = rowErr;
+                            if (errorRows <= 5) {
+                                console.error('[deleteInstanceRows] row ' + j + ' (camera=' + cn +
+                                    ', frame=' + frameIdx + ') failed — leaving it in place:', rowErr);
+                            }
+                        }
+                    }
+                }
+                byCamera[cn] = (byCamera[cn] || 0) + camDeleted;
+            }
+            if (storeDeleted === 0) continue;   // nothing matched in this store
+
+            // ---- 2. Prefix sum: new index of surviving old row i == survBefore[i].
+            var survBefore = new Uint32Array(nInst + 1);
+            for (var i = 0; i < nInst; i++) survBefore[i + 1] = survBefore[i] + (kill[i] ? 0 : 1);
+            var nSurv = survBefore[nInst];
+
+            // ---- 3. Compact EVERY instancesData column of length nInst.
+            // Iterating `Object.keys` instead of a hardcoded column list so a
+            // future schema addition is carried through rather than silently
+            // left at the old length (which would desync the columns).
+            // `col.constructor` preserves typed-vs-plain and the element type
+            // (#193 made these typed arrays; `score` is float, `track` is int).
+            var idnKeys = Object.keys(idn);
+            for (var ki = 0; ki < idnKeys.length; ki++) {
+                var col = idn[idnKeys[ki]];
+                if (!col || typeof col.length !== 'number' || col.length !== nInst) continue;
+                var isTyped = typeof col.subarray === 'function';
+                var out = isTyped ? new col.constructor(nSurv) : new Array(nSurv);
+                var w = 0;
+                for (var s = 0; s < nInst; s++) if (!kill[s]) out[w++] = col[s];
+                // Reassign the PROPERTY on the same `instancesData` object —
+                // never replace the object itself. `appendStore` and
+                // `_computeSparseOccupancy` both read `store.instancesData.<col>`
+                // fresh on each access, so this is picked up; replacing the
+                // container would orphan any held reference to it.
+                idn[idnKeys[ki]] = out;
+            }
+
+            // ---- 4. Remap from_predicted through the same table. Values are
+            // still in the OLD numbering (copied verbatim above). A link whose
+            // target was deleted degrades to -1, which is precisely what
+            // `appendStore`'s `outIdxOf` already does for overlay-skipped rows.
+            var fpCol = idn.from_predicted;
+            if (fpCol) {
+                for (var k = 0; k < nSurv; k++) {
+                    var fp = Number(fpCol[k]);
+                    if (!Number.isFinite(fp) || fp < 0 || fp >= nInst) { fpCol[k] = -1; continue; }
+                    fpCol[k] = kill[fp] ? -1 : survBefore[fp];
+                }
+            }
+
+            // ---- 5. Re-range EVERY frame row of this store (not just this
+            // camera's): on a shared store the rows of all cameras interleave in
+            // one instance column, so every range shifts. Rows are kept, ranges
+            // are rewritten; a collapsed range (start === end) is a legitimate
+            // empty frame.
+            for (var r = 0; r < nFrameRows; r++) {
+                var os = Number(fd.instance_id_start[r]) || 0;
+                var oe = Number(fd.instance_id_end[r]) || 0;
+                if (os < 0) os = 0; if (os > nInst) os = nInst;
+                if (oe < 0) oe = 0; if (oe > nInst) oe = nInst;
+                if (oe < os) oe = os;
+                fd.instance_id_start[r] = survBefore[os];
+                fd.instance_id_end[r] = survBefore[oe];
+            }
+
+            // ---- 6. Rebuild each affected camera's sparse track occupancy from
+            // the compacted columns, exactly as remapTracksFromIdentity does —
+            // `session.trackOccupancy` is this same Map by reference, so the
+            // Tracks Timeline picks it up. Without this it shows presence bars
+            // for deleted instances forever.
+            for (var ci2 = 0; ci2 < camNames.length; ci2++) {
+                var cn2 = camNames[ci2];
+                try {
+                    var newOcc = this._computeSparseOccupancy(labels, this.nFrames, this.frameRowByCam.get(cn2));
+                    if (newOcc) this.trackOccupancy.set(cn2, newOcc);
+                    else this.trackOccupancy.delete(cn2);
+                } catch (e) { /* occupancy is optional; ignore */ }
+            }
+            seenLabels.add(labels);
+        }
+
+        // ---- 7. Invalidate every resident cache layer, so a cached or later
+        // revisited frame re-materializes from the compacted columns instead of
+        // serving a frame that still contains the deleted instances. Same two
+        // layers and same clearCache-with-per-row-fallback as
+        // remapTracksFromIdentity.
+        if (seenLabels.size > 0) {
+            this.cache.clear();
+            this.cacheOrder = [];
+            for (var labels2 of seenLabels) {
+                if (labels2._lazyFrameList && typeof labels2._lazyFrameList.clearCache === 'function') {
+                    labels2._lazyFrameList.clearCache();
+                } else if (typeof labels2.releaseFrame === 'function') {
+                    for (var camName2 of this.labelsByCam.keys()) {
+                        if (this.labelsByCam.get(camName2) !== labels2) continue;
+                        var rowMap2 = this.frameRowByCam.get(camName2);
+                        if (!rowMap2) continue;
+                        for (var frameRow2 of rowMap2.values()) labels2.releaseFrame(frameRow2);
+                    }
+                }
+            }
+        }
+
+        if (errorRows > 0) {
+            console.error('[deleteInstanceRows] ' + errorRows + ' row(s) failed and were LEFT IN THE ' +
+                'PROJECT — the delete is incomplete and the caller must report it rather than claim ' +
+                'success. First error:', firstError);
+        }
+        return { deleted: deleted, errorRows: errorRows, firstError: firstError, byCamera: byCamera };
     }
 
     close() {
