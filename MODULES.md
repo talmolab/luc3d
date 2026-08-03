@@ -1163,6 +1163,74 @@ playback state, dirty tracking, multi-session UI.
 
 ---
 
+### ui/custom-delete-ops.js
+
+**Purpose.** Pure, DOM-free logic behind "Custom Instance Delete…" — LUCID's
+equivalent of SLEAP's `sleap/gui/dialogs/delete.py` `DeleteDialog`
+(Labels ▸ Custom Instance Delete…), adapted to the multi-view model. Imports **no
+project modules** (only calls methods on the `Session` it is handed), so it bridges
+into `tests/test-runner.html` for isolated unit testing — same contract as
+`ui/track-identity-ops.js`. The DOM modal lives in `ui/ui-wiring.js`.
+
+**Exports.** `collectDeletionTargets(session, filters, ctx)` (pure — returns
+`{targets, count, byCamera, groupsDissolved, groupsUngrouped, instancesPromoted,
+groupsLosing3d}`), `previewCascade(targets)`, `executeDeletion(session, targets)`,
+`pruneOrphanIdentities(session, frameIndices)`.
+
+**Vocabulary.** SLEAP's *video* scope is LUCID's **session** — every camera in a
+session shares one frame index space, so a camera is a VIEW FILTER, not a frame
+domain. The UI says **Grouped / Ungrouped** (the panel headers) and must never say
+"Unlinked": in SLEAP an *unlinked prediction* is one with no `from_predicted`
+back-link to a user instance, an unrelated concept that shares the word.
+
+**Type and grouping are ORTHOGONAL axes**, not siblings — a grouped instance is
+still user or predicted. "Delete grouped instances" is `type:'all'` +
+`grouping:'grouped'`. Conflating them is the main way this dialog could become
+incoherent. `type:'all'` = user + predicted (matching SLEAP's "all instances"),
+never reprojections — those are derived and live in `reprojectedInstances`.
+
+**Identity is resolved PER FRAME** via `session.getIdentityIdForTrack(cam,
+trackIdx, frameIdx)`, never `group.identityId` (only refreshed on the frame an
+identity was assigned — the #155/#168 staleness class). This is the same call
+`groupByIdentityAndTriangulateAll` buckets by, so the dialog and the grouping
+cannot disagree.
+
+**Cascade, and why the dialog reports it.** A group must have ≥2 members, so
+removing members can dissolve a group (`removeInstanceGroup`), auto-ungroup it
+(`unlinkGroup`, returning the lone survivor to the ungrouped pool and **promoting a
+predicted survivor of a formerly-mixed group to `type:'user', modified:true`**), or
+leave it intact with stale 3D. `previewCascade` predicts all of this before any
+mutation so the modal can warn — reporting only "N instances" hides two
+irreversible side effects.
+
+**`executeDeletion` order is load-bearing** (see `scratch/PLAN-custom-instance-delete.md`
+§5.2): (1) `lazyLoader.deleteInstanceRows` — the persistence, and it must run BEFORE
+`_rawInstIndex` is touched since the row identity *is* `_rawInstIndex`;
+(2) renumber `_rawInstIndex` on survivors, else `refFor` writes grouping refs at the
+wrong instances and `finalizeLazyFrameGroup` hydrates the wrong 2D;
+(3) `instanceGroups` cascade; (4) `frameGroups` cascade under the same `seen` Set
+(hydrated frames share instance objects between the maps — the #195 lesson);
+(5) prune `frameIdentityMap`. Never assigns `group.observedPoints` (read-only getter
+since #189 — assigning throws in every ES module). App-level triangulation caches
+are the caller's job: run `purgeTriangulationDataForGroup` over the returned
+`purgedGroups`.
+
+**`pruneOrphanIdentities` is not cosmetic.** `frameIdentityMap` is serialized into
+the `.slp`, so residue can re-attach a ghost identity to a later instance reusing
+the same `(frame, camera, track)`; and `ensureGroupsFromIdentities` RECREATES groups
+from this map for any frame with no `instanceGroups` entry, so an unpruned entry
+brings a deleted group back on the next Triangulate All. Goes through
+`session.deleteFrameIdentity` because the keys are **packed Numbers** since #185 —
+the raw `frameIdx + ':' + cam + ':' + track` string comparison used by the earlier
+PR #153 implementation silently matched nothing, making its prune dead code.
+
+**Imports from project modules.** None (deliberately).
+
+**Tests.** `tests/test-custom-delete-ops.js` (19 cases), plus
+`tests/test-custom-delete-store.js` for the store primitive it drives.
+
+---
+
 ### ui/export-modals.js
 
 **Purpose.** Modal dialogs for bulk-triangulation and export (Group-by-Track,

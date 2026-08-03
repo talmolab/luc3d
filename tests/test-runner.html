@@ -277,6 +277,11 @@
          constraint. -->
     <script src="test-custom-delete-store.js"></script>
 
+    <!-- Custom Instance Delete: filters, the >=2-member cascade, and the packed
+         frameIdentityMap prune. Needs window.__CustomDeleteOps + the pose-data
+         classes, both from the bridge below. -->
+    <script src="test-custom-delete-ops.js"></script>
+
     <!-- Pass 2 transitional bridge + test runner.
          Loads ESM-converted modules (pose/, ui/) and exposes their exports on
          window so the test files (loaded as classic scripts above) can find
@@ -317,6 +322,12 @@
         // Dependency-free (no app.js in its import graph; uses window.SleapIO +
         // document.baseURI only inside open()). Bridged for the lazy-release tests.
         import * as __SioLazy from '../loading/sio-lazy-loader.js';
+        // Pure (DOM-free) ops backing the Custom Instance Delete modal — imports
+        // no project modules at all, so it bridges cleanly. Exposed under its own
+        // namespace rather than spread onto window: names like
+        // `collectDeletionTargets`/`previewCascade` are too generic to be globals.
+        import * as __CustomDeleteOps from '../ui/custom-delete-ops.js';
+        window.__CustomDeleteOps = __CustomDeleteOps;
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
