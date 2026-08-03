@@ -2708,6 +2708,31 @@ chains):
   "New name for …" entry. Apply renames `session.tracks` /
   `session.identities[].name`, migrates hidden-set membership
   (`renameHiddenTrack` / `renameHiddenIdentity`). Enter applies.
+- `showCustomDeleteModal()` — **Edit ▸ "Custom Instance Delete…"** (menu item
+  `#menuCustomDeleteInstance`), LUCID's equivalent of SLEAP's
+  Labels ▸ Custom Instance Delete… Six selects: `Delete` (predicted — the SLEAP
+  default — / user / all), `Grouping` (any / grouped only / ungrouped only, which
+  is ORTHOGONAL to type), `in` (current frame / current session — LUCID's analogue
+  of SLEAP's "current video", since a session shares one frame index space),
+  `in view` (all / one camera), plus `with track` / `with identity` rows shown only
+  when the session has any. A live count, a per-camera breakdown table with a Total
+  (same shape as `showDeleteModal`'s), and a **cascade line** — "N group(s)
+  removed · N ungrouped · N lose their 3D · N predicted instance(s) promoted to
+  User" — because the ≥2-member invariant makes those consequences both surprising
+  and irreversible. Esc closes; Delete is an explicit click (never Enter). On
+  apply it re-collects (the model can move under an open dialog), clears the
+  selection FIRST (a stale `selectedInstanceGroup` would point at a deleted object,
+  and `viewport3d.selectedInstanceIdx` is a positional index that re-indexes under
+  any group removal), runs `executeDeletion`, then
+  `purgeTriangulationDataForGroup` over the returned `purgedGroups` (the ops module
+  is import-free by design), and reports the **durable** store-row count rather
+  than the resident one — surfacing `errorRows` as a warning instead of claiming
+  success. All matching/cascade/durability logic is in `ui/custom-delete-ops.js`;
+  this is only the dialog. No keyboard shortcut (matching SLEAP), so no
+  `ACTION_CATALOG` entry. Covered by `tests/e2e/custom-delete-modal.mjs`.
+  Deliberately does NOT copy SLEAP's `labels.clean()` cascade, which also prunes
+  unused tracks and skeletons project-wide — LUCID has an explicit `Delete Track…`
+  and enforces one skeleton per project, so that would be data loss by surprise.
 - `showDeleteModal(kind)` — Delete Track / Delete Identity: single-select list, a
   red `.delete-warning` line ("Current track/identity "X" instances will have
   null …"), and — in place of a text entry — a per-camera table of instances
