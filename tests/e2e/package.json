@@ -27,7 +27,8 @@
     "test:save-3d-typed-sink": "node save-session-3d-typed-sink.mjs",
     "test:save-golden": "node save-golden-digest.mjs",
     "test:save-golden:record": "node save-golden-digest.mjs --write-golden",
-    "test:ui-smoke-repr": "node ui-smoke-representation-change.mjs"
+    "test:ui-smoke-repr": "node ui-smoke-representation-change.mjs",
+    "test:rpe": "node rpe-per-instance.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

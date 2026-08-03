@@ -7,7 +7,7 @@ import {
     Skeleton, Camera, Session,
 } from '../pose/pose-data.js';
 import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
-import { REPROJECTION_COLOR, getTrackColor } from './overlays.js';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
@@ -1277,98 +1277,229 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
         }
     }
 
-    // ---- Per-node per-camera error breakdown table ----
+    // ---- Per-instance per-node per-camera error breakdown (issue #135) ----
+    // The headline mean + per-camera rows above are the frame SUMMARY (averaged
+    // across every triangulated instance). Here we drill down to ONE breakdown
+    // table PER instance, each labelled by its track/identity, so a large error
+    // can be traced to a specific animal + node + view instead of being hidden
+    // in a cross-track average.
+    //
+    // Render only results whose group is still one of THIS frame's live groups.
+    // `state.triangulationResults` is derived state that outlives the groups it
+    // describes: "Triangulate All" routes to `groupByIdentityAndTriangulateAll`
+    // (whenever identities exist), which DELETES and rebuilds each frame's
+    // `instanceGroups` but — unlike every other bulk path, which either `set()`s
+    // per frame or `clear()`s wholesale — never prunes the results map, and
+    // `ui/rendering.js`'s lazy fill then CONCATENATES its freshly-computed
+    // entries onto whatever was already stored. A frame the user had already
+    // triangulated therefore ends up holding results for both the deleted
+    // groups and their replacements, which rendered as TWO tables per animal
+    // (measured: 4 tables for 2 animals, 2 referencing deleted groups). This is
+    // display-side only, on purpose — the triangulation paths are verified
+    // against the real project and are deliberately left untouched.
+    //
+    // Entries with no `group` at all are kept (they render via the `Instance N`
+    // fallback), and the filter is skipped entirely when the caller passed no
+    // group list, so neither case can blank a panel that used to populate.
     var breakdownDiv = document.getElementById('errorBreakdownTable');
     breakdownDiv.textContent = '';
-    if (results && results.length > 0 && state.session && state.session.skeleton) {
+    var liveResults = results;
+    if (results && instanceGroups && instanceGroups.length > 0) {
+        var liveGroups = new Set(instanceGroups);
+        liveResults = results.filter(function (r) { return !r.group || liveGroups.has(r.group); });
+    }
+    if (liveResults && liveResults.length > 0 && state.session && state.session.skeleton) {
         var nodeNames = state.session.skeleton.nodes;
         var cameras = state.session.cameras;
-        var camNames = cameras.map(function(c) { return c.name; });
+        var camNames = cameras.map(function (c) { return c.name; });
+        var colorClass = function (v) {
+            return v < 2 ? 'var(--success-color)' : v < 5 ? 'var(--warning-color)' : 'var(--error-color)';
+        };
 
-        // Accumulate errors: nodeErrors[nodeIdx][camName] = {sum, count}
-        var nodeErrors = [];
-        for (var ni = 0; ni < nodeNames.length; ni++) {
-            nodeErrors[ni] = {};
-            for (var ci = 0; ci < camNames.length; ci++) {
-                nodeErrors[ni][camNames[ci]] = { sum: 0, count: 0 };
+        // Build one per-node × per-camera table for a single result. Kept
+        // sum/count based so a rare multi-observation node still averages
+        // correctly, but for one instance each cell is normally one value.
+        var buildBreakdownTable = function (r) {
+            var nodeErrors = [];
+            for (var ni = 0; ni < nodeNames.length; ni++) {
+                nodeErrors[ni] = {};
+                for (var ci = 0; ci < camNames.length; ci++) {
+                    nodeErrors[ni][camNames[ci]] = { sum: 0, count: 0 };
+                }
             }
-        }
-        for (var ri = 0; ri < results.length; ri++) {
-            var r = results[ri];
-            if (!r.errors) continue;
-            for (var ci = 0; ci < camNames.length; ci++) {
-                var camErrs = r.errors[camNames[ci]];
-                if (!camErrs) continue;
-                for (var ni = 0; ni < Math.min(camErrs.length, nodeNames.length); ni++) {
-                    if (camErrs[ni] != null) {
-                        nodeErrors[ni][camNames[ci]].sum += camErrs[ni];
-                        nodeErrors[ni][camNames[ci]].count++;
+            if (r.errors) {
+                for (var ci = 0; ci < camNames.length; ci++) {
+                    var camErrs = r.errors[camNames[ci]];
+                    if (!camErrs) continue;
+                    for (var ni = 0; ni < Math.min(camErrs.length, nodeNames.length); ni++) {
+                        if (camErrs[ni] != null) {
+                            nodeErrors[ni][camNames[ci]].sum += camErrs[ni];
+                            nodeErrors[ni][camNames[ci]].count++;
+                        }
                     }
                 }
             }
-        }
 
-        // Build table
-        var tbl = document.createElement('table');
-        tbl.style.cssText = 'font-size:10px;border-collapse:collapse;width:100%;';
-        var thead = document.createElement('thead');
-        var hrow = document.createElement('tr');
-        var th0 = document.createElement('th');
-        th0.textContent = 'Node';
-        th0.style.cssText = 'text-align:left;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
-        hrow.appendChild(th0);
-        for (var ci = 0; ci < camNames.length; ci++) {
-            var th = document.createElement('th');
-            th.textContent = camNames[ci];
-            th.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
-            hrow.appendChild(th);
-        }
-        var thAvg = document.createElement('th');
-        thAvg.textContent = 'Avg';
-        thAvg.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);font-weight:700;';
-        hrow.appendChild(thAvg);
-        thead.appendChild(hrow);
-        tbl.appendChild(thead);
-
-        var tbody = document.createElement('tbody');
-        for (var ni = 0; ni < nodeNames.length; ni++) {
-            var row = document.createElement('tr');
-            var tdName = document.createElement('td');
-            tdName.textContent = nodeNames[ni];
-            tdName.style.cssText = 'padding:1px 4px;white-space:nowrap;color:var(--text-secondary);';
-            row.appendChild(tdName);
-            var rowSum = 0, rowCount = 0;
+            var tbl = document.createElement('table');
+            tbl.style.cssText = 'font-size:10px;border-collapse:collapse;width:100%;';
+            var thead = document.createElement('thead');
+            var hrow = document.createElement('tr');
+            var th0 = document.createElement('th');
+            th0.textContent = 'Node';
+            th0.style.cssText = 'text-align:left;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
+            hrow.appendChild(th0);
             for (var ci = 0; ci < camNames.length; ci++) {
-                var td = document.createElement('td');
-                td.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;';
-                var entry = nodeErrors[ni][camNames[ci]];
-                if (entry.count > 0) {
-                    var avg = entry.sum / entry.count;
-                    td.textContent = avg.toFixed(1);
-                    td.style.color = avg < 2 ? 'var(--success-color)' : avg < 5 ? 'var(--warning-color)' : 'var(--error-color)';
-                    rowSum += entry.sum;
-                    rowCount += entry.count;
-                } else {
-                    td.textContent = '-';
-                    td.style.color = 'var(--text-muted)';
+                var th = document.createElement('th');
+                th.textContent = camNames[ci];
+                th.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
+                hrow.appendChild(th);
+            }
+            var thAvg = document.createElement('th');
+            thAvg.textContent = 'Avg';
+            thAvg.style.cssText = 'text-align:right;padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);font-weight:700;';
+            hrow.appendChild(thAvg);
+            thead.appendChild(hrow);
+            tbl.appendChild(thead);
+
+            var tbody = document.createElement('tbody');
+            for (var ni = 0; ni < nodeNames.length; ni++) {
+                var row = document.createElement('tr');
+                var tdName = document.createElement('td');
+                tdName.textContent = nodeNames[ni];
+                tdName.style.cssText = 'padding:1px 4px;white-space:nowrap;color:var(--text-secondary);';
+                row.appendChild(tdName);
+                var rowSum = 0, rowCount = 0;
+                for (var ci = 0; ci < camNames.length; ci++) {
+                    var td = document.createElement('td');
+                    td.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;';
+                    var entry = nodeErrors[ni][camNames[ci]];
+                    if (entry.count > 0) {
+                        var avg = entry.sum / entry.count;
+                        td.textContent = avg.toFixed(1);
+                        td.style.color = colorClass(avg);
+                        rowSum += entry.sum;
+                        rowCount += entry.count;
+                    } else {
+                        td.textContent = '-';
+                        td.style.color = 'var(--text-muted)';
+                    }
+                    row.appendChild(td);
                 }
-                row.appendChild(td);
+                var tdAvg = document.createElement('td');
+                tdAvg.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;font-weight:700;';
+                if (rowCount > 0) {
+                    var rowAvg = rowSum / rowCount;
+                    tdAvg.textContent = rowAvg.toFixed(1);
+                    tdAvg.style.color = colorClass(rowAvg);
+                } else {
+                    tdAvg.textContent = '-';
+                    tdAvg.style.color = 'var(--text-muted)';
+                }
+                row.appendChild(tdAvg);
+                tbody.appendChild(row);
             }
-            var tdAvg = document.createElement('td');
-            tdAvg.style.cssText = 'text-align:right;padding:1px 4px;font-family:monospace;font-weight:700;';
-            if (rowCount > 0) {
-                var rowAvg = rowSum / rowCount;
-                tdAvg.textContent = rowAvg.toFixed(1);
-                tdAvg.style.color = rowAvg < 2 ? 'var(--success-color)' : rowAvg < 5 ? 'var(--warning-color)' : 'var(--error-color)';
-            } else {
-                tdAvg.textContent = '-';
-                tdAvg.style.color = 'var(--text-muted)';
+            tbl.appendChild(tbody);
+            return tbl;
+        };
+
+        // Resolve a label + dot color for the instance behind a result. Both
+        // MUST agree with what the rest of the app shows for the same group,
+        // so this deliberately reuses the canonical resolvers rather than
+        // reading `group.identityId` / `getTrackColor` directly:
+        //   * Track: the first member instance that actually CARRIES a track,
+        //     scanning every camera — not just `instances`' first entry, which
+        //     may be a trackless view while its siblings are tracked (the scan
+        //     `getGroupColor` and the identity dropdown below both use).
+        //   * Identity: the PER-FRAME identity for that live (camera, track)
+        //     first. `group.identityId` is only refreshed on the frame where an
+        //     identity is (re)assigned, so it goes stale on every other frame
+        //     once a swap fix propagates forward — reading it first labelled
+        //     these tables with the pre-fix animal (issue #155). Mirrors the
+        //     Linked Instance Groups identity `<select>`'s pre-select exactly.
+        //   * Color: `getGroupColor`, so the dot matches the 2D views and the
+        //     3D viewport — it honors Color-by-Identity mode (`state.color
+        //     ByIdentity`) and carries the #168 wildcard-identity and #183
+        //     frame-0 raw-trackIdx-collision guards, which a bare
+        //     `getTrackColor(trackIdx)` bypasses (painting two different
+        //     animals the same color on exactly the frames those fixes cover).
+        var describeResult = function (r, idx) {
+            var group = r && r.group;
+            var trackCam = null, trackIdx = null;
+            if (group && group.instances) {
+                for (var [dCam, dInst] of group.instances) {
+                    if (dInst && dInst.trackIdx != null && dInst.trackIdx >= 0) {
+                        trackCam = dCam; trackIdx = dInst.trackIdx; break;
+                    }
+                }
             }
-            row.appendChild(tdAvg);
-            tbody.appendChild(row);
+            // The synthetic "No ID" track is not an animal name — leave it to
+            // the identity part (and to getGroupColor's NULL_ID_COLOR).
+            var trackName = null;
+            if (trackIdx != null &&
+                !(state.session.isNoIdTrack && state.session.isNoIdTrack(trackIdx))) {
+                trackName = state.session.tracks[trackIdx] || ('track ' + trackIdx);
+            }
+            var identityId = null;
+            if (group) {
+                if (trackIdx != null && state.session.getIdentityIdForTrack) {
+                    identityId = state.session.getIdentityIdForTrack(trackCam, trackIdx, frameIdx);
+                }
+                if (identityId == null && group.identityId != null && group.identityId >= 0) {
+                    identityId = group.identityId;
+                }
+            }
+            var identity = (identityId != null && state.session.getIdentity)
+                ? state.session.getIdentity(identityId) : null;
+            var parts = [];
+            if (identity) parts.push(identity.name);
+            if (trackName) parts.push(trackName);
+            return {
+                text: parts.length ? parts.join(' · ') : ('Instance ' + (idx + 1)),
+                color: group
+                    ? getGroupColor(group, state.session, state.colorByIdentity, frameIdx, null)
+                    : 'var(--text-muted)',
+                result: r,
+            };
+        };
+
+        // Order by label for a stable reading order across frames. Labels are
+        // resolved ONCE (up front, against each result's ORIGINAL index, so the
+        // "Instance N" fallback numbering doesn't shuffle with the sort) and the
+        // original index breaks ties — without it, several trackless groups all
+        // compare equal and their order varies frame to frame.
+        var described = liveResults.map(function (r, idx) { return describeResult(r, idx); });
+        var order = described.map(function (_, idx) { return idx; }).sort(function (a, b) {
+            var cmp = described[a].text.localeCompare(described[b].text);
+            return cmp !== 0 ? cmp : a - b;
+        });
+
+        for (var oi = 0; oi < order.length; oi++) {
+            var lbl = described[order[oi]];
+            var res = lbl.result;
+            var block = document.createElement('div');
+            block.style.cssText = 'margin-top:' + (oi === 0 ? '0' : '8px') + ';';
+
+            // Instance header: color dot + label + this instance's mean error.
+            var hdr = document.createElement('div');
+            hdr.style.cssText = 'display:flex;align-items:center;gap:5px;margin-bottom:2px;font-size:10px;';
+            var dot = document.createElement('span');
+            dot.className = 'track-indicator';
+            dot.style.cssText = 'background-color:' + lbl.color + ';flex:0 0 auto;';
+            hdr.appendChild(dot);
+            var name = document.createElement('span');
+            name.textContent = lbl.text;
+            name.style.cssText = 'color:var(--text-secondary);font-weight:600;';
+            hdr.appendChild(name);
+            if (res.meanError != null) {
+                var me = document.createElement('span');
+                me.textContent = res.meanError.toFixed(1) + ' px';
+                me.style.cssText = 'margin-left:auto;font-family:monospace;color:' + colorClass(res.meanError) + ';';
+                hdr.appendChild(me);
+            }
+            block.appendChild(hdr);
+            block.appendChild(buildBreakdownTable(res));
+            breakdownDiv.appendChild(block);
         }
-        tbl.appendChild(tbody);
-        breakdownDiv.appendChild(tbl);
     }
 
     // ---- Linked Instance Groups table ----
