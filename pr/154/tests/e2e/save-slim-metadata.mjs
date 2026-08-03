@@ -106,8 +106,8 @@ try {
     let recA = null, recB = null;
     for (const g of groups) {
       const c1 = g.getInstance('cam1');
-      if (c1 && Math.abs(c1.points[0][0] - 10) < 0.5) recA = g;
-      if (c1 && Math.abs(c1.points[0][0] - 50) < 0.5) recB = g;
+      if (c1 && Math.abs(c1.getX(0) - 10) < 0.5) recA = g;
+      if (c1 && Math.abs(c1.getX(0) - 50) < 0.5) recB = g;
     }
     const outA = recA ? {
       cam1Type: recA.getInstance('cam1').type,

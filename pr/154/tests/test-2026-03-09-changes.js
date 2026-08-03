@@ -163,14 +163,14 @@
 
         it('unlinkGroup preserves instance points', function () {
             var env = createGroupedEnv();
-            var origPoints1 = env.inst1.points.slice();
+            var origPoints1 = env.inst1.toPointsArray();
 
             var newUnlinked = env.session.unlinkGroup(0, env.group);
 
             var ul1 = env.fg.getUnlinkedInstances('cam1')[0];
             assertNotNull(ul1, 'unlinked instance exists');
-            assertEqual(ul1.instance.points[0][0], origPoints1[0][0], 'points preserved');
-            assertEqual(ul1.instance.points[0][1], origPoints1[0][1], 'points preserved');
+            assertEqual(ul1.instance.getX(0), origPoints1[0][0], 'points preserved');
+            assertEqual(ul1.instance.getY(0), origPoints1[0][1], 'points preserved');
         });
 
         it('unlinkGroup removes instances from FrameGroup.instances', function () {

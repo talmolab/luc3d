@@ -775,8 +775,8 @@
 
                 // The unlinked instance should be findable
                 var hit = mgr.findNearestUnlinkedNode(
-                    ulList[0].instance.points[0][0],
-                    ulList[0].instance.points[0][1],
+                    ulList[0].instance.getX(0),
+                    ulList[0].instance.getY(0),
                     'cam1', 0
                 );
                 assertNotNull(hit, 'new unlinked is findable by hit test');

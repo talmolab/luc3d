@@ -22,7 +22,8 @@ import {
     getCachedTimelineHeight,
     setCachedTimelineHeight,
 } from './timeline-controller.js';
-import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session } from '../pose/pose-data.js';
+import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
+         someValidPoint3d } from '../pose/pose-data.js';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject } from '../pose/triangulation.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
@@ -530,6 +531,7 @@ export function setupMenus() {
         state.colorByIdentity = true;
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(session, { cap: true });
         setStatus('Propagate Tracks → IDs: ' + res.identities + ' identities from tracks (' +
@@ -548,10 +550,21 @@ export function setupMenus() {
             return;
         }
         drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
-        setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks from identities (' +
-            res.instances + ' instances updated)', 'success');
+        if (res.lazyErrorRows > 0) {
+            // Surfaced, not silently eaten: some rows in the persistent
+            // columnar store failed to remap (see console for exactly which)
+            // and were left with their OLD track index — those will show as
+            // trackless in the exported .slp once session.tracks is replaced
+            // with the shorter identity-derived list.
+            setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks, but ' + res.lazyErrorRows +
+                ' row(s) failed to remap — export will be INCOMPLETE. See console for details.', 'error');
+        } else {
+            setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks from identities (' +
+                res.instances + ' instances updated)', 'success');
+        }
     });
 
     // Color by Tracks / ID toolbar toggle
@@ -788,7 +801,7 @@ export function setupMenus() {
             if (groupCams.length < 2) continue;
             var result = triangulateAndReproject(group, groupCams);
             group.points3d = result.points3d;
-            if (group.points3d && group.points3d.some(function (p) { return p != null; })) {
+            if (someValidPoint3d(group.points3d)) {
                 envGroups.push(group);
             }
         }
@@ -1029,7 +1042,12 @@ export function setupMenus() {
 
     document.getElementById('menuExportLabels').addEventListener('click', function () {
         closeMenus();
-        exportLabels();
+        // `exportLabels` became async when it started streaming through a windowed
+        // sweep (luc3d #195) — catch here so a failure surfaces instead of becoming
+        // an unhandled rejection.
+        Promise.resolve(exportLabels()).catch(function (e) {
+            console.error('[menuExportLabels] export failed:', e);
+        });
     });
 
     // Deprecated: "Export 2D SLP (All Views)" was removed from the File menu.
@@ -1235,10 +1253,11 @@ function copySelectedInstance() {
     var skel = state.session.skeleton;
     var pointsByName = {};
     for (var i = 0; i < skel.nodes.length; i++) {
-        var p = inst.points[i];
+        // hasPoint/getX/getY instead of getPoint: the boxed row would be
+        // thrown away immediately (the clipboard entry gets its own array).
         pointsByName[skel.nodes[i]] = {
-            point: p ? [p[0], p[1]] : null,
-            occluded: !!(inst.occluded && inst.occluded[i])
+            point: inst.hasPoint(i) ? [inst.getX(i), inst.getY(i)] : null,
+            occluded: inst.isOccluded(i)
         };
     }
     setInstanceClipboard({
@@ -1468,13 +1487,13 @@ export function setupUI() {
                 if (e.shiftKey) return; // Shift+Arrow is unbound
                 e.preventDefault();
                 if (e.altKey) { seekToLabeledFrame(1); }
-                else { videoController.seekToFrame(state.currentFrame + 1); }
+                else { videoController.scrubToFrame(state.currentFrame + 1); }
                 break;
             case 'ArrowLeft':
                 if (e.shiftKey) return; // Shift+Arrow is unbound
                 e.preventDefault();
                 if (e.altKey) { seekToLabeledFrame(-1); }
-                else { videoController.seekToFrame(state.currentFrame - 1); }
+                else { videoController.scrubToFrame(state.currentFrame - 1); }
                 break;
             case ' ':
                 e.preventDefault();
@@ -1487,11 +1506,11 @@ export function setupUI() {
                 break;
             case 'Home':
                 e.preventDefault();
-                videoController.seekToFrame(0);
+                videoController.scrubToFrame(0);
                 break;
             case 'End':
                 e.preventDefault();
-                videoController.seekToFrame(state.totalFrames - 1);
+                videoController.scrubToFrame(state.totalFrames - 1);
                 break;
             case '+':
             case '=':
@@ -2511,7 +2530,7 @@ export function seekToLabeledFrame(direction) {
         // frames at once.
         if (timeline) timeline.setCurrentFrame(target);
         updateSeekbarVisual(target);
-        videoController.seekToFrame(target);
+        videoController.scrubToFrame(target);
         setStatus('Frame ' + (target + 1), 'info');
     }
 }

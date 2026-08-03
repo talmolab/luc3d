@@ -7,7 +7,7 @@ import {
     Skeleton, Camera, Session,
 } from '../pose/pose-data.js';
 import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
-import { REPROJECTION_COLOR, getTrackColor } from './overlays.js';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
@@ -1283,9 +1283,32 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
     // table PER instance, each labelled by its track/identity, so a large error
     // can be traced to a specific animal + node + view instead of being hidden
     // in a cross-track average.
+    //
+    // Render only results whose group is still one of THIS frame's live groups.
+    // `state.triangulationResults` is derived state that outlives the groups it
+    // describes: "Triangulate All" routes to `groupByIdentityAndTriangulateAll`
+    // (whenever identities exist), which DELETES and rebuilds each frame's
+    // `instanceGroups` but — unlike every other bulk path, which either `set()`s
+    // per frame or `clear()`s wholesale — never prunes the results map, and
+    // `ui/rendering.js`'s lazy fill then CONCATENATES its freshly-computed
+    // entries onto whatever was already stored. A frame the user had already
+    // triangulated therefore ends up holding results for both the deleted
+    // groups and their replacements, which rendered as TWO tables per animal
+    // (measured: 4 tables for 2 animals, 2 referencing deleted groups). This is
+    // display-side only, on purpose — the triangulation paths are verified
+    // against the real project and are deliberately left untouched.
+    //
+    // Entries with no `group` at all are kept (they render via the `Instance N`
+    // fallback), and the filter is skipped entirely when the caller passed no
+    // group list, so neither case can blank a panel that used to populate.
     var breakdownDiv = document.getElementById('errorBreakdownTable');
     breakdownDiv.textContent = '';
-    if (results && results.length > 0 && state.session && state.session.skeleton) {
+    var liveResults = results;
+    if (results && instanceGroups && instanceGroups.length > 0) {
+        var liveGroups = new Set(instanceGroups);
+        liveResults = results.filter(function (r) { return !r.group || liveGroups.has(r.group); });
+    }
+    if (liveResults && liveResults.length > 0 && state.session && state.session.skeleton) {
         var nodeNames = state.session.skeleton.nodes;
         var cameras = state.session.cameras;
         var camNames = cameras.map(function (c) { return c.name; });
@@ -1379,44 +1402,84 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             return tbl;
         };
 
-        // Resolve a stable label + color for the instance behind a result,
-        // preferring identity, then track, then a positional fallback.
-        var resultLabel = function (r, idx) {
-            var group = r.group;
-            var trackIdx = null;
+        // Resolve a label + dot color for the instance behind a result. Both
+        // MUST agree with what the rest of the app shows for the same group,
+        // so this deliberately reuses the canonical resolvers rather than
+        // reading `group.identityId` / `getTrackColor` directly:
+        //   * Track: the first member instance that actually CARRIES a track,
+        //     scanning every camera — not just `instances`' first entry, which
+        //     may be a trackless view while its siblings are tracked (the scan
+        //     `getGroupColor` and the identity dropdown below both use).
+        //   * Identity: the PER-FRAME identity for that live (camera, track)
+        //     first. `group.identityId` is only refreshed on the frame where an
+        //     identity is (re)assigned, so it goes stale on every other frame
+        //     once a swap fix propagates forward — reading it first labelled
+        //     these tables with the pre-fix animal (issue #155). Mirrors the
+        //     Linked Instance Groups identity `<select>`'s pre-select exactly.
+        //   * Color: `getGroupColor`, so the dot matches the 2D views and the
+        //     3D viewport — it honors Color-by-Identity mode (`state.color
+        //     ByIdentity`) and carries the #168 wildcard-identity and #183
+        //     frame-0 raw-trackIdx-collision guards, which a bare
+        //     `getTrackColor(trackIdx)` bypasses (painting two different
+        //     animals the same color on exactly the frames those fixes cover).
+        var describeResult = function (r, idx) {
+            var group = r && r.group;
+            var trackCam = null, trackIdx = null;
             if (group && group.instances) {
-                var firstInst = group.instances.values().next().value;
-                if (firstInst && firstInst.trackIdx != null && firstInst.trackIdx >= 0) trackIdx = firstInst.trackIdx;
+                for (var [dCam, dInst] of group.instances) {
+                    if (dInst && dInst.trackIdx != null && dInst.trackIdx >= 0) {
+                        trackCam = dCam; trackIdx = dInst.trackIdx; break;
+                    }
+                }
             }
-            var trackName = trackIdx != null ? (state.session.tracks[trackIdx] || ('track ' + trackIdx)) : null;
-            var identName = null;
-            if (group && group.identityId != null && group.identityId >= 0 && state.session.identities) {
-                var ident = state.session.identities.find(function (id) { return id.id === group.identityId; });
-                if (ident) identName = ident.name;
+            // The synthetic "No ID" track is not an animal name — leave it to
+            // the identity part (and to getGroupColor's NULL_ID_COLOR).
+            var trackName = null;
+            if (trackIdx != null &&
+                !(state.session.isNoIdTrack && state.session.isNoIdTrack(trackIdx))) {
+                trackName = state.session.tracks[trackIdx] || ('track ' + trackIdx);
             }
+            var identityId = null;
+            if (group) {
+                if (trackIdx != null && state.session.getIdentityIdForTrack) {
+                    identityId = state.session.getIdentityIdForTrack(trackCam, trackIdx, frameIdx);
+                }
+                if (identityId == null && group.identityId != null && group.identityId >= 0) {
+                    identityId = group.identityId;
+                }
+            }
+            var identity = (identityId != null && state.session.getIdentity)
+                ? state.session.getIdentity(identityId) : null;
             var parts = [];
-            if (identName) parts.push(identName);
+            if (identity) parts.push(identity.name);
             if (trackName) parts.push(trackName);
-            var text = parts.length ? parts.join(' · ') : ('Instance ' + (idx + 1));
-            // Trackless groups get a neutral dot instead of implying track 0.
-            var color = trackIdx != null ? getTrackColor(trackIdx) : 'var(--text-muted)';
-            return { text: text, color: color };
+            return {
+                text: parts.length ? parts.join(' · ') : ('Instance ' + (idx + 1)),
+                color: group
+                    ? getGroupColor(group, state.session, state.colorByIdentity, frameIdx, null)
+                    : 'var(--text-muted)',
+                result: r,
+            };
         };
 
-        // Order instances by track name, then identity, for a stable reading
-        // order across frames (matches the Linked Instance Groups table).
-        var orderedResults = results.slice().sort(function (a, b) {
-            var la = resultLabel(a, 0).text, lb = resultLabel(b, 0).text;
-            return la.localeCompare(lb);
+        // Order by label for a stable reading order across frames. Labels are
+        // resolved ONCE (up front, against each result's ORIGINAL index, so the
+        // "Instance N" fallback numbering doesn't shuffle with the sort) and the
+        // original index breaks ties — without it, several trackless groups all
+        // compare equal and their order varies frame to frame.
+        var described = liveResults.map(function (r, idx) { return describeResult(r, idx); });
+        var order = described.map(function (_, idx) { return idx; }).sort(function (a, b) {
+            var cmp = described[a].text.localeCompare(described[b].text);
+            return cmp !== 0 ? cmp : a - b;
         });
 
-        for (var oi = 0; oi < orderedResults.length; oi++) {
-            var res = orderedResults[oi];
+        for (var oi = 0; oi < order.length; oi++) {
+            var lbl = described[order[oi]];
+            var res = lbl.result;
             var block = document.createElement('div');
             block.style.cssText = 'margin-top:' + (oi === 0 ? '0' : '8px') + ';';
 
             // Instance header: color dot + label + this instance's mean error.
-            var lbl = resultLabel(res, oi);
             var hdr = document.createElement('div');
             hdr.style.cssText = 'display:flex;align-items:center;gap:5px;margin-bottom:2px;font-size:10px;';
             var dot = document.createElement('span');
@@ -1995,8 +2058,8 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
 
                 const tdPoints = document.createElement('td');
                 tdPoints.className = 'mono';
-                const validPts = ul.instance.points.filter(function (p) { return p !== null; }).length;
-                tdPoints.textContent = validPts + '/' + ul.instance.points.length;
+                const validPts = ul.instance.countPoints();
+                tdPoints.textContent = validPts + '/' + ul.instance.numNodes;
 
                 const tdScore = document.createElement('td');
                 tdScore.className = 'mono';

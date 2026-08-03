@@ -14,17 +14,17 @@ import {
     triangulatePoints,
     reprojectPoint,
     reprojectPoints,
-    computeInstanceDistance,
+    computeInstanceDistanceTo,
     hungarianAlgorithm
 } from './triangulation.js';
 import { CrossViewTracker, Detection } from './cross-view-tracker.js';
-import { InstanceGroup } from './pose-data.js';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
 import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
 import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
 import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
-import { loadAllLazyFrames, batchLoadLazyFrames } from './triangulation.js';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 
@@ -40,7 +40,7 @@ var EXPLICIT_NONE = -1;
 var _fMatrixCache = {};   // "cam1:cam2" → F matrix
 var _undistortCache = new WeakMap();  // Instance → undistorted points
 
-// Per-node weights for the current track run (parallel to Instance.points), set
+// Per-node weights for the current track run (parallel to skeleton nodes), set
 // at the start of matchFrameInstances from the user's Tracking Wizard settings.
 // null ⇒ every node weighted 1. A node weighted 0 is excluded from all costs.
 var _nodeWeights = null;
@@ -76,14 +76,10 @@ function getUndistortedPoints(inst, cam) {
     var cached = _undistortCache.get(inst);
     if (cached) return cached;
     var pts = [];
-    for (var k = 0; k < inst.points.length; k++) {
-        if (inst.points[k] == null) {
-            pts.push(null);
-        } else if (cam.undistortPoint) {
-            pts.push(cam.undistortPoint(inst.points[k]));
-        } else {
-            pts.push(inst.points[k]);
-        }
+    for (var k = 0, nK = inst.numNodes; k < nK; k++) {
+        var p = inst.getPoint(k);
+        if (p == null) pts.push(null);
+        else pts.push(cam.undistortPoint ? cam.undistortPoint(p) : p);
     }
     _undistortCache.set(inst, pts);
     return pts;
@@ -104,16 +100,25 @@ function clearFrameCache() {
  */
 function epipolarScore(instA, camA, instB, camB) {
     var F = getCachedF(camA, camB);
-    var ptsA = instA.points, ptsB = instB.points;
-    var numKp = Math.min(ptsA.length, ptsB.length);
+    var numKp = Math.min(instA.numNodes, instB.numNodes);
+    var ptA = [0, 0], ptB = [0, 0];
     var totalErr = 0, validCount = 0;
 
     for (var k = 0; k < numKp; k++) {
-        if (ptsA[k] == null || ptsB[k] == null) continue;
+        if (!instA.readPoint(k, ptA) || !instB.readPoint(k, ptB)) continue;
         var w = nodeWeight(k);
         if (w <= 0) continue;
-        var x1 = ptsA[k][0], y1 = ptsA[k][1];
-        var x2 = ptsB[k][0], y2 = ptsB[k][1];
+        var x1 = ptA[0], y1 = ptA[1];
+        // `ptB` — the reusable buffer `instB.readPoint(k, ptB)` just filled.
+        // Was `ptsB[k]`, a leftover from the pre-#185 boxed per-node arrays that
+        // this loop replaced; `ptsB` has not existed since, so every call threw
+        // `ReferenceError: ptsB is not defined`. Unreachable from the app (the
+        // live tracker is `CrossViewTracker`; `matchFrameInstances` is
+        // bench/test-only surface with no app caller), which is how it survived —
+        // but `tests/test-tracker-luc3d.mjs` covers this path and was failing
+        // outright, and it is not part of the `test-runner.html` suite that
+        // `run-unit-tests.mjs` drives, so nothing reported it.
+        var x2 = ptB[0], y2 = ptB[1];
         var l0 = F[0][0]*x1 + F[0][1]*y1 + F[0][2];
         var l1 = F[1][0]*x1 + F[1][1]*y1 + F[1][2];
         var l2 = F[2][0]*x1 + F[2][1]*y1 + F[2][2];
@@ -146,8 +151,8 @@ function reprojectionScore(instA, camA, instB, camB) {
         if (pt3d == null) continue;
         var repA = reprojectPoint(pt3d, PA);
         var repB = reprojectPoint(pt3d, PB);
-        var dxA = instA.points[k][0] - repA[0], dyA = instA.points[k][1] - repA[1];
-        var dxB = instB.points[k][0] - repB[0], dyB = instB.points[k][1] - repB[1];
+        var dxA = instA.getX(k) - repA[0], dyA = instA.getY(k) - repA[1];
+        var dxB = instB.getX(k) - repB[0], dyB = instB.getY(k) - repB[1];
         totalOks += w * (Math.exp(-(dxA*dxA + dyA*dyA) / sigma2x2) +
                      Math.exp(-(dxB*dxB + dyB*dyB) / sigma2x2)) / 2;
         validCount += w;
@@ -170,20 +175,13 @@ function crossViewScore(instA, camA, instB, camB) {
 
 // Number of present (non-null) keypoints in an instance — the geometry half of
 // the detection filter. Missing keypoints are stored as null (see getUndistortedPoints).
-function countVisibleNodes(points) {
-    if (!points) return 0;
-    var n = 0;
-    for (var k = 0; k < points.length; k++) if (points[k] != null) n++;
-    return n;
-}
-
 // Detection-pool gate: drop garbage/low-confidence instances before they enter
 // cross-view matching. Both gates default to 0 (no-op), so behavior is unchanged
 // unless the Tracking Wizard / bench sets them.
 //   filterMinVisibleNodes — geometry gate, needs no per-detection score (sleap-3d Stage-1 = 8)
 //   filterMinInstanceScore — confidence gate, only applies when inst.score is available (sleap-3d = 0.85)
 function passesDetectionFilter(inst, minVis, minScore) {
-    if (minVis > 0 && countVisibleNodes(inst.points) < minVis) return false;
+    if (minVis > 0 && inst.countPoints() < minVis) return false;
     if (minScore > 0 && inst.score != null && inst.score < minScore) return false;
     return true;
 }
@@ -241,7 +239,7 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
     var prevTargets3d = opts.prevTargets3d || null;
 
     // Resolve user-defined per-node weights for this run (Tracking Wizard).
-    // Indexed to match Instance.points; null ⇒ all nodes weighted 1.
+    // Indexed to match skeleton nodes; null ⇒ all nodes weighted 1.
     _nodeWeights = (session && session.skeleton && Array.isArray(session.skeleton.nodes))
         ? getNodeWeightArray(session.skeleton.nodes)
         : null;
@@ -359,7 +357,7 @@ export function matchFrameInstances(frameGroup, cameras, session, opts) {
                 var aTrack = aInsts[aii].trackIdx;
                 if (assignments.has(acn + ':' + aTrack)) continue;
                 if (session.frameIdentityMap &&
-                    session.frameIdentityMap.has(fi + ':' + acn + ':' + aTrack)) continue;
+                    session.hasFrameIdentity(fi, acn, aTrack)) continue;
                 session.setFrameIdentity(fi, acn, aTrack, EXPLICIT_NONE);
             }
         }
@@ -411,7 +409,7 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     var cam = camMap[camName];
                     if (!cam) return;
                     var reproj = reprojectPoints(prevPts3d, cam.projectionMatrix);
-                    var d = computeInstanceDistance(reproj, inst.points, _nodeWeights);
+                    var d = computeInstanceDistanceTo(reproj, inst, _nodeWeights);
                     if (d < Infinity) { reprojTotal += d; reprojCount++; }
                 });
                 if (reprojCount > 0) {
@@ -423,14 +421,15 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
             // Signal 2: 3D distance
             if (prevPts3d && currPts3d) {
                 var totalDist3d = 0, count3d = 0;
-                var numKp = Math.min(prevPts3d.length, currPts3d.length);
+                var numKp = Math.min(points3dNodeCount(prevPts3d), points3dNodeCount(currPts3d));
+                var _pp = [0, 0, 0], _cp = [0, 0, 0];
                 for (var k = 0; k < numKp; k++) {
-                    if (prevPts3d[k] && currPts3d[k]) {
+                    if (readPoint3d(prevPts3d, k, _pp) && readPoint3d(currPts3d, k, _cp)) {
                         var w3d = nodeWeight(k);
                         if (w3d <= 0) continue;
-                        var dx = prevPts3d[k][0] - currPts3d[k][0];
-                        var dy = prevPts3d[k][1] - currPts3d[k][1];
-                        var dz = prevPts3d[k][2] - currPts3d[k][2];
+                        var dx = _pp[0] - _cp[0];
+                        var dy = _pp[1] - _cp[1];
+                        var dz = _pp[2] - _cp[2];
                         totalDist3d += w3d * Math.sqrt(dx*dx + dy*dy + dz*dz);
                         count3d += w3d;
                     }
@@ -451,7 +450,7 @@ function reorderGroupsByPrevTargets(groups, prevTargets3d, camMap, prevAssignmen
                     var cam = camMap[camName];
                     if (!cam || !prevInst) return;
                     var reproj = reprojectPoints(currPts3d, cam.projectionMatrix);
-                    var d = computeInstanceDistance(reproj, prevInst.points, _nodeWeights);
+                    var d = computeInstanceDistanceTo(reproj, prevInst, _nodeWeights);
                     if (d < Infinity) { oksTotal += Math.exp(-d / 50.0); oksCount++; }
                 });
                 if (oksCount > 0) { score += oksTotal / oksCount; scoreCount++; }
@@ -657,7 +656,7 @@ function matchPairwise(camInstances, camMap, activeCams, numAnimals, prevAssignm
                 var costRow = [];
                 for (var ii = 0; ii < insts3.length; ii++) {
                     costRow[ii] = used.has(ii) ? Infinity
-                        : computeInstanceDistance(reproj3, insts3[ii].points, _nodeWeights);
+                        : computeInstanceDistanceTo(reproj3, insts3[ii], _nodeWeights);
                 }
                 rows.push({ gi: gi, gate: reprojectionGate(groups[gi].size) });
                 cost3.push(costRow);
@@ -706,12 +705,12 @@ function triangulateGroup(group, camMap) {
     group.forEach(function(inst, cn) { cams.push(camMap[cn]); entries.push(inst); });
     if (cams.length < 2) return null;
 
-    var numKp = entries[0].points.length;
+    var numKp = entries[0].numNodes;
     var allObs = [];
     for (var k = 0; k < numKp; k++) {
         var obs = [];
         for (var c = 0; c < entries.length; c++) {
-            var pt = entries[c].points[k];
+            var pt = entries[c].getPoint(k);
             obs.push(pt && cams[c].undistortPoint ? cams[c].undistortPoint(pt) : pt);
         }
         allObs.push(obs);
@@ -743,17 +742,18 @@ function getTrackerHyperparams() {
 
 // Count null (non-triangulated) 3D nodes across the groups a tracking run
 // produced. `targets3d` is the per-frame array returned by matchFrameInstances;
-// each entry's `points3d` is a per-node array (null entry ⇒ that node could not
-// be triangulated). Single-view groups (points3d === null) are skipped — they
-// were never triangulated, so they are not "null nodes" in the 3D sense.
+// each entry's `points3d` is a flat Float64Array (an all-NaN triple ⇒ that node
+// could not be triangulated). Single-view groups (points3d === null) are skipped
+// — they were never triangulated, so they are not "null nodes" in the 3D sense.
 function countNullNodesInTargets(targets3d) {
     var nulls = 0;
     if (!targets3d) return 0;
     for (var i = 0; i < targets3d.length; i++) {
         var p = targets3d[i] && targets3d[i].points3d;
         if (!p) continue;
-        for (var k = 0; k < p.length; k++) {
-            if (p[k] == null) nulls++;
+        var n = points3dNodeCount(p);
+        for (var k = 0; k < n; k++) {
+            if (!hasPoint3d(p, k)) nulls++;
         }
     }
     return nulls;
@@ -788,6 +788,26 @@ function computeMaxInstancesPerView(session) {
             var count = (linked ? linked.length : 0) + (unlinked ? unlinked.length : 0);
             if (count > max) max = count;
         }
+    }
+    // This reads `frameGroups`, i.e. the RESIDENT window — on a lazily reopened
+    // project that is a sample (31 of 180,210 frames measured), not the project.
+    // Deliberately NOT "fixed" to sweep the store: unlike the other resident-only
+    // defects this one is a SAMPLE, and it is usually right — every animal is
+    // visible in most frames, so the max is reached almost immediately, and Track
+    // All is confirmed working on the real project with this behaviour. Changing
+    // how the animal count is derived would change tracking output on a path that
+    // currently works, which is not a trade worth making blind. It can only be
+    // wrong in one direction (too LOW — if no sampled frame happens to show every
+    // animal at once), and that shows up as a too-small identity pool, so make the
+    // sampling visible instead of silent.
+    var loader = session.lazyLoader;
+    var total = loader ? (loader.nFrames || 0) : 0;
+    var resident = session.frameGroups ? session.frameGroups.size : 0;
+    if (total > 0 && resident < total) {
+        console.warn('[tracker] auto-detected ' + max + ' animals per view from ' +
+            resident.toLocaleString() + ' resident frame(s) of ' + total.toLocaleString() +
+            '. If that is lower than the real animal count, set it explicitly ' +
+            '(Track ▸ number of animals) before running Track All.');
     }
     return max;
 }
@@ -860,9 +880,34 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx) {
 // Persist a tracked frame: for each live target with a cross-view bundle THIS
 // frame, create an InstanceGroup, map the target's stable trackId to a session
 // Identity, write the per-frame identity entries, and promote unlinked members.
-function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
+//
+// Raw-trackIdx collision guard (2D-viewer color bug, most visible on the
+// first frame or two of a video): `session.setFrameIdentity` keys
+// `frameIdentityMap` by (frameIdx, camName, RAW per-camera trackIdx) — but
+// per-camera prediction files number tracks independently PER CAMERA, and a
+// single camera's own raw tracker is commonly less differentiated right at
+// the start of a video (not enough history yet to tell two animals apart
+// confidently). If that raw tracker briefly assigns the SAME trackIdx to two
+// DIFFERENT physical animals in the same camera on the same frame, this
+// function used to call `setFrameIdentity` for both — the second silently
+// overwrote the first's map entry. `group.identityId` (read by the info
+// panel and the 3D viewport's any-camera-fallback color lookup) stayed
+// correct regardless, since it's set once per group, not through this
+// shared map key — but `ui/overlays.js`'s 2D color path queries this exact
+// per-camera-per-frame key, so it would confidently show the WRONG identity's
+// color for whichever animal got overwritten, on that one (camera, frame)
+// only, self-correcting the moment the raw tracker re-differentiates them
+// (matching the report: "same Track and ID name on click, different color in
+// the 2D viewer, 3D viewport correct, self-corrects next frame"). `writtenThisFrame`
+// detects the collision (two DIFFERENT identities writing the identical
+// camName+trackIdx key within this single frame) and marks that one key
+// explicit "no identity" (-1) instead of letting either identity win — the
+// 2D lookup then correctly misses and falls through to `group.identityId`,
+// exactly like the info panel and 3D viewport already do.
+export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
     var fg = session.getFrameGroup(frameIdx);
     if (!fg) return;
+    var writtenThisFrame = new Map();   // "camName:trackIdx" -> identityId
     for (var ti = 0; ti < trk.targets.length; ti++) {
         var target = trk.targets[ti];
         var members = [];
@@ -889,7 +934,19 @@ function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
                 fg.addInstance(camName, inst);          // promote into the linked pool
                 fg.removeUnlinkedById(det.unlinkedId);
             }
-            session.setFrameIdentity(frameIdx, camName, inst.trackIdx, identityId);
+            var collisionKey = camName + ':' + inst.trackIdx;
+            var priorIdentity = writtenThisFrame.get(collisionKey);
+            if (priorIdentity != null && priorIdentity !== identityId) {
+                session.setFrameIdentity(frameIdx, camName, inst.trackIdx, -1);
+                console.warn('[commitTrackedFrame] frame ' + frameIdx + ' camera ' + camName +
+                    ' trackIdx ' + inst.trackIdx + ': the raw per-camera tracker assigned this same ' +
+                    'trackIdx to two different animals this frame — marking per-frame identity ' +
+                    'ambiguous for this (frame,camera,trackIdx) key so the 2D viewer falls back to ' +
+                    'each group\'s own (correct) identityId instead of showing whichever animal wrote last.');
+            } else {
+                writtenThisFrame.set(collisionKey, identityId);
+                session.setFrameIdentity(frameIdx, camName, inst.trackIdx, identityId);
+            }
         }
         if (!session.instanceGroups.has(frameIdx)) session.instanceGroups.set(frameIdx, []);
         session.instanceGroups.get(frameIdx).push(group);
@@ -959,104 +1016,24 @@ export async function runCrossViewTrackerProgress(session, cameras, frameIndices
     return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
 
-/** Mirrors `ui/export-modals.js`'s private `frameGroupHasUserInstances` (kept
- * local rather than shared to avoid a new cross-module import for one small
- * pure helper) — true if a FrameGroup carries any user-authored instance. */
-function frameGroupHasUserInstances(fg) {
-    for (var [, insts] of fg.instances) {
-        for (var i = 0; i < insts.length; i++) {
-            if (insts[i] && insts[i].type === 'user') return true;
-        }
-    }
-    for (var [, uInsts] of fg.unlinkedInstances) {
-        for (var j = 0; j < uInsts.length; j++) {
-            if (uInsts[j] && uInsts[j].instance && uInsts[j].instance.type === 'user') return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Windowed sibling of `runCrossViewTrackerProgress` for a windowing-capable
- * lazy loader (`SioLazyLoader` — memory-bounded phase-5 sessions). The
- * cross-view tracker is sequential (`stepTrackerFrame` only ever reads the
- * CURRENT frame's `FrameGroup`; all cross-frame state lives in `run.trk`/
- * `run.trackToIdentity`, not in `session.frameGroups`), so — mirroring
- * `ui/export-modals.js`'s `sweepTriangulationFrames` — this walks
- * `0..loader.nFrames` in windows, materializes each window
- * (`batchLoadLazyFrames`), steps the tracker over it, then releases it
- * (dropping predicted-only `FrameGroup`s — they rebuild from the columnar
- * store on demand; identities/instanceGroups already live in
- * `session.identities`/`session.instanceGroups`, untouched by the release).
- *
- * This replaces `trackAll()`'s previous `loadAllLazyFrames()` (materializing
- * the WHOLE ~108k-frame project into `frameGroups` before tracking even
- * starts) with a bounded window — measured to cut a 108k-frame×3-camera
- * session's Track-All-time peak by roughly the full-materialization cost
- * (~1+ GB), critical headroom for sequential multi-session processing where
- * every GB matters (see `saveAllSessionsStreaming` / the multi-session save
- * plan).
- */
-/**
- * No `--expose-gc` in a real browser — a large, immediately-discarded
- * allocation typically forces V8 to prove it has room (or reclaim some)
- * before granting it, nudging a collection sooner than just waiting would.
- * Real-data testing showed a released window's garbage can otherwise pile up
- * across a whole ~108k-frame/~54-window sweep. Best-effort only.
- */
-async function encourageGC(totalMB) {
-    // See the identical helper in import-export/save-load.js for why this
-    // allocates toward the real heap ceiling rather than a token amount — a
-    // modest allocation is trivially satisfied from free space without V8
-    // bothering to run the mark-compact pass that actually reclaims a large,
-    // promoted-to-old-space object graph like a released window's data.
-    var junk = [];
-    try {
-        var chunkMB = 100;
-        var n = Math.ceil((totalMB || 800) / chunkMB);
-        for (var i = 0; i < n; i++) {
-            var buf = new ArrayBuffer(chunkMB * 1024 * 1024);
-            new Uint8Array(buf)[0] = 1;
-            junk.push(buf);
-        }
-    } catch (e) { /* ignore — hitting real pressure is the point */ }
-    junk = null;
-    await new Promise(function (r) { setTimeout(r, 50); });
-}
-
 async function sweepTrackAllFrames(session, cameras, maxTargets, onProgress, windowSize) {
     var run = createTrackerRun(session, cameras, maxTargets);
-    var loader = session.lazyLoader;
-    var total = loader.nFrames;
-    var W = windowSize || 2000;
+    var total = session.lazyLoader.nFrames;
     var done = 0;
-    var windowCount = 0;
     var stride = Math.max(1, Math.ceil(total / 20));
-    for (var start = 0; start < total; start += W) {
-        var end = Math.min(start + W, total);
-        await batchLoadLazyFrames(start, end - start);
-        for (var fi = start; fi < end; fi++) {
-            stepTrackerFrame(session, run, fi);
-            done++;
-            if (onProgress && (done % stride === 0 || done === total)) {
-                await onProgress(done, total);
-            }
+    // The hydrate-window/process/release/GC mechanics live in
+    // `sweepLazyFrameWindows` (luc3d #195) — this was one of three identical
+    // copies. Behaviour is preserved exactly: `stepTrackerFrame` already
+    // early-returns on a frame with no `FrameGroup`, which is the same set the
+    // sweep skips, and the release policy (pin the on-screen frame + any
+    // user-edited frame) and GC cadence are the ones lifted from here.
+    await sweepLazyFrameWindows(session, function (fi) {
+        stepTrackerFrame(session, run, fi);
+        done++;
+        if (onProgress && (done % stride === 0 || done === total)) {
+            return onProgress(done, total);
         }
-        // Release the window — keep the on-screen current frame and any
-        // user-edited frame; everything else is predicted-only and rebuildable.
-        for (var rf = start; rf < end; rf++) {
-            if (rf === state.currentFrame) continue;
-            var rfg = session.frameGroups.get(rf);
-            if (rfg && !frameGroupHasUserInstances(rfg)) session.frameGroups.delete(rf);
-        }
-        loader.releaseWindow(start, end);
-        windowCount++;
-        // Every few windows, nudge + yield so released windows don't just
-        // pile up as uncollected garbage across the whole sweep.
-        if (windowCount % 5 === 0) {
-            await encourageGC(800);
-        }
-    }
+    }, { window: windowSize || 2000 });
     return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
 
@@ -1182,17 +1159,6 @@ export async function trackAll() {
         return;
     }
 
-    var frameIndices = session.frameIndices;
-    if (frameIndices.length === 0) {
-        setStatus('No frames to track', 'error');
-        return;
-    }
-
-    // Prompt for number of animals
-    if (trackerNumAnimals == null) {
-        if (!promptNumAnimals()) return;
-    }
-
     // Lazy sessions (large .slp session folders, #132) keep only a resident window
     // in `frameGroups`, so `session.frameIndices` covers just the VISITED frames —
     // but the cross-view tracker is sequential and needs EVERY frame in order.
@@ -1203,6 +1169,26 @@ export async function trackAll() {
     // non-lazy session, where it's already a no-op).
     var loader = session.lazyLoader;
     var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
+
+    var frameIndices = session.frameIndices;
+    // A freshly-opened large project has ZERO resident frameGroups (nothing
+    // visited/scrubbed to yet) — session.frameIndices.length is 0 even though
+    // the project has 180k+ frames waiting in the lazy loader. Checking
+    // frameIndices alone here made Track All immediately bail with "No frames
+    // to track" on every large lazy project the very first time it was run,
+    // before ever reaching the windowed sweep below that doesn't need any
+    // frame pre-visited. Use the loader's real total when windowed.
+    var hasFrames = windowed ? loader.nFrames > 0 : frameIndices.length > 0;
+    if (!hasFrames) {
+        setStatus('No frames to track', 'error');
+        return;
+    }
+
+    // Prompt for number of animals
+    if (trackerNumAnimals == null) {
+        if (!promptNumAnimals()) return;
+    }
+
     if (loader && !windowed) {
         showLoading('Loading all ' + session.numFrames + ' frames for tracking…');
         await new Promise(function (r) { setTimeout(r, 0); });

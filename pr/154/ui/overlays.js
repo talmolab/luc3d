@@ -152,14 +152,29 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
     // fires, so consulting it here would show stale colors for any group
     // whose past-frame instances still carry the old trackIdx.
     var effectiveTrackIdx = null;
+    var effectiveTrackCam = null;
     if (cameraName && group.instances.has(cameraName)) {
         var camInst = group.instances.get(cameraName);
-        if (camInst && camInst.trackIdx != null) effectiveTrackIdx = camInst.trackIdx;
+        if (camInst && camInst.trackIdx != null) { effectiveTrackIdx = camInst.trackIdx; effectiveTrackCam = cameraName; }
     }
     if (effectiveTrackIdx == null) {
-        for (var [, inst] of group.instances) {
-            if (inst && inst.trackIdx != null) { effectiveTrackIdx = inst.trackIdx; break; }
+        for (var [otherCam, inst] of group.instances) {
+            if (inst && inst.trackIdx != null) { effectiveTrackIdx = inst.trackIdx; effectiveTrackCam = otherCam; break; }
         }
+    }
+    // Same-frame raw-trackIdx collision: `commitTrackedFrame`'s
+    // `writtenThisFrame` guard marks a (frame,cam,trackIdx) key -1/ambiguous
+    // in frameIdentityMap ONLY when the raw per-camera tracker briefly
+    // assigned that exact trackIdx to two DIFFERENT groups this one frame
+    // (most common on frame 0, before it has history to differentiate them —
+    // -1 is written nowhere else, so this check is unambiguous). Coloring
+    // purely by that (collided) trackIdx would paint both groups identically
+    // on this one frame — fall back to this group's own `identityId`
+    // (unambiguous, never shared between two colliding groups) just for this
+    // frame, exactly like the "no trackIdx at all" fallback below.
+    if (effectiveTrackIdx != null && effectiveTrackCam && session &&
+        session.isExplicitNoIdentity && session.isExplicitNoIdentity(effectiveTrackCam, effectiveTrackIdx, frameIdx)) {
+        effectiveTrackIdx = null;
     }
     if (effectiveTrackIdx == null) {
         effectiveTrackIdx = group.identityId != null && group.identityId >= 0 ? group.identityId : 0;
@@ -422,7 +437,7 @@ export function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, f
  * Draw a single skeleton (edges + nodes) for one instance.
  *
  * @param {CanvasRenderingContext2D} ctx - Overlay canvas context
- * @param {Object} instance - Instance with .points (array of [x,y] or null) and .trackIdx
+ * @param {Object} instance - Instance (flat coords; read via hasPoint/getX/getY) with .trackIdx
  * @param {Object} skeleton - Skeleton with .nodes (array of { name }) and .edges (array of [srcIdx, dstIdx])
  * @param {Object} [options]
  * @param {string}  [options.color]        - Override color (default: track color)
@@ -490,8 +505,8 @@ export function drawNodeShape(ctx, x, y, shape, size, color) {
 
 export function drawSkeleton(ctx, instance, skeleton, options) {
     options = options || {};
-    const points = instance.points;
-    if (!points || points.length === 0) return;
+    const nPts = instance.numNodes;
+    if (nPts === 0) return;
 
     const color = options.color || (instance.trackIdx != null ? getTrackColor(instance.trackIdx) : UNGROUPED_USER_COLOR);
     const edgeColor = options.edgeColor || color;
@@ -525,26 +540,21 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
     const lineWidth = baseLineWidth;
     const nulledNodes = instance.nulledNodes || null;
 
-    // Pre-compute canvas positions for each point
-    const canvasPoints = new Array(points.length);
-    for (let i = 0; i < points.length; i++) {
-        const pt = points[i];
-        if (pt == null) {
+    // Pre-compute canvas positions for each point. Read straight out of the
+    // flat coords (luc3d #189 follow-up #1) — this is the per-frame draw path,
+    // so no boxed [x,y] row is materialized on the way.
+    const canvasPoints = new Array(nPts);
+    for (let i = 0; i < nPts; i++) {
+        if (!instance.hasPoint(i)) {
             canvasPoints[i] = null;
             continue;
         }
-        if (toCanvas) {
-            canvasPoints[i] = toCanvas(pt[0], pt[1]);
-        } else {
-            canvasPoints[i] = { x: pt[0], y: pt[1] };
-        }
+        const px = instance.getX(i), py = instance.getY(i);
+        canvasPoints[i] = toCanvas ? toCanvas(px, py) : { x: px, y: py };
     }
 
     ctx.save();
     ctx.globalAlpha = alpha;
-
-    // Check for occluded array on the instance
-    const occluded = instance.occluded || [];
 
     // --- 1. Draw edges ---
     if (skeleton.edges) {
@@ -1193,18 +1203,14 @@ export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) 
 
     for (let instIdx = 0; instIdx < instances.length; instIdx++) {
         const inst = instances[instIdx];
-        if (!inst.points || inst.points.length === 0) continue;
+        if (inst.numNodes === 0) continue;
 
         // Find first non-null point for track label placement
         let firstCp = null;
-        for (let i = 0; i < inst.points.length; i++) {
-            const pt = inst.points[i];
-            if (pt == null) continue;
-            if (toCanvas) {
-                firstCp = toCanvas(pt[0], pt[1]);
-            } else {
-                firstCp = { x: pt[0], y: pt[1] };
-            }
+        for (let i = 0; i < inst.numNodes; i++) {
+            if (!inst.hasPoint(i)) continue;
+            const px = inst.getX(i), py = inst.getY(i);
+            firstCp = toCanvas ? toCanvas(px, py) : { x: px, y: py };
             break;
         }
 
@@ -1253,18 +1259,14 @@ export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) 
             ctx.textBaseline = 'bottom';
             ctx.textAlign = 'left';
             // Build canvasPoints for label offset computation
-            var instCanvasPoints = new Array(inst.points.length);
-            for (let n = 0; n < inst.points.length; n++) {
-                const pt = inst.points[n];
-                if (pt == null) { instCanvasPoints[n] = null; continue; }
-                if (toCanvas) {
-                    instCanvasPoints[n] = toCanvas(pt[0], pt[1]);
-                } else {
-                    instCanvasPoints[n] = { x: pt[0], y: pt[1] };
-                }
+            var instCanvasPoints = new Array(inst.numNodes);
+            for (let n = 0; n < inst.numNodes; n++) {
+                if (!inst.hasPoint(n)) { instCanvasPoints[n] = null; continue; }
+                const npx = inst.getX(n), npy = inst.getY(n);
+                instCanvasPoints[n] = toCanvas ? toCanvas(npx, npy) : { x: npx, y: npy };
             }
             var instNulled = inst.nulledNodes || null;
-            for (let n = 0; n < inst.points.length; n++) {
+            for (let n = 0; n < inst.numNodes; n++) {
                 var cp = instCanvasPoints[n];
                 if (!cp) continue;
                 const nodeName = typeof skeleton.nodes[n] === 'string'
@@ -1444,11 +1446,41 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
 
     const typeFilter = options.typeFilter || null;
 
+    // Same-trackIdx collision among UNLINKED instances: unlike linked/grouped
+    // instances (which have a `group.identityId` fallback — see getGroupColor
+    // — for the analogous collision `commitTrackedFrame`'s writtenThisFrame
+    // guard flags), an unlinked instance has no group and no identity at all,
+    // so `getInstanceColor` colors it purely by its raw per-camera `trackIdx`
+    // — a property of the raw prediction data itself, not something LUCID's
+    // tracker assigns. Two DIFFERENT unlinked instances in the same (camera,
+    // frame) can legitimately share that raw trackIdx (upstream tracking
+    // ambiguity, most common early in a video before per-camera track
+    // numbering has settled) and would otherwise render as the exact same
+    // color with nothing to tell them apart. Give every occurrence after the
+    // first a brightness-shifted variant of the shared base color so they
+    // stay visually distinct — computed over the type-filtered set actually
+    // drawn together in this call, not the whole unfiltered array.
+    var dupIndexByInstance = new Map();  // Instance -> occurrence index (0 = first)
+    (function computeDupIndices() {
+        var seenCount = new Map();  // trackIdx -> count so far
+        for (let u2 = 0; u2 < unlinkedInstances.length; u2++) {
+            const ul2 = unlinkedInstances[u2];
+            const inst2 = ul2.instance;
+            if (!inst2 || inst2.numNodes === 0) continue;
+            const type2 = inst2.type || 'user';
+            if (typeFilter && type2 !== typeFilter) continue;
+            if (inst2.trackIdx == null) continue;
+            const count = seenCount.get(inst2.trackIdx) || 0;
+            dupIndexByInstance.set(inst2, count);
+            seenCount.set(inst2.trackIdx, count + 1);
+        }
+    })();
+
     for (let u = 0; u < unlinkedInstances.length; u++) {
         const ul = unlinkedInstances[u];
         const instance = ul.instance;
-        const points = instance.points;
-        if (!points || points.length === 0) continue;
+        const nUlPts = instance.numNodes;
+        if (nUlPts === 0) continue;
 
         // Filter by type if typeFilter is set
         const instType = instance.type || 'user';
@@ -1465,20 +1497,24 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
         var baseTrackColor = getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity, ulFrameIdx) || (isPredicted ? '#888888' : UNGROUPED_USER_COLOR);
+        var dupIdx = dupIndexByInstance.get(instance) || 0;
+        if (dupIdx > 0) {
+            // adjustColorBrightness clamps each RGB channel at 255, so a
+            // factor > 1 has little/no visible effect on already-saturated
+            // palette colors — darken monotonically instead, floored so
+            // several duplicates never converge to pure black.
+            baseTrackColor = adjustColorBrightness(baseTrackColor, Math.max(0.35, 1 - 0.22 * dupIdx));
+        }
         const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
         const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
 
         // Pre-compute canvas positions
-        const canvasPoints = new Array(points.length);
-        for (let i = 0; i < points.length; i++) {
-            const pt = points[i];
-            if (pt == null) { canvasPoints[i] = null; continue; }
-            if (toCanvas) {
-                canvasPoints[i] = toCanvas(pt[0], pt[1]);
-            } else {
-                canvasPoints[i] = { x: pt[0], y: pt[1] };
-            }
+        const canvasPoints = new Array(nUlPts);
+        for (let i = 0; i < nUlPts; i++) {
+            if (!instance.hasPoint(i)) { canvasPoints[i] = null; continue; }
+            const upx = instance.getX(i), upy = instance.getY(i);
+            canvasPoints[i] = toCanvas ? toCanvas(upx, upy) : { x: upx, y: upy };
         }
 
         const nulledNodes = instance.nulledNodes || null;
@@ -1632,8 +1668,9 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
  * @param {Object} frameGroup - FrameGroup for the current frame; has per-camera
  *        instance arrays, e.g. frameGroup.instances[viewName] = [Instance, ...]
  * @param {Array}  instanceGroups - InstanceGroup[] for current frame; each has:
- *        .trackIdx, .reprojections[viewName] = [x,y][] or null,
- *        .observedPoints[viewName] = [x,y][] or null
+ *        .trackIdx, .reprojections[viewName] = [x,y][] or null, and
+ *        .observedPoints[viewName] = [x,y][] or null (a DERIVED getter over
+ *        .instances — allocates per access, so hoist it out of loops)
  * @param {Object} session - Session object with .cameras, .skeleton
  * @param {Object} [options]
  * @param {boolean} [options.showDetected]    - Show original 2D detections (default true)
@@ -1746,15 +1783,14 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
                 ? adjustColorBrightness(getInstanceColor(inst, session, viewName, colorByIdentity, windowIdx[k]), stepBright[k])
                 : null);
         }
-        if (!sample || !sample.points) return;
+        if (!sample || sample.numNodes === 0) return;
 
-        for (var n = 0; n < sample.points.length; n++) {
+        for (var n = 0; n < sample.numNodes; n++) {
             var prev = null;
             for (var k2 = 0; k2 < W; k2++) {
                 var inst2 = byFrame[k2].get(tk);
-                var pt = inst2 && inst2.points ? inst2.points[n] : null;
-                if (pt == null) { prev = null; continue; }   // gap — break the line
-                var cp = toCanvas(pt[0], pt[1]);
+                if (!inst2 || !inst2.hasPoint(n)) { prev = null; continue; }   // gap — break the line
+                var cp = toCanvas(inst2.getX(n), inst2.getY(n));
                 // Segment prev(newer) → cp(older) is styled/colored by its older
                 // endpoint (index k2), so older segments fade and keep their color.
                 if (prev && colAtK[k2]) {
@@ -1926,7 +1962,11 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             // Error vectors: need both observed and reprojected
             const reprojPtsForErrors = group.reprojections ? group.reprojections[viewName] : null;
             if (showErrors && reprojPtsForErrors) {
-                const observedPts = group.observedPoints ? group.observedPoints[viewName] : null;
+                // Straight to the member instance rather than group.observedPoints,
+                // which is derived and would allocate a whole object per view
+                // inside this per-frame draw loop (luc3d #189).
+                const observedInst = group.getInstance(viewName);
+                const observedPts = observedInst ? observedInst.toPointsArray() : null;
                 if (observedPts) {
                     drawReprojectionErrors(ctx, observedPts, reprojPtsForErrors, reprojRender);
                 }
@@ -2064,8 +2104,8 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         const selInst = selectedInstanceGroup.getInstance
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
-        if (selInst && selInst.points) {
-            drawSelectionHighlight(ctx, selInst.points, skeleton, Object.assign({}, userRender, {
+        if (selInst && selInst.numNodes > 0) {
+            drawSelectionHighlight(ctx, selInst.toPointsArray(), skeleton, Object.assign({}, userRender, {
                 color: '#ffffff',
                 selectedNodeIdx: selectedNodeIdx,
                 nulledNodes: selInst.nulledNodes || null,
@@ -2079,8 +2119,8 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         var egInst = editGroupTarget.getInstance
             ? editGroupTarget.getInstance(viewName)
             : null;
-        if (egInst && egInst.points) {
-            drawSelectionHighlight(ctx, egInst.points, skeleton, Object.assign({}, userRender, {
+        if (egInst && egInst.numNodes > 0) {
+            drawSelectionHighlight(ctx, egInst.toPointsArray(), skeleton, Object.assign({}, userRender, {
                 color: '#ffffff',
                 selectedNodeIdx: -1,
                 nulledNodes: egInst.nulledNodes || null,
@@ -2095,8 +2135,8 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         const dragInst = selectedInstanceGroup.getInstance
             ? selectedInstanceGroup.getInstance(viewName)
             : (selectedInstanceGroup.instances ? selectedInstanceGroup.instances[viewName] : null);
-        if (dragInst && dragInst.points) {
-            drawDragPreview(ctx, dragInst.points, dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
+        if (dragInst && dragInst.numNodes > 0) {
+            drawDragPreview(ctx, dragInst.toPointsArray(), dragInfo.nodeIdx, dragInfo.currentPos, skeleton,
                 Object.assign({}, userRender, { color: '#ffffff' }));
         }
     }
@@ -2308,8 +2348,11 @@ export function getFrameStats(frameGroup, instanceGroups, cameras) {
         const group = instanceGroups[g];
         const trackIdx = group.identityId >= 0 ? group.identityId : g;
         const reproj = group.reprojections;
+        // Derived (luc3d #189) — hoisted, since each access rebuilds the object.
+        // It is never null now, so the old `!observed` skip becomes an emptiness
+        // check: a group with no member instances contributes no errors.
         const observed = group.observedPoints;
-        if (!reproj || !observed) continue;
+        if (!reproj || Object.keys(observed).length === 0) continue;
 
         if (!stats.perTrackErrors[trackIdx]) {
             stats.perTrackErrors[trackIdx] = { sum: 0, max: 0, count: 0 };

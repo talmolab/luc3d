@@ -50,6 +50,7 @@ try {
   const browser = await chromium.launch();
   const page = await browser.newPage();
   page.on('pageerror', e => { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; });
+  if (process.env.SHOW_PHASES) page.on('console', m => { const t = m.text(); if (t.includes('phase:')) console.log('  [page]', t); });
   await page.goto(`http://localhost:${PORT}/index.html`);
   await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
 
@@ -125,8 +126,8 @@ try {
     // and the SECOND trackless camA instance (row 1) alone — mirroring what
     // Track All + Triangulate All would produce for two animals, one seen in
     // both cameras and one only in camA.
-    const instA0 = camAInsts.find(i => i.points[0][0] === 10);
-    const instA1 = camAInsts.find(i => i.points[0][0] === 50);
+    const instA0 = camAInsts.find(i => i.getX(0) === 10);
+    const instA1 = camAInsts.find(i => i.getX(0) === 50);
     const instB0 = camBInsts[0];
 
     const groupA0B0 = new InstanceGroup(1, -1);
@@ -166,7 +167,7 @@ try {
     } catch (e) { reconErr = String(e && e.stack || e); }
 
     const groups = (fresh.instanceGroups.get(0) || []);
-    const findGroupByCamAX = (x) => groups.find(g => { const inst = g.getInstance ? g.getInstance(CAM_A) : g.instances.get(CAM_A); return inst && inst.points[0][0] === x; });
+    const findGroupByCamAX = (x) => groups.find(g => { const inst = g.getInstance ? g.getInstance(CAM_A) : g.instances.get(CAM_A); return inst && inst.getX(0) === x; });
     const reGroupA0 = findGroupByCamAX(10);
     const reGroupA1 = findGroupByCamAX(50);
 
@@ -175,10 +176,12 @@ try {
       refCollisions: recon ? recon.refCollisions : null,
       nGroups: groups.length,
       groupA0HasCamB: !!(reGroupA0 && (reGroupA0.getInstance ? reGroupA0.getInstance(CAM_B) : reGroupA0.instances.get(CAM_B))),
-      groupA0CamBPoint: reGroupA0 ? (reGroupA0.getInstance ? reGroupA0.getInstance(CAM_B) : reGroupA0.instances.get(CAM_B)).points[0][0] : null,
+      groupA0CamBPoint: reGroupA0 ? (reGroupA0.getInstance ? reGroupA0.getInstance(CAM_B) : reGroupA0.instances.get(CAM_B)).getX(0) : null,
       groupA1HasCamB: !!(reGroupA1 && (reGroupA1.getInstance ? reGroupA1.getInstance(CAM_B) : reGroupA1.instances.get(CAM_B))),
-      groupA0Points3d: reGroupA0 ? reGroupA0.points3d : null,
-      groupA1Points3d: reGroupA1 ? reGroupA1.points3d : null,
+      // points3d is a flat Float64Array (luc3d #189) — boxed here so it
+      // survives the page->node structured-clone/JSON boundary readably.
+      groupA0Points3d: reGroupA0 ? pd.toBoxedPoints3d(reGroupA0.points3d) : null,
+      groupA1Points3d: reGroupA1 ? pd.toBoxedPoints3d(reGroupA1.points3d) : null,
     };
   });
 

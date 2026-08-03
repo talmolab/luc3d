@@ -640,7 +640,7 @@
             var fg = new FrameGroup(0);
 
             var inst = makeInstance([[100, 200], [150, 250], [200, 300]], 0, 'user');
-            inst.occluded = [false, true, false];
+            inst.setOccludedFrom([false, true, false]);
             fg.addInstance('CamA', inst);
             session.addFrameGroup(fg);
 
@@ -998,7 +998,7 @@
             // Main frameGroups should only have 1 instance (animal)
             var mainInstances = session.getFrameGroup(0).getInstances('CamA');
             assertEqual(mainInstances.length, 1, 'main should have only animal instance');
-            assertEqual(mainInstances[0].points.length, 3, 'animal has 3 nodes');
+            assertEqual(mainInstances[0].numNodes, 3, 'animal has 3 nodes');
 
             // Env data is separate
             var envFrame = session.envFrames.get(0);

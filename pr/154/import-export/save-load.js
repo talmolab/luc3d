@@ -8,6 +8,7 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
+    toBoxedPoints3d, asPoints3d, someValidPoint3d,
 } from '../pose/pose-data.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
@@ -246,6 +247,35 @@ export function newProject(force) {
     setStatus('New project started', 'success');
 }
 
+/**
+ * Loud guard for the JSON project serializer (luc3d #195).
+ *
+ * `serializeSessionFrames` walks `session.frameGroups`, i.e. RESIDENT frames
+ * only. On a lazily reopened project that is a handful of frames — measured 31 of
+ * 180,210 — so a JSON project save would silently write ~0.02% of the labels into
+ * a structurally valid file. Unlike `exportLabels` (rewritten to stream in #195)
+ * this path is currently DEAD UI SURFACE: `saveProject` is imported by
+ * `ui/ui-wiring.js` but wired to no menu item, and the app saves `.slp` through
+ * `saveProjectSlp`/`saveAs`. Rather than restructure unreachable code, refuse
+ * loudly so it can never quietly truncate a project if it is ever re-wired.
+ *
+ * @returns {boolean} true when serialization is safe to proceed
+ */
+function assertJsonSaveCoversProject(session) {
+    var loader = session && session.lazyLoader;
+    if (!loader) return true;                       // fully-resident project: fine
+    var total = loader.nFrames || 0;
+    var resident = session.frameGroups ? session.frameGroups.size : 0;
+    if (total === 0 || resident >= total) return true;
+    var msg = 'JSON project save covers RESIDENT frames only (' +
+        resident.toLocaleString() + ' of ' + total.toLocaleString() +
+        '). This project is lazily loaded, so the JSON would be almost empty. ' +
+        'Use File → Save (.slp), which streams the whole project.';
+    console.error('[save-load] ' + msg);
+    setStatus(msg, 'error');
+    return false;
+}
+
 function serializeSessionFrames(session) {
     var frames = {};
     for (var [frameIdx, fg] of session.frameGroups) {
@@ -257,7 +287,7 @@ function serializeSessionFrames(session) {
                 id: group.id,
                 identityId: group.identityId != null ? group.identityId : -1,
                 instances: {},
-                points3d: group.points3d || null,
+                points3d: toBoxedPoints3d(group.points3d),
                 reprojections: group.reprojections || null,
                 observedPoints: group.observedPoints || null,
                 dirty: group.dirty || false,
@@ -267,12 +297,12 @@ function serializeSessionFrames(session) {
             }
             for (var [camName, inst] of group.instances) {
                 var instData = {
-                    points: inst.points,
+                    points: inst.toPointsArray(),
                     trackIdx: inst.trackIdx,
                     type: inst.type,
                     score: inst.score,
                     modified: inst.modified,
-                    occluded: inst.occluded,
+                    occluded: inst.toOccludedArray(),
                 };
                 if (inst.nulledNodes && inst.nulledNodes.size > 0) {
                     instData.nulledNodes = Array.from(inst.nulledNodes);
@@ -286,12 +316,12 @@ function serializeSessionFrames(session) {
                 var ulType = unlinked.instance.type || 'user';
                 var ulData = {
                     cameraName: camName2,
-                    points: unlinked.instance.points,
+                    points: unlinked.instance.toPointsArray(),
                     trackIdx: unlinked.instance.trackIdx,
                     type: ulType,
                     score: unlinked.instance.score || 1.0,
                     modified: unlinked.instance.modified || false,
-                    occluded: unlinked.instance.occluded,
+                    occluded: unlinked.instance.toOccludedArray(),
                 };
                 if (unlinked.instance.nulledNodes && unlinked.instance.nulledNodes.size > 0) {
                     ulData.nulledNodes = Array.from(unlinked.instance.nulledNodes);
@@ -392,6 +422,119 @@ async function encourageGC(totalMB) {
     await yieldToEventLoop(50);
 }
 
+/** Thrown by `buildSlpBytes` when the user declines the large-project size
+ * warning below — callers should report this as a cancellation, not a
+ * failure (mirrors the existing `pickErr.name === 'AbortError'` handling for
+ * a declined save-file-picker). */
+/** Monotonic clock, tolerant of environments without `performance`. */
+function _saveNow() {
+    return (typeof performance !== 'undefined' && performance.now)
+        ? performance.now() : Date.now();
+}
+
+class SaveCancelledError extends Error {
+    constructor(message) {
+        super(message || 'Save cancelled');
+        this.name = 'SaveCancelledError';
+    }
+}
+
+// Per-object cost in the CAGE — V8's pointer-compressed heap, which a Chrome
+// renderer hard-caps near 4 GB and which is the resource a big merged save
+// actually runs out of. MEASURED in a real renderer by
+// `tests/e2e/_diag-repr-sizing.mjs`, not modelled.
+//
+// Only in-cage bytes are counted. A typed array's backing store is allocated
+// OUTSIDE the cap — verified by `tests/e2e/_diag-cage-vs-external.mjs`, which
+// allocates 6,272 MB of Float64Array against a reported 4,192 MB
+// `jsHeapSizeLimit` without failing — so `points3d`'s coordinates cost only
+// their wrapper objects here, and `usedJSHeapSize` (which DOES count backing
+// stores) is not a valid substitute for this estimate.
+var CAGE_B_PER_INSTANCE = 824;      // boxed points[][] + occluded[] + object shell
+var CAGE_B_PER_GROUP = 130;         // InstanceGroup shell + its instances Map entry
+var CAGE_B_PER_GROUP_PTS3D = 116;   // flat Float64Array wrapper (coords are external)
+var CAGE_B_PER_FIM_ENTRY = 16;      // packed-Number key -> identityId, in a Map
+var CAGE_B_PER_REFGRAPH_MEMBER = 24; // PASS-1 CamRefMap parallel arrays, per (group, camera)
+
+/**
+ * Estimate the peak CAGE pressure of a merged save, by pricing the state that
+ * is actually resident rather than extrapolating from the project's shape.
+ *
+ * WHY THIS WAS REWRITTEN (luc3d #189). The previous version returned
+ * `frames x cameras x 11.4 KB`, a single-data-point extrapolation. Two things
+ * were wrong with it:
+ *
+ *   1. It never looked at the data. On the real bug-report project it reported
+ *      "~10.3 GB" (180,210 x 5 x 11.4 KB) — and would have reported the very
+ *      same 10.3 GB for a project with ZERO instances in it, or after any
+ *      amount of memory optimisation, because neither term is in the formula.
+ *   2. The shape was wrong. O(frames x cameras) is the cost of Track All /
+ *      Triangulate All, both of which have already COMPLETED by the time Save
+ *      As is clicked. What the save adds is O(instance_groups x cameras) for
+ *      the ref graph, on top of a baseline dominated by the live `Instance`
+ *      objects that grouping pins.
+ *
+ * The merged save of that project has since been measured succeeding —
+ * 1,404,804,682 bytes in 49.5 s — while the old estimate still claimed 10.3 GB
+ * and a likely crash, so the dialog was actively steering users away from an
+ * operation that works.
+ *
+ * Walks `session.instanceGroups` (O(groups), a few ms even at 531,799 groups).
+ *
+ * @param {Array} sessionsToExport
+ * @returns {number} estimated peak cage bytes
+ */
+export function estimateSaveCagePressureBytes(sessionsToExport) {
+    var total = 0;
+    for (var i = 0; i < sessionsToExport.length; i++) {
+        var sess = sessionsToExport[i];
+        if (!sess) continue;
+        var nGroups = 0, nMembers = 0, nWith3d = 0;
+        if (sess.instanceGroups) {
+            for (var entry of sess.instanceGroups) {
+                var groups = entry[1] || [];
+                for (var gi = 0; gi < groups.length; gi++) {
+                    var g = groups[gi];
+                    nGroups++;
+                    nMembers += (g.instances && g.instances.size) || 0;
+                    if (g.points3d) nWith3d++;
+                }
+            }
+        }
+        var nFim = (sess.frameIdentityMap && sess.frameIdentityMap.size) || 0;
+        total += nGroups * CAGE_B_PER_GROUP
+               + nMembers * CAGE_B_PER_INSTANCE
+               + nWith3d * CAGE_B_PER_GROUP_PTS3D
+               + nFim * CAGE_B_PER_FIM_ENTRY
+               + nMembers * CAGE_B_PER_REFGRAPH_MEMBER;
+    }
+    return total;
+}
+
+/**
+ * The tab's hard JS-heap ceiling. Chrome reports it via `performance.memory`
+ * (measured 3,760-4,192 MB depending on build); anything else gets a
+ * conservative 4 GB. `--max-old-space-size` does NOT raise this.
+ * @returns {number} bytes
+ */
+export function getCageLimitBytes() {
+    try {
+        var m = (typeof performance !== 'undefined') && performance.memory;
+        if (m && m.jsHeapSizeLimit > 0) return m.jsHeapSizeLimit;
+    } catch (e) { /* not Chrome, or blocked */ }
+    return 4e9;
+}
+
+// Warn once the estimated peak reaches this share of the tab's hard JS-heap
+// ceiling. Video decode buffers, the UI, and whatever Track All / Triangulate
+// All left resident share the same budget, so leave real margin.
+//
+// Reference point for the tuning: the real 180,210-frame x 5-camera project
+// SUCCEEDS at a measured 2,891 MB pre-save baseline against a 3,760 MB ceiling
+// (77%). So the threshold has to sit above that — warning on a save that is
+// known to work is what the old heuristic did wrong.
+var CAGE_WARN_FRACTION = 0.85;
+
 async function buildSlpBytes(opts) {
     opts = opts || {};
     await ensureSleapIO();
@@ -420,6 +563,26 @@ async function buildSlpBytes(opts) {
     // themselves haven't been reclaimed yet. Returns `null` when streamed to a sink.
     if (sessionsToExport.length > 0 && SIO && typeof SIO.openSlpWriter === 'function' &&
         sessionsToExport.every(function (s) { return !!s.lazyLoader; })) {
+
+        if (!opts.skipSizeWarning) {
+            var estBytes = estimateSaveCagePressureBytes(sessionsToExport);
+            var capBytes = getCageLimitBytes();
+            if (estBytes > capBytes * CAGE_WARN_FRACTION) {
+                var estGB = (estBytes / 1e9).toFixed(1);
+                var capGB = (capBytes / 1e9).toFixed(1);
+                var proceed = window.confirm(
+                    'This project is very large. Its triangulated grouping is estimated to ' +
+                    'occupy ~' + estGB + ' GB of this tab\'s ~' + capGB + ' GB JavaScript memory ' +
+                    'limit, leaving little headroom for a merged save, which could crash the ' +
+                    'tab before finishing.\n\n' +
+                    'Click OK to attempt the save anyway, or Cancel and use ' +
+                    '"Export SLEAP File Per Session" / "By Cam" instead — those write one ' +
+                    'smaller file per camera and are far less likely to crash.'
+                );
+                if (!proceed) throw new SaveCancelledError();
+            }
+        }
+
         if (sessionsToExport.length === 1) {
             var lazySess = sessionsToExport[0];
             var lazyViews = state.views.filter(function (v) {
@@ -435,6 +598,41 @@ async function buildSlpBytes(opts) {
         return await saveAllSessionsStreaming(sessionsToExport, opts.sink ? { sink: opts.sink } : undefined);
     }
 
+    // MIXED PROJECT GUARD. The eager builder below iterates only the RESIDENT
+    // `frameGroups`, which is correct for a fully-resident project and silently
+    // catastrophic for a lazy one. The streaming path above requires EVERY
+    // session to be lazy, so a project with one lazy session and one
+    // hand-labeled session falls through to here — and writes a structurally
+    // valid .slp containing the resident handful of the lazy session's frames
+    // (31 of 180,210 in the measured case) with no error. That is silent data
+    // loss on the primary save path, so refuse instead: same precedent as
+    // `assertJsonSaveCoversProject` above. Sessions that are merely SMALL are
+    // unaffected — a non-lazy session has every frame resident by definition,
+    // and an all-lazy project never reaches this line.
+    var _truncated = [];
+    for (var _gi = 0; _gi < sessionsToExport.length; _gi++) {
+        var _gs = sessionsToExport[_gi];
+        var _gl = _gs && _gs.lazyLoader;
+        if (!_gl) continue;
+        var _gTotal = _gl.nFrames || 0;
+        var _gResident = _gs.frameGroups ? _gs.frameGroups.size : 0;
+        if (_gTotal > 0 && _gResident < _gTotal) {
+            _truncated.push('"' + (_gs.name || 'session ' + _gi) + '" (' +
+                _gResident.toLocaleString() + ' of ' + _gTotal.toLocaleString() + ' frames resident)');
+        }
+    }
+    if (_truncated.length > 0) {
+        var _msg = 'Cannot save: this project mixes lazily-loaded and fully-loaded ' +
+            'sessions, and the combined save path can only write frames that are ' +
+            'currently in memory — ' + _truncated.join('; ') + '. Saving would ' +
+            'silently drop the rest. Export the lazy session(s) on their own ' +
+            '(File → Save As with only those sessions), or use "Export SLEAP File ' +
+            'Per Session".';
+        console.error('[save-slp] ' + _msg);
+        setStatus(_msg, 'error');
+        throw new Error(_msg);
+    }
+
     for (var si = 0; si < sessionsToExport.length; si++) {
         var sess = sessionsToExport[si];
 
@@ -443,7 +641,7 @@ async function buildSlpBytes(opts) {
         for (var [_dbgFi, _dbgGroups] of sess.instanceGroups) {
             for (var _dbgG of _dbgGroups) {
                 dbgGroupCount++;
-                if (_dbgG.points3d && _dbgG.points3d.some(function(p) { return p != null; })) dbgWith3d++;
+                if (someValidPoint3d(_dbgG.points3d)) dbgWith3d++;
             }
         }
         console.log('[save-slp] Session', si, '(' + sess.name + '):', sess.frameGroups.size, 'frames,',
@@ -598,7 +796,7 @@ export async function commitSessionForMultiSessionSave(handle, session) {
     });
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
     var wasSharedStore = !!session.lazyLoader._sharedStore;
-    var refGraph = buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
+    var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
     handle.pending.push({ session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
@@ -623,7 +821,20 @@ export async function commitSessionForMultiSessionSave(handle, session) {
  * (or null if `opts.sink` was given).
  */
 export async function finalizeMultiSessionSave(handle, opts) {
+    // Per-phase timing — a merged save of a tracked+triangulated project takes
+    // tens of seconds, which is indistinguishable from a hang without it. Each
+    // line prints as its phase COMPLETES, so the phase still running is the one
+    // after the last line printed. (Single-session path: see
+    // `buildSessionSlpBytesStreaming` in slp-streaming-write.js.)
+    var _t0 = _saveNow(), _tp = _t0;
+    var _lap = function (label) {
+        var n = _saveNow();
+        console.log('[save-slp] phase: ' + label + ' — ' + Math.round(n - _tp) +
+            ' ms (total ' + Math.round(n - _t0) + ' ms)');
+        _tp = n;
+    };
     var writer = await openProjectWriter(handle.ctx, handle.pending.map(function (p) { return p.refGraph.sioSession; }));
+    _lap('openProjectWriter (writes /session_data + sessions_json)');
     try {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
@@ -632,9 +843,12 @@ export async function finalizeMultiSessionSave(handle, opts) {
             p.session.lazyLoader.close();
             p.session.lazyLoader = null;
             console.log('[save-slp] pass 2/2: streamed session', p.session.name || j, 'into the project writer');
+            _lap('stream session ' + (p.session.name || j));
             await encourageGC(1000);
         }
-        return await finalizeProjectWriter(writer, opts);
+        var _out = await finalizeProjectWriter(writer, opts);
+        _lap('finalizeProjectWriter (flush to disk)');
+        return _out;
     } catch (err) {
         try { if (typeof writer.dispose === 'function') writer.dispose(); } catch (e) { /* ignore */ }
         throw err;
@@ -733,6 +947,17 @@ export async function quickSave() {
         setStatus('Saved (' + sizeMB + ' MB)', 'success');
     } catch (err) {
         state.isSaving = false;
+        if (err && err.name === 'SaveCancelledError') {
+            // `writable` (if it got that far) already has an open swap file —
+            // abort() discards it WITHOUT touching the original file at
+            // `state.slpFileHandle`, unlike close(), which would overwrite it
+            // with zero bytes.
+            if (typeof writable !== 'undefined' && writable && typeof writable.abort === 'function') {
+                try { await writable.abort(); } catch (e) { /* best effort */ }
+            }
+            setStatus('Save cancelled', 'warning');
+            return;
+        }
         console.error('Quick save failed:', err);
         setStatus('Save failed: ' + err.message, 'error');
     }
@@ -771,6 +996,10 @@ export async function saveProjectSlp() {
 
         setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
     } catch (err) {
+        if (err && err.name === 'SaveCancelledError') {
+            setStatus('Save cancelled', 'warning');
+            return;
+        }
         console.error('Save project SLP failed:', err);
         setStatus('Save failed: ' + err.message, 'error');
     }
@@ -780,6 +1009,12 @@ export function saveProject() {
     if (!state.session) {
         setStatus('No session to save', 'error');
         return;
+    }
+    // luc3d #195 — refuse rather than silently write a near-empty JSON for a
+    // lazily reopened project. See `assertJsonSaveCoversProject`.
+    if (!assertJsonSaveCoversProject(state.session)) return;
+    for (var _si = 0; _si < state.sessions.length; _si++) {
+        if (!assertJsonSaveCoversProject(state.sessions[_si])) return;
     }
 
     try {
@@ -808,7 +1043,7 @@ export function saveProject() {
                     }),
                     trustTracks: sess.trustTracks || false,
                     frameIdentityMap: sess.frameIdentityMap
-                        ? Array.from(sess.frameIdentityMap.entries())
+                        ? sess.exportFrameIdentityEntries()
                         : [],
                     videoManifest: sess.videoFileIndices.map(function(vfIdx) {
                         var vf = state.videoFiles[vfIdx];
@@ -854,7 +1089,7 @@ export function saveProject() {
         }),
         trustTracks: state.session.trustTracks || false,
         frameIdentityMap: state.session.frameIdentityMap
-            ? Array.from(state.session.frameIdentityMap.entries())
+            ? state.session.exportFrameIdentityEntries()
             : [],
         videoManifest: (state.videoFiles || []).map(function (vf) {
             return { filename: vf.name, assignedCamera: vf.assignedCamera || null };
@@ -876,7 +1111,7 @@ export function saveProject() {
                 id: group.id,
                 identityId: group.identityId != null ? group.identityId : -1,
                 instances: {},
-                points3d: group.points3d || null,
+                points3d: toBoxedPoints3d(group.points3d),
                 reprojections: group.reprojections || null,
                 observedPoints: group.observedPoints || null,
                 dirty: group.dirty || false,
@@ -886,12 +1121,12 @@ export function saveProject() {
             }
             for (const [camName, inst] of group.instances) {
                 const instData = {
-                    points: inst.points,
+                    points: inst.toPointsArray(),
                     trackIdx: inst.trackIdx,
                     type: inst.type,
                     score: inst.score,
                     modified: inst.modified,
-                    occluded: inst.occluded,
+                    occluded: inst.toOccludedArray(),
                 };
                 if (inst.nulledNodes && inst.nulledNodes.size > 0) {
                     instData.nulledNodes = Array.from(inst.nulledNodes);
@@ -906,12 +1141,12 @@ export function saveProject() {
             for (const unlinked of unlinkedList) {
                 const ulData = {
                     cameraName: camName,
-                    points: unlinked.instance.points,
+                    points: unlinked.instance.toPointsArray(),
                     trackIdx: unlinked.instance.trackIdx,
                     type: unlinked.instance.type || 'user',
                     score: unlinked.instance.score || 1.0,
                     modified: unlinked.instance.modified || false,
-                    occluded: unlinked.instance.occluded,
+                    occluded: unlinked.instance.toOccludedArray(),
                 };
                 if (unlinked.instance.nulledNodes && unlinked.instance.nulledNodes.size > 0) {
                     ulData.nulledNodes = Array.from(unlinked.instance.nulledNodes);
@@ -1422,10 +1657,7 @@ function _restoreProjectV2(data) {
     // per-frame entries after frame groups load (see end of this function).
     var legacyGlobalIdentities = data.trackIdentityMap || null;
     if (data.frameIdentityMap && data.frameIdentityMap.length > 0) {
-        if (!session.frameIdentityMap) session.frameIdentityMap = new Map();
-        for (var fmi = 0; fmi < data.frameIdentityMap.length; fmi++) {
-            session.frameIdentityMap.set(data.frameIdentityMap[fmi][0], data.frameIdentityMap[fmi][1]);
-        }
+        session.ingestFrameIdentityEntries(data.frameIdentityMap);
     }
 
     if (data.frames) {
@@ -1446,14 +1678,14 @@ function _restoreProjectV2(data) {
                         : (groupData.trackIdx != null ? groupData.trackIdx : -1);
                     var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                     if (groupData.points3d) {
-                        group.points3d = groupData.points3d;
+                        group.points3d = asPoints3d(groupData.points3d);
                     }
                     if (groupData.reprojections) {
                         group.reprojections = groupData.reprojections;
                     }
-                    if (groupData.observedPoints) {
-                        group.observedPoints = groupData.observedPoints;
-                    }
+                    // groupData.observedPoints is ignored on restore: it is now
+                    // DERIVED from the group's instances, which are rebuilt just
+                    // below. Still written on save for backward compat (luc3d #189).
 
                     for (var camName in groupData.instances) {
                         var instData = groupData.instances[camName];
@@ -1465,7 +1697,7 @@ function _restoreProjectV2(data) {
                             instData.score || 1.0
                         );
                         inst.modified = instData.modified || false;
-                        if (instData.occluded) inst.occluded = instData.occluded;
+                        if (instData.occluded) inst.setOccludedFrom(instData.occluded);
                         if (instData.nulledNodes && instData.nulledNodes.length > 0) {
                             inst.nulledNodes = new Set(instData.nulledNodes);
                         }
@@ -1508,7 +1740,7 @@ function _restoreProjectV2(data) {
                         ulData.score || 1.0
                     );
                     ulInst.modified = ulData.modified || false;
-                    if (ulData.occluded) ulInst.occluded = ulData.occluded;
+                    if (ulData.occluded) ulInst.setOccludedFrom(ulData.occluded);
                     if (ulData.nulledNodes && ulData.nulledNodes.length > 0) {
                         ulInst.nulledNodes = new Set(ulData.nulledNodes);
                     }
@@ -1554,8 +1786,10 @@ function _restoreProjectV2(data) {
                     // the Undistorted headline isn't blank for loaded projects.
                     var trErrorsUndist = {};
                     var trTotalErrU = 0, trTotalCountU = 0;
+                    // Derived (luc3d #189) — hoist, it allocates per access.
+                    var trObserved = trGroup.observedPoints;
                     for (var trCamName in trGroup.reprojections) {
-                        var trObs = trGroup.observedPoints ? trGroup.observedPoints[trCamName] : null;
+                        var trObs = trObserved[trCamName] || null;
                         var trRep = trGroup.reprojections[trCamName];
                         if (!trObs || !trRep) continue;
                         trErrors[trCamName] = [];

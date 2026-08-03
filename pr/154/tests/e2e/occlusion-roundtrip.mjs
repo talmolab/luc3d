@@ -156,7 +156,7 @@ async function reopenAndInspect(page, fixture) {
             found: !!inst,
             grouped,
             nulled: inst && inst.nulledNodes ? Array.from(inst.nulledNodes) : null,
-            pt1: inst ? inst.points[1] : null,
+            pt1: inst ? inst.getPoint(1) : null,
         };
     }, { cam: CAM_ORDER[0] });
 }

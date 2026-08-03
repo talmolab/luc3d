@@ -54,12 +54,80 @@
  */
 
 import { _buildSioPoints } from './file-io.js';
+import { points3dNodeCount } from '../pose/pose-data.js';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
     var v = Number(arr[i]);
     return isNaN(v) ? (dflt === undefined ? 0 : dflt) : v;
 }
+
+/** Monotonic clock, tolerant of environments without `performance`. */
+function _now() {
+    return (typeof performance !== 'undefined' && performance.now)
+        ? performance.now() : Date.now();
+}
+
+// Yield a real macrotask. `buildSessionRefGraph`'s ref-resolution loop runs over
+// every grouped frame in the project (180,210 of them on the real 5-camera bug
+// project — a ~2.5 s unbroken synchronous burst), so it periodically awaits this
+// for two reasons: the save progress modal can actually paint, and V8 gets
+// collection points between chunks for the loop's per-group temporaries. The
+// latter is not cosmetic — the merged save runs with under 900 MB of headroom
+// below the renderer's hard ~4 GB JS-heap cap (luc3d #185), and the verified-
+// working configuration measured on the real project included these yields.
+function yieldToBrowser() {
+    return new Promise(function (resolve) { setTimeout(resolve, 0); });
+}
+
+/**
+ * Minimal Map-compatible container for the small (<=camera-count) per-group
+ * camera->ref lookup every triangulated `InstanceGroup` carries
+ * (`instanceRefsByCamera`). A real `Map` allocates a hash-table backing store
+ * regardless of size; on a large multi-camera project `buildSessionRefGraph`
+ * builds one of these PER instance-group (500k+ on a 180k-frame x 5-camera
+ * project), so that per-instance overhead was a real slice of PASS-1 peak
+ * memory. This implements only the subset of Map's interface sleap-io.js's
+ * write/clone paths actually use against `_instanceRefsByCamera`: get/set/has,
+ * `.keys()`, and `for...of` [key, value] iteration.
+ *
+ * CAUTION — this is duck-typed against the VENDORED writer, so it is only safe
+ * as long as that subset holds. As of sleap-io.js 0.5.5 the consumers are
+ * `instanceGroupMemberRows` (`chunk-X76PRJK6.js`: `instRefs?.keys()` spread into
+ * a Set, then `.has()`/`.get()` per camera) and the `InstanceGroup` constructor.
+ * **Re-check on every re-vendor** (`grep -n '_instanceRefsByCamera'
+ * lib/sleap-io/`): a new `.size`, `.forEach`, `.values()`, `.entries()` or
+ * `.delete()` call would silently get `undefined` and break the save. Exercised
+ * by `tests/e2e/save-multiinstance-ref-integrity.mjs`.
+ */
+function CamRefMap() {
+    this._k = [];
+    this._v = [];
+}
+CamRefMap.prototype.set = function (k, v) {
+    var i = this._k.indexOf(k);
+    if (i >= 0) this._v[i] = v; else { this._k.push(k); this._v.push(v); }
+    return this;
+};
+CamRefMap.prototype.get = function (k) {
+    var i = this._k.indexOf(k);
+    return i >= 0 ? this._v[i] : undefined;
+};
+CamRefMap.prototype.has = function (k) {
+    return this._k.indexOf(k) >= 0;
+};
+CamRefMap.prototype.keys = function () {
+    return this._k.slice();
+};
+CamRefMap.prototype[Symbol.iterator] = function () {
+    var k = this._k, v = this._v, i = 0;
+    return {
+        next: function () {
+            if (i >= k.length) return { done: true, value: undefined };
+            return { done: false, value: [k[i], v[i++]] };
+        }
+    };
+};
 
 /**
  * Resolve the output video path for a camera (mirrors buildSlpLabelsAllViews).
@@ -95,6 +163,19 @@ export function createProjectWriterContext() {
         skeletonByName: new Map(),
         allVideos: [],             // SIO.Video[], global index = videoIndexOffset for appendStore
         allTracks: [],             // SIO.Track[], global index = trackOffset for appendStore
+        // Dedup key (this camera's track NAME list, joined) -> the trackBase
+        // it was first added at. Needed for the non-shared-store branch below:
+        // separate per-camera prediction .slp files normally have genuinely
+        // DISJOINT track lists (each camera's own raw SLEAP tracker), so
+        // concatenating is correct — but after `Session.propagateIdentitiesToTracks`
+        // every camera's `labels.tracks` becomes the SAME identity-derived list
+        // (see `remapTracksFromIdentity`, `loading/sio-lazy-loader.js`). Without
+        // this dedup, each additional camera re-appended its own copy of that
+        // now-identical list under an increasing `trackOffset`, so every camera
+        // after the first pointed its instances at a DIFFERENT duplicate Track
+        // object sharing the same name — same failure class the analogous
+        // `skeletonByName` dedup above already guards against for skeletons.
+        trackBaseByNameSig: new Map(),
         allIdentities: [],         // SIO.Identity[], concatenated across sessions
     };
 }
@@ -111,7 +192,7 @@ export function createProjectWriterContext() {
  *
  * @returns {{ sioSession: Object, overlayLfs: Array, cam: Array<{name:string, videoIndex:number, trackBase:number}> }}
  */
-export function buildSessionRefGraph(session, views, videoFiles, ctx) {
+export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     var SIO = window.SleapIO;
     var loader = session.lazyLoader;
     if (!loader) throw new Error('buildSessionRefGraph requires a lazy session with a lazyLoader');
@@ -263,10 +344,25 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
             }
             trackBase = _sharedTrackBase;
         } else {
-            trackBase = ctx.allTracks.length;
             var camTracks = (labels.tracks || []);
-            for (var ti = 0; ti < camTracks.length; ti++) {
-                ctx.allTracks.push(new SIO.Track(camTracks[ti].name));
+            // Name-list signature ('|~|'-joined — a track/identity name
+            // containing this exact 3-char sequence is not a realistic
+            // concern): if this camera's track list is IDENTICAL (by name,
+            // in order) to one already added, reuse that trackBase instead
+            // of appending a duplicate copy. Two DIFFERENT cameras' raw
+            // prediction tracks are essentially never identical by
+            // coincidence, so this only ever fires for the genuinely-
+            // identical case: every camera sharing the SAME identity-derived
+            // list post-propagate.
+            var camTrackSig = camTracks.map(function (t) { return t.name; }).join('|~|');
+            if (ctx.trackBaseByNameSig.has(camTrackSig)) {
+                trackBase = ctx.trackBaseByNameSig.get(camTrackSig);
+            } else {
+                trackBase = ctx.allTracks.length;
+                ctx.trackBaseByNameSig.set(camTrackSig, trackBase);
+                for (var ti = 0; ti < camTracks.length; ti++) {
+                    ctx.allTracks.push(new SIO.Track(camTracks[ti].name));
+                }
             }
         }
 
@@ -292,7 +388,7 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
     sioSession.metadata.lucid = {
         sessionName: session.name || null,
         trustTracks: session.trustTracks || false,
-        frameIdentityMap: session.frameIdentityMap ? Array.from(session.frameIdentityMap.entries()) : [],
+        frameIdentityMap: session.frameIdentityMap ? session.exportFrameIdentityEntries() : [],
         identities: sessIdentitiesJson,
         skeleton: { name: session.skeleton.name || 'skeleton', nodes: session.skeleton.nodes, edges: session.skeleton.edges },
         tracks: session.tracks,
@@ -473,13 +569,15 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
 
     var groupedFrameIdxs = Array.from(session.instanceGroups.keys()).sort(function (a, b) { return a - b; });
     for (var gf = 0; gf < groupedFrameIdxs.length; gf++) {
+        if (gf % 2000 === 0) {
+            await yieldToBrowser();
+        }
         var frameIdx = groupedFrameIdxs[gf];
         var groups = session.instanceGroups.get(frameIdx) || [];
         var sioInstanceGroups = [];
         for (var gi = 0; gi < groups.length; gi++) {
             var group = groups[gi];
-            var instanceRefsByCamera = new Map();
-            var labeledFrameRefsByCamera = new Map();
+            var instanceRefsByCamera = new CamRefMap();
             var igLucidMeta = {
                 instanceMeta: {},
                 identityId: (group.identityId != null && group.identityId >= 0) ? group.identityId : -1,
@@ -493,7 +591,6 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
                 var ref = refFor(gCamName, frameIdx, gInst);
                 if (!ref) continue;
                 instanceRefsByCamera.set(sioCamRef, ref);
-                labeledFrameRefsByCamera.set(sioCamRef, ref[0]);
                 refCount++;
                 // Slim metadata (#134): only non-reconstructable fields, only
                 // when set (trackIdx/type/score/occluded derive from the
@@ -507,6 +604,10 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
             if (refCount === 0) continue;
 
             var instance3d = undefined;
+            // Shape-agnostic on purpose: LUCID always produces a flat
+            // Float64Array now, and the vendored writer consumes that directly
+            // (LUCID local patch, luc3d #189) with no boxing — but it still
+            // accepts boxed rows, so don't reject them here.
             if (group.points3d && group.points3d.length > 0) {
                 instance3d = new SIO.Instance3D({ points: group.points3d, skeleton: skeleton });
             }
@@ -521,13 +622,20 @@ export function buildSessionRefGraph(session, views, videoFiles, ctx) {
             }));
         }
         if (sioInstanceGroups.length === 0) continue;
-        var fgRefs = new Map();
-        for (var ig2 = 0; ig2 < sioInstanceGroups.length; ig2++) {
-            var m = sioInstanceGroups[ig2]._instanceRefsByCamera;
-            if (m) for (var e2 of m) fgRefs.set(e2[0], e2[1][0]);
-        }
+        // No `labeledFrameRefsByCamera` here: the write path
+        // (`writeSessions`/`instanceGroupMemberRows` in the vendored writer)
+        // only reads `frameGroup.labeledFrameByCamera` when a group carries
+        // CONCRETE instances (`_instanceByCamera`) — LUCID's ref-based groups
+        // never set that, so building this map was pure dead weight (one
+        // extra Map per frame, discarded unread) on top of the per-group
+        // `instanceRefsByCamera` above that the writer actually consumes.
+        // Verified in sleap-io.js 0.5.5: `instanceGroupMemberRows` computes
+        // `lfByCamera` only as `concreteInst && ... ? frameGroup.labeledFrameByCamera
+        // : void 0`, reads it only inside `if (instance && lfByCamera)` where
+        // `instance = concreteInst?.get(camera)`, and otherwise takes the pair
+        // straight from `instRefs.get(camera)`. Re-check on re-vendor.
         sioSession.frameGroups.set(frameIdx, new SIO.FrameGroup({
-            frameIdx: frameIdx, instanceGroups: sioInstanceGroups, labeledFrameRefsByCamera: fgRefs,
+            frameIdx: frameIdx, instanceGroups: sioInstanceGroups,
         }));
     }
 
@@ -698,12 +806,30 @@ export async function finalizeProjectWriter(writer, opts) {
  * @returns {Promise<Uint8Array|null>}
  */
 export async function buildSessionSlpBytesStreaming(session, views, videoFiles, opts) {
+    // Per-phase timing. A merged save of a fully tracked+triangulated project is
+    // inherently slow (tens of seconds on the real 180,210-frame x 5-camera one),
+    // which is indistinguishable from a hang without this. Each line prints as
+    // its phase COMPLETES, so the phase currently running is the one after the
+    // last line printed.
+    var _t0 = _now(), _tPhase = _t0;
+    var _lap = function (label) {
+        var now = _now();
+        console.log('[slp-streaming-write] phase: ' + label + ' — ' +
+            Math.round(now - _tPhase) + ' ms (total ' + Math.round(now - _t0) + ' ms)');
+        _tPhase = now;
+    };
+
     var ctx = createProjectWriterContext();
-    var refGraph = buildSessionRefGraph(session, views, videoFiles, ctx);
+    var refGraph = await buildSessionRefGraph(session, views, videoFiles, ctx);
+    _lap('1/4 buildSessionRefGraph');
     var writer = await openProjectWriter(ctx, [refGraph.sioSession], (opts || {}).provenance);
+    _lap('2/4 openProjectWriter (writes /session_data + sessions_json)');
     try {
         streamSessionIntoWriter(writer, session, refGraph);
-        return await finalizeProjectWriter(writer, opts);
+        _lap('3/4 streamSessionIntoWriter (2D frames)');
+        var out = await finalizeProjectWriter(writer, opts);
+        _lap('4/4 finalizeProjectWriter (flush to disk)');
+        return out;
     } catch (err) {
         try { if (typeof writer.dispose === 'function') writer.dispose(); } catch (e) { /* ignore */ }
         throw err;

@@ -44,7 +44,7 @@
         function addGroup(frameIdx, trackIdx, pts) {
             if (!session.instanceGroups.has(frameIdx)) session.instanceGroups.set(frameIdx, []);
             var g = new InstanceGroup(1000 + frameIdx * 10 + trackIdx, trackIdx);
-            g.points3d = pts;
+            g.points3d = fromBoxedPoints3d(pts);
             session.instanceGroups.get(frameIdx).push(g);
         }
         var P = [[1, 2, 3], [4, 5, 6]];
@@ -118,7 +118,7 @@
             session.tracks.push('id_2');
             session.instanceGroups.get(0).push((function () {
                 var g = new InstanceGroup(9999, 2);
-                g.points3d = [null, null];
+                g.points3d = fromBoxedPoints3d([null, null]);
                 return g;
             })());
             tl.setData(session);

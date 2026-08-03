@@ -5,7 +5,9 @@
  * Uses the Jacobi eigenvalue algorithm for solving the 4x4 symmetric eigenproblem.
  */
 
-import { mat3x3Multiply, FrameGroup, Instance, UnlinkedInstance, InstanceGroup } from './pose-data.js';
+import { mat3x3Multiply, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
+         makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js';
 import { state, timeline, viewport3d } from '../ui/app-state.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js
 import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
@@ -308,16 +310,20 @@ export function triangulatePointDLT(observations, projectionMatrices) {
 /**
  * Triangulate multiple keypoints from multi-view observations.
  *
+ * Returns the flat `points3d` representation (see `pose-data.js`): a
+ * `Float64Array(3 * nKeypoints)` where an un-triangulable keypoint is an
+ * all-NaN triple rather than a `null` row.
+ *
  * @param {(number[]|null)[][]} allObservations - Array of arrays, one per keypoint.
  *   allObservations[k] = [[x1,y1], [x2,y2], ...] or [null, [x2,y2], ...]
  *   (null means the keypoint is not visible in that camera)
  * @param {number[][][]} projectionMatrices - [P1, P2, ...] one per camera
- * @returns {(number[]|null)[]} Array of [X,Y,Z] or null for each keypoint
+ * @returns {Float64Array} Flat [X,Y,Z] per keypoint; all-NaN where untriangulable
  */
 export function triangulatePoints(allObservations, projectionMatrices) {
-    const results = [];
+    const results = makePoints3d(allObservations.length);
     for (let k = 0; k < allObservations.length; k++) {
-        results.push(triangulatePointDLT(allObservations[k], projectionMatrices));
+        setPoint3d(results, k, triangulatePointDLT(allObservations[k], projectionMatrices));
     }
     return results;
 }
@@ -484,14 +490,18 @@ export function triangulatePointBA(observations, projectionMatrices, initial, op
  *
  * @param {(number[]|null)[][]} allObservations - one observation array per keypoint.
  * @param {number[][][]} projectionMatrices - [P1, P2, ...] one per camera.
- * @param {(number[]|null)[]} [initialPoints] - per-keypoint [X,Y,Z] initial guesses.
- * @returns {(number[]|null)[]} Refined [X,Y,Z] or null for each keypoint.
+ * @param {Float64Array|(number[]|null)[]} [initialPoints] - per-keypoint [X,Y,Z]
+ *   initial guesses, flat or boxed.
+ * @returns {Float64Array} Flat refined [X,Y,Z] per keypoint; all-NaN where unrefinable.
  */
 export function triangulatePointsBA(allObservations, projectionMatrices, initialPoints) {
-    const results = [];
+    const results = makePoints3d(allObservations.length);
+    const flatInit = initialPoints instanceof Float64Array ? initialPoints : null;
     for (let k = 0; k < allObservations.length; k++) {
-        const init = initialPoints ? initialPoints[k] : null;
-        results.push(triangulatePointBA(allObservations[k], projectionMatrices, init));
+        let init = null;
+        if (flatInit) init = getPoint3d(flatInit, k);
+        else if (initialPoints) init = initialPoints[k];
+        setPoint3d(results, k, triangulatePointBA(allObservations[k], projectionMatrices, init));
     }
     return results;
 }
@@ -526,18 +536,18 @@ export function reprojectPoint(point3d, projectionMatrix) {
 /**
  * Reproject an array of 3D points through a 3x4 projection matrix.
  *
- * @param {(number[]|null)[]} points3d - Array of [X,Y,Z] or null
+ * @param {Float64Array} points3d - Flat [X,Y,Z] per keypoint (all-NaN = missing)
  * @param {number[][]} projectionMatrix - 3x4 projection matrix
- * @returns {(number[]|null)[]} Array of [x,y] or null (if input point is null)
+ * @returns {(number[]|null)[]} Array of [x,y] or null (if the 3D point is missing)
  */
 export function reprojectPoints(points3d, projectionMatrix) {
-    const results = [];
-    for (let i = 0; i < points3d.length; i++) {
-        if (points3d[i] == null) {
-            results.push(null);
-        } else {
-            results.push(reprojectPoint(points3d[i], projectionMatrix));
-        }
+    const n = points3dNodeCount(points3d);
+    const results = new Array(n);
+    const p = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+        results[i] = readPoint3d(points3d, i, p)
+            ? reprojectPoint(p, projectionMatrix)
+            : null;
     }
     return results;
 }
@@ -565,18 +575,18 @@ export function reprojectPointCamera(point3d, camera) {
 /**
  * Reproject an array of 3D points into a camera's native (distorted) pixel space.
  *
- * @param {(number[]|null)[]} points3d - Array of [X,Y,Z] or null
+ * @param {Float64Array} points3d - Flat [X,Y,Z] per keypoint (all-NaN = missing)
  * @param {Camera} camera - camera with .projectionMatrix and .distortPoint
- * @returns {(number[]|null)[]} Array of [x,y] or null (if input point is null)
+ * @returns {(number[]|null)[]} Array of [x,y] or null (if the 3D point is missing)
  */
 export function reprojectPointsCamera(points3d, camera) {
-    const results = [];
-    for (let i = 0; i < points3d.length; i++) {
-        if (points3d[i] == null) {
-            results.push(null);
-        } else {
-            results.push(reprojectPointCamera(points3d[i], camera));
-        }
+    const n = points3dNodeCount(points3d);
+    const results = new Array(n);
+    const p = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+        results[i] = readPoint3d(points3d, i, p)
+            ? reprojectPointCamera(p, camera)
+            : null;
     }
     return results;
 }
@@ -664,6 +674,34 @@ export function computeInstanceDistance(pointsA, pointsB, weights) {
     return count > 0 ? totalDist / count : Infinity;
 }
 
+/**
+ * Mean weighted distance between boxed 2D points and an `Instance`'s coords.
+ * Instance-aware sibling of `computeInstanceDistance` — every caller had an
+ * `Instance` on one side, and materializing `inst.toPointsArray()` just to
+ * measure a distance would allocate nNodes arrays per comparison inside the
+ * tracker's per-frame matching loops (luc3d #189 follow-up #1).
+ *
+ * @param {(number[]|null)[]} pointsA
+ * @param {Instance} instB
+ * @param {(number|null)[]} [weights]
+ * @returns {number} mean distance, or Infinity when nothing overlaps
+ */
+export function computeInstanceDistanceTo(pointsA, instB, weights) {
+    var totalDist = 0, count = 0;
+    var len = Math.min(pointsA.length, instB.numNodes);
+    for (var i = 0; i < len; i++) {
+        var a = pointsA[i];
+        if (a == null || !instB.hasPoint(i)) continue;
+        var w = weights ? (weights[i] != null ? weights[i] : 1) : 1;
+        if (w <= 0) continue;
+        var dx = a[0] - instB.getX(i);
+        var dy = a[1] - instB.getY(i);
+        totalDist += w * Math.sqrt(dx * dx + dy * dy);
+        count += w;
+    }
+    return count > 0 ? totalDist / count : Infinity;
+}
+
 // ============================================
 // Triangulation + Reprojection pipeline
 // ============================================
@@ -680,17 +718,17 @@ export function computeInstanceDistance(pointsA, pointsB, weights) {
  *
  * @param {InstanceGroup} instanceGroup
  *   - has .instances Map<cameraName, Instance>
- *   - each Instance has .points array of [x,y] or null
+ *   - each Instance stores flat coords; read via inst.hasPoint(k)/getPoint(k)
  * @param {Camera[]} cameras
  *   - each Camera has .name and .projectionMatrix (3x4)
  *
  * @returns {{
- *   points3d: (number[]|null)[],
+ *   points3d: Float64Array,
  *   reprojections: Object.<string, (number[]|null)[]>,
  *   errors: Object.<string, (number|null)[]>,
  *   meanError: number|null
  * }}
- *   points3d: [X,Y,Z] or null for each keypoint
+ *   points3d: flat [X,Y,Z] per keypoint, all-NaN triple where untriangulable
  *   reprojections: { cameraName: [[x,y], ...] } reprojected 2D points per camera
  *   errors: { cameraName: [error, ...] } per-keypoint reprojection errors per camera
  *   meanError: scalar mean error across all cameras and keypoints
@@ -723,15 +761,15 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     let numKeypoints = 0;
     for (let c = 0; c < cameraNames.length; c++) {
         const inst = instanceGroup.getInstance(cameraNames[c]);
-        if (inst && inst.points) {
-            numKeypoints = inst.points.length;
+        if (inst && inst.numNodes > 0) {
+            numKeypoints = inst.numNodes;
             break;
         }
     }
 
     if (numKeypoints === 0) {
         return {
-            points3d: [],
+            points3d: makePoints3d(0),
             reprojections: {},
             errors: {},
             meanError: null
@@ -749,12 +787,13 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             const inst = instanceGroup.getInstance(cameraNames[c]);
             // Skip nulled nodes — they are excluded from triangulation
             const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
-            if (included[c] && inst && inst.points && inst.points[k] != null && !isNulled) {
+            if (included[c] && inst && inst.hasPoint(k) && !isNulled) {
                 const cam = cameraMap[cameraNames[c]];
+                const raw2d = inst.getPoint(k);
                 if (cam && cam.undistortPoint) {
-                    obsForKeypoint.push(cam.undistortPoint(inst.points[k]));
+                    obsForKeypoint.push(cam.undistortPoint(raw2d));
                 } else {
-                    obsForKeypoint.push(inst.points[k]);
+                    obsForKeypoint.push(raw2d);
                 }
             } else {
                 obsForKeypoint.push(null);
@@ -790,12 +829,14 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         // error exceeds the threshold — re-triangulate that node from the views that
         // remain. This works PER NODE within a view; it never drops a whole view
         // (that is the Tracking Wizard's job). A node left with <2 views is null.
+        const _nodeErrBuf = [0, 0, 0];
         function nodeError(k, c) {
-            if (allObservations[k][c] == null || points3d[k] == null) return -1;
+            if (allObservations[k][c] == null) return -1;
+            if (!readPoint3d(points3d, k, _nodeErrBuf)) return -1;
             const inst = instanceGroup.getInstance(cameraNames[c]);
-            const raw = inst && inst.points ? inst.points[k] : null;
+            const raw = inst ? inst.getPoint(k) : null;
             if (raw == null) return -1;
-            const rep = reprojectPointCamera(points3d[k], cameraMap[cameraNames[c]]);
+            const rep = reprojectPointCamera(_nodeErrBuf, cameraMap[cameraNames[c]]);
             if (rep == null) return -1;
             const dx = raw[0] - rep[0], dy = raw[1] - rep[1];
             return Math.sqrt(dx * dx + dy * dy);
@@ -808,7 +849,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         for (let iter = 0; iter < maxPasses; iter++) {
             let excludedAny = false;
             for (let k = 0; k < numKeypoints; k++) {
-                if (points3d[k] == null) continue;
+                if (!hasPoint3d(points3d, k)) continue;
                 let worstC = -1, worstErr = reprojThresh, kept = 0;
                 for (let c = 0; c < cameraNames.length; c++) {
                     if (!included[c] || allObservations[k][c] == null) continue;
@@ -824,10 +865,10 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         // If a node's remaining views still exceed the threshold, it has <2 views
         // under the threshold → drop it from 3D (null).
         for (let k = 0; k < numKeypoints; k++) {
-            if (points3d[k] == null) continue;
+            if (!hasPoint3d(points3d, k)) continue;
             for (let c = 0; c < cameraNames.length; c++) {
                 if (!included[c] || allObservations[k][c] == null) continue;
-                if (nodeError(k, c) > reprojThresh) { points3d[k] = null; break; }
+                if (nodeError(k, c) > reprojThresh) { clearPoint3d(points3d, k); break; }
             }
         }
     }
@@ -856,8 +897,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
         const observed = [];
         for (let k = 0; k < numKeypoints; k++) {
             const isNulled = inst && inst.nulledNodes && inst.nulledNodes.has(k);
-            if (inst && inst.points && inst.points[k] != null && !isNulled) {
-                observed.push(inst.points[k]);
+            if (inst && inst.hasPoint(k) && !isNulled) {
+                observed.push(inst.getPoint(k));
             } else {
                 observed.push(null);
             }
@@ -1234,19 +1275,20 @@ export function pointToRayDistance(point, rayOrigin, rayDir) {
  * Batch compute point-to-ray distances for arrays of points and directions.
  * Handles null entries in either array.
  *
- * @param {(number[]|null)[]} points - Array of [x,y,z] or null
+ * @param {Float64Array} points - Flat [x,y,z] per node (all-NaN = missing)
  * @param {number[]} rayOrigin - [x, y, z]
  * @param {(number[]|null)[]} rayDirs - Array of [dx,dy,dz] or null
- * @returns {(number|null)[]} distances, null where either input is null
+ * @returns {(number|null)[]} distances, null where either input is missing
  */
 export function pointsToRayDistances(points, rayOrigin, rayDirs) {
     var results = [];
-    var len = Math.min(points.length, rayDirs.length);
+    var len = Math.min(points3dNodeCount(points), rayDirs.length);
+    var p = [0, 0, 0];
     for (var i = 0; i < len; i++) {
-        if (points[i] == null || rayDirs[i] == null) {
+        if (rayDirs[i] == null || !readPoint3d(points, i, p)) {
             results.push(null);
         } else {
-            results.push(pointToRayDistance(points[i], rayOrigin, rayDirs[i]));
+            results.push(pointToRayDistance(p, rayOrigin, rayDirs[i]));
         }
     }
     return results;
@@ -1387,13 +1429,43 @@ export function storeReprojectedInstances(group, triangulationResult, allCameras
             var existing = group.getReprojectedInstance
                 ? group.getReprojectedInstance(cam.name) : null;
             if (existing) {
-                existing.points = reprojPts;
+                existing.setPointsFrom(reprojPts);
             } else {
                 var reprojInstance = new Instance(reprojPts, group.identityId, 'reprojected', 1.0);
                 group.addReprojectedInstance(cam.name, reprojInstance);
             }
         }
     }
+}
+
+/**
+ * Get a group's reprojected Instance for `camName`, synthesizing one on
+ * demand from the already-cached `group.reprojections[camName]` (raw points)
+ * when `reprojectedInstances` was never eagerly built for this group.
+ *
+ * Bulk sweeps (`triangulateAllFrames`, `triangulateMultiFrameInstances`) stop
+ * calling `storeReprojectedInstances` — building a full `Instance` (with its
+ * own `occluded` array) per camera per group for the WHOLE project was a
+ * major, provably-unneeded memory cost (nothing in the SLP save/export path
+ * reads `reprojectedInstances`; only live 2D/3D display and the opt-in
+ * "Save Reprojections" export do, and both can be served from the much
+ * cheaper `.reprojections` raw-points object those sweeps still populate).
+ * Single-frame paths (`triangulateCurrentFrame`, `reTriangulateGroup`) still
+ * call `storeReprojectedInstances` eagerly — bounded cost, immediate feedback
+ * while the user is actively working on that frame — so this only needs to
+ * cover the bulk-sweep gap. Never mutates/caches onto the group; a caller
+ * that wants the result retained should use `storeReprojectedInstances`
+ * instead (as the single-frame paths already do).
+ * @param {InstanceGroup} group
+ * @param {string} camName
+ * @returns {Instance|null}
+ */
+export function getOrComputeReprojectedInstance(group, camName) {
+    var existing = group.getReprojectedInstance ? group.getReprojectedInstance(camName) : null;
+    if (existing) return existing;
+    var pts = group.reprojections ? group.reprojections[camName] : null;
+    if (!pts) return null;
+    return new Instance(pts, group.identityId, 'reprojected', 1.0);
 }
 
 // ============================================
@@ -1605,20 +1677,45 @@ export function frameHasGroupedUserInstances(frameIdx) {
  * instances (currently all in `fg.instances`) into this frame's pre-existing
  * InstanceGroups vs the unlinked pool.
  *
- * Default (per-camera lazy load / Track All): no reopened grouping → every raw
- * instance goes to the unlinked pool (the original behavior).
+ * No pre-existing groups for this frame (fresh, untracked session, or a
+ * frame Track All hasn't reached yet): every raw instance goes to the
+ * unlinked pool (the original behavior).
  *
- * Reopened lazy project (`session._lazyReopened`, from
- * `reconstructInstanceGroupsFromSessionLazy`): the groups already exist with
- * LIGHTWEIGHT members (null 2D, tagged `_rawInstIndex`/`_lazy2d`). Here we
- * **hydrate** each member's 2D from the matching raw store instance (by
- * `_rawInstIndex`) and place the member in `fg.instances` (grouped); only the
- * non-member raw instances go to the unlinked pool — mirroring an eager-loaded
- * frame so rendering / the 3D view / reprojection all work unchanged.
+ * Pre-existing groups for this frame — from EITHER a reopened lazy project
+ * (`reconstructInstanceGroupsFromSessionLazy`, lightweight members tagged
+ * `_rawInstIndex`/`_lazy2d`) OR a fresh Track All run on this same session
+ * (`commitTrackedFrame` reuses the SAME already-`_rawInstIndex`-tagged
+ * Instance objects it found resident in `fg.instances`/`fg.unlinkedInstances`
+ * at tracking time — see `buildLazyFrameGroupSync`/`ensureLazyFrameData`,
+ * which both tag `_rawInstIndex` on every instance they materialize, so a
+ * Track-All group's members carry it too, not just a reopen's): **hydrate**
+ * each member's 2D from the matching raw store instance (by `_rawInstIndex`,
+ * a no-op when the member already has real points, as a fresh Track-All
+ * group's do) and place the member in `fg.instances` (grouped); only the
+ * non-member raw instances go to the unlinked pool — mirroring an
+ * eager-loaded frame so rendering / the 3D view / reprojection all work
+ * unchanged.
+ *
+ * BUG FIXED (reported: grouped instances AND duplicate unlinked instances
+ * for the same animals on every frame except the current one, after Track
+ * All): this used to gate the hydration branch on `session._lazyReopened`
+ * specifically — true ONLY for a reopened project, never for a session
+ * that was tracked fresh in this same session. A fresh Track-All sweep
+ * evicts every frame except the current one from `session.frameGroups`
+ * (`sweepTrackAllFrames`'s windowed release), but `session.instanceGroups`
+ * is never evicted — so when the user later scrubbed to any OTHER frame,
+ * it re-materialized here, always took the "no pre-existing groups" branch
+ * (since `_lazyReopened` was never set), and dumped every instance into the
+ * unlinked pool even though `session.instanceGroups` already had real
+ * groups for it — rendering each tracked animal twice: once via its
+ * (still-resident) InstanceGroup, once again as a freshly-unlinked
+ * duplicate. Only the current frame (kept resident throughout Track All,
+ * never evicted/rebuilt) was unaffected. Fixed by checking
+ * `session.instanceGroups` directly instead of gating on `_lazyReopened` —
+ * the hydration logic below already works for both origins unchanged.
  */
 function finalizeLazyFrameGroup(session, fg, frameIdx) {
-    var groups = (session._lazyReopened && session.instanceGroups)
-        ? session.instanceGroups.get(frameIdx) : null;
+    var groups = session.instanceGroups ? session.instanceGroups.get(frameIdx) : null;
 
     if (!groups || groups.length === 0) {
         for (var [cn, camInsts] of fg.instances) {
@@ -1648,8 +1745,7 @@ function finalizeLazyFrameGroup(session, fg, frameIdx) {
             if (member) {
                 if (member._lazy2d) {
                     // Hydrate the member's 2D from the store instance at this row.
-                    member.points = built[bi].points;
-                    member.occluded = built[bi].occluded;
+                    member.adoptPointsFrom(built[bi]);
                     member._lazy2d = false;
                 }
                 grouped.push(member);
@@ -1942,96 +2038,63 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     var totalGroups = 0;
     var totalErrors = [];
 
-    for (var f = startFrame; f <= endFrame; f++) {
+    // MEMORY / CORRECTNESS (luc3d #195): sweep the range through
+    // `sweepLazyFrameWindows` so each frame's 2D is HYDRATED before it is
+    // triangulated. This loop used to read `session.instanceGroups.get(f)`
+    // directly and triangulate from whatever 2D happened to be resident — which
+    // on a lazily reopened project is a handful of frames, so a range
+    // re-triangulation silently did almost nothing (the same defect as
+    // `triangulateAllFrames`, luc3d #194). The sweep hydrates and releases in
+    // 2,000-frame windows, so a range covering the whole project is bounded.
+    await sweepLazyFrameWindows(session, function (f) {
         var frameGroupsList2 = session.instanceGroups.get(f);
-        if (frameGroupsList2) {
-            var frameResults = [];
+        if (!frameGroupsList2) return;
+        var frameResults = [];
 
-            for (var gi = 0; gi < frameGroupsList2.length; gi++) {
-                var group = frameGroupsList2[gi];
+        for (var gi = 0; gi < frameGroupsList2.length; gi++) {
+            var group = frameGroupsList2[gi];
+            // Camera-name fixup + >=2-usable-view gate + points3d/usedCameras
+            // stores are shared with the other two paths (see
+            // `_triangulateGroupStep`).
+            var step = _triangulateGroupStep(group, cameras, method);
+            if (!step) continue;
+            var result = step.result;
 
-                // Resolve camera name mismatches
-                var groupKeys = group.cameraNames;
-                for (var ki = 0; ki < groupKeys.length; ki++) {
-                    var gk = groupKeys[ki];
-                    if (!cameras.some(function (c) { return c.name === gk; })) {
-                        var gkLower = gk.toLowerCase();
-                        for (var ci = 0; ci < cameras.length; ci++) {
-                            var camLower = cameras[ci].name.toLowerCase();
-                            if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
-                                if (!group.getInstance(cameras[ci].name)) {
-                                    var inst = group.getInstance(gk);
-                                    group.instances.delete(gk);
-                                    group.instances.set(cameras[ci].name, inst);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+            group.reprojections = result.reprojections;
+            // NOT storeReprojectedInstances here — this is a bulk sweep (the range
+            // can span the entire project); eagerly building a full Instance (+ its
+            // own `occluded` array) per camera per group here was a major memory
+            // cost never needed by SLP save/export. Display and export instead
+            // resolve on demand via getOrComputeReprojectedInstance.
+            group.markClean();
+            totalGroups++;
 
-                // Count views with labels
-                var viewsWithLabels = 0;
-                for (var cj = 0; cj < cameras.length; cj++) {
-                    var inst2 = group.getInstance(cameras[cj].name);
-                    if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
-                        viewsWithLabels++;
-                    }
-                }
-                if (viewsWithLabels < 2) continue;
+            frameResults.push({
+                group: group,
+                points3d: result.points3d,
+                reprojections: result.reprojections,
+                errors: result.errors,
+                errorsUndistorted: result.errorsUndistorted,
+                meanError: result.meanError,
+                meanErrorUndistorted: result.meanErrorUndistorted,
+                method: result.method,
+            });
 
-                var groupCamNames = group.cameraNames;
-                var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
-                var result = triangulateAndReproject(group, groupCameras, { method: method });
-                group.triangulationMethod = result.method;
-
-                group.reprojections = result.reprojections;
-                group.points3d = result.points3d;
-                storeReprojectedInstances(group, result, cameras);
-                group.observedPoints = {};
-                group.usedCameras = new Set();
-                for (var ck = 0; ck < groupCameras.length; ck++) {
-                    var camInst = group.getInstance(groupCameras[ck].name);
-                    if (camInst) {
-                        group.observedPoints[groupCameras[ck].name] = camInst.points;
-                        if (camInst.points.some(function (p) { return p != null; })) {
-                            group.usedCameras.add(groupCameras[ck].name);
-                        }
-                    }
-                }
-                group.markClean();
-                totalGroups++;
-
-                frameResults.push({
-                    group: group,
-                    points3d: result.points3d,
-                    reprojections: result.reprojections,
-                    errors: result.errors,
-                    errorsUndistorted: result.errorsUndistorted,
-                    meanError: result.meanError,
-                    meanErrorUndistorted: result.meanErrorUndistorted,
-                    method: result.method,
-                });
-
-                if (result.meanError != null) {
-                    totalErrors.push(result.meanError);
-                }
-            }
-
-            if (frameResults.length > 0) {
-                state.triangulationResults.set(f, frameResults);
-                triangulated++;
+            if (result.meanError != null) {
+                totalErrors.push(result.meanError);
             }
         }
 
+        if (frameResults.length > 0) {
+            state.triangulationResults.set(f, frameResults);
+            triangulated++;
+        }
         completed++;
-        if (onProgress) onProgress(completed, totalFrames);
-
-        // Yield to UI for progress bar updates every 50 frames
-        if (completed % 50 === 0) {
-            await new Promise(function (r) { setTimeout(r, 0); });
-        }
-    }
+    }, {
+        start: startFrame,
+        end: endFrame,
+        onProgress: function () { if (onProgress) onProgress(completed, totalFrames); },
+    });
 
     return { triangulated: triangulated, totalGroups: totalGroups, totalErrors: totalErrors };
 }
@@ -2062,7 +2125,7 @@ export function reTriangulateGroup(instanceGroup) {
     instanceGroup.triangulationMethod = result.method;
 
     // Only update if we got valid results
-    var validPts = result.points3d && result.points3d.some(function (p) { return p != null; });
+    var validPts = someValidPoint3d(result.points3d);
     if (validPts) {
         instanceGroup.points3d = result.points3d;
         instanceGroup.reprojections = result.reprojections;
@@ -2073,14 +2136,6 @@ export function reTriangulateGroup(instanceGroup) {
         instanceGroup.points3d = oldPoints3d;
         instanceGroup.reprojections = oldReprojections;
         if (oldReprojInstances) instanceGroup.reprojectedInstances = oldReprojInstances;
-    }
-    instanceGroup.observedPoints = {};
-    for (var ci = 0; ci < groupCameras.length; ci++) {
-        var cam = groupCameras[ci];
-        var inst = instanceGroup.getInstance(cam.name);
-        if (inst) {
-            instanceGroup.observedPoints[cam.name] = inst.points;
-        }
     }
     instanceGroup.markClean();
 
@@ -2195,10 +2250,6 @@ export function ensureGroupsFromIdentities(session, frameIdx) {
         for (var _ci = 0; _ci < _camNames.length; _ci++) {
             _group.addInstance(_camNames[_ci], _bucket[_camNames[_ci]]);
         }
-        _group.observedPoints = {};
-        for (var _ci2 = 0; _ci2 < _camNames.length; _ci2++) {
-            _group.observedPoints[_camNames[_ci2]] = _bucket[_camNames[_ci2]].points;
-        }
         if (!session.instanceGroups.has(frameIdx)) {
             session.instanceGroups.set(frameIdx, []);
         }
@@ -2267,8 +2318,8 @@ export function triangulateCurrentFrame(method) {
             const camStatus = {};
             for (const cam of cameras) {
                 const inst = group.getInstance(cam.name);
-                if (inst && inst.points) {
-                    const hasAny = inst.points.some((p, idx) => p != null && !(inst.nulledNodes && inst.nulledNodes.has(idx)));
+                if (inst && inst.numNodes > 0) {
+                    const hasAny = inst.hasAnyUsablePoint();
                     if (hasAny) viewsWithLabels++;
                     camStatus[cam.name] = hasAny ? 'labeled' : 'empty';
                 } else {
@@ -2291,14 +2342,29 @@ export function triangulateCurrentFrame(method) {
             const result = triangulateAndReproject(group, groupCameras, { method: method });
             group.triangulationMethod = result.method;
 
-            // Check for NaN in points3d
-            const hasNaN = result.points3d.some(p => p && (isNaN(p[0]) || isNaN(p[1]) || isNaN(p[2])));
-            const validPts = result.points3d.filter(p => p != null).length;
-            console.log('[triangulate] points3d:', validPts, 'valid /', result.points3d.length,
-                '| hasNaN:', hasNaN, '| meanError:', result.meanError,
+            // Watch for a NaN-poisoned solve. An all-NaN triple is now just the
+            // "missing" sentinel, so it can no longer stand in for corruption —
+            // check the actual root cause (a NaN in a projection matrix) plus the
+            // one NaN pattern a clean solve can never produce: a PARTIALLY NaN
+            // triple, where some but not all coordinates came back NaN.
+            const nPts = points3dNodeCount(result.points3d);
+            const validPts = countPoints3d(result.points3d);
+            let partialNaN = false;
+            for (let _k = 0; _k < nPts && !partialNaN; _k++) {
+                const _o = _k * 3;
+                let _nans = 0;
+                for (let _c = 0; _c < 3; _c++) if (isNaN(result.points3d[_o + _c])) _nans++;
+                if (_nans > 0 && _nans < 3) partialNaN = true;
+            }
+            const badCalib = groupCameras.some(c => !c.projectionMatrix ||
+                c.projectionMatrix.some(row => row.some(isNaN)));
+            let _sample = null;
+            for (let _k = 0; _k < nPts && !_sample; _k++) _sample = getPoint3d(result.points3d, _k);
+            console.log('[triangulate] points3d:', validPts, 'valid /', nPts,
+                '| partialNaN:', partialNaN, '| meanError:', result.meanError,
                 '| cameras used:', groupCamNames,
-                '| sample:', result.points3d.find(p => p != null));
-            if (hasNaN) {
+                '| sample:', _sample);
+            if (partialNaN || badCalib) {
                 console.error('[triangulate] WARNING: NaN in 3D points! Check calibration matrices.');
                 for (const cam of groupCameras) {
                     console.log('[triangulate] Camera', cam.name, 'P=', cam.projectionMatrix);
@@ -2316,13 +2382,11 @@ export function triangulateCurrentFrame(method) {
             group.reprojections = result.reprojections;
             group.points3d = result.points3d;
             storeReprojectedInstances(group, result, cameras);
-            group.observedPoints = {};
             group.usedCameras = new Set();
             for (const cam of groupCameras) {
                 const inst = group.getInstance(cam.name);
                 if (inst) {
-                    group.observedPoints[cam.name] = inst.points;
-                    const hasAny = inst.points.some(function (p) { return p != null; });
+                    const hasAny = inst.hasAnyPoint();
                     if (hasAny) group.usedCameras.add(cam.name);
                 }
             }
@@ -2352,7 +2416,7 @@ export function triangulateCurrentFrame(method) {
         console.log('[triangulate] Group result:',
             '| cameras in group:', fr.group.cameraNames,
             '| has reprojections:', Object.keys(fr.group.reprojections || {}),
-            '| points3d valid:', (fr.points3d || []).filter(p => p != null).length);
+            '| points3d valid:', countPoints3d(fr.points3d));
     }
 
     // Show reproj/error UI elements now that triangulation has been run
@@ -2393,6 +2457,323 @@ export function triangulateCurrentFrame(method) {
  * Triangulate all frames in the session.
  * Uses the same logic as triangulateCurrentFrame but batched across all frames.
  */
+/**
+ * Mirrors `pose/tracker.js`'s private `frameGroupHasUserInstances` (which itself
+ * mirrors `ui/export-modals.js`'s). Kept local because `tracker.js` already
+ * imports from this module, and widening that into a two-way import for one
+ * predicate is not worth it. **Keep the three in sync.**
+ */
+function _fgHasUserInstances(fg) {
+    if (!fg) return false;
+    for (var [, insts] of fg.instances) {
+        for (var i = 0; i < insts.length; i++) {
+            if (insts[i] && insts[i].type === 'user') return true;
+        }
+    }
+    if (fg.unlinkedInstances) {
+        for (var [, ul] of fg.unlinkedInstances) {
+            for (var u = 0; u < ul.length; u++) {
+                if (ul[u] && ul[u].instance && ul[u].instance.type === 'user') return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * Mirrors `pose/tracker.js`'s private `encourageGC` — see its comment for why
+ * allocating toward the ceiling is what actually forces the mark-compact that
+ * reclaims a released window's promoted object graph. **Keep in sync.**
+ */
+async function _encourageGC(totalMB) {
+    var junk = [];
+    try {
+        var chunkMB = 100;
+        var n = Math.ceil((totalMB || 800) / chunkMB);
+        for (var i = 0; i < n; i++) {
+            var buf = new ArrayBuffer(chunkMB * 1024 * 1024);
+            new Uint8Array(buf)[0] = 1;
+            junk.push(buf);
+        }
+    } catch (e) { /* ignore — hitting real pressure is the point */ }
+    junk = null;
+    await new Promise(function (r) { setTimeout(r, 50); });
+}
+
+/**
+ * Shared per-group step for both Triangulate All paths: fix up camera-name
+ * mismatches, require >=2 views carrying usable 2D, then triangulate.
+ *
+ * Returns `null` when the group cannot be triangulated (fewer than 2 usable
+ * views) — callers must leave such a group's existing `points3d` ALONE rather
+ * than clearing it.
+ *
+ * @returns {{result: Object, groupCameras: Array}|null}
+ */
+function _triangulateGroupStep(group, cameras, method) {
+    // Resolve camera name mismatches
+    var groupKeys = group.cameraNames;
+    for (var ki = 0; ki < groupKeys.length; ki++) {
+        var gk = groupKeys[ki];
+        if (!cameras.some(function (c) { return c.name === gk; })) {
+            var gkLower = gk.toLowerCase();
+            for (var ci = 0; ci < cameras.length; ci++) {
+                var camLower = cameras[ci].name.toLowerCase();
+                if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
+                    if (!group.getInstance(cameras[ci].name)) {
+                        var mvInst = group.getInstance(gk);
+                        group.instances.delete(gk);
+                        group.instances.set(cameras[ci].name, mvInst);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    var viewsWithLabels = 0;
+    for (var cj = 0; cj < cameras.length; cj++) {
+        var inst2 = group.getInstance(cameras[cj].name);
+        if (inst2 && inst2.hasAnyUsablePoint()) viewsWithLabels++;
+    }
+    if (viewsWithLabels < 2) return null;
+
+    var groupCamNames = group.cameraNames;
+    var groupCameras = cameras.filter(function (c) { return groupCamNames.indexOf(c.name) >= 0; });
+    var result = triangulateAndReproject(group, groupCameras, { method: method });
+    group.triangulationMethod = result.method;
+    group.points3d = result.points3d;
+    group.usedCameras = new Set();
+    for (var ck = 0; ck < groupCameras.length; ck++) {
+        var camInst = group.getInstance(groupCameras[ck].name);
+        if (camInst && camInst.hasAnyPoint()) group.usedCameras.add(groupCameras[ck].name);
+    }
+    return { result: result, groupCameras: groupCameras };
+}
+
+/**
+ * THE memory-bounded frame sweep. Hydrate a window of lazy frames → run
+ * `onFrame` over it → release it → periodically force a real collection.
+ *
+ * Every bulk operation over "every frame" must go through this. A loop over
+ * `session.frameGroups` sees only what is RESIDENT, which on a lazily reopened
+ * project is a handful of frames (measured: 31 of 180,210) — so such a loop
+ * silently processes ~nothing, returns a plausible count, and its result gets
+ * saved. That single mistake has produced every bug in this class so far:
+ * `trackAll` (luc3d #185 notes), `triangulateAllFrames` (#194),
+ * `exportLabels`/`swapTracks` (#195). Conversely, `loadAllLazyFrames` +
+ * iterate-everything is the OTHER failure mode — materializing 2D for 180,210
+ * frames × 5 cameras at once is the renderer OOM the memory work exists to
+ * prevent. This is the shape that is neither.
+ *
+ * Consolidated from three previously-independent copies (`sweepTrackAllFrames`
+ * in `pose/tracker.js`, the private `sweepTriangulationFrames` in
+ * `ui/export-modals.js`, and the windowing formerly inlined in
+ * `sweepTriangulateAllFrames` below) — they had identical mechanics, and a
+ * fourth was about to be written for the #195 fixes. Lives here because
+ * `tracker.js` and `export-modals.js` already import from this module, so no new
+ * import cycle is created.
+ *
+ * `onFrame(frameIdx, frameGroup)` is called once per frame that has data, with
+ * that frame's 2D guaranteed hydrated. It may be async.
+ *
+ * "Has data" means a hydrated `FrameGroup` **or** an `instanceGroups` entry —
+ * NOT `FrameGroup` alone. `frameGroup` is therefore `undefined` for a frame that
+ * has 3D grouping but no resident 2D, and a callback that dereferences it must
+ * guard (`exportLabels` does; the triangulation callbacks read `instanceGroups`
+ * and do not care).
+ *
+ * That distinction is load-bearing, and getting it wrong caused a REGRESSION of
+ * luc3d #194 (fixed here). The consolidation that created this function gated on
+ * `session.frameGroups.get(fi)` alone, which the three lifted copies never did —
+ * `sweepTriangulateAllFrames` had called `ensureGroupsFromIdentities(session, fi)`
+ * for every index in the window unconditionally. So every frame whose 2D did not
+ * come back on hydration was silently skipped, while Triangulate All had ALREADY
+ * wiped `reprojections` project-wide up front: reprojections gone everywhere, 3D
+ * refreshed only where the sweep ran. Exactly the #194 symptom, one layer down.
+ * The synthetic harness could not see it — its fixture gives every frame 2D in
+ * every camera, so the two conditions coincide.
+ *
+ * IMPORTANT — what does NOT survive: after each window, non-user frames are
+ * dropped from `session.frameGroups` and the loader window is released, so any
+ * mutation `onFrame` made to a *predicted* instance's fields is LOST (the frame
+ * is rebuilt from the columnar store on next hydration). Mutations must either
+ * land in a durable structure (the store's own columns, `frameIdentityMap`,
+ * `instanceGroups`) or mark the instance user-edited so its frame is pinned.
+ *
+ * `opts.start`/`opts.end` (inclusive) restrict the sweep to a frame range — used
+ * by the range operations (Triangulate Range). Omit both to sweep everything.
+ *
+ * @param {Object} session                LUCID Session
+ * @param {(frameIdx:number, fg:Object)=>void|Promise<void>} onFrame
+ * @param {{window?:number, onProgress?:Function, yieldEvery?:number,
+ *          gcEveryWindows?:number, gcMB?:number, start?:number, end?:number}} [opts]
+ * @returns {Promise<number>} frames processed
+ */
+function _hasFrameData(session, frameIdx) {
+    if (session.frameGroups.has(frameIdx)) return true;
+    var ig = session.instanceGroups && session.instanceGroups.get(frameIdx);
+    return !!(ig && ig.length > 0);
+}
+
+export async function sweepLazyFrameWindows(session, onFrame, opts) {
+    opts = opts || {};
+    var loader = session.lazyLoader;
+    var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
+    var YIELD_EVERY = opts.yieldEvery || 100;
+    var gcEvery = opts.gcEveryWindows || 5;
+    var gcMB = opts.gcMB || 800;
+    var processed = 0;
+
+    if (windowed) {
+        var W = opts.window || 2000;
+        var from = opts.start != null ? Math.max(0, opts.start) : 0;
+        var to = opts.end != null ? Math.min(loader.nFrames - 1, opts.end) : loader.nFrames - 1;
+        var total = Math.max(0, to - from + 1);
+        var windowCount = 0;
+        for (var start = from; start <= to; start += W) {
+            var end = Math.min(start + W, to + 1);
+            await batchLoadLazyFrames(start, end - start);
+            for (var fi = start; fi < end; fi++) {
+                var fg = session.frameGroups.get(fi);
+                // A frame counts as HAVING DATA if it has 2D (a hydrated
+                // FrameGroup) *or* an `instanceGroups` entry — see `_hasFrameData`.
+                if (!fg && !_hasFrameData(session, fi)) continue;
+                await onFrame(fi, fg);
+                processed++;
+                if (processed % YIELD_EVERY === 0) {
+                    // Awaited: Track All's progress callback repaints a live
+                    // counter and must be allowed to finish before the next chunk.
+                    if (opts.onProgress) await opts.onProgress(processed, total);
+                    await new Promise(function (r) { setTimeout(r, 0); });
+                }
+            }
+            // Release the window. Keep the on-screen current frame and any
+            // user-edited frame; everything else is predicted-only and rebuildable.
+            for (var rf = start; rf < end; rf++) {
+                if (rf === state.currentFrame) continue;
+                var rfg = session.frameGroups.get(rf);
+                if (rfg && !_fgHasUserInstances(rfg)) session.frameGroups.delete(rf);
+            }
+            loader.releaseWindow(start, end);
+            windowCount++;
+            // `end` is an absolute frame index; progress is a COUNT within the
+            // (possibly offset) range, so subtract the range start.
+            if (opts.onProgress) await opts.onProgress(Math.min(end - from, total), total);
+            if (windowCount % gcEvery === 0) await _encourageGC(gcMB);
+        }
+        return processed;
+    }
+
+    // Worker-backed lazy sessions (small analysis .h5, no windowing) still
+    // materialize up front; non-lazy sessions already hold every frame.
+    if (loader) await loadAllLazyFrames(opts.onStatus);
+    var lo = opts.start != null ? opts.start : -Infinity;
+    var hi = opts.end != null ? opts.end : Infinity;
+    // Union of both data maps, for the same reason the windowed branch checks
+    // both (see `_hasFrameData`): a 3D-only frame has an `instanceGroups` entry
+    // and no `FrameGroup`, and must still be visited.
+    var idxSet = new Set(session.frameGroups.keys());
+    for (var [igIdx] of session.instanceGroups) idxSet.add(igIdx);
+    var idxs = Array.from(idxSet)
+        .filter(function (k) { return k >= lo && k <= hi; })
+        .sort(function (a, b) { return a - b; });
+    for (var j = 0; j < idxs.length; j++) {
+        var fg2 = session.frameGroups.get(idxs[j]);
+        await onFrame(idxs[j], fg2);
+        processed++;
+        if (processed % YIELD_EVERY === 0) {
+            if (opts.onProgress) opts.onProgress(processed, idxs.length);
+            await new Promise(function (r) { setTimeout(r, 0); });
+        }
+    }
+    return processed;
+}
+
+/**
+ * Memory-bounded Triangulate All for a lazily-reopened project.
+ *
+ * ## Why this exists
+ *
+ * `triangulateAllFrames`'s original loop never hydrated lazy 2D. A reopened
+ * project's group members are NULL-FILLED PLACEHOLDER `Instance`s (2D
+ * materializes on scrub — `reconstructInstanceGroupsFromSessionLazy`), so
+ * `hasAnyUsablePoint()` was false, `viewsWithLabels < 2`, and the sweep skipped
+ * almost everything. Measured on the real 180,210-frame x 5-camera project:
+ * **31 frames / 93 groups triangulated out of 180,210 / 531,799** — 0.02%, in
+ * 61 s — because only the frames already scrubbed through were resident. The
+ * 3D on disk was never lost, but `setReprojErrorVisible(true)` then switched
+ * the reprojection UI on globally, so the other 99.98% rendered blank reproj
+ * columns; and where hydration was PARTIAL, the on-demand recompute in
+ * `drawAllOverlays` cached a result covering only the hydrated cameras.
+ *
+ * `trackAll()` had exactly this defect and was fixed with
+ * `sweepTrackAllFrames`: hydrate a window, process it, release it. This is the
+ * same shape. The old `loadAllLazyFrames()` ("used before bulk operations
+ * (triangulate all, etc.)") is deliberately NOT used — materializing 2D for
+ * 180,210 frames x 5 cameras at once is the OOM this whole branch exists to
+ * avoid.
+ *
+ * ## What is NOT stored, and why
+ *
+ * `group.reprojections` is ~5 cameras x 15 nodes of boxed `[x, y]` pairs per
+ * group. Retaining it for 531,799 groups is on the order of **1.9 GB** — worse
+ * than every allocation #185/#189/#190/#191/#193 removed. Accumulating
+ * `state.triangulationResults` across 180,210 frames is the same problem. Both
+ * are DERIVED and both are already recomputed on demand for the frame being
+ * viewed (`ui/rendering.js` `drawAllOverlays`, which runs after
+ * `ensureLazyFrameData` has hydrated that frame's real 2D). So this sweep
+ * stores only `points3d` (a flat Float64Array, ~191 MB total, the same
+ * representation the file uses) plus `usedCameras`, and keeps scalar error
+ * stats for the summary.
+ *
+ * Stale derived state IS cleared up front — that is the "wipe the previous
+ * triangulations first" part, and it is safe precisely because it is derived.
+ * `points3d` is deliberately NOT wiped up front: it is replaced per group as
+ * the sweep reaches it (the assignment drops the old array immediately, so old
+ * and new never coexist), which keeps the peak identical to a global wipe while
+ * ensuring an interrupted or partly-untriangulatable sweep never leaves groups
+ * with no 3D at all.
+ */
+async function sweepTriangulateAllFrames(session, cameras, method) {
+    // Windowing/hydration/release all live in `sweepLazyFrameWindows`.
+
+    // Clear derived state project-wide before starting (see docstring).
+    state.triangulationResults.clear();
+    for (var [, clrGroups] of session.instanceGroups) {
+        for (var cgi = 0; cgi < clrGroups.length; cgi++) {
+            var cg = clrGroups[cgi];
+            cg.reprojections = null;
+            if (cg.reprojectedInstances && cg.reprojectedInstances.size) cg.reprojectedInstances.clear();
+        }
+    }
+
+    var stats = { frames: 0, groups: 0, skipped: 0, errSum: 0, errN: 0 };
+    await sweepLazyFrameWindows(session, function (fi) {
+        var list = ensureGroupsFromIdentities(session, fi);
+        if (!list || list.length === 0) return;
+        var anyInFrame = false;
+        for (var gi = 0; gi < list.length; gi++) {
+            var step = _triangulateGroupStep(list[gi], cameras, method);
+            if (!step) { stats.skipped++; continue; }
+            list[gi].markClean();
+            stats.groups++;
+            anyInFrame = true;
+            if (step.result.meanError != null) {
+                stats.errSum += step.result.meanError;
+                stats.errN++;
+            }
+        }
+        if (anyInFrame) stats.frames++;
+    }, {
+        onProgress: function (done, tot) {
+            showLoading('Triangulating... ' + done + '/' + tot + ' frames (' +
+                stats.groups.toLocaleString() + ' groups)');
+        },
+    });
+    return stats;
+}
+
 export async function triangulateAllFrames(method) {
     if (!state.session) {
         setStatus('No session loaded', 'warning');
@@ -2407,6 +2788,33 @@ export async function triangulateAllFrames(method) {
     var cameras = state.session.cameras;
     if (cameras.length < 2) {
         setStatus('Need at least 2 cameras for triangulation', 'warning');
+        return;
+    }
+
+    // A windowing-capable loader (SioLazyLoader) drives `sweepTriangulateAllFrames`
+    // instead: hydrate a window / triangulate / release. Without it, a reopened
+    // project's 2D is never materialized and ~all frames are silently skipped
+    // (measured: 31 of 180,210). Mirrors `trackAll`'s `windowed` check.
+    var triLoader = state.session.lazyLoader;
+    var triWindowed = triLoader && triLoader.isSync &&
+        typeof triLoader.releaseWindow === 'function' && triLoader.nFrames > 0;
+    if (triWindowed) {
+        markDirty();
+        showLoading('Triangulating ' + triLoader.nFrames.toLocaleString() + ' frames (' +
+            triangulationMethodLabel(method) + ')...');
+        var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
+        setReprojErrorVisible(true);
+        drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);
+        if (viewport3d) viewport3d.fitToScene();
+        hideLoading();
+        var sweptAvg = swept.errN > 0 ? (swept.errSum / swept.errN).toFixed(2) : 'N/A';
+        setStatus('Triangulated ' + swept.frames.toLocaleString() + ' frames via ' +
+            triangulationMethodLabel(method) + ' (' + swept.groups.toLocaleString() +
+            ' groups, avg error: ' + sweptAvg + 'px)', 'success');
+        console.log('[triangulate-all] windowed sweep done:', swept.frames, 'frames,',
+            swept.groups, 'groups,', swept.skipped, 'groups skipped (<2 usable views), avg error:', sweptAvg);
+        if (timeline) timeline.refreshTracks(state.session, { cap: true });
         return;
     }
 
@@ -2442,58 +2850,26 @@ export async function triangulateAllFrames(method) {
         for (var gi = 0; gi < frameGroupsList.length; gi++) {
                 var group = frameGroupsList[gi];
 
-                // Resolve camera name mismatches
-                var groupKeys = group.cameraNames;
-                for (var ki = 0; ki < groupKeys.length; ki++) {
-                    var gk = groupKeys[ki];
-                    if (!cameras.some(function (c) { return c.name === gk; })) {
-                        var gkLower = gk.toLowerCase();
-                        for (var ci = 0; ci < cameras.length; ci++) {
-                            var camLower = cameras[ci].name.toLowerCase();
-                            if (gkLower === camLower || gkLower.indexOf(camLower) >= 0 || camLower.indexOf(gkLower) >= 0) {
-                                if (!group.getInstance(cameras[ci].name)) {
-                                    var inst = group.getInstance(gk);
-                                    group.instances.delete(gk);
-                                    group.instances.set(cameras[ci].name, inst);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+                // Camera-name fixup, >=2-usable-view gate, triangulate, and the
+                // `points3d`/`usedCameras`/`triangulationMethod` stores are shared
+                // with the windowed sweep via `_triangulateGroupStep` — keeping one
+                // copy of the camera-name matching so the two paths cannot drift.
+                var step = _triangulateGroupStep(group, cameras, method);
+                if (!step) continue;
+                var result = step.result;
 
-                // Count views with labels
-                var viewsWithLabels = 0;
-                for (var cj = 0; cj < cameras.length; cj++) {
-                    var inst2 = group.getInstance(cameras[cj].name);
-                    if (inst2 && inst2.points && inst2.points.some(function (p, idx) { return p != null && !(inst2.nulledNodes && inst2.nulledNodes.has(idx)); })) {
-                        viewsWithLabels++;
-                    }
-                }
-
-                if (viewsWithLabels < 2) continue;
-
-                // Only use cameras that have instances in this group (assigned views)
-                var groupCamNames2 = group.cameraNames;
-                var groupCameras2 = cameras.filter(function (c) { return groupCamNames2.indexOf(c.name) >= 0; });
-
-                var result = triangulateAndReproject(group, groupCameras2, { method: method });
-                group.triangulationMethod = result.method;
-
+                // Eager-path-only: retain the derived reprojections. Safe here
+                // because this path handles projects small enough to be fully
+                // resident; the windowed sweep deliberately does NOT (~1.9 GB at
+                // 531,799 groups) and lets `drawAllOverlays` recompute per frame.
                 group.reprojections = result.reprojections;
-                group.points3d = result.points3d;
-                storeReprojectedInstances(group, result, cameras);
-                group.observedPoints = {};
-                group.usedCameras = new Set();
-                for (var ck = 0; ck < groupCameras2.length; ck++) {
-                    var camInst = group.getInstance(groupCameras2[ck].name);
-                    if (camInst) {
-                        group.observedPoints[groupCameras2[ck].name] = camInst.points;
-                        if (camInst.points.some(function (p) { return p != null; })) {
-                            group.usedCameras.add(groupCameras2[ck].name);
-                        }
-                    }
-                }
+                // NOT storeReprojectedInstances here — "Triangulate All" sweeps
+                // the WHOLE project; eagerly building a full Instance (+ its
+                // own `occluded` array) per camera per group here was a major
+                // memory cost never needed by SLP save/export (see
+                // getOrComputeReprojectedInstance's doc comment). Display and
+                // export instead resolve on demand from `.reprojections` above.
+                // (`group.usedCameras` is already built by `_triangulateGroupStep`.)
 
                 group.markClean();
                 totalGroups++;

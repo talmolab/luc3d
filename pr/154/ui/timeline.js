@@ -9,6 +9,7 @@
  */
 
 import { getTrackColor, NULL_ID_COLOR } from './overlays.js';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js';
 import { isCameraTracked } from './settings.js';
 
 /**
@@ -1115,8 +1116,7 @@ export class Timeline {
         if (!session.instanceGroups) return false;
         for (var [, grps] of session.instanceGroups) {
             for (var gi = 0; gi < grps.length; gi++) {
-                var pts = grps[gi].points3d;
-                if (pts && pts.some(function (p) { return p != null; })) return true;
+                if (someValidPoint3d(grps[gi].points3d)) return true;
             }
         }
         return false;
@@ -1139,7 +1139,7 @@ export class Timeline {
         for (var [frameIdx, groups] of session.instanceGroups) {
             for (var gi = 0; gi < groups.length; gi++) {
                 var g = groups[gi];
-                if (!g.points3d || !g.points3d.some(function (p) { return p != null; })) continue;
+                if (!someValidPoint3d(g.points3d)) continue;
                 var id = g.identityId;
                 if (id == null) continue;
                 if (!idFrames[id]) { idFrames[id] = new Set(); idOrder.push(id); }
@@ -1714,17 +1714,16 @@ export class Timeline {
             // everything (>=0 → identityId, <0 → explicit no-identity), no
             // per-key helper calls needed.
             if (session.frameIdentityMap) {
-                for (var [fiKey, fiVal] of session.frameIdentityMap) {
-                    var parsed = _parseFrameIdentityKey(fiKey);
-                    if (!parsed || materializedFrames.has(parsed.frameIdx)) continue;
-                    if (fiVal < 0) {
-                        var fbNKey = NO_ID_KEY + ':' + parsed.camName;
+                for (var rec of session.frameIdentityEntries()) {
+                    if (materializedFrames.has(rec.frameIdx)) continue;
+                    if (rec.identityId < 0) {
+                        var fbNKey = NO_ID_KEY + ':' + rec.camName;
                         if (!idCamFrames[fbNKey]) idCamFrames[fbNKey] = new Set();
-                        idCamFrames[fbNKey].add(parsed.frameIdx);
+                        idCamFrames[fbNKey].add(rec.frameIdx);
                     } else {
-                        var fbKey = fiVal + ':' + parsed.camName;
+                        var fbKey = rec.identityId + ':' + rec.camName;
                         if (!idCamFrames[fbKey]) idCamFrames[fbKey] = new Set();
-                        idCamFrames[fbKey].add(parsed.frameIdx);
+                        idCamFrames[fbKey].add(rec.frameIdx);
                     }
                 }
             }

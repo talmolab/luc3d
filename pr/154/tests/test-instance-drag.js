@@ -121,18 +121,18 @@
     describe('Instance Drag - Integration with Data Model', function () {
         it('updates Instance points in-place', function () {
             var instance = new Instance([[10, 20], [30, 40], null], 0, 'predicted', 0.9);
-            var originalPoints = instance.points.map(function (p) { return p ? [p[0], p[1]] : null; });
+            var originalPoints = instance.toPointsArray();
 
             var dx = 15, dy = 30;
-            for (var i = 0; i < instance.points.length; i++) {
+            for (var i = 0; i < instance.numNodes; i++) {
                 if (originalPoints[i]) {
-                    instance.points[i] = [originalPoints[i][0] + dx, originalPoints[i][1] + dy];
+                    instance.setPoint(i, originalPoints[i][0] + dx, originalPoints[i][1] + dy);
                 }
             }
 
-            assertDeepEqual(instance.points[0], [25, 50]);
-            assertDeepEqual(instance.points[1], [45, 70]);
-            assertEqual(instance.points[2], null, 'Null point stays null');
+            assertDeepEqual(instance.getPoint(0), [25, 50]);
+            assertDeepEqual(instance.getPoint(1), [45, 70]);
+            assertEqual(instance.getPoint(2), null, 'Null point stays null');
         });
 
         it('converts instance type to user after drag', function () {
@@ -152,17 +152,17 @@
 
             // Simulate whole-instance drag
             var dx = 5, dy = 10;
-            for (var i = 0; i < inst.points.length; i++) {
-                if (inst.points[i]) {
-                    inst.points[i] = [inst.points[i][0] + dx, inst.points[i][1] + dy];
+            for (var i = 0; i < inst.numNodes; i++) {
+                if (inst.hasPoint(i)) {
+                    inst.setPoint(i, inst.getX(i) + dx, inst.getY(i) + dy);
                 }
             }
 
             // Verify via group reference
             var retrieved = ig.getInstance('cam1');
-            assertDeepEqual(retrieved.points[0], [15, 30], 'Group reference should reflect changes');
-            assertDeepEqual(retrieved.points[1], [35, 50]);
-            assertDeepEqual(retrieved.points[2], [55, 70]);
+            assertDeepEqual(retrieved.getPoint(0), [15, 30], 'Group reference should reflect changes');
+            assertDeepEqual(retrieved.getPoint(1), [35, 50]);
+            assertDeepEqual(retrieved.getPoint(2), [55, 70]);
         });
     });
 

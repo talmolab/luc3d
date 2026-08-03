@@ -28,7 +28,7 @@ import {
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
 } from './app-state.js';
-import { FrameGroup, UnlinkedInstance, Camera } from '../pose/pose-data.js';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration,
@@ -1206,7 +1206,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                         });
                         if (groupCameras.length >= 2) {
                             var result = triangulateAndReproject(group, groupCameras);
-                            var valid = result.points3d && result.points3d.some(function (p) { return p != null; });
+                            var valid = someValidPoint3d(result.points3d);
                             if (valid) {
                                 group.points3d = result.points3d;
                                 group.reprojections = result.reprojections;

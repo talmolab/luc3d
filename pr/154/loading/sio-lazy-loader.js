@@ -333,6 +333,22 @@ export class SioLazyLoader {
         }
         this.nFrames = maxFrameIdx + 1;
 
+        // Sparse per-track occupancy for the timeline's presence bars — same
+        // as open()'s per-camera call, but every camera here shares ONE
+        // interleaved store, so each needs its OWN rowMap passed to scope the
+        // scan to just its rows (see _computeSparseOccupancy's doc). Missing
+        // entirely until now: reopening an already-saved project via
+        // openProjectSlp left the Tracks Timeline with no occupancy data at
+        // all for any camera, unlike the per-camera open() path. Best-effort,
+        // never blocks the load.
+        for (var occCamName of this.labelsByCam.keys()) {
+            try {
+                var occRowMap = this.frameRowByCam.get(occCamName);
+                var occ = this._computeSparseOccupancy(labels, this.nFrames, occRowMap);
+                if (occ) this.trackOccupancy.set(occCamName, occ);
+            } catch (e) { /* occupancy is optional; ignore */ }
+        }
+
         return {
             labels: labels,
             typedSession: typedSession,
@@ -353,9 +369,17 @@ export class SioLazyLoader {
      *
      * @param {Object} labels    lazy sleap-io.js Labels (with `_lazyDataStore`).
      * @param {number} nFrames   this camera's video frame span (maxFrameIdx + 1).
+     * @param {Map<number,number>} [rowMap] - Restricts the scan to THIS camera's
+     *   own rows (videoFrameIdx -> store row), required whenever `labels`'s
+     *   store is SHARED across multiple cameras (`openProjectSlp` — one
+     *   interleaved store, every camera's rows mixed together in file order).
+     *   Without it, scanning the whole table would attribute a DIFFERENT
+     *   camera's instances/tracks to this one. Omit for the per-camera
+     *   `open()` path, where `labels`'s store already belongs to exactly one
+     *   camera and every row is valid.
      * @returns {Object|null} `{ sparse, nTracks, nFrames, segments, counts }` or null.
      */
-    _computeSparseOccupancy(labels, nFrames) {
+    _computeSparseOccupancy(labels, nFrames, rowMap) {
         var store = labels && labels._lazyDataStore;
         if (!store || !store.framesData) return null;
         var fd = store.framesData;
@@ -364,14 +388,42 @@ export class SioLazyLoader {
         var startCol = fd.instance_id_start || [];
         var endCol = fd.instance_id_end || [];
         var trackCol = idn.track || [];
-        var nRows = frameIdxCol.length;
         var nTracks = (labels.tracks || []).length;
+        // Row source: either every row in the table (single-camera store) or
+        // just this camera's own rows (shared multi-camera store), sorted by
+        // frame so the run-length segment logic below (which relies on
+        // encountering a track's frames in increasing order) stays correct —
+        // a shared store's rows are interleaved across cameras, not sorted
+        // per-camera, even though a single-camera store's rows already are.
+        var rows;
+        if (rowMap) {
+            rows = Array.from(rowMap.values());
+            // A single camera's own rows are already in on-disk frame order
+            // (openProjectSlp scans the shared store's native row order and
+            // appends to each camera's map in that same order — the same
+            // frame-ordering invariant `appendStore` relies on elsewhere), so
+            // sorting is usually a no-op. Verify with one cheap linear pass
+            // instead of unconditionally paying an O(n log n) sort — a real
+            // cost at 180k+ rows/camera on a large project — and only sort
+            // when a row is genuinely out of order.
+            var alreadySorted = true;
+            for (var ci = 1; ci < rows.length; ci++) {
+                if (Number(frameIdxCol[rows[ci]]) < Number(frameIdxCol[rows[ci - 1]])) { alreadySorted = false; break; }
+            }
+            if (!alreadySorted) {
+                rows.sort(function (a, b) { return Number(frameIdxCol[a]) - Number(frameIdxCol[b]); });
+            }
+        } else {
+            rows = frameIdxCol.length;   // sentinel: iterate 0..rows-1 below
+        }
+        var nRows = rowMap ? rows.length : rows;
 
         var segments = new Map();   // trackIdx -> [{start,end}]
         var counts = new Map();     // trackIdx -> occupied-frame count
         var open = new Map();       // trackIdx -> {start,last}: the run in progress
 
-        for (var r = 0; r < nRows; r++) {
+        for (var ri = 0; ri < nRows; ri++) {
+            var r = rowMap ? rows[ri] : ri;
             var f = Number(frameIdxCol[r]);
             if (!(f >= 0)) continue;
             var s = Number(startCol[r]) || 0;
@@ -510,6 +562,198 @@ export class SioLazyLoader {
     /** Release a half-open window [startFrameIdx, endFrameIdx) of frames. */
     releaseWindow(startFrameIdx, endFrameIdx) {
         for (var f = startFrameIdx; f < endFrameIdx; f++) this.releaseFrame(f);
+    }
+
+    /**
+     * Read-only sweep over every (camera, frameIdx, trackIdx) instance triple
+     * in the WHOLE project, straight from each camera's columnar store
+     * (`labels._lazyDataStore.framesData`/`.instancesData`) — no frame or
+     * instance object materialization, independent of what's currently
+     * resident/cached. Used by project-wide identity/track propagation
+     * (`Session.propagateTracksToIdentities`, pose/pose-data.js) so it isn't
+     * limited to whatever's in `session.frameGroups` (a lazy session's small
+     * resident window).
+     * @param {(camName: string, frameIdx: number, trackIdx: number) => void} visitFn
+     *   `trackIdx` is -1 for a trackless instance.
+     */
+    forEachInstanceRow(visitFn) {
+        for (var camName of this.labelsByCam.keys()) {
+            var labels = this.labelsByCam.get(camName);
+            var store = labels && labels._lazyDataStore;
+            var rowMap = this.frameRowByCam.get(camName);
+            if (!store || !rowMap) continue;
+            var fd = store.framesData || {};
+            var idn = store.instancesData || {};
+            for (var [frameIdx, frameRow] of rowMap) {
+                var iStart = Number(fd.instance_id_start ? fd.instance_id_start[frameRow] : 0) || 0;
+                var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[frameRow] : 0) || 0;
+                for (var j = iStart; j < iEnd; j++) {
+                    var trk = idn.track ? Number(idn.track[j]) : -1;
+                    if (!Number.isFinite(trk)) trk = -1;
+                    visitFn(camName, frameIdx, trk);
+                }
+            }
+        }
+    }
+
+    /**
+     * Rewrite every camera's persistent columnar track assignment to match a
+     * new identity-derived track list, so the change survives eviction/reload
+     * and is picked up natively by SLP export — `appendStore` reads
+     * `instancesData.track` by reference (see import-export/slp-streaming-
+     * write.js) — without materializing a single extra frame. Companion to
+     * `forEachInstanceRow`; used by `Session.propagateIdentitiesToTracks`
+     * ("Propagate IDs → Tracks").
+     *
+     * Each underlying `labels` object's `tracks` array (shared by reference
+     * with its `_lazyDataStore.tracks` — mutated in place, never reassigned,
+     * so both stay in sync) is rebuilt to exactly `newTrackNames`; a shared
+     * store (one project `.slp` interleaving multiple cameras, see
+     * `openProjectSlp`) is only rebuilt once even though several camera names
+     * point at the same `labels`.
+     *
+     * @param {string[]} newTrackNames - the new project-wide track name list
+     *   (mirrors `session.tracks` after propagate).
+     * @param {(camName: string, frameIdx: number, oldTrackIdx: number) => number} remapFn
+     *   Returns the new track index (into `newTrackNames`), or a negative
+     *   number for "no track."
+     * @returns {{changed: number, errorRows: number, firstError: Error|null}}
+     *   `changed` is instance rows whose track id actually changed;
+     *   `errorRows`/`firstError` surface any per-row failures (see the
+     *   diagnostic note above) instead of silently swallowing them.
+     */
+    remapTracksFromIdentity(newTrackNames, remapFn) {
+        var SIO = window.SleapIO;
+        var TrackCtor = SIO && SIO.Track;
+        var changed = 0;
+        // Regression diagnostic (see "only the first frame(s) have tracks after
+        // export" report): this function used to have NO error handling at all
+        // — an exception thrown mid-row would silently abort the rest of the
+        // ENTIRE remap for every camera not yet processed, while the live
+        // session (frameIdentityMap/instanceGroups/resident Instance.trackIdx,
+        // all mutated BEFORE this function runs) would already look completely
+        // correct in the GUI. That mismatch — correct on screen, broken in the
+        // export — is exactly what silently swallowing an error here would
+        // produce. `errorRows`/`firstError` surface any such failure instead of
+        // eating it; `propagateIdentitiesToTracks` reports both in its status.
+        var errorRows = 0;
+        var firstError = null;
+        var rebuiltLabels = new Set();   // labels whose .tracks array was rebuilt
+        var seenLabels = new Set();      // every labels object touched (cache-clear target)
+        for (var camName of this.labelsByCam.keys()) {
+            var labels = this.labelsByCam.get(camName);
+            var store = labels && labels._lazyDataStore;
+            var rowMap = this.frameRowByCam.get(camName);
+            if (!store || !rowMap) continue;
+            seenLabels.add(labels);
+
+            if (TrackCtor && !rebuiltLabels.has(labels)) {
+                rebuiltLabels.add(labels);
+                var tracksArr = store.tracks;   // === labels.tracks (shared ref)
+                if (Array.isArray(tracksArr)) {
+                    tracksArr.length = 0;
+                    for (var t = 0; t < newTrackNames.length; t++) {
+                        tracksArr.push(new TrackCtor(newTrackNames[t]));
+                    }
+                }
+            }
+
+            var fd = store.framesData || {};
+            var idn = store.instancesData || {};
+            if (!idn.track) continue;
+            // Per-camera diagnostic counters (see the note above this method) —
+            // logged after this camera's loop so a scan of the console
+            // immediately shows whether coverage suspiciously drops to ~0 for
+            // some camera/frame range instead of scaling with the columnar
+            // store's actual row count.
+            var camRowsVisited = 0;
+            var camRowsChanged = 0;
+            for (var [frameIdx, frameRow] of rowMap) {
+                var iStart = Number(fd.instance_id_start ? fd.instance_id_start[frameRow] : 0) || 0;
+                var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[frameRow] : 0) || 0;
+                for (var j = iStart; j < iEnd; j++) {
+                    camRowsVisited++;
+                    // Isolated per-row: one malformed row/frame must not abort
+                    // the remap for every frame after it (see the diagnostic
+                    // note above this method).
+                    try {
+                        var oldTrk = Number(idn.track[j]);
+                        if (!Number.isFinite(oldTrk)) oldTrk = -1;
+                        var newTrk = remapFn(camName, frameIdx, oldTrk);
+                        newTrk = (newTrk == null || newTrk < 0) ? -1 : newTrk;
+                        if (idn.track[j] !== newTrk) { idn.track[j] = newTrk; changed++; camRowsChanged++; }
+                    } catch (rowErr) {
+                        errorRows++;
+                        if (!firstError) firstError = rowErr;
+                        if (errorRows <= 5) {
+                            console.error('[remapTracksFromIdentity] row ' + j + ' (camera=' + camName +
+                                ', frame=' + frameIdx + ') failed — leaving its track unchanged:', rowErr);
+                        }
+                    }
+                }
+            }
+            console.log('[remapTracksFromIdentity] camera=' + camName + ': ' + camRowsChanged + '/' +
+                camRowsVisited + ' rows remapped (rest already matched, or had no identity to remap to).');
+
+            // Rebuild THIS camera's sparse track-occupancy from the just-
+            // remapped column. `session.trackOccupancy` is the SAME Map
+            // object as `this.trackOccupancy` (set by reference in
+            // session-loader.js), so replacing this entry is picked up by the
+            // Timeline with no extra wiring. Without this, `_computeSparseOccupancy`'s
+            // one-time snapshot from `open()` keeps describing the
+            // PRE-propagate track ids forever, and `ui/timeline.js:
+            // _buildTrackSegments` trusts it for every frame the user hasn't
+            // scrubbed to — the "Tracks Timeline doesn't update after
+            // Propagate IDs → Tracks" bug.
+            try {
+                // Pass THIS camera's rowMap — required for a shared-store
+                // project (openProjectSlp, multiple cameras -> one `labels`);
+                // without it the scan would mix every camera's rows together
+                // (see _computeSparseOccupancy's doc). Harmless/no-op change
+                // for a per-camera open() store, where every row already
+                // belongs to this camera.
+                var newOcc = this._computeSparseOccupancy(labels, this.nFrames, rowMap);
+                if (newOcc) this.trackOccupancy.set(camName, newOcc);
+                else this.trackOccupancy.delete(camName);
+            } catch (e) { /* occupancy is optional; ignore */ }
+        }
+
+        // Invalidate every resident cache layer — our own adapted-dict LRU
+        // and each camera's underlying sleap-io.js typed-frame cache — so a
+        // currently-cached or later-revisited frame re-materializes from the
+        // just-mutated columns instead of serving stale trackIdx values
+        // (adaptTypedInstance/`materializeFrame` both resolve trackIdx from
+        // `tracks`/`instancesData.track` fresh on each materialization, so
+        // simply dropping the cached copies is sufficient — no rebuild here).
+        //
+        // Reaches into `_lazyFrameList.clearCache()` (drops the WHOLE cache
+        // in one call) instead of the public per-row `releaseFrame(row)` API
+        // looped over every frame in the project: for a 180k-frame x 5-camera
+        // project that loop was up to ~900k calls just to invalidate what's
+        // normally a few hundred cached entries (`internalFrameCacheLimit`)
+        // — the dominant cost in the "Propagate IDs -> Tracks takes forever"
+        // report. Falls back to the old per-row loop on an older bundle
+        // without `clearCache`.
+        this.cache.clear();
+        this.cacheOrder = [];
+        for (var labels2 of seenLabels) {
+            if (labels2._lazyFrameList && typeof labels2._lazyFrameList.clearCache === 'function') {
+                labels2._lazyFrameList.clearCache();
+            } else if (typeof labels2.releaseFrame === 'function') {
+                for (var camName2 of this.labelsByCam.keys()) {
+                    if (this.labelsByCam.get(camName2) !== labels2) continue;
+                    var rowMap2 = this.frameRowByCam.get(camName2);
+                    if (!rowMap2) continue;
+                    for (var frameRow2 of rowMap2.values()) labels2.releaseFrame(frameRow2);
+                }
+            }
+        }
+        if (errorRows > 0) {
+            console.error('[remapTracksFromIdentity] ' + errorRows + ' row(s) failed and were left with their ' +
+                'OLD (now likely out-of-range) track index — those rows will show as trackless once ' +
+                'session.tracks is replaced with the shorter identity-derived list. First error:', firstError);
+        }
+        return { changed: changed, errorRows: errorRows, firstError: firstError };
     }
 
     close() {
