@@ -1391,6 +1391,23 @@ for freshly-triangulated AND reopened projects alike.
     bypasses (which painted two different animals the same color on exactly
     the frames those fixes cover).
   - The synthetic "No ID" track (`isNoIdTrack`) is not shown as an animal name.
+  **Only results for THIS frame's live groups are rendered.**
+  `state.triangulationResults` is derived state that outlives the groups it
+  describes: "Triangulate All" routes to `groupByIdentityAndTriangulateAll`
+  whenever identities exist, which DELETES and rebuilds each frame's
+  `instanceGroups` but — unlike every other bulk path, which either `set()`s per
+  frame (`groupByTrackAndTriangulateAll`, `triangulateAllFrames`) or `clear()`s
+  wholesale (`sweepTriangulateAllFrames`) — never prunes the results map, and
+  `ui/rendering.js`'s lazy fill then CONCATENATES its freshly-computed entries
+  onto whatever was already stored. A frame the user had already triangulated
+  therefore holds results for both the deleted groups and their replacements,
+  which rendered as TWO tables per animal (measured: 4 tables for 2 animals).
+  The breakdown filters `results` against the `instanceGroups` argument, keeping
+  entries with no `group` (they use the `Instance N` fallback) and skipping the
+  filter entirely when no group list was passed, so neither case can blank a
+  panel that used to populate. Deliberately display-side: the triangulation
+  paths are verified against the real project and are left untouched, so the
+  frame-summary headline still averages every stored entry.
   Labels are resolved ONCE up front against each result's ORIGINAL index (so the
   `Instance N` fallback numbering doesn't shuffle with the sort) and the original
   index breaks label ties, keeping several trackless groups in a stable order

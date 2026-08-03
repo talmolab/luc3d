@@ -1283,9 +1283,32 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
     // table PER instance, each labelled by its track/identity, so a large error
     // can be traced to a specific animal + node + view instead of being hidden
     // in a cross-track average.
+    //
+    // Render only results whose group is still one of THIS frame's live groups.
+    // `state.triangulationResults` is derived state that outlives the groups it
+    // describes: "Triangulate All" routes to `groupByIdentityAndTriangulateAll`
+    // (whenever identities exist), which DELETES and rebuilds each frame's
+    // `instanceGroups` but — unlike every other bulk path, which either `set()`s
+    // per frame or `clear()`s wholesale — never prunes the results map, and
+    // `ui/rendering.js`'s lazy fill then CONCATENATES its freshly-computed
+    // entries onto whatever was already stored. A frame the user had already
+    // triangulated therefore ends up holding results for both the deleted
+    // groups and their replacements, which rendered as TWO tables per animal
+    // (measured: 4 tables for 2 animals, 2 referencing deleted groups). This is
+    // display-side only, on purpose — the triangulation paths are verified
+    // against the real project and are deliberately left untouched.
+    //
+    // Entries with no `group` at all are kept (they render via the `Instance N`
+    // fallback), and the filter is skipped entirely when the caller passed no
+    // group list, so neither case can blank a panel that used to populate.
     var breakdownDiv = document.getElementById('errorBreakdownTable');
     breakdownDiv.textContent = '';
-    if (results && results.length > 0 && state.session && state.session.skeleton) {
+    var liveResults = results;
+    if (results && instanceGroups && instanceGroups.length > 0) {
+        var liveGroups = new Set(instanceGroups);
+        liveResults = results.filter(function (r) { return !r.group || liveGroups.has(r.group); });
+    }
+    if (liveResults && liveResults.length > 0 && state.session && state.session.skeleton) {
         var nodeNames = state.session.skeleton.nodes;
         var cameras = state.session.cameras;
         var camNames = cameras.map(function (c) { return c.name; });
@@ -1444,7 +1467,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
         // "Instance N" fallback numbering doesn't shuffle with the sort) and the
         // original index breaks ties — without it, several trackless groups all
         // compare equal and their order varies frame to frame.
-        var described = results.map(function (r, idx) { return describeResult(r, idx); });
+        var described = liveResults.map(function (r, idx) { return describeResult(r, idx); });
         var order = described.map(function (_, idx) { return idx; }).sort(function (a, b) {
             var cmp = described[a].text.localeCompare(described[b].text);
             return cmp !== 0 ? cmp : a - b;

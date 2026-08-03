@@ -179,6 +179,122 @@ try {
 
   check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs[0] : ''));
 
+  // ---------------------------------------------------------------------------
+  // Phase 4 (fresh page): no PHANTOM tables after the REAL "Triangulate All".
+  //
+  // "Triangulate All" routes to `groupByIdentityAndTriangulateAll` whenever
+  // identities exist. That DELETES and rebuilds each frame's `instanceGroups`
+  // but never prunes `state.triangulationResults`, and `ui/rendering.js`'s lazy
+  // fill CONCATENATES its freshly-computed entries onto whatever was already
+  // stored — so a frame the user had already triangulated holds results for both
+  // the deleted groups and their replacements. Unfiltered, that renders two
+  // tables per animal. The panel must show one table per LIVE group.
+  // ---------------------------------------------------------------------------
+  console.log('  -- phase 4: real Triangulate All over an already-triangulated frame --');
+  const page2 = await browser.newPage();
+  const errs2 = [];
+  page2.on('pageerror', e => errs2.push(String(e)));
+  await page2.goto(`http://localhost:${PORT}/index.html`);
+  await page2.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+
+  const ta = await page2.evaluate(async () => {
+    const pd = await import('/pose/pose-data.js');
+    const AS = await import('/ui/app-state.js');
+    const IP = await import('/ui/info-panel.js');
+    const TRI = await import('/pose/triangulation.js');
+    const EM = await import('/ui/export-modals.js');
+    const { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } = pd;
+
+    const K = [[600, 0, 320], [0, 600, 240], [0, 0, 1]];
+    const camA = new Camera('camA', K, [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+    const camB = new Camera('camB', K, [0, 0, 0, 0, 0], [0, 0.3, 0], [20, 0, 0], [640, 480]);
+    const skel = new Skeleton('sk', ['a', 'b'], [[0, 1]]);
+    const session = new Session([camA, camB], skel, ['track_0', 'track_1'], 'RPETriangulateAll');
+    const NF = 3;
+    for (let f = 0; f < NF; f++) {
+      const fg = new FrameGroup(f);
+      session.addFrameGroup(fg);
+      for (const [tr, base] of [[0, [10, 5, 50]], [1, [-8, 4, 45]]]) {
+        const p1 = [base[0] + f * 0.2, base[1], base[2]];
+        const p2 = [base[0] + 1 + f * 0.2, base[1] + 1, base[2] + 1];
+        for (const cam of [camA, camB]) {
+          fg.addInstance(cam.name, new Instance([cam.project(p1), cam.project(p2)], tr, 'predicted', 1));
+        }
+      }
+    }
+    AS.state.sessions = [session];
+    AS.state.activeSessionIdx = 0;
+    AS.state.session = session;
+    AS.state.totalFrames = NF;
+    AS.state.currentFrame = 0;
+    AS.state.triangulationResults = new Map();
+    AS.state.views = [];
+
+    // Real Track-All-shaped output: two identities, per-camera track→identity.
+    const red = session.addIdentity('Red');
+    const blue = session.addIdentity('Blue');
+    for (const cn of ['camA', 'camB']) {
+      session.assignTrackToIdentity(0, red.id, cn);
+      session.assignTrackToIdentity(1, blue.id, cn);
+    }
+    for (let f = 0; f < NF; f++) {
+      const fg = session.frameGroups.get(f);
+      const groups = [];
+      for (const [gi, idObj] of [[0, red], [1, blue]]) {
+        const grp = new InstanceGroup(f * 10 + gi + 1, idObj.id);
+        for (const cam of [camA, camB]) grp.addInstance(cam.name, fg.instances.get(cam.name)[gi]);
+        groups.push(grp);
+      }
+      session.instanceGroups.set(f, groups);
+    }
+
+    const readPanel = () => {
+      const div = document.getElementById('errorBreakdownTable');
+      return {
+        tables: div.querySelectorAll('table').length,
+        labels: Array.from(div.children).map(b =>
+          (b.children[0] && b.children[0].children[1]) ? b.children[0].children[1].textContent : null),
+      };
+    };
+
+    // The user triangulates the current frame first (very common), THEN hits
+    // Triangulate All — which is what leaves the superseded results behind.
+    TRI.triangulateCurrentFrame('dlt');
+    IP.updateFrameInfo(0, TRI.getInstanceGroupsForFrame(0));
+    const afterSingle = readPanel();
+
+    await EM.groupByIdentityAndTriangulateAll();
+    // It ends with drawAllOverlays + updateInfoPanel, so the panel is rendered.
+    const stored = AS.state.triangulationResults.get(0) || [];
+    const live = session.instanceGroups.get(0) || [];
+    return {
+      afterSingle,
+      afterAll: readPanel(),
+      storedResults: stored.length,
+      liveGroups: live.length,
+      supersededResults: stored.filter(r => !live.includes(r.group)).length,
+    };
+  });
+
+  console.log('    after single-frame Triangulate:', JSON.stringify(ta.afterSingle));
+  console.log('    after real Triangulate All:    ', JSON.stringify(ta.afterAll),
+    `stored=${ta.storedResults} live=${ta.liveGroups} superseded=${ta.supersededResults}`);
+
+  check(ta.afterSingle.tables === 2,
+    `precondition: single-frame Triangulate renders one table per animal (got ${ta.afterSingle.tables})`);
+  check(ta.supersededResults > 0,
+    `precondition: Triangulate All leaves superseded results behind (got ${ta.supersededResults}) — ` +
+    `if this ever hits 0 the triangulation path started pruning them and the filter is now belt-and-braces`);
+  check(ta.afterAll.tables === 2,
+    `after real Triangulate All: one table per LIVE animal, no phantom duplicates ` +
+    `(got ${ta.afterAll.tables} tables for ${ta.liveGroups} groups)`);
+  check(new Set(ta.afterAll.labels).size === ta.afterAll.labels.length,
+    `no duplicated instance labels (got ${JSON.stringify(ta.afterAll.labels)})`);
+  check(ta.afterAll.labels.some(l => l && l.indexOf('Red') === 0) &&
+        ta.afterAll.labels.some(l => l && l.indexOf('Blue') === 0),
+    `both animals still labelled by identity (got ${JSON.stringify(ta.afterAll.labels)})`);
+  check(errs2.length === 0, 'no page errors in phase 4' + (errs2.length ? ': ' + errs2[0] : ''));
+
   await browser.close();
 } finally {
   server.kill('SIGTERM');
