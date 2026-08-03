@@ -1369,8 +1369,35 @@ labelled with a color dot + track/identity (identity preferred, then track, then
 `Instance N`) and that instance's own mean error, ordered by label. This
 replaced the earlier single table that averaged all instances together and hid
 which animal/node/view carried a large error. Reads each `state.triangulationResults`
-entry's `{ group, errors, meanError }`; labels via `getTrackColor` + the session
-tracks/identities.
+entry's `{ group, errors, meanError }` — a shape all three producers supply
+(`pose/triangulation.js`'s sweeps, `import-export/save-load.js`'s load-time
+rebuild, and `ui/rendering.js`'s lazy per-frame fill), so the panel populates
+for freshly-triangulated AND reopened projects alike.
+  **Label/color resolution reuses the canonical resolvers on purpose** — the
+  panel must never disagree with what the same group shows elsewhere:
+  - *Track*: the first member instance that actually CARRIES a track, scanning
+    every camera (not `instances`' first entry, which can be a trackless view
+    while its siblings are tracked) — the same scan `getGroupColor` and the
+    identity `<select>` below use.
+  - *Identity*: `session.getIdentityIdForTrack(cam, trackIdx, frameIdx)` FIRST,
+    falling back to `group.identityId`. `group.identityId` is only refreshed on
+    the frame an identity is (re)assigned, so reading it first labelled these
+    tables with the PRE-fix animal on every frame a propagated swap fix covers
+    (issue #155/#168). Mirrors the identity dropdown's pre-select exactly.
+  - *Color*: `getGroupColor(group, session, state.colorByIdentity, frameIdx)`,
+    so the dot matches the 2D views and 3D viewport — it honors
+    Color-by-Identity mode and carries the #168 wildcard-identity and #183
+    frame-0 trackIdx-collision guards that a bare `getTrackColor(trackIdx)`
+    bypasses (which painted two different animals the same color on exactly
+    the frames those fixes cover).
+  - The synthetic "No ID" track (`isNoIdTrack`) is not shown as an animal name.
+  Labels are resolved ONCE up front against each result's ORIGINAL index (so the
+  `Instance N` fallback numbering doesn't shuffle with the sort) and the original
+  index breaks label ties, keeping several trackless groups in a stable order
+  frame to frame. Covered by `tests/e2e/rpe-per-instance.mjs`, which asserts the
+  per-instance split, the all-camera track scan, per-frame-identity precedence
+  over a stale `group.identityId`, and dot/`getGroupColor` agreement in both
+  color modes.
 
 **Instance-panel track/identity dropdowns.** Each grouped/unlinked instance
 row has a track `<select>` and an identity `<select>`. Both selects include a
@@ -1423,7 +1450,7 @@ on reload); see `ui/app-state.js`.
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Skeleton`, `Camera`, `Session`.
 - `../pose/triangulation.js` — `getInstanceGroupsForFrame`.
-- `./overlays.js` — `REPROJECTION_COLOR`.
+- `./overlays.js` — `REPROJECTION_COLOR`, `getTrackColor`, `getGroupColor`.
 - `./rendering.js` — `drawAllOverlays`, `updateFrameCounters`.
 - `./interaction.js` — `isInteractiveClickTarget`.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
