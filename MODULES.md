@@ -1163,6 +1163,96 @@ playback state, dirty tracking, multi-session UI.
 
 ---
 
+### ui/custom-delete-ops.js
+
+**Purpose.** Pure, DOM-free logic behind "Custom Instance Delete…" — LUCID's
+equivalent of SLEAP's `sleap/gui/dialogs/delete.py` `DeleteDialog`
+(Labels ▸ Custom Instance Delete…), adapted to the multi-view model. Imports **no
+project modules** (only calls methods on the `Session` it is handed), so it bridges
+into `tests/test-runner.html` for isolated unit testing — same contract as
+`ui/track-identity-ops.js`. The DOM modal lives in `ui/ui-wiring.js`.
+
+**Exports.** `collectDeletionTargets(session, filters, ctx)` (pure — returns
+`{targets, count, byCamera, groupsDissolved, groupsUngrouped, instancesPromoted,
+groupsLosing3d}`), `previewCascade(targets)`, `executeDeletion(session, targets)`,
+`pruneOrphanIdentities(session, frameIndices)`.
+
+**Vocabulary.** SLEAP's *video* scope is LUCID's **session** — every camera in a
+session shares one frame index space, so a camera is a VIEW FILTER, not a frame
+domain. The UI says **Grouped / Ungrouped** (the panel headers) and must never say
+"Unlinked": in SLEAP an *unlinked prediction* is one with no `from_predicted`
+back-link to a user instance, an unrelated concept that shares the word.
+
+**Type and grouping are ORTHOGONAL axes**, not siblings — a grouped instance is
+still user or predicted. "Delete grouped instances" is `type:'all'` +
+`grouping:'grouped'`. Conflating them is the main way this dialog could become
+incoherent. `type:'all'` = user + predicted (matching SLEAP's "all instances"),
+never reprojections — those are derived and live in `reprojectedInstances`.
+
+**Lazy / not-yet-hydrated frames.** Scope enumeration must never loop
+`session.frameGroups` — that is the small resident window (31 of 180,210 frames
+measured on the real project), so a bulk delete driven from it would silently delete
+almost nothing while reporting success (the #185/#194/#195 bug class). So:
+- `frameScope:'currentSession'` is **store-driven** via
+  `lazyLoader.forEachInstanceRow`. It needs no hydration and no `async`, because all
+  four filter axes resolve without materializing a frame: **type/track** from the
+  store's own columns (`forEachInstanceRow`'s 4th `info` argument), **identity** from
+  `frameIdentityMap` (in memory project-wide), and **grouping** from
+  `session.instanceGroups` (also project-wide — rebuilt in full at reopen — whose
+  members carry `_rawInstIndex`).
+- `frameScope:'currentFrame'` normally reads the richer resident model, but falls
+  back to the same store-driven collector restricted to that one frame when the
+  frame has **no `FrameGroup`** (never hydrated). Otherwise its ungrouped rows,
+  which exist only in the store, would be missed — a sneaky partial failure, since
+  `instanceGroups` is project-wide so grouped members *would* still be found.
+- A non-resident row has no `UnlinkedInstance` wrapper; `executeDeletion` counts it
+  and skips the pool update. That is correct — the store row was the only thing that
+  existed for it, and the frame hydrates from the compacted store.
+- With no `lazyLoader` at all, session scope walks `frameGroups` ∪ `instanceGroups`;
+  an eager project is fully resident, so that enumeration is complete by definition.
+
+**Identity is resolved PER FRAME** via `session.getIdentityIdForTrack(cam,
+trackIdx, frameIdx)`, never `group.identityId` (only refreshed on the frame an
+identity was assigned — the #155/#168 staleness class). This is the same call
+`groupByIdentityAndTriangulateAll` buckets by, so the dialog and the grouping
+cannot disagree.
+
+**Cascade, and why the dialog reports it.** A group must have ≥2 members, so
+removing members can dissolve a group (`removeInstanceGroup`), auto-ungroup it
+(`unlinkGroup`, returning the lone survivor to the ungrouped pool and **promoting a
+predicted survivor of a formerly-mixed group to `type:'user', modified:true`**), or
+leave it intact with stale 3D. `previewCascade` predicts all of this before any
+mutation so the modal can warn — reporting only "N instances" hides two
+irreversible side effects.
+
+**`executeDeletion` order is load-bearing** (see `scratch/PLAN-custom-instance-delete.md`
+§5.2): (1) `lazyLoader.deleteInstanceRows` — the persistence, and it must run BEFORE
+`_rawInstIndex` is touched since the row identity *is* `_rawInstIndex`;
+(2) renumber `_rawInstIndex` on survivors, else `refFor` writes grouping refs at the
+wrong instances and `finalizeLazyFrameGroup` hydrates the wrong 2D;
+(3) `instanceGroups` cascade; (4) `frameGroups` cascade under the same `seen` Set
+(hydrated frames share instance objects between the maps — the #195 lesson);
+(5) prune `frameIdentityMap`. Never assigns `group.observedPoints` (read-only getter
+since #189 — assigning throws in every ES module). App-level triangulation caches
+are the caller's job: run `purgeTriangulationDataForGroup` over the returned
+`purgedGroups`.
+
+**`pruneOrphanIdentities` is not cosmetic.** `frameIdentityMap` is serialized into
+the `.slp`, so residue can re-attach a ghost identity to a later instance reusing
+the same `(frame, camera, track)`; and `ensureGroupsFromIdentities` RECREATES groups
+from this map for any frame with no `instanceGroups` entry, so an unpruned entry
+brings a deleted group back on the next Triangulate All. Goes through
+`session.deleteFrameIdentity` because the keys are **packed Numbers** since #185 —
+the raw `frameIdx + ':' + cam + ':' + track` string comparison used by the earlier
+PR #153 implementation silently matched nothing, making its prune dead code.
+
+**Imports from project modules.** None (deliberately).
+
+**Tests.** `tests/test-custom-delete-ops.js` (19 cases), plus
+`tests/test-custom-delete-store.js` for the store primitive it drives.
+
+---
+
 ### ui/export-modals.js
 
 **Purpose.** Modal dialogs for bulk-triangulation and export (Group-by-Track,
@@ -2618,6 +2708,31 @@ chains):
   "New name for …" entry. Apply renames `session.tracks` /
   `session.identities[].name`, migrates hidden-set membership
   (`renameHiddenTrack` / `renameHiddenIdentity`). Enter applies.
+- `showCustomDeleteModal()` — **Edit ▸ "Custom Instance Delete…"** (menu item
+  `#menuCustomDeleteInstance`), LUCID's equivalent of SLEAP's
+  Labels ▸ Custom Instance Delete… Six selects: `Delete` (predicted — the SLEAP
+  default — / user / all), `Grouping` (any / grouped only / ungrouped only, which
+  is ORTHOGONAL to type), `in` (current frame / current session — LUCID's analogue
+  of SLEAP's "current video", since a session shares one frame index space),
+  `in view` (all / one camera), plus `with track` / `with identity` rows shown only
+  when the session has any. A live count, a per-camera breakdown table with a Total
+  (same shape as `showDeleteModal`'s), and a **cascade line** — "N group(s)
+  removed · N ungrouped · N lose their 3D · N predicted instance(s) promoted to
+  User" — because the ≥2-member invariant makes those consequences both surprising
+  and irreversible. Esc closes; Delete is an explicit click (never Enter). On
+  apply it re-collects (the model can move under an open dialog), clears the
+  selection FIRST (a stale `selectedInstanceGroup` would point at a deleted object,
+  and `viewport3d.selectedInstanceIdx` is a positional index that re-indexes under
+  any group removal), runs `executeDeletion`, then
+  `purgeTriangulationDataForGroup` over the returned `purgedGroups` (the ops module
+  is import-free by design), and reports the **durable** store-row count rather
+  than the resident one — surfacing `errorRows` as a warning instead of claiming
+  success. All matching/cascade/durability logic is in `ui/custom-delete-ops.js`;
+  this is only the dialog. No keyboard shortcut (matching SLEAP), so no
+  `ACTION_CATALOG` entry. Covered by `tests/e2e/custom-delete-modal.mjs`.
+  Deliberately does NOT copy SLEAP's `labels.clean()` cascade, which also prunes
+  unused tracks and skeletons project-wide — LUCID has an explicit `Delete Track…`
+  and enforces one skeleton per project, so that would be data loss by surprise.
 - `showDeleteModal(kind)` — Delete Track / Delete Identity: single-select list, a
   red `.delete-warning` line ("Current track/identity "X" instances will have
   null …"), and — in place of a text entry — a per-camera table of instances
@@ -2998,6 +3113,50 @@ correctness for speed — same result either way). Verified on a real
 `tests/e2e/occupancy-sort-skip-optimization.mjs` (asserts zero sort calls
 for real ordered data, confirms the fallback sort still engages and
 produces the IDENTICAL correct segments for a deliberately shuffled rowMap).
+
+**`deleteInstanceRows(shouldDeleteFn)` — the durable-delete primitive (Custom
+Instance Delete).** Permanently removes instance rows from the columnar store so a
+bulk delete survives eviction, re-hydration, save and reload. Companion to
+`remapTracksFromIdentity`; same diagnostics contract
+(`{deleted, errorRows, firstError, byCamera}`, per-row `try/catch`, `console.error`
+on `errorRows`). Exists because a resident-only delete fails **twice**: (1) without
+even saving — `finalizeLazyFrameGroup` re-derives `fg.instances` from store rows and
+puts any row with no matching `_rawInstIndex` member into the UNLINKED pool, so
+scrubbing away and back resurrects it; and (2) on save — `appendStore` copies the
+columns verbatim with no per-instance filter, and the user-correction overlay skips
+any camera-frame with no resident *user* instance and bails on
+`lucidInsts.length === 0`, so an emptied camera-frame streams back unchanged.
+Mutating the store is the only thing that fixes both.
+- Compacts every `instancesData` column of length `nInst` (iterates `Object.keys`,
+  so a schema addition is carried through; `col.constructor` preserves typed-vs-plain
+  and int-vs-float). **Leaves `pointsData`/`predPointsData` alone on purpose** —
+  `appendStore` walks points PER SURVIVING INSTANCE via `point_id_start/end`, so
+  orphaned point rows are never visited and never written.
+- **Keeps frame rows** (`frameRowByCam` is keyed by row index, and `refFor`,
+  `releaseFrame` and `_computeSparseOccupancy` all depend on that indexing). A frame
+  whose range collapses to `start === end` is written by `appendStore` as an empty
+  `LabeledFrame` — LUCID's answer to SLEAP's "empty LabeledFrames are removed".
+- Renumbers via a prefix sum (`survBefore`), so it does **not** assume frame rows are
+  sorted by `instance_id_start`: new index of surviving old row `i` is
+  `survBefore[i]`, and a frame's new range is `[survBefore[oldStart], survBefore[oldEnd])`.
+- Remaps `from_predicted` through the same table, degrading a link whose target was
+  deleted to `-1` — mirroring `appendStore`'s own `outIdxOf`.
+- Groups cameras by their `labels` so a **shared store** (`openProjectSlp`,
+  `_sharedStore === true`) is compacted EXACTLY ONCE; unlike
+  `remapTracksFromIdentity`'s `rebuiltLabels` guard (which only covers a one-time
+  tracks rebuild) this guard has to cover the whole mutation, because compaction is
+  global to a store.
+- Then rebuilds each affected camera's `trackOccupancy` and clears both cache layers
+  (`this.cache` + `labels._lazyFrameList.clearCache()`), same as
+  `remapTracksFromIdentity`.
+- **Caller contract:** store-only. The caller must also renumber `_rawInstIndex` on
+  surviving instances in each touched (camera, frame) — else `refFor` writes grouping
+  refs at the wrong instances and hydration loads the wrong 2D — and mirror the
+  removal into `frameGroups`/`instanceGroups` under one shared `seen` Set.
+- Unit tests: `tests/test-custom-delete-store.js` (11 cases — compaction, column-length
+  coherence, typed-array kind, order-independence, emptied-frame collapse,
+  `from_predicted` remap + degrade-to-`-1`, shared-store apply-once, per-row error
+  isolation, no-op).
 
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds

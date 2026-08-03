@@ -61,6 +61,9 @@ import {
     purgeTriangulationDataForGroup,
     swapTracks,
 } from './identity-assignment.js';
+// Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
+// project modules itself, which is why it can also be unit tested in isolation.
+import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -407,6 +410,256 @@ function showDeleteModal(kind) {
     selectItem(items[0].idx);
 }
 
+/**
+ * Edit ▸ "Custom Instance Delete…" — LUCID's equivalent of SLEAP's
+ * Labels ▸ Custom Instance Delete… (`sleap/gui/dialogs/delete.py`), adapted to
+ * the multi-view model. All the matching/cascade/durability logic lives in the
+ * DOM-free `ui/custom-delete-ops.js`; this is only the dialog.
+ *
+ * Axes, in LUCID's own vocabulary:
+ *   Delete       user / predicted / all       (SLEAP's instance-type axis)
+ *   Grouping     any / grouped / ungrouped    (ORTHOGONAL to type — a grouped
+ *                                              instance is still user or
+ *                                              predicted; no SLEAP analogue)
+ *   in           current frame / current session   (SLEAP's "video" axis; a
+ *                                              LUCID session shares one frame
+ *                                              index space across its cameras)
+ *   in view      all views / one camera       (no SLEAP analogue)
+ *   with track / with identity                (SLEAP has the track axis only)
+ *
+ * Deliberate divergences from SLEAP, all safety-driven: SLEAP's dialog has no
+ * confirmation, leaves the deleted instance selected, and its `labels.clean()`
+ * also prunes unused TRACKS and SKELETONS project-wide. LUCID does none of that —
+ * it has an explicit `Delete Track…` and enforces one skeleton per project, so
+ * silently dropping a track because its last instance went would be data loss by
+ * surprise. Instead: a live match count, a per-camera breakdown (matching the
+ * Delete Track modal), an explicit cascade warning, and selection cleared.
+ *
+ * The cascade line is not decoration. A group must have >=2 members, so a delete
+ * can dissolve a group, auto-ungroup it (losing its 3D), and silently PROMOTE a
+ * predicted survivor of a formerly-mixed group to `type='user'`. Reporting only
+ * "N instances" hides two irreversible side effects.
+ *
+ * Esc closes (CLAUDE.md UI convention). Deletion is an explicit Delete-button
+ * click, never bound to Enter, since it cannot be undone.
+ */
+function showCustomDeleteModal() {
+    if (!state.session) { setStatus('No session', 'warning'); return; }
+    var session = state.session;
+    var hasTracks = !!(session.tracks && session.tracks.length);
+    var hasIdentities = !!(session.identities && session.identities.length);
+
+    function opt(value, label, sel) {
+        return '<option value="' + value + '"' + (sel ? ' selected' : '') + '>' + label + '</option>';
+    }
+    var rowStyle = 'style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0;"';
+    var selStyle = 'style="flex:1;max-width:62%;"';
+
+    var viewOpts = opt('', 'All views', true);
+    session.cameras.forEach(function (c) { viewOpts += opt('cam:' + c.name, c.name); });
+
+    var trackRow = '';
+    if (hasTracks) {
+        var trackOpts = opt('any', 'Any (incl. none)', true) + opt('none', 'No track set');
+        session.tracks.forEach(function (name, i) { trackOpts += opt('idx:' + i, name); });
+        trackRow = '<div ' + rowStyle + '><label>with track</label>' +
+            '<select id="cdTrack" ' + selStyle + '>' + trackOpts + '</select></div>';
+    }
+    var idRow = '';
+    if (hasIdentities) {
+        var idOpts = opt('any', 'Any (incl. none)', true) + opt('none', 'No identity set');
+        session.identities.forEach(function (id) { idOpts += opt('id:' + id.id, id.name); });
+        idRow = '<div ' + rowStyle + '><label>with identity</label>' +
+            '<select id="cdIdentity" ' + selStyle + '>' + idOpts + '</select></div>';
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.innerHTML =
+        '<h3>Custom Instance Delete</h3>' +
+        '<div ' + rowStyle + '><label>Delete</label><select id="cdType" ' + selStyle + '>' +
+        opt('predicted', 'Predicted instances', true) +
+        opt('user', 'User instances') +
+        opt('all', 'All instances (user + predicted)') +
+        '</select></div>' +
+        '<div ' + rowStyle + '><label>Grouping</label><select id="cdGrouping" ' + selStyle + '>' +
+        opt('any', 'Any', true) + opt('grouped', 'Grouped only') + opt('ungrouped', 'Ungrouped only') +
+        '</select></div>' +
+        '<div ' + rowStyle + '><label>in</label><select id="cdFrames" ' + selStyle + '>' +
+        opt('currentFrame', 'Current frame', true) + opt('currentSession', 'Current session') +
+        '</select></div>' +
+        '<div ' + rowStyle + '><label>in view</label><select id="cdView" ' + selStyle + '>' + viewOpts + '</select></div>' +
+        trackRow + idRow +
+        '<div id="cdBreakdown" style="margin:10px 0 4px;max-height:120px;overflow-y:auto;"></div>' +
+        '<div class="delete-warning" id="cdCount">No instances match.</div>' +
+        '<div class="delete-warning" id="cdCascade" style="display:none;"></div>' +
+        '<div class="delete-warning" style="opacity:0.85;">This cannot be undone.</div>' +
+        '<div class="modal-actions">' +
+        '<button id="cdCancel">Cancel</button>' +
+        '<button class="danger" id="cdApply" disabled>Delete</button>' +
+        '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    var typeSel = modal.querySelector('#cdType');
+    var groupingSel = modal.querySelector('#cdGrouping');
+    var framesSel = modal.querySelector('#cdFrames');
+    var viewSel = modal.querySelector('#cdView');
+    var trackSel = modal.querySelector('#cdTrack');
+    var idSel = modal.querySelector('#cdIdentity');
+    var countEl = modal.querySelector('#cdCount');
+    var cascadeEl = modal.querySelector('#cdCascade');
+    var breakdownEl = modal.querySelector('#cdBreakdown');
+    var applyBtn = modal.querySelector('#cdApply');
+
+    function buildFilters() {
+        var trackMode = 'any', trackIdx = null;
+        if (trackSel) {
+            var tv = trackSel.value;
+            if (tv === 'none') trackMode = 'none';
+            else if (tv.indexOf('idx:') === 0) { trackMode = 'specific'; trackIdx = parseInt(tv.slice(4)); }
+        }
+        var identityMode = 'any', identityId = null;
+        if (idSel) {
+            var iv = idSel.value;
+            if (iv === 'none') identityMode = 'none';
+            else if (iv.indexOf('id:') === 0) { identityMode = 'specific'; identityId = parseInt(iv.slice(3)); }
+        }
+        return {
+            type: typeSel.value,
+            grouping: groupingSel.value,
+            view: viewSel.value.indexOf('cam:') === 0 ? viewSel.value.slice(4) : null,
+            trackMode: trackMode, trackIdx: trackIdx,
+            identityMode: identityMode, identityId: identityId,
+            frameScope: framesSel.value,
+        };
+    }
+
+    var lastFound = null;
+    function recompute() {
+        lastFound = collectDeletionTargets(session, buildFilters(), { currentFrame: state.currentFrame });
+        var n = lastFound.count;
+        countEl.textContent = n === 0
+            ? 'No instances match.'
+            : (n + ' instance' + (n === 1 ? '' : 's') + ' will be deleted.');
+        applyBtn.disabled = n === 0;
+
+        // Per-camera breakdown, same shape as the Delete Track modal's.
+        breakdownEl.textContent = '';
+        if (n > 0) {
+            var tbl = document.createElement('table');
+            tbl.style.cssText = 'font-size:11px;width:100%;border-collapse:collapse;';
+            var head = document.createElement('tr');
+            ['Camera', 'Instances'].forEach(function (h, i) {
+                var th = document.createElement('th');
+                th.textContent = h;
+                th.style.cssText = 'text-align:' + (i === 0 ? 'left' : 'right') +
+                    ';padding:2px 4px;border-bottom:1px solid var(--border-color);color:var(--text-muted);';
+                head.appendChild(th);
+            });
+            tbl.appendChild(head);
+            session.cameras.forEach(function (c) {
+                var v = lastFound.byCamera[c.name] || 0;
+                if (!v) return;
+                var tr = document.createElement('tr');
+                var td0 = document.createElement('td');
+                td0.textContent = c.name;
+                td0.style.cssText = 'padding:1px 4px;color:var(--text-secondary);';
+                var td1 = document.createElement('td');
+                td1.textContent = String(v);
+                td1.style.cssText = 'padding:1px 4px;text-align:right;font-family:monospace;';
+                tr.appendChild(td0); tr.appendChild(td1);
+                tbl.appendChild(tr);
+            });
+            var trT = document.createElement('tr');
+            var tdL = document.createElement('td');
+            tdL.textContent = 'Total';
+            tdL.style.cssText = 'padding:2px 4px;font-weight:700;border-top:1px solid var(--border-color);';
+            var tdV = document.createElement('td');
+            tdV.textContent = String(n);
+            tdV.style.cssText = 'padding:2px 4px;text-align:right;font-family:monospace;font-weight:700;border-top:1px solid var(--border-color);';
+            trT.appendChild(tdL); trT.appendChild(tdV);
+            tbl.appendChild(trT);
+            breakdownEl.appendChild(tbl);
+        }
+
+        // Cascade consequences — surfaced because they are surprising and
+        // irreversible, not because they are errors.
+        var bits = [];
+        if (lastFound.groupsDissolved) bits.push(lastFound.groupsDissolved + ' group(s) removed');
+        if (lastFound.groupsUngrouped) bits.push(lastFound.groupsUngrouped + ' group(s) ungrouped');
+        if (lastFound.groupsLosing3d) bits.push(lastFound.groupsLosing3d + ' group(s) lose their 3D');
+        if (lastFound.instancesPromoted) {
+            bits.push(lastFound.instancesPromoted + ' predicted instance(s) promoted to User');
+        }
+        if (bits.length) {
+            cascadeEl.textContent = 'Also: ' + bits.join(' · ') + '.';
+            cascadeEl.style.display = '';
+        } else {
+            cascadeEl.style.display = 'none';
+        }
+    }
+
+    function close() {
+        document.removeEventListener('keydown', onKey);
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+    }
+    document.addEventListener('keydown', onKey);
+
+    [typeSel, groupingSel, framesSel, viewSel, trackSel, idSel].forEach(function (el) {
+        if (el) el.addEventListener('change', recompute);
+    });
+
+    function doDelete() {
+        // Re-collect rather than trusting `lastFound`: the model can have moved
+        // under us (a background sweep, a scrub) since the last recompute.
+        var found = collectDeletionTargets(session, buildFilters(), { currentFrame: state.currentFrame });
+        if (found.count === 0) { close(); return; }
+
+        // Selection must go before the model changes — a stale
+        // selectedInstanceGroup/selectedUnlinked would point at a deleted object,
+        // and viewport3d.selectedInstanceIdx is a positional index into the
+        // per-frame group list, so it re-indexes under any group removal.
+        if (interactionManager) interactionManager.clearSelection();
+
+        var res = executeDeletion(session, found.targets);
+
+        // App-level triangulation caches are the caller's job (the ops module is
+        // import-free by design).
+        for (var i = 0; i < res.purgedGroups.length; i++) {
+            purgeTriangulationDataForGroup(res.purgedGroups[i].frameIdx, res.purgedGroups[i].group);
+        }
+
+        markDirty();
+        for (var f = 0; f < res.touchedFrames.length; f++) updateTimelineForFrame(res.touchedFrames[f]);
+        if (timeline) timeline.refreshTracks(session, { cap: true });
+        if (viewport3d) viewport3d.setFrame(getInstanceGroupsForFrame(state.currentFrame));
+        drawAllOverlays(state.currentFrame);
+        updateInfoPanel();
+
+        // Report the DURABLE count when a store exists — "deleted 12" while the
+        // store still holds 12,000 is precisely the silence this bug class lives
+        // in (the swapTracks convention).
+        var shown = (res.durable != null) ? res.durable : res.deleted;
+        if (res.errorRows > 0) {
+            setStatus('Deleted ' + shown + ', but ' + res.errorRows +
+                ' row(s) FAILED and are still in the project — see the console', 'warning');
+        } else {
+            setStatus('Deleted ' + shown + ' instance' + (shown === 1 ? '' : 's'), 'success');
+        }
+        close();
+    }
+
+    modal.querySelector('#cdCancel').addEventListener('click', close);
+    applyBtn.addEventListener('click', doDelete);
+    recompute();
+}
+
 // ============================================
 // Menu Setup
 // ============================================
@@ -472,6 +725,11 @@ export function setupMenus() {
     document.getElementById('menuDeleteInstance').addEventListener('click', function () {
         closeMenus();
         if (interactionManager) interactionManager._deleteSelected();
+    });
+
+    document.getElementById('menuCustomDeleteInstance').addEventListener('click', function () {
+        closeMenus();
+        showCustomDeleteModal();
     });
 
     document.getElementById('menuUnlinkGroup').addEventListener('click', function () {

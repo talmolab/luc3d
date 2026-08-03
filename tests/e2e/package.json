@@ -28,7 +28,9 @@
     "test:save-golden": "node save-golden-digest.mjs",
     "test:save-golden:record": "node save-golden-digest.mjs --write-golden",
     "test:ui-smoke-repr": "node ui-smoke-representation-change.mjs",
-    "test:rpe": "node rpe-per-instance.mjs"
+    "test:rpe": "node rpe-per-instance.mjs",
+    "test:custom-delete": "node custom-delete-roundtrip.mjs",
+    "test:custom-delete-modal": "node custom-delete-modal.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"
