@@ -52,3 +52,12 @@ _bugdata
 _real-roundtrip-*.slp
 # sequence-workflow harness fixtures/outputs (tests/e2e/sequence-lazy-workflow.mjs)
 _seq-*.slp
+
+# Paper figures (figs/): the SCRIPTS are tracked, the inputs and outputs are not.
+# figs/session/ is a trimmed multi-camera clip rebuilt by figs/build_fig_session.py
+# from _bugdata; figs/out/ is generated PNG/SVG. Notes in figs/ ARE tracked, which
+# needs an explicit negation because *.md above ignores markdown repo-wide.
+figs/session/
+figs/out/
+figs/node_modules
+!figs/*.md
