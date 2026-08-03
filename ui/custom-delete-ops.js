@@ -42,7 +42,9 @@
  * @property {number|null} trackIdx        Track index when trackMode==='specific'.
  * @property {'any'|'none'|'specific'} identityMode
  * @property {number|null} identityId      Identity id when identityMode==='specific'.
- * @property {'currentFrame'} frameScope   Session-wide scope lands in phase 2.
+ * @property {'currentFrame'|'currentSession'} frameScope
+ *   `currentSession` is LUCID's equivalent of SLEAP's "current video" — every
+ *   camera in a session shares one frame index space.
  */
 
 /**
@@ -116,9 +118,39 @@ export function collectDeletionTargets(session, filters, ctx) {
         return { targets: targets, count: 0, byCamera: byCamera, groupsDissolved: 0,
             groupsUngrouped: 0, instancesPromoted: 0, groupsLosing3d: 0 };
     }
-    var frames = [ctx.currentFrame];   // phase 1: current frame only
-
     var bump = function (camName) { byCamera[camName] = (byCamera[camName] || 0) + 1; };
+
+    // Session-wide scope takes a different route on a lazy project. It must NOT
+    // enumerate `session.frameGroups` — that is the small resident window (31 of
+    // 180,210 frames measured on the real project), so a frameGroups loop in a
+    // bulk operation would silently delete almost nothing while reporting
+    // success. The store is walked instead, which is also the enumeration the
+    // deletion itself uses.
+    //
+    // No hydration and no async are needed, because all four filter axes resolve
+    // without materializing a frame:
+    //   type, track  -> the store's own columns (via forEachInstanceRow's `info`)
+    //   identity     -> `frameIdentityMap`, which is in memory project-wide
+    //   grouping     -> `session.instanceGroups`, ALSO project-wide (rebuilt in
+    //                   full at reopen), whose members carry `_rawInstIndex`
+    if (filters.frameScope === 'currentSession') {
+        return collectSessionWide(session, filters, byCamera, bump, null);
+    }
+
+    // Current-frame scope normally reads the resident model, which is richer (real
+    // `UnlinkedInstance` wrappers for the pool). But a lazy frame that has not been
+    // hydrated has NO `FrameGroup` at all, and its ungrouped rows exist only in the
+    // store — so a resident-only read would silently miss them and under-delete.
+    // `instanceGroups` is project-wide so grouped members would still be found,
+    // which makes this failure mode especially sneaky: partially correct.
+    // Route through the same store-driven collector, restricted to this one frame.
+    if (filters.frameScope === 'currentFrame' && session.lazyLoader &&
+        !(session.getFrameGroup ? session.getFrameGroup(ctx.currentFrame)
+            : session.frameGroups.get(ctx.currentFrame))) {
+        return collectSessionWide(session, filters, byCamera, bump, ctx.currentFrame);
+    }
+
+    var frames = [ctx.currentFrame];
 
     for (var fi = 0; fi < frames.length; fi++) {
         var frameIdx = frames[fi];
@@ -172,6 +204,115 @@ export function collectDeletionTargets(session, filters, ctx) {
         targets: targets,
         count: targets.length,
         byCamera: byCamera,
+        groupsDissolved: cascade.groupsDissolved,
+        groupsUngrouped: cascade.groupsUngrouped,
+        instancesPromoted: cascade.instancesPromoted,
+        groupsLosing3d: cascade.groupsLosing3d,
+    };
+}
+
+/**
+ * Session-wide collection, driven by the columnar store rather than by the
+ * resident window. See the note at the `currentSession` branch in
+ * `collectDeletionTargets` for why this is store-driven and why it needs no
+ * hydration.
+ *
+ * Falls back to walking `frameGroups` + `instanceGroups` when there is no lazy
+ * loader — an eager project IS fully resident, so that enumeration is complete
+ * there by definition.
+ */
+function collectSessionWide(session, filters, byCamera, bump, onlyFrame) {
+    var targets = [];
+    var loader = session.lazyLoader;
+
+    if (!loader || typeof loader.forEachInstanceRow !== 'function') {
+        // Eager project: every frame is resident, so reuse the per-frame path
+        // over the union of both maps.
+        var allFrames = new Set();
+        if (onlyFrame != null) {
+            allFrames.add(onlyFrame);
+        } else {
+            session.frameGroups.forEach(function (_v, k) { allFrames.add(k); });
+            session.instanceGroups.forEach(function (_v, k) { allFrames.add(k); });
+        }
+        for (var fIdx of allFrames) {
+            var sub = collectDeletionTargets(session, Object.assign({}, filters, { frameScope: 'currentFrame' }),
+                { currentFrame: fIdx });
+            for (var si = 0; si < sub.targets.length; si++) {
+                targets.push(sub.targets[si]);
+                bump(sub.targets[si].camName);
+            }
+        }
+        var eagerCascade = previewCascade(targets);
+        return {
+            targets: targets, count: targets.length, byCamera: byCamera,
+            groupsDissolved: eagerCascade.groupsDissolved,
+            groupsUngrouped: eagerCascade.groupsUngrouped,
+            instancesPromoted: eagerCascade.instancesPromoted,
+            groupsLosing3d: eagerCascade.groupsLosing3d,
+        };
+    }
+
+    // Index grouped membership project-wide: (cam, frame, rawInstIndex) -> {group, inst}.
+    // `session.instanceGroups` is populated for the WHOLE project at lazy reopen,
+    // so this is complete without touching a single frame's 2D.
+    var groupedAt = new Map();
+    var keyOf = function (cam, frameIdx, rawIdx) { return cam + '\u0000' + frameIdx + '\u0000' + rawIdx; };
+    for (var [gFrame, gList] of session.instanceGroups) {
+        for (var gi = 0; gi < gList.length; gi++) {
+            for (var [gCam, gInst] of gList[gi].instances) {
+                if (!gInst || gInst._rawInstIndex == null) continue;
+                groupedAt.set(keyOf(gCam, gFrame, gInst._rawInstIndex), { group: gList[gi], inst: gInst });
+            }
+        }
+    }
+
+    loader.forEachInstanceRow(function (camName, frameIdx, trackIdx, info) {
+        if (!info) return;
+        if (onlyFrame != null && frameIdx !== onlyFrame) return;
+        if (!_viewMatches(camName, filters)) return;
+        if (!_typeMatches(info.type, filters.type)) return;
+        // Build the minimal instance-shaped object the pure matchers need, so
+        // track/identity filtering is IDENTICAL to the per-frame path.
+        var probe = { trackIdx: trackIdx >= 0 ? trackIdx : null, type: info.type };
+        if (!_trackMatches(probe, filters)) return;
+        if (!_identityMatches(session, camName, probe, frameIdx, filters)) return;
+
+        var hit = groupedAt.get(keyOf(camName, frameIdx, info.offsetInFrame));
+        var isGrouped = !!hit;
+        if (filters.grouping === 'grouped' && !isGrouped) return;
+        if (filters.grouping === 'ungrouped' && isGrouped) return;
+
+        if (isGrouped) {
+            targets.push({
+                kind: 'grouped', frameIdx: frameIdx, camName: camName,
+                group: hit.group, inst: hit.inst, rawIdx: info.offsetInFrame,
+            });
+        } else {
+            // Ungrouped. A resident `UnlinkedInstance` wrapper is looked up so the
+            // pool can be updated; a non-resident frame has none, and needs none —
+            // the store row is the only thing that exists for it, and it will
+            // hydrate correctly from the compacted store.
+            var ulRef = null, ulInst = null;
+            var fgR = session.frameGroups.get(frameIdx);
+            if (fgR) {
+                var pool = fgR.unlinkedInstances.get(camName) || [];
+                for (var pi = 0; pi < pool.length; pi++) {
+                    var cand = pool[pi] && pool[pi].instance;
+                    if (cand && cand._rawInstIndex === info.offsetInFrame) { ulRef = pool[pi]; ulInst = cand; break; }
+                }
+            }
+            targets.push({
+                kind: 'ungrouped', frameIdx: frameIdx, camName: camName,
+                ul: ulRef, inst: ulInst, rawIdx: info.offsetInFrame,
+            });
+        }
+        bump(camName);
+    });
+
+    var cascade = previewCascade(targets);
+    return {
+        targets: targets, count: targets.length, byCamera: byCamera,
         groupsDissolved: cascade.groupsDissolved,
         groupsUngrouped: cascade.groupsUngrouped,
         instancesPromoted: cascade.instancesPromoted,
@@ -425,11 +566,17 @@ export function executeDeletion(session, targets) {
 
     for (var ut = 0; ut < ungroupedTargets.length; ut++) {
         var uTarget = ungroupedTargets[ut];
+        // A session-wide delete legitimately reaches rows on NON-RESIDENT frames,
+        // which have no `UnlinkedInstance` wrapper to remove. That is not a
+        // failure: the store row (already gone) is the only thing that existed for
+        // them, and the frame will hydrate correctly from the compacted store. So
+        // count the deletion either way and only touch the pool when it is there.
+        result.deleted++;
+        if (!uTarget.ul) continue;
         var uFg = session.getFrameGroup ? session.getFrameGroup(uTarget.frameIdx)
             : session.frameGroups.get(uTarget.frameIdx);
         if (uFg && typeof uFg.removeUnlinkedById === 'function') {
             uFg.removeUnlinkedById(uTarget.ul.id);
-            result.deleted++;
         }
     }
 
@@ -453,13 +600,29 @@ export function executeDeletion(session, targets) {
 export function pruneOrphanIdentities(session, frameIndices) {
     if (!session || !session.frameIdentityMap || !session.deleteFrameIdentity) return 0;
     var pruned = 0;
+
+    // Index the map's own decoded entries by frame, ONCE. The obvious
+    // alternative — testing every (camera, track) pair the frame could hold —
+    // is a frames x cameras x tracks cross-product, and a session-wide delete
+    // touches ~180k frames on the real project, so that is tens of millions of
+    // lookups to inspect a map that normally holds far fewer entries. Going
+    // through `frameIdentityEntries()` also means this never has to know the
+    // packed-key encoding (#185).
+    var entriesByFrame = new Map();
+    if (typeof session.frameIdentityEntries === 'function') {
+        for (var rec of session.frameIdentityEntries()) {
+            if (!entriesByFrame.has(rec.frameIdx)) entriesByFrame.set(rec.frameIdx, []);
+            entriesByFrame.get(rec.frameIdx).push(rec);
+        }
+    }
+
     for (var fi = 0; fi < frameIndices.length; fi++) {
         var frameIdx = frameIndices[fi];
         // Live (camera, trackIdx) pairs remaining on this frame.
         var live = new Set();
         var note = function (camName, inst) {
             if (!inst || inst.trackIdx == null || inst.trackIdx < 0) return;
-            live.add(camName + ' ' + inst.trackIdx);
+            live.add(camName + '\u0000' + inst.trackIdx);
         };
         var groups = session.instanceGroups.get(frameIdx) || [];
         for (var gi = 0; gi < groups.length; gi++) {
@@ -479,7 +642,7 @@ export function pruneOrphanIdentities(session, frameIndices) {
         var nTracks = (session.tracks || []).length;
         for (var ci = 0; ci < cams.length; ci++) {
             for (var ti = 0; ti < nTracks; ti++) {
-                if (live.has(cams[ci] + ' ' + ti)) continue;
+                if (live.has(cams[ci] + '\u0000' + ti)) continue;
                 if (session.hasFrameIdentity && !session.hasFrameIdentity(frameIdx, cams[ci], ti)) continue;
                 if (session.deleteFrameIdentity(frameIdx, cams[ci], ti)) pruned++;
             }

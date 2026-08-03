@@ -277,9 +277,58 @@ try {
     check(scenB.errorRows === 0, 'no store row errors on the empty-frame case');
 
     const rowsAfterB = await storeRows();
-    const expectedRows = rowsBefore - CAMS.length - CAMS.length * PER_CAM;
-    check(rowsAfterB === expectedRows,
-        `store rows now ${expectedRows} (${rowsBefore} - ${CAMS.length} - ${CAMS.length * PER_CAM}), got ${rowsAfterB}`);
+    const rowsExpectedB = rowsBefore - CAMS.length - CAMS.length * PER_CAM;
+    check(rowsAfterB === rowsExpectedB,
+        `store rows now ${rowsExpectedB} (${rowsBefore} - ${CAMS.length} - ${CAMS.length * PER_CAM}), got ${rowsAfterB}`);
+
+    // ---- Scenario C: SESSION-WIDE delete of the remaining predicted ----------
+    // The point of this scenario: only frames 0 and 1 have ever been hydrated, so
+    // a delete that enumerated `session.frameGroups` would find almost nothing and
+    // still report success. Session scope is store-driven precisely so it reaches
+    // every frame without hydrating any.
+    // Force the project back to (almost) nothing resident FIRST. Without this the
+    // reopen + the two hydrations above leave nearly every frame resident, and the
+    // scenario would pass without ever exercising the non-hydrated path — which is
+    // the entire point of a store-driven enumeration.
+    const residentBeforeC = await page2.evaluate(() => {
+        const session = window.__lucid.state.session;
+        session.frameGroups.clear();
+        return session.frameGroups.size;
+    });
+    const scenC = await page2.evaluate(async () => {
+        const OPS = await import('/ui/custom-delete-ops.js');
+        const AS = await import('/ui/app-state.js');
+        const session = AS.state.session;
+        const filters = {
+            type: 'predicted', grouping: 'any', view: null,
+            trackMode: 'any', trackIdx: null, identityMode: 'any', identityId: null,
+            frameScope: 'currentSession',
+        };
+        const found = OPS.collectDeletionTargets(session, filters, { currentFrame: 0 });
+        const framesHit = new Set(found.targets.map(t => t.frameIdx));
+        const res = OPS.executeDeletion(session, found.targets);
+        return {
+            matched: found.count, framesHit: framesHit.size,
+            durable: res.durable, errorRows: res.errorRows,
+        };
+    });
+    // 12 frames x 3 cams x 1 predicted = 36 total; 3 went in A, 3 more in B.
+    const remainingPred = NF * CAMS.length - CAMS.length - CAMS.length;
+    console.log(`  scenario C (session-wide predicted; only ${residentBeforeC} frames resident):`,
+        JSON.stringify(scenC));
+    check(residentBeforeC === 0,
+        `precondition: ZERO frames resident — nothing is hydrated (got ${residentBeforeC})`);
+    check(scenC.matched === remainingPred,
+        `session scope reached all ${remainingPred} remaining predicted rows with NOTHING ` +
+        `hydrated — a frameGroups loop would have found 0 here (got ${scenC.matched})`);
+    check(scenC.framesHit === NF - 2,
+        `spanned all ${NF - 2} frames that still had a predicted instance (got ${scenC.framesHit})`);
+    check(scenC.errorRows === 0, 'no store row errors on the session-wide pass');
+
+    const expectedRows = rowsExpectedB - remainingPred;
+    const rowsAfterC = await storeRows();
+    check(rowsAfterC === expectedRows,
+        `store rows now ${expectedRows} — only user rows remain (got ${rowsAfterC})`);
 
     // ---- gate 6: Triangulate All must not resurrect anything ---------------
     const gate6 = await page2.evaluate(async () => {
@@ -391,18 +440,20 @@ try {
         `gate 3: frame 0 kept only its ${(CAMS.length * PER_CAM) - CAMS.length} user rows (got ${reopened.f0rows})`);
     check(reopened.f1rows === 0,
         `gate 3: frame 1 came back EMPTY — the empty-frame case survived the round trip (got ${reopened.f1rows})`);
-    check(reopened.f2rows === CAMS.length * PER_CAM,
-        `untouched frame 2 is intact (${CAMS.length * PER_CAM} rows, got ${reopened.f2rows})`);
+    check(reopened.f2rows === CAMS.length,
+        `gate 3: frame 2 — never hydrated, only reached by the SESSION-WIDE pass — came back with ` +
+        `just its ${CAMS.length} user rows (got ${reopened.f2rows})`);
     check(reopened.f0.predicted === 0,
         `gate 3: no predicted instance on frame 0 after reopen (got ${reopened.f0.predicted})`);
     check(reopened.f1.grouped === 0 && reopened.f1.ungrouped === 0,
         `gate 3: frame 1 has no grouped OR ungrouped instances after reopen ` +
         `(got ${reopened.f1.grouped}/${reopened.f1.ungrouped})`);
 
-    // gate 5: the emptied frame must carry no identity residue. Every (cam, track)
-    // override for frame 1 was pruned, so 3 cameras x 2 tracks = 6 entries are gone,
-    // plus frame 0's 3 predicted-track (t1) overrides.
-    const fimExpected = built.fimSize - (CAMS.length * PER_CAM) - CAMS.length;
+    // gate 5: no identity residue anywhere a delete landed. Pruned overrides:
+    //   frame 1  -> every (cam, track): CAMS x PER_CAM
+    //   frame 0  -> the predicted track (t1) per camera: CAMS
+    //   frames 2..NF-1 -> the predicted track per camera (scenario C): remainingPred
+    const fimExpected = built.fimSize - (CAMS.length * PER_CAM) - CAMS.length - remainingPred;
     check(reopened.fimSize === fimExpected,
         `gate 5: frameIdentityMap has no orphan residue — ${built.fimSize} -> ${fimExpected} ` +
         `(got ${reopened.fimSize})`);

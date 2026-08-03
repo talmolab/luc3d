@@ -304,6 +304,103 @@
         });
     });
 
+    describe('custom-delete-ops — lazy / not-yet-hydrated frames', function () {
+        /**
+         * Attach a stub lazy loader whose store holds rows for frames the resident
+         * model knows nothing about. `forEachInstanceRow` mirrors the real 4-arg
+         * signature (camName, frameIdx, trackIdx, info).
+         */
+        function attachStubLoader(session, rows) {
+            const deleted = [];
+            session.lazyLoader = {
+                forEachInstanceRow(visitFn) {
+                    for (const r of rows) {
+                        visitFn(r.cam, r.frameIdx, r.track != null ? r.track : -1, {
+                            offsetInFrame: r.offset, storeRow: r.frameIdx,
+                            instanceRow: r.offset, type: r.type,
+                        });
+                    }
+                },
+                deleteInstanceRows(shouldDeleteFn) {
+                    let n = 0;
+                    for (const r of rows) {
+                        if (shouldDeleteFn(r.cam, r.frameIdx, r.offset, r.offset)) { deleted.push(r); n++; }
+                    }
+                    return { deleted: n, errorRows: 0, firstError: null, byCamera: {} };
+                },
+                _deleted: deleted,
+            };
+            return deleted;
+        }
+
+        it('session scope reads the STORE, not the resident window', function () {
+            const { session } = buildSession();
+            // Frames 5 and 6 are in the store but were never hydrated.
+            attachStubLoader(session, [
+                { cam: 'cam1', frameIdx: 5, offset: 0, type: 'predicted', track: 0 },
+                { cam: 'cam2', frameIdx: 5, offset: 0, type: 'predicted', track: 0 },
+                { cam: 'cam1', frameIdx: 6, offset: 0, type: 'user', track: 1 },
+            ]);
+            assertTrue(!session.frameGroups.get(5), 'precondition: frame 5 is NOT resident');
+
+            const r = __CustomDeleteOps.collectDeletionTargets(
+                session, f({ type: 'predicted', frameScope: 'currentSession' }), CTX);
+            assertEqual(r.count, 2, 'found the 2 predicted store rows on the non-resident frame 5');
+            assertTrue(r.targets.every(t => t.frameIdx === 5), 'both are on frame 5');
+            assertTrue(r.targets.every(t => t.kind === 'ungrouped'),
+                'not in any InstanceGroup, so they classify as ungrouped');
+            assertTrue(r.targets.every(t => t.ul === null),
+                'no UnlinkedInstance wrapper exists for a non-resident frame — and none is needed');
+        });
+
+        it('session scope deletes non-resident rows durably and reports the store count', function () {
+            const { session } = buildSession();
+            const deleted = attachStubLoader(session, [
+                { cam: 'cam1', frameIdx: 5, offset: 0, type: 'predicted', track: 0 },
+                { cam: 'cam2', frameIdx: 5, offset: 0, type: 'predicted', track: 0 },
+                { cam: 'cam1', frameIdx: 6, offset: 0, type: 'user', track: 1 },
+            ]);
+            const r = __CustomDeleteOps.collectDeletionTargets(
+                session, f({ type: 'predicted', frameScope: 'currentSession' }), CTX);
+            const res = __CustomDeleteOps.executeDeletion(session, r.targets);
+
+            assertEqual(res.durable, 2, 'reported the DURABLE store-row count');
+            assertEqual(res.deleted, 2, 'counted both even though neither had a resident wrapper');
+            assertEqual(deleted.length, 2, 'the stub store really was asked to drop 2 rows');
+            assertTrue(deleted.every(d => d.frameIdx === 5), 'and they were frame 5\'s rows');
+        });
+
+        it('CURRENT-frame scope falls back to the store when that frame is not hydrated', function () {
+            const { session } = buildSession();
+            // Frame 9 exists only in the store — no FrameGroup, no instanceGroups.
+            attachStubLoader(session, [
+                { cam: 'cam1', frameIdx: 9, offset: 0, type: 'predicted', track: 0 },
+                { cam: 'cam3', frameIdx: 9, offset: 1, type: 'predicted', track: 1 },
+            ]);
+            assertTrue(!session.frameGroups.get(9), 'precondition: frame 9 is NOT resident');
+
+            const r = __CustomDeleteOps.collectDeletionTargets(
+                session, f({ type: 'predicted' }), { currentFrame: 9 });
+            assertEqual(r.count, 2,
+                'a non-hydrated current frame still yields its store rows — a resident-only read ' +
+                'would have returned 0 and under-deleted (got ' + r.count + ')');
+            assertEqual(r.byCamera.cam1, 1, 'cam1 row found');
+            assertEqual(r.byCamera.cam3, 1, 'cam3 row found');
+        });
+
+        it('current-frame scope still uses the RESIDENT model when the frame IS hydrated', function () {
+            const { session } = buildSession();
+            // A stub store that would report a bogus extra row for frame 0. Frame 0
+            // IS resident, so the resident path must win and this must be ignored.
+            attachStubLoader(session, [
+                { cam: 'cam1', frameIdx: 0, offset: 99, type: 'predicted', track: 0 },
+            ]);
+            const r = __CustomDeleteOps.collectDeletionTargets(session, f(), CTX);
+            assertEqual(r.count, 9,
+                'still the 9 resident instances, not the store stub (got ' + r.count + ')');
+        });
+    });
+
     describe('custom-delete-ops — frameIdentityMap pruning (packed keys)', function () {
 
         it('prunes orphaned entries through deleteFrameIdentity, and keeps live ones', function () {

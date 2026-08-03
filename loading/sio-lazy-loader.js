@@ -573,8 +573,14 @@ export class SioLazyLoader {
      * (`Session.propagateTracksToIdentities`, pose/pose-data.js) so it isn't
      * limited to whatever's in `session.frameGroups` (a lazy session's small
      * resident window).
-     * @param {(camName: string, frameIdx: number, trackIdx: number) => void} visitFn
-     *   `trackIdx` is -1 for a trackless instance.
+     * @param {(camName: string, frameIdx: number, trackIdx: number, info: {offsetInFrame: number, storeRow: number, instanceRow: number, type: string}) => void} visitFn
+     *   `trackIdx` is -1 for a trackless instance. `info` is a 4th argument added
+     *   for Custom Instance Delete's session-wide scope, which has to filter by
+     *   type and address rows by their in-frame offset WITHOUT hydrating any
+     *   frame: `offsetInFrame` is the value an `Instance._rawInstIndex` carries,
+     *   and `type` is `'predicted'`/`'user'` decoded from `instance_type`
+     *   (1 = predicted, matching `appendStore`). Pre-existing callers take three
+     *   parameters and are unaffected.
      */
     forEachInstanceRow(visitFn) {
         for (var camName of this.labelsByCam.keys()) {
@@ -590,7 +596,12 @@ export class SioLazyLoader {
                 for (var j = iStart; j < iEnd; j++) {
                     var trk = idn.track ? Number(idn.track[j]) : -1;
                     if (!Number.isFinite(trk)) trk = -1;
-                    visitFn(camName, frameIdx, trk);
+                    visitFn(camName, frameIdx, trk, {
+                        offsetInFrame: j - iStart,
+                        storeRow: frameRow,
+                        instanceRow: j,
+                        type: (idn.instance_type && Number(idn.instance_type[j]) === 1) ? 'predicted' : 'user',
+                    });
                 }
             }
         }

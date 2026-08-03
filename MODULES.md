@@ -1189,6 +1189,28 @@ still user or predicted. "Delete grouped instances" is `type:'all'` +
 incoherent. `type:'all'` = user + predicted (matching SLEAP's "all instances"),
 never reprojections — those are derived and live in `reprojectedInstances`.
 
+**Lazy / not-yet-hydrated frames.** Scope enumeration must never loop
+`session.frameGroups` — that is the small resident window (31 of 180,210 frames
+measured on the real project), so a bulk delete driven from it would silently delete
+almost nothing while reporting success (the #185/#194/#195 bug class). So:
+- `frameScope:'currentSession'` is **store-driven** via
+  `lazyLoader.forEachInstanceRow`. It needs no hydration and no `async`, because all
+  four filter axes resolve without materializing a frame: **type/track** from the
+  store's own columns (`forEachInstanceRow`'s 4th `info` argument), **identity** from
+  `frameIdentityMap` (in memory project-wide), and **grouping** from
+  `session.instanceGroups` (also project-wide — rebuilt in full at reopen — whose
+  members carry `_rawInstIndex`).
+- `frameScope:'currentFrame'` normally reads the richer resident model, but falls
+  back to the same store-driven collector restricted to that one frame when the
+  frame has **no `FrameGroup`** (never hydrated). Otherwise its ungrouped rows,
+  which exist only in the store, would be missed — a sneaky partial failure, since
+  `instanceGroups` is project-wide so grouped members *would* still be found.
+- A non-resident row has no `UnlinkedInstance` wrapper; `executeDeletion` counts it
+  and skips the pool update. That is correct — the store row was the only thing that
+  existed for it, and the frame hydrates from the compacted store.
+- With no `lazyLoader` at all, session scope walks `frameGroups` ∪ `instanceGroups`;
+  an eager project is fully resident, so that enumeration is complete by definition.
+
 **Identity is resolved PER FRAME** via `session.getIdentityIdForTrack(cam,
 trackIdx, frameIdx)`, never `group.identityId` (only refreshed on the frame an
 identity was assigned — the #155/#168 staleness class). This is the same call
