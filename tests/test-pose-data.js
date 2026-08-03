@@ -134,7 +134,7 @@
     describe('Instance', function () {
         it('constructor sets properties', function () {
             const inst = new Instance([[10, 20], null, [30, 40]], 0, 'predicted', 0.95);
-            assertEqual(inst.points.length, 3);
+            assertEqual(inst.numNodes, 3);
             assertEqual(inst.trackIdx, 0);
             assertEqual(inst.type, 'predicted');
             assertEqual(inst.score, 0.95);
@@ -145,16 +145,18 @@
             const inst = new Instance([[10, 20], [30, 40]], 0, 'user', 1);
             inst.backupPoints();
             inst.setPointVisible(0, false);
-            assertNull(inst.points[0]);
+            assertNull(inst.getPoint(0));
             inst.setPointVisible(0, true);
-            assertDeepEqual(inst.points[0], [10, 20]);
+            assertDeepEqual(inst.getPoint(0), [10, 20]);
         });
 
-        it('backupPoints creates deep copy', function () {
+        it('backupPoints creates a deep copy', function () {
             const inst = new Instance([[10, 20]], 0, 'user', 1);
             inst.backupPoints();
-            inst.points[0][0] = 999;
-            assertEqual(inst._originalPoints[0][0], 10);
+            inst.setPoint(0, 999, 20);
+            assertEqual(inst.getX(0), 999, 'live value moved');
+            inst.restorePoints();
+            assertEqual(inst.getX(0), 10, 'backup was an independent copy');
         });
     });
 
@@ -261,7 +263,7 @@
         it('addNewInstance creates and stores instance', function () {
             const inst = session.addNewInstance(0, 'cam1', session.skeleton, 0);
             assertNotNull(inst);
-            assertEqual(inst.points.length, 3); // 3 nodes
+            assertEqual(inst.numNodes, 3); // 3 nodes
             assertEqual(inst.type, 'user');
             assertTrue(inst.modified);
             assertEqual(session.getFrameGroup(0).getInstances('cam1').length, 1);
@@ -312,23 +314,23 @@
 
         it('propagateNodeAdded extends all instance points', function () {
             const inst = session.addNewInstance(0, 'cam1', session.skeleton, 0);
-            assertEqual(inst.points.length, 3);
+            assertEqual(inst.numNodes, 3);
             session.skeleton.addNode('new_node');
             session.propagateNodeAdded();
-            assertEqual(inst.points.length, 4);
-            assertNull(inst.points[3]);
+            assertEqual(inst.numNodes, 4);
+            assertNull(inst.getPoint(3));
         });
 
         it('propagateNodeRemoved splices all instance points', function () {
             const inst = session.addNewInstance(0, 'cam1', session.skeleton, 0);
-            inst.points[0] = [10, 20];
-            inst.points[1] = [30, 40];
-            inst.points[2] = [50, 60];
+            inst.setPoint(0, 10, 20);
+            inst.setPoint(1, 30, 40);
+            inst.setPoint(2, 50, 60);
             session.skeleton.removeNode(1); // removes 'b'
             session.propagateNodeRemoved(1);
-            assertEqual(inst.points.length, 2);
-            assertDeepEqual(inst.points[0], [10, 20]);
-            assertDeepEqual(inst.points[1], [50, 60]);
+            assertEqual(inst.numNodes, 2);
+            assertDeepEqual(inst.getPoint(0), [10, 20]);
+            assertDeepEqual(inst.getPoint(1), [50, 60]);
         });
 
         it('createGroupFromUnlinked creates a group', function () {
@@ -428,8 +430,8 @@
 
             // propagateIdentity starts at frame 50, so it must not write any
             // per-frame entry for the earlier frame 10.
-            assertFalse(session.frameIdentityMap.has('10:cam0:0'));
-            assertFalse(session.frameIdentityMap.has('10:cam0:1'));
+            assertFalse(session.hasFrameIdentity(10, 'cam0', 0));
+            assertFalse(session.hasFrameIdentity(10, 'cam0', 1));
         });
 
         it('does nothing for frames where the trackIdx is absent', function () {
@@ -445,8 +447,8 @@
 
             // Frame 200: t0 written (B), but t1 doesn't exist there
             // so no per-frame override is created for it.
-            assertEqual(session.frameIdentityMap.get('200:cam0:0'), 2);
-            assertFalse(session.frameIdentityMap.has('200:cam0:1'));
+            assertEqual(session.getFrameIdentityValue(200, 'cam0', 0), 2);
+            assertFalse(session.hasFrameIdentity(200, 'cam0', 1));
         });
 
         it('returns the count of frames updated', function () {
@@ -454,6 +456,73 @@
             session.assignTrackToIdentity(0, 1, 'cam0');
             const count = session.propagateIdentity(50, 'cam0', 0, 2);
             assertEqual(count, 2); // frames 50 and 100
+        });
+
+        // RESIDENT-ONLY REGRESSION (the luc3d #194/#195 class). Assigning an
+        // identity in the info panel propagates it forward via this method, which
+        // walked `session.frameGroups` — the RESIDENT window (31 of 180,210 on the
+        // real project). So on a reopened project "propagate forward" silently
+        // stopped at the edge of the current window: nothing corrupted, almost
+        // nothing done. It now also sweeps the columnar store's track column.
+        it('propagates to NON-RESIDENT frames via the lazy store', function () {
+            const session = buildSession();          // resident: frames 50, 100
+            session.assignTrackToIdentity(0, 1, 'cam0');
+            session.assignTrackToIdentity(1, 2, 'cam0');
+            // `assignTrackToIdentity` is itself resident-only, so it wrote nothing
+            // for frame 4000. Set that frame's per-frame state explicitly: t0 → A,
+            // t1 → B, so propagating B onto t0 there is a genuine collider.
+            session.setFrameIdentity(4000, 'cam0', 0, 1);
+            session.setFrameIdentity(4000, 'cam0', 1, 2);
+            // The store knows about far more frames than are resident, including
+            // frames before startFrame and a trackless row.
+            const rows = [
+                ['cam0', 10, 0], ['cam0', 10, 1],       // before startFrame — untouched
+                ['cam0', 50, 0], ['cam0', 50, 1],       // resident — handled by the resident pass
+                ['cam0', 4000, 0], ['cam0', 4000, 1],   // non-resident, collider present
+                ['cam0', 4001, 0],                      // non-resident, no collider
+                ['cam0', 4002, -1],                     // trackless only — track absent
+                ['cam1', 4003, 0],                      // another camera — must be ignored
+            ];
+            session.lazyLoader = {
+                forEachInstanceRow: function (visitFn) {
+                    rows.forEach(function (r) { visitFn(r[0], r[1], r[2]); });
+                },
+            };
+
+            const count = session.propagateIdentity(50, 'cam0', 0, 2);
+
+            assertEqual(session.getIdentityIdForTrack('cam0', 0, 4000), 2,
+                'non-resident frame got the new identity');
+            assertEqual(session.getIdentityIdForTrack('cam0', 1, 4000), 1,
+                'collider on a non-resident frame was swapped, not duplicated');
+            assertEqual(session.getIdentityIdForTrack('cam0', 0, 4001), 2,
+                'non-resident frame with no collider got the new identity');
+            assertFalse(session.hasFrameIdentity(4002, 'cam0', 0),
+                'a frame where the track is absent is not written');
+            assertFalse(session.hasFrameIdentity(4003, 'cam1', 0),
+                'another camera is never touched');
+            assertFalse(session.hasFrameIdentity(10, 'cam0', 0),
+                'store frames before startFrame stay untouched');
+            assertEqual(count, 4, 'counts resident (50, 100) and non-resident (4000, 4001) frames once each');
+        });
+
+        it('resident state wins over the store for a frame that is both', function () {
+            // A resident frame can carry in-memory edits and unlinked instances the
+            // store does not know about, so the store pass must not re-derive it.
+            // Here the store claims frame 100 has only track 0, while the resident
+            // FrameGroup has both — the collider swap must still happen.
+            const session = buildSession();
+            session.assignTrackToIdentity(0, 1, 'cam0');
+            session.assignTrackToIdentity(1, 2, 'cam0');
+            session.lazyLoader = {
+                forEachInstanceRow: function (visitFn) { visitFn('cam0', 100, 0); },
+            };
+
+            session.propagateIdentity(50, 'cam0', 0, 2);
+
+            assertEqual(session.getIdentityIdForTrack('cam0', 0, 100), 2);
+            assertEqual(session.getIdentityIdForTrack('cam0', 1, 100), 1,
+                'the resident view of frame 100 drove the collider swap');
         });
     });
 
@@ -504,6 +573,296 @@
             const none = insts.find(function (i) { return i.trackIdx == null; });
             assertTrue(!!none, 'unidentified instance becomes trackless (null)');
             assertEqual(session.tracks.indexOf(NO_ID_TRACK_NAME), -1, 'still no "No ID" track');
+        });
+    });
+
+    describe('Session.propagateIdentitiesToTracks — whole-project correctness under lazy eviction', function () {
+        // Regression for the "ID view goes gray after Propagate IDs -> Tracks"
+        // bug on large lazy-loaded sessions: frameIdentityMap is the single,
+        // always-resident, WHOLE-PROJECT identity record (Track All writes it
+        // for every frame it processes; nothing ever evicts it). `frameGroups`,
+        // by contrast, is only a resident window on a lazy session — most
+        // frames are evicted/never-visited. The old implementation derived its
+        // replacement frameIdentityMap ONLY from a `frameGroups` walk, so
+        // committing it silently destroyed identity data for every frame
+        // outside whatever was resident at click time.
+        function buildSession() {
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            return new Session([cam], sk, ['t0', 't1'], 'S');
+        }
+
+        it('does not destroy identity data for frames absent from frameGroups (simulated eviction)', function () {
+            const session = buildSession();
+            const idA = session.addIdentity('Alice');
+            const idB = session.addIdentity('Bob');
+
+            // Frame 50 is "resident" (has a real FrameGroup/Instance).
+            const fg50 = new FrameGroup(50);
+            fg50.addInstance('cam0', new Instance([[0, 0]], 0, 'user', 0));  // track 0
+            session.frameGroups.set(50, fg50);
+            session.setFrameIdentity(50, 'cam0', 0, idA.id);
+
+            // Frame 90000 is "evicted" — identity was assigned when it WAS
+            // resident (e.g. during Track All), but nothing keeps a lazy
+            // session's predicted-only FrameGroup around forever, so by the
+            // time the user clicks Propagate, frame 90000 has no FrameGroup at
+            // all. Only frameIdentityMap remembers it.
+            session.setFrameIdentity(90000, 'cam0', 1, idB.id);
+            assertFalse(session.frameGroups.has(90000), 'precondition: frame 90000 is NOT resident');
+
+            const res = session.propagateIdentitiesToTracks();
+
+            assertEqual(res.tracks, 2, 'both used identities become tracks');
+            assertEqual(session.frameIdentityMap.size, 2,
+                'frameIdentityMap still has an entry for BOTH frames, not just the resident one');
+
+            const aliceTrack = session.tracks.indexOf('Alice');
+            const bobTrack = session.tracks.indexOf('Bob');
+            assertTrue(aliceTrack >= 0 && bobTrack >= 0, 'both identity names became track names');
+            assertEqual(session.getFrameIdentityValue(90000, 'cam0', bobTrack), idB.id,
+                'the evicted frame\'s identity survives, remapped to its new trackIdx');
+            assertEqual(session.getFrameIdentityValue(50, 'cam0', aliceTrack), idA.id,
+                'the resident frame\'s identity also survives, remapped consistently');
+
+            // Resident instance gets its live trackIdx updated too (GUI feedback).
+            const inst = session.frameGroups.get(50).instances.get('cam0')[0];
+            assertEqual(inst.trackIdx, aliceTrack, 'resident instance trackIdx mutated to match its identity');
+        });
+
+        it('delegates a project-wide columnar remap to a lazy loader when present', function () {
+            const session = buildSession();
+            const idA = session.addIdentity('Alice');
+            session.setFrameIdentity(90000, 'cam0', 3, idA.id);  // frame never resident at all
+
+            const calls = [];
+            session.lazyLoader = {
+                remapTracksFromIdentity: function (newTrackNames, remapFn) {
+                    calls.push(newTrackNames.slice());
+                    // Exercise remapFn the way SioLazyLoader would: one row,
+                    // camera cam0, frame 90000, old track 3. Compare against
+                    // newTrackNames (not session.tracks — that only commits
+                    // AFTER this call returns, in step 5).
+                    const newTrk = remapFn('cam0', 90000, 3);
+                    assertEqual(newTrk, newTrackNames.indexOf('Alice'),
+                        'remapFn resolves the evicted frame\'s new track from identity alone');
+                    // Real SioLazyLoader.remapTracksFromIdentity returns
+                    // {changed, errorRows, firstError}, not a bare number (see
+                    // its diagnostic note — surfacing row-level failures
+                    // instead of silently swallowing them).
+                    return { changed: 1, errorRows: 0, firstError: null };
+                },
+            };
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(calls.length, 1, 'lazyLoader.remapTracksFromIdentity was invoked exactly once');
+            assertDeepEqual(calls[0], ['Alice'], 'lazy loader gets the same new-track-names list as session.tracks');
+            assertEqual(res.instances, 1, 'lazy-remapped row count is folded into the returned instance count');
+            assertEqual(res.lazyErrorRows, 0, 'no row errors reported');
+        });
+
+        it('surfaces lazyLoader row-remap errors instead of silently swallowing them', function () {
+            // Regression for "export only has tracks on the first frame(s)":
+            // if remapTracksFromIdentity fails partway through the columnar
+            // store (any reason), that must be visible on the result, not
+            // just quietly absorbed while the live session already looks
+            // fully correct (frameIdentityMap/instanceGroups/resident
+            // trackIdx are all fixed up BEFORE this call, in steps 1-3b).
+            const session = buildSession();
+            const idA = session.addIdentity('Alice');
+            session.setFrameIdentity(50, 'cam0', 0, idA.id);
+
+            session.lazyLoader = {
+                remapTracksFromIdentity: function () {
+                    return { changed: 3, errorRows: 41, firstError: new Error('boom') };
+                },
+            };
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(res.lazyErrorRows, 41, 'row-error count from the lazy loader is passed through, not dropped');
+            assertEqual(res.instances, 3, 'changed count still folds in normally alongside the error count');
+        });
+
+        it('back-compat: a lazyLoader.remapTracksFromIdentity returning a bare number still works', function () {
+            const session = buildSession();
+            const idA = session.addIdentity('Alice');
+            session.setFrameIdentity(50, 'cam0', 0, idA.id);
+            session.lazyLoader = { remapTracksFromIdentity: function () { return 7; } };
+
+            const res = session.propagateIdentitiesToTracks();
+            assertEqual(res.lazyErrorRows, 0, 'no error count available from a bare-number return — defaults to 0');
+        });
+
+        it('remaps session.instanceGroups member trackIdx project-wide, not just resident frameGroups', function () {
+            // Regression for "2D viewer updates but 3D viewport/Timeline/info
+            // panel stay stale after Propagate IDs -> Tracks": on a lazy
+            // session, instanceGroups is populated PROJECT-WIDE at reopen with
+            // its OWN lightweight per-camera Instance members — separate
+            // objects from whatever's in frameGroups until that frame is
+            // scrubbed to (and even then, hydration never refreshes trackIdx).
+            // The 3D viewport, info panel, and Timeline's instanceGroups scan
+            // all read trackIdx off THESE objects, so leaving them stale after
+            // session.tracks is replaced with a new (shorter) list points them
+            // at wrong/out-of-range tracks.
+            const session = buildSession();
+            const idB = session.addIdentity('Bob');
+
+            // Frame 90000 has NO FrameGroup at all (never materialized) — only
+            // an instanceGroups entry, exactly the lazy "reopened but not
+            // scrubbed to" shape.
+            const group = new InstanceGroup(1, -1);
+            const member = new Instance([[3, 3]], 1, 'predicted', 0.9);  // OLD track 1
+            group.addInstance('cam0', member);
+            session.instanceGroups.set(90000, [group]);
+            session.setFrameIdentity(90000, 'cam0', 1, idB.id);
+            assertFalse(session.frameGroups.has(90000), 'precondition: frame 90000 is NOT resident');
+
+            session.propagateIdentitiesToTracks();
+
+            const bobTrack = session.tracks.indexOf('Bob');
+            assertTrue(bobTrack >= 0, 'Bob became a track');
+            assertEqual(member.trackIdx, bobTrack,
+                'the instanceGroups member (never touched by the frameGroups walk) got remapped too');
+        });
+
+        it('replaces an auto-generated "id_N" identity name with the app\'s track_N convention; custom names survive', function () {
+            // Regression: propagating IDs -> Tracks after a prior Tracks -> IDs
+            // pass (which names identities "id_<n>" via getOrCreateIdentityForTrack)
+            // used to carry that literal "id_N" string over as the new track
+            // name — so a round trip renamed track_0/track_1 to id_0/id_1
+            // instead of restoring the app's normal track_N naming. A
+            // genuinely custom identity name (e.g. "Alice") must still be
+            // preserved verbatim.
+            const session = buildSession();
+            const idAuto = session.addIdentity('id_7');   // mimics getOrCreateIdentityForTrack's placeholder
+            const idCustom = session.addIdentity('Alice');
+            session.setFrameIdentity(10, 'cam0', 0, idAuto.id);
+            session.setFrameIdentity(10, 'cam0', 1, idCustom.id);
+
+            session.propagateIdentitiesToTracks();
+
+            assertEqual(session.tracks.indexOf('id_7'), -1, 'the placeholder "id_7" name is NOT carried over literally');
+            assertTrue(session.tracks.some(function (t) { return /^track_\d+$/.test(t); }),
+                'the auto-named identity falls back to the track_N convention');
+            assertTrue(session.tracks.indexOf('Alice') >= 0, 'a genuinely custom identity name is preserved');
+        });
+    });
+
+    describe('Session.propagateTracksToIdentities — lazy sessions', function () {
+        it('sweeps a lazy loader for instances outside frameGroups', function () {
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam], sk, ['t0', 't1'], 'S');
+
+            const rows = [
+                ['cam0', 90000, 0],
+                ['cam0', 90001, 1],
+                ['cam0', 90002, -1],  // trackless — must be skipped
+            ];
+            session.lazyLoader = {
+                forEachInstanceRow: function (visitFn) {
+                    rows.forEach(function (r) { visitFn(r[0], r[1], r[2]); });
+                },
+            };
+
+            const res = session.propagateTracksToIdentities();
+
+            assertEqual(session.getIdentityIdForTrack('cam0', 0, 90000), session.getOrCreateIdentityForTrack(0).id,
+                'evicted frame 90000 got its identity stamped from the lazy sweep');
+            assertEqual(session.getIdentityIdForTrack('cam0', 1, 90001), session.getOrCreateIdentityForTrack(1).id,
+                'evicted frame 90001 got its identity stamped from the lazy sweep');
+            assertFalse(session.hasFrameIdentity(90002, 'cam0', -1), 'trackless row produces no identity entry');
+        });
+
+        it('aligns instanceGroups.identityId across many frames without O(frames^2) blowup (freeze regression)', function () {
+            // Regression: the "Align grouped frames' group.identityId" pass
+            // at the end of propagateTracksToIdentities walks EVERY frame of
+            // session.instanceGroups (project-wide on a lazy session, not
+            // just the resident frameGroups window) and used to call
+            // assignIdentityToGroup(group, id) with no frame hint — which
+            // itself re-derives the host frame by scanning ALL of
+            // instanceGroups per call. Doing that once per group while
+            // already iterating every frame is O(frames^2); this test builds
+            // enough frames that the fix must still complete correctly (and
+            // fast) with NO frameGroups populated at all — the exact lazy
+            // "instanceGroups populated, frameGroups mostly empty" shape.
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam], sk, [], 'S');
+
+            const N_FRAMES = 300;
+            let nextGroupId = 1;
+            for (let f = 0; f < N_FRAMES; f++) {
+                const gEven = new InstanceGroup(nextGroupId++, -1);
+                gEven.addInstance('cam0', new Instance([[1, 1]], 0, 'predicted', 0.9));   // track 0
+                const gOdd = new InstanceGroup(nextGroupId++, -1);
+                gOdd.addInstance('cam0', new Instance([[2, 2]], 1, 'predicted', 0.9));    // track 1
+                session.instanceGroups.set(f, [gEven, gOdd]);
+            }
+            assertEqual(session.frameGroups.size, 0, 'precondition: frameGroups is empty (nothing materialized)');
+
+            const res = session.propagateTracksToIdentities();
+
+            const idTrack0 = session.getOrCreateIdentityForTrack(0).id;
+            const idTrack1 = session.getOrCreateIdentityForTrack(1).id;
+            assertEqual(res.identities, 2, 'exactly 2 identities created (one per distinct track)');
+            for (let f = 0; f < N_FRAMES; f++) {
+                const [gEven, gOdd] = session.instanceGroups.get(f);
+                assertEqual(gEven.identityId, idTrack0, 'frame ' + f + ' track-0 group aligned to its track\'s identity');
+                assertEqual(gOdd.identityId, idTrack1, 'frame ' + f + ' track-1 group aligned to its track\'s identity');
+            }
+        });
+
+        it('does not create a duplicate identity per repeated row for the same track (freeze regression)', function () {
+            // Regression for "Propagate Tracks -> IDs freezes on a large
+            // heavily-tracked project": getOrCreateIdentityForTrack does a
+            // LINEAR SCAN over session.identities. Before the fix, the lazy
+            // sweep called it once per INSTANCE ROW — with many distinct
+            // tracks repeated across many frames that's O(rows x identities).
+            // This drives many rows per track through the sweep and asserts
+            // exactly one identity gets created per distinct track (proving
+            // the memoized lookup still finds/reuses the same identity
+            // instead of scanning-and-recreating), not a timing assertion
+            // (unreliable in CI) — the fix's complexity change is what
+            // eliminates the freeze, not something a small unit test can
+            // directly clock.
+            const sk = new Skeleton('test', ['a'], []);
+            const cam = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam], sk, [], 'S');
+
+            const N_TRACKS = 50, REPEATS_PER_TRACK = 20;
+            const rows = [];
+            let frameIdx = 0;
+            for (let t = 0; t < N_TRACKS; t++) {
+                for (let r = 0; r < REPEATS_PER_TRACK; r++) {
+                    rows.push(['cam0', frameIdx++, t]);
+                }
+            }
+            session.lazyLoader = {
+                forEachInstanceRow: function (visitFn) {
+                    rows.forEach(function (row) { visitFn(row[0], row[1], row[2]); });
+                },
+            };
+
+            const res = session.propagateTracksToIdentities();
+
+            assertEqual(session.identities.length, N_TRACKS,
+                'exactly one identity per distinct track, not one per row (' + rows.length + ' rows)');
+            assertEqual(res.identities, N_TRACKS, 'returned identity count matches');
+            // Every row's frame got the SAME identity as every other row for
+            // that track (not a fresh/duplicate identity per occurrence).
+            for (let t = 0; t < N_TRACKS; t++) {
+                const expectedId = session.getOrCreateIdentityForTrack(t).id;
+                for (let r = 0; r < REPEATS_PER_TRACK; r++) {
+                    const f = t * REPEATS_PER_TRACK + r;
+                    assertEqual(session.getIdentityIdForTrack('cam0', t, f), expectedId,
+                        'track ' + t + ' frame ' + f + ' stamped with its track\'s single identity');
+                }
+            }
         });
     });
 
@@ -603,6 +962,20 @@
             session.assignIdentityToGroup(gA, -1);
             assertEqual(gA.identityId, -1);
             assertEqual(gB.identityId, 2); // unchanged
+        });
+
+        it('passing hostFrameIdx explicitly (propagate\'s fast path) matches the fallback-search behavior', function () {
+            // Regression for the O(frames^2) freeze: propagateTracksToIdentities
+            // now passes the already-known frameIdx as a 3rd arg instead of
+            // making assignIdentityToGroup re-derive it by scanning ALL of
+            // instanceGroups. Same swap/collision scenario as "swaps when
+            // assigning an identity already held by a sibling group" above,
+            // but with the frame passed explicitly — must produce the
+            // identical outcome.
+            const { session, gA, gB } = buildSessionWithGroups();
+            session.assignIdentityToGroup(gA, 2, 100);   // 100 = the real host frame
+            assertEqual(gA.identityId, 2);
+            assertEqual(gB.identityId, 1, 'swap still fires correctly with an explicit hostFrameIdx');
         });
     });
 
@@ -878,6 +1251,350 @@
                 state.sessions = savedSessions;
                 state.session = savedSession;
             }
+        });
+    });
+
+    // ---- Instance flat coordinate storage ----
+    //
+    // `Instance` stores 2D keypoints in a flat Float64Array(2n) with NaN = no
+    // point, and occlusion in a bit set. The public `points`/`occluded` fields
+    // are GONE on purpose (a missed call site must throw, not silently read a
+    // doubled length or an undefined occlusion flag), so these pin the accessor
+    // contract that replaced them.
+
+    describe('Instance flat coordinate storage', function () {
+        it('constructs from the legacy boxed shape', function () {
+            var i = new Instance([[1, 2], null, [5, 6]], 0, 'user', 1);
+            assertEqual(i.numNodes, 3, 'numNodes is NODES, not 2*nodes');
+            assertTrue(i.hasPoint(0));
+            assertFalse(i.hasPoint(1), 'a null row becomes "no point"');
+            assertTrue(i.hasPoint(2));
+            assertDeepEqual(i.getPoint(0), [1, 2]);
+            assertNull(i.getPoint(1));
+            assertEqual(i.getX(2), 5);
+            assertEqual(i.getY(2), 6);
+        });
+
+        it('adopts an already-flat Float64Array without copying', function () {
+            var xy = new Float64Array([1, 2, 3, 4]);
+            var i = new Instance(xy, 0, 'user', 1);
+            assertEqual(i.numNodes, 2);
+            assertDeepEqual(i.getPoint(1), [3, 4]);
+            xy[0] = 99;
+            assertEqual(i.getX(0), 99, 'adopted by reference, not copied');
+        });
+
+        it('round-trips through the boxed form', function () {
+            var boxed = [[1.5, 2.5], null, [-3, 0]];
+            assertDeepEqual(new Instance(boxed, 0, 'user', 1).toPointsArray(), boxed);
+        });
+
+        it('keeps full f64 precision', function () {
+            var v = 0.1 + 0.2;                 // not representable in f32
+            var i = new Instance([[v, 12345678.90123456]], 0, 'user', 1);
+            assertTrue(i.getX(0) === v, 'x exact');
+            assertTrue(i.getY(0) === 12345678.90123456, 'y exact');
+        });
+
+        it('set / clear a point', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            i.setPoint(0, 9, 8);
+            assertDeepEqual(i.getPoint(0), [9, 8]);
+            i.clearPoint(0);
+            assertFalse(i.hasPoint(0));
+            assertNull(i.getPoint(0));
+            i.setPointFrom(0, [7, 7]);
+            assertDeepEqual(i.getPoint(0), [7, 7]);
+            i.setPointFrom(0, null);
+            assertFalse(i.hasPoint(0), 'setPointFrom(null) clears');
+        });
+
+        it('readPoint fills a caller buffer without allocating', function () {
+            var i = new Instance([[1, 2], null], 0, 'user', 1);
+            var out = [0, 0];
+            assertTrue(i.readPoint(0, out) === out, 'returns the same buffer');
+            assertDeepEqual(out, [1, 2]);
+            assertNull(i.readPoint(1, out), 'missing node returns null');
+        });
+
+        it('counts and predicates', function () {
+            var i = new Instance([[1, 2], null, [5, 6]], 0, 'user', 1);
+            assertEqual(i.countPoints(), 2);
+            assertTrue(i.hasAnyPoint());
+            var empty = new Instance([null, null], 0, 'user', 1);
+            assertEqual(empty.countPoints(), 0);
+            assertFalse(empty.hasAnyPoint());
+        });
+
+        it('hasAnyUsablePoint honours nulledNodes', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            assertTrue(i.hasAnyUsablePoint());
+            i.nulledNodes = new Set([0, 1]);
+            assertFalse(i.hasAnyUsablePoint(), 'all positioned nodes are nulled');
+            i.nulledNodes = new Set([0]);
+            assertTrue(i.hasAnyUsablePoint(), 'node 1 still usable');
+        });
+
+        it('occlusion round-trips through the bit set', function () {
+            var i = new Instance([[1, 2], [3, 4], [5, 6]], 0, 'user', 1);
+            assertFalse(i.isOccluded(1));
+            assertFalse(i.anyOccluded());
+            i.setOccluded(1, true);
+            assertTrue(i.isOccluded(1));
+            assertFalse(i.isOccluded(0), 'neighbours unaffected');
+            assertFalse(i.isOccluded(2));
+            assertTrue(i.anyOccluded());
+            assertDeepEqual(i.toOccludedArray(), [false, true, false]);
+            i.setOccluded(1, false);
+            assertFalse(i.anyOccluded());
+        });
+
+        it('occlusion works past 32 nodes (Uint32Array path)', function () {
+            // <=32 nodes uses a Number bitmask; beyond that a Uint32Array. Bit 40
+            // lands in the second word, which is where an off-by-one would show.
+            var boxed = [];
+            for (var k = 0; k < 50; k++) boxed.push([k, k]);
+            var i = new Instance(boxed, 0, 'user', 1);
+            assertEqual(i.numNodes, 50);
+            i.setOccluded(40, true);
+            i.setOccluded(3, true);
+            assertTrue(i.isOccluded(40), 'bit in the second word');
+            assertTrue(i.isOccluded(3), 'bit in the first word');
+            assertFalse(i.isOccluded(41));
+            assertFalse(i.isOccluded(39));
+            assertEqual(i.toOccludedArray().filter(Boolean).length, 2);
+        });
+
+        it('setOccludedFrom ingests a boolean array', function () {
+            var i = new Instance([[1, 2], [3, 4], [5, 6]], 0, 'user', 1);
+            i.setOccludedFrom([false, true, true]);
+            assertDeepEqual(i.toOccludedArray(), [false, true, true]);
+            i.setOccludedFrom(null);
+            assertFalse(i.anyOccluded(), 'null clears');
+        });
+
+        it('clearing a point clears its occlusion flag', function () {
+            var i = new Instance([[1, 2]], 0, 'user', 1);
+            i.setOccluded(0, true);
+            i.clearPoint(0);
+            assertFalse(i.isOccluded(0), 'an absent point cannot be occluded');
+        });
+
+        it('toggleOccluded only applies to positioned nodes', function () {
+            var i = new Instance([[1, 2], null], 0, 'user', 1);
+            i.toggleOccluded(0);
+            assertTrue(i.isOccluded(0));
+            i.toggleOccluded(1);
+            assertFalse(i.isOccluded(1), 'no position => no toggle');
+        });
+
+        it('setPointsFrom replaces every coordinate', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            i.setPointsFrom([[9, 9], null]);
+            assertDeepEqual(i.getPoint(0), [9, 9]);
+            assertFalse(i.hasPoint(1));
+        });
+
+        it('adoptPointsFrom shares buffers (lazy-2D hydration)', function () {
+            var a = new Instance([[1, 2]], 0, 'predicted', 1);
+            var b = new Instance([null], 0, 'predicted', 1);
+            b.adoptPointsFrom(a);
+            assertDeepEqual(b.getPoint(0), [1, 2]);
+            a.setPoint(0, 7, 7);
+            assertDeepEqual(b.getPoint(0), [7, 7], 'shares the same buffer');
+        });
+
+        it('backup / restore covers coordinates AND occlusion', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            i.setOccluded(1, true);
+            i.backupPoints();
+            assertTrue(i.hasBackup());
+            i.setPoint(0, 99, 99);
+            i.setOccluded(1, false);
+            i.restorePoints();
+            assertDeepEqual(i.getPoint(0), [1, 2], 'coords restored');
+            assertTrue(i.isOccluded(1), 'occlusion restored');
+        });
+
+        it('setPointVisible(false) clears, (true) restores from backup', function () {
+            var i = new Instance([[1, 2], [3, 4]], 0, 'user', 1);
+            i.backupPoints();
+            i.setPointVisible(0, false);
+            assertFalse(i.hasPoint(0));
+            i.setPointVisible(0, true);
+            assertDeepEqual(i.getPoint(0), [1, 2], 'restored from the backup');
+        });
+
+        it('insertNodeAt / removeNodeAt keep coords, occlusion and backup aligned', function () {
+            var i = new Instance([[1, 1], [2, 2], [3, 3]], 0, 'user', 1);
+            i.setOccluded(2, true);
+            i.backupPoints();
+
+            i.insertNodeAt(3);                       // append, as propagateNodeAdded does
+            assertEqual(i.numNodes, 4);
+            assertFalse(i.hasPoint(3), 'new node starts empty');
+            assertTrue(i.isOccluded(2), 'existing occlusion survives');
+
+            i.removeNodeAt(1);                       // drop the middle node
+            assertEqual(i.numNodes, 3);
+            assertDeepEqual(i.getPoint(0), [1, 1]);
+            assertDeepEqual(i.getPoint(1), [3, 3], 'node 2 shifted down to 1');
+            assertTrue(i.isOccluded(1), 'its occlusion bit shifted with it');
+            assertFalse(i.hasPoint(2), 'the appended empty node is now last');
+
+            i.restorePoints();
+            assertEqual(i.numNodes, 3, 'backup was resized alongside');
+        });
+
+        it('out-of-range access is safe', function () {
+            var i = new Instance([[1, 2]], 0, 'user', 1);
+            assertFalse(i.hasPoint(5));
+            assertNull(i.getPoint(5));
+            assertFalse(i.isOccluded(5));
+            i.setPoint(5, 1, 1);
+            i.setOccluded(5, true);
+            i.clearPoint(-1);
+            assertEqual(i.numNodes, 1, 'no growth from out-of-range writes');
+        });
+
+        it('a zero-node instance is inert', function () {
+            var i = new Instance([], 0, 'user', 1);
+            assertEqual(i.numNodes, 0);
+            assertFalse(i.hasAnyPoint());
+            assertDeepEqual(i.toPointsArray(), []);
+            assertDeepEqual(i.toOccludedArray(), []);
+        });
+
+        it('the removed fields really are gone (missed call sites must throw)', function () {
+            var i = new Instance([[1, 2]], 0, 'user', 1);
+            assertEqual(i.points, undefined, 'no `points` field');
+            assertEqual(i.occluded, undefined, 'no `occluded` field');
+        });
+    });
+
+    // ---- points3d flat-array codec ----
+    //
+    // `InstanceGroup.points3d` is a flat Float64Array(3*nNodes) with an all-NaN
+    // triple for a missing node, replacing boxed `[x,y,z]|null` rows. These pin
+    // the codec's edge cases: the NaN sentinel, partial-NaN triples, and the
+    // dual-format ingest that keeps legacy readers/projects loading.
+
+    describe('points3d codec', function () {
+        it('makePoints3d allocates all-missing nodes', function () {
+            var p = makePoints3d(4);
+            assertTrue(p instanceof Float64Array, 'flat Float64Array');
+            assertEqual(p.length, 12, '3 coords per node');
+            assertEqual(points3dNodeCount(p), 4);
+            assertFalse(someValidPoint3d(p), 'nothing triangulated yet');
+            assertEqual(countPoints3d(p), 0);
+        });
+
+        it('set/get/clear round-trips a node', function () {
+            var p = makePoints3d(3);
+            setPoint3d(p, 1, [1.5, -2.25, 300.125]);
+            assertTrue(hasPoint3d(p, 1));
+            assertDeepEqual(getPoint3d(p, 1), [1.5, -2.25, 300.125]);
+            assertNull(getPoint3d(p, 0), 'untouched node reads as missing');
+            assertEqual(countPoints3d(p), 1);
+            clearPoint3d(p, 1);
+            assertNull(getPoint3d(p, 1), 'cleared node reads as missing');
+            assertFalse(someValidPoint3d(p));
+        });
+
+        it('setPoint3d(null) marks a node missing', function () {
+            var p = makePoints3d(2);
+            setPoint3d(p, 0, [1, 2, 3]);
+            setPoint3d(p, 0, null);
+            assertFalse(hasPoint3d(p, 0));
+        });
+
+        it('preserves full f64 precision (bit-exact, so the golden digest holds)', function () {
+            var p = makePoints3d(1);
+            // A value that is NOT representable in f32 — would quantize if the
+            // backing store were Float32Array.
+            var v = 0.1 + 0.2; // 0.30000000000000004
+            setPoint3d(p, 0, [v, 1e-300, 12345678.90123456]);
+            var got = getPoint3d(p, 0);
+            assertTrue(got[0] === v, 'x survives exactly');
+            assertTrue(got[1] === 1e-300, 'denormal-ish y survives exactly');
+            assertTrue(got[2] === 12345678.90123456, 'z survives exactly');
+        });
+
+        it('a partially-NaN triple counts as missing, not present', function () {
+            // A node with a NaN in any coordinate has no meaningful 3D position;
+            // treating it as present would push NaN geometry into the 3D view.
+            var p = makePoints3d(1);
+            p[0] = 1; p[1] = NaN; p[2] = 3;
+            assertFalse(hasPoint3d(p, 0), 'NaN in y => missing');
+            assertNull(getPoint3d(p, 0));
+        });
+
+        it('readPoint3d fills a caller buffer without allocating', function () {
+            var p = makePoints3d(2);
+            setPoint3d(p, 1, [7, 8, 9]);
+            var out = [0, 0, 0];
+            assertTrue(readPoint3d(p, 1, out) === out, 'returns the same buffer');
+            assertDeepEqual(out, [7, 8, 9]);
+            assertNull(readPoint3d(p, 0, out), 'missing node returns null');
+        });
+
+        it('toBoxedPoints3d emits the legacy [x,y,z]|null shape', function () {
+            var p = makePoints3d(3);
+            setPoint3d(p, 0, [1, 2, 3]);
+            setPoint3d(p, 2, [4, 5, 6]);
+            assertDeepEqual(toBoxedPoints3d(p), [[1, 2, 3], null, [4, 5, 6]]);
+        });
+
+        it('fromBoxedPoints3d ingests the legacy shape', function () {
+            var p = fromBoxedPoints3d([[1, 2, 3], null, [4, 5, 6]]);
+            assertTrue(p instanceof Float64Array);
+            assertEqual(points3dNodeCount(p), 3);
+            assertDeepEqual(getPoint3d(p, 0), [1, 2, 3]);
+            assertNull(getPoint3d(p, 1));
+            assertDeepEqual(getPoint3d(p, 2), [4, 5, 6]);
+        });
+
+        it('boxed -> flat -> boxed round-trips', function () {
+            var boxed = [[1.25, 2.5, 3.75], null, [-4, 0, 6]];
+            assertDeepEqual(toBoxedPoints3d(fromBoxedPoints3d(boxed)), boxed);
+        });
+
+        it('asPoints3d normalizes every ingest form', function () {
+            var flat = makePoints3d(2);
+            assertTrue(asPoints3d(flat) === flat, 'flat passes through WITHOUT copying');
+            assertNull(asPoints3d(null));
+            var fromBoxed = asPoints3d([[1, 2, 3]]);
+            assertTrue(fromBoxed instanceof Float64Array, 'boxed rows convert');
+            assertDeepEqual(getPoint3d(fromBoxed, 0), [1, 2, 3]);
+            // A reader could hand back a different typed view (e.g. f32).
+            var f32 = asPoints3d(new Float32Array([1, 2, 3]));
+            assertTrue(f32 instanceof Float64Array, 'other typed views are widened');
+            assertDeepEqual(getPoint3d(f32, 0), [1, 2, 3]);
+        });
+
+        it('an explicit NaN row ingests as missing (matches what SLP stores)', function () {
+            // The SLP format writes NaN for missing 3D keypoints, so a reload has
+            // always erased the null-vs-NaN distinction. Ingest must agree.
+            var p = fromBoxedPoints3d([[NaN, NaN, NaN], [1, 2, 3]]);
+            assertFalse(hasPoint3d(p, 0));
+            assertTrue(hasPoint3d(p, 1));
+            assertEqual(countPoints3d(p), 1);
+        });
+
+        it('clonePoints3d copies rather than aliases', function () {
+            var p = makePoints3d(2);
+            setPoint3d(p, 0, [1, 2, 3]);
+            var c = clonePoints3d(p);
+            setPoint3d(c, 0, [9, 9, 9]);
+            assertDeepEqual(getPoint3d(p, 0), [1, 2, 3], 'original untouched');
+            assertNull(clonePoints3d(null));
+        });
+
+        it('handles a zero-node array', function () {
+            var p = makePoints3d(0);
+            assertEqual(points3dNodeCount(p), 0);
+            assertFalse(someValidPoint3d(p));
+            assertDeepEqual(toBoxedPoints3d(p), []);
         });
     });
 })();

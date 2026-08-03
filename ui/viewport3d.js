@@ -10,9 +10,14 @@
  *   - three@0.147.0/examples/js/controls/OrbitControls.js -> THREE.OrbitControls
  *
  * ES module. Exports `Viewport3D`. Caller supplies `cameras`, `skeleton`, and
- * a `getTrackColor` callback via the options bag — no project-file imports
- * are needed.
+ * a `getTrackColor` callback via the options bag — no app-state imports are
+ * needed. The one project import is the `points3d` codec from `pose-data.js`
+ * (a leaf module, no cycle): `InstanceGroup.points3d` is a flat
+ * `Float64Array(3N)` with all-NaN triples for missing nodes, so reading it
+ * requires the shared accessors rather than array indexing.
  */
+
+import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js';
 
 // ============================================
 // Viewport3D class
@@ -807,7 +812,7 @@ export class Viewport3D {
      *   - Colors determined by track index via getTrackColor
      *
      * @param {InstanceGroup[]} instanceGroups - Array of InstanceGroup objects
-     *        for the current frame. Each should have .points3d (array of [x,y,z]
+     *        for the current frame. Each should have .points3d (flat Float64Array
      *        or null per node) and .trackIdx.
      */
     updateSkeleton(instanceGroups) {
@@ -819,7 +824,7 @@ export class Viewport3D {
             return;
         }
 
-        var groupsWithPts = instanceGroups.filter(function(g) { return g.points3d && g.points3d.length > 0; });
+        var groupsWithPts = instanceGroups.filter(function(g) { return points3dNodeCount(g.points3d) > 0; });
         if (_dbg3d) console.log('[3D] updateSkeleton:', instanceGroups.length, 'groups,', groupsWithPts.length, 'with points3d, sceneScale:', this._sceneScale);
 
         const ss = this._sceneScale || 1;
@@ -852,7 +857,8 @@ export class Viewport3D {
         for (let g = 0; g < instanceGroups.length; g++) {
             const group = instanceGroups[g];
             const pts = group.points3d;
-            if (!pts || pts.length === 0) continue;
+            const nPts = points3dNodeCount(pts);
+            if (nPts === 0) continue;
 
             const colorStr = this.getGroupColorFn
                 ? this.getGroupColorFn(group)
@@ -883,12 +889,13 @@ export class Viewport3D {
 
             // --- Draw keypoint markers (shape per Node Style toggle) ---
             if (this.showSkeletonNodes && nodeRadius > 0) {
-                for (let n = 0; n < pts.length; n++) {
-                    const pt = pts[n];
+                for (let n = 0; n < nPts; n++) {
+                    const pt = getPoint3d(pts, n);
                     if (pt == null) continue;
-                    // Guard against NaN/Inf coords (e.g. missing keypoints in an
-                    // imported points3d H5) — they would produce NaN meshes and
-                    // poison bounding-sphere / fitToScene math.
+                    // Guard against Inf coords (e.g. missing keypoints in an
+                    // imported points3d H5) — they would produce broken meshes and
+                    // poison bounding-sphere / fitToScene math. (NaN is already
+                    // filtered by getPoint3d, which treats it as "missing".)
                     if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
 
                     let nodeObj;
@@ -918,9 +925,9 @@ export class Viewport3D {
                 const srcIdx = edges[e][0];
                 const dstIdx = edges[e][1];
 
-                if (srcIdx >= pts.length || dstIdx >= pts.length) continue;
-                const srcPt = pts[srcIdx];
-                const dstPt = pts[dstIdx];
+                if (srcIdx >= nPts || dstIdx >= nPts) continue;
+                const srcPt = getPoint3d(pts, srcIdx);
+                const dstPt = getPoint3d(pts, dstIdx);
                 if (srcPt == null || dstPt == null) continue;
                 if (!isFinite(srcPt[0]) || !isFinite(srcPt[1]) || !isFinite(srcPt[2])) continue;
                 if (!isFinite(dstPt[0]) || !isFinite(dstPt[1]) || !isFinite(dstPt[2])) continue;
@@ -984,13 +991,14 @@ export class Viewport3D {
         for (var g = 0; g < instanceGroups.length; g++) {
             var group = instanceGroups[g];
             var pts = group.points3d;
-            if (!pts || pts.length === 0) continue;
+            var nPts = points3dNodeCount(pts);
+            if (nPts === 0) continue;
 
             var envGroup3D = new THREE.Group();
             envGroup3D.name = 'env_' + g;
 
-            for (var n = 0; n < pts.length; n++) {
-                var pt = pts[n];
+            for (var n = 0; n < nPts; n++) {
+                var pt = getPoint3d(pts, n);
                 if (pt == null) continue;
                 var mesh = new THREE.Mesh(sphereGeo, nodeMaterial);
                 mesh.position.set(pt[0], pt[1], pt[2]);
@@ -1001,9 +1009,9 @@ export class Viewport3D {
             for (var e = 0; e < edges.length; e++) {
                 var srcIdx = edges[e][0];
                 var dstIdx = edges[e][1];
-                if (srcIdx >= pts.length || dstIdx >= pts.length) continue;
-                var srcPt = pts[srcIdx];
-                var dstPt = pts[dstIdx];
+                if (srcIdx >= nPts || dstIdx >= nPts) continue;
+                var srcPt = getPoint3d(pts, srcIdx);
+                var dstPt = getPoint3d(pts, dstIdx);
                 if (srcPt == null || dstPt == null) continue;
 
                 var cylinder = this._createCylinder(srcPt, dstPt, edgeRadius, edgeMaterial, cylinderSegments);

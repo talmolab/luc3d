@@ -12,14 +12,13 @@ import { state, viewport3d, timeline, getActiveSession } from './app-state.js';
 import { InstanceGroup, UnlinkedInstance } from '../pose/pose-data.js';
 import {
     triangulateAndReproject,
-    storeReprojectedInstances,
     frameHasGroupedUserInstances,
     loadAllLazyFrames,
-    batchLoadLazyFrames,
     triangulateMultiFrameInstances,
     sessionHasCalibration,
     showCalibrationRequiredPopup,
     getInstanceGroupsForFrame,
+    sweepLazyFrameWindows,
 } from '../pose/triangulation.js';
 import { Viewport3D } from './viewport3d.js';
 import { getTrackColor, getGroupColor } from './overlays.js';
@@ -75,25 +74,44 @@ export function showGroupByTrackModal() {
     // Scan all frames to gather per-track stats
     var trackStats = {};  // trackIdx -> { frames: Set, cameras: Set, nodeCount }
     var numNodes = session.skeleton.nodes.length;
-    for (var [frameIdx, fg] of session.frameGroups) {
-        // Grouped instances
-        for (var [camName, instances] of fg.instances) {
-            for (var ii = 0; ii < instances.length; ii++) {
-                var tid = instances[ii].trackIdx;
-                if (tid == null || tid < 0) continue;
-                if (!trackStats[tid]) trackStats[tid] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
-                trackStats[tid].frames.add(frameIdx);
-                trackStats[tid].cameras.add(camName);
+    var statLoader = session.lazyLoader;
+    if (statLoader && typeof statLoader.forEachInstanceRow === 'function') {
+        // luc3d #195: read the persistent columnar track column, not
+        // `session.frameGroups`. Resident frames are a handful on a lazily
+        // reopened project (measured 31 of 180,210), so the old loop reported
+        // "track_0: 31 frames" for a track present on all 180,210 — a wildly
+        // misleading preview for a destructive grouping operation.
+        // `forEachInstanceRow` visits every instance row without materializing a
+        // single frame, so this is both complete and allocation-free apart from
+        // the per-track sets below (frame indices must be de-duplicated across
+        // cameras, and the modal only reads their `.size`).
+        statLoader.forEachInstanceRow(function (camName, frameIdx, trk) {
+            if (trk == null || trk < 0) return;
+            if (!trackStats[trk]) trackStats[trk] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
+            trackStats[trk].frames.add(frameIdx);
+            trackStats[trk].cameras.add(camName);
+        });
+    } else {
+        for (var [frameIdx, fg] of session.frameGroups) {
+            // Grouped instances
+            for (var [camName, instances] of fg.instances) {
+                for (var ii = 0; ii < instances.length; ii++) {
+                    var tid = instances[ii].trackIdx;
+                    if (tid == null || tid < 0) continue;
+                    if (!trackStats[tid]) trackStats[tid] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
+                    trackStats[tid].frames.add(frameIdx);
+                    trackStats[tid].cameras.add(camName);
+                }
             }
-        }
-        // Unlinked instances
-        for (var [camName2, ulList] of fg.unlinkedInstances) {
-            for (var ui = 0; ui < ulList.length; ui++) {
-                var tid2 = ulList[ui].instance.trackIdx;
-                if (tid2 == null || tid2 < 0) continue;
-                if (!trackStats[tid2]) trackStats[tid2] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
-                trackStats[tid2].frames.add(frameIdx);
-                trackStats[tid2].cameras.add(camName2);
+            // Unlinked instances
+            for (var [camName2, ulList] of fg.unlinkedInstances) {
+                for (var ui = 0; ui < ulList.length; ui++) {
+                    var tid2 = ulList[ui].instance.trackIdx;
+                    if (tid2 == null || tid2 < 0) continue;
+                    if (!trackStats[tid2]) trackStats[tid2] = { frames: new Set(), cameras: new Set(), nodeCount: numNodes };
+                    trackStats[tid2].frames.add(frameIdx);
+                    trackStats[tid2].cameras.add(camName2);
+                }
             }
         }
     }
@@ -233,129 +251,16 @@ export function showGroupByTrackModal() {
 // ============================================
 
 /**
- * Group instances by their assigned Identity (from tracker), then triangulate.
- * Uses session.getIdentityIdForTrack (per-frame identity) per camera:trackIdx.
- * For each frame, groups instances that share the same identity into InstanceGroups,
- * then triangulates each group.
- */
-/**
- * True if a FrameGroup carries any user-authored instance (grouped or unlinked).
- * Decides which frames a windowed triangulation sweep may release: a predicted-only
- * frame's 2D data rebuilds on demand (its compact 3D result is kept in
- * session.instanceGroups), whereas a user-edited frame must stay resident.
- */
-function frameGroupHasUserInstances(fg) {
-    for (var [, insts] of fg.instances) {
-        for (var i = 0; i < insts.length; i++) {
-            if (insts[i] && insts[i].type === 'user') return true;
-        }
-    }
-    for (var [, uInsts] of fg.unlinkedInstances) {
-        for (var j = 0; j < uInsts.length; j++) {
-            if (uInsts[j] && uInsts[j].instance && uInsts[j].instance.type === 'user') return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Drive a bulk per-frame triangulation over an ENTIRE session — memory-bounded on
- * large lazy `.slp` sessions.
+ * Thin wrapper over the shared `sweepLazyFrameWindows` (luc3d #195).
  *
- * For a windowing-capable lazy loader (SioLazyLoader): walk 0..nFrames in windows,
- * materialize each window into session.frameGroups (batchLoadLazyFrames), invoke
- * `onFrame(frameIdx, fg)` per resident frame, then RELEASE the window — dropping
- * predicted-only frameGroups (they rebuild on navigation; their compact 3D result
- * lives in session.instanceGroups) and the loader's internal typed-frame caches via
- * releaseWindow. Peak stays at one window instead of the whole ~108k×3 graph, so
- * this no longer re-OOMs the way `loadAllLazyFrames` + full iteration did — and it
- * fixes the silent-drop bug (only resident/visited frames were processed before).
- *
- * For non-lazy sessions (all frames resident) and worker-backed lazy sessions
- * (small analysis `.h5`, materialized up front) it iterates the resident
- * frameGroups exactly as before.
- *
- * @returns {Promise<number>} number of frames processed.
+ * This used to be a full third copy of the hydrate-window/process/release
+ * mechanics — identical to `sweepTrackAllFrames` in `pose/tracker.js` and to the
+ * windowing inlined in `triangulateAllFrames`. Consolidated so the memory
+ * behaviour of every bulk sweep is defined in exactly one place; kept as a named
+ * local so this module's call sites read unchanged.
  */
-// No `--expose-gc` in a real browser — a large, immediately-discarded
-// allocation typically forces V8 to prove it has room (or reclaim some)
-// before granting it, nudging a collection sooner than just waiting would.
-// Real-data testing showed a released window's garbage can otherwise pile up
-// across a whole ~108k-frame sweep. Best-effort only — see pose/tracker.js's
-// identical helper (`sweepTrackAllFrames`), duplicated here to avoid a new
-// cross-module import for one small pure helper.
-async function encourageGC(totalMB) {
-    // See the identical helper in import-export/save-load.js for why this
-    // allocates toward the real heap ceiling rather than a token amount.
-    var junk = [];
-    try {
-        var chunkMB = 100;
-        var n = Math.ceil((totalMB || 800) / chunkMB);
-        for (var i = 0; i < n; i++) {
-            var buf = new ArrayBuffer(chunkMB * 1024 * 1024);
-            new Uint8Array(buf)[0] = 1;
-            junk.push(buf);
-        }
-    } catch (e) { /* ignore — hitting real pressure is the point */ }
-    junk = null;
-    await new Promise(function (r) { setTimeout(r, 50); });
-}
-
 async function sweepTriangulationFrames(session, onFrame, opts) {
-    opts = opts || {};
-    var loader = session.lazyLoader;
-    var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
-    var YIELD_EVERY = 100;
-    var processed = 0;
-
-    if (windowed) {
-        var W = opts.window || 2000;
-        var total = loader.nFrames;
-        var windowCount = 0;
-        for (var start = 0; start < total; start += W) {
-            var end = Math.min(start + W, total);
-            await batchLoadLazyFrames(start, end - start);
-            for (var fi = start; fi < end; fi++) {
-                var fg = session.frameGroups.get(fi);
-                if (!fg) continue;
-                onFrame(fi, fg);
-                processed++;
-                if (processed % YIELD_EVERY === 0) {
-                    if (opts.onProgress) opts.onProgress(processed, total);
-                    await new Promise(function (r) { setTimeout(r, 0); });
-                }
-            }
-            // Release the window. Keep the on-screen current frame and any
-            // user-edited frame; everything else is predicted-only and rebuildable.
-            for (var rf = start; rf < end; rf++) {
-                if (rf === state.currentFrame) continue;
-                var rfg = session.frameGroups.get(rf);
-                if (rfg && !frameGroupHasUserInstances(rfg)) session.frameGroups.delete(rf);
-            }
-            loader.releaseWindow(start, end);
-            windowCount++;
-            if (windowCount % 5 === 0) {
-                await encourageGC(800);
-            }
-        }
-        return processed;
-    }
-
-    // Worker-backed lazy sessions (small analysis .h5) still materialize up front;
-    // non-lazy sessions already hold every frame.
-    if (loader) await loadAllLazyFrames(opts.onStatus);
-    var idxs = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
-    for (var j2 = 0; j2 < idxs.length; j2++) {
-        var fg2 = session.frameGroups.get(idxs[j2]);
-        if (!fg2) continue;
-        onFrame(idxs[j2], fg2);
-        processed++;
-        if (processed % YIELD_EVERY === 0) {
-            if (opts.onProgress) opts.onProgress(processed, idxs.length);
-            await new Promise(function (r) { setTimeout(r, 0); });
-        }
-    }
-    return processed;
+    return await sweepLazyFrameWindows(session, onFrame, opts);
 }
 
 export async function groupByIdentityAndTriangulateAll() {
@@ -392,6 +297,13 @@ export async function groupByIdentityAndTriangulateAll() {
     // Memory-bounded sweep over every frame (windows + release on lazy sessions),
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
     var processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
+        // `fg` is undefined for a frame that has 3D grouping but no resident 2D
+        // (the sweep's contract — see `sweepLazyFrameWindows`). Without this guard
+        // the very next line throws a TypeError, which aborts the whole operation
+        // PART-WAY THROUGH — after step 2 below has already deleted the
+        // instanceGroups of every frame processed so far. Losing 3D on an
+        // arbitrary prefix of the project is the worst possible failure here.
+        if (!fg) return;
 
         // 1. Collect all instances, bucket by identityId
         //    identityId -> { camName -> Instance }
@@ -426,6 +338,48 @@ export async function groupByIdentityAndTriangulateAll() {
                 if (!idBuckets[identityId2]) idBuckets[identityId2] = {};
                 if (!idBuckets[identityId2][camName2]) idBuckets[identityId2][camName2] = ulInst;
             }
+        }
+
+        // 1b. IDENTITY FALLBACK + DESTRUCTION GUARD (the "Triangulate All deleted
+        //     my 3D" bug). Step 2 below deletes this frame's instanceGroups —
+        //     and with them their `points3d` — BEFORE knowing whether step 3 can
+        //     rebuild anything. Step 3 only builds a group when
+        //     `getIdentityIdForTrack(cam, inst.trackIdx, frameIdx)` resolves on
+        //     >= 2 cameras. On a reopened project that lookup can come back null
+        //     for every instance (identity is carried on `group.identityId`, and
+        //     the per-frame track->identity entries do not necessarily key by the
+        //     trackIdx the rehydrated instances carry), so the frame lost all of
+        //     its 3D, IDs and reprojections and got nothing back. Measured on the
+        //     real 180,210-frame project: groups 3 -> 0 on every probe frame.
+        //
+        //     So: (a) fall back to the identity already recorded on the existing
+        //     group for that instance, which is the same identity this operation
+        //     is trying to group by; and (b) if after that NOTHING would be
+        //     rebuilt, leave the frame completely alone rather than emptying it.
+        //     Grouping that cannot improve a frame must not destroy it.
+        var _existing = session.instanceGroups.get(frameIdx);
+        if (_existing && _existing.length) {
+            for (var _eg = 0; _eg < _existing.length; _eg++) {
+                var _grp = _existing[_eg];
+                if (_grp.identityId == null || _grp.identityId < 0) continue;
+                for (var [_ecam, _einst] of _grp.instances) {
+                    if (!_einst) continue;
+                    // Only fills gaps — a resolvable per-frame identity still wins.
+                    if (!idBuckets[_grp.identityId]) idBuckets[_grp.identityId] = {};
+                    if (!idBuckets[_grp.identityId][_ecam]) idBuckets[_grp.identityId][_ecam] = _einst;
+                }
+            }
+        }
+        var _wouldBuild = 0;
+        for (var _bk in idBuckets) {
+            if (Object.keys(idBuckets[_bk]).length >= 2) _wouldBuild++;
+        }
+        if (_wouldBuild === 0) {
+            if (_existing && _existing.length) {
+                console.warn('[groupByIdentity] frame ' + frameIdx + ': no identity resolved on >=2 ' +
+                    'cameras; keeping the ' + _existing.length + ' existing group(s) rather than deleting them.');
+            }
+            return;
         }
 
         // 2. Clear existing groups and instances for this frame
@@ -479,10 +433,6 @@ export async function groupByIdentityAndTriangulateAll() {
             var triResult = triangulateAndReproject(group, cameras, { triangulateOnly: true });
             group.points3d = triResult.points3d;
             group.triangulationMethod = triResult.method;
-            group.observedPoints = {};
-            for (var _oci = 0; _oci < camNames.length; _oci++) {
-                group.observedPoints[camNames[_oci]] = bucket[camNames[_oci]].points;
-            }
             group.markClean();
 
             totalGrouped++;
@@ -641,9 +591,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             var viewsWithLabels = 0;
             for (var cj = 0; cj < groupCameras.length; cj++) {
                 var gInst = group.getInstance(groupCameras[cj].name);
-                if (gInst && gInst.points && gInst.points.some(function (p, idx) {
-                    return p != null && !(gInst.nulledNodes && gInst.nulledNodes.has(idx));
-                })) {
+                if (gInst && gInst.hasAnyUsablePoint()) {
                     viewsWithLabels++;
                 }
             }
@@ -654,15 +602,17 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
             group.reprojections = result.reprojections;
             group.points3d = result.points3d;
-            // Reproject to ALL cameras (including excluded ones) so they show reprojections
-            storeReprojectedInstances(group, result, allCameras);
-            group.observedPoints = {};
+            // NOT storeReprojectedInstances here — "Group by Track" sweeps the
+            // WHOLE project; eagerly building a full Instance (+ its own
+            // `occluded` array) per camera per group here was a major memory
+            // cost never needed by SLP save/export (see triangulation.js's
+            // getOrComputeReprojectedInstance doc comment). Display and export
+            // instead resolve on demand from `.reprojections` above.
             group.usedCameras = new Set();
             for (var ck = 0; ck < groupCameras.length; ck++) {
                 var camInst = group.getInstance(groupCameras[ck].name);
                 if (camInst) {
-                    group.observedPoints[groupCameras[ck].name] = camInst.points;
-                    if (camInst.points.some(function (p) { return p != null; })) {
+                    if (camInst.hasAnyPoint()) {
                         group.usedCameras.add(groupCameras[ck].name);
                     }
                 }
@@ -2439,53 +2389,151 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
 // Export Labels (simple JSON dump)
 // ============================================
 
-export function exportLabels() {
+/**
+ * Export every labeled frame as JSON.
+ *
+ * MEMORY + CORRECTNESS (luc3d #195). This used to iterate `state.session
+ * .frameGroups` directly and build one giant object, which broke twice over on a
+ * lazily reopened project:
+ *
+ *  - CORRECTNESS: only RESIDENT frames are in that map. Measured on the real
+ *    project, 31 of 180,210 — so the export silently emitted ~0.02% of the
+ *    labels into a structurally valid JSON file, with no warning. That is the
+ *    worst kind of failure: a file that looks fine and is almost empty.
+ *  - MEMORY: the naive fix (hydrate everything, then serialize) is worse — 2D for
+ *    180,210 frames x 5 cameras resident at once, plus a multi-GB JSON string and
+ *    the Blob copy of it, all inside the ~4 GB renderer cap.
+ *
+ * So it now STREAMS: `sweepLazyFrameWindows` hydrates a window, each frame is
+ * serialized and written straight out, and the window is released. Peak memory is
+ * one window plus one frame's JSON, independent of project size.
+ *
+ * Output goes through `showSaveFilePicker` when available (same as Save As). When
+ * it is not (older browsers), it falls back to accumulating a Blob download —
+ * correct, but it necessarily holds the whole document, so the user is warned
+ * first on a project large enough for that to matter.
+ */
+export async function exportLabels() {
     if (!state.session) {
         setStatus('No session to export', 'error');
         return;
     }
+    var session = state.session;
+    var loader = session.lazyLoader;
+    var totalFrames = loader ? loader.nFrames : session.frameGroups.size;
 
-    const exportData = {
+    // Header/footer are small; only `frames` is unbounded, so only it streams.
+    var header = {
         skeleton: {
-            name: state.session.skeleton.name,
-            nodes: state.session.skeleton.nodes,
-            edges: state.session.skeleton.edges,
+            name: session.skeleton.name,
+            nodes: session.skeleton.nodes,
+            edges: session.skeleton.edges,
         },
-        cameras: state.session.cameras.map(function (c) {
+        cameras: session.cameras.map(function (c) {
             return { name: c.name, matrix: c.matrix, dist: c.dist, rvec: c.rvec, tvec: c.tvec, size: c.size };
         }),
-        tracks: state.session.tracks,
-        frames: {},
+        tracks: session.tracks,
     };
 
-    for (const [frameIdx, fg] of state.session.frameGroups) {
-        const frameData = {};
-        for (const [camName, instances] of fg.instances) {
-            frameData[camName] = instances.map(function (inst) {
-                return {
-                    points: inst.points,
-                    trackIdx: inst.trackIdx,
-                    type: inst.type,
-                    score: inst.score,
-                    modified: inst.modified,
-                };
-            });
-        }
-        exportData.frames[frameIdx] = frameData;
+    var writer = null;          // FileSystemWritableFileStream, when picked
+    var parts = null;           // Blob-fallback accumulator
+    var enc = new TextEncoder();
+    var written = 0;
+    async function emit(str) {
+        written += str.length;
+        if (writer) await writer.write(enc.encode(str));
+        else parts.push(str);
     }
 
-    // Download as JSON
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'labels_export.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    if (typeof window.showSaveFilePicker === 'function') {
+        try {
+            var handle = await window.showSaveFilePicker({
+                suggestedName: 'labels_export.json',
+                types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+            });
+            writer = await handle.createWritable();
+        } catch (e) {
+            if (e && e.name === 'AbortError') { setStatus('Export cancelled', 'warning'); return; }
+            writer = null;   // fall through to the Blob path
+        }
+    }
+    if (!writer) {
+        // No streaming target: the whole document has to be held in memory.
+        var BIG = 20000;
+        if (totalFrames > BIG && !window.confirm(
+            'This project has ' + totalFrames.toLocaleString() + ' frames. Without a ' +
+            'save-file picker the whole JSON export must be built in memory, which ' +
+            'may crash the tab.\n\nExport anyway?')) {
+            setStatus('Export cancelled', 'warning');
+            return;
+        }
+        parts = [];
+    }
 
-    setStatus('Labels exported', 'success');
+    showLoading('Exporting labels...');
+    try {
+        var head = JSON.stringify(header, null, 2);
+        // Splice `"frames": { ... }` in as the last key so the streamed frames
+        // need no re-serialization of the header.
+        await emit(head.slice(0, head.length - 2) + ',\n  "frames": {');
+
+        var first = true;
+        var nFrames = 0;
+        await sweepLazyFrameWindows(session, async function (frameIdx, fg) {
+            // `fg` is undefined for a frame with 3D grouping but no resident 2D
+            // (see the sweep's contract). This exporter emits 2D, so such a frame
+            // has nothing to write.
+            if (!fg) return;
+            var frameData = {};
+            var any = false;
+            for (var [camName, instances] of fg.instances) {
+                frameData[camName] = instances.map(function (inst) {
+                    return {
+                        // JSON boundary: must emit the legacy boxed [[x,y]|null] shape.
+                        points: inst.toPointsArray(),
+                        trackIdx: inst.trackIdx,
+                        type: inst.type,
+                        score: inst.score,
+                        modified: inst.modified,
+                    };
+                });
+                any = true;
+            }
+            if (!any) return;
+            await emit((first ? '\n    ' : ',\n    ') +
+                JSON.stringify(String(frameIdx)) + ': ' + JSON.stringify(frameData));
+            first = false;
+            nFrames++;
+        }, {
+            onProgress: function (done, tot) {
+                showLoading('Exporting labels... ' + done + '/' + tot + ' frames');
+            },
+        });
+
+        await emit('\n  }\n}\n');
+
+        if (writer) {
+            await writer.close();
+        } else {
+            var blob = new Blob(parts, { type: 'application/json' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'labels_export.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        }
+        hideLoading();
+        setStatus('Labels exported — ' + nFrames.toLocaleString() + ' frames, ' +
+            (written / 1e6).toFixed(1) + ' MB', 'success');
+    } catch (err) {
+        hideLoading();
+        try { if (writer) await writer.close(); } catch (e) { /* ignore */ }
+        console.error('[exportLabels] failed:', err);
+        setStatus('Label export failed: ' + (err && err.message ? err.message : String(err)), 'error');
+    }
 }
 
 

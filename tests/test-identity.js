@@ -1,5 +1,5 @@
 (function () {
-    const { describe, it, assertEqual, assertNotNull, assertTrue, assertNull } = TestFramework;
+    const { describe, it, assertEqual, assertNotNull, assertTrue, assertFalse, assertNull } = TestFramework;
 
     // Identity is stored per-frame (frameIdentityMap); there is no global
     // track→identity map. assignTrackToIdentity / Track All only stamp frames
@@ -552,7 +552,7 @@
             var id = s.addIdentity('id_0');
             addInst(s, 0, 'CamA', 0);
             s.assignTrackToIdentity(0, id.id, 'CamA');
-            assertEqual(s.frameIdentityMap.get('0:CamA:0'), id.id);
+            assertEqual(s.getFrameIdentityValue(0, 'CamA', 0), id.id);
         });
 
         it('assignTrackToIdentity without camera stamps all cameras', function () {
@@ -565,8 +565,8 @@
             addInst(s, 0, 'CamA', 0);
             addInst(s, 0, 'CamB', 0);
             s.assignTrackToIdentity(0, id.id);
-            assertEqual(s.frameIdentityMap.get('0:CamA:0'), id.id);
-            assertEqual(s.frameIdentityMap.get('0:CamB:0'), id.id);
+            assertEqual(s.getFrameIdentityValue(0, 'CamA', 0), id.id);
+            assertEqual(s.getFrameIdentityValue(0, 'CamB', 0), id.id);
         });
 
         it('getIdentityForTrack with camera returns per-camera identity', function () {
@@ -831,6 +831,119 @@
 
     // ---- frameIdentityMap serialization ----
 
+    // ---- frameIdentityMap packed-key codec (luc3d #185 follow-up #3) ----
+    // The map holds one entry per 2D detection project-wide (2,627,447 of them on
+    // the real 180k-frame x 5-camera project), so its keys are packed into a single
+    // exact-integer Number instead of a "frameIdx:camName:trackIdx" string — a
+    // measured 132 MB of a renderer heap that is hard-capped near 4 GB. These
+    // tests pin the codec's contract, including the two things that would cause
+    // SILENT identity loss if wrong: key collisions between distinct tuples, and
+    // the fallback for tuples that cannot be packed.
+    describe('frameIdentityMap packed-key codec', function () {
+        function mk(camNames, nTracks) {
+            var cams = camNames.map(function (n) {
+                return new Camera(n, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [8, 8]);
+            });
+            var tracks = [];
+            for (var i = 0; i < (nTracks || 4); i++) tracks.push('t' + i);
+            return new Session(cams, new Skeleton('s', ['a'], []), tracks);
+        }
+
+        it('packs in-range tuples into Numbers and round-trips them', function () {
+            var s = mk(['camA', 'camB']);
+            var cases = [
+                [0, 'camA', 0], [0, 'camB', -1], [1, 'camA', 3],
+                [99999, 'camB', 7], [1073741823, 'camA', 131070],
+            ];
+            for (var i = 0; i < cases.length; i++) {
+                var c = cases[i];
+                var k = s._fimKey(c[0], c[1], c[2]);
+                assertEqual(typeof k, 'number', 'key for ' + c.join(',') + ' is packed');
+                var d = s._fimDecode(k);
+                assertEqual(d.frameIdx, c[0], 'frameIdx round-trips for ' + c.join(','));
+                assertEqual(d.camName, c[1], 'camName round-trips for ' + c.join(','));
+                assertEqual(d.trackIdx, c[2], 'trackIdx round-trips for ' + c.join(','));
+            }
+        });
+
+        it('encodes the -1 "untracked" trackIdx distinctly from 0', function () {
+            var s = mk(['camA']);
+            assertTrue(s._fimKey(5, 'camA', -1) !== s._fimKey(5, 'camA', 0),
+                '-1 and 0 must not collide');
+            assertEqual(s._fimDecode(s._fimKey(5, 'camA', -1)).trackIdx, -1);
+        });
+
+        it('never collides across adjacent frame/camera/track tuples', function () {
+            var s = mk(['camA', 'camB', 'camC']);
+            var seen = new Map();
+            for (var f = 0; f < 6; f++) {
+                for (var c = 0; c < 3; c++) {
+                    for (var t = -1; t < 5; t++) {
+                        var key = s._fimKey(f, ['camA', 'camB', 'camC'][c], t);
+                        var tag = f + '|' + c + '|' + t;
+                        assertTrue(!seen.has(key), 'no collision for ' + tag +
+                            (seen.has(key) ? ' (clashes with ' + seen.get(key) + ')' : ''));
+                        seen.set(key, tag);
+                    }
+                }
+            }
+            assertEqual(seen.size, 6 * 3 * 6);
+        });
+
+        it('falls back to a legacy string key when the tuple cannot be packed', function () {
+            var s = mk(['camA']);
+            // trackIdx beyond the 17-bit field, and an unknown camera, are both
+            // unpackable — they must still store and read back correctly rather
+            // than silently dropping the identity.
+            var big = s._fimKey(0, 'camA', 999999);
+            assertEqual(typeof big, 'string', 'oversized trackIdx falls back to a string key');
+            var unknown = s._fimKey(0, 'nosuchcam', 0);
+            assertEqual(typeof unknown, 'string', 'unknown camera falls back to a string key');
+
+            s.setFrameIdentity(0, 'camA', 999999, 42);
+            assertEqual(s.getFrameIdentityValue(0, 'camA', 999999), 42,
+                'value stored under a fallback key reads back');
+            assertTrue(s.hasFrameIdentity(0, 'camA', 999999));
+            s.deleteFrameIdentity(0, 'camA', 999999);
+            assertFalse(s.hasFrameIdentity(0, 'camA', 999999));
+        });
+
+        it('ingests BOTH legacy string keys and packed numeric keys', function () {
+            var s = mk(['camA', 'camB']);
+            var packed = s._fimKey(3, 'camB', 2);
+            var n = s.ingestFrameIdentityEntries([
+                ['0:camA:0', 10],        // legacy on-disk form
+                ['1:camB:1', 11],        // legacy on-disk form
+                [packed, 12],            // already packed
+            ]);
+            assertEqual(n, 3, 'all three entries ingested');
+            assertEqual(s.getFrameIdentityValue(0, 'camA', 0), 10, 'legacy key ingested');
+            assertEqual(s.getFrameIdentityValue(1, 'camB', 1), 11, 'legacy key ingested');
+            assertEqual(s.getFrameIdentityValue(3, 'camB', 2), 12, 'packed key ingested');
+        });
+
+        it('always exports the legacy string form, whatever is held in memory', function () {
+            var s = mk(['camA']);
+            s.setFrameIdentity(7, 'camA', 2, 5);
+            var out = s.exportFrameIdentityEntries();
+            assertEqual(out.length, 1);
+            assertEqual(out[0][0], '7:camA:2', 'exported key is the on-disk string shape');
+            assertEqual(out[0][1], 5);
+        });
+
+        it('round-trips a camera name containing a colon', function () {
+            // The legacy parser splits on the FIRST and LAST colon precisely
+            // because camera names are not guaranteed colon-free; export/ingest
+            // must survive that.
+            var s = mk(['rig:cam:1']);
+            s.setFrameIdentity(4, 'rig:cam:1', 3, 9);
+            var s2 = mk(['rig:cam:1']);
+            s2.ingestFrameIdentityEntries(s.exportFrameIdentityEntries());
+            assertEqual(s2.getFrameIdentityValue(4, 'rig:cam:1', 3), 9,
+                'colon-containing camera name survives export -> ingest');
+        });
+    });
+
     describe('frameIdentityMap serialization', function () {
         it('round-trips through array of entries', function () {
             var cams = [
@@ -843,16 +956,21 @@
             s.setFrameIdentity(0, 'CamA', 1, id1.id);
 
             // Serialize
-            var entries = Array.from(s.frameIdentityMap.entries());
+            var entries = s.exportFrameIdentityEntries();
             assertEqual(entries.length, 2);
+            // The serialized form must stay the legacy "frameIdx:camName:trackIdx"
+            // string regardless of the in-memory key packing — that is what every
+            // already-saved project on disk contains.
+            assertTrue(entries.every(function (e) { return typeof e[0] === 'string'; }),
+                'serialized keys are strings');
+            assertTrue(entries.some(function (e) { return e[0] === '0:CamA:0'; }),
+                'serialized key keeps the frameIdx:camName:trackIdx shape');
 
             // Restore
             var s2 = new Session(cams, new Skeleton('s', ['a'], []), ['t0', 't1']);
-            for (var i = 0; i < entries.length; i++) {
-                s2.frameIdentityMap.set(entries[i][0], entries[i][1]);
-            }
-            assertEqual(s2.frameIdentityMap.get('0:CamA:0'), id0.id);
-            assertEqual(s2.frameIdentityMap.get('0:CamA:1'), id1.id);
+            s2.ingestFrameIdentityEntries(entries);
+            assertEqual(s2.getFrameIdentityValue(0, 'CamA', 0), id0.id);
+            assertEqual(s2.getFrameIdentityValue(0, 'CamA', 1), id1.id);
         });
     });
     // ---- Timeline tracklet stress test ----
@@ -1045,7 +1163,7 @@
             var s = makeSession().session;
             var id0 = s.identities[0];
             s.setFrameIdentity(0, 'cam1', 0, id0.id);
-            var val = s.frameIdentityMap.get('0:cam1:0');
+            var val = s.getFrameIdentityValue(0, 'cam1', 0);
             assertEqual(val, id0.id, 'per-frame override should be set');
         });
 
@@ -1086,11 +1204,11 @@
             var count = s.propagateIdentity(1, 'cam1', 0, id0.id);
             assertTrue(count >= 2, 'should affect frames 1 and 2');
             // Frame 0 should NOT have override
-            assertNull(s.frameIdentityMap.get('0:cam1:0') != null ? 'set' : null,
+            assertNull(s.getFrameIdentityValue(0, 'cam1', 0) != null ? 'set' : null,
                 'frame 0 should not be set');
             // Frame 1 and 2 should have override
-            assertEqual(s.frameIdentityMap.get('1:cam1:0'), id0.id, 'frame 1 should be set');
-            assertEqual(s.frameIdentityMap.get('2:cam1:0'), id0.id, 'frame 2 should be set');
+            assertEqual(s.getFrameIdentityValue(1, 'cam1', 0), id0.id, 'frame 1 should be set');
+            assertEqual(s.getFrameIdentityValue(2, 'cam1', 0), id0.id, 'frame 2 should be set');
         });
 
         it('manual identity change overrides Track All per-frame value', function () {
