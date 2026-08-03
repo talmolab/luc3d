@@ -2999,6 +2999,50 @@ correctness for speed — same result either way). Verified on a real
 for real ordered data, confirms the fallback sort still engages and
 produces the IDENTICAL correct segments for a deliberately shuffled rowMap).
 
+**`deleteInstanceRows(shouldDeleteFn)` — the durable-delete primitive (Custom
+Instance Delete).** Permanently removes instance rows from the columnar store so a
+bulk delete survives eviction, re-hydration, save and reload. Companion to
+`remapTracksFromIdentity`; same diagnostics contract
+(`{deleted, errorRows, firstError, byCamera}`, per-row `try/catch`, `console.error`
+on `errorRows`). Exists because a resident-only delete fails **twice**: (1) without
+even saving — `finalizeLazyFrameGroup` re-derives `fg.instances` from store rows and
+puts any row with no matching `_rawInstIndex` member into the UNLINKED pool, so
+scrubbing away and back resurrects it; and (2) on save — `appendStore` copies the
+columns verbatim with no per-instance filter, and the user-correction overlay skips
+any camera-frame with no resident *user* instance and bails on
+`lucidInsts.length === 0`, so an emptied camera-frame streams back unchanged.
+Mutating the store is the only thing that fixes both.
+- Compacts every `instancesData` column of length `nInst` (iterates `Object.keys`,
+  so a schema addition is carried through; `col.constructor` preserves typed-vs-plain
+  and int-vs-float). **Leaves `pointsData`/`predPointsData` alone on purpose** —
+  `appendStore` walks points PER SURVIVING INSTANCE via `point_id_start/end`, so
+  orphaned point rows are never visited and never written.
+- **Keeps frame rows** (`frameRowByCam` is keyed by row index, and `refFor`,
+  `releaseFrame` and `_computeSparseOccupancy` all depend on that indexing). A frame
+  whose range collapses to `start === end` is written by `appendStore` as an empty
+  `LabeledFrame` — LUCID's answer to SLEAP's "empty LabeledFrames are removed".
+- Renumbers via a prefix sum (`survBefore`), so it does **not** assume frame rows are
+  sorted by `instance_id_start`: new index of surviving old row `i` is
+  `survBefore[i]`, and a frame's new range is `[survBefore[oldStart], survBefore[oldEnd])`.
+- Remaps `from_predicted` through the same table, degrading a link whose target was
+  deleted to `-1` — mirroring `appendStore`'s own `outIdxOf`.
+- Groups cameras by their `labels` so a **shared store** (`openProjectSlp`,
+  `_sharedStore === true`) is compacted EXACTLY ONCE; unlike
+  `remapTracksFromIdentity`'s `rebuiltLabels` guard (which only covers a one-time
+  tracks rebuild) this guard has to cover the whole mutation, because compaction is
+  global to a store.
+- Then rebuilds each affected camera's `trackOccupancy` and clears both cache layers
+  (`this.cache` + `labels._lazyFrameList.clearCache()`), same as
+  `remapTracksFromIdentity`.
+- **Caller contract:** store-only. The caller must also renumber `_rawInstIndex` on
+  surviving instances in each touched (camera, frame) — else `refFor` writes grouping
+  refs at the wrong instances and hydration loads the wrong 2D — and mirror the
+  removal into `frameGroups`/`instanceGroups` under one shared `seen` Set.
+- Unit tests: `tests/test-custom-delete-store.js` (11 cases — compaction, column-length
+  coherence, typed-array kind, order-independence, emptied-frame collapse,
+  `from_predicted` remap + degrade-to-`-1`, shared-store apply-once, per-row error
+  isolation, no-op).
+
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds
 its internal typed-frame cache automatically. `releaseFrame(frameIdx)` /

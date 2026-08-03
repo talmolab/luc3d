@@ -270,6 +270,13 @@
          the other lazy-export tests above. -->
     <script src="test-lazy-export-instance-filter.js"></script>
 
+    <!-- Custom Instance Delete: the columnar-store durability primitive
+         (`SioLazyLoader.deleteInstanceRows`). Hand-builds a store and drives the
+         compaction directly, so the index math is pinned without needing a real
+         .slp. Only needs the window.SioLazyLoader bridge — no ordering
+         constraint. -->
+    <script src="test-custom-delete-store.js"></script>
+
     <!-- Pass 2 transitional bridge + test runner.
          Loads ESM-converted modules (pose/, ui/) and exposes their exports on
          window so the test files (loaded as classic scripts above) can find
