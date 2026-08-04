@@ -66,6 +66,12 @@ export function isCameraTracked(name) {
     const ex = (globalThis.__BENCH && globalThis.__BENCH.excludedCameras) || [];
     return ex.indexOf(name) < 0;
 }
+
+// Default triangulation method — pose/triangulation.js imports this for
+// resolveTriangulationMethod's fallback, so it must exist for the link step.
+export function getDefaultTriangulationMethod() {
+    return (globalThis.__BENCH && globalThis.__BENCH.triangulationMethod) || 'dlt';
+}
 `;
 
 // Generic no-op UI stubs. `state` is a plain mutable object; the core matching

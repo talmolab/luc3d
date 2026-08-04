@@ -5,14 +5,14 @@
  * Uses the Jacobi eigenvalue algorithm for solving the 4x4 symmetric eigenproblem.
  */
 
-import { mat3x3Multiply, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
+import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js';
 import { state, timeline, viewport3d } from '../ui/app-state.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js
 import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
 import { updateTriangulationBadge } from '../ui/info-panel.js';
-import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
@@ -330,15 +330,166 @@ export function triangulatePoints(allObservations, projectionMatrices) {
 
 
 // ============================================
-// Bundle Adjustment (non-linear refinement)
+// Point refinement ("bundle adjustment", cameras fixed)
 // ============================================
 //
-// With fixed (calibrated) cameras, each 3D point is independent of the others,
-// so "bundle adjustment" here reduces to a per-point non-linear least-squares
-// refinement that minimizes the geometric reprojection error across all views.
-// DLT minimizes an *algebraic* error; this minimizes the true pixel error and
-// is therefore slower but more accurate. We solve it with Levenberg–Marquardt,
-// initialized from the DLT solution.
+// This is the *point* stage, and it deliberately mirrors aniposelib's
+// `CameraGroup.optim_points` — which is what sleap-anipose actually runs for
+// pose triangulation (`sleap_anipose.triangulate` → `triangulate_optim` →
+// `optim_points`). There, as here, the cameras are held FIXED and only the 3D
+// structure moves, so each keypoint is independent and the solve is a
+// 3-parameter non-linear least squares per point, initialized from DLT.
+//
+// ## LUCID DOES NON-LINEAR TRIANGULATION ONLY. CAMERAS ARE NEVER REFINED.
+//
+// This is a scope decision, not a missing feature — do not "complete" it by
+// re-adding joint camera+structure bundle adjustment. aniposelib's true joint
+// solve is `bundle_adjust_iter`, and that is its *calibration* path: it belongs
+// where calibration is produced (sleap-anipose / `slap-calibrate`, on a
+// checkerboard), not in an annotation GUI. LUCID CONSUMES a calibration; it is
+// not a calibration tool. Reasons this stays out:
+//
+//   * The calibration is an INPUT the user is entitled to trust. Silently
+//     mutating extrinsics under an annotation session means the 3D a user
+//     labelled against yesterday is not the 3D they get today, and every
+//     already-triangulated frame in the project becomes inconsistent with the
+//     new rig unless the whole project is re-solved.
+//   * Metric SCALE is unobservable from images alone — a uniform similarity
+//     transform of cameras plus structure reprojects identically. aniposelib only
+//     escapes this because it bundle-adjusts on a rigid board and carries an
+//     `errors_obj` term (weighted 2/board_square_length) that supplies the
+//     reference. Animal keypoints have no such model, so a joint solve here can
+//     drive reprojection error down while the geometry drifts, and it cannot fix
+//     a scale error no matter how good it looks. A previous implementation had to
+//     pin camera 0 and renormalize the camera-0-to-camera-1 baseline after every
+//     step purely to keep the normal equations from being rank-deficient by 7.
+//   * Reprojection error would then stop being a diagnostic. It is currently the
+//     signal a user reads to spot a bad label or a bad calibration; if the solver
+//     is free to move the cameras, low error no longer distinguishes "good
+//     labels" from "cameras bent to fit bad labels".
+//
+// The label "Bundle Adjustment" in the UI (and `triangulationMethodLabel`) refers
+// to THIS point stage, cameras fixed. It is the term users of anipose/SLEAP
+// expect for `optim_points`, hence kept, but it does not imply camera refinement.
+//
+// DLT minimizes an *algebraic* error; this minimizes the true pixel error.
+// Three properties matter, and all three were wrong before issue #113:
+//
+//   1. RESIDUAL SPACE. Residuals are formed in the camera's **native
+//      (distorted) pixel space** — the space the detections live in, the space
+//      the noise is i.i.d. in, and the space `triangulateAndReproject` reports
+//      `meanError` in. aniposelib does the same: its `_error_fun_triangulation`
+//      compares raw 2D against `cam.project(p3d)`, and `Camera.project` applies
+//      distortion. Previously the objective was formed against *undistorted*
+//      observations with an ideal pinhole projection, so BA minimized one thing
+//      and the UI displayed another; with realistic radial distortion the
+//      displayed error rose on 40% of instance groups.
+//
+//   2. ROBUST LOSS. A plain squared loss is dominated by the single worst view,
+//      so one bad detection drags the 3D point toward itself. We use the same
+//      soft-L1 (pseudo-Huber) loss aniposelib uses, with the same default
+//      scale (`reproj_error_threshold = 15` px), applied via IRLS inside the
+//      Levenberg–Marquardt normal equations.
+//
+//   3. MONOTONICITY ON THE REPORTED METRIC. A refinement seeded from DLT must
+//      never look worse than DLT. That cannot be guaranteed by the optimizer
+//      alone: the robust loss and the reported mean-of-Euclidean-distances are
+//      different functions, and a step that lowers either one can raise the
+//      other. So the accepted step is verified against the *reported* metric
+//      and backtracked toward the DLT seed until it is non-worsening. If no
+//      fraction of the step passes, the DLT point is returned unchanged. This
+//      makes "BA is never worse than DLT" true by construction rather than by
+//      hope.
+//
+// NOT changed by #113: the Levenberg–Marquardt ladder itself. It was measured
+// strictly monotone in its own objective (0/3000 sum-of-squares increases) and
+// converged to the local optimum (0/4000 trials left a >1e-6 relative cost gap
+// versus a 500-iteration/tol=1e-16 solve). It was never the bug.
+
+/**
+ * Default soft-L1 scale, in pixels. Residuals below this are treated as inliers
+ * (quadratic); beyond it the loss grows linearly. Matches aniposelib's
+ * `reproj_error_threshold=15` default for `optim_points` (which sleap-anipose's
+ * `slap-triangulate` re-exposes as `--reproj_error_threshold 15.0`).
+ */
+export const BA_ROBUST_SCALE_PX = 15;
+
+/**
+ * Jacobian of the Brown–Conrady distortion map with respect to the ideal
+ * (pinhole) pixel coordinates — i.e. d(distorted u, v) / d(ideal u, v).
+ *
+ * `Camera.distortPoint` computes, with x = (u - cx)/fx and y = (v - cy)/fy:
+ *   radial = 1 + k1 r² + k2 r⁴ + k3 r⁶
+ *   xd = x·radial + 2 p1 x y + p2 (r² + 2x²)
+ *   yd = y·radial + p1 (r² + 2y²) + 2 p2 x y
+ *   ud = xd·fx + cx,  vd = yd·fy + cy
+ * The fx/fy cancel on the diagonal and cross over on the off-diagonal.
+ *
+ * @param {Camera} camera
+ * @param {number[]} ideal - [u, v] ideal (undistorted) pixel coordinates
+ * @returns {number[][]|null} 2x2 [[du'/du, du'/dv], [dv'/du, dv'/dv]],
+ *   or null when the camera has no distortion (caller should use identity).
+ */
+function distortJacobian(camera, ideal) {
+    const d = camera && camera.dist;
+    if (!d || (d[0] === 0 && d[1] === 0 && d[2] === 0 && d[3] === 0 &&
+               (d.length < 5 || d[4] === 0))) {
+        return null;
+    }
+    const K = camera.matrix;
+    const fx = K[0][0], fy = K[1][1], cx = K[0][2], cy = K[1][2];
+    const k1 = d[0], k2 = d[1], p1 = d[2], p2 = d[3], k3 = d.length > 4 ? d[4] : 0;
+
+    const x = (ideal[0] - cx) / fx;
+    const y = (ideal[1] - cy) / fy;
+    const r2 = x * x + y * y;
+    const radial = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2;
+    // g = d(radial)/d(r²); d(radial)/dx = 2gx, d(radial)/dy = 2gy.
+    const g = k1 + 2 * k2 * r2 + 3 * k3 * r2 * r2;
+
+    const dxd_dx = radial + 2 * g * x * x + 2 * p1 * y + 6 * p2 * x;
+    const dxd_dy = 2 * g * x * y + 2 * p1 * x + 2 * p2 * y;
+    const dyd_dx = dxd_dy;   // symmetric for this model
+    const dyd_dy = radial + 2 * g * y * y + 6 * p1 * y + 2 * p2 * x;
+
+    return [
+        [dxd_dx, (fx / fy) * dxd_dy],
+        [(fy / fx) * dyd_dx, dyd_dy]
+    ];
+}
+
+/**
+ * Project a 3D point into a camera's **native (distorted)** pixel space and
+ * return the Jacobian with respect to the 3D point. This is the residual model
+ * the point refinement uses, so that it optimizes the same quantity
+ * `triangulateAndReproject` reports.
+ *
+ * @param {number[]} point - [X, Y, Z]
+ * @param {Camera} camera - needs .projectionMatrix, and .dist/.matrix for distortion
+ * @returns {{u:number, v:number, Ju:number[], Jv:number[]}|null}
+ */
+function projectAndJacobianCamera(point, camera) {
+    const pr = projectAndJacobian(point, camera.projectionMatrix);
+    if (pr == null) return null;
+    const D = distortJacobian(camera, [pr.u, pr.v]);
+    if (D == null) return pr;   // distortion-free: ideal projection is native
+    const dp = camera.distortPoint([pr.u, pr.v]);
+    // Chain rule: J_native = D (2x2) · J_ideal (2x3)
+    return {
+        u: dp[0],
+        v: dp[1],
+        Ju: [
+            D[0][0] * pr.Ju[0] + D[0][1] * pr.Jv[0],
+            D[0][0] * pr.Ju[1] + D[0][1] * pr.Jv[1],
+            D[0][0] * pr.Ju[2] + D[0][1] * pr.Jv[2]
+        ],
+        Jv: [
+            D[1][0] * pr.Ju[0] + D[1][1] * pr.Jv[0],
+            D[1][0] * pr.Ju[1] + D[1][1] * pr.Jv[1],
+            D[1][0] * pr.Ju[2] + D[1][1] * pr.Jv[2]
+        ]
+    };
+}
 
 /**
  * Project a 3D point through a 3x4 projection matrix and compute the Jacobian
@@ -376,20 +527,54 @@ function projectAndJacobian(point, P) {
 }
 
 /**
- * Refine a single 3D point by minimizing the total squared reprojection error
- * across all views via Levenberg–Marquardt.
+ * Refine a single 3D point across all views via Levenberg–Marquardt with a
+ * soft-L1 robust loss, guaranteed never to worsen the reported reprojection
+ * error relative to its initialization (issue #113).
  *
- * @param {(number[]|null)[]} observations - 2D points [[x1,y1], ...] (undistorted),
- *   null where the point is not visible in that camera.
+ * ### Residual space
+ * When `options.cameras` is supplied, `observations` are the **raw, native
+ * (still-distorted)** 2D detections and residuals are formed against
+ * `distort(P·X)` — the same space `triangulateAndReproject` reports errors in,
+ * and the same convention aniposelib uses. Without `options.cameras` the legacy
+ * behavior applies: `observations` are assumed already undistorted and
+ * residuals are formed against the ideal pinhole projection `P·X`.
+ *
+ * ### Robust loss
+ * Soft-L1 (pseudo-Huber) on each view's squared residual norm s:
+ *   ρ(s) = 2 f² (√(1 + s/f²) − 1),  IRLS weight w = ρ'(s) = 1/√(1 + s/f²)
+ * with f = `options.robustScale` (default {@link BA_ROBUST_SCALE_PX} = 15 px,
+ * aniposelib's `reproj_error_threshold`). Pass `robustScale: Infinity` for a
+ * plain squared loss.
+ *
+ * ### Two phases, then a guard
+ * Phase 1 minimizes the robust loss above. Phase 2 ("polish", on by default)
+ * then minimizes Σ‖rᵢ‖ — which *is* the reported mean reprojection error up to
+ * a constant factor — seeded from whichever of {DLT init, phase-1 result} scores
+ * better on it. Since each LM run is monotone in its own loss, phase 2 makes
+ * "never worse than DLT" structural. A final backtracking guard covers the
+ * residual cases (polish disabled, degenerate views), falling back to the
+ * initialization if no fraction of the step is non-worsening. Only the
+ * native-space metric is guarded; see the guard's own comment for why.
+ *
+ * @param {(number[]|null)[]} observations - 2D points [[x1,y1], ...],
+ *   null where the point is not visible in that camera. Raw/native when
+ *   `options.cameras` is given, otherwise undistorted.
  * @param {number[][][]} projectionMatrices - 3x4 projection matrices, one per camera.
  * @param {number[]|null} [initial] - Initial [X,Y,Z] guess. If null, DLT is used.
- * @param {{maxIterations?:number, tol?:number}} [options]
+ * @param {{maxIterations?:number, tol?:number, robustScale?:number,
+ *          cameras?:Camera[], guard?:boolean, polish?:boolean}} [options]
+ *   `robustScale: Infinity` + `polish: false` + `guard: false` reproduces the
+ *   pre-#113 plain-least-squares behavior, which the tests use as a baseline.
  * @returns {number[]|null} Refined [X, Y, Z], or null if < 2 valid observations.
  */
 export function triangulatePointBA(observations, projectionMatrices, initial, options) {
     options = options || {};
     const maxIter = options.maxIterations || 20;
     const tol = options.tol || 1e-8;
+    const cameras = options.cameras || null;
+    const guard = options.guard !== false;
+    const fScale = options.robustScale != null ? options.robustScale : BA_ROBUST_SCALE_PX;
+    const f2 = fScale * fScale;
 
     // Collect valid observation indices
     const validIndices = [];
@@ -400,108 +585,209 @@ export function triangulatePointBA(observations, projectionMatrices, initial, op
     }
     if (validIndices.length < 2) return null;
 
-    // Initialize from the provided guess or fall back to DLT
-    let p;
+    // Project into the residual space: native (distorted) when cameras are known.
+    function projectView(pt, idx) {
+        return cameras && cameras[idx]
+            ? projectAndJacobianCamera(pt, cameras[idx])
+            : projectAndJacobian(pt, projectionMatrices[idx]);
+    }
+
+    // Initialize from the provided guess or fall back to DLT. NOTE: when the
+    // caller supplies `cameras`, `observations` are distorted, so a DLT fallback
+    // here would be biased — callers on that path (triangulatePointsBA via
+    // triangulateAndReproject) always pass an undistorted-space DLT seed.
+    let init;
     if (initial && initial.length === 3 &&
         isFinite(initial[0]) && isFinite(initial[1]) && isFinite(initial[2])) {
-        p = [initial[0], initial[1], initial[2]];
+        init = [initial[0], initial[1], initial[2]];
     } else {
-        p = triangulatePointDLT(observations, projectionMatrices);
+        init = triangulatePointDLT(observations, projectionMatrices);
     }
-    if (p == null) return null;
+    if (init == null) return null;
+    let p = [init[0], init[1], init[2]];
 
-    function computeCost(pt) {
+    // ---- Loss models -------------------------------------------------------
+    // Each is expressed on s = ‖r‖² (per view), as {rho, weight}. `weight` is
+    // 2·ρ'(s), the IRLS weight that turns Gauss–Newton on Σρ(sᵢ) into a
+    // weighted linear least squares — the standard first-order (Triggs/Ceres)
+    // form. Both phases below share the LM driver, differing only in the loss.
+
+    // Phase 1: soft-L1 / pseudo-Huber, aniposelib's `optim_points` loss.
+    // Quadratic within `fScale` px, linear beyond, so a gross outlier cannot
+    // drag the point toward itself. `Infinity` degenerates to plain squares.
+    const LOSS_SOFT_L1 = {
+        rho: function (s) { return isFinite(f2) ? 2 * f2 * (Math.sqrt(1 + s / f2) - 1) : s; },
+        weight: function (s) { return isFinite(f2) ? 1 / Math.sqrt(1 + s / f2) : 1; }
+    };
+    // Phase 2: plain Euclidean norm, ρ(s) = √s. Σρ(sᵢ) IS the (unnormalized)
+    // reported reprojection error, so descending it descends the number the UI
+    // shows — which is the whole point of issue #113. The IRLS weight 1/‖r‖ is
+    // the Weiszfeld iteration for the geometric median.
+    const L1_EPS = 1e-6;
+    const LOSS_L1 = {
+        rho: function (s) { return Math.sqrt(s); },
+        weight: function (s) { return 1 / Math.max(Math.sqrt(s), L1_EPS); }
+    };
+
+    /** Total loss at `pt` under `loss`; Infinity if any view degenerates. */
+    function costUnder(pt, loss) {
         let sum = 0;
         for (let k = 0; k < validIndices.length; k++) {
             const idx = validIndices[k];
-            const pr = projectAndJacobian(pt, projectionMatrices[idx]);
+            const pr = projectView(pt, idx);
             if (pr == null) return Infinity;
             const du = observations[idx][0] - pr.u;
             const dv = observations[idx][1] - pr.v;
-            sum += du * du + dv * dv;
+            sum += loss.rho(du * du + dv * dv);
         }
         return sum;
     }
 
-    let lambda = 1e-3;
-    let cost = computeCost(p);
-
-    for (let iter = 0; iter < maxIter; iter++) {
-        // Accumulate normal equations: JtJ (3x3) and Jtr (3)
-        const JtJ = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
-        const Jtr = [0, 0, 0];
-        let ok = true;
-        for (let k = 0; k < validIndices.length; k++) {
-            const idx = validIndices[k];
-            const pr = projectAndJacobian(p, projectionMatrices[idx]);
-            if (pr == null) { ok = false; break; }
-            const ru = observations[idx][0] - pr.u;
-            const rv = observations[idx][1] - pr.v;
-            for (let a = 0; a < 3; a++) {
-                Jtr[a] += pr.Ju[a] * ru + pr.Jv[a] * rv;
-                for (let b = 0; b < 3; b++) {
-                    JtJ[a][b] += pr.Ju[a] * pr.Ju[b] + pr.Jv[a] * pr.Jv[b];
-                }
-            }
-        }
-        if (!ok) break;
-
-        // Levenberg–Marquardt damped step; grow lambda until the cost drops.
-        let improved = false;
-        for (let attempt = 0; attempt < 8; attempt++) {
-            const A = [
-                [JtJ[0][0] * (1 + lambda), JtJ[0][1], JtJ[0][2]],
-                [JtJ[1][0], JtJ[1][1] * (1 + lambda), JtJ[1][2]],
-                [JtJ[2][0], JtJ[2][1], JtJ[2][2] * (1 + lambda)]
-            ];
-            const Ainv = invert3x3(A);
-            if (Ainv == null) { lambda *= 10; continue; }
-
-            const delta = [
-                Ainv[0][0] * Jtr[0] + Ainv[0][1] * Jtr[1] + Ainv[0][2] * Jtr[2],
-                Ainv[1][0] * Jtr[0] + Ainv[1][1] * Jtr[1] + Ainv[1][2] * Jtr[2],
-                Ainv[2][0] * Jtr[0] + Ainv[2][1] * Jtr[1] + Ainv[2][2] * Jtr[2]
-            ];
-            const pNew = [p[0] + delta[0], p[1] + delta[1], p[2] + delta[2]];
-            const newCost = computeCost(pNew);
-
-            if (newCost < cost) {
-                const stepMag = Math.abs(delta[0]) + Math.abs(delta[1]) + Math.abs(delta[2]);
-                const rel = (cost - newCost) / (cost + 1e-12);
-                p = pNew;
-                cost = newCost;
-                lambda = Math.max(lambda * 0.3, 1e-12);
-                improved = true;
-                if (stepMag < tol || rel < tol) return p;
-                break;
-            }
-            lambda *= 10;
-            if (lambda > 1e12) return p; // Converged / stuck
-        }
-        if (!improved) break;
+    // The *reported* metric: mean Euclidean pixel error over this point's views,
+    // in the residual space. Monotonicity in this is what issue #113 is about.
+    // Identical to costUnder(pt, LOSS_L1) up to the 1/nViews normalization.
+    function reportedError(pt) {
+        return costUnder(pt, LOSS_L1) / validIndices.length;
     }
 
-    return p;
+    /**
+     * Levenberg–Marquardt on the 3 point parameters under an IRLS loss, started
+     * at `start`. Strictly monotone in `loss` — a step is accepted only when the
+     * loss drops — so the returned point is never worse than `start` under it.
+     */
+    function runLM(start, loss) {
+        let p = [start[0], start[1], start[2]];
+        let lambda = 1e-3;
+        let cost = costUnder(p, loss);
+        if (!isFinite(cost)) return p;
+
+        for (let iter = 0; iter < maxIter; iter++) {
+            // Accumulate IRLS-weighted normal equations: JtJ (3x3) and Jtr (3).
+            const JtJ = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+            const Jtr = [0, 0, 0];
+            let ok = true;
+            for (let k = 0; k < validIndices.length; k++) {
+                const idx = validIndices[k];
+                const pr = projectView(p, idx);
+                if (pr == null) { ok = false; break; }
+                const ru = observations[idx][0] - pr.u;
+                const rv = observations[idx][1] - pr.v;
+                const w = loss.weight(ru * ru + rv * rv);
+                for (let a = 0; a < 3; a++) {
+                    Jtr[a] += w * (pr.Ju[a] * ru + pr.Jv[a] * rv);
+                    for (let b = 0; b < 3; b++) {
+                        JtJ[a][b] += w * (pr.Ju[a] * pr.Ju[b] + pr.Jv[a] * pr.Jv[b]);
+                    }
+                }
+            }
+            if (!ok) break;
+
+            // Levenberg–Marquardt damped step; grow lambda until the cost drops.
+            let improved = false;
+            let converged = false;
+            for (let attempt = 0; attempt < 8; attempt++) {
+                const A = [
+                    [JtJ[0][0] * (1 + lambda), JtJ[0][1], JtJ[0][2]],
+                    [JtJ[1][0], JtJ[1][1] * (1 + lambda), JtJ[1][2]],
+                    [JtJ[2][0], JtJ[2][1], JtJ[2][2] * (1 + lambda)]
+                ];
+                const Ainv = invert3x3(A);
+                if (Ainv == null) { lambda *= 10; continue; }
+
+                const delta = [
+                    Ainv[0][0] * Jtr[0] + Ainv[0][1] * Jtr[1] + Ainv[0][2] * Jtr[2],
+                    Ainv[1][0] * Jtr[0] + Ainv[1][1] * Jtr[1] + Ainv[1][2] * Jtr[2],
+                    Ainv[2][0] * Jtr[0] + Ainv[2][1] * Jtr[1] + Ainv[2][2] * Jtr[2]
+                ];
+                const pNew = [p[0] + delta[0], p[1] + delta[1], p[2] + delta[2]];
+                const newCost = costUnder(pNew, loss);
+
+                if (newCost < cost) {
+                    const stepMag = Math.abs(delta[0]) + Math.abs(delta[1]) + Math.abs(delta[2]);
+                    const rel = (cost - newCost) / (cost + 1e-12);
+                    p = pNew;
+                    cost = newCost;
+                    lambda = Math.max(lambda * 0.3, 1e-12);
+                    improved = true;
+                    if (stepMag < tol || rel < tol) converged = true;
+                    break;
+                }
+                lambda *= 10;
+                if (lambda > 1e12) { converged = true; break; }
+            }
+            if (converged || !improved) break;
+        }
+        return p;
+    }
+
+    // Phase 1 — robust solve. Resists outliers, but its objective is not the
+    // reported metric, so it can land somewhere with a worse displayed error.
+    const robust = runLM(init, LOSS_SOFT_L1);
+    p = robust;
+
+    // Phase 2 — polish on the reported metric itself, started from whichever of
+    // {DLT seed, robust solve} already scores better on it. Because runLM is
+    // monotone in its loss and LOSS_L1 *is* the reported metric (up to the
+    // 1/nViews factor), the result is guaranteed no worse than that starting
+    // point — hence no worse than DLT. This is what makes issue #113's
+    // invariant structural rather than a post-hoc veto.
+    if (options.polish !== false) {
+        const seed = reportedError(robust) <= reportedError(init) ? robust : init;
+        p = runLM(seed, LOSS_L1);
+    }
+
+    if (!guard) return p;
+
+    // Monotone guard: a cheap belt-and-braces check on the reported metric, for
+    // the cases phase 2 cannot cover (polish disabled, or an LM that stalled on
+    // a degenerate view). Backtrack toward the initialization by halving; fall
+    // back to `init` outright if nothing passes.
+    //
+    // Deliberately guards ONLY the native-space metric — the headline
+    // `meanError` and the per-view/per-node breakdowns. It does NOT guard
+    // `meanErrorUndistorted`: that diagnostic is measured in a space nobody
+    // labels in, and DLT is inherently favored there (DLT minimizes an
+    // algebraic error in exactly those ideal-pinhole coordinates), so requiring
+    // both to improve was measured to veto genuine improvements — on a 2-camera
+    // rig with k1=-0.3 it discarded a 37% reduction in the reported error
+    // (1.78px -> 1.12px available, 1.77px kept).
+    const e0 = reportedError(init);
+    const eps = 1e-9;
+    let t = 1;
+    for (let attempt = 0; attempt < 8; attempt++) {
+        const cand = t === 1 ? p : [
+            init[0] + t * (p[0] - init[0]),
+            init[1] + t * (p[1] - init[1]),
+            init[2] + t * (p[2] - init[2])
+        ];
+        if (reportedError(cand) <= e0 + eps) return cand;
+        t *= 0.5;
+    }
+    return init;
 }
 
 /**
- * Bundle-adjust an array of keypoints. Each keypoint is refined independently,
- * initialized from a DLT estimate (or the supplied initial points).
+ * Refine an array of keypoints. Each keypoint is refined independently
+ * (the cameras are fixed, so the keypoints do not couple), initialized from a
+ * DLT estimate or the supplied initial points.
  *
- * @param {(number[]|null)[][]} allObservations - one observation array per keypoint.
+ * @param {(number[]|null)[][]} allObservations - one observation array per keypoint,
+ *   in the residual space implied by `options` (see {@link triangulatePointBA}).
  * @param {number[][][]} projectionMatrices - [P1, P2, ...] one per camera.
  * @param {Float64Array|(number[]|null)[]} [initialPoints] - per-keypoint [X,Y,Z]
  *   initial guesses, flat or boxed.
+ * @param {object} [options] - forwarded verbatim to {@link triangulatePointBA}.
  * @returns {Float64Array} Flat refined [X,Y,Z] per keypoint; all-NaN where unrefinable.
  */
-export function triangulatePointsBA(allObservations, projectionMatrices, initialPoints) {
+export function triangulatePointsBA(allObservations, projectionMatrices, initialPoints, options) {
     const results = makePoints3d(allObservations.length);
     const flatInit = initialPoints instanceof Float64Array ? initialPoints : null;
     for (let k = 0; k < allObservations.length; k++) {
         let init = null;
         if (flatInit) init = getPoint3d(flatInit, k);
         else if (initialPoints) init = initialPoints[k];
-        setPoint3d(results, k, triangulatePointBA(allObservations[k], projectionMatrices, init));
+        setPoint3d(results, k,
+            triangulatePointBA(allObservations[k], projectionMatrices, init, options));
     }
     return results;
 }
@@ -780,9 +1066,17 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     // Undistort 2D points before triangulation for accuracy
     // Occluded keypoints are excluded (position may be imprecise)
     // allObservations[k][c] = [x,y] (undistorted) or null
+    // allObservationsRaw[k][c] = the same detection in the camera's NATIVE
+    //   (still-distorted) pixel space, kept index-parallel so the two stay in
+    //   lockstep as the outlier-rejection loop below nulls entries. DLT needs
+    //   the undistorted form (it is a linear method in ideal pinhole
+    //   coordinates); the 'ba' refinement needs the raw form, because it
+    //   minimizes in the space the reported error is measured in (issue #113).
     const allObservations = [];
+    const allObservationsRaw = [];
     for (let k = 0; k < numKeypoints; k++) {
         const obsForKeypoint = [];
+        const rawForKeypoint = [];
         for (let c = 0; c < cameraNames.length; c++) {
             const inst = instanceGroup.getInstance(cameraNames[c]);
             // Skip nulled nodes — they are excluded from triangulation
@@ -790,6 +1084,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
             if (included[c] && inst && inst.hasPoint(k) && !isNulled) {
                 const cam = cameraMap[cameraNames[c]];
                 const raw2d = inst.getPoint(k);
+                rawForKeypoint.push(raw2d);
                 if (cam && cam.undistortPoint) {
                     obsForKeypoint.push(cam.undistortPoint(raw2d));
                 } else {
@@ -797,20 +1092,49 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
                 }
             } else {
                 obsForKeypoint.push(null);
+                rawForKeypoint.push(null);
             }
         }
         allObservations.push(obsForKeypoint);
+        allObservationsRaw.push(rawForKeypoint);
     }
 
     // Step 2: Triangulate.
     //   'dlt' (default) — fast linear DLT.
-    //   'ba'            — DLT to initialize, then non-linear bundle-adjustment
-    //                     refinement minimizing geometric reprojection error.
+    //   'ba'            — DLT to initialize, then robust non-linear refinement
+    //                     of each keypoint against the native-space detections
+    //                     (aniposelib `optim_points` paradigm; cameras fixed).
+    //
+    // CAUTION — this default is SILENT. Omitting `options.method` does not mean
+    // "keep whatever method this group already used"; it means DLT. Any caller
+    // that re-solves an ALREADY-TRIANGULATED group must pass
+    // `{ method: group.triangulationMethod === 'ba' ? 'ba' : 'dlt' }` — see
+    // `reTriangulateGroup` and `ui/rendering.js`'s lazy reprojection fill.
+    // Otherwise it silently downgrades a BA solve to DLT while
+    // `group.triangulationMethod` still claims 'ba', so the Info Panel labels
+    // the number "Bundle Adjustment" and shows DLT's value. That was exactly
+    // the "Triangulate All ▸ Bundle Adjustment appears to change nothing" bug
+    // (guarded by `tests/e2e/triangulate-all-ba-display.mjs`). Callers that are
+    // deliberately fast/DLT-only (the grouping sweeps in `ui/export-modals.js`,
+    // the identity-assignment cost matrices) say so at the call site.
     const method = (options && options.method === 'ba') ? 'ba' : 'dlt';
+    const baCameras = cameraNames.map(function (n) { return cameraMap[n]; });
+    const baOptions = {
+        cameras: baCameras,
+        robustScale: (options && options.robustScale != null)
+            ? options.robustScale : BA_ROBUST_SCALE_PX
+    };
     function triangulateFrom(obs) {
         if (method === 'ba') {
             const dltPoints = triangulatePoints(obs, projMatrices);
-            return triangulatePointsBA(obs, projMatrices, dltPoints);
+            // Mask the raw observations to exactly the views `obs` still keeps,
+            // so a view dropped by the outlier loop is dropped from BA too.
+            const rawMasked = obs.map(function (perKeypoint, k) {
+                return perKeypoint.map(function (o, c) {
+                    return o == null ? null : allObservationsRaw[k][c];
+                });
+            });
+            return triangulatePointsBA(rawMasked, projMatrices, dltPoints, baOptions);
         }
         return triangulatePoints(obs, projMatrices);
     }
@@ -2099,6 +2423,139 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     return { triangulated: triangulated, totalGroups: totalGroups, totalErrors: totalErrors };
 }
 
+// ============================================
+// Method preservation (luc3d: "exported 3D must equal displayed 3D")
+// ============================================
+
+/**
+ * Which method should be used to (re-)triangulate `group`?
+ *
+ * `triangulateAndReproject`'s `options.method` default is SILENT DLT, so every
+ * caller that omits it quietly downgrades a bundle-adjusted group to DLT. The
+ * rule, in priority order:
+ *
+ *   1. The group's OWN recorded method — a group already refined with BA must
+ *      stay BA, otherwise a re-solve replaces the 3D the user is looking at (and
+ *      that a subsequent save/export writes) with a *different*, worse solution.
+ *   2. Otherwise the user's global default (Settings ▸ Triangulation Method),
+ *      which is what an explicit user action on a brand-new group should honor.
+ *      Never a bare `'dlt'` literal.
+ *
+ * `typeof` guard on the settings getter for the flat-script test harness
+ * (`tests/run-node.js`), which does not resolve the ES import — same pattern as
+ * `isCameraTracked` / `getTrackingThreshold` above.
+ *
+ * NOT used by `ui/rendering.js`'s lazy reprojection fill, deliberately. That
+ * path re-derives reprojections for 3D it does NOT own and does not write back,
+ * so it must REPRODUCE the existing solve (`=== 'ba' ? 'ba' : 'dlt'`); falling
+ * back to the global default there would report the error of a solution the
+ * group does not hold. Rule of thumb: writes `points3d` → use this; only reads
+ * it → match the recorded method exactly.
+ *
+ * @param {InstanceGroup|null} [group] - the group about to be triangulated, or
+ *   the equivalent PRIOR group when a rebuild produced a fresh object.
+ * @returns {'ba'|'dlt'}
+ */
+export function resolveTriangulationMethod(group) {
+    if (group && group.triangulationMethod === 'ba') return 'ba';
+    if (group && group.triangulationMethod === 'dlt') return 'dlt';
+    var pref = (typeof getDefaultTriangulationMethod === 'function')
+        ? getDefaultTriangulationMethod() : 'dlt';
+    return pref === 'ba' ? 'ba' : 'dlt';
+}
+
+/**
+ * Find the group in `priorGroups` that is the SAME group as `group` — i.e. its
+ * membership is identical, camera for camera, by Instance object identity.
+ *
+ * The regrouping sweeps (`groupByIdentityAndTriangulateAll`,
+ * `groupByTrackAndTriangulateAll`) delete a frame's `instanceGroups` and build
+ * fresh `InstanceGroup` objects around the SAME `Instance` objects. The fresh
+ * object carries no `points3d` and no `triangulationMethod`, so without this
+ * lookup a regroup cannot tell "I just rebuilt the identical group, its existing
+ * 3D is still exactly right" from "this is a genuinely new grouping". It used to
+ * assume the latter for every group and re-solve with DLT — silently replacing
+ * a whole project's BA 3D, and with it what gets saved/exported.
+ *
+ * Identical membership means identical 2D input, so the prior 3D is still the
+ * correct solution: nothing to recompute. (2D edits cannot hide here — moving or
+ * nulling a node already routes through `reTriangulateGroup`, which refreshes
+ * the group's 3D at edit time, preserving its method.)
+ *
+ * @param {InstanceGroup[]|null} priorGroups
+ * @param {InstanceGroup} group
+ * @returns {InstanceGroup|null}
+ */
+export function findEquivalentPriorGroup(priorGroups, group) {
+    if (!priorGroups || !priorGroups.length || !group) return null;
+    for (var i = 0; i < priorGroups.length; i++) {
+        var prior = priorGroups[i];
+        if (!prior || prior === group) continue;
+        if (prior.instances.size !== group.instances.size) continue;
+        var same = true;
+        for (var [cn, inst] of group.instances) {
+            if (prior.instances.get(cn) !== inst) { same = false; break; }
+        }
+        if (same) return prior;
+    }
+    return null;
+}
+
+/**
+ * Adopt `prior`'s already-valid 3D onto `group` instead of re-solving it —
+ * but ONLY when doing so is a genuine no-op with respect to `method`.
+ *
+ * Only call with a `prior` from `findEquivalentPriorGroup` (identical
+ * membership). Adoption requires BOTH:
+ *   * identical membership (the caller's job) — so the 2D input is unchanged; and
+ *   * `prior.triangulationMethod === method` — so the stored 3D already IS the
+ *     solution this operation was asked to produce.
+ *
+ * The method check is load-bearing, not defensive. The grouping sweeps are
+ * GOVERNED by the requested method (the Settings default, or an explicit pick):
+ * with Bundle Adjustment selected, "Group by Track / Group by ID & Triangulate
+ * All" must leave BA 3D on every group — including groups that already had
+ * perfectly good DLT 3D with unchanged membership. Adopting on membership alone
+ * would silently keep that DLT solution and make the setting a no-op for exactly
+ * the groups a user is most likely to have. Conversely a DLT re-run over a
+ * DLT-solved project adopts everything and solves nothing, which is the free fast
+ * path this exists for.
+ *
+ * Copies `points3d`, `triangulationMethod` and `usedCameras`.
+ *
+ * `reprojections` is deliberately NOT copied. It is pure derived state, and
+ * leaving it empty is what lets `ui/rendering.js`'s lazy fill regenerate both it
+ * AND `state.triangulationResults` for the displayed frame using the adopted
+ * `triangulationMethod` — so the reported error matches the adopted 3D. Copying
+ * it would instead SUPPRESS that fill (its condition is "has points3d but no
+ * reprojections"), leaving the Info Panel with no results to show. Same reason
+ * the memory-bounded sweeps drop it; `points3d` is what save/export reads.
+ *
+ * `triangulationMethod` IS persisted (per-group
+ * `metadata.lucid.triangulationMethod`, written by both SLP writers and restored
+ * by the importer), so this check still works on a REOPENED project. It was not,
+ * originally: a reopened project had 3D with an undefined method, so nothing could
+ * ever be adopted and `ui/rendering.js`'s fill reported DLT's error for BA points.
+ *
+ * @param {InstanceGroup} group
+ * @param {InstanceGroup|null} prior
+ * @param {'ba'|'dlt'} method - the method this operation is required to produce
+ * @returns {boolean} true if 3D was adopted and `group` needs no triangulation
+ */
+export function adoptPrior3d(group, prior, method) {
+    if (!group || !prior) return false;
+    if (!someValidPoint3d(prior.points3d)) return false;
+    // Only adopt a solution produced by the method being asked for. An undefined
+    // prior method is NOT assumed to be DLT: it is unknown, so it never matches
+    // and the group is re-solved rather than trusted.
+    var want = (method === 'ba') ? 'ba' : 'dlt';
+    if (prior.triangulationMethod !== want) return false;
+    group.points3d = prior.points3d;
+    group.triangulationMethod = want;
+    if (prior.usedCameras && prior.usedCameras.size) group.usedCameras = prior.usedCameras;
+    return true;
+}
+
 /**
  * Re-triangulate a single instance group if it was previously triangulated.
  * Called automatically when a node is moved or nulled to keep reprojections in sync.
@@ -2119,8 +2576,9 @@ export function reTriangulateGroup(instanceGroup) {
     var oldPoints3d = instanceGroup.points3d;
 
     // Preserve whichever method this group was last triangulated with so a node
-    // move re-refines consistently (e.g. a BA group stays BA).
-    var method = (instanceGroup.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+    // move re-refines consistently (e.g. a BA group stays BA); a group with no
+    // recorded method (e.g. 3D loaded from file) takes the user's global default.
+    var method = resolveTriangulationMethod(instanceGroup);
     var result = triangulateAndReproject(instanceGroup, groupCameras, { method: method });
     instanceGroup.triangulationMethod = result.method;
 

@@ -234,6 +234,12 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             if (points3dNodeCount(_igPts) > 0) {
                 group.points3d = _igPts;
                 restoredWith3d++;
+                // Which solver produced this 3D (persisted in metadata.lucid;
+                // absent = DLT). Without it a reopened project has BA 3D with an
+                // unknown method, so `ui/rendering.js`'s lazy fill re-derives
+                // reprojections with DLT and displays DLT's error for BA points,
+                // and `adoptPrior3d` can never match so every regroup re-solves.
+                group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
             }
 
             groups.push(group);
@@ -424,6 +430,12 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             if (points3dNodeCount(_i3dPts) > 0) {
                 group.points3d = _i3dPts;
                 restoredWith3d++;
+                // Which solver produced this 3D (persisted in metadata.lucid;
+                // absent = DLT). Without it a reopened project has BA 3D with an
+                // unknown method, so `ui/rendering.js`'s lazy fill re-derives
+                // reprojections with DLT and displays DLT's error for BA points,
+                // and `adoptPrior3d` can never match so every regroup re-solves.
+                group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
             }
 
             groups.push(group);
@@ -562,6 +574,12 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             if (points3dNodeCount(_i3dPts) > 0) {
                 group.points3d = _i3dPts; // REUSE — asPoints3d passes a flat array through uncopied
                 restoredWith3d++;
+                // Which solver produced this 3D (persisted in metadata.lucid;
+                // absent = DLT). Without it a reopened project has BA 3D with an
+                // unknown method, so `ui/rendering.js`'s lazy fill re-derives
+                // reprojections with DLT and displays DLT's error for BA points,
+                // and `adoptPrior3d` can never match so every regroup re-solves.
+                group.triangulationMethod = (igLucid.triangulationMethod === 'ba') ? 'ba' : 'dlt';
             }
 
             groups.push(group);
