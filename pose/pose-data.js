@@ -957,6 +957,18 @@ export class InstanceGroup {
         this.dirty = false;
         /** @type {Set<string>|null} Camera names used for last triangulation */
         this.usedCameras = null;
+        /**
+         * Which solver produced `points3d`: `'ba'` | `'dlt'` | undefined (never
+         * triangulated). Read by `resolveTriangulationMethod` (a re-solve keeps the
+         * group's method), by `ui/rendering.js`'s lazy reprojection fill (so the
+         * reported error matches the 3D actually on hand), by `adoptPrior3d` (a
+         * regroup only reuses 3D produced by the method being asked for) and by the
+         * Info Panel's method label. NOT reconstructable from `points_3d`, so it is
+         * PERSISTED in per-group `metadata.lucid.triangulationMethod` (written only
+         * when `'ba'`; absent means DLT) and restored on import.
+         * @type {'ba'|'dlt'|undefined}
+         */
+        this.triangulationMethod = undefined;
         /** @type {Map<string, Instance>} camera name -> reprojected instance */
         this.reprojectedInstances = new Map();
     }

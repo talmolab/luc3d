@@ -256,7 +256,18 @@ session graph that holds them.
 - `Identity` — id + name + color (uses `IDENTITY_COLORS` palette).
 - `IDENTITY_COLORS` — 20-color palette for identity badges.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
-  + cached `reprojectedInstances`. `markDirty`/`markClean`.
+  + cached `reprojectedInstances`. `markDirty`/`markClean`. Also
+  `triangulationMethod` (`'ba'`|`'dlt'`|undefined), recording WHICH SOLVER
+  produced `points3d`. Read by `resolveTriangulationMethod`,
+  `ui/rendering.js`'s lazy reprojection fill, `adoptPrior3d` and the Info Panel's
+  method label — and **persisted**, in per-group
+  `metadata.lucid.triangulationMethod` (written only when `'ba'`; absent means
+  DLT), because it cannot be reconstructed from `points_3d`. Before that,
+  reopening a BA project gave every group BA 3D with an *unknown* method, so the
+  display fill re-derived reprojections with DLT and the panel reported DLT's
+  error under a "DLT" label for BA points (measured on the regression fixture:
+  1.62 px shown instead of 1.43 px). Guarded by
+  `tests/e2e/triangulate-all-ba-file-roundtrip.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
   frameGroups, instanceGroups. The `numFrames` getter returns
   `lazyLoader.nFrames` on a lazy session (`frameGroups` there holds only the
@@ -1477,12 +1488,10 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   plus governance in both directions (DLT-over-DLT adopts everything; BA-over-DLT
   re-solves everything) and that an explicit `'dlt'` beats a BA default.
 
-  **Caveat: `group.triangulationMethod` is in-memory only** — it is not persisted
-  to the `.slp`, so on a reopened project every group has 3D but an undefined
-  method. Adoption therefore cannot fire after a reopen (everything is re-solved
-  with the requested method — correct, but not free), and `ui/rendering.js`'s fill
-  resolves to `'dlt'`. Persisting it in per-group `metadata.lucid` is tracked
-  separately.
+  `group.triangulationMethod` IS persisted (per-group
+  `metadata.lucid.triangulationMethod`), so adoption works across a reopen too and
+  a reopened BA project still displays BA's error — see `pose/pose-data.js`'s
+  `InstanceGroup` entry.
 - `sweepTriangulationFrames(session, onFrame, opts)` (module-private) +
   `frameGroupHasUserInstances(fg)` — memory-bounded driver both bulk-triangulate
   paths (identity + track) now use. On a windowing-capable lazy session
@@ -4420,8 +4429,9 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   `RecordingSession` (`frameGroups → instanceGroups → instanceByCamera`): 2D
   points/occlusion from each typed `Instance._xy`/`_visible`, per-instance
   metadata from `ig.metadata.lucid.instanceMeta`, 3D from `ig.instance3d.points`,
-  and per-session identity from `ig.metadata.lucid.identityId` (falling back to
-  the raw dict's `identity_idx` for legacy files). Reads both LUCID's legacy and
+  the solver that produced that 3D from `ig.metadata.lucid.triangulationMethod`
+  (absent = `'dlt'`), and per-session identity from `ig.metadata.lucid.identityId`
+  (falling back to the raw dict's `identity_idx` for legacy files). Reads both LUCID's legacy and
   the new canonical `sessions_json`. Same pass-1 dedup + trackless/identity-less
   handling as the dict version. Returns `{ restoredGroups, restoredWith3d }`.
 - `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →

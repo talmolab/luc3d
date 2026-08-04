@@ -2531,11 +2531,11 @@ export function findEquivalentPriorGroup(priorGroups, group) {
  * reprojections"), leaving the Info Panel with no results to show. Same reason
  * the memory-bounded sweeps drop it; `points3d` is what save/export reads.
  *
- * NOTE: `triangulationMethod` is currently in-memory only — it is not persisted
- * to the `.slp`, so on a REOPENED project every group has 3D but an undefined
- * method and this check can never match (nothing is adopted; everything is
- * re-solved with the requested method, which is correct but not free). Persisting
- * it is tracked separately.
+ * `triangulationMethod` IS persisted (per-group
+ * `metadata.lucid.triangulationMethod`, written by both SLP writers and restored
+ * by the importer), so this check still works on a REOPENED project. It was not,
+ * originally: a reopened project had 3D with an undefined method, so nothing could
+ * ever be adopted and `ui/rendering.js`'s fill reported DLT's error for BA points.
  *
  * @param {InstanceGroup} group
  * @param {InstanceGroup|null} prior

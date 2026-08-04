@@ -582,6 +582,10 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
                 instanceMeta: {},
                 identityId: (group.identityId != null && group.identityId >= 0) ? group.identityId : -1,
             };
+            // Which solver produced this group's 3D — not reconstructable from
+            // `points_3d`, so it must be persisted. See the identical note in
+            // `file-io.js`'s eager writer. Only written when 'ba' (absent = DLT).
+            if (group.triangulationMethod === 'ba') igLucidMeta.triangulationMethod = 'ba';
             var refCount = 0;
             for (var entry of group.instances) {
                 var gCamName = entry[0];
