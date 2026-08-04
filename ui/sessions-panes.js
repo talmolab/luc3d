@@ -5,7 +5,8 @@
 //     `mapPositionToDirection`, `updateStripItemStatus`,
 //     `refreshPaneInteractions`, `renderDuplicatePanels`).
 //   - View strip (`multiSelectViews`, `clearMultiSelect`,
-//     `populateVideoBrightnessTable`, `applyVideoBrightness`,
+//     `populateVideoBrightnessTable`, `populateVideoContrastTable`,
+//     `applyVideoFilters`,
 //     `clampRotation`, `populateVideoRotationTable`, `syncRotationUI`,
 //     `populateViewStrip`).
 //   - Sessions panel (`populateSessionsPanel`).
@@ -41,7 +42,11 @@ import {
     updateTotalFrames,
 } from '../loading/session-loader.js';
 import { OnDemandVideoDecoder } from '../loading/video.js';
-import { setStatus, showLoading, hideLoading, quickSave } from '../import-export/save-load.js';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js';
+import {
+    CONTRAST_MIN, CONTRAST_MAX, clampContrast,
+    buildVideoFilter, getSessionContrast, setSessionContrast,
+} from './video-filters.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
@@ -126,6 +131,11 @@ class VideoPaneRenderer {
             view.overlayCanvas = overlayCanvas;
             view.overlayCtx = overlayCanvas.getContext('2d');
             view.wrapper = wrapper;
+            // Brand-new canvas — re-apply the view's display filters. Contrast
+            // lives on the SESSION, so a session switch (which rebuilds every
+            // view and pane) must repaint the filter from the session's stored
+            // value rather than start clean.
+            applyVideoFilters(view);
         }
 
         panelRenderers.set(this.panelId, this);
@@ -163,6 +173,7 @@ class VideoPaneRenderer {
                 view.overlayCanvas = overlayCanvas;
                 view.overlayCtx = overlayCanvas.getContext('2d');
                 view.wrapper = wrapper;
+                applyVideoFilters(view);
             }
             requestAnimationFrame(function () { refreshPaneInteractions(); });
         }
@@ -566,7 +577,7 @@ function populateVideoBrightnessTable() {
                 if (linked && linked.checked) {
                     for (var i = 0; i < state.views.length; i++) {
                         state.views[i]._brightness = val;
-                        applyVideoBrightness(state.views[i]);
+                        applyVideoFilters(state.views[i]);
                     }
                     var sliders = container.querySelectorAll('input[type=range]');
                     var vals = container.querySelectorAll('.vis-val');
@@ -574,7 +585,7 @@ function populateVideoBrightnessTable() {
                     vals.forEach(function(v) { v.textContent = val + '%'; });
                 } else {
                     state.views[idx]._brightness = val;
-                    applyVideoBrightness(state.views[idx]);
+                    applyVideoFilters(state.views[idx]);
                 }
             };
         })(vi, valLabel));
@@ -587,10 +598,115 @@ function populateVideoBrightnessTable() {
     }
 }
 
-function applyVideoBrightness(view) {
-    if (!view.canvas) return;
-    var brightness = view._brightness != null ? view._brightness : 100;
-    view.canvas.style.filter = brightness === 100 ? '' : 'brightness(' + (brightness / 100) + ')';
+/** Signed display for a contrast slider: `-40`, `0`, `+40`. */
+function formatContrast(val) {
+    return (val > 0 ? '+' : '') + val;
+}
+
+/**
+ * Visibility tab → Video Contrast. Mirrors `populateVideoBrightnessTable`, but
+ * the value is stored PER SESSION (`session.videoContrast`, persisted in the
+ * `.slp`) rather than on the transient view object, so it survives session
+ * switches and reopens.
+ */
+function populateVideoContrastTable() {
+    var container = document.getElementById('visVideoContrastTable');
+    if (!container) return;
+    container.innerHTML = '';
+    for (var vi = 0; vi < state.views.length; vi++) {
+        var view = state.views[vi];
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px;';
+
+        var current = getSessionContrast(state.session, view.name);
+
+        var slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = String(CONTRAST_MIN);
+        slider.max = String(CONTRAST_MAX);
+        slider.value = String(current);
+        slider.step = '1';
+        slider.style.cssText = 'width:120px;flex-shrink:0;';
+        slider.dataset.viewIdx = vi;
+
+        var valLabel = document.createElement('span');
+        valLabel.className = 'vis-val';
+        valLabel.style.cssText = 'min-width:32px;text-align:right;flex-shrink:0;';
+        valLabel.textContent = formatContrast(current);
+
+        var camLabel = document.createElement('span');
+        camLabel.style.cssText = 'color:var(--text-primary,#e0e0e0);white-space:nowrap;flex-shrink:0;';
+        camLabel.textContent = view.name;
+
+        var videoName = '';
+        for (var vfi = 0; vfi < state.videoFiles.length; vfi++) {
+            if (state.videoFiles[vfi].name === view.name) {
+                videoName = state.videoFiles[vfi].file ? state.videoFiles[vfi].file.name : '';
+                break;
+            }
+        }
+        var vidLabel = document.createElement('span');
+        vidLabel.style.cssText = 'color:var(--text-muted,#888);font-size:10px;overflow-x:auto;white-space:nowrap;max-width:120px;';
+        vidLabel.textContent = videoName;
+
+        slider.addEventListener('input', (function(idx, vl) {
+            return function(e) {
+                // Clamp once, up front, and drive the store, the labels and the
+                // sibling sliders from the SAME value — so the UI can never show
+                // a number the session didn't actually accept.
+                var val = clampContrast(e.target.value);
+                var linked = document.getElementById('visVideoContrastLink');
+                if (linked && linked.checked) {
+                    for (var i = 0; i < state.views.length; i++) {
+                        setSessionContrast(state.session, state.views[i].name, val);
+                        applyVideoFilters(state.views[i]);
+                    }
+                    var sliders = container.querySelectorAll('input[type=range]');
+                    var vals = container.querySelectorAll('.vis-val');
+                    sliders.forEach(function(s) { s.value = val; });
+                    vals.forEach(function(v) { v.textContent = formatContrast(val); });
+                } else {
+                    setSessionContrast(state.session, state.views[idx].name, val);
+                    vl.textContent = formatContrast(val);
+                    applyVideoFilters(state.views[idx]);
+                }
+                // Contrast is project state (saved into the .slp), not a
+                // browser-local display preference — an edit leaves the project
+                // unsaved.
+                markDirty();
+            };
+        })(vi, valLabel));
+
+        row.appendChild(slider);
+        row.appendChild(valLabel);
+        row.appendChild(camLabel);
+        row.appendChild(vidLabel);
+        container.appendChild(row);
+    }
+}
+
+/**
+ * Write the combined brightness+contrast CSS filter onto a view's canvas.
+ *
+ * Both settings share `style.filter`, so they MUST be emitted together —
+ * applying them separately would have the second assignment erase the first.
+ * Duplicate panes of the same view get the same filter: they receive their
+ * pixels via `drawImage` (see `renderDuplicatePanels`), which copies raw pixel
+ * data and does not inherit the primary canvas's CSS filter.
+ */
+export function applyVideoFilters(view) {
+    if (!view) return;
+    var filter = buildVideoFilter(
+        view._brightness != null ? view._brightness : 100,
+        getSessionContrast(state.session, view.name)
+    );
+    if (view.canvas) view.canvas.style.filter = filter;
+    for (var entry of panelRenderers) {
+        var renderer = entry[1];
+        if (!renderer || renderer.getViewName() !== view.name) continue;
+        var mirror = renderer.element.querySelector('canvas:not(.overlay-canvas)');
+        if (mirror && mirror !== view.canvas) mirror.style.filter = filter;
+    }
 }
 
 export function clampRotation(deg) {
@@ -805,6 +921,7 @@ export function populateViewStrip() {
         })(state.views[idx]);
     }
     populateVideoBrightnessTable();
+    populateVideoContrastTable();
     populateVideoRotationTable();
 }
 

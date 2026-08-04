@@ -445,6 +445,12 @@ session graph that holds them.
   `_promoteIfMixed`), skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
   (`renameCameraInAllData`).
+  **`videoContrast`** (issue #149) — `{ cameraName: int }`, each an integer in
+  [−100, 100]. Display-only (a CSS filter on the view canvas) but **per-session**
+  and persisted in the `.slp` (`metadata.lucid.videoContrast`): `state.views` is
+  rebuilt from scratch on every session switch, so a per-view field would
+  silently reset. Default (0) entries are never stored — see
+  `ui/video-filters.js`, which owns every read/write.
 - `clonePoints(points)` — deep-clone helper for `[u,v]|null` arrays.
 - `mat3x3Multiply`, `mat3x3Multiply3x4` — matrix utilities used by
   `Camera` and `triangulation.js`.
@@ -2016,6 +2022,8 @@ multi-video docking layout.
 - `multiSelectViews`, `clearMultiSelect`.
 - `refreshPaneInteractions`.
 - `clampRotation`, `syncRotationUI`.
+- `applyVideoFilters(view)` — write the COMBINED brightness+contrast CSS filter
+  onto a view's canvas (see below).
 - `populateViewStrip`, `populateSessionsPanel`, `populateSessionStrip`.
 - `showMoveVideoModal`.
 - `removeSession`, `switchSession` (async).
@@ -2031,7 +2039,9 @@ multi-video docking layout.
   `fitCanvasesToCells`, `updateTotalFrames`.
 - `../loading/video.js` — `OnDemandVideoDecoder`.
 - `../import-export/save-load.js` — `setStatus`, `showLoading`,
-  `hideLoading`.
+  `hideLoading`, `quickSave`, `markDirty`.
+- `./video-filters.js` — `CONTRAST_MIN`, `CONTRAST_MAX`, `buildVideoFilter`,
+  `getSessionContrast`, `setSessionContrast`.
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `./identity-assignment.js` — `autoAssignState`.
@@ -2084,8 +2094,33 @@ Re-activating an evicted session later requires reopening it from scratch
 from within one already-open project `.slp` yet.
 
 **User-facing features.** Video pane docking (drag/move/resize), view
-strip (top), session strip (bottom), per-pane brightness/rotation
+strip (top), session strip (bottom), per-pane brightness/contrast/rotation
 controls, switch-session UX, move-video-between-sessions modal.
+
+**Video display filters — brightness + contrast (issue #149).**
+`populateVideoBrightnessTable` and `populateVideoContrastTable` render the
+Visibility tab's per-view tables (`#visVideoBrightnessTable`,
+`#visVideoContrastTable`, each with a `Select All Videos` link toggle), and both
+funnel into the single **`applyVideoFilters(view)`**, which composes
+`buildVideoFilter(view._brightness, getSessionContrast(state.session,
+view.name))` (`ui/video-filters.js`) into ONE `style.filter` string. They must
+share one writer: both settings target the same CSS property, so applying them
+independently would have the second write erase the first.
+The two settings differ in where they live:
+- **Brightness** stays on the transient view object (`view._brightness`), so it
+  resets on a session switch — pre-existing behavior, unchanged.
+- **Contrast** lives on the SESSION (`session.videoContrast`, an integer in
+  [−100, 100] per camera) and is persisted in the `.slp`
+  (`metadata.lucid.videoContrast`). `switchSession` throws `state.views` away and
+  rebuilds every pane, so `VideoPaneRenderer.init`/`update` call
+  `applyVideoFilters` right after assigning `view.canvas` — that is what restores
+  each session's own contrast on a switch (and on a reopen). A slider edit calls
+  `markDirty()`: contrast is project state, not a browser-local preference.
+`applyVideoFilters` also writes the filter onto any **duplicate panes** of the
+same view. Mirror panes receive their pixels via `drawImage`
+(`renderDuplicatePanels`), which copies raw pixel data and does not inherit the
+primary canvas's CSS filter — so without this they showed the unfiltered video
+(this also fixes that pre-existing gap for brightness).
 
 **Visibility-tab toggle list refresh (Block 2 / Prompt 4).** After
 `timeline.setData(newSession)`, `switchSession` calls
@@ -2646,6 +2681,61 @@ covered by `tests/test-track-identity-modals.js`; the lazy/durable half of
 
 ---
 
+### ui/video-filters.js
+
+**Purpose.** Per-view video display filters — brightness and contrast (issue
+#149). Pure and DOM-free: it imports NO project modules, so it can be bridged
+into `tests/test-runner.html` and the `vm` sandbox runner without dragging
+`app.js` in. `ui/sessions-panes.js` owns the DOM half (the Visibility-tab
+tables) and calls in here for the math and the per-session store.
+
+**The contrast mapping.** CSS `filter: contrast(k)` is a per-channel linear
+transfer function pivoted on mid-grey — `out = k * in + (0.5 - 0.5 * k)` on
+normalized channel values. `k = 1` is identity, `k > 1` pushes values away from
+0.5 (more contrast), `k < 1` collapses them toward 0.5, and `k = 0` flattens the
+image to mid-grey. So the bipolar slider is a straight affine map with no branch
+on sign: `k = 1 + s / 100` for `s ∈ [-100, 100]` → `k ∈ [0, 2]`, mirroring the
+brightness slider's 0..200 % → `brightness(0..2)`.
+
+**Key exports.**
+- `CONTRAST_MIN` / `CONTRAST_MAX` / `CONTRAST_DEFAULT` (−100 / 100 / 0),
+  `BRIGHTNESS_MIN` / `BRIGHTNESS_MAX` / `BRIGHTNESS_DEFAULT` (0 / 200 / 100).
+- `clampContrast(v)` / `clampBrightness(v)` — coerce anything (number, slider
+  string, `null`, `NaN`, out-of-range) to a valid integer setting; junk falls
+  back to the default rather than producing `NaN`.
+- `contrastFactor(v)` / `brightnessFactor(v)` — slider value → CSS amount.
+- `buildVideoFilter(brightness, contrast)` → the COMBINED filter string
+  (`''` / `'brightness(1.15)'` / `'brightness(1.15) contrast(0.6)'`). Both
+  settings share `canvas.style.filter`, so they must be emitted together —
+  writing them separately makes the second assignment erase the first. Identity
+  components are omitted, and an all-identity pair yields `''`, so an untouched
+  project leaves `style.filter` exactly as it was before contrast existed.
+- `getSessionContrast(session, camName)` / `setSessionContrast(session, camName,
+  value)` — the per-session store (`Session.videoContrast`). The SESSION, not the
+  view, is the source of truth: `state.views` is rebuilt from scratch on every
+  session switch, so a per-view field would silently reset. `set` returns the
+  clamped value actually stored and **deletes** default (0) entries.
+- `serializeVideoContrast(session)` → the `metadata.lucid.videoContrast` payload
+  or **`null`** when nothing is worth writing (writers must omit the key on
+  `null`, which is what keeps untouched projects byte-identical —
+  `tests/e2e/save-golden-digest.mjs`).
+- `ingestVideoContrast(session, raw)` — merge a saved payload in, clamping and
+  dropping anything unusable; tolerates a missing/garbage payload (older `.slp`
+  files have no such key). Returns the count applied.
+
+**Imports from project modules.** None, by design.
+
+**Imported by.** `ui/sessions-panes.js` (the tables + `applyVideoFilters`),
+`import-export/file-io.js` and `import-export/slp-streaming-write.js` (write
+`metadata.lucid.videoContrast`), `import-export/slp-import.js` and
+`loading/session-loader.js` (read it back), `import-export/save-load.js` (the
+legacy v2/v3 project-JSON path). Bridged into `tests/test-runner.html` and
+covered by `tests/test-video-contrast.js`; the real-app half (slider → canvas
+filter, session switch, save/reopen through both writers) is covered by
+`tests/e2e/contrast-slider-roundtrip.mjs`.
+
+---
+
 ### ui/ui-wiring.js
 
 **Purpose.** Top-level UI wiring. Builds the menu bar, transport controls,
@@ -3064,7 +3154,9 @@ blank until the user manually re-ran Triangulate All. Covered by
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
   `../import-export/slp-import.js`, `../ui/loading-progress-modal.js`,
   `../import-export/import-track-resolve.js`,
-  `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`.
+  `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
+  `../ui/video-filters.js` (`ingestVideoContrast`, for the lazy-reopen read of
+  `metadata.lucid.videoContrast`).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `ui/info-panel.js`,
@@ -3762,6 +3854,12 @@ exports via the eager path; partially-resident refuses and says so).
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Camera`, `Skeleton`, `Instance`, `Identity`.
+- `./slp-merge.js` — `validateSkeletonCompatibility`.
+- `../pose/triangulation.js` — `getOrComputeReprojectedInstance`,
+  `sweepLazyFrameWindows`.
+- `../ui/video-filters.js` — `serializeVideoContrast` (writes
+  `metadata.lucid.videoContrast`; dependency-free, so it adds nothing to
+  this module's import graph).
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
@@ -3949,7 +4047,9 @@ reproj export. **Scope:** predictions + full grouping (identities + 3D) + 2D
 corrections.
 
 **Imports.** `window.SleapIO` (streaming writer API); `_buildSioPoints`
-(`import-export/file-io.js`). **Imported by.** `import-export/save-load.js`
+(`import-export/file-io.js`); `points3dNodeCount` (`pose/pose-data.js`);
+`serializeVideoContrast` (`ui/video-filters.js`, for
+`metadata.lucid.videoContrast`). **Imported by.** `import-export/save-load.js`
 (`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
 `finalizeMultiSessionSave`).
 
@@ -4086,7 +4186,9 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`,
-  `./slp-import.js`.
+  `./slp-import.js`, `../ui/video-filters.js`
+  (`serializeVideoContrast`/`ingestVideoContrast` for the legacy v2/v3
+  project-JSON `videoContrast` key).
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/slp-import.js`,
@@ -4235,7 +4337,8 @@ cancels every cold eviction timer, and re-initialises both arrays.
   `../loading/session-loader.js`, `./save-load.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
-  `../ui/sessions-panes.js`. Also spawns
+  `../ui/sessions-panes.js`, `../ui/video-filters.js`
+  (`ingestVideoContrast`). Also spawns
   `../loading/frame-worker.js` (twice) via `new Worker(new URL(...))`.
 
 **Imported by.** `import-export/save-load.js`, `ui/ui-wiring.js`.

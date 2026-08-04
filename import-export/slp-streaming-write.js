@@ -55,6 +55,7 @@
 
 import { _buildSioPoints } from './file-io.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
+import { serializeVideoContrast } from '../ui/video-filters.js';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -393,6 +394,10 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
         skeleton: { name: session.skeleton.name || 'skeleton', nodes: session.skeleton.nodes, edges: session.skeleton.edges },
         tracks: session.tracks,
     };
+    // Per-camera video contrast (issue #149) — key omitted when every camera is
+    // at the default, so untouched projects serialize byte-identically.
+    var sessContrast = serializeVideoContrast(session);
+    if (sessContrast) sioSession.metadata.lucid.videoContrast = sessContrast;
     for (var av = 0; av < sioCameras.length; av++) sioSession.addVideo(ctx.allVideos[sessionVideoIndices[av]], sioCameras[av]);
 
     var camByName = new Map();

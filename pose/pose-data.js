@@ -1091,6 +1091,15 @@ export class Session {
          * duplicate identities whenever per-frame reality diverged from it.
          */
         this.frameIdentityMap = new Map();
+        /**
+         * @type {Object<string, number>} cameraName -> contrast setting, an
+         * integer in [-100, 100]. Display-only (a CSS filter on the view
+         * canvas), but per-SESSION and persisted in the `.slp`
+         * (`metadata.lucid.videoContrast`) — `state.views` is rebuilt from
+         * scratch on every session switch, so a per-view field would reset.
+         * Default (0) entries are never stored; see `ui/video-filters.js`.
+         */
+        this.videoContrast = {};
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */
