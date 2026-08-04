@@ -1071,9 +1071,19 @@ common case, which makes the correct behavior *cheaper* than the old one rather
 than paying BA's ~3x-6x cost per group project-wide. Both sweeps report 3D
 provenance ("N kept existing 3D, N solved via Bundle Adjustment, N via DLT") in
 their progress text and status line, so a method's cost is visible rather than
-hidden. The one remaining deliberate bare-DLT caller is the O(n×m) Hungarian cost
-matrix in `ui/identity-assignment.js`, whose temporary groups' 3D is discarded and
-where only the relative ordering of errors matters; it says so at the call site.
+hidden. The one deliberate DLT caller is the O(n×m) Hungarian cost matrix in
+`ui/identity-assignment.js`, whose temporary groups' 3D is discarded and where only
+the relative ordering of errors matters. It passes `{ method: 'dlt' }` **explicitly**,
+so the invariant is the checkable one — *every* call site states its method — rather
+than the uncheckable "every caller that forgot happened to want DLT".
+`tests/test-triangulation-method-propagation.mjs` enforces that by scanning the app
+source: it fails, naming file and line, on any call that omits the options object,
+omits `method`, hardcodes `'dlt'` outside the cost matrix, or passes something that
+is neither a resolver nor a threaded-in method (confirmed to catch the original
+`ui/rendering.js` bug). A runtime assert inside `triangulateAndReproject` was
+considered and REJECTED: it runs once per candidate PAIR inside that cost matrix, so
+a warning would fire O(n*m) times per auto-assign — noise in a legitimate path,
+which is exactly what the guard must not create.
 
 **Distortion handling.** 2D keypoints on disk are lens-distorted. **DLT** runs in
 ideal pinhole space: observations are undistorted first (`Camera.undistortPoint`),
@@ -1668,10 +1678,11 @@ and `autoAssignAcrossFrames`' per-new-group solve) now pass
 **every** group on the frame, including pre-existing bundle-adjusted ones, and
 passing no method silently re-solved them with DLT and overwrote `points3d` —
 which is what save/export read. The third, the O(nRef × nOther) **Hungarian cost
-matrix**, deliberately keeps the DLT default: its temporary groups' 3D is
-discarded, only the relative ordering of the errors matters, and BA's ~3x-6x cost
-would buy nothing. That is stated at the call site so it does not read as an
-oversight. (This module already used `getDefaultTriangulationMethod()` for its
+matrix**, is deliberately DLT — its temporary groups' 3D is discarded, only the
+relative ordering of the errors matters, and BA's ~3x-6x cost would buy nothing —
+and it passes `{ method: 'dlt' }` explicitly rather than relying on the default, so
+that no call site in the app depends on that default (enforced by
+`tests/test-triangulation-method-propagation.mjs`). (This module already used `getDefaultTriangulationMethod()` for its
 `triangulateCurrentFrame` call, so honoring the user's method here is consistent
 rather than new policy.)
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
