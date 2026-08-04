@@ -2082,7 +2082,9 @@ the classic-script unit runner and exercised without a browser dock.
   letterboxes the whole composition rather than distorting it). Integer pixels,
   clamped into bounds, never degenerate.
 - `outputSizeFor(aspect, presetKey)` — height from `RES_PRESETS`
-  (360/720/1080/1440), width from the aspect, clamped to `MAX_OUT_DIM` (3840)
+  (**480p / 720p / 1080p / 2K**; keys ARE the height, so `1440` carries the `2K`
+  label, matching `V3D_RES` in `ui/export-modals.js` where 2K means 2560×1440),
+  width from the aspect, clamped to `MAX_OUT_DIM` (3840)
   with the height recomputed so the aspect holds. **Always even**: `VideoEncoder`
   rejects odd H.264 (yuv420) dimensions, so an odd size is a hard export failure.
 - `outputSizeFrom(settings, aspect)` / `RES_CUSTOM` / `clampOutDim(n)` /
@@ -2095,11 +2097,17 @@ the classic-script unit runner and exercised without a browser dock.
   `computeTileRects` from burning letterbox bars into a custom-size export.
 - `h264CodecFor(W, H)`, `bitrateFor(W, H, fps, quality)`, `QUALITY_BPP`.
 - `defaultOverlayExportSettings()`, `mergeSettings(base, saved)`,
-  `applyStoredSettings`, `saveOverlayExportSettings`, `SETTINGS_KEY`
-  (`'overlayExportSettings.v1'`). `mergeSettings` is schema-driven: it ignores
+  `sanitizeSettings(s)`, `applyStoredSettings`, `saveOverlayExportSettings`,
+  `SETTINGS_KEY` (`'overlayExportSettings.v1'`), `DEFAULT_RES` (`'1080'`).
+  `mergeSettings` is schema-driven: it ignores
   keys `base` doesn't declare and values whose `typeof` doesn't match, so a stale
   or hand-edited blob can never introduce an unknown key or slip a string into a
-  canvas/encoder parameter.
+  canvas/encoder parameter. It only type-checks, though, so `applyStoredSettings`
+  follows it with `sanitizeSettings`, which holds `res` to the *current* preset
+  set — the list has already changed once (`360` → `480`), and a stored key
+  nothing recognises would blank the `<select>` while `outputSizeFor` quietly fell
+  back to `DEFAULT_RES`, leaving the summary quoting a size the visible control
+  doesn't name.
 - `overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH)` — the
   settings → `drawFrameOverlays()` options translation. Explicitly nulls ALL
   interaction state (selection / hover / drag / assignment): an export has no
@@ -2138,8 +2146,10 @@ version: `index.html`'s CSS, `sessions-panes.js`, and this module), seeded via
 range (**1-based display**, 0-based internally, matching the issue) at the top,
 then layers, per-layer appearance, background, and quality/output.
 
-**Output dimensions.** Quality & Output has a Resolution picker (the presets plus
-**Custom**) and a live `width × height` row. The fields always show the size the
+**Output dimensions.** Quality & Output has a Resolution picker (480p / 720p /
+1080p / 2K, plus **Custom**) and a live `width × height` row. Quality itself is a
+separate control — it is the bitrate tier (low / medium / high via `QUALITY_BPP`),
+not a resolution. The fields always show the size the
 export will really be — for a preset that is the derived size, refreshed by
 `syncOutFields()` out of `refreshSummary()` as the composition changes — and
 typing in either one is itself the gesture that switches Resolution to Custom, so
@@ -2233,7 +2243,8 @@ reopened modal re-seeds from the main-window mirror.
 **Imported by.** `ui/ui-wiring.js` (`menuExportOverlayVideo`).
 
 **Tests.** `tests/test-overlay-export-layout.js` (geometry / encoder params /
-custom-size clamping / settings merge / seed plan) and
+custom-size clamping / preset set / stale-`res` fallback / settings merge /
+seed plan) and
 `tests/e2e/overlay-export-modal.mjs` (menu placement, dock seeding, 1-based range
 validation, settings round-trip, absence of any playback transport,
 scrub-to-app-viewer sync, live dock
