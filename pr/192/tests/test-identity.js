@@ -1246,6 +1246,156 @@
         });
     });
 
+    // luc3d #172 — a MANUAL identity switch is a statement about the rest of the
+    // video, so it must EXCHANGE the two identities from the current frame to the
+    // end of the timeline, in every view, independent of raw-track continuity.
+    // The old per-track `propagateIdentity` stopped at the first fragment
+    // boundary of the one raw track it followed, and only in the cameras the
+    // selected group had an instance in.
+    describe('swapIdentitiesForward (#172)', function () {
+        // Two animals, two cameras, FRAGMENTED raw tracks: animal `a` is on
+        // track 2*floor(f/2)+a, i.e. a new track index every 2 frames — the
+        // shape real per-camera tracker output has.
+        function makeFragmented(nFrames) {
+            var cams = [
+                new Camera('cam1', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
+                new Camera('cam2', [[1,0,0],[0,1,0],[0,0,1]], [0,0,0,0,0], [0,0,0], [0,0,0], [640,480]),
+            ];
+            var tracks = [];
+            for (var t = 0; t < nFrames; t++) tracks.push('trk_' + t);
+            var session = new Session(cams, new Skeleton('s', ['a'], []), tracks);
+            session.addIdentity('animal0');
+            session.addIdentity('animal1');
+            var trackOf = function (f, a) { return 2 * Math.floor(f / 2) + a; };
+            for (var f = 0; f < nFrames; f++) {
+                var fg = new FrameGroup(f);
+                session.addFrameGroup(fg);
+                var groups = [];
+                for (var a = 0; a < 2; a++) {
+                    var g = new InstanceGroup(f * 2 + a + 1, a);
+                    for (var c = 0; c < 2; c++) {
+                        var cn = cams[c].name;
+                        var inst = new Instance([[10 + a * 50, 20]], trackOf(f, a), 'predicted');
+                        fg.addInstance(cn, inst);
+                        g.addInstance(cn, inst);
+                        session.setFrameIdentity(f, cn, trackOf(f, a), a);
+                    }
+                    groups.push(g);
+                }
+                session.instanceGroups.set(f, groups);
+            }
+            return { session: session, trackOf: trackOf };
+        }
+
+        // Identity as the app resolves it (per-frame entry for a live track).
+        function idAt(session, f, cn, trackIdx) {
+            return session.getIdentityIdForTrack(cn, trackIdx, f);
+        }
+
+        it('exchanges both identities on every frame from startFrame to the end', function () {
+            var d = makeFragmented(10);
+            var s = d.session;
+            var res = s.swapIdentitiesForward(4, 0, 1);
+            for (var f = 4; f < 10; f++) {
+                assertEqual(idAt(s, f, 'cam1', d.trackOf(f, 0)), 1, 'frame ' + f + ' animal0 → 1');
+                assertEqual(idAt(s, f, 'cam1', d.trackOf(f, 1)), 0, 'frame ' + f + ' animal1 → 0');
+            }
+            assertEqual(res.frames, 6, 'reports the 6 frames it changed');
+            assertEqual(res.entries, 24, '6 frames x 2 cameras x 2 animals per-frame entries');
+        });
+
+        it('crosses raw-track fragment boundaries (the #172 failure)', function () {
+            var d = makeFragmented(10);
+            var s = d.session;
+            // The correction frame's raw track only lives for frames 4-5, so a
+            // per-track propagation could reach at most frame 5.
+            assertEqual(d.trackOf(4, 0), d.trackOf(5, 0), 'fragment covers 4..5');
+            assertTrue(d.trackOf(9, 0) !== d.trackOf(4, 0), 'frame 9 is a different raw track');
+            s.swapIdentitiesForward(4, 0, 1);
+            assertEqual(idAt(s, 9, 'cam1', d.trackOf(9, 0)), 1,
+                'the LAST frame, four fragments later, is swapped');
+        });
+
+        it('reaches every camera, not just one view', function () {
+            var d = makeFragmented(6);
+            var s = d.session;
+            s.swapIdentitiesForward(2, 0, 1);
+            assertEqual(idAt(s, 5, 'cam2', d.trackOf(5, 0)), 1, 'cam2 swapped too');
+            assertEqual(idAt(s, 5, 'cam2', d.trackOf(5, 1)), 0, 'cam2 mirror swapped too');
+        });
+
+        it('leaves frames before startFrame untouched (#155 forward-only)', function () {
+            var d = makeFragmented(6);
+            var s = d.session;
+            s.swapIdentitiesForward(3, 0, 1);
+            for (var f = 0; f < 3; f++) {
+                assertEqual(idAt(s, f, 'cam1', d.trackOf(f, 0)), 0, 'frame ' + f + ' still animal0');
+                assertEqual(idAt(s, f, 'cam1', d.trackOf(f, 1)), 1, 'frame ' + f + ' still animal1');
+            }
+        });
+
+        it('keeps group-level identityId in sync (propagateIdentitiesToTracks reads it)', function () {
+            var d = makeFragmented(6);
+            var s = d.session;
+            s.swapIdentitiesForward(2, 0, 1);
+            var g0 = s.instanceGroups.get(5)[0], g1 = s.instanceGroups.get(5)[1];
+            assertEqual(g0.identityId, 1, 'group that was animal0 is now animal1');
+            assertEqual(g1.identityId, 0, 'group that was animal1 is now animal0');
+            var early = s.instanceGroups.get(0)[0];
+            assertEqual(early.identityId, 0, 'a group before startFrame is untouched');
+        });
+
+        it('is its own inverse — applying it twice restores the original', function () {
+            var d = makeFragmented(8);
+            var s = d.session;
+            s.swapIdentitiesForward(3, 0, 1);
+            s.swapIdentitiesForward(3, 0, 1);
+            for (var f = 0; f < 8; f++) {
+                assertEqual(idAt(s, f, 'cam1', d.trackOf(f, 0)), 0, 'frame ' + f + ' back to animal0');
+                assertEqual(idAt(s, f, 'cam1', d.trackOf(f, 1)), 1, 'frame ' + f + ' back to animal1');
+            }
+            assertEqual(s.instanceGroups.get(7)[0].identityId, 0, 'group identity restored');
+        });
+
+        it('a second correction later composes to "until the next correction"', function () {
+            var d = makeFragmented(10);
+            var s = d.session;
+            s.swapIdentitiesForward(2, 0, 1);   // fix from frame 2
+            s.swapIdentitiesForward(6, 0, 1);   // correct again at frame 6
+            assertEqual(idAt(s, 4, 'cam1', d.trackOf(4, 0)), 1, 'frames 2..5 keep the first fix');
+            assertEqual(idAt(s, 8, 'cam1', d.trackOf(8, 0)), 0, 'frames 6.. take the second');
+        });
+
+        it('is a no-op for equal or null identities', function () {
+            var d = makeFragmented(4);
+            var s = d.session;
+            assertEqual(s.swapIdentitiesForward(0, 1, 1).entries, 0, 'A === B changes nothing');
+            assertEqual(s.swapIdentitiesForward(0, null, 1).entries, 0, 'null A changes nothing');
+            assertEqual(idAt(s, 3, 'cam1', d.trackOf(3, 0)), 0, 'identities intact');
+        });
+
+        it('leaves unrelated identities alone', function () {
+            var d = makeFragmented(4);
+            var s = d.session;
+            s.addIdentity('animal2');
+            s.setFrameIdentity(3, 'cam1', 99, 2);
+            s.swapIdentitiesForward(0, 0, 1);
+            assertEqual(s.getFrameIdentityValue(3, 'cam1', 99), 2, 'identity 2 untouched');
+        });
+
+        it('handles legacy string keys as well as packed keys', function () {
+            var d = makeFragmented(4);
+            var s = d.session;
+            // A key that cannot be packed (out-of-range trackIdx) falls back to
+            // the legacy "frame:cam:track" string — it must swap too.
+            s.frameIdentityMap.set('3:cam1:999999', 0);
+            s.frameIdentityMap.set('0:cam1:999999', 0);
+            s.swapIdentitiesForward(2, 0, 1);
+            assertEqual(s.frameIdentityMap.get('3:cam1:999999'), 1, 'legacy key after startFrame swapped');
+            assertEqual(s.frameIdentityMap.get('0:cam1:999999'), 0, 'legacy key before startFrame untouched');
+        });
+    });
+
     describe('Session identity state consistency', function () {
         it('new tracks beyond original count are accessible', function () {
             var s = new Session([], new Skeleton('s', ['a'], []), ['track_0']);
