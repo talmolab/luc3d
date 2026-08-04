@@ -1623,8 +1623,9 @@ on reload); see `ui/app-state.js`.
   `createViewForVideoFile`, `rebuildVideoController`,
   `fitCanvasesToCells`, `loadSingleSessionFromCache`.
 - `./ui-wiring.js` — `unlinkGroup`, `showGroupContextMenu`.
-- `./identity-assignment.js` — `swapAssignTrack`, `propagateIdentityForward`,
-  `applyIdentitySwitch`, `describeIdentitySwitch`. Both identity `<select>`s (the
+- `./identity-assignment.js` — `swapAssignTrack`, `applyIdentitySwitch`,
+  `describeIdentitySwitch` (`propagateIdentityForward` is no longer imported —
+  `applyIdentitySwitch` subsumes it). Both identity `<select>`s (the
   Linked Instance Groups row and the unlinked row) drive their change through
   `applyIdentitySwitch`, so a manual ID switch exchanges the two identities to the
   end of the timeline in every view (luc3d #172) and reports its real count via

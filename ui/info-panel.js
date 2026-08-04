@@ -27,10 +27,10 @@ import {
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
 import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
-// luc3d #172: every manual identity switch routes through applyIdentitySwitch.
+// luc3d #172: every manual identity switch routes through applyIdentitySwitch,
+// which subsumes this file's former direct propagateIdentityForward calls.
 import {
-    swapAssignTrack, propagateIdentityForward,
-    applyIdentitySwitch, describeIdentitySwitch,
+    swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
 } from './identity-assignment.js';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
