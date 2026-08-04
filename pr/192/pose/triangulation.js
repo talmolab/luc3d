@@ -12,7 +12,7 @@ import { state, timeline, viewport3d } from '../ui/app-state.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js
 import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
 import { updateTriangulationBadge } from '../ui/info-panel.js';
-import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
@@ -3101,6 +3101,139 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
     return { triangulated: triangulated, totalGroups: totalGroups, totalErrors: totalErrors };
 }
 
+// ============================================
+// Method preservation (luc3d: "exported 3D must equal displayed 3D")
+// ============================================
+
+/**
+ * Which method should be used to (re-)triangulate `group`?
+ *
+ * `triangulateAndReproject`'s `options.method` default is SILENT DLT, so every
+ * caller that omits it quietly downgrades a bundle-adjusted group to DLT. The
+ * rule, in priority order:
+ *
+ *   1. The group's OWN recorded method — a group already refined with BA must
+ *      stay BA, otherwise a re-solve replaces the 3D the user is looking at (and
+ *      that a subsequent save/export writes) with a *different*, worse solution.
+ *   2. Otherwise the user's global default (Settings ▸ Triangulation Method),
+ *      which is what an explicit user action on a brand-new group should honor.
+ *      Never a bare `'dlt'` literal.
+ *
+ * `typeof` guard on the settings getter for the flat-script test harness
+ * (`tests/run-node.js`), which does not resolve the ES import — same pattern as
+ * `isCameraTracked` / `getTrackingThreshold` above.
+ *
+ * NOT used by `ui/rendering.js`'s lazy reprojection fill, deliberately. That
+ * path re-derives reprojections for 3D it does NOT own and does not write back,
+ * so it must REPRODUCE the existing solve (`=== 'ba' ? 'ba' : 'dlt'`); falling
+ * back to the global default there would report the error of a solution the
+ * group does not hold. Rule of thumb: writes `points3d` → use this; only reads
+ * it → match the recorded method exactly.
+ *
+ * @param {InstanceGroup|null} [group] - the group about to be triangulated, or
+ *   the equivalent PRIOR group when a rebuild produced a fresh object.
+ * @returns {'ba'|'dlt'}
+ */
+export function resolveTriangulationMethod(group) {
+    if (group && group.triangulationMethod === 'ba') return 'ba';
+    if (group && group.triangulationMethod === 'dlt') return 'dlt';
+    var pref = (typeof getDefaultTriangulationMethod === 'function')
+        ? getDefaultTriangulationMethod() : 'dlt';
+    return pref === 'ba' ? 'ba' : 'dlt';
+}
+
+/**
+ * Find the group in `priorGroups` that is the SAME group as `group` — i.e. its
+ * membership is identical, camera for camera, by Instance object identity.
+ *
+ * The regrouping sweeps (`groupByIdentityAndTriangulateAll`,
+ * `groupByTrackAndTriangulateAll`) delete a frame's `instanceGroups` and build
+ * fresh `InstanceGroup` objects around the SAME `Instance` objects. The fresh
+ * object carries no `points3d` and no `triangulationMethod`, so without this
+ * lookup a regroup cannot tell "I just rebuilt the identical group, its existing
+ * 3D is still exactly right" from "this is a genuinely new grouping". It used to
+ * assume the latter for every group and re-solve with DLT — silently replacing
+ * a whole project's BA 3D, and with it what gets saved/exported.
+ *
+ * Identical membership means identical 2D input, so the prior 3D is still the
+ * correct solution: nothing to recompute. (2D edits cannot hide here — moving or
+ * nulling a node already routes through `reTriangulateGroup`, which refreshes
+ * the group's 3D at edit time, preserving its method.)
+ *
+ * @param {InstanceGroup[]|null} priorGroups
+ * @param {InstanceGroup} group
+ * @returns {InstanceGroup|null}
+ */
+export function findEquivalentPriorGroup(priorGroups, group) {
+    if (!priorGroups || !priorGroups.length || !group) return null;
+    for (var i = 0; i < priorGroups.length; i++) {
+        var prior = priorGroups[i];
+        if (!prior || prior === group) continue;
+        if (prior.instances.size !== group.instances.size) continue;
+        var same = true;
+        for (var [cn, inst] of group.instances) {
+            if (prior.instances.get(cn) !== inst) { same = false; break; }
+        }
+        if (same) return prior;
+    }
+    return null;
+}
+
+/**
+ * Adopt `prior`'s already-valid 3D onto `group` instead of re-solving it —
+ * but ONLY when doing so is a genuine no-op with respect to `method`.
+ *
+ * Only call with a `prior` from `findEquivalentPriorGroup` (identical
+ * membership). Adoption requires BOTH:
+ *   * identical membership (the caller's job) — so the 2D input is unchanged; and
+ *   * `prior.triangulationMethod === method` — so the stored 3D already IS the
+ *     solution this operation was asked to produce.
+ *
+ * The method check is load-bearing, not defensive. The grouping sweeps are
+ * GOVERNED by the requested method (the Settings default, or an explicit pick):
+ * with Bundle Adjustment selected, "Group by Track / Group by ID & Triangulate
+ * All" must leave BA 3D on every group — including groups that already had
+ * perfectly good DLT 3D with unchanged membership. Adopting on membership alone
+ * would silently keep that DLT solution and make the setting a no-op for exactly
+ * the groups a user is most likely to have. Conversely a DLT re-run over a
+ * DLT-solved project adopts everything and solves nothing, which is the free fast
+ * path this exists for.
+ *
+ * Copies `points3d`, `triangulationMethod` and `usedCameras`.
+ *
+ * `reprojections` is deliberately NOT copied. It is pure derived state, and
+ * leaving it empty is what lets `ui/rendering.js`'s lazy fill regenerate both it
+ * AND `state.triangulationResults` for the displayed frame using the adopted
+ * `triangulationMethod` — so the reported error matches the adopted 3D. Copying
+ * it would instead SUPPRESS that fill (its condition is "has points3d but no
+ * reprojections"), leaving the Info Panel with no results to show. Same reason
+ * the memory-bounded sweeps drop it; `points3d` is what save/export reads.
+ *
+ * NOTE: `triangulationMethod` is currently in-memory only — it is not persisted
+ * to the `.slp`, so on a REOPENED project every group has 3D but an undefined
+ * method and this check can never match (nothing is adopted; everything is
+ * re-solved with the requested method, which is correct but not free). Persisting
+ * it is tracked separately.
+ *
+ * @param {InstanceGroup} group
+ * @param {InstanceGroup|null} prior
+ * @param {'ba'|'dlt'} method - the method this operation is required to produce
+ * @returns {boolean} true if 3D was adopted and `group` needs no triangulation
+ */
+export function adoptPrior3d(group, prior, method) {
+    if (!group || !prior) return false;
+    if (!someValidPoint3d(prior.points3d)) return false;
+    // Only adopt a solution produced by the method being asked for. An undefined
+    // prior method is NOT assumed to be DLT: it is unknown, so it never matches
+    // and the group is re-solved rather than trusted.
+    var want = (method === 'ba') ? 'ba' : 'dlt';
+    if (prior.triangulationMethod !== want) return false;
+    group.points3d = prior.points3d;
+    group.triangulationMethod = want;
+    if (prior.usedCameras && prior.usedCameras.size) group.usedCameras = prior.usedCameras;
+    return true;
+}
+
 /**
  * Re-triangulate a single instance group if it was previously triangulated.
  * Called automatically when a node is moved or nulled to keep reprojections in sync.
@@ -3121,8 +3254,9 @@ export function reTriangulateGroup(instanceGroup) {
     var oldPoints3d = instanceGroup.points3d;
 
     // Preserve whichever method this group was last triangulated with so a node
-    // move re-refines consistently (e.g. a BA group stays BA).
-    var method = (instanceGroup.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+    // move re-refines consistently (e.g. a BA group stays BA); a group with no
+    // recorded method (e.g. 3D loaded from file) takes the user's global default.
+    var method = resolveTriangulationMethod(instanceGroup);
     var result = triangulateAndReproject(instanceGroup, groupCameras, { method: method });
     instanceGroup.triangulationMethod = result.method;
 

@@ -10,7 +10,7 @@ import { state, videoController, interactionManager, viewport3d, timeline, paneM
 import { InstanceGroup, UnlinkedInstance, someValidPoint3d } from '../pose/pose-data.js';
 import {
     frameHasGroupedUserInstances, getInstanceGroupsForFrame,
-    triangulateAndReproject, storeReprojectedInstances,
+    triangulateAndReproject, storeReprojectedInstances, resolveTriangulationMethod,
     reprojectPointsCamera, computeInstanceDistanceTo, hungarianAlgorithm,
     updateTimelineForFrame,
     triangulateCurrentFrame,
@@ -758,7 +758,12 @@ export function runAutomaticAssignment(selectedViewNames) {
         for (var a = 0; a < nRef; a++) {
             costMatrix[a] = [];
             for (var b = 0; b < nOther; b++) {
-                // Create temporary group with instances from both views
+                // Create temporary group with instances from both views.
+                // DLT (the default) is DELIBERATE here: this is an O(nRef x
+                // nOther) cost matrix feeding the Hungarian matcher, the
+                // temporary group's 3D is discarded, and only the RELATIVE
+                // ordering of the errors matters — so BA's ~4.6-6.1x cost would
+                // buy nothing. Nothing user-visible or exportable is written.
                 var tempGroup = new InstanceGroup(-1, -1);
                 tempGroup.addInstance(refView, refInstances[a].instance);
                 tempGroup.addInstance(otherView, otherInstances[b].instance);
@@ -805,8 +810,16 @@ export function runAutomaticAssignment(selectedViewNames) {
             return groupCamNames.indexOf(c.name) >= 0;
         });
         if (groupCameras.length >= 2) {
-            var result = triangulateAndReproject(group, groupCameras);
+            // This loop covers EVERY group on the frame, including ones that
+            // already existed with bundle-adjusted 3D — so it must preserve each
+            // group's own method (new groups fall back to the user's Settings
+            // choice). It previously passed no options, silently re-solving
+            // pre-existing BA groups with DLT and overwriting `points3d`, which
+            // is what save/export reads. Single frame, so the cost is bounded.
+            var result = triangulateAndReproject(group, groupCameras,
+                { method: resolveTriangulationMethod(group) });
             group.points3d = result.points3d;
+            group.triangulationMethod = result.method;
             group.reprojections = result.reprojections;
             storeReprojectedInstances(group, result, cameras);
             group.markClean();
@@ -1005,8 +1018,14 @@ export function runTrackedAssignment(viewNames, prevGroups) {
                 return groupCamNames.indexOf(c.name) >= 0;
             });
             if (groupCameras.length >= 2) {
-                var result = triangulateAndReproject(group, groupCameras);
+                // Brand-new group, so nothing to preserve — take the user's
+                // Settings ▸ Triangulation Method rather than hardcoding DLT
+                // (this module already does exactly that at the tail of
+                // `autoAssignAcrossFrames`). Single frame; cost is bounded.
+                var result = triangulateAndReproject(group, groupCameras,
+                    { method: resolveTriangulationMethod(group) });
                 group.points3d = result.points3d;
+                group.triangulationMethod = result.method;
                 group.reprojections = result.reprojections;
                 storeReprojectedInstances(group, result, cameras);
                 group.markClean();
