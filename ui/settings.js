@@ -68,7 +68,9 @@ const ACTION_CATALOG = [
     { id: 'findMatch', label: 'Find match for selection', category: 'Editing', binding: 'f', editable: true, dispatched: true },
 
     // --- Identity & Tracks (select a group first) ---
-    { id: 'assignIdentity', label: 'Assign identity 1–9 to selection', category: 'Identity & Tracks', binding: '1 – 9', editable: false, dispatched: false },
+    // luc3d #172: an identity switch SWAPS the two identities from the current
+    // frame to the end of the timeline, in every view — keep this label honest.
+    { id: 'assignIdentity', label: 'Assign identity 1–9 (swaps to end of timeline)', category: 'Identity & Tracks', binding: '1 – 9', editable: false, dispatched: false },
     { id: 'assignTrack', label: 'Assign track 1–9 (propagates)', category: 'Identity & Tracks', binding: 'Shift+1 – 9', editable: false, dispatched: false },
 
     // --- View ---

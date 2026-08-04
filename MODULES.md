@@ -286,7 +286,37 @@ session graph that holds them.
   180k-entry map of Sets; the per-frame uniqueness/collider rule is shared by both
   passes via `_applyIdentityAtFrame`. NOTE `assignTrackToIdentity` above is still
   resident-only — it has **no callers** (dead since #155) and is left alone
-  deliberately), group assignment
+  deliberately. `propagateIdentity` is now the FALLBACK for a manual identity
+  switch, used only when there is no identity to swap away from — see
+  `swapIdentitiesForward` next;
+  `swapIdentitiesForward(startFrame, identityA, identityB)` — **exchanges two
+  identities from `startFrame` through the END of the project, in every view**
+  (luc3d #172). This, not `propagateIdentity`, is what a MANUAL identity
+  correction means, and it is the identity-layer analogue of SLEAP's
+  `Labels.track_swap` over `(frame_idx, None)`. `propagateIdentity` cannot
+  express it: it follows ONE raw `(camera, trackIdx)` pair forward, so it dies at
+  the first fragment boundary of that raw track — and real per-camera tracker
+  output fragments constantly (the same animal is track 4 for a few hundred
+  frames, then 12, then 20), which is why a correction reached only the current
+  tracklet, and only the views the group happened to be visible in on that one
+  frame (#172: "only a small fragment of the ID propagates down the timeline",
+  "the propagation appears limited to tracks visible in the current view").
+  Identity, unlike a raw track, is DENSE project-wide — that is why
+  `frameIdentityMap` is per-frame keyed at all — so expressing the correction over
+  identity VALUES needs no track continuity. Rewrites both durable structures:
+  `frameIdentityMap` (values only, so mutating during iteration is safe; packed
+  keys carry `frameIdx` in their top bits, so the frame filter is arithmetic with
+  no decode and no allocation on the 2.6M-entry real project) and the
+  whole-project `instanceGroups[*].identityId` (saved into the columnar
+  `instance_groups` table, used as the display fallback, and read directly by
+  `propagateIdentitiesToTracks` step 2b — leaving it stale would let a later
+  IDs→Tracks resurrect the pre-swap assignment). Frames before `startFrame` are
+  never touched (#155), and the operation is an involution, so a later correction
+  at frame G composes to "until the next manual correction" without tracking
+  correction history. No frame materialization, so nothing hydrates or evicts.
+  Returns `{entries, groups, frames}`. Guarded by the `swapIdentitiesForward
+  (#172)` block in `tests/test-identity.js` and end to end by
+  `tests/e2e/identity-switch-propagates-to-end.mjs`), group assignment
   (`assignIdentityToGroup`), lookup (`getIdentityIdForTrack`/
   `getIdentityForTrack` — per-frame only, return null with no fallback;
   `isExplicitNoIdentity`; `isNoIdTrack(trackIdx)` — true for the dedicated
@@ -1403,14 +1433,38 @@ triangulation, multi-frame assignment modal, track/identity helpers.
   why both maps are required and why the de-duplication is load-bearing. The
   reported count is the durable row count when a store exists, the in-memory
   changed count otherwise.
-  `assignIdentityToSelected` (and the info-panel Identity dropdowns) propagate
-  the identity from the CURRENT frame **forward only** via the swap-aware
-  `propagateIdentity` — they no longer call `assignTrackToIdentity` (which
-  re-stamped EVERY frame of the track, corrupting already-correct earlier
-  frames when fixing a mid-video swap; issue #155). Whole-track identity
-  assignment is still available via **Tracks ▸ Propagate Tracks → IDs**; to
-  identity-stamp a whole track from the dropdown, assign at the track's first
-  frame.
+- Manual identity switch: `applyIdentitySwitch`, `describeIdentitySwitch`
+  (luc3d #172). **The single entry point for "the user picked a different ID for
+  this instance"** — the `1`–`9` hotkeys (`assignIdentityToSelected`), the Linked
+  Instance Groups identity dropdown and the unlinked-row identity dropdown
+  (`ui/info-panel.js`) all route through it so they cannot drift. Two modes:
+  - **swap** — the selection already reads as identity A and the user picks B, so
+    A and B are EXCHANGED from the current frame to the end of the timeline in
+    every view via `Session.swapIdentitiesForward`. A correction is a statement
+    about the rest of the video, exactly as SLEAP's `track_swap` is for tracks.
+    The private `resolveCurrentIdentityId` reads the CURRENT identity the way
+    `getGroupColor` does — the per-frame entry for one of the selection's own live
+    (camera, trackIdx) pairs first, `group.identityId` only as a fallback, because
+    that field is stale on every frame but the last assignment's (#155).
+  - **propagate** — nothing to swap away from (fresh project / just-grouped group
+    / "none" picked), so it falls back to the per-camera, per-track forward stamp
+    (`assignIdentityToGroup` + `Session.propagateIdentity`), the only continuity
+    signal available in that state.
+
+  This replaced a `for (cam of sel.instances) propagateIdentityForward(...)` loop
+  that was scoped to **one raw track and only the cameras the group was visible in
+  on that frame**, so a switch covered a few hundred frames of a multi-thousand-
+  frame project and skipped any view where the animal was occluded right then —
+  luc3d #172. Measured on `tests/e2e/identity-switch-propagates-to-end.mjs`
+  (3,000 frames × 3 cameras, raw tracks fragmented every 200 frames): 100 of
+  2,700 remaining frames in 2 of 3 cameras before, 2,700 of 2,700 in all 3 after,
+  surviving save + reopen. `describeIdentitySwitch` builds the status text so the
+  reported count is what actually changed — a plausible-looking count over a
+  silently truncated range ("propagated to 200 future instances") is exactly how
+  #172 hid. Still **forward-only**: earlier frames are never re-stamped (#155),
+  and `assignTrackToIdentity` (which re-stamped EVERY frame of a track) remains
+  uncalled. Whole-track identity assignment is still available via
+  **Tracks ▸ Propagate Tracks → IDs**.
 - Manual assign: `manualAssignState`, `getTotalUnlinkedCount`,
   `cleanupManualAssignment`, `startManualAssignment`.
 - Edit group: `editGroupState`, `startEditGroup`, `cancelEditGroup`,
@@ -1569,7 +1623,12 @@ on reload); see `ui/app-state.js`.
   `createViewForVideoFile`, `rebuildVideoController`,
   `fitCanvasesToCells`, `loadSingleSessionFromCache`.
 - `./ui-wiring.js` — `unlinkGroup`, `showGroupContextMenu`.
-- `./identity-assignment.js` — `swapAssignTrack`, `propagateIdentityForward`.
+- `./identity-assignment.js` — `swapAssignTrack`, `propagateIdentityForward`,
+  `applyIdentitySwitch`, `describeIdentitySwitch`. Both identity `<select>`s (the
+  Linked Instance Groups row and the unlinked row) drive their change through
+  `applyIdentitySwitch`, so a manual ID switch exchanges the two identities to the
+  end of the timeline in every view (luc3d #172) and reports its real count via
+  `describeIdentitySwitch`.
 - `./sessions-panes.js` — `populateSessionsPanel`, `populateViewStrip`,
   `populateSessionStrip`.
 
