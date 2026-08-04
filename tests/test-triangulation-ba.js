@@ -336,6 +336,228 @@
         });
     });
 
+    // ---- Joint bundle adjustment (cameras + structure) ----------------------
+
+    describe('BA #113 - joint bundle adjustment (bundleAdjustCameras)', function () {
+        const JOINT_DIST = [-0.08, 0.01, 0.0002, 0.0002, 0];
+
+        /**
+         * Ground-truth rig + point cloud + observations, then a version of the
+         * rig with cameras 1..N-1 perturbed. Camera 0 is never perturbed: it is
+         * the gauge anchor, so perturbing it would just re-express the whole
+         * solution in a different frame and make "did we recover the truth?"
+         * unanswerable.
+         */
+        function jointFixture(rotPert, transPert, noisePx, nPoints, scale) {
+            const r = rng(2024);
+            const trueCams = RIG.map(function (s) {
+                return new Camera(s[0], K, JOINT_DIST, s[1], s[2], [640, 480]);
+            });
+            const truth = [];
+            for (let i = 0; i < nPoints; i++) {
+                truth.push([(r.u() - 0.5) * 30, (r.u() - 0.5) * 30, 35 + r.u() * 25]);
+            }
+            const obs = truth.map(function (X) {
+                return trueCams.map(function (c) { return observe(c, X, noisePx, r); });
+            });
+            const k = scale || 1;
+            const badCams = RIG.map(function (s, i) {
+                // Camera 0's pose is the gauge anchor and is never perturbed —
+                // perturbing it would just re-express the solution in another
+                // frame, making "did we recover the truth?" unanswerable. A
+                // uniform `scale` is applied to EVERY camera including 0, since
+                // that is what a global scale error looks like.
+                if (i === 0) {
+                    return new Camera(s[0], K, JOINT_DIST, s[1],
+                        s[2].map(function (v) { return v * k; }), [640, 480]);
+                }
+                return new Camera(s[0], K, JOINT_DIST,
+                    s[1].map(function (v) { return v + r.gauss() * rotPert; }),
+                    s[2].map(function (v) { return v * k + r.gauss() * transPert; }),
+                    [640, 480]);
+            });
+            return { trueCams: trueCams, badCams: badCams, obs: obs, truth: truth };
+        }
+
+        function poseDelta(cam, spec) {
+            let dr = 0, dt = 0;
+            for (let j = 0; j < 3; j++) {
+                dr += (cam.rvec[j] - spec[1][j]) * (cam.rvec[j] - spec[1][j]);
+                dt += (cam.tvec[j] - spec[2][j]) * (cam.tvec[j] - spec[2][j]);
+            }
+            return { dr: Math.sqrt(dr), dt: Math.sqrt(dt) };
+        }
+
+        it('recovers a badly perturbed calibration', function () {
+            if (typeof bundleAdjustCameras !== 'function') return;
+            const f = jointFixture(0.03, 0.6, 0.5, 200);
+            const res = bundleAdjustCameras(f.obs, f.badCams, {});
+            assertTrue(res != null, 'returns a result');
+            // Measured on a 600-point cloud: 14.58 px -> 0.4832 px, against a
+            // 0.4794 px noise floor for the true calibration.
+            assertTrue(res.errorBefore > 5,
+                'fixture really is badly calibrated (' + res.errorBefore.toFixed(3) + ' px)');
+            assertLessThan(res.errorAfter, res.errorBefore * 0.2,
+                'joint BA cuts the median reprojection error from ' +
+                res.errorBefore.toFixed(3) + ' px to ' + res.errorAfter.toFixed(3) + ' px');
+            assertTrue(res.improved === true, 'reports that it improved');
+        });
+
+        it('recovers the true extrinsics, not merely a reprojection-equivalent set', function () {
+            if (typeof bundleAdjustCameras !== 'function') return;
+            // This is the gauge test. A joint solve with a mishandled gauge can
+            // drive reprojection error down while drifting the geometry
+            // arbitrarily; only comparing against the TRUE poses catches that.
+            // Rotation-only perturbation, so every baseline length starts exact
+            // and the unobservable scale direction (next test) is not in play.
+            const f = jointFixture(0.03, 0, 0.5, 200);
+            const res = bundleAdjustCameras(f.obs, f.badCams, {});
+            assertTrue(res != null, 'returns a result');
+            for (let i = 1; i < RIG.length; i++) {
+                const before = poseDelta(f.badCams[i], RIG[i]);
+                const after = poseDelta(res.cameras[i], RIG[i]);
+                // Measured 0.007x-0.034x.
+                assertLessThan(after.dr, before.dr * 0.15,
+                    RIG[i][0] + ' rotation error ' + before.dr.toFixed(5) + ' -> ' + after.dr.toFixed(5));
+                // Translations started exact; they must STAY near-exact rather
+                // than being traded away to absorb the rotation fit.
+                assertLessThan(after.dt, 0.15,
+                    RIG[i][0] + ' translation stays near truth (' + after.dt.toFixed(5) + ')');
+            }
+        });
+
+        it('cannot and does not try to fix a global scale error (documented limit)', function () {
+            if (typeof bundleAdjustCameras !== 'function') return;
+            // A uniform similarity scaling of cameras AND structure reprojects
+            // identically, so scale is unobservable from images alone. This is
+            // why aniposelib carries a calibration-board term (`errors_obj`,
+            // weighted 2/board_square_length) — it supplies the metric
+            // reference. LUCID bundle-adjusts on animal keypoints where no such
+            // model exists, so `bundleAdjustCameras` PRESERVES the input scale
+            // by construction (the baseline gauge) rather than inventing one.
+            //
+            // Consequence for a caller: if the initial calibration's scale is
+            // wrong, joint BA will not fix it, and translation errors that are
+            // really scale errors will persist. Measured: an 8% oversized rig
+            // already sits at the noise floor before BA (0.473 px) and comes out
+            // with its scale untouched.
+            const f = jointFixture(0, 0, 0.5, 200, 1.08);
+            const res = bundleAdjustCameras(f.obs, f.badCams, {});
+            assertTrue(res != null, 'returns a result');
+            // Nothing to see: a scaled rig reprojects as well as the true one.
+            assertLessThan(res.errorBefore, 1.0,
+                'a purely scaled rig already reprojects at the noise floor (' +
+                res.errorBefore.toFixed(4) + ' px)');
+            // And the scale is left alone rather than being churned.
+            for (let i = 1; i < RIG.length; i++) {
+                const before = poseDelta(f.badCams[i], RIG[i]);
+                const after = poseDelta(res.cameras[i], RIG[i]);
+                assertTrue(after.dt > before.dt * 0.8,
+                    RIG[i][0] + ' scale error is preserved, not "fixed": ' +
+                    before.dt.toFixed(4) + ' -> ' + after.dt.toFixed(4));
+            }
+        });
+
+        it('holds camera 0 exactly fixed (gauge anchor)', function () {
+            if (typeof bundleAdjustCameras !== 'function') return;
+            const f = jointFixture(0.03, 0.6, 0.5, 150);
+            const res = bundleAdjustCameras(f.obs, f.badCams, {});
+            for (let j = 0; j < 3; j++) {
+                assertTrue(res.cameras[0].rvec[j] === RIG[0][1][j],
+                    'camera 0 rvec[' + j + '] unchanged');
+                assertTrue(res.cameras[0].tvec[j] === RIG[0][2][j],
+                    'camera 0 tvec[' + j + '] unchanged');
+            }
+        });
+
+        it('never worsens an already-optimal calibration', function () {
+            if (typeof bundleAdjustCameras !== 'function') return;
+            // The #113 failure mode, one level up. The per-round objective is a
+            // robust loss on a TRIMMED subset and the trim moves every round, so
+            // the round sequence is not monotone in the reported median error:
+            // the raw aniposelib schedule was measured to drift an optimal
+            // calibration from 0.4794 px to 0.4836 px. bundleAdjustCameras keeps
+            // the best-scoring calibration instead.
+            const f = jointFixture(0, 0, 0.5, 200);
+            const res = bundleAdjustCameras(f.obs, f.badCams, {});
+            assertTrue(res != null, 'returns a result');
+            assertTrue(res.errorAfter <= res.errorBefore + 1e-9,
+                'median error must not rise: ' + res.errorBefore.toFixed(6) +
+                ' -> ' + res.errorAfter.toFixed(6));
+            // NOTE: `improved` is legitimately true here. With finite noise the
+            // TRUE calibration is not the reprojection-error minimizer, so BA
+            // can dip below it by mildly overfitting the noise (measured
+            // 0.4907 -> 0.4695). What matters is that the geometry barely moves
+            // while it does so — a joint solve that "improved" the error by
+            // wandering off the true poses would be the real failure.
+            for (let i = 1; i < RIG.length; i++) {
+                const after = poseDelta(res.cameras[i], RIG[i]);
+                assertLessThan(after.dr, 0.01,
+                    RIG[i][0] + ' rotation barely drifts (' + after.dr.toFixed(5) + ')');
+                assertLessThan(after.dt, 0.15,
+                    RIG[i][0] + ' translation barely drifts (' + after.dt.toFixed(5) + ')');
+            }
+        });
+
+        it('does not mutate the input cameras', function () {
+            if (typeof bundleAdjustCameras !== 'function') return;
+            const f = jointFixture(0.03, 0.6, 0.5, 150);
+            const snapshot = f.badCams.map(function (c) {
+                return c.rvec.join(',') + '|' + c.tvec.join(',');
+            });
+            bundleAdjustCameras(f.obs, f.badCams, {});
+            for (let i = 0; i < f.badCams.length; i++) {
+                const now = f.badCams[i].rvec.join(',') + '|' + f.badCams[i].tvec.join(',');
+                assertTrue(now === snapshot[i], 'input camera ' + i + ' untouched');
+            }
+        });
+
+        it('anneals mu geometrically from startMu down to endMu', function () {
+            if (typeof bundleAdjustCameras !== 'function') return;
+            // The threshold schedule is the heart of bundle_adjust_iter. Use a
+            // deliberately loose data set (large noise) so the data-driven p75
+            // clamp does not immediately override the schedule, and read the mu
+            // actually used out of `rounds`.
+            const f = jointFixture(0.02, 0.4, 3.0, 250);
+            const res = bundleAdjustCameras(f.obs, f.badCams, {
+                nIters: 4, startMu: 40, endMu: 2, errorThreshold: 0
+            });
+            assertTrue(res != null, 'returns a result');
+            const inner = res.rounds.filter(function (r) { return !r.final; });
+            assertTrue(inner.length >= 2, 'ran at least two inner rounds (' + inner.length + ')');
+            for (let i = 1; i < inner.length; i++) {
+                assertTrue(inner[i].mu <= inner[i - 1].mu + 1e-9,
+                    'mu must not increase across inner rounds: ' +
+                    inner.map(function (r) { return r.mu.toFixed(3); }).join(' -> '));
+            }
+            const last = res.rounds[res.rounds.length - 1];
+            assertTrue(last.final === true, 'the last round is the final loose one');
+            // The final round loosens via `max(max(p75, endMu), p15)`, so its mu
+            // is at least endMu. It is NOT comparable to the inner rounds' mu or
+            // kept-count: it is recomputed from the already-improved cameras, so
+            // its p75 is smaller and its threshold can legitimately be lower in
+            // absolute terms while still being the loosest choice available at
+            // that point (measured inner 17.844 -> 4.019, final 3.930).
+            assertTrue(last.mu >= 2 - 1e-9,
+                'final round mu respects endMu: ' + last.mu.toFixed(4));
+        });
+
+        it('returns null when there is nothing to solve', function () {
+            if (typeof bundleAdjustCameras !== 'function') return;
+            const f = jointFixture(0, 0, 0.5, 10);
+            assertTrue(bundleAdjustCameras(f.obs, [f.badCams[0]], {}) === null,
+                'a single camera cannot be bundle-adjusted');
+            assertTrue(bundleAdjustCameras([], f.badCams, {}) === null,
+                'no observations');
+            // Every point visible in only one view -> nothing triangulable.
+            const oneView = f.obs.map(function (row) {
+                return row.map(function (o, c) { return c === 0 ? o : null; });
+            });
+            assertTrue(bundleAdjustCameras(oneView, f.badCams, {}) === null,
+                'no point visible in two or more views');
+        });
+    });
+
     describe('BA #113 - residual space', function () {
         it('optimizes native (distorted) pixel space when cameras are supplied', function () {
             if (typeof triangulatePointBA !== 'function') return;
