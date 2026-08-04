@@ -12,15 +12,21 @@ export const TILE_3D = '__3d__';
 export const SETTINGS_KEY = 'overlayExportSettings.v1';
 
 /**
- * Output heights. Width is derived from the composition (or tile) aspect ratio,
- * so the export carries no letterbox bars unless the layout itself demands them.
+ * Output heights. Keys ARE the height; the width is derived from the composition
+ * (or tile) aspect ratio, so the export carries no letterbox bars unless the
+ * layout itself demands them — which is also why these labels can't state a
+ * fixed W×H the way `V3D_RES` in ui/export-modals.js does. `1440` is labelled
+ * **2K** to match that modal, where 2K already means 2560×1440.
  */
 export const RES_PRESETS = {
-    '360':  { h: 360,  label: '360p'  },
+    '480':  { h: 480,  label: '480p'  },
     '720':  { h: 720,  label: '720p'  },
     '1080': { h: 1080, label: '1080p' },
-    '1440': { h: 1440, label: '1440p' },
+    '1440': { h: 1440, label: '2K'    },
 };
+
+/** Fallback whenever a `res` value isn't a known preset. */
+export const DEFAULT_RES = '1080';
 
 export const MAX_OUT_DIM = 3840;
 
@@ -84,7 +90,7 @@ export function computeTileRects(dock, tiles, outW, outH) {
  * which case the height is recomputed so the aspect still holds).
  */
 export function outputSizeFor(aspect, presetKey) {
-    var preset = RES_PRESETS[presetKey] || RES_PRESETS['1080'];
+    var preset = RES_PRESETS[presetKey] || RES_PRESETS[DEFAULT_RES];
     if (!isFinite(aspect) || aspect <= 0) aspect = 16 / 9;
     var h = preset.h;
     var w = evenDim(h * aspect);
@@ -118,7 +124,7 @@ export function outputSizeFrom(settings, aspect) {
     if (settings && settings.res === RES_CUSTOM) {
         return { width: clampOutDim(settings.outW), height: clampOutDim(settings.outH) };
     }
-    return outputSizeFor(aspect, settings ? settings.res : '1080');
+    return outputSizeFor(aspect, settings ? settings.res : DEFAULT_RES);
 }
 
 /**
@@ -170,7 +176,7 @@ export function defaultOverlayExportSettings() {
             brightness: 1.0, nodeColor: 'white', lineStyle: 'dotted',
             labelSize: 0, labelAlpha: 0.9, showNodes: true, showEdges: true,
         },
-        res: '1080',
+        res: DEFAULT_RES,
         outW: 1920,          // only consulted when res === RES_CUSTOM
         outH: 1080,
         fps: 30,
@@ -200,11 +206,27 @@ export function mergeSettings(base, saved) {
     return base;
 }
 
+/**
+ * Hold a persisted blob to the CURRENT option sets.
+ *
+ * `mergeSettings` only type-checks, so a `res` written by an older build (the
+ * preset list has changed once already: `360` became `480`) survives as a string
+ * nothing recognises. That splits the UI in two — `outputSizeFor` falls back to
+ * the default height while the `<select>`, having no matching `<option>`, goes
+ * blank — so the summary would quote a size the visible control doesn't name.
+ * Fall back explicitly instead.
+ */
+export function sanitizeSettings(s) {
+    if (!s) return s;
+    if (s.res !== RES_CUSTOM && !RES_PRESETS[s.res]) s.res = DEFAULT_RES;
+    return s;
+}
+
 /** Merge the persisted blob (if any) over `base`. */
 export function applyStoredSettings(base) {
     try {
         var raw = localStorage.getItem(SETTINGS_KEY);
-        if (raw) return mergeSettings(base, JSON.parse(raw));
+        if (raw) return sanitizeSettings(mergeSettings(base, JSON.parse(raw)));
     } catch (e) { /* corrupt / unavailable storage — keep the seeded defaults */ }
     return base;
 }

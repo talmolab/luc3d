@@ -497,7 +497,7 @@ try {
             el.value = v;
             el.dispatchEvent(new Event('change', { bubbles: true }));
         };
-        set('ovRes', '360');
+        set('ovRes', '480');
         set('ovMode', 'stitched');
         set('ovStartField', '2');
         set('ovEndField', '4');
@@ -505,7 +505,7 @@ try {
         const dr = document.getElementById('ovDock').getBoundingClientRect();
         return {
             tiles: document.querySelectorAll('#ovDock [data-view-name]').length,
-            size: L.outputSizeFor(dr.width / dr.height, '360'),
+            size: L.outputSizeFor(dr.width / dr.height, '480'),
         };
     });
     check(expected.tiles === 2, `two tiles re-added by double-clicking strip items (got ${expected.tiles})`);
@@ -567,7 +567,7 @@ try {
             el.value = v;
             el.dispatchEvent(new Event('change', { bubbles: true }));
         };
-        set('ovRes', '360');
+        set('ovRes', '480');
         set('ovMode', 'individual');
         set('ovStartField', '2');
         set('ovEndField', '3');
@@ -586,8 +586,8 @@ try {
     if (individualDls.length) {
         const first = await fs.readFile(await individualDls[0].path());
         const d0 = avcDims(first);
-        // A 640x480 source at the 360p preset -> 480x360.
-        check(d0 && d0.height === 360 && d0.width === 480,
+        // A 640x480 source at the 480p preset -> 640x480.
+        check(d0 && d0.height === 480 && d0.width === 640,
             `an individual 2D file uses the source aspect at the preset height (got ${d0 && d0.width}x${d0 && d0.height})`);
     }
 

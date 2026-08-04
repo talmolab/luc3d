@@ -117,7 +117,7 @@
     describe('overlay export — output size / encoder params', () => {
         it('always returns even dimensions (H.264 yuv420 requires it)', () => {
             const aspects = [16 / 9, 4 / 3, 1, 2.35, 0.5625, 3.7, 1.333333];
-            for (const key of ['360', '720', '1080', '1440']) {
+            for (const key of Object.keys(__OverlayExportLayout.RES_PRESETS)) {
                 for (const a of aspects) {
                     const s = __OverlayExportLayout.outputSizeFor(a, key);
                     assertEqual(s.width % 2, 0, 'even width for aspect ' + a + ' @ ' + key);
@@ -130,6 +130,30 @@
             const s = __OverlayExportLayout.outputSizeFor(16 / 9, '1080');
             assertEqual(s.height, 1080, 'preset height');
             assertEqual(s.width, 1920, 'derived width');
+        });
+
+        it('offers 480p / 720p / 1080p / 2K, each keyed by its own height', () => {
+            const P = __OverlayExportLayout.RES_PRESETS;
+            assertEqual(Object.keys(P).join(','), '480,720,1080,1440', 'the four presets, in order');
+            assertEqual(Object.keys(P).map(k => P[k].label).join(','), '480p,720p,1080p,2K', 'labels');
+            // The key must BE the height — `outputSizeFor` reads `preset.h`, and a
+            // key that disagreed would make the picker lie about the output.
+            for (const k of Object.keys(P)) assertEqual(P[k].h, Number(k), 'key is the height for ' + k);
+            // 2K means 2560x1440 here, matching V3D_RES in ui/export-modals.js.
+            assertEqual(__OverlayExportLayout.outputSizeFor(16 / 9, '1440').width, 2560, '2K is 2560 wide at 16:9');
+        });
+
+        it('falls back to the default preset for a res it no longer recognises', () => {
+            // '360' was a real preset on an earlier build of this branch, so a
+            // stored blob can still carry it. Left alone it would blank the
+            // <select> while outputSizeFor quietly used 1080 — two disagreeing UIs.
+            const D = __OverlayExportLayout.DEFAULT_RES;
+            for (const stale of ['360', '2160', '', 'garbage']) {
+                const s = __OverlayExportLayout.sanitizeSettings({ res: stale });
+                assertEqual(s.res, D, 'stale res ' + JSON.stringify(stale) + ' falls back');
+            }
+            assertEqual(__OverlayExportLayout.sanitizeSettings({ res: '720' }).res, '720', 'a live preset is kept');
+            assertEqual(__OverlayExportLayout.sanitizeSettings({ res: 'custom' }).res, 'custom', 'custom is not a preset but is legal');
         });
 
         it('clamps an extreme aspect to MAX_OUT_DIM and keeps the aspect', () => {
@@ -290,7 +314,7 @@
             const s = __OverlayExportLayout.defaultOverlayExportSettings();
             s.user.nodeSize = 4; s.user.lineWidth = 2; s.user.labelSize = 12;
             // 640x480 video into a 1280x960 tile → 2x. "Size 4" must mean 4
-            // VIDEO pixels at every output resolution, or a 360p and a 1440p
+            // VIDEO pixels at every output resolution, or a 480p and a 2K
             // export of the same layout would not look alike.
             const big = __OverlayExportLayout.overlayOptionsFrom(s, 640, 480, 1280, 960);
             assertEqual(big.userOpts.nodeSize, 8, 'marker doubled');
