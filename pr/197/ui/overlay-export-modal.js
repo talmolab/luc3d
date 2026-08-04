@@ -225,7 +225,10 @@ export function showOverlayExportModal() {
         '      <button id="ovPrev" title="Previous frame" style="' + TBTN + '">⏮</button>' +
         '      <button id="ovPlay" title="Play / Pause" style="' + TBTN + '">▶</button>' +
         '      <button id="ovNext" title="Next frame" style="' + TBTN + '">⏭</button>' +
-        '      <div id="ovTrack" style="position:relative;flex:1;height:26px;margin:0 10px;cursor:pointer;">' +
+        // `touch-action:none` so a touch scrub drags the playhead instead of
+        // scrolling the modal (the handles carry the same rule).
+        '      <div id="ovTrack" title="Click or drag to scrub" ' +
+        '           style="position:relative;flex:1;height:26px;margin:0 10px;cursor:pointer;touch-action:none;">' +
         '        <div style="position:absolute;top:11px;left:0;right:0;height:4px;background:#444;border-radius:2px;"></div>' +
         '        <div id="ovRangeFill" style="position:absolute;top:11px;height:4px;background:var(--accent,#4a9eff);border-radius:2px;"></div>' +
         '        <div id="ovPlayhead" style="position:absolute;top:3px;width:2px;height:20px;background:#fff;opacity:0.85;margin-left:-1px;pointer-events:none;z-index:1;"></div>' +
@@ -1036,6 +1039,7 @@ export function showOverlayExportModal() {
     prevBtn.addEventListener('click', function () { setPlaying(false); showFrame(previewFrame - 1); });
     nextBtn.addEventListener('click', function () { setPlaying(false); showFrame(previewFrame + 1); });
 
+    // `'playhead'` | `'start'` | `'end'` — the track scrubs, the handles resize.
     var dragging = null;
     function frameFromClientX(clientX) {
         var rect = trackEl.getBoundingClientRect();
@@ -1046,13 +1050,16 @@ export function showOverlayExportModal() {
     function onDragMove(ev) {
         if (!dragging) return;
         var f = frameFromClientX(ev.clientX);
-        if (dragging === 'start') setRange(Math.min(f, rangeEnd), rangeEnd);
+        if (dragging === 'playhead') showFrame(f);
+        else if (dragging === 'start') setRange(Math.min(f, rangeEnd), rangeEnd);
         else setRange(rangeStart, Math.max(f, rangeStart));
         if (ev.cancelable) ev.preventDefault();
     }
     function onDragEnd() {
         if (!dragging) return;
-        showFrame(dragging === 'start' ? rangeStart : rangeEnd);
+        // Releasing an endpoint previews the boundary you just set; a playhead
+        // drag is already sitting on the right frame, so leave it alone.
+        if (dragging !== 'playhead') showFrame(dragging === 'start' ? rangeStart : rangeEnd);
         dragging = null;
         document.removeEventListener('pointermove', onDragMove);
         document.removeEventListener('pointerup', onDragEnd);
@@ -1067,13 +1074,30 @@ export function showOverlayExportModal() {
     }
     handleStart.addEventListener('pointerdown', function (ev) { beginDrag('start', ev); });
     handleEnd.addEventListener('pointerdown', function (ev) { beginDrag('end', ev); });
+
+    /**
+     * Pressing the track scrubs the CURRENT FRAME and drags it, rather than
+     * pulling whichever range endpoint happens to be nearer.
+     *
+     * Scrubbing is the gesture you reach for constantly — you set the export
+     * range once and then hunt for the frame you want to check. Nearest-endpoint
+     * grabbing meant an innocent click halfway down the track silently redefined
+     * what would be exported, and which end moved depended on invisible
+     * arithmetic. So the two gestures are now separated by what you press: the
+     * track scrubs, and an endpoint moves only when you grab its handle
+     * directly. The handles sit above the track (`z-index`) and claim their own
+     * `pointerdown`, so a press that lands on one never reaches here.
+     *
+     * Scrubbing is deliberately NOT clamped to the export range — the playhead
+     * is a preview cursor, and being able to look just outside the range before
+     * committing to it is the point. Playback still starts at `rangeStart` when
+     * the playhead is outside, so nothing downstream is confused by it.
+     */
     trackEl.addEventListener('pointerdown', function (ev) {
         if (exporting) return;
         if (ev.target === handleStart || ev.target === handleEnd) return;
-        var f = frameFromClientX(ev.clientX);
-        var which = Math.abs(f - rangeStart) <= Math.abs(f - rangeEnd) ? 'start' : 'end';
-        if (which === 'start') setRange(f, rangeEnd); else setRange(rangeStart, f);
-        beginDrag(which, ev);
+        beginDrag('playhead', ev);
+        showFrame(frameFromClientX(ev.clientX));
     });
 
     // ========================================================================

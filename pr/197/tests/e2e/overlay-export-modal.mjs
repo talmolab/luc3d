@@ -315,6 +315,67 @@ try {
     check(phPlay > phPrev, `playing advances the playhead (${phPrev} -> ${phPlay})`);
     check(afPlay === phPlay, `the app viewer keeps up with playback (app ${afPlay} vs playhead ${phPlay})`);
 
+    // ---- the track scrubs; only the handles move the range -----------------
+    // Real mouse events, not synthetic dispatch: the whole point of this
+    // behavior is which ELEMENT a press lands on (track vs handle), and only a
+    // real press does that hit-testing. Pressing the track must move the current
+    // frame and leave the export range alone — it used to drag whichever
+    // endpoint was nearer, so an innocent click silently redefined the export.
+    const trackBox = await page.locator('#ovTrack').boundingBox();
+    const atPct = (p) => ({ x: trackBox.x + trackBox.width * p, y: trackBox.y + trackBox.height / 2 });
+    const rangeNow = () => page.evaluate(() => ({
+        start: document.getElementById('ovStartField').value,
+        end: document.getElementById('ovEndField').value,
+    }));
+    const LAST = 39;                                   // 40 frames, 0-based
+    const near = (got, want, slack = 1) => Math.abs(got - want) <= slack;
+
+    const rangeBefore = await rangeNow();
+    const clickPt = atPct(0.25);
+    await page.mouse.move(clickPt.x, clickPt.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    const phClick = await playhead();
+    const afClick = await appFrame();
+    const rangeAfterClick = await rangeNow();
+    check(near(phClick, Math.round(0.25 * LAST)),
+        `clicking the track scrubs to that frame (got ${phClick}, expected ~${Math.round(0.25 * LAST)})`);
+    check(rangeAfterClick.start === rangeBefore.start && rangeAfterClick.end === rangeBefore.end,
+        `clicking the track leaves the export range untouched (got ${rangeAfterClick.start}..${rangeAfterClick.end})`);
+    check(afClick === phClick, `the app viewer follows a track click (app ${afClick} vs playhead ${phClick})`);
+
+    // Dragging on the track keeps scrubbing the playhead.
+    const dragTo = atPct(0.6);
+    await page.mouse.move(clickPt.x, clickPt.y);
+    await page.mouse.down();
+    await page.mouse.move(dragTo.x, dragTo.y, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(450);
+    const phDrag = await playhead();
+    const rangeAfterDrag = await rangeNow();
+    check(near(phDrag, Math.round(0.6 * LAST)),
+        `dragging on the track drags the playhead (got ${phDrag}, expected ~${Math.round(0.6 * LAST)})`);
+    check(rangeAfterDrag.start === rangeBefore.start && rangeAfterDrag.end === rangeBefore.end,
+        `dragging on the track still leaves the range untouched (got ${rangeAfterDrag.start}..${rangeAfterDrag.end})`);
+
+    // The start handle, grabbed directly, still resizes the range.
+    const handleBox = await page.locator('#ovHandleStart').boundingBox();
+    const handleTo = atPct(0.3);
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleTo.x, handleTo.y, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(450);
+    const rangeAfterHandle = await rangeNow();
+    const wantStart = Math.round(0.3 * LAST) + 1;      // 1-based display
+    check(near(Number(rangeAfterHandle.start), wantStart),
+        `grabbing the start handle still moves the range start (got ${rangeAfterHandle.start}, expected ~${wantStart})`);
+    check(rangeAfterHandle.end === rangeBefore.end,
+        `moving the start handle leaves the end alone (got ${rangeAfterHandle.end})`);
+    check(near(await playhead(), Number(rangeAfterHandle.start) - 1),
+        'releasing an endpoint previews the boundary it was dropped on');
+
     // ---- custom output dimensions, applied to the composition live ---------
     const custom = await page.evaluate(async () => {
         const set = (id, v) => {
