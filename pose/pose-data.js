@@ -1941,6 +1941,91 @@ export class Session {
     }
 
     /**
+     * Exchange two identities from `startFrame` through the END of the project,
+     * in EVERY view (luc3d #172).
+     *
+     * This is the identity-layer analogue of SLEAP's `Labels.track_swap` over
+     * `(frame_idx, None)`, and it is what a MANUAL identity correction means: the
+     * user is asserting "from here on, these two animals are the other way
+     * round". `propagateIdentity` cannot express that, because it follows ONE
+     * raw `(camera, trackIdx)` pair forward and therefore dies at the first
+     * fragment boundary of that raw track — on real per-camera tracker output
+     * the same animal is track 4 for a few hundred frames, then track 12, then
+     * track 20, so a correction reached only the current tracklet (issue #172:
+     * "only a small fragment of the ID propagates down the timeline").
+     *
+     * Identity, unlike a raw track, is DENSE across the whole project: that is
+     * precisely why `frameIdentityMap` is keyed per (frame, camera, track)
+     * rather than globally per track. So the swap is expressed over identity
+     * VALUES and needs no track continuity at all — it reaches every frame,
+     * every camera, and every raw track fragment in one pass.
+     *
+     * Two structures are rewritten, both whole-project and both durable:
+     *  - `frameIdentityMap` — the per-frame source of truth every consumer reads
+     *    (`getGroupColor`, the ID timeline, triangulation grouping). Saved via
+     *    `exportFrameIdentityEntries`.
+     *  - `instanceGroups[*].identityId` — the group-level field, saved into the
+     *    columnar `instance_groups` table and used as the display FALLBACK for
+     *    groups with no per-frame entry, and read directly by
+     *    `propagateIdentitiesToTracks` (step 2b). Leaving it stale would make a
+     *    later "Propagate IDs -> Tracks" resurrect the pre-swap assignment.
+     *
+     * Frames BEFORE `startFrame` are never touched — a correction fixes the
+     * future, not already-correct history (issue #155). A later correction at a
+     * frame G simply exchanges the pair again from G forward, which composes to
+     * "until the next manual correction" without this method having to know
+     * anything about correction history.
+     *
+     * Cost: one arithmetic pass over `frameIdentityMap` (no key decoding for
+     * packed keys, no allocation) plus one pass over `instanceGroups`. No frame
+     * materialization, so nothing hydrates and nothing is evicted.
+     *
+     * @param {number} startFrame inclusive
+     * @param {number} identityA
+     * @param {number} identityB
+     * @returns {{entries:number, groups:number, frames:number}} per-frame
+     *   identity entries changed, group-level fields changed, and frames with at
+     *   least one change.
+     */
+    swapIdentitiesForward(startFrame, identityA, identityB) {
+        var entries = 0, groups = 0, frames = 0;
+        if (identityA == null || identityB == null || identityA === identityB) {
+            return { entries: 0, groups: 0, frames: 0 };
+        }
+        // Pass 1 — per-frame identity. Only VALUES change, so mutating during
+        // iteration is safe (no key is added or removed). Packed keys carry
+        // frameIdx in their top bits, so the frame filter is pure arithmetic on
+        // the 2.6M-entry real project rather than a decode per entry.
+        for (var entry of this.frameIdentityMap) {
+            var k = entry[0], v = entry[1];
+            if (v !== identityA && v !== identityB) continue;
+            var f;
+            if (_fimIsPacked(k)) {
+                f = Math.floor(k / FIM_CAM_STRIDE);
+            } else {
+                var parts = _parseFrameIdentityKey(String(k));
+                if (!parts) continue;
+                f = parts.frameIdx;
+            }
+            if (f < startFrame) continue;
+            this.frameIdentityMap.set(k, v === identityA ? identityB : identityA);
+            entries++;
+        }
+        // Pass 2 — group-level identity (whole-project placeholders).
+        for (var [gF, gList] of this.instanceGroups) {
+            if (gF < startFrame) continue;
+            var touched = false;
+            for (var gi = 0; gi < gList.length; gi++) {
+                var g = gList[gi];
+                if (g.identityId === identityA) { g.identityId = identityB; groups++; touched = true; }
+                else if (g.identityId === identityB) { g.identityId = identityA; groups++; touched = true; }
+            }
+            if (touched) frames++;
+        }
+        return { entries: entries, groups: groups, frames: frames };
+    }
+
+    /**
      * Stamp `identityId` onto (cameraName, trackIdx) at one frame, preserving
      * per-frame uniqueness. Shared by both passes of `propagateIdentity` so the
      * resident and store-driven paths cannot drift.
