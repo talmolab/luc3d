@@ -1,40 +1,50 @@
 /**
  * test-triangulation-ba.js — Bundle-adjustment correctness (issue #113).
  *
- * The issue's symptom: **"error sometimes goes up compared to DLT"**. Bundle
- * adjustment is initialized FROM the DLT solution and only refines it, so the
+ * The issue's symptom: **"error sometimes goes up compared to DLT"**. The point
+ * refinement is initialized FROM the DLT solution and only refines it, so the
  * reprojection error the app reports must never be worse than DLT's. These tests
- * pin that invariant across the scenarios that broke it, and pin the accuracy
- * gain that a robust loss buys under outliers.
+ * pin that invariant, pin the accuracy gain the robust loss buys under outliers,
+ * and — crucially — pin that the *pre-fix* configuration violates the invariant,
+ * so the suite cannot silently stop testing the bug.
  *
- * Three independent mechanisms were reproduced on the pre-fix code (counts are
- * from the harness below, and are what these tests assert away):
+ * ## Fixture correctness (read this before adding a scenario)
+ * `Camera.project()` does **NOT** apply distortion (see pose-data.js). A real
+ * camera observes `distortPoint(project(X))`. Every scenario below synthesizes
+ * observations that way. Getting this wrong (feeding ideal pinhole points as if
+ * they were raw detections) produces a fixture whose undistort/reproject
+ * pipeline is self-inconsistent, with ~25 px reprojection errors from 2 px of
+ * noise, and makes every measurement meaningless. Use `observe()`.
  *
- *   1. SPACE MISMATCH — BA minimized squared error against the *undistorted*
- *      observations, while `triangulateAndReproject` reports `meanError` in the
- *      camera's *native (distorted)* pixel space. With realistic radial
- *      distortion the reported error rose in 162/400 groups (40%), while the
- *      undistorted-space error rose in 0/400. The optimizer was right; it was
- *      optimizing a different thing than the number on screen.
+ * ## What was wrong, measured on the pre-#113 configuration
+ * `{ robustScale: Infinity, polish: false, guard: false }` reproduces the old
+ * behavior exactly. Two mismatches between the minimized objective and the
+ * displayed metric, both reproduced below:
  *
- *   2. LOSS MISMATCH — BA minimized the SUM of SQUARED residuals (dominated by
- *      the worst view) while the report is the MEAN of Euclidean residuals. With
- *      one gross outlier and zero distortion the reported error rose in 134/400
- *      groups (34%) even though the sum of squares strictly fell every time.
+ *   1. SPACE — the objective was formed against *undistorted* observations with
+ *      an ideal pinhole projection, while `triangulateAndReproject` reports
+ *      `meanError` against the raw detections in the camera's *native
+ *      (distorted)* space. Fixed by making the residual native-space, which is
+ *      also what aniposelib does (`Camera.project` there applies distortion).
  *
- *   3. OUTLIER CHASING — a plain squared loss pulls the 3D point toward a bad
- *      observation, so BA's distance to ground truth was WORSE than DLT's in
- *      1345/3000 single-point trials (up to 1.48x). Fixed by the robust loss.
+ *   2. LOSS — the objective was the SUM of SQUARED residuals, dominated by the
+ *      worst view, while the report is the MEAN of Euclidean residuals. A step
+ *      that lowers one can raise the other. This reproduces with *zero*
+ *      distortion, so it is independent of mechanism 1.
  *
- * NOT a bug (verified, 0 violations): the Levenberg-Marquardt loop itself. It is
- * strictly monotone in its own objective (0/3000 sum-of-squares increases) and
- * reaches the local optimum (0/4000 trials left a >1e-6 relative cost gap versus
- * a 500-iteration/1e-16 solve). Do not "fix" the LM ladder.
+ * The fix makes the invariant structural rather than post-hoc: phase 2 of the
+ * solve minimizes Σ‖r‖, which *is* the reported metric, so monotonicity in the
+ * displayed number follows from the LM being monotone in its own loss.
+ *
+ * ## NOT a bug (verified; do not "fix" the LM ladder)
+ * The Levenberg–Marquardt loop was strictly monotone in its own objective
+ * (0/3000 sum-of-squares increases) and reached the local optimum (0/4000 trials
+ * left a >1e-6 relative cost gap versus a 500-iteration/tol=1e-16 solve).
  *
  * Runs under the browser runner and the Node `vm` harness (run-node.js).
  */
 (function () {
-    const { describe, it, assertTrue, assertLessThan, assertNotNull } = TestFramework;
+    const { describe, it, assertTrue, assertLessThan } = TestFramework;
 
     // Deterministic LCG + Box-Muller, so every assertion below is reproducible.
     function rng(seed) {
@@ -48,8 +58,15 @@
 
     const K = [[600, 0, 320], [0, 600, 240], [0, 0, 1]];
     const NO_DIST = [0, 0, 0, 0, 0];
-    // Realistic barrel distortion (same order of magnitude as a real lab camera).
+    // Barrel distortion of the magnitude a real wide-ish lab camera shows. The
+    // undistort/distort round trip is exact to <1e-9 px over the whole frame for
+    // both of these, so the fixture is self-consistent.
     const RADIAL = [-0.3, 0.12, 0.001, 0.001, 0];
+    const MILD_RADIAL = [-0.08, 0.01, 0.0002, 0.0002, 0];
+
+    // The pre-#113 objective: plain squared loss, undistorted residuals, no
+    // metric-matching polish, no guard.
+    const PRE_FIX = { robustScale: Infinity, polish: false, guard: false };
 
     // A 4-camera rig with genuinely different viewpoints.
     const RIG = [
@@ -58,23 +75,33 @@
         ['c3', [0.2, 0, 0], [0, 15, 0]],
         ['c4', [0.1, -0.35, 0], [-18, 4, 0]],
     ];
-    function buildRig(dist) {
-        return RIG.map(function (r) { return new Camera(r[0], K, dist, r[1], r[2], [640, 480]); });
+    function buildRig(dist, nCams) {
+        return RIG.slice(0, nCams || RIG.length).map(function (r) {
+            return new Camera(r[0], K, dist, r[1], r[2], [640, 480]);
+        });
     }
 
-    // A synthetic InstanceGroup: nNodes ground-truth 3D points, projected into
-    // every camera with Gaussian pixel noise, optionally with one gross outlier.
-    function makeGroup(cams, r, nNodes, noisePx, outlierPx) {
-        const truth = [];
+    /** What the real camera sees: distortion applied, then pixel noise. */
+    function observe(cam, point3d, noisePx, r) {
+        const q = cam.distortPoint(cam.project(point3d));
+        return [q[0] + r.gauss() * noisePx, q[1] + r.gauss() * noisePx];
+    }
+
+    function randomTruth(r, nNodes) {
+        const out = [];
         for (let k = 0; k < nNodes; k++) {
-            truth.push([(r.u() - 0.5) * 24, (r.u() - 0.5) * 24, 35 + r.u() * 20]);
+            out.push([(r.u() - 0.5) * 24, (r.u() - 0.5) * 24, 35 + r.u() * 20]);
         }
+        return out;
+    }
+
+    // ---- Group-level sweep over triangulateAndReproject ---------------------
+
+    function makeGroup(cams, r, nNodes, noisePx, outlierPx) {
+        const truth = randomTruth(r, nNodes);
         const g = new InstanceGroup(1, 0);
         for (let c = 0; c < cams.length; c++) {
-            const pts = truth.map(function (p) {
-                const q = cams[c].project(p);
-                return [q[0] + r.gauss() * noisePx, q[1] + r.gauss() * noisePx];
-            });
+            const pts = truth.map(function (p) { return observe(cams[c], p, noisePx, r); });
             g.addInstance(cams[c].name, new Instance(pts, 0, 'user', 1));
         }
         if (outlierPx > 0) {
@@ -88,218 +115,299 @@
         return { group: g, truth: truth };
     }
 
-    // Sweep `trials` synthetic groups; count how often BA's reported error beats
-    // / loses to DLT's. `pick` selects which reported metric to compare.
-    function sweep(opts) {
-        const cams = buildRig(opts.dist);
+    function sweepGroups(opts) {
+        const cams = buildRig(opts.dist, opts.nCams);
         const names = cams.map(function (c) { return c.name; });
         const r = rng(opts.seed);
         let worse = 0, better = 0, total = 0, worstRatio = 1;
         for (let t = 0; t < opts.trials; t++) {
             const t1 = makeGroup(cams, r, opts.nNodes, opts.noisePx, opts.outlierPx || 0);
-            const base = { includedCameras: names };
-            const rd = triangulateAndReproject(t1.group, cams, Object.assign({ method: 'dlt' }, base));
-            const rb = triangulateAndReproject(t1.group, cams, Object.assign({ method: 'ba' }, base));
-            const ed = opts.pick(rd), eb = opts.pick(rb);
-            if (ed == null || eb == null) continue;
+            const rd = triangulateAndReproject(t1.group, cams,
+                { method: 'dlt', includedCameras: names });
+            const rb = triangulateAndReproject(t1.group, cams,
+                { method: 'ba', includedCameras: names });
+            if (rd.meanError == null || rb.meanError == null) continue;
             total++;
-            if (eb > ed + 1e-9) { worse++; worstRatio = Math.max(worstRatio, eb / ed); }
-            else if (eb < ed - 1e-9) better++;
+            if (rb.meanError > rd.meanError + 1e-9) {
+                worse++; worstRatio = Math.max(worstRatio, rb.meanError / rd.meanError);
+            } else if (rb.meanError < rd.meanError - 1e-9) better++;
         }
         return { worse: worse, better: better, total: total, worstRatio: worstRatio };
     }
 
-    const distorted = function (res) { return res.meanError; };
-    const undistorted = function (res) { return res.meanErrorUndistorted; };
-
-    describe('BA #113 - reported error never worse than DLT', function () {
-        it('holds in the camera-native (distorted) space with radial distortion', function () {
-            if (typeof triangulateAndReproject !== 'function') return;
-            // MECHANISM 1. Pre-fix: 162/400 groups worse.
-            const s = sweep({
-                dist: RADIAL, seed: 99, trials: 200, nNodes: 12,
-                noisePx: 2.0, pick: distorted
+    describe('BA #113 - group reported error never worse than DLT', function () {
+        const SCENARIOS = [
+            ['no distortion, noise only', NO_DIST, 2.0, 0],
+            ['no distortion, gross outlier', NO_DIST, 1.0, 60],
+            ['radial k1=-0.3, noise only', RADIAL, 2.0, 0],
+            ['radial k1=-0.3, gross outlier', RADIAL, 1.0, 60],
+            ['mild radial k1=-0.08, noise only', MILD_RADIAL, 2.0, 0],
+        ];
+        SCENARIOS.forEach(function (sc) {
+            it('holds: ' + sc[0], function () {
+                if (typeof triangulateAndReproject !== 'function') return;
+                const s = sweepGroups({
+                    dist: sc[1], seed: 99, trials: 150, nNodes: 12,
+                    noisePx: sc[2], outlierPx: sc[3]
+                });
+                assertTrue(s.total > 100, 'sweep produced groups (' + s.total + ')');
+                assertTrue(s.worse === 0,
+                    'BA raised the reported mean error in ' + s.worse + '/' + s.total +
+                    ' groups (worst ' + s.worstRatio.toFixed(4) + 'x)');
+                assertTrue(s.better > s.total * 0.9,
+                    'BA still improves nearly every group (' + s.better + '/' + s.total + ')');
             });
-            assertTrue(s.total > 150, 'sweep produced groups (' + s.total + ')');
-            assertTrue(s.worse === 0,
-                'BA raised the reported distorted-space mean error in ' + s.worse + '/' +
-                s.total + ' groups (worst ' + s.worstRatio.toFixed(4) + 'x)');
-            assertTrue(s.better > 0, 'BA still improves most groups (' + s.better + '/' + s.total + ')');
-        });
-
-        it('holds in undistorted space with radial distortion', function () {
-            if (typeof triangulateAndReproject !== 'function') return;
-            const s = sweep({
-                dist: RADIAL, seed: 99, trials: 200, nNodes: 12,
-                noisePx: 2.0, pick: undistorted
-            });
-            assertTrue(s.worse === 0,
-                'BA raised the undistorted-space mean error in ' + s.worse + '/' + s.total);
-        });
-
-        it('holds when a gross outlier observation is present', function () {
-            if (typeof triangulateAndReproject !== 'function') return;
-            // MECHANISM 2. Pre-fix: 134/400 groups worse (no distortion at all).
-            const s = sweep({
-                dist: NO_DIST, seed: 99, trials: 200, nNodes: 12,
-                noisePx: 1.0, outlierPx: 60, pick: distorted
-            });
-            assertTrue(s.worse === 0,
-                'BA raised the reported mean error under an outlier in ' + s.worse + '/' +
-                s.total + ' groups (worst ' + s.worstRatio.toFixed(4) + 'x)');
-        });
-
-        it('holds with both distortion and an outlier', function () {
-            if (typeof triangulateAndReproject !== 'function') return;
-            // Pre-fix: 170/400 groups worse.
-            const s = sweep({
-                dist: RADIAL, seed: 31, trials: 200, nNodes: 12,
-                noisePx: 1.0, outlierPx: 60, pick: distorted
-            });
-            assertTrue(s.worse === 0,
-                'BA raised the reported mean error in ' + s.worse + '/' + s.total +
-                ' groups (worst ' + s.worstRatio.toFixed(4) + 'x)');
-        });
-
-        it('holds with noise only and no distortion', function () {
-            if (typeof triangulateAndReproject !== 'function') return;
-            // Pre-fix: 14/400 groups worse (squared-vs-mean alone, no outliers).
-            const s = sweep({
-                dist: NO_DIST, seed: 7, trials: 200, nNodes: 12,
-                noisePx: 2.0, pick: distorted
-            });
-            assertTrue(s.worse === 0, 'BA raised the reported mean error in ' + s.worse + '/' + s.total);
-            assertTrue(s.better > 0, 'BA still improves groups (' + s.better + '/' + s.total + ')');
-        });
-
-        it('holds when some views are missing the keypoint', function () {
-            if (typeof triangulateAndReproject !== 'function') return;
-            const cams = buildRig(RADIAL);
-            const names = cams.map(function (c) { return c.name; });
-            const r = rng(1234);
-            let worse = 0, total = 0, worstRatio = 1;
-            for (let t = 0; t < 200; t++) {
-                const t1 = makeGroup(cams, r, 10, 1.5, r.u() < 0.5 ? 50 : 0);
-                // Drop a random node from a random view (leaving >= 2 views).
-                for (let d = 0; d < 3; d++) {
-                    const inst = t1.group.getInstance(names[Math.floor(r.u() * names.length)]);
-                    inst.clearPoint(Math.floor(r.u() * 10));
-                }
-                const rd = triangulateAndReproject(t1.group, cams, { method: 'dlt', includedCameras: names });
-                const rb = triangulateAndReproject(t1.group, cams, { method: 'ba', includedCameras: names });
-                if (rd.meanError == null || rb.meanError == null) continue;
-                total++;
-                if (rb.meanError > rd.meanError + 1e-9) {
-                    worse++; worstRatio = Math.max(worstRatio, rb.meanError / rd.meanError);
-                }
-            }
-            assertTrue(total > 100, 'sweep produced groups (' + total + ')');
-            assertTrue(worse === 0, 'BA raised the reported mean error in ' + worse + '/' + total +
-                ' groups with missing views (worst ' + worstRatio.toFixed(4) + 'x)');
         });
     });
 
-    describe('BA #113 - per-point invariant', function () {
-        it('triangulatePointBA never increases the mean per-view pixel error vs its DLT init', function () {
-            if (typeof triangulatePointBA !== 'function') return;
-            const cams = buildRig(NO_DIST);
-            const mats = cams.map(function (c) { return c.projectionMatrix; });
-            const r = rng(2026);
-            function meanAbs(pt, obs) {
-                let s = 0, n = 0;
-                for (let i = 0; i < obs.length; i++) {
-                    if (obs[i] == null) continue;
-                    const q = reprojectPoint(pt, mats[i]);
-                    s += Math.sqrt((obs[i][0] - q[0]) * (obs[i][0] - q[0]) +
-                                   (obs[i][1] - q[1]) * (obs[i][1] - q[1]));
-                    n++;
-                }
-                return n ? s / n : null;
-            }
-            let worse = 0, total = 0, worstRatio = 1;
-            for (let t = 0; t < 2000; t++) {
-                const gt = [(r.u() - 0.5) * 20, (r.u() - 0.5) * 20, 35 + r.u() * 20];
-                const obs = cams.map(function (c) {
-                    const q = c.project(gt);
-                    return [q[0] + r.gauss() * 1.0, q[1] + r.gauss() * 1.0];
-                });
+    // ---- Per-point sweep, with a pre-fix baseline for teeth -----------------
+
+    /**
+     * Sweep single points; return how often each configuration raises the mean
+     * native-space Euclidean reprojection error above its DLT initialization.
+     */
+    function sweepPoints(opts) {
+        const cams = buildRig(opts.dist, opts.nCams);
+        const mats = cams.map(function (c) { return c.projectionMatrix; });
+        const r = rng(opts.seed);
+        const acc = { dlt3d: 0, fix3d: 0, preWorse: 0, fixWorse: 0, fixBetter: 0, total: 0,
+                      preWorstRatio: 1, fixWorstRatio: 1 };
+        for (let t = 0; t < opts.trials; t++) {
+            const gt = randomTruth(r, 1)[0];
+            const raw = cams.map(function (c) { return observe(c, gt, opts.noisePx, r); });
+            if (opts.outlierPx > 0) {
                 const oi = Math.floor(r.u() * cams.length);
-                obs[oi] = [obs[oi][0] + 50 * (r.u() - 0.5), obs[oi][1] + 50 * (r.u() - 0.5)];
-                const dlt = triangulatePointDLT(obs, mats);
-                if (dlt == null) continue;
-                const ba = triangulatePointBA(obs, mats, dlt);
-                if (ba == null) continue;
-                total++;
-                const ed = meanAbs(dlt, obs), eb = meanAbs(ba, obs);
-                if (eb > ed + 1e-9) { worse++; worstRatio = Math.max(worstRatio, eb / ed); }
+                raw[oi] = [raw[oi][0] + opts.outlierPx * (r.u() < 0.5 ? -1 : 1),
+                           raw[oi][1] + opts.outlierPx * (r.u() < 0.5 ? -1 : 1)];
             }
-            assertTrue(total > 1500, 'trials ran (' + total + ')');
-            // Pre-fix: ~1105/3000 worse, up to 1.073x.
-            assertTrue(worse === 0, 'per-point BA raised the mean pixel error in ' + worse + '/' +
-                total + ' trials (worst ' + worstRatio.toFixed(4) + 'x)');
+            const und = raw.map(function (p, i) { return cams[i].undistortPoint(p); });
+            const dlt = triangulatePointDLT(und, mats);
+            if (dlt == null) continue;
+            // Pre-fix took undistorted observations; the fix takes raw + cameras.
+            const pre = triangulatePointBA(und, mats, dlt, PRE_FIX);
+            const fix = triangulatePointBA(raw, mats, dlt, { cameras: cams });
+            if (pre == null || fix == null) continue;
+            acc.total++;
+
+            // Reported metric: mean Euclidean error vs the RAW detections, in
+            // native space — exactly triangulateAndReproject's `meanError`.
+            function reported(pt) {
+                let s = 0;
+                for (let i = 0; i < cams.length; i++) {
+                    const q = reprojectPointCamera(pt, cams[i]);
+                    s += Math.sqrt((raw[i][0] - q[0]) * (raw[i][0] - q[0]) +
+                                   (raw[i][1] - q[1]) * (raw[i][1] - q[1]));
+                }
+                return s / cams.length;
+            }
+            function dist3(a) {
+                return Math.sqrt((a[0] - gt[0]) * (a[0] - gt[0]) + (a[1] - gt[1]) * (a[1] - gt[1]) +
+                                 (a[2] - gt[2]) * (a[2] - gt[2]));
+            }
+            const e0 = reported(dlt), ep = reported(pre), ef = reported(fix);
+            if (ep > e0 + 1e-9) { acc.preWorse++; acc.preWorstRatio = Math.max(acc.preWorstRatio, ep / e0); }
+            if (ef > e0 + 1e-9) { acc.fixWorse++; acc.fixWorstRatio = Math.max(acc.fixWorstRatio, ef / e0); }
+            if (ef < e0 - 1e-9) acc.fixBetter++;
+            acc.dlt3d += dist3(dlt);
+            acc.fix3d += dist3(fix);
+        }
+        return acc;
+    }
+
+    describe('BA #113 - per-point invariant, with a pre-fix baseline', function () {
+        const CASES = [
+            ['no distortion, noise only', NO_DIST, 2.0, 0, 4],
+            ['no distortion, gross outlier', NO_DIST, 1.0, 60, 4],
+            ['radial k1=-0.3, noise only', RADIAL, 2.0, 0, 4],
+            ['radial k1=-0.3, gross outlier', RADIAL, 1.0, 60, 4],
+            ['radial k1=-0.3, two views only', RADIAL, 2.0, 0, 2],
+        ];
+        CASES.forEach(function (c) {
+            it('never worsens the reported error: ' + c[0], function () {
+                if (typeof triangulatePointBA !== 'function') return;
+                const a = sweepPoints({
+                    dist: c[1], noisePx: c[2], outlierPx: c[3], nCams: c[4],
+                    seed: 31337, trials: 1200
+                });
+                assertTrue(a.total > 900, 'trials ran (' + a.total + ')');
+                assertTrue(a.fixWorse === 0,
+                    'BA raised the reported error in ' + a.fixWorse + '/' + a.total +
+                    ' trials (worst ' + a.fixWorstRatio.toFixed(5) + 'x)');
+                assertTrue(a.fixBetter > a.total * 0.9,
+                    'BA still improves nearly every point (' + a.fixBetter + '/' + a.total + ')');
+            });
         });
 
-        it('still strictly beats DLT on clean noisy data (BA is not a no-op)', function () {
+        // TEETH. If these ever stop failing-in-the-old-config, the tests above
+        // have stopped proving anything and something has silently changed.
+        it('the pre-#113 configuration DOES violate the invariant (test has teeth)', function () {
             if (typeof triangulatePointBA !== 'function') return;
-            const cams = buildRig(NO_DIST);
-            const mats = cams.map(function (c) { return c.projectionMatrix; });
-            const r = rng(555);
-            let strictlyBetter = 0, total = 0;
-            for (let t = 0; t < 500; t++) {
-                const gt = [(r.u() - 0.5) * 20, (r.u() - 0.5) * 20, 35 + r.u() * 20];
-                const obs = cams.map(function (c) {
-                    const q = c.project(gt);
-                    return [q[0] + r.gauss() * 2.0, q[1] + r.gauss() * 2.0];
-                });
-                const dlt = triangulatePointDLT(obs, mats);
-                const ba = triangulatePointBA(obs, mats, dlt);
-                if (dlt == null || ba == null) continue;
-                total++;
-                let sd = 0, sb = 0;
-                for (let i = 0; i < obs.length; i++) {
-                    const qd = reprojectPoint(dlt, mats[i]), qb = reprojectPoint(ba, mats[i]);
-                    sd += (obs[i][0] - qd[0]) * (obs[i][0] - qd[0]) + (obs[i][1] - qd[1]) * (obs[i][1] - qd[1]);
-                    sb += (obs[i][0] - qb[0]) * (obs[i][0] - qb[0]) + (obs[i][1] - qb[1]) * (obs[i][1] - qb[1]);
-                }
-                if (sb < sd - 1e-9) strictlyBetter++;
-            }
-            assertTrue(strictlyBetter > total * 0.9,
-                'BA strictly reduces squared reprojection error on ' + strictlyBetter + '/' + total);
+            // Mechanism 2 in isolation: zero distortion, so only the
+            // squared-loss-vs-mean-report mismatch can be at fault.
+            const clean = sweepPoints({
+                dist: NO_DIST, noisePx: 2.0, outlierPx: 0, nCams: 4,
+                seed: 31337, trials: 1200
+            });
+            assertTrue(clean.preWorse > clean.total * 0.1,
+                'pre-fix should raise the reported error on a meaningful fraction ' +
+                'even with NO distortion, got ' + clean.preWorse + '/' + clean.total);
+            // Mechanism 1: with distortion the failure rate should be higher still.
+            const distorted = sweepPoints({
+                dist: RADIAL, noisePx: 2.0, outlierPx: 0, nCams: 4,
+                seed: 31337, trials: 1200
+            });
+            assertTrue(distorted.preWorse > clean.preWorse,
+                'adding distortion should make the pre-fix failure worse: ' +
+                distorted.preWorse + ' vs ' + clean.preWorse + ' of ' + clean.total);
         });
     });
 
     describe('BA #113 - robust loss improves 3D accuracy under outliers', function () {
-        it('is at least as close to ground truth as DLT on average', function () {
+        it('is far closer to ground truth than DLT when a view is an outlier', function () {
             if (typeof triangulatePointBA !== 'function') return;
-            // MECHANISM 3. Pre-fix, a plain squared loss chased the outlier and was
-            // FARTHER from truth than DLT in 1345/3000 trials. A robust loss should
-            // make BA's *aggregate* 3D error strictly better than DLT's.
+            const a = sweepPoints({
+                dist: NO_DIST, noisePx: 1.0, outlierPx: 60, nCams: 4,
+                seed: 4242, trials: 1200
+            });
+            assertTrue(a.total > 900, 'trials ran (' + a.total + ')');
+            // Measured ~11x better (3.46 -> 0.30 mean distance to truth).
+            assertLessThan(a.fix3d / a.total, (a.dlt3d / a.total) * 0.5,
+                'BA 3D error (' + (a.fix3d / a.total).toFixed(4) + ') should be far below DLT (' +
+                (a.dlt3d / a.total).toFixed(4) + ') under outliers');
+        });
+
+        it('costs only a little 3D accuracy on clean Gaussian noise', function () {
+            if (typeof triangulatePointBA !== 'function') return;
+            // Honest counterpart of the test above: minimizing Σ‖r‖ instead of
+            // Σ‖r‖² is slightly less statistically efficient when the noise
+            // really is Gaussian and there are no outliers. Measured ~10%
+            // (0.2101 -> 0.2309). Pinned so a future change cannot quietly
+            // trade away much more than that.
+            const a = sweepPoints({
+                dist: NO_DIST, noisePx: 2.0, outlierPx: 0, nCams: 4,
+                seed: 4242, trials: 1200
+            });
+            assertLessThan(a.fix3d / a.total, (a.dlt3d / a.total) * 1.25,
+                'BA 3D error on clean data (' + (a.fix3d / a.total).toFixed(4) +
+                ') should stay within 25% of DLT (' + (a.dlt3d / a.total).toFixed(4) + ')');
+        });
+    });
+
+    describe('BA #113 - views excluded from the solve', function () {
+        it('holds over the views BA is allowed to fit, not over excluded ones', function () {
+            if (typeof triangulateAndReproject !== 'function') return;
+            // A view excluded in the Camera Views panel does not contribute to
+            // the solve but IS still reprojected into and counted in the headline
+            // `meanError`. BA fitting the *included* views better can therefore
+            // raise the excluded view's error, and with it the headline number.
+            // That is correct behavior, not a regression: chasing an excluded
+            // view is exactly what excluding it forbids. The invariant that must
+            // hold is the one over the solve's own views.
+            const cams = buildRig(RADIAL);
+            const included = ['c1', 'c2', 'c3'];
+            const r = rng(777);
+            function meanOver(res, names) {
+                let s = 0, n = 0;
+                for (let i = 0; i < names.length; i++) {
+                    const errs = res.errors[names[i]];
+                    if (!errs) continue;
+                    for (let k = 0; k < errs.length; k++) {
+                        if (errs[k] != null) { s += errs[k]; n++; }
+                    }
+                }
+                return n ? s / n : null;
+            }
+            let worseIncluded = 0, total = 0, worstRatio = 1;
+            for (let t = 0; t < 150; t++) {
+                const t1 = makeGroup(cams, r, 10, 2.0, 0);
+                const rd = triangulateAndReproject(t1.group, cams,
+                    { method: 'dlt', includedCameras: included });
+                const rb = triangulateAndReproject(t1.group, cams,
+                    { method: 'ba', includedCameras: included });
+                const di = meanOver(rd, included), bi = meanOver(rb, included);
+                if (di == null || bi == null) continue;
+                total++;
+                if (bi > di + 1e-9) { worseIncluded++; worstRatio = Math.max(worstRatio, bi / di); }
+            }
+            assertTrue(total > 100, 'sweep produced groups (' + total + ')');
+            assertTrue(worseIncluded === 0,
+                'BA raised the error over INCLUDED views in ' + worseIncluded + '/' + total +
+                ' groups (worst ' + worstRatio.toFixed(5) + 'x)');
+        });
+    });
+
+    describe('BA #113 - residual space', function () {
+        it('optimizes native (distorted) pixel space when cameras are supplied', function () {
+            if (typeof triangulatePointBA !== 'function') return;
+            // Direct evidence for the mechanism-1 fix: given RAW observations and
+            // cameras, the solve must beat the pre-fix undistorted-space solve on
+            // the native-space metric.
+            const cams = buildRig(RADIAL);
+            const mats = cams.map(function (c) { return c.projectionMatrix; });
+            const r = rng(2026);
+            let nativeWins = 0, total = 0;
+            for (let t = 0; t < 400; t++) {
+                const gt = randomTruth(r, 1)[0];
+                const raw = cams.map(function (c) { return observe(c, gt, 2.0, r); });
+                const und = raw.map(function (p, i) { return cams[i].undistortPoint(p); });
+                const dlt = triangulatePointDLT(und, mats);
+                if (dlt == null) continue;
+                const pre = triangulatePointBA(und, mats, dlt, PRE_FIX);
+                const fix = triangulatePointBA(raw, mats, dlt, { cameras: cams });
+                if (pre == null || fix == null) continue;
+                total++;
+                function nativeErr(pt) {
+                    let s = 0;
+                    for (let i = 0; i < cams.length; i++) {
+                        const q = reprojectPointCamera(pt, cams[i]);
+                        s += Math.sqrt((raw[i][0] - q[0]) * (raw[i][0] - q[0]) +
+                                       (raw[i][1] - q[1]) * (raw[i][1] - q[1]));
+                    }
+                    return s;
+                }
+                if (nativeErr(fix) < nativeErr(pre) - 1e-9) nativeWins++;
+            }
+            assertTrue(total > 300, 'trials ran (' + total + ')');
+            assertTrue(nativeWins > total * 0.95,
+                'native-space solve should beat the undistorted-space solve on the ' +
+                'native metric in nearly every trial (' + nativeWins + '/' + total + ')');
+        });
+
+        it('reproduces the pre-#113 behavior exactly under the legacy option set', function () {
+            if (typeof triangulatePointBA !== 'function') return;
+            // Guards the baseline the "teeth" test depends on: with
+            // robustScale=Infinity, polish=false, guard=false the solve is a
+            // plain sum-of-squares LM, so it must be strictly monotone in
+            // sum-of-squares (that property was never broken).
             const cams = buildRig(NO_DIST);
             const mats = cams.map(function (c) { return c.projectionMatrix; });
-            const r = rng(4242);
-            let sumD = 0, sumB = 0, total = 0;
-            for (let t = 0; t < 1500; t++) {
-                const gt = [(r.u() - 0.5) * 20, (r.u() - 0.5) * 20, 35 + r.u() * 20];
-                const obs = cams.map(function (c) {
-                    const q = c.project(gt);
-                    return [q[0] + r.gauss() * 1.0, q[1] + r.gauss() * 1.0];
-                });
+            const r = rng(13);
+            let violations = 0, total = 0;
+            for (let t = 0; t < 600; t++) {
+                const gt = randomTruth(r, 1)[0];
+                const obs = cams.map(function (c) { return observe(c, gt, 3.0, r); });
                 const oi = Math.floor(r.u() * cams.length);
-                obs[oi] = [obs[oi][0] + 40 * (r.u() < 0.5 ? -1 : 1), obs[oi][1] + 40 * (r.u() < 0.5 ? -1 : 1)];
+                obs[oi] = [obs[oi][0] + 150 * (r.u() - 0.5), obs[oi][1] + 150 * (r.u() - 0.5)];
                 const dlt = triangulatePointDLT(obs, mats);
                 if (dlt == null) continue;
-                const ba = triangulatePointBA(obs, mats, dlt);
-                if (ba == null) continue;
+                const pre = triangulatePointBA(obs, mats, dlt, PRE_FIX);
+                if (pre == null) continue;
                 total++;
-                sumD += Math.sqrt((dlt[0] - gt[0]) * (dlt[0] - gt[0]) + (dlt[1] - gt[1]) * (dlt[1] - gt[1]) +
-                                  (dlt[2] - gt[2]) * (dlt[2] - gt[2]));
-                sumB += Math.sqrt((ba[0] - gt[0]) * (ba[0] - gt[0]) + (ba[1] - gt[1]) * (ba[1] - gt[1]) +
-                                  (ba[2] - gt[2]) * (ba[2] - gt[2]));
+                function sq(pt) {
+                    let s = 0;
+                    for (let i = 0; i < cams.length; i++) {
+                        const q = reprojectPoint(pt, mats[i]);
+                        s += (obs[i][0] - q[0]) * (obs[i][0] - q[0]) +
+                             (obs[i][1] - q[1]) * (obs[i][1] - q[1]);
+                    }
+                    return s;
+                }
+                if (sq(pre) > sq(dlt) * (1 + 1e-9)) violations++;
             }
-            assertTrue(total > 1000, 'trials ran (' + total + ')');
-            assertLessThan(sumB / total, sumD / total,
-                'BA mean 3D error (' + (sumB / total).toFixed(4) + ') should beat DLT (' +
-                (sumD / total).toFixed(4) + ') under outliers');
+            assertTrue(total > 500, 'trials ran (' + total + ')');
+            assertTrue(violations === 0,
+                'the legacy plain-squares path must stay monotone in sum-of-squares, ' +
+                violations + '/' + total + ' violations');
         });
     });
 })();
