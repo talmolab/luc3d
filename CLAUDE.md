@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 28 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 40 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (5 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, settings (14 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, settings (21 files)
 - `loading/` — video decoding, session loading, SLP/package readers, web workers (5 files)
 - `import-export/` — file I/O, save/load, SLP import/merge (4 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -23,11 +23,12 @@ python3 -m http.server 8080
 
 ## Dependencies (CDN only)
 - Three.js 0.147
-- dockview-core **pinned to 6.6.1** (`index.html` CSS + `ui/sessions-panes.js` ESM
-  import — keep the two pins in sync). 7.x renamed `api.onUnhandledDragOverEvent`
+- dockview-core **pinned to 6.6.1** in THREE places (`index.html` CSS +
+  `ui/sessions-panes.js` ESM import + `ui/overlay-export-modal.js` ESM import —
+  keep all three in sync). 7.x renamed `api.onUnhandledDragOverEvent`
   → `onUnhandledDragOver`, so an unpinned `/+esm` import silently breaks pane
   docking whenever the CDN cache refreshes. Audit the dockview API usage in
-  `ui/sessions-panes.js` before bumping past 6.x.
+  `ui/sessions-panes.js` and `ui/overlay-export-modal.js` before bumping past 6.x.
 - mp4box.js
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
@@ -307,7 +308,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1201 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1301 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```

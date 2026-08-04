@@ -73,6 +73,7 @@ import {
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
 } from './export-modals.js';
+import { showOverlayExportModal } from './overlay-export-modal.js';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
     panelRenderers, multiSelectViews,
@@ -1336,6 +1337,12 @@ export function setupMenus() {
         closeMenus();
         if (!state.sessions || state.sessions.length === 0) { setStatus('No sessions to export', 'error'); return; }
         showSlpExportByCamModal();
+    });
+
+    document.getElementById('menuExportOverlayVideo').addEventListener('click', function () {
+        closeMenus();
+        if (!state.session) { setStatus('No session to export', 'error'); return; }
+        showOverlayExportModal();
     });
 
     document.getElementById('menuExportVideo3d').addEventListener('click', function () {
