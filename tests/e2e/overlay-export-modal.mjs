@@ -279,41 +279,20 @@ try {
     const reseeded = await page.evaluate(() => document.querySelectorAll('#ovDock [data-view-name]').length);
     check(reseeded === 4, `reopening re-seeds the full composition (got ${reseeded})`);
 
-    // ---- the modal transport drives the app viewer -------------------------
-    // Stepping/scrubbing/playing in the modal must move the real viewer, so the
-    // app is left on the frame you stopped at. `scrubToFrame` coalesces, so the
-    // assertion is "the app agrees with the playhead", not "every frame landed".
+    // ---- no playback transport --------------------------------------------
+    // The modal is a still-frame previewer: no play/pause, no frame stepping.
+    // Scrubbing the track is the only way to change frames, and it must drive
+    // the real viewer so the app is left on the frame you stopped at.
     const playhead = () => page.evaluate(() => {
         const m = /frame (\d+) \//.exec(document.getElementById('ovScrubVal').textContent);
         return m ? Number(m[1]) - 1 : -1;          // displayed 1-based -> 0-based
     });
     const appFrame = () => page.evaluate(async () => (await import('/ui/app-state.js')).state.currentFrame);
 
-    await page.evaluate(async () => {
-        document.getElementById('ovNext').click();
-        await new Promise(r => setTimeout(r, 350));
-    });
-    const [phNext, afNext] = [await playhead(), await appFrame()];
-    check(phNext > 0, `stepping forward moves the modal playhead (got frame ${phNext})`);
-    check(afNext === phNext, `the app viewer follows a forward step (app ${afNext} vs playhead ${phNext})`);
-
-    await page.evaluate(async () => {
-        document.getElementById('ovPrev').click();
-        await new Promise(r => setTimeout(r, 350));
-    });
-    const [phPrev, afPrev] = [await playhead(), await appFrame()];
-    check(phPrev === phNext - 1, `stepping back moves the playhead (got frame ${phPrev})`);
-    check(afPrev === phPrev, `the app viewer follows a backward step (app ${afPrev} vs playhead ${phPrev})`);
-
-    await page.evaluate(async () => {
-        document.getElementById('ovPlay').click();
-        await new Promise(r => setTimeout(r, 900));
-        document.getElementById('ovPlay').click();      // pause
-        await new Promise(r => setTimeout(r, 350));
-    });
-    const [phPlay, afPlay] = [await playhead(), await appFrame()];
-    check(phPlay > phPrev, `playing advances the playhead (${phPrev} -> ${phPlay})`);
-    check(afPlay === phPlay, `the app viewer keeps up with playback (app ${afPlay} vs playhead ${phPlay})`);
+    const transport = await page.evaluate(() => ['ovPlay', 'ovPrev', 'ovNext']
+        .filter(id => document.getElementById(id) !== null));
+    check(transport.length === 0,
+        `no play/pause or frame-step buttons in the modal (found ${JSON.stringify(transport)})`);
 
     // ---- the track scrubs; only the handles move the range -----------------
     // Real mouse events, not synthetic dispatch: the whole point of this
@@ -358,6 +337,16 @@ try {
         `dragging on the track drags the playhead (got ${phDrag}, expected ~${Math.round(0.6 * LAST)})`);
     check(rangeAfterDrag.start === rangeBefore.start && rangeAfterDrag.end === rangeBefore.end,
         `dragging on the track still leaves the range untouched (got ${rangeAfterDrag.start}..${rangeAfterDrag.end})`);
+
+    // Nothing auto-advances: the frame you scrubbed to is the frame you keep.
+    // At the default 30 fps a surviving play timer would have moved ~36 frames
+    // in this window, so a still playhead is real evidence, not a slow tick.
+    await page.waitForTimeout(1200);
+    const phSettled = await playhead();
+    check(phSettled === phDrag,
+        `the playhead does not advance on its own (${phDrag} -> ${phSettled} after 1.2 s)`);
+    check((await appFrame()) === phSettled,
+        'the app viewer stays on the scrubbed frame too');
 
     // The start handle, grabbed directly, still resizes the range.
     const handleBox = await page.locator('#ovHandleStart').boundingBox();

@@ -2150,13 +2150,33 @@ WYSIWYG: dock aspect and output aspect agree again, so `computeTileRects` fills
 the frame instead of letterboxing it. In individual mode a custom size applies to
 every file, with each tile letterboxed into it.
 
-**Transport ↔ app viewer.** Stepping, scrubbing or playing in the modal drives the
-real viewer through `videoController.scrubToFrame()` (`syncViewer`, called from
-`showFrame`), so the app's canvases, overlays and timeline follow the modal
-playhead and closing the modal leaves you on the frame you stopped at.
-`scrubToFrame` is the **coalescing** entry point — it keeps one seek in flight and
-drops intermediate targets — so the app skips frames it can't keep up with rather
-than queueing a decode backlog behind the preview. Suppressed while exporting.
+**Reprojection fill.** `ensureReprojections()` is the export-side mirror of
+`ui/rendering.js`'s lazy fill, so exporting a triangulated-but-never-viewed range
+still draws reprojections. It **resolves the method from the group**
+(`triangulationMethod === 'ba' ? 'ba' : 'dlt'`) exactly as the display path does:
+omitting the option silently re-solves with DLT, which would burn DLT
+reprojections into the video while the app shows BA's, breaking the
+"exported 3D == displayed 3D" invariant. Guarded by
+`tests/test-triangulation-method-propagation.mjs`, which scans every
+`triangulateAndReproject` call site in the repo.
+
+**Still-frame previewer, no playback.** The modal has **no transport**: no
+play/pause, no frame stepping, no `setPlaying`/`playTimer`. Scrubbing the track is
+the only way to change frames (the range fields also preview the boundary they
+commit). Playing a multi-view composition here decoded every docked view per tick
+*and* pushed every tick into the app viewer, competing with the export the modal
+exists to configure; a single rendered frame is what tells you whether the
+overlays look right. Note the consequence: exact single-frame navigation now costs
+a pixel-accurate scrub, which is coarse on a long video — the range fields are the
+precise way to land on a specific frame.
+
+**Preview ↔ app viewer.** Scrubbing in the modal drives the real viewer through
+`videoController.scrubToFrame()` (`syncViewer`, called from `showFrame`), so the
+app's canvases, overlays and timeline follow the modal playhead and closing the
+modal leaves you on the frame you stopped at. `scrubToFrame` is the **coalescing**
+entry point — it keeps one seek in flight and drops intermediate targets — so a
+fast drag doesn't queue a decode backlog behind the preview. Suppressed while
+exporting.
 
 **Track gestures.** The two gestures on the scrub track are separated by *what you
 press*, tracked by `dragging` (`'playhead' | 'start' | 'end'`). Pressing the track
@@ -2166,10 +2186,10 @@ claim their own `pointerdown`, so such a press never reaches the track handler).
 Pressing the track used to pull whichever endpoint was *nearer*, which meant an
 innocent click halfway along silently redefined what would be exported — and which
 end moved depended on invisible arithmetic. Scrubbing is deliberately **not**
-clamped to the export range, so you can look just outside it before committing;
-playback still restarts at `rangeStart` when the playhead is outside. Releasing an
-endpoint previews the boundary it was dropped on; releasing a playhead drag leaves
-the frame where it is.
+clamped to the export range, so you can look just outside it before committing —
+the playhead is a preview cursor, not an export bound. Releasing an endpoint
+previews the boundary it was dropped on; releasing a playhead drag leaves the
+frame where it is.
 
 **Rendering model.** Every tile owns **two** canvases (video + overlay), exactly
 like the main window's `.canvas-wrapper`, because `drawFrameOverlays()` opens
@@ -2215,7 +2235,8 @@ reopened modal re-seeds from the main-window mirror.
 **Tests.** `tests/test-overlay-export-layout.js` (geometry / encoder params /
 custom-size clamping / settings merge / seed plan) and
 `tests/e2e/overlay-export-modal.mjs` (menu placement, dock seeding, 1-based range
-validation, settings round-trip, transport-to-app-viewer sync, live dock
+validation, settings round-trip, absence of any playback transport,
+scrub-to-app-viewer sync, live dock
 re-shaping on a custom size, and a **real** end-to-end mp4 export in all three
 shapes — stitched, individual, and custom-size. The `avc1` sample entry's
 width/height is asserted against `outputSizeFor`/the typed dimensions, which is
