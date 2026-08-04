@@ -23,6 +23,12 @@ export function getTrackingThresholds() {
     const out = {}; for (const id in DEFAULTS) out[id] = getTrackingThreshold(id); return out;
 }
 export function isCameraTracked() { return true; }
+// pose/triangulation.js imports this for resolveTriangulationMethod's fallback.
+// The stub must export every name the real module exports that any module under
+// test imports, or the ESM link step throws before a single assertion runs.
+export function getDefaultTriangulationMethod() {
+    return (globalThis.__GUI && globalThis.__GUI.triangulationMethod) || 'dlt';
+}
 `;
 
 // state + timeline are real, mutable spy objects the test can read/populate.

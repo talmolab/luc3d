@@ -1015,22 +1015,78 @@ miscalibration to the 0.48 px noise floor.
 The method is selected via `options.method` on `triangulateAndReproject` and
 threaded through the orchestration functions; the chosen method is recorded on
 each group (`group.triangulationMethod`) and in each `state.triangulationResults`
-entry (`.method`) so the info panel can label it. Grouping operations
-(`groupByIdentityAndTriangulateAll`, group-by-track) always use DLT.
+entry (`.method`) so the info panel can label it.
 
-**`options.method`'s default is SILENT — and that is a live footgun.** Omitting
+**`options.method`'s default is SILENT — and that was a live footgun.** Omitting
 it does not mean "keep whatever method this group already used"; it means DLT.
-Any caller that re-solves an **already-triangulated** group must pass
-`{ method: group.triangulationMethod === 'ba' ? 'ba' : 'dlt' }`. Two callers do:
-`reTriangulateGroup` (a node move re-refines consistently) and `ui/rendering.js`'s
-lazy reprojection fill. The latter did **not**, which is the whole of the
-"Triangulate All ▸ Bundle Adjustment appears to change nothing" bug: the group
-kept BA's `points3d` and `triangulationMethod = 'ba'`, but the DLT re-solve's
-error landed in `state.triangulationResults`, so the panel labelled the number
-"Bundle Adjustment" and showed DLT's value (measured on the regression fixture:
-1.6155 px displayed vs BA's actual 1.4273 px, with the two solves' 3D differing
-by 0.098 world units). Guarded by
-`tests/e2e/triangulate-all-ba-display.mjs`.
+The governing rule now is **exported 3D == displayed 3D**: no path may replace a
+bundle-adjusted solve with a DLT one behind the user's back. Three helpers
+implement it, all in this module:
+
+- `resolveTriangulationMethod(group)` → `'ba'|'dlt'`. The group's own recorded
+  method wins; otherwise the user's global **Settings ▸ Triangulation Method**
+  (`getDefaultTriangulationMethod`). Never a bare `'dlt'` literal. Used by
+  `reTriangulateGroup`, both grouping sweeps in `ui/export-modals.js`,
+  `ui/sessions-panes.js`'s move-view re-triangulate, `ui/ui-wiring.js`'s
+  environment-skeleton solve, and `ui/identity-assignment.js`'s two group-writing
+  loops. **Deliberately NOT used by `ui/rendering.js`'s lazy reprojection fill:**
+  that path re-derives reprojections for 3D it does not own and does not write
+  back, so it must REPRODUCE the recorded solve exactly rather than fall back to a
+  global default. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
+  only *reads* it → match `triangulationMethod` exactly.
+- `findEquivalentPriorGroup(priorGroups, group)` → the prior group with identical
+  membership (camera for camera, by `Instance` object identity), or null.
+- `adoptPrior3d(group, prior, method)` → copies `points3d`,
+  `triangulationMethod` and `usedCameras`; returns true when `group` therefore
+  needs no solve. Adoption requires identical membership **AND**
+  `prior.triangulationMethod === method`, so it only ever fires when re-solving
+  would be a provable no-op (an *unknown* prior method never matches). Does **not**
+  copy `reprojections` — leaving those empty is what lets `ui/rendering.js`'s fill
+  regenerate them (and `state.triangulationResults`) with the adopted method;
+  copying them would suppress that fill and leave the Info Panel with nothing.
+
+**The selected method GOVERNS the two grouping sweeps.** With Settings ▸ Default
+Triangulation set to Bundle Adjustment, "Group by Track / Group by ID &
+Triangulate All" leave BA 3D on *every* group — new, changed, or
+unchanged-but-previously-DLT. That last case is why `adoptPrior3d` takes a
+`method`: adopting on membership alone would keep the old DLT solution for exactly
+the groups a user is most likely to already have, making the setting a silent
+no-op. An explicit pick beats the default —
+`groupByIdentityAndTriangulateAll(explicitMethod)` takes one, and
+"Triangulate All ▸ DLT" (which routes there) passes `'dlt'`, so an explicit DLT
+request is not overridden by a BA default. Consequence to be aware of: with DLT
+selected, a grouping op over BA 3D *does* re-solve it as DLT — that is the setting
+being obeyed, and unlike the old behavior it is named in the progress text and
+status line rather than silent.
+
+Two bugs this closes, both measured on `tests/e2e/fixtures/ba-rig-fixture.js`
+(where BA's and DLT's 3D differ by 0.098 world units):
+
+1. **Display** (`ui/rendering.js`'s lazy fill, which did not pass a method): the
+   group kept BA's `points3d` and `triangulationMethod = 'ba'`, but the DLT
+   re-solve's error landed in `state.triangulationResults` — so the panel labelled
+   the number "Bundle Adjustment" and showed DLT's value (1.6155 px displayed vs
+   BA's actual 1.4273 px). Guarded by
+   `tests/e2e/triangulate-all-ba-display.mjs`.
+2. **Data** (the grouping sweeps): `groupByIdentityAndTriangulateAll` and
+   `groupByTrackAndTriangulateAll` delete a frame's `instanceGroups` and rebuild
+   fresh objects around the same `Instance`s, then re-solved every group with the
+   default method and stamped `triangulationMethod = 'dlt'`. Running either after
+   a BA Triangulate All silently downgraded the whole project's 3D to DLT, and
+   since save/export read `group.points3d`, the exported file stopped matching
+   what the user had computed. Verified pre-fix: the exporter emitted DLT's 3D
+   *exactly* (delta 0 from DLT, 0.098 from BA). Guarded by
+   `tests/e2e/triangulate-all-ba-export.mjs`.
+
+Regrouping does not invalidate a solve whose 2D inputs are unchanged, only one
+whose membership changed — so the sweeps now ADOPT rather than re-solve in the
+common case, which makes the correct behavior *cheaper* than the old one rather
+than paying BA's ~3x-6x cost per group project-wide. Both sweeps report 3D
+provenance ("N kept existing 3D, N solved via Bundle Adjustment, N via DLT") in
+their progress text and status line, so a method's cost is visible rather than
+hidden. The one remaining deliberate bare-DLT caller is the O(n×m) Hungarian cost
+matrix in `ui/identity-assignment.js`, whose temporary groups' 3D is discarded and
+where only the relative ordering of errors matters; it says so at the call site.
 
 **Distortion handling.** 2D keypoints on disk are lens-distorted. **DLT** runs in
 ideal pinhole space: observations are undistorted first (`Camera.undistortPoint`),
@@ -1202,8 +1258,18 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   confirmed all 4 assertions fail pre-fix and pass post-fix).
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
+- Method preservation ("exported 3D == displayed 3D", see the BA section above):
+  `resolveTriangulationMethod(group)` — the group's own method, else the user's
+  Settings default, never a bare `'dlt'`;
+  `findEquivalentPriorGroup(priorGroups, group)` — the prior group with identical
+  membership by `Instance` object identity;
+  `adoptPrior3d(group, prior)` — take the prior's `points3d` /
+  `triangulationMethod` / `usedCameras` instead of re-solving (not
+  `reprojections`, deliberately). The latter two exist for the regrouping sweeps,
+  which rebuild `InstanceGroup` objects around unchanged `Instance`s.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,
-  `reTriangulateGroup` (preserves the group's existing method),
+  `reTriangulateGroup` (preserves the group's existing method via
+  `resolveTriangulationMethod`),
   `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
   (`method` defaults to `'dlt'`), `sessionHasCalibration`,
   `showCalibrationRequiredPopup`,
@@ -1222,6 +1288,8 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 - `../ui/app-state.js` — `state`, `timeline`, `viewport3d`.
 - `../ui/rendering.js` — `setReprojErrorVisible`, `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateTriangulationBadge`.
+- `../ui/settings.js` — `isCameraTracked`, `getTrackingThreshold`,
+  `getDefaultTriangulationMethod` (the fallback in `resolveTriangulationMethod`).
 - `../import-export/save-load.js` — `markDirty`, `setStatus`,
   `showLoading`, `hideLoading`.
 - `./initialization.js` — `update3DViewport` (circular).
@@ -1400,10 +1468,56 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 
 **Key exports.**
 - `showGroupByTrackModal()` — modal that bulk-groups by trackIdx.
-- `groupByIdentityAndTriangulateAll()` — bulk-group then triangulate. Ends by
+- `groupByIdentityAndTriangulateAll(explicitMethod)` — bulk-group then
+  triangulate. `explicitMethod` (`'ba'|'dlt'`) is the user's explicit pick when
+  there was one — "Triangulate All ▸ DLT" routes here and passes `'dlt'`; omitting
+  it (Tracks ▸ Group by Identity) means "use Settings ▸ Default Triangulation".
+  Either way the resolved method **governs the whole sweep**. Ends by
   calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
   the current frame (this is the path "Triangulate All" takes when identities
   exist; previously it refreshed only the 2D overlays, leaving 3D empty).
+
+  **Both grouping sweeps ADOPT existing 3D rather than re-solving it.** Each
+  deletes a frame's `instanceGroups` and rebuilds fresh `InstanceGroup` objects
+  around the SAME `Instance` objects. The fresh object carries no `points3d` and
+  no `triangulationMethod`, so both used to re-solve every group with
+  `triangulateAndReproject`'s DEFAULT method — a silent DLT — and stamp
+  `triangulationMethod = 'dlt'`. Running "Group by Identity" (or Triangulate All ▸
+  DLT, which routes here) or "Group by Track" after a **BA** Triangulate All
+  therefore silently downgraded the whole project's 3D to DLT; since save/export
+  read `group.points3d`, the exported file stopped matching what the user had
+  computed and was looking at. Measured pre-fix on
+  `tests/e2e/fixtures/ba-rig-fixture.js`: the exporter emitted DLT's 3D *exactly*
+  (delta 0 from DLT, 0.098 world units from BA).
+
+  Each sweep resolves ONE governing method up front (the explicit pick, else
+  Settings ▸ Default Triangulation) and every group ends up with 3D from that
+  method. A group is ADOPTED rather than solved — `findEquivalentPriorGroup` +
+  `adoptPrior3d`, no solve at all — only when its membership is unchanged AND its
+  existing 3D already came from that same method, i.e. only when re-solving is a
+  provable no-op. So a DLT re-run over a DLT project solves nothing (measured: all
+  16 fixture groups adopted, 4 ms) while switching the default to BA re-solves the
+  project (0 adopted, 16 solved via BA, 13 ms — 3.0x, in line with the 3.4x
+  per-group BA/DLT ratio measured on the same rig; larger skeletons measure
+  ~4.6-6.1x). That cost is the user's explicit choice, so both sweeps name the
+  method and report 3D provenance ("N kept existing 3D, N solved via Bundle
+  Adjustment, N via DLT") in their progress text and status line — visible rather
+  than hidden.
+
+  Guarded by `tests/e2e/triangulate-all-ba-export.mjs` (six phases; 17 assertions
+  confirmed failing pre-fix, 0 after). It drives Group by Identity directly and
+  Group by Track through its real modal, and asserts the 3D
+  `buildPoints3dExportData` emits — what `buildPoints3dH5` and the JSON labels
+  export write — is bit-identical to an independent BA solve and NOT the DLT solve;
+  plus governance in both directions (DLT-over-DLT adopts everything; BA-over-DLT
+  re-solves everything) and that an explicit `'dlt'` beats a BA default.
+
+  **Caveat: `group.triangulationMethod` is in-memory only** — it is not persisted
+  to the `.slp`, so on a reopened project every group has 3D but an undefined
+  method. Adoption therefore cannot fire after a reopen (everything is re-solved
+  with the requested method — correct, but not free), and `ui/rendering.js`'s fill
+  resolves to `'dlt'`. Persisting it in per-group `metadata.lucid` is tracked
+  separately.
 - `sweepTriangulationFrames(session, onFrame, opts)` (module-private) +
   `frameGroupHasUserInstances(fg)` — memory-bounded driver both bulk-triangulate
   paths (identity + track) now use. On a windowing-capable lazy session
@@ -1503,7 +1617,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `storeReprojectedInstances`, `frameHasGroupedUserInstances`,
   `loadAllLazyFrames`, `triangulateMultiFrameInstances`,
   `sessionHasCalibration`, `showCalibrationRequiredPopup`,
-  `getInstanceGroupsForFrame`.
+  `getInstanceGroupsForFrame`, `sweepLazyFrameWindows`,
+  `resolveTriangulationMethod`, `findEquivalentPriorGroup`, `adoptPrior3d`,
+  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
@@ -1568,7 +1684,22 @@ triangulation, multi-frame assignment modal, track/identity helpers.
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `storeReprojectedInstances`, `reprojectPoints`,
   `computeInstanceDistance`, `hungarianAlgorithm`,
-  `updateTimelineForFrame`, `triangulateCurrentFrame`.
+  `updateTimelineForFrame`, `triangulateCurrentFrame`,
+  `resolveTriangulationMethod`.
+
+**Three `triangulateAndReproject` call sites, two of which write 3D.** The two
+that write it (`autoAssign`'s "auto-triangulate all groups for this frame" loop
+and `autoAssignAcrossFrames`' per-new-group solve) now pass
+`resolveTriangulationMethod(group)`. The first is the load-bearing one: it sweeps
+**every** group on the frame, including pre-existing bundle-adjusted ones, and
+passing no method silently re-solved them with DLT and overwrote `points3d` —
+which is what save/export read. The third, the O(nRef × nOther) **Hungarian cost
+matrix**, deliberately keeps the DLT default: its temporary groups' 3D is
+discarded, only the relative ordering of the errors matters, and BA's ~3x-6x cost
+would buy nothing. That is stated at the call site so it does not read as an
+oversight. (This module already used `getDefaultTriangulationMethod()` for its
+`triangulateCurrentFrame` call, so honoring the user's method here is consistent
+rather than new policy.)
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `../import-export/save-load.js` — `markDirty`, `setStatus`.
@@ -2128,7 +2259,13 @@ multi-video docking layout.
 - `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`.
 - `../pose/triangulation.js` — `triangulateAndReproject`,
   `storeReprojectedInstances`, `getInstanceGroupsForFrame`,
-  `sessionHasCalibration`.
+  `sessionHasCalibration`, `resolveTriangulationMethod`. Moving a view between
+  sessions strips that camera from every group in the origin session, which
+  genuinely invalidates their 3D — so those groups ARE re-solved, but with
+  `resolveTriangulationMethod(group)` and the result's method stamped back, so a
+  bundle-adjusted group is not silently downgraded to DLT (it previously passed no
+  method, i.e. a silent DLT, changing both the displayed 3D and what a later
+  save/export writes).
 - `../loading/session-loader.js` — `cellResizeObserver`,
   `createViewForVideoFile`, `rebuildVideoController`,
   `fitCanvasesToCells`, `updateTotalFrames`.
@@ -2855,7 +2992,10 @@ while hovering reveals a menu for picking DLT / BA explicitly. `wireTriDropdown`
 wires both the button click (default method) and the menu items (explicit
 picks). Implicit triangulation — the `t` shortcut, the Edit ▸ Triangulate menu
 item, and the auto-assign flow in `identity-assignment.js` — also uses the
-default method.
+default method. The **environment-skeleton** solve (Load Environment) likewise
+takes it, via `resolveTriangulationMethod(group)` on a brand-new group; it used
+to hardcode DLT, so a BA user's environment 3D silently disagreed with the method
+they had selected.
 
 **Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
 actions for both tracks and identities open shared private modal helpers in

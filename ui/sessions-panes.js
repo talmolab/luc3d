@@ -31,7 +31,7 @@ import {
 import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
-    sessionHasCalibration,
+    sessionHasCalibration, resolveTriangulationMethod,
 } from '../pose/triangulation.js';
 import {
     cellResizeObserver,
@@ -1205,10 +1205,19 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                             return group.cameraNames.indexOf(c.name) >= 0;
                         });
                         if (groupCameras.length >= 2) {
-                            var result = triangulateAndReproject(group, groupCameras);
+                            // Losing a view genuinely invalidates this group's 3D,
+                            // so it must be re-solved — but with the SAME method it
+                            // was solved with (falling back to the user's Settings
+                            // choice), never a silent DLT. Otherwise moving a view
+                            // between sessions downgraded every bundle-adjusted
+                            // group in the origin session to DLT, changing both the
+                            // displayed 3D and what a later save/export writes.
+                            var result = triangulateAndReproject(group, groupCameras,
+                                { method: resolveTriangulationMethod(group) });
                             var valid = someValidPoint3d(result.points3d);
                             if (valid) {
                                 group.points3d = result.points3d;
+                                group.triangulationMethod = result.method;
                                 group.reprojections = result.reprojections;
                                 storeReprojectedInstances(group, result, fromSession.cameras);
                             }
