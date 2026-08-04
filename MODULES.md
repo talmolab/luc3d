@@ -2158,6 +2158,19 @@ playhead and closing the modal leaves you on the frame you stopped at.
 drops intermediate targets — so the app skips frames it can't keep up with rather
 than queueing a decode backlog behind the preview. Suppressed while exporting.
 
+**Track gestures.** The two gestures on the scrub track are separated by *what you
+press*, tracked by `dragging` (`'playhead' | 'start' | 'end'`). Pressing the track
+scrubs the **current frame** and drags it; a range endpoint moves only when its
+handle is grabbed directly (the handles sit above the track via `z-index` and
+claim their own `pointerdown`, so such a press never reaches the track handler).
+Pressing the track used to pull whichever endpoint was *nearer*, which meant an
+innocent click halfway along silently redefined what would be exported — and which
+end moved depended on invisible arithmetic. Scrubbing is deliberately **not**
+clamped to the export range, so you can look just outside it before committing;
+playback still restarts at `rangeStart` when the playhead is outside. Releasing an
+endpoint previews the boundary it was dropped on; releasing a playhead drag leaves
+the frame where it is.
+
 **Rendering model.** Every tile owns **two** canvases (video + overlay), exactly
 like the main window's `.canvas-wrapper`, because `drawFrameOverlays()` opens
 with a full-canvas `clearRect` and would otherwise erase the video drawn beneath
@@ -2207,6 +2220,14 @@ re-shaping on a custom size, and a **real** end-to-end mp4 export in all three
 shapes — stitched, individual, and custom-size. The `avc1` sample entry's
 width/height is asserted against `outputSizeFor`/the typed dimensions, which is
 what proves the layout capture and the encoder config agree).
+
+The **track-gesture** split is driven with real mouse events rather than synthetic
+dispatch, because the behavior is entirely about which element a press hit-tests
+to. Note which assertions actually discriminate it: the ones checking the export
+range is *unchanged* by a track press. A scrub lands on the same frame under
+either implementation — the old nearest-endpoint code previewed the endpoint it
+had just dragged — so the playhead assertions alone would pass on the old code
+too. Both range assertions were confirmed to fail against it.
 
 ---
 
