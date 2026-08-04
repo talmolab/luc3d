@@ -909,19 +909,67 @@ sync** — `tracker.js` already imports from this module, so a two-way import wa
 avoided).
 
 **Triangulation methods.** `'dlt'` (default) is the fast linear DLT.
-`'ba'` initializes from DLT then runs per-point Levenberg–Marquardt bundle
-adjustment minimizing geometric reprojection error (slower, more accurate).
-Cameras are fixed (calibrated), so each keypoint is refined independently.
+`'ba'` initializes from DLT then runs a per-point Levenberg–Marquardt refinement
+of the geometric reprojection error. Cameras are fixed (calibrated), so each
+keypoint is refined independently — this mirrors aniposelib's
+`CameraGroup.optim_points`, which is what sleap-anipose actually runs for pose
+triangulation (aniposelib's `bundle_adjust_iter`, the one that also moves the
+cameras, is its *calibration* path). Costs 4.6–6.1x DLT: ~310 µs per keypoint
+versus ~54 µs, on a 5-camera / 15-node rig.
+
+**`'ba'` is guaranteed never worse than DLT on the reported error (issue #113).**
+Three properties make that true, and all three were wrong before:
+
+1. *Residual space.* Residuals are formed in the camera's **native (distorted)**
+   pixel space — where the detections live, where the noise is i.i.d., and the
+   space `meanError` is reported in. `distortJacobian` supplies the analytic
+   Brown–Conrady derivative and `projectAndJacobianCamera` chain-rules it onto
+   the projection Jacobian. Previously the objective used *undistorted*
+   observations and an ideal pinhole projection, so BA minimized one thing while
+   the UI displayed another; with radial distortion the displayed error rose on
+   up to 89% of points (2 cameras, k1=-0.3).
+2. *Robust loss.* Soft-L1 (pseudo-Huber) via IRLS in the normal equations, at
+   aniposelib's default scale (`BA_ROBUST_SCALE_PX` = 15 px, its
+   `reproj_error_threshold`). `robustScale: Infinity` restores plain squares.
+3. *Metric-matching polish.* A second LM phase minimizes Σ‖r‖, which **is** the
+   reported mean error up to the 1/nViews factor, so monotonicity in the
+   displayed number follows from the LM being monotone in its own loss. Seeded
+   from whichever of {DLT, phase 1} already scores better. Not decorative:
+   native-space soft-L1 alone still regressed ~20–47% of clean-noise trials,
+   because minimizing Σ‖r‖² and minimizing Σ‖r‖ genuinely disagree. Disable with
+   `polish: false`. A backtracking `guard` (on by default) is the belt-and-braces
+   net for what phase 2 cannot cover.
+
+Consequences worth knowing: the L1-type objective is ~10% less efficient than L2
+on genuinely clean Gaussian noise (3D error 0.2101 → 0.2309) but 11–18x better
+under a gross outlier (3.46 → 0.30), which is the right trade for real
+detections. `meanErrorUndistorted` is deliberately **not** guarded — DLT is
+inherently favored in ideal-pinhole coordinates since that is where its algebraic
+objective lives, and guarding both was measured to veto real improvements. Views
+**excluded** from the solve still count toward the headline `meanError`, so BA
+fitting the included views better can raise it; that is correct (chasing an
+excluded view is what excluding it forbids) and the invariant is pinned over the
+solve's own views instead. `{ robustScale: Infinity, polish: false, guard: false }`
+reproduces the pre-#113 behavior, which `tests/test-triangulation-ba.js` uses as
+a baseline so the suite cannot silently stop testing the bug. The
+Levenberg–Marquardt ladder itself was **not** the bug and was not changed — it
+was verified strictly monotone in its own objective and converged to the local
+optimum (0/3000 and 0/4000 respectively).
+
 The method is selected via `options.method` on `triangulateAndReproject` and
 threaded through the orchestration functions; the chosen method is recorded on
 each group (`group.triangulationMethod`) and in each `state.triangulationResults`
 entry (`.method`) so the info panel can label it. Grouping operations
 (`groupByIdentityAndTriangulateAll`, group-by-track) always use DLT.
 
-**Distortion handling.** 2D keypoints on disk are lens-distorted. Triangulation
-(DLT and BA) runs in ideal pinhole space: observations are undistorted first
-(`Camera.undistortPoint`). Reprojections meant for display or error comparison
-must therefore be **re-distorted** back to native pixel space
+**Distortion handling.** 2D keypoints on disk are lens-distorted. **DLT** runs in
+ideal pinhole space: observations are undistorted first (`Camera.undistortPoint`),
+which is required — DLT is linear only in those coordinates. **BA does not**; it
+refines against the raw native-space detections (issue #113, above), so
+`triangulateAndReproject` keeps `allObservationsRaw` index-parallel to the
+undistorted set and masks the two identically whenever the outlier-rejection loop
+drops a view. Reprojections meant for display or error comparison
+must be **re-distorted** back to native pixel space
 (`reprojectPointCamera` / `reprojectPointsCamera` → project, then
 `Camera.distortPoint`). Comparing ideal reprojections against raw distorted
 keypoints previously produced spurious error that grew toward the frame edges
@@ -931,8 +979,9 @@ projects 3D targets with distortion before measuring distance to raw detections.
 
 `triangulateAndReproject` reports the reprojection error in **both** spaces:
 `meanError`/`errors` (distorted — what is drawn and broken down per view/node)
-and `meanErrorUndistorted`/`errorsUndistorted` (ideal pinhole — the space BA
-actually minimizes). The info panel shows the distorted value as the headline
+and `meanErrorUndistorted`/`errorsUndistorted` (ideal pinhole — a diagnostic; as
+of #113 the distorted space is the one BA minimizes). The info panel shows the
+distorted value as the headline
 ("N.NN px", colour-coded) with the undistorted value as a small subtitle below
 it ("undist N.NN px"); the per-view and per-node breakdowns remain
 distorted-space. Both error spaces are recomputed on project load — `.slp`
@@ -941,9 +990,16 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
 subtitle is populated for loaded projects, not just freshly triangulated ones.
 
 **Key exports.**
-- BA math: `triangulatePointBA(observations, projMatrices, initial?, options?)`,
-  `triangulatePointsBA(allObservations, projMatrices, initialPoints?)`,
+- BA math: `triangulatePointBA(observations, projMatrices, initial?, options?)`
+  (`options`: `cameras` → native-space residuals and `observations` are then the
+  RAW detections; `robustScale` px, default `BA_ROBUST_SCALE_PX`; `polish`;
+  `guard`; `maxIterations`; `tol`),
+  `triangulatePointsBA(allObservations, projMatrices, initialPoints?, options?)`
+  (forwards `options` verbatim), `BA_ROBUST_SCALE_PX` (= 15),
   `triangulationMethodLabel(method)` → `'DLT'` | `'Bundle Adjustment'`.
+  Module-private: `distortJacobian(camera, ideal)` → 2x2 Brown–Conrady
+  derivative, `projectAndJacobianCamera(point, camera)` → native-space
+  projection + 2x3 Jacobian.
 - Math: `triangulatePointDLT`, `triangulatePoints`, `reprojectPoint`,
   `reprojectPoints` (ideal pinhole), `reprojectPointCamera` /
   `reprojectPointsCamera` (project then re-distort into the camera's native
@@ -957,7 +1013,9 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `pointToRayDistance`, `pointsToRayDistances`,
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
 - Group math: `triangulateAndReproject(instanceGroup, cameras, options)`
-  (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`; returns
+  (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`,
+  `options.robustScale` (BA soft-L1 scale in px), `options.includedCameras`,
+  `options.reprojErrorThreshold`; returns
   `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
