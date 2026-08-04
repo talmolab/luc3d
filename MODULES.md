@@ -956,61 +956,37 @@ Levenberg–Marquardt ladder itself was **not** the bug and was not changed — 
 was verified strictly monotone in its own objective and converged to the local
 optimum (0/3000 and 0/4000 respectively).
 
-**True joint bundle adjustment: `bundleAdjustCameras` (opt-in, not yet wired).**
+**No joint bundle adjustment: cameras are NEVER refined (deliberate scope).**
 Everything the `'ba'` method does holds the cameras FIXED, so it is non-linear
-triangulation however it is labelled. `bundleAdjustCameras` is bundle adjustment
-in the strict sense — camera poses and 3D structure optimized together — ported
-from aniposelib's `CameraGroup.bundle_adjust_iter` (what `slap-calibrate` runs).
-The iteration that the point stage lacks: `nIters` (6) rounds, each
-re-triangulating from the *current* cameras, hard-trimming outliers at a
-threshold `mu` **annealed geometrically** from `startMu` (15 px) to `endMu` (1 px),
-then running one joint LM on the survivors — the camera update changes which
-points look like outliers, which changes the next camera update. `mu` is clamped
-by the data (`max(min(p75max, mus[i]), p15max)`, percentiles taken per camera
-PAIR and maxed across pairs; both accumulators are a `max` in aniposelib, which
-reads like a typo for `min_error` but is the real behavior and is what stops a
-round discarding nearly all data). Early exit below `errorThreshold` (0.3 px); a
-final round deliberately **loosens** (`max(max(p75max, endMu), p15max)`) and runs
-even after an early exit. Solved with the Schur complement (point blocks
-eliminated; the reduced camera system is 6(C-1) square, 24 for 5 cameras),
-analytic point Jacobians, finite-difference camera Jacobians (aniposelib supplies
-no analytic Jacobian either).
+triangulation however it is labelled in the UI. A true joint camera+structure
+solve (`bundleAdjustCameras`, a port of aniposelib's
+`CameraGroup.bundle_adjust_iter` — what `slap-calibrate` runs) was implemented
+here and has been **DELETED**, along with its private support cast and its eight
+tests. LUCID CONSUMES a calibration; it is not a calibration tool, and that
+belongs where calibration is produced (sleap-anipose, on a checkerboard). Do not
+re-add it. Three reasons, spelled out at the "Point refinement" header in
+`pose/triangulation.js` so the next person finds them:
 
-Pure function — the input cameras are never mutated; it returns new `Camera`
-instances plus `{points3d, errorBefore, errorAfter, rounds, converged, improved}`.
-**Nothing calls it yet**: rewriting a project's calibration invalidates every 3D
-point already derived from it, so that is a decision for a caller, not a side
-effect of triangulating.
+- The calibration is an **input the user is entitled to trust**. Mutating
+  extrinsics mid-annotation means yesterday's 3D is not today's, and every
+  already-triangulated frame becomes inconsistent with the new rig unless the
+  whole project is re-solved.
+- Metric **scale is unobservable** from images alone — a uniform similarity of
+  cameras plus structure reprojects identically. aniposelib escapes this only via
+  its rigid-board `errors_obj` term (weighted 2/board_square_length); animal
+  keypoints have no equivalent reference. The deleted implementation had to pin
+  camera 0 and renormalize the camera-0-to-1 baseline after every accepted step
+  purely to keep the normal equations from being rank-deficient by 7 DoF, and it
+  still could not fix a scale error (measured: a rig 8% too large reprojected at
+  the 0.473 px noise floor before BA and came out unchanged).
+- Reprojection error would stop being a **diagnostic**. It is the signal a user
+  reads to spot a bad label or a bad calibration; if the solver may move the
+  cameras, low error no longer distinguishes good labels from cameras bent to fit
+  bad ones.
 
-Deliberate deviations from aniposelib, each a documented choice: **extrinsics
-only** (its default also fits a shared focal and k1, and its `set_params`
-silently zeroes p1/p2/k3 and ties fx=fy — adopting that would quietly degrade
-LUCID cameras, which carry all five coefficients); **deterministic** point
-selection instead of the randomized `resample_points` (a GUI returning a
-different calibration each run is a bug), ranked by camera visibility with the
-window rotated per round; **soft-L1 residuals** on top of the hard trim rather
-than its `loss='linear'`; a **stagnation exit** (measured: rounds 2-6 improved
-the median by 0.003 px total); and **best-so-far tracking**, because the
-per-round objective is a robust loss on a subset whose trim moves every round, so
-the round sequence is *not* monotone — aniposelib returns whatever its last solve
-produced, which drifted an already-optimal calibration from 0.4794 px to
-0.4836 px in testing. That is the #113 failure one level up, so the best-scoring
-calibration is kept and the input is returned when nothing beats it.
-
-**Scale is unobservable and is NOT fixed.** With no calibration board the cost is
-invariant under any global similarity (7 DoF): camera 0's pose is held fixed
-(6 DoF) and the residual scale DoF is removed by renormalizing the camera-0-to-1
-baseline to its initial length after every accepted step (a pure gauge
-transformation, so it cannot alter the cost or break monotonicity). Consequently
-the input scale is *preserved*, not estimated — a rig uniformly 8% too large
-already reprojects at the noise floor (0.473 px) and comes out unchanged, so
-translation errors that are really scale errors persist. aniposelib escapes this
-only via its board `errors_obj` term (weighted 2/board_square_length); animal
-keypoints have no equivalent reference. What *is* recovered well is relative
-orientation: with baselines starting correct, rotation error drops to
-0.007x-0.034x of the perturbation while translations stay within ~0.04 world
-units. On a 4-camera rig, 200-600 points: 0.3-0.9 s, recovering a 14.6 px
-miscalibration to the 0.48 px noise floor.
+Naming note: the user-facing "Bundle Adjustment" label and
+`triangulationMethodLabel` are unchanged — that is the term anipose/SLEAP users
+expect for `optim_points` — but it does not imply camera refinement.
 
 The method is selected via `options.method` on `triangulateAndReproject` and
 threaded through the orchestration functions; the chosen method is recorded on
@@ -1126,17 +1102,6 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   Module-private: `distortJacobian(camera, ideal)` → 2x2 Brown–Conrady
   derivative, `projectAndJacobianCamera(point, camera)` → native-space
   projection + 2x3 Jacobian.
-- Joint BA: `bundleAdjustCameras(observations, cameras, options?)` →
-  `{cameras, points3d, errorBefore, errorAfter, rounds, converged, improved}` or
-  `null`. `observations[p][c]` is the RAW native 2D detection of flat point index
-  `p` (any (frame, node) pair) in camera `c`, or null. `options`: `nIters` (6),
-  `startMu` (15), `endMu` (1), `errorThreshold` (0.3), `maxPoints` (1000),
-  `minPairPoints` (10), `robustScale`, `maxIterations` (30), `tol`. Never mutates
-  its inputs. Module-private helpers: `rotationMatrixToRvec`,
-  `cameraPoseVector`, `cameraFromPoseVector`, `cameraCentreOf`,
-  `percentileSorted` (numpy `linear` interpolation — `mu` depends on it),
-  `solveDense`, `_pointErrorNorms`, `_pairErrorBounds`, `_selectPoints`,
-  `_jointLMStep`.
 - Math: `triangulatePointDLT`, `triangulatePoints`, `reprojectPoint`,
   `reprojectPoints` (ideal pinhole), `reprojectPointCamera` /
   `reprojectPointsCamera` (project then re-distort into the camera's native
