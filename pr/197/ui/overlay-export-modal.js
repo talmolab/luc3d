@@ -138,7 +138,12 @@ function ensureReprojections(groups, session) {
         if (points3dNodeCount(g.points3d) > 0 &&
             (!g.reprojectedInstances || g.reprojectedInstances.size === 0) &&
             (!g.reprojections || Object.keys(g.reprojections).length === 0)) {
-            var res = triangulateAndReproject(g, session.cameras);
+            // Resolve the method from the group, exactly as `rendering.js`'s lazy
+            // fill does. Omitting it silently re-solves with DLT, which would burn
+            // DLT reprojections into the video while the app displays BA's —
+            // breaking the "exported 3D == displayed 3D" invariant (#113).
+            var _m = (g.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+            var res = triangulateAndReproject(g, session.cameras, { method: _m });
             g.reprojections = res.reprojections;
             storeReprojectedInstances(g, res, session.cameras);
         }
@@ -160,7 +165,6 @@ const BG_FILL = { black: '#000000', white: '#ffffff', gray: '#808080' };
 // ============================================================================
 
 var FIELD = 'background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:4px;font-size:12px;padding:3px 5px;';
-var TBTN = 'padding:4px 9px;font-size:13px;line-height:1;cursor:pointer;background:var(--bg-tertiary,#2a2a2a);color:#ddd;border:1px solid var(--border-color,#444);border-radius:4px;';
 var HANDLE = 'position:absolute;top:5px;width:15px;height:15px;margin-left:-8px;border-radius:50%;background:var(--accent,#4a9eff);border:2px solid #fff;box-sizing:border-box;cursor:ew-resize;touch-action:none;z-index:2;';
 
 /**
@@ -222,9 +226,6 @@ export function showOverlayExportModal() {
         '    </div>' +
         '    <div id="ovDockEmpty" style="display:none;position:absolute;"></div>' +
         '    <div style="display:flex;align-items:center;gap:6px;">' +
-        '      <button id="ovPrev" title="Previous frame" style="' + TBTN + '">⏮</button>' +
-        '      <button id="ovPlay" title="Play / Pause" style="' + TBTN + '">▶</button>' +
-        '      <button id="ovNext" title="Next frame" style="' + TBTN + '">⏭</button>' +
         // `touch-action:none` so a touch scrub drags the playhead instead of
         // scrolling the modal (the handles carry the same rule).
         '      <div id="ovTrack" title="Click or drag to scrub" ' +
@@ -278,9 +279,6 @@ export function showOverlayExportModal() {
     var handleStart = modal.querySelector('#ovHandleStart');
     var handleEnd = modal.querySelector('#ovHandleEnd');
     var scrubVal = modal.querySelector('#ovScrubVal');
-    var prevBtn = modal.querySelector('#ovPrev');
-    var playBtn = modal.querySelector('#ovPlay');
-    var nextBtn = modal.querySelector('#ovNext');
     var cancelBtn = modal.querySelector('#ovCancel');
     var exportBtn = modal.querySelector('#ovExport');
     var resetBtn = modal.querySelector('#ovResetSettings');
@@ -288,7 +286,7 @@ export function showOverlayExportModal() {
     var progressFill = modal.querySelector('#ovProgressFill');
     var progressLabel = modal.querySelector('#ovProgressLabel');
 
-    var exporting = false, cancelled = false, playTimer = null;
+    var exporting = false, cancelled = false;
     var startField = null, endField = null;   // assigned by buildSettings()
     var outWField = null, outHField = null, resSelect = null;
 
@@ -1020,24 +1018,13 @@ export function showOverlayExportModal() {
         } catch (e) { /* the preview is authoritative; a stale app view is harmless */ }
     }
 
-    function setPlaying(on) {
-        if (playTimer) { clearTimeout(playTimer); playTimer = null; }
-        playBtn.textContent = on ? '⏸' : '▶';
-        if (!on) return;
-        var tick = function () {
-            if (previewFrame >= rangeEnd) { setPlaying(false); return; }
-            showFrame(previewFrame + 1);
-            playTimer = setTimeout(tick, 1000 / currentFps());
-        };
-        playTimer = setTimeout(tick, 1000 / currentFps());
-    }
-    playBtn.addEventListener('click', function () {
-        if (playTimer) { setPlaying(false); return; }
-        if (previewFrame >= rangeEnd || previewFrame < rangeStart) showFrame(rangeStart);
-        setPlaying(true);
-    });
-    prevBtn.addEventListener('click', function () { setPlaying(false); showFrame(previewFrame - 1); });
-    nextBtn.addEventListener('click', function () { setPlaying(false); showFrame(previewFrame + 1); });
+    // The modal deliberately has NO playback transport: it is a still-frame
+    // previewer, so the only way to change frames is to scrub the track (or set
+    // the range fields, which preview the boundary they commit). Playing back a
+    // multi-view composition here meant decoding every view per tick and pushing
+    // each tick into the app viewer too, which competed with the export it
+    // exists to configure; the single rendered frame is what tells you whether
+    // the overlays look right, and that is what this modal is for.
 
     // `'playhead'` | `'start'` | `'end'` — the track scrubs, the handles resize.
     var dragging = null;
@@ -1066,7 +1053,6 @@ export function showOverlayExportModal() {
     }
     function beginDrag(which, ev) {
         if (exporting) return;
-        setPlaying(false);
         dragging = which;
         document.addEventListener('pointermove', onDragMove);
         document.addEventListener('pointerup', onDragEnd);
@@ -1215,7 +1201,6 @@ export function showOverlayExportModal() {
             return;
         }
 
-        setPlaying(false);
         exporting = true;
         cancelled = false;
         setControlsDisabled(true);
@@ -1443,9 +1428,6 @@ export function showOverlayExportModal() {
 
     function setControlsDisabled(on) {
         exportBtn.disabled = on;
-        prevBtn.disabled = on;
-        playBtn.disabled = on;
-        nextBtn.disabled = on;
         trackEl.style.pointerEvents = on ? 'none' : '';
         stripEl.style.pointerEvents = on ? 'none' : '';
         dockEl.style.pointerEvents = on ? 'none' : '';
@@ -1490,7 +1472,6 @@ export function showOverlayExportModal() {
     window.addEventListener('resize', onWinResize);
 
     function cleanup() {
-        setPlaying(false);
         document.removeEventListener('keydown', onKey, true);
         window.removeEventListener('resize', onWinResize);
         if (tileResizeObserver) { try { tileResizeObserver.disconnect(); } catch (e) { /* ignore */ } }
