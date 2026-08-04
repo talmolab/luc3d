@@ -1782,6 +1782,19 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     //   'ba'            — DLT to initialize, then robust non-linear refinement
     //                     of each keypoint against the native-space detections
     //                     (aniposelib `optim_points` paradigm; cameras fixed).
+    //
+    // CAUTION — this default is SILENT. Omitting `options.method` does not mean
+    // "keep whatever method this group already used"; it means DLT. Any caller
+    // that re-solves an ALREADY-TRIANGULATED group must pass
+    // `{ method: group.triangulationMethod === 'ba' ? 'ba' : 'dlt' }` — see
+    // `reTriangulateGroup` and `ui/rendering.js`'s lazy reprojection fill.
+    // Otherwise it silently downgrades a BA solve to DLT while
+    // `group.triangulationMethod` still claims 'ba', so the Info Panel labels
+    // the number "Bundle Adjustment" and shows DLT's value. That was exactly
+    // the "Triangulate All ▸ Bundle Adjustment appears to change nothing" bug
+    // (guarded by `tests/e2e/triangulate-all-ba-display.mjs`). Callers that are
+    // deliberately fast/DLT-only (the grouping sweeps in `ui/export-modals.js`,
+    // the identity-assignment cost matrices) say so at the call site.
     const method = (options && options.method === 'ba') ? 'ba' : 'dlt';
     const baCameras = cameraNames.map(function (n) { return cameraMap[n]; });
     const baOptions = {

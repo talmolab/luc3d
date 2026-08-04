@@ -1018,6 +1018,20 @@ each group (`group.triangulationMethod`) and in each `state.triangulationResults
 entry (`.method`) so the info panel can label it. Grouping operations
 (`groupByIdentityAndTriangulateAll`, group-by-track) always use DLT.
 
+**`options.method`'s default is SILENT — and that is a live footgun.** Omitting
+it does not mean "keep whatever method this group already used"; it means DLT.
+Any caller that re-solves an **already-triangulated** group must pass
+`{ method: group.triangulationMethod === 'ba' ? 'ba' : 'dlt' }`. Two callers do:
+`reTriangulateGroup` (a node move re-refines consistently) and `ui/rendering.js`'s
+lazy reprojection fill. The latter did **not**, which is the whole of the
+"Triangulate All ▸ Bundle Adjustment appears to change nothing" bug: the group
+kept BA's `points3d` and `triangulationMethod = 'ba'`, but the DLT re-solve's
+error landed in `state.triangulationResults`, so the panel labelled the number
+"Bundle Adjustment" and showed DLT's value (measured on the regression fixture:
+1.6155 px displayed vs BA's actual 1.4273 px, with the two solves' 3D differing
+by 0.098 world units). Guarded by
+`tests/e2e/triangulate-all-ba-display.mjs`.
+
 **Distortion handling.** 2D keypoints on disk are lens-distorted. **DLT** runs in
 ideal pinhole space: observations are undistorted first (`Camera.undistortPoint`),
 which is required — DLT is linear only in those coordinates. **BA does not**; it
@@ -2045,6 +2059,30 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   When paused (seek/step) they run every call; `VideoController.stopPlayback`
   fires one final unthrottled `drawAllOverlays` so the panel/playhead settle to
   the exact stop frame.
+
+  **Lazy reprojection fill — honors the group's triangulation method.** A group
+  with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
+  and the result is written into `state.triangulationResults` (which is what the
+  Info Panel's headline error, per-camera rows and per-instance breakdown read).
+  That re-solve passes
+  `{ method: group.triangulationMethod === 'ba' ? 'ba' : 'dlt' }` — the same
+  method-preserving rule as `reTriangulateGroup`
+  (`pose/triangulation.js`) — and carries `method` through into the stored
+  result. It previously passed **no options**, and
+  `triangulateAndReproject`'s `options.method === 'ba' ? 'ba' : 'dlt'` default is
+  SILENT, so it re-solved with DLT. That is why **"Triangulate All ▸ Bundle
+  Adjustment" appeared to do nothing:** the windowed sweep
+  (`sweepTriangulateAllFrames`) deliberately drops `reprojections` and
+  `state.triangulationResults` project-wide (~1.9 GB at 531,799 groups — see its
+  docstring), so this fill is the ONLY thing that repopulates them, and the DLT
+  re-solve overwrote BA's error with DLT's while `group.triangulationMethod`
+  still read `'ba'` — so the panel labelled the number "Bundle Adjustment" and
+  showed DLT's value. The single-frame `triangulateCurrentFrame` path was
+  unaffected because it stores its own result AND populates `reprojections`, so
+  this condition is false. `points3d` is deliberately **not** written back
+  (the group already holds the authoritative 3D from the sweep); with the method
+  honored the two are bit-identical, which
+  `tests/e2e/triangulate-all-ba-display.mjs` asserts directly.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
 **Imports from project modules.**
