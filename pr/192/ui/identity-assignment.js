@@ -759,15 +759,21 @@ export function runAutomaticAssignment(selectedViewNames) {
             costMatrix[a] = [];
             for (var b = 0; b < nOther; b++) {
                 // Create temporary group with instances from both views.
-                // DLT (the default) is DELIBERATE here: this is an O(nRef x
-                // nOther) cost matrix feeding the Hungarian matcher, the
+                // DLT is DELIBERATE here, and passed EXPLICITLY: this is an
+                // O(nRef x nOther) cost matrix feeding the Hungarian matcher, the
                 // temporary group's 3D is discarded, and only the RELATIVE
-                // ordering of the errors matters — so BA's ~4.6-6.1x cost would
-                // buy nothing. Nothing user-visible or exportable is written.
+                // ordering of the errors matters — so BA's ~3x-6x cost would buy
+                // nothing. Nothing user-visible or exportable is written.
+                //
+                // Spelled out rather than left to `triangulateAndReproject`'s
+                // silent DLT default so that NO call site in the app relies on
+                // that default: "every caller states its method" is checkable,
+                // "every caller that forgot happened to want DLT" is not. This is
+                // the only intentionally-DLT caller.
                 var tempGroup = new InstanceGroup(-1, -1);
                 tempGroup.addInstance(refView, refInstances[a].instance);
                 tempGroup.addInstance(otherView, otherInstances[b].instance);
-                var result = triangulateAndReproject(tempGroup, cameras);
+                var result = triangulateAndReproject(tempGroup, cameras, { method: 'dlt' });
                 costMatrix[a][b] = (result.meanError != null && isFinite(result.meanError))
                     ? result.meanError : 1e6;
             }
