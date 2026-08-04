@@ -500,6 +500,7 @@ var testFiles = [
     'test-pose-data.js',
     'test-skeleton-json.js',
     'test-triangulation.js',
+    'test-triangulation-ba.js',
     'test-triangulation-robust.js',
     'test-file-io.js',
     'test-interaction.js',

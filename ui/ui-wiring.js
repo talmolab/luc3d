@@ -25,7 +25,8 @@ import {
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
          someValidPoint3d } from '../pose/pose-data.js';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
-         loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject } from '../pose/triangulation.js';
+         loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
+         resolveTriangulationMethod } from '../pose/triangulation.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
@@ -1057,8 +1058,14 @@ export function setupMenus() {
             }
             var groupCams = cameras.filter(function (c) { return bucketCamNames.indexOf(c.name) >= 0; });
             if (groupCams.length < 2) continue;
-            var result = triangulateAndReproject(group, groupCams);
+            // Brand-new group (built from the environment file's instances), so
+            // there is no prior method to preserve — take the user's Settings
+            // choice rather than hardcoding DLT. This 3D is displayed in the
+            // viewport, and "displayed == exported" has to start at the solve.
+            var result = triangulateAndReproject(group, groupCams,
+                { method: resolveTriangulationMethod(group) });
             group.points3d = result.points3d;
+            group.triangulationMethod = result.method;
             if (someValidPoint3d(group.points3d)) {
                 envGroups.push(group);
             }
@@ -2399,13 +2406,16 @@ export function setupUI() {
     });
 
     // Triangulate all frames. DLT keeps the existing "group by identity first"
-    // behavior (grouping always uses DLT); BA triangulates every group with
-    // bundle adjustment (auto-grouping from identities as needed).
+    // behavior; BA triangulates every group with bundle adjustment (auto-grouping
+    // from identities as needed). The DLT branch passes its method EXPLICITLY:
+    // `groupByIdentityAndTriangulateAll` is now GOVERNED by the method it is given
+    // (or Settings ▸ Default Triangulation when given none), so without this an
+    // explicit "DLT" pick would silently run as BA under a BA default.
     wireTriDropdown('triangulateAllDropdown', 'tbTriangulateAll', function (method) {
         if (method === 'ba') {
             triangulateAllFrames('ba');
         } else if (state.session && state.session.identities.length > 0) {
-            groupByIdentityAndTriangulateAll();
+            groupByIdentityAndTriangulateAll('dlt');
         } else {
             triangulateAllFrames('dlt');
         }

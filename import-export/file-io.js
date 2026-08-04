@@ -2263,6 +2263,14 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 instanceMeta: {},
                 identityId: (group.identityId != null && group.identityId >= 0) ? group.identityId : -1,
             };
+            // Which solver produced this group's 3D. NOT reconstructable from the
+            // file — `points_3d` is just numbers — so it must be persisted or a
+            // reopened project has BA 3D with an unknown method. That breaks two
+            // things: `ui/rendering.js`'s lazy fill re-derives reprojections with
+            // DLT and then displays DLT's error for BA 3D, and `adoptPrior3d` can
+            // never match, so every regroup needlessly re-solves. Written only when
+            // 'ba'; absent means DLT, which keeps `sessions_json` slim (#134).
+            if (group.triangulationMethod === 'ba') igLucidMeta.triangulationMethod = 'ba';
             for (var [metaCam, metaInst] of group.instances) {
                 var instMeta = {};
                 var hasMeta = false;

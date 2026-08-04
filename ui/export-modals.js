@@ -19,6 +19,10 @@ import {
     showCalibrationRequiredPopup,
     getInstanceGroupsForFrame,
     sweepLazyFrameWindows,
+    resolveTriangulationMethod,
+    findEquivalentPriorGroup,
+    adoptPrior3d,
+    triangulationMethodLabel,
 } from '../pose/triangulation.js';
 import { Viewport3D } from './viewport3d.js';
 import { getTrackColor, getGroupColor } from './overlays.js';
@@ -263,7 +267,18 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
     return await sweepLazyFrameWindows(session, onFrame, opts);
 }
 
-export async function groupByIdentityAndTriangulateAll() {
+/**
+ * Bulk-group by identity, then triangulate every group.
+ *
+ * @param {'ba'|'dlt'} [explicitMethod] - the method the user explicitly asked
+ *   for, when they did. "Triangulate All ▸ DLT" routes here and passes `'dlt'`,
+ *   so an explicit pick stays honest. Omitted (Tracks ▸ Group by Identity) means
+ *   "use my configured default" — Settings ▸ Default Triangulation. Either way the
+ *   resulting method GOVERNS the whole sweep: with Bundle Adjustment selected,
+ *   every group ends up with BA 3D, including groups that already held valid DLT
+ *   3D with unchanged membership (see `adoptPrior3d`).
+ */
+export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     if (!sessionHasCalibration()) {
         showCalibrationRequiredPopup();
         return;
@@ -289,10 +304,22 @@ export async function groupByIdentityAndTriangulateAll() {
         return;
     }
 
-    showLoading('Grouping by identity & triangulating 0/' + totalFrames + ' frames...');
+    // THE governing method for this whole sweep: an explicit user pick if there
+    // was one, else Settings ▸ Default Triangulation. Named in the progress text
+    // and the final status line so the method (and therefore its cost — BA runs
+    // ~3x-6x DLT per group) is visible rather than a surprise.
+    var prefMethod = explicitMethod
+        ? (explicitMethod === 'ba' ? 'ba' : 'dlt')
+        : resolveTriangulationMethod(null);
+
+    showLoading('Grouping by identity & triangulating 0/' + totalFrames + ' frames (' +
+        triangulationMethodLabel(prefMethod) + ')...');
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
+    // 3D provenance, reported at the end: groups whose existing 3D was reused
+    // as-is vs. groups that genuinely had to be solved, and with what.
+    var reused3d = 0, solvedBa = 0, solvedDlt = 0;
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions),
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
@@ -427,12 +454,31 @@ export async function groupByIdentityAndTriangulateAll() {
             }
             session.instanceGroups.get(frameIdx).push(group);
 
-            // Triangulate — store only points3d (compact).
-            // Reprojections are computed on-the-fly when drawing.
-            // Grouping always uses fast DLT.
-            var triResult = triangulateAndReproject(group, cameras, { triangulateOnly: true });
-            group.points3d = triResult.points3d;
-            group.triangulationMethod = triResult.method;
+            // 3D: ADOPT rather than re-solve when this rebuild reproduced a group
+            // that already existed with identical membership AND whose 3D was
+            // already produced by `prefMethod` — i.e. when re-solving would be a
+            // provable no-op. Everything else is solved with `prefMethod`.
+            //
+            // This used to unconditionally re-solve with the DEFAULT option, i.e.
+            // DLT, and stamp `triangulationMethod = 'dlt'`, regardless of the
+            // user's setting. Running "Group by Identity" (or Triangulate All ▸
+            // DLT, which routes here) after a BA Triangulate All therefore
+            // silently downgraded the whole project's 3D to DLT — and save/export
+            // read `group.points3d`, so the exported file stopped matching what
+            // the user had computed and was looking at.
+            var prior = findEquivalentPriorGroup(_existing, group);
+            if (adoptPrior3d(group, prior, prefMethod)) {
+                reused3d++;
+            } else {
+                // Still `triangulateOnly` (reprojections are recomputed on demand
+                // when drawing); that skips the reprojection/error passes, not the
+                // solve, so BA still runs when BA is what was asked for.
+                var triResult = triangulateAndReproject(group, cameras,
+                    { triangulateOnly: true, method: prefMethod });
+                group.points3d = triResult.points3d;
+                group.triangulationMethod = triResult.method;
+                if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
+            }
             group.markClean();
 
             totalGrouped++;
@@ -443,7 +489,9 @@ export async function groupByIdentityAndTriangulateAll() {
         onProgress: function (done, total) {
             var el = document.getElementById('loadingStatus');
             if (el) el.textContent =
-                'Grouping by identity & triangulating ' + done + '/' + total + ' frames...';
+                'Grouping by identity & triangulating ' + done + '/' + total + ' frames (' +
+                triangulationMethodLabel(prefMethod) + '; ' +
+                reused3d.toLocaleString() + ' existing solutions kept)...';
         },
     });
 
@@ -456,8 +504,16 @@ export async function groupByIdentityAndTriangulateAll() {
     // "Triangulate", which calls update3DViewport(frameIdx) at its tail.
     update3DViewport(state.currentFrame);
     updateInfoPanel();
+    // Name the 3D's provenance so a run that kept BA solutions can't be mistaken
+    // for one that silently re-solved them with DLT.
     setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
-        totalTriangulated + ' across ' + processedFrames + ' frames', 'success');
+        totalTriangulated + ' across ' + processedFrames + ' frames via ' +
+        triangulationMethodLabel(prefMethod) + ' (' +
+        reused3d.toLocaleString() + ' kept existing 3D, ' +
+        solvedBa.toLocaleString() + ' solved via Bundle Adjustment, ' +
+        solvedDlt.toLocaleString() + ' via DLT)', 'success');
+    console.log('[groupByIdentity] 3D provenance: reused', reused3d,
+        '| solved BA', solvedBa, '| solved DLT', solvedDlt);
 }
 
 
@@ -489,11 +545,22 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         return;
     }
 
-    showLoading('Grouping & triangulating 0/' + totalFrames + ' frames...');
+    // THE governing method for this whole sweep: Settings ▸ Default
+    // Triangulation. This entry point has no explicit-pick path (it is only
+    // reachable through `showGroupByTrackModal`), so the configured default is the
+    // user's instruction. Named in the progress/status text so the method — and
+    // therefore its cost, BA running ~3x-6x DLT per group — is visible rather
+    // than a surprise.
+    var prefMethodT = resolveTriangulationMethod(null);
+
+    showLoading('Grouping & triangulating 0/' + totalFrames + ' frames (' +
+        triangulationMethodLabel(prefMethodT) + ')...');
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
     var totalErrors = [];
+    // 3D provenance, reported at the end (see the adopt-vs-solve note below).
+    var reused3dT = 0, solvedBaT = 0, solvedDltT = 0;
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions);
     // also fixes the prior silent-drop (only resident frames were grouped before).
@@ -535,7 +602,10 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         }
 
         // 2. Clear existing groups and instances for this frame
-        //    Remove old InstanceGroups
+        //    Remove old InstanceGroups — but keep a handle on them first, so a
+        //    rebuild that lands on the identical membership can ADOPT its
+        //    existing 3D instead of re-solving it (see step 4).
+        var priorGroups = session.instanceGroups.get(frameIdx) || [];
         session.instanceGroups.delete(frameIdx);
         //    Clear grouped instances (will be re-added from track buckets)
         for (var [cn] of fg.instances) {
@@ -597,8 +667,33 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             }
             if (viewsWithLabels < 2) continue;
 
-            var result = triangulateAndReproject(group, groupCameras);
+            // ADOPT existing 3D only when this rebuild reproduced a group with
+            // identical membership AND whose 3D already came from `prefMethodT` —
+            // i.e. when re-solving would be a provable no-op (the common case when
+            // Group by Track is re-run with the same method). Everything else is
+            // solved with `prefMethodT`.
+            //
+            // This used to unconditionally re-solve with the DEFAULT option (DLT)
+            // and stamp `triangulationMethod = 'dlt'` regardless of the user's
+            // setting, so running Group by Track after a BA Triangulate All
+            // silently downgraded the whole project's 3D to DLT — and save/export
+            // read `group.points3d`, so the exported file no longer matched what
+            // the user had computed and was looking at.
+            var priorT = findEquivalentPriorGroup(priorGroups, group);
+            if (adoptPrior3d(group, priorT, prefMethodT)) {
+                reused3dT++;
+                group.markClean();
+                // No frameResult: the errors belong to the adopted solve, which
+                // is not recomputed here. `ui/rendering.js`'s lazy fill derives
+                // them (with the adopted method) for the frame being viewed —
+                // the same contract the windowed Triangulate All sweep uses.
+                continue;
+            }
+
+            var result = triangulateAndReproject(group, groupCameras,
+                { method: prefMethodT });
             group.triangulationMethod = result.method;
+            if (result.method === 'ba') solvedBaT++; else solvedDltT++;
 
             group.reprojections = result.reprojections;
             group.points3d = result.points3d;
@@ -639,7 +734,9 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
     }, {
         onProgress: function (done, total) {
-            showLoading('Triangulating... ' + done + '/' + total + ' frames');
+            showLoading('Triangulating... ' + done + '/' + total + ' frames (' +
+                triangulationMethodLabel(prefMethodT) + '; ' +
+                reused3dT.toLocaleString() + ' existing solutions kept)');
         },
     });
 
@@ -652,9 +749,17 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     var avgError = totalErrors.length > 0
         ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
         : 'N/A';
+    // Name the 3D's provenance so a run that kept BA solutions can't be mistaken
+    // for one that silently re-solved them with DLT. `avgError` covers only the
+    // groups actually solved here — an adopted group's error is derived on demand.
     setStatus('Grouped ' + totalGrouped + ' track-groups, triangulated ' + totalTriangulated +
-        ' frames (avg error: ' + avgError + 'px)', 'success');
-    console.log('[group-by-track] Done:', totalGrouped, 'groups across', totalTriangulated, 'frames, avg error:', avgError);
+        ' frames via ' + triangulationMethodLabel(prefMethodT) +
+        ' (avg error: ' + avgError + 'px; ' + reused3dT.toLocaleString() +
+        ' kept existing 3D, ' + solvedBaT.toLocaleString() + ' solved via Bundle Adjustment, ' +
+        solvedDltT.toLocaleString() + ' via DLT)', 'success');
+    console.log('[group-by-track] Done:', totalGrouped, 'groups across', totalTriangulated,
+        'frames, avg error:', avgError, '| 3D provenance: reused', reused3dT,
+        '| solved BA', solvedBaT, '| solved DLT', solvedDltT);
 
     // Update timeline
     if (timeline) {
