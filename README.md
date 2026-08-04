@@ -2,8 +2,7 @@
 Label Unification and Correspondence in 3D Annotation GUI in Web Browser
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
-<img width="3452" height="1804" alt="luc3d image" src="https://github.com/user-attachments/assets/657d408c-62fe-45a6-bd0e-31fa4adc703c" />
-
+<img width="3450" height="1804" alt="luc3d image" src="https://github.com/user-attachments/assets/f013dc6b-c10c-4f1d-a70a-1a18a105dbd0" />
 
 Full documentation, tutorials, and user guides: (https://talmolab.github.io/luc3d-docs)
 
