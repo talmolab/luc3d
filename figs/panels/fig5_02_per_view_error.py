@@ -104,7 +104,14 @@ def main():
     cams = list(errs[0]["perView"])
     # Camera names carry a role suffix (Camera6_sideL); the role is the informative
     # half, so the tick shows that rather than the index.
-    labels = [c.split("_", 1)[1] if "_" in c else c for c in cams]
+    # "0 mid", not "mid": this panel's own tile badges read "cam 0 mid" / "cam 4 topR",
+    # so bare role names put two camera-naming conventions inside ONE panel and made
+    # the bars look like they belonged to different cameras from the tiles. The index
+    # is what ties a bar to a tile. Legacy used this same short "0 mid" form on the
+    # axis, keeping "cam N name" for the badges where there is room for it.
+    labels = [f"{c[6:].split('_', 1)[0]} {c.split('_', 1)[1]}"
+              if c.startswith("Camera") and "_" in c
+              else (c.split("_", 1)[1] if "_" in c else c) for c in cams]
     x = np.arange(len(cams))
 
     # Two square image tiles and the bar chart, in one panel, at 180 mm: the tiles

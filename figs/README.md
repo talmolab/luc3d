@@ -157,6 +157,33 @@ while carrying 1.26x the linear resolution on a 1.2x wider tile. Labels are off 
 cannot be made legible at any size); `rigFit().camScreen` is in the manifest if a
 composer wants to typeset real names.
 
+## Whitespace: what is structural and what is waste
+
+An adversarial review measured "19-35 % blank rows" across the composites and read it
+as wasted page. Most of it is not waste, and the distinction is worth recording so it
+is not re-chased.
+
+A composite's blank scanlines include the space BETWEEN panel rows, and that space is
+load-bearing: `MARGIN` + `LETTER_LEAD` + `ROW_GAP` per row + the provenance footer is
+where the panel letters and titles live. Measured on the current build, that structure
+alone accounts for **22.6 %** of Fig 4 and **22.5 %** of Fig 5 -- against total blank
+fractions of 18.7 % and 23.2 %. In other words the gaps ARE the figure's typography,
+and deleting them would delete the titles.
+
+The actionable number is blank INSIDE a panel, which is where a `row=` taller than its
+ink shows up. That has been driven down: Fig 1 34.7 -> 25.5 %, Fig 6 31.6 -> 26.2 %,
+Fig 5 27.2 -> 23.2 %, and `fig1a` 29.4 -> ~0, `fig1d` 37.9 -> ~0, `fig5b_loop`
+40.1 -> 23.5 % (the residue there is the equal-aspect schematic's own letterboxing, and
+shrinking the row would shrink the chevrons rather than the gap).
+
+Two traps if you do tighten a panel:
+* `blank()` sets `aspect="equal"`, so a schematic panel's axes is HEIGHT-bound and the
+  row height sets the drawing's print scale. Pin the scale and derive the height;
+  dropping `row=` shrinks the artwork.
+* Table whitespace is usually interline LEADING, not one dead band. Reduce row pitch in
+  POINTS and pin anything specified in data units (rule offsets, tick geometry) so it
+  cannot scale with the pitch.
+
 ## Known defects in the current build
 
 * **Fig 7f cannot plot ByteTrack's points.** `detector_recall_corr.per_session`

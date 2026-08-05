@@ -18,8 +18,32 @@ bottom out at r = 2, dropping from 1,329 with no 3D term at all to 2. IDF1 alone
 would say "anything >= 1 is fine"; switches say where it actually stops improving.
 The shipped r = 6 sits comfortably past both knees.
 
-r = 0 is the "no 3D term at all" control the handoff asked for, and it is the point
-of the panel: without the 3D term the tracker makes 1,329 switches.
+r IS ON A REAL LOG AXIS, NOT A CATEGORY INDEX. It used to be plotted at
+`np.arange(len(df))` -- the 12 sampled ratios 0, 0.25, 0.5, 1, 2, 3, 4, 6, 8, 12,
+16, 24 at EQUAL spacing -- and that made both of the claims above partly artefacts
+of the sampling: on an index, the distance from r = 1 to r = 2 is the same as from
+r = 16 to r = 24, so "the knee is at 2" and "the shipped 6 sits past both knees"
+were being read off a geometry that has nothing to do with r. Worse, 12 ticks over
+~30 mm of plot is 2.5 mm of pitch, so 7 of the 12 tick labels had to be suppressed
+to stop them colliding and the reader could not place a knee at all.
+
+Of the three fixes available, a genuine log axis is the only one that fixes the
+GEOMETRY: rotating all 12 labels to 90 deg would make them legible but leaves the
+spacing false, and printing "x is an index, spacing is not proportional" is honest
+but still unreadable. The cost of the log axis is that a subset of ticks is still
+labelled -- 0, 0.5, 1, 2, 6, 24, which is what fits at 8 pt in 30 mm -- but that is
+now harmless, because positions are proportional and interpolating between labelled
+decades is exactly what a log axis is for. Every sampled r is still visible: each is
+drawn with its own marker.
+
+r = 0 IS OFF A LOG AXIS, SO IT GETS A BREAK. r = 0 is the "no 3D term at all"
+control the handoff asked for and the point of the panel (1,329 switches without
+it), so it cannot be dropped just because log(0) is undefined. It is drawn in a
+slot to the left of the log region, its tick labelled `0`, with an explicit break
+mark on the x spine and a DOTTED connector across the break -- so the one position
+on the axis that is not to scale announces itself, and the other eleven are.
+`BREAK_DEC` is the size of that slot in decades; nothing else on the panel depends
+on it.
 
 THE METRIC IS IDF1, NOT HOTA. Nothing in luc3d-bench computes HOTA. Do not relabel.
 
@@ -32,6 +56,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import NullLocator
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
@@ -42,6 +67,17 @@ METRIC = "idf1_cross"
 
 #: The app's shipped ratio (corr2d 1.0, corr3d 6.0 -> r = 6).
 SHIPPED_R = 6.0
+
+#: Width of the r = 0 slot, in DECADES to the left of the smallest positive r. Wide
+#: enough that its `0` tick label clears the next labelled tick, narrow enough that
+#: the break reads as a break rather than as a second panel.
+BREAK_DEC = 0.20
+
+#: Which r values get a tick LABEL. Every r is drawn (each has a marker); these are
+#: the ones whose labels fit at 8 pt in a ~30 mm plot without colliding -- the set
+#: the panel's argument is made from (0 the control, 1 and 2 the two knees, 6 the
+#: shipped ratio, 24 the end of the sweep) plus 0.5 to anchor the low end.
+LABELLED_R = (0.0, 0.5, 1.0, 2.0, 6.0, 24.0)
 
 
 def build() -> pd.DataFrame:
@@ -77,31 +113,51 @@ def main():
     # at x = -15.3 mm and had its y axis cut off the page. Nothing in a per-panel
     # render shows that; `assemble.py` now refuses the row instead.
     fig, ax = panel("third", "std", key=2)
-    x = np.arange(len(df))                      # even spacing: r is not linear
+
+    # r ON A LOG AXIS, with the r = 0 control in a broken-off slot to its left. See
+    # the docstring: at even spacing this axis made "the knee is at r = 2" a
+    # statement about the sampling grid rather than about r.
+    r = df.r.to_numpy(dtype=float)
+    first = float(r[r > 0].min())                 # 0.25, the smallest sampled ratio
+    zero_x = first * 10 ** -BREAK_DEC             # where the r = 0 datum is drawn
+    x = np.where(r > 0, r, zero_x)
+    pos = r > 0
+
+    def series(axis, y, color, ms):
+        """One series: solid over the log region, DOTTED across the break."""
+        axis.plot(x[pos], y[pos], color=color, lw=2.0, zorder=3)
+        axis.plot(x[:2], y[:2], color=color, lw=1.2, ls=(0, (1.4, 1.2)), zorder=3)
+        axis.plot(x, y, "o", color=color, ms=ms, mec="white", mew=0.8, zorder=4)
 
     # ID switches, log, on the left.
-    ax.plot(x, df.switches.clip(lower=1), color=SALMON, lw=2.0, zorder=3)
-    ax.plot(x, df.switches.clip(lower=1), "o", color=SALMON, ms=4, mec="white",
-            mew=0.8, zorder=4)
+    series(ax, df.switches.clip(lower=1).to_numpy(dtype=float), SALMON, 4)
     ax.set_yscale("log")
     ax.set_ylabel("ID switches", color=SALMON)
     ax.tick_params(axis="y", colors=SALMON)
     ax.spines["left"].set_color(SALMON)
-    # 12 ratios in one row overlapped at the low end, where they bunch (0, 0.25,
-    # 0.5, 1). Label every tick but drop the ones that collide. The dropped set grew
-    # when the panel came down to a "third": 12 ticks over ~76 pt is 6.9 pt of pitch,
-    # measured, so an 11.5 pt "0.5" literally overlapped its neighbouring "1", and
-    # even the digits that technically cleared each other closed to a 2.4 pt gap and
-    # read as one run ("4 6 8"). What survives is exactly the set the docstring argues
-    # from -- 0 (the control), 1 and 2 (the two knees), 6 (shipped) and 24 (the end of
-    # the sweep) -- which also happens to be sparse enough to be legible. 1 and 2 are
-    # adjacent ticks and cannot be separated further; both are kept because the whole
-    # point of the panel is that IDF1 stops improving at one of them and switches at
-    # the other.
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"{v:g}" if v in (0, 1.0, 2.0, 6.0, 24.0) else ""
-                        for v in df.r])
-    ax.set_xlabel("r = corr3d / corr2d")
+
+    ax.set_xscale("log")
+    # Limits in decades either side, so the r = 0 slot and the 24 label both clear
+    # the spines. Minor ticks off: on a log axis they are a grey haze at this size,
+    # and every sampled r already carries a marker.
+    ax.set_xlim(zero_x * 10 ** -0.22, 24 * 10 ** 0.11)
+    ax.set_xticks([zero_x if v == 0 else v for v in LABELLED_R])
+    ax.set_xticklabels([f"{v:g}" for v in LABELLED_R])
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.set_xlabel("r = corr3d / corr2d (log)")
+    # THE BREAK, ON THE SPINE. Two slashes with the spine whited out between them, so
+    # the one position on this axis that is not to scale says so. Drawn in the x-axis
+    # transform (x in data, y in axes fractions) and unclipped, so it sits ON the
+    # spine rather than inside the data area.
+    tr = ax.get_xaxis_transform()
+    mid = (zero_x * first) ** 0.5
+    ax.plot([mid * 10 ** -0.055, mid * 10 ** 0.055], [0, 0], color="white",
+            lw=1.6, transform=tr, clip_on=False, zorder=5,
+            solid_capstyle="butt")
+    for off in (-0.030, 0.030):
+        ax.plot([mid * 10 ** (off - 0.022), mid * 10 ** (off + 0.022)],
+                [-0.030, 0.030], color=MUTED, lw=0.8, transform=tr,
+                clip_on=False, zorder=6)
     # "(no 3D term)" used to be the second line of the r = 0 tick label. Centred on
     # the leftmost tick it is ~50 pt wide and ran off the left edge of the narrower
     # panel, so the gloss moves under the axis where its width is the panel's.
@@ -109,20 +165,19 @@ def main():
     # the restyle dropped it. In a figure whose panel f runs LUC3D against an
     # exhaustive baseline, an unlabelled two-series ablation reads as a
     # between-method comparison, which this one is not.
-    footnote(ax, "r = 0: no 3D term at all\n"
+    footnote(ax, "r = 0 = no 3D term, past the break\n"
                  "both series are LUC3D against itself")
 
     # Cross-view IDF1 on the right.
     ax2 = ax.twinx()
     ax2.spines["top"].set_visible(False)
-    ax2.plot(x, df.idf1, color=TEAL, lw=2.0, zorder=3)
-    ax2.plot(x, df.idf1, "o", color=TEAL, ms=4, mec="white", mew=0.8, zorder=4)
+    series(ax2, df.idf1.to_numpy(dtype=float), TEAL, 4)
     ax2.set_ylabel("cross-view IDF1", color=TEAL)
     ax2.tick_params(axis="y", colors=TEAL)
     ax2.spines["right"].set_color(TEAL)
 
-    # The shipped ratio, on the r axis.
-    xr = float(np.interp(SHIPPED_R, df.r, x))
+    # The shipped ratio, at its own place on the r axis now that the axis has one.
+    xr = SHIPPED_R
     ax.axvline(xr, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
     ax.annotate(f"shipped r = {SHIPPED_R:g}", (xr, 1.0),
                 xycoords=("data", "axes fraction"), xytext=(0, 2),

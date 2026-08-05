@@ -34,6 +34,14 @@ near 0.5, far ABOVE where SLEAP and ByteTrack land. Both facts are printed at th
 rule, because a reader who takes 0.20 for chance draws a WEAKER conclusion than the
 data supports -- 0.062 and 0.046 are below the ceiling, which is the stronger claim.
 
+THIS PANEL'S "WITHIN VIEW" IS NOT PANEL c'S. Both are called within-view IDF1 and
+they are different quantities: 0.749 here is BMimica, 50 sessions, C = 5, while c is
+SLAP-2M, 74 sessions, C = 6, where LUC3D's within-view mean is 0.736 and its median
+0.900. Nothing about the two numbers announces the difference -- 0.749 and 0.736 look
+like the same measurement rounded twice -- so the corpus is named in this panel's
+footer AND the pointer `c-g: SLAP-2M` rides on its last line, with the mirror note on
+c. See the footnote comment for why it goes there rather than on a fourth line.
+
 Every mean now carries its deposited 95% CI (`ci95_lo`/`ci95_hi`, bootstrap over
 sessions) at both ends of its slope; the panel previously plotted bare means, so a
 reader could not see that LUC3D's two intervals coincide (the no-drift result).
@@ -55,7 +63,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (MUTED, footnote, GREY, PERIWINKLE, PINK, SALMON, TEAL, deposit, panel,  # noqa: E402
+from src.style import (MUTED, entity, footnote, deposit, panel,  # noqa: E402
                        save, text_legend, use)
 
 #: (deposit key, name on the artwork, colour). The deposit calls SLEAP's entry
@@ -64,8 +72,18 @@ from src.style import (MUTED, footnote, GREY, PERIWINKLE, PINK, SALMON, TEAL, de
 #: per-camera-ness is carried at the 0.20 rule instead, which is the one place it is
 #: load-bearing: the rule is the ceiling *because* SLEAP and ByteTrack label each
 #: camera on its own, and both names are printed there.
-ORDER = [("LUC3D", "LUC3D", TEAL), ("SLEAP per-camera", "SLEAP", PERIWINKLE),
-         ("ByteTrack", "ByteTrack", SALMON), ("3D-MuPPET", "3D-MuPPET", PINK)]
+#:
+#: COLOURS COME FROM `entity()`, not from a hue picked here. All four series are
+#: recurring ENTITIES -- LUC3D, SLEAP and ByteTrack appear in five of this figure's
+#: seven panels and in Figs 3-5 as well -- so their hues are reserved set-wide and
+#: `entity()` is the only place that mapping lives. Hard-coding TEAL/PERIWINKLE here
+#: is how periwinkle came to mean DLT in Fig 4 and SLEAP in Fig 7 (review finding C3).
+#: The hues are unchanged by the switch; what changes is that they can no longer
+#: drift apart panel by panel.
+ORDER = [("LUC3D", "LUC3D", entity("luc3d")),
+         ("SLEAP per-camera", "SLEAP", entity("sleap")),
+         ("ByteTrack", "ByteTrack", entity("bytetrack")),
+         ("3D-MuPPET", "3D-MuPPET", entity("3d-muppet"))]
 
 #: WHY THIS PANEL HAS FOUR SERIES AND b-g HAVE THREE, said next to the series that is
 #: only here. 3D-MuPPET is measured on BMimica alone: `fig3_trackers.json` lists it
@@ -78,6 +96,25 @@ ORDER = [("LUC3D", "LUC3D", TEAL), ("SLEAP per-camera", "SLEAP", PERIWINKLE),
 #: Entry measures 65.6 mm from the key's x = 12.3 mm, i.e. 77.9 of 88 mm.
 CORPUS_NOTE = {"3D-MuPPET": "· BMimica only"}
 NCAM = 5
+
+#: Panel height in mm, DECLARED rather than taken from `ROW_H["std"]` (52 mm). Every
+#: panel in this figure was 52 mm and none of them needed it: measured on the 300 dpi
+#: render, this panel's ink spanned 50.0 of 52.1 mm and the page came to 196.3 mm --
+#: 19.3% of its scanlines carrying no ink at all (review findings 6.12 / C9). At 47 mm
+#: the ink is the same ink: nothing is resized, no type is touched, the axes simply
+#: stops being taller than its content. A row is as tall as its TALLEST panel, so this
+#: only pays if its row-mate (7b) comes down with it, which it does.
+ROW_H = 47.0
+
+#: `text_legend`'s "above" branch hard-codes `dy = 0.052` in FIGURE coordinates, i.e.
+#: 2.70 mm at the 52 mm height it was tuned for and 2.44 mm at 47 mm -- and 8 pt type
+#: sets a ~3.24 mm span box, so at the shorter height the four key lines would overlap
+#: by 25% of a box and `lint_text.py` would (correctly) fail. Passing `dy` and an
+#: explicit `transform` keeps the ABSOLUTE line spacing at 2.70 mm, so the key reads
+#: exactly as it did at 52 mm. This is the documented way to override that branch: it
+#: is skipped when `transform` is not None, and `xy` then supplies the anchor the
+#: branch would have set.
+KEY_DY = 0.052 * 52.0 / ROW_H
 
 
 def main():
@@ -92,7 +129,7 @@ def main():
     # the panel (measured: axes 44.5 of 88 mm) and pulled the centred x-axis footer
     # left with it until its leading characters fell off the page. In the band the
     # plot keeps its full width and the footer is centred on a full-width axis.
-    fig, ax = panel("half", "std", key=len(ORDER))
+    fig, ax = panel("half", ROW_H, key=len(ORDER))
     for rank, (key, name, color) in enumerate(ORDER):
         if key not in bm:
             continue
@@ -125,7 +162,11 @@ def main():
     # that labels each camera independently, and chance is set by the animal count.
     # Both are printed, because the two readings support different conclusions and
     # the deposit's own caveat picks the ceiling one.
-    ax.axhline(1 / NCAM, color=GREY, lw=0.8, ls=(0, (2.5, 1.5)), zorder=1)
+    # entity("ceiling") -- the same GREY every bound in the set is drawn in (Fig 5's
+    # oracle, Fig 4's random baseline). A bound is not a method and must not borrow a
+    # method's hue.
+    ax.axhline(1 / NCAM, color=entity("ceiling"), lw=0.8, ls=(0, (2.5, 1.5)),
+               zorder=1)
     # Anchored at the axes' left edge (x = -0.13), not at x = 0, so the two lines fit
     # inside the plot without running under the tracker values.
     ax.text(-0.13, 1 / NCAM + 0.015,
@@ -134,7 +175,8 @@ def main():
             "not a chance level — chance with 2 animals ≈ 0.5",
             color=MUTED, fontsize=6.5, va="bottom", linespacing=1.4)
 
-    text_legend(ax, entries, "above")
+    text_legend(ax, entries, "above", dy=KEY_DY, xy=(0.14, 0.985),
+                transform=fig.transFigure)
     ax.set_xlim(-0.15, 1.05)
     ax.set_xticks([0, 1])
     ax.set_xticklabels(["within view", "cross view"])
@@ -153,17 +195,26 @@ def main():
     # single-line version measured 77 mm and the per-camera line 80 mm on an 88 mm
     # panel; the x label is centred on the axes, so anything wider than the axis
     # extent hangs off the left of the page and the renderer drops the overhang
-    # without complaint. Every line here is under 64 mm.
+    # without complaint. Every line here is under 68 mm, measured.
     #
     # A FOURTH LINE IS NOT FREE, which is why the "BMimica only" note rides in the
     # key instead (see CORPUS_NOTE). `footnote` folds into the x label, so each line
     # is 3.2 mm taken out of THIS panel's axes: measured, a fourth line shrinks the
     # plot from 22.0 to 18.8 mm, and the two-line ceiling annotation then fills a
     # third of the data area. The key band is already reserved by `panel(key=4)`.
+    #
+    # `c–g: SLAP-2M` RIDES ON LINE 3 FOR THAT REASON, and it is not decoration.
+    # TWO DIFFERENT QUANTITIES IN THIS FIGURE ARE BOTH CALLED "within-view IDF1":
+    # this panel's 0.749 is BMimica, 50 sessions, C = 5; panel c's survival curve is
+    # SLAP-2M, 74 sessions, C = 6, where the same tracker's within-view mean is 0.736
+    # and its median 0.900. A reader who meets 0.749 here and a curve centred near
+    # 0.90 there has no way to know they are different corpora unless BOTH panels say
+    # so, so each names its own corpus AND points at the other (c carries the mirror
+    # note "a is BMimica"). Naming only this one would still leave c unlabelled.
     footnote(ax, f"n = {int(df.n_sessions.iloc[0])} full BMimica sessions, "
              f"{NCAM} cameras, 2 mice\n"
              f"mean ± 95% CI; LUC3D drift ≤ {drift:.3f} in every session\n"
-             f"ahead of every other tracker in {xwins}/{xn} sessions")
+             f"ahead of every tracker in {xwins}/{xn} sessions · c–g: SLAP-2M")
     save(fig, 7, "a", "within_vs_cross")
 
 

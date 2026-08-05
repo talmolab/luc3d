@@ -51,6 +51,25 @@ silently dropped. Exhaustive therefore never faced the frames that are hardest f
 association, which makes the agreement number, if anything, generous to it -- so
 both counts are on the artwork, not only the one that flatters the result.
 
+AND SO IS THE SAMPLE'S COMPOSITION, which is the part a ratio hides. "The same
+grouping on 99.999%" is a statement about a specific 137,266 frames, and those
+frames are not a cross-section of the problem:
+
+  * 61,026 of the 198,292 (30.8%) were SKIPPED, and not at random -- a frame is
+    skipped exactly when some camera does not hold `animals` non-null detections,
+    i.e. when an animal is occluded, missed or doubled. Those are precisely the
+    frames association finds hard, and exhaustive never saw one of them.
+  * 122,830 of the 137,266 that remain (89.5%) are the SAME configuration:
+    2 animals x 5 cameras, 32 hypotheses per frame -- the easiest cell in the
+    figure. Only 161 frames (0.12%) have 3 animals, and none have 4.
+
+So the honest reading is "on clean, almost-entirely-two-animal frames the greedy
+solve reaches the same answer", and the panel now says that rather than leaving it
+to this docstring: `COMPOSITION` is drawn inside the axes, in the empty upper-left
+quadrant, so it costs no layout height and cannot be separated from the headline it
+qualifies. It is derived from the per-config counts in the deposit (not typed in),
+so it cannot drift from the data the title is computed from.
+
 Source: figs/out/fig3_headtohead.json, figs/out/fig3_runtime.json `measured`.
 
     python3 figs/panels/fig3_06_head_to_head.py
@@ -64,7 +83,7 @@ from matplotlib.ticker import NullLocator
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (SALMON, TEAL, annotate_series, deposit,  # noqa: E402
+from src.style import (MUTED, SALMON, TEAL, annotate_series, deposit,  # noqa: E402
                        footnote, panel, save, use)
 
 #: Which corpus each runtime-bench session belongs to. `fig3_runtime.json` says
@@ -203,6 +222,30 @@ def main():
     annotate_series(ax, 0.06, 0.35, "exhaustive", SALMON, size=7, va="bottom")
     annotate_series(ax, len(df) - 0.6, 0.02, "LUC3D", TEAL, size=7, va="bottom",
                     ha="right")
+
+    # WHAT THE 137,266 FRAMES ACTUALLY ARE. The agreement rate in the title is a
+    # ratio, and a ratio hides its denominator's composition: 30.8% of the frames
+    # offered were skipped BECAUSE a camera was short of `animals` detections (the
+    # occluded ones -- the hard case for association), and 89.5% of what survived is
+    # one configuration, the cheapest in the figure. Without this the headline reads
+    # as a general result about greedy vs exhaustive.
+    #
+    # In the axes, not in the title or the footnote, for two reasons: the title is
+    # already at its 3-line width limit and a 4th footnote line would eat the plot
+    # (this y axis spans 9.5 decades in 25 mm, so ~2.6 mm of height costs a tick), and
+    # the upper-left quadrant is genuinely empty -- the exhaustive curve does not
+    # reach 10^3 s until x = 2.7 and the "10^n x" callout sits a decade below the
+    # block. Placed in axes fractions so it tracks the axes if the panel is resized.
+    skipped = int(df.frames_considered.sum() - df.frames_computed.sum())
+    big = df.loc[df.frames_computed.idxmax()]
+    share = big.frames_computed / df.frames_computed.sum()
+    n3 = int(df.loc[df.animals == 3, "frames_computed"].sum())
+    ax.text(0.012, 0.995,
+            f"{skipped:,} skipped as occluded\n"
+            f"{share:.0%} of the rest is {big.label}\n"
+            f"{n3:,} frames test 3 animals",
+            transform=ax.transAxes, ha="left", va="top", color=MUTED,
+            fontsize=6.5, linespacing=1.3)
 
     # The gap at the biggest configuration, which is the sentence the panel exists
     # to support. On the geometric midpoint, where both lines are far away.

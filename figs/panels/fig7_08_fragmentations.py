@@ -39,8 +39,22 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, INK, PERIWINKLE, deposit, panel, save,  # noqa: E402
+from src.style import (footnote, INK, entity, deposit, panel, save,  # noqa: E402
                        use)
+
+#: SLEAP's set-wide hue, via `entity()` rather than a local PERIWINKLE: this panel is
+#: read against 7d's "SLEAP ahead" half and 7e's SLEAP bar, so it must be the SAME
+#: periwinkle (review finding C3). Colour unchanged.
+SLEAP = entity("sleap")
+#: Panel height in mm, DECLARED rather than taken from `ROW_H["std"]` (52 mm). Every
+#: panel in this figure was 52 mm and none of them needed it: measured on the 300 dpi
+#: render this panel's ink spanned 49.4 of 52.1 mm, and the assembled page came to
+#: 196.3 mm with 19.3% of its scanlines carrying no ink at all (review findings 6.12 /
+#: C9). At 47 mm nothing is resized and no type is touched -- the axes just stops being
+#: taller than its content. It has to be the WHOLE figure: a row is as tall as its
+#: tallest panel, so shrinking one panel of a pair buys nothing.
+ROW_H = 47.0
+
 
 
 def main():
@@ -57,15 +71,15 @@ def main():
 
     # 38 mm: the narrowest slot on the column grid that fits the label. One paired
     # difference is one datum -- a wide panel would be white space.
-    fig, ax = panel(38.0, "std")
+    fig, ax = panel(38.0, ROW_H)
     ax.axhline(0, color=INK, lw=0.8, zorder=1)
-    # PERIWINKLE, matching 7d's "SLEAP ahead" half: colour carries who wins, and
+    # SLEAP's hue, matching 7d's "SLEAP ahead" half: colour carries who wins, and
     # SLEAP wins this one.
-    ax.plot([0, 0], [fp["ci95_lo"], fp["ci95_hi"]], color=PERIWINKLE, lw=1.2,
+    ax.plot([0, 0], [fp["ci95_lo"], fp["ci95_hi"]], color=SLEAP, lw=1.2,
             zorder=3)
-    ax.plot([0], [fp["mean"]], "o", color=PERIWINKLE, ms=6, mec="white", mew=1.0,
+    ax.plot([0], [fp["mean"]], "o", color=SLEAP, ms=6, mec="white", mew=1.0,
             zorder=4)
-    ax.plot([-0.16, 0.16], [fp["median"]] * 2, color=PERIWINKLE, lw=1.2, zorder=3)
+    ax.plot([-0.16, 0.16], [fp["median"]] * 2, color=SLEAP, lw=1.2, zorder=3)
 
     top = fp["ci95_hi"] * 1.62
     ax.set_xlim(-0.7, 0.7)
@@ -78,12 +92,12 @@ def main():
     # not beside their own marks: this panel is 38 mm wide, and a "median +14.1" set
     # to the right of the median rule ran off the page (the renderer drops the
     # overhang silently, so it has to be placed rather than caught).
-    ax.text(-0.66, top * 0.99, "LUC3D fragments more", color=PERIWINKLE, fontsize=6,
+    ax.text(-0.66, top * 0.99, "LUC3D fragments more", color=SLEAP, fontsize=6,
             fontweight="bold", va="top")
     ax.text(-0.66, top * 0.86,
             f"{fp['mean']:+.1f} [{fp['ci95_lo']:+.1f}, {fp['ci95_hi']:+.1f}]\n"
             f"median {fp['median']:+.1f}",
-            color=PERIWINKLE, fontsize=6, va="top", linespacing=1.35)
+            color=SLEAP, fontsize=6, va="top", linespacing=1.35)
     # INK, not GREY: this line IS the panel's finding, and GREY (#B3B3B3) is a
     # series colour at 2.1:1 on white -- too light to carry a result.
     ax.text(-0.66, -top * 0.15, f"SLEAP fewer in {n - luc_better} of {n}",

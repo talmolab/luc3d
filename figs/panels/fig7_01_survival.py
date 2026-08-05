@@ -18,7 +18,12 @@ WHAT THIS PANEL MEASURES IS NOT WHAT 7a MEASURES, and the figure previously gave
 reader no way to tell. 7a's "within view" is 0.749 -- BMimica, 50 sessions, 5
 cameras. This is SLAP-2M, 74 sessions, 6 cameras, where LUC3D's within-view mean is
 0.736. Two different quantities, both called within-view IDF1; the corpus and n are
-now on the panel.
+now on the panel, and BOTH DIRECTIONS OF THE POINTER ARE DRAWN -- `SLAP-2M corpus ·
+a is BMimica` heads the count block here, and 7a's footer carries `c-g: SLAP-2M`.
+One-sided labelling was the state that made 7.6 a finding: naming the corpus on the
+panel a reader happens to be looking at does nothing if the panel they are comparing
+it with is unlabelled, and the two numbers (0.749 vs 0.736) are close enough to read
+as one measurement rounded twice.
 
 BOTH MEAN AND MEDIAN ARE PRINTED, which the deposit asks for: `caveats` --
 "Corpus means are dragged by a heavy tail: LUC3D within-view IDF1 mean 0.736 vs
@@ -43,13 +48,30 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (MUTED, footnote, GREY, PERIWINKLE, SALMON, TEAL, deposit, panel,  # noqa: E402
+from src.style import (MUTED, entity, footnote, GREY, deposit, panel,  # noqa: E402
                        save, use)
 
-TRACKERS = [("luc3d", "LUC3D", TEAL), ("sleap", "SLEAP", PERIWINKLE),
-            ("bytetrack", "ByteTrack", SALMON)]
+#: Hues from `entity()`, not picked here: these three trackers recur across five of
+#: this figure's seven panels and across Figs 3-5, so one hue must mean one tracker
+#: set-wide (review finding C3). The colours are unchanged; the mapping now has one
+#: home instead of seven.
+TRACKERS = [("luc3d", "LUC3D", entity("luc3d")),
+            ("sleap", "SLEAP", entity("sleap")),
+            ("bytetrack", "ByteTrack", entity("bytetrack"))]
 MARK = 0.9
 N_CAMERAS = 6
+#: The corpus, stated as a header over the in-axes count block. See the comment at
+#: its `ax.text` for why it is there and not on a fourth footer line.
+CORPUS = "SLAP-2M corpus · a is BMimica"
+#: Panel height in mm, DECLARED rather than taken from `ROW_H["std"]` (52 mm). Every
+#: panel in this figure was 52 mm and none of them needed it: measured on the 300 dpi
+#: render this panel's ink spanned 49.4 of 52.1 mm, and the assembled page came to
+#: 196.3 mm with 19.3% of its scanlines carrying no ink at all (review findings 6.12 /
+#: C9). At 47 mm nothing is resized and no type is touched -- the axes just stops being
+#: taller than its content. It has to be the WHOLE figure: a row is as tall as its
+#: tallest panel, so shrinking one panel of a pair buys nothing.
+ROW_H = 47.0
+
 
 
 def main():
@@ -64,7 +86,7 @@ def main():
     # "half", not "third": at a third of the page this panel could not carry its own
     # corpus label, and the row it shares with 7d used 149 of 180 mm, so the width
     # was free. Both panels in the row are now 88 mm and their axes line up.
-    fig, ax = panel("half", "std")
+    fig, ax = panel("half", ROW_H)
     for key, label, color in TRACKERS:
         v = np.sort(np.asarray(wv[key]["per_session"]))
         n = len(v)
@@ -91,6 +113,23 @@ def main():
                 f"{label}  {int((v >= MARK).sum())}/{len(v)} · {am[key]}/{n_cs}",
                 transform=ax.transAxes, ha="left", color=color, fontsize=7,
                 fontweight="bold")
+    # THE CORPUS, AS A HEADER OVER THAT BLOCK, and it is load-bearing rather than
+    # provenance boilerplate. 7a's "within view" is 0.749 and this curve is centred
+    # near 0.90; both are called within-view IDF1 and they are DIFFERENT quantities
+    # (a: BMimica, 50 sessions, C = 5; here: SLAP-2M, 74 sessions, C = 6). The footer
+    # already names SLAP-2M, but a reader reads a number where it is printed, and the
+    # counts in this block are the numbers a reader compares against a. So the
+    # contrast is stated at the block, in MUTED so it reads as a label for the three
+    # coloured lines under it rather than a fourth series.
+    #
+    # HERE AND NOT ON A FOURTH FOOTER LINE: `footnote` folds into the x label, so a
+    # fourth line costs ~3.2 mm out of this panel's plot. This corner is free -- every
+    # curve starts near 100% and falls rightwards, and at 6.5 pt the string measures
+    # 33.9 mm against the ~46 mm of clear width before the ByteTrack step reaches
+    # this height, so it lands on nothing. Measured, not assumed; `lint_text.py`'s
+    # on-data check is the backstop.
+    ax.text(0.03, 0.31, CORPUS, transform=ax.transAxes, ha="left", va="baseline",
+            color=MUTED, fontsize=6.5)
     ax.text(MARK - 0.015, 96, f"IDF1 ≥ {MARK}", color=MUTED, fontsize=7, ha="right",
             rotation=90, va="top")
 

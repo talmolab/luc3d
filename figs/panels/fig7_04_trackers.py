@@ -32,11 +32,14 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, INK, PERIWINKLE, SALMON, TEAL, deposit, panel,  # noqa: E402
+from src.style import (footnote, GREY, INK, entity, deposit, panel,  # noqa: E402
                        save, use)
 
-TRACKERS = [("luc3d", "LUC3D", TEAL), ("sleap", "SLEAP", PERIWINKLE),
-            ("bytetrack", "ByteTrack", SALMON)]
+#: Hues from `entity()` -- one hue per tracker set-wide (review finding C3),
+#: unchanged colours.
+TRACKERS = [("luc3d", "LUC3D", entity("luc3d")),
+            ("sleap", "SLEAP", entity("sleap")),
+            ("bytetrack", "ByteTrack", entity("bytetrack"))]
 
 
 def main():

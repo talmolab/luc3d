@@ -36,13 +36,25 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, PERIWINKLE, SALMON, TEAL, deposit, panel, save,  # noqa: E402
+from src.style import (footnote, entity, deposit, panel, save,  # noqa: E402
                        text_legend, use)
 
-TRACKERS = [("luc3d", "LUC3D", TEAL), ("sleap", "SLEAP", PERIWINKLE),
-            ("bytetrack", "ByteTrack", SALMON)]
+#: Hues from `entity()` -- one hue per tracker across the whole set, resolved in one
+#: place instead of re-picked per panel (review finding C3). Colours unchanged.
+TRACKERS = [("luc3d", "LUC3D", entity("luc3d")),
+            ("sleap", "SLEAP", entity("sleap")),
+            ("bytetrack", "ByteTrack", entity("bytetrack"))]
 TERMS = [("false_positives", "false positives"), ("id_switches", "ID switches")]
 BAR_W = 0.26
+#: Panel height in mm, DECLARED rather than taken from `ROW_H["std"]` (52 mm). Every
+#: panel in this figure was 52 mm and none of them needed it: measured on the 300 dpi
+#: render this panel's ink spanned 50.0 of 52.1 mm, and the assembled page came to
+#: 196.3 mm with 19.3% of its scanlines carrying no ink at all (review findings 6.12 /
+#: C9). At 47 mm nothing is resized and no type is touched -- the axes just stops being
+#: taller than its content. It has to be the WHOLE figure: a row is as tall as its
+#: tallest panel, so shrinking one panel of a pair buys nothing.
+ROW_H = 47.0
+
 
 
 def main():
@@ -56,7 +68,7 @@ def main():
 
     # 80 mm rather than a half: this row now carries three panels (e, f, g) and the
     # six exact counts need the width. At 88 mm the row would not fit 180 mm.
-    fig, ax = panel(80.0, "std", key=1)
+    fig, ax = panel(80.0, ROW_H, key=1)
     top = max(ed[k]["false_positives"] for k, _, _ in TRACKERS) * 1.30
     x = np.arange(len(TERMS))
     for i, (k, lab, color) in enumerate(TRACKERS):

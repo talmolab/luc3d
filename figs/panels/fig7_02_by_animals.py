@@ -54,8 +54,23 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, INK, PERIWINKLE, TEAL, deposit, panel, save,  # noqa: E402
+from src.style import (footnote, GREY, INK, entity, deposit, panel, save,  # noqa: E402
                        use)
+
+#: The two entities this panel contrasts. `entity()` rather than a local TEAL /
+#: PERIWINKLE: the sign of the difference is encoded in the two trackers' own set-wide
+#: hues, so teal here MUST be the same teal as 7a's LUC3D and 7e's LUC3D bar, and
+#: periwinkle the same SLEAP (review finding C3). Colours unchanged.
+LUC3D, SLEAP = entity("luc3d"), entity("sleap")
+#: Panel height in mm, DECLARED rather than taken from `ROW_H["std"]` (52 mm). Every
+#: panel in this figure was 52 mm and none of them needed it: measured on the 300 dpi
+#: render this panel's ink spanned 50.0 of 52.1 mm, and the assembled page came to
+#: 196.3 mm with 19.3% of its scanlines carrying no ink at all (review findings 6.12 /
+#: C9). At 47 mm nothing is resized and no type is touched -- the axes just stops being
+#: taller than its content. It has to be the WHOLE figure: a row is as tall as its
+#: tallest panel, so shrinking one panel of a pair buys nothing.
+ROW_H = 50.0
+
 
 
 def sign_p(pos, n):
@@ -85,11 +100,11 @@ def main():
     m_wins = sum(1 for v in multi if v > 0)
     m_p = sign_p(m_wins, len(multi))
 
-    fig, ax = panel("half", "std")
+    fig, ax = panel("half", ROW_H)
     x = np.arange(len(df))
     ax.axhline(0, color=INK, lw=0.8, zorder=1)
     for i, r in df.iterrows():
-        color = TEAL if r["mean"] > 0 else PERIWINKLE
+        color = LUC3D if r["mean"] > 0 else SLEAP
         ax.plot([i, i], [r.ci95_lo, r.ci95_hi], color=color, lw=1.2, zorder=3)
         ax.plot([i], [r["mean"]], "o", color=color, ms=6, mec="white", mew=1.0,
                 zorder=4)
@@ -113,9 +128,9 @@ def main():
     lim = max(df.ci95_hi.max(), -df.ci95_lo.min()) * 1.9
     ax.set_ylim(-lim, lim)
     ax.text(0.98, 0.96, "LUC3D ahead", transform=ax.transAxes, ha="right",
-            va="top", color=TEAL, fontsize=6.5, fontweight="bold")
+            va="top", color=LUC3D, fontsize=6.5, fontweight="bold")
     ax.text(0.98, 0.04, "SLEAP ahead", transform=ax.transAxes, ha="right",
-            va="bottom", color=PERIWINKLE, fontsize=6.5, fontweight="bold")
+            va="bottom", color=SLEAP, fontsize=6.5, fontweight="bold")
 
     # TWO BRACKETS AND TWO NOTES, in the empty band below the data: one over the
     # 1-animal cell saying why its +0.141 cannot be a cross-view result, one over the

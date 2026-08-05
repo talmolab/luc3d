@@ -40,12 +40,26 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, PERIWINKLE, SALMON, TEAL, deposit, panel,  # noqa: E402
+from src.style import (footnote, GREY, entity, deposit, panel,  # noqa: E402
                        save, use)
 
-TRACKERS = [("luc3d", "LUC3D", TEAL), ("sleap", "SLEAP", PERIWINKLE),
-            ("bytetrack", "ByteTrack", SALMON)]
+#: Hues from `entity()` -- one hue per tracker set-wide, resolved in one place rather
+#: than re-picked in each of the seven panels (review finding C3). Unchanged colours.
+#: The detector-recall control below stays GREY on purpose: it is not a tracker, and
+#: GREY is this set's colour for a reference level rather than a method.
+TRACKERS = [("luc3d", "LUC3D", entity("luc3d")),
+            ("sleap", "SLEAP", entity("sleap")),
+            ("bytetrack", "ByteTrack", entity("bytetrack"))]
 CONDS = ["black", "white"]
+#: Panel height in mm, DECLARED rather than taken from `ROW_H["std"]` (52 mm). Every
+#: panel in this figure was 52 mm and none of them needed it: measured on the 300 dpi
+#: render this panel's ink spanned 50.0 of 52.1 mm, and the assembled page came to
+#: 196.3 mm with 19.3% of its scanlines carrying no ink at all (review findings 6.12 /
+#: C9). At 47 mm nothing is resized and no type is touched -- the axes just stops being
+#: taller than its content. It has to be the WHOLE figure: a row is as tall as its
+#: tallest panel, so shrinking one panel of a pair buys nothing.
+ROW_H = 47.0
+
 BAR_W = 0.34
 
 
@@ -64,7 +78,7 @@ def main():
                    [bb[c]["detector_recall"] for c in CONDS]))
 
     rows = []
-    fig, ax = panel("half", "std")
+    fig, ax = panel("half", ROW_H)
     x = np.arange(len(groups))
     for i, (lab, color, ys) in enumerate(groups):
         # Solid = black bedding, open = white bedding. The fills are a mnemonic for
