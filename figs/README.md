@@ -432,16 +432,32 @@ about what is *in* these datasets. Replace with:
 * **b** — real multi-camera screenshots with instance overlays, contrasting difficulty:
   white bedding + white mice against black bedding + agouti/black mice, which is what
   actually makes a session hard.
-* **c** — **reprojection error by difficulty**, the informative metric. Available from
-  `luc3d-bench/outputs/_multi_master.tsv`: 42 SLAP-2M sessions with `difficulty` 2–7
-  (13 at 7, 10 each at 2 and 4), `bedding` (black 23 / white 19), `animals` (2: 35,
-  3: 4, 4: 3), `obstacle_rating` 0–5, coat-colour counts, and precomputed per-camera
-  `*_reproj_h5`. Stratify by difficulty, and by bedding-vs-coat contrast.
+* **c** — **reprojection error by difficulty**, the informative metric.
 * **d** — stats table organised BY DIFFICULTY STRATUM rather than one flat corpus row.
 
-`fig6_measure.py` / `fig6_pose.py` / `fig6.py` are kept for the corpus totals
-(130 sessions, 12,039,174 frames, 29.5 h) which are still wanted for the text, but
-the panel layout is superseded.
+**THREE DEPOSITS DESCRIBE "difficulty", AND THEY ARE NOT THE SAME MEASUREMENT.** This
+block used to quote one of them without saying which, which is how an adversarial
+review came to read it as stale. It is not stale — it described a source the figure has
+since stopped using. Both facts matter, so both are recorded:
+
+| deposit | n | difficulty | bedding | what it measures |
+|---|---|---|---|---|
+| `fig6_detections.json` | **74** | **1–7** (12/13/9/13/10/4/13) | — | the benchmark's shared identity-stripped **raw detections** vs the proofread 3D reprojected into each camera. **This is what panels c, d and f read.** |
+| `fig6_difficulty.json` | 42 | 2–7 (13 at 7, 10 each at 2 and 4) | black 23 / white 19 | **proofread labels** vs the same reference — i.e. the reconstruction's own 2D→3D residual. Legacy called this a "circular comparison" and used it only as a fallback. |
+| `fig3_trackers.json slap2m.by_bedding` | 74 | — | black 44 / white 30 | tracker IDF1 by bedding. **This is what Fig 7b reads.** |
+
+The two 74-session tables disagree on the 2-animal miss rate by ~50 % (21.95 % vs
+33.19 %) and that gap is a **result**, not an inconsistency to reconcile: the raw
+detector misses far more than the residual path suggests, which is what you expect when
+the residual path cannot see a detection that never fired. `fig6_07_animal_count.py`'s
+docstring records the reasoning for reading `fig6_detections.json`.
+
+Both `_multi_master.tsv` fields the original plan wanted — `obstacle_rating` 0–5 and the
+coat-colour counts — are still unused by any panel.
+
+`fig6_measure.py` / `fig6_pose.py` are kept for the corpus totals (130 sessions,
+12,039,174 frames, 29.5 h) which are still wanted for the text; `legacy/fig6.py`'s panel
+layout is superseded.
 
 ## Open## Open
 
