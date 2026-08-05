@@ -1,9 +1,9 @@
-,Install,Runs in,Multi-animal,Multi-camera 3D,Cross-view ID,3D proofreading
-LUC3D (this work),none,browser,True,True,True,True
-SLEAP,conda/pip,desktop,True,sleap-anipose,False,2D only
-Label3D,MATLAB,desktop,1 animal,True,False,True
-JARVIS (HybridNet),conda/pip,desktop,1 animal,True,False,reproj. error
-Lightning Pose,pip,browser + CLI,1 animal,multi-view losses,False,False
-DeepLabCut,conda/pip,desktop,True,"1 animal, pairwise",False,False
-Anipose,conda/pip,CLI,False,True,False,False
-DANNCE / SDANNCE,conda/pip,CLI + MATLAB,True,True,False,False
+,No installation,Browser-based,Multi-animal,Multi-camera 3D,Cross-view ID,3D proofreading
+LUC3D (this work),True,True,True,True,True,True
+SLEAP,False,False,True,sleap-anipose,False,2D only
+Label3D,False,False,False,True,False,True
+JARVIS (HybridNet),False,False,False,True,False,reproj. error
+Lightning Pose,False,True,False,multi-view losses,False,False
+DeepLabCut,False,False,True,pairwise,False,False
+Anipose,False,False,False,True,False,False
+DANNCE / SDANNCE,False,False,True,True,False,False

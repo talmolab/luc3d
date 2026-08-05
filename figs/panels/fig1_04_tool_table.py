@@ -105,7 +105,11 @@ def main():
     nrow, ncol = len(TOOLS), len(COLS)
     # Column widths in axes units, sized to the longest string each column carries
     # plus a gutter. Every column previously overflowed into its neighbour.
-    widths = [0.205, 0.105, 0.135, 0.125, 0.165, 0.150, 0.115]
+    # Columns 1-2 carry the two longest HEADERS in the table ("No installation",
+    # "Browser-based") over the shortest cells (a tick or a dash), so they are sized
+    # by their headers, not their contents -- at the old widths the two headers ran
+    # into each other.
+    widths = [0.185, 0.150, 0.140, 0.120, 0.155, 0.135, 0.115]
     x0 = [sum(widths[:i]) for i in range(ncol)]
 
     def u(pt):

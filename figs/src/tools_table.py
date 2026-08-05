@@ -13,6 +13,11 @@ Cells are deliberately CONSERVATIVE: an unsupported "yes" and an unsupported "no
 are both over-claims. Where a tool does a weaker version of a thing, the cell says
 which weaker version rather than collapsing to True/False.
 
+A DASH MEANS "NOT A DOCUMENTED FEATURE", not "impossible". Several tools previously
+carried the string "1 animal" in the Multi-animal column; that read as a positive
+claim about a capability their docs do not describe, so it is now a dash like any
+other absent feature.
+
   SLEAP        multi-camera 3D is real but lives OUTSIDE the GUI, in sleap-io's
                RecordingSession/FrameGroup/InstanceGroup (the SLP 2.8
                /session_data LUC3D itself writes) plus sleap-anipose. There is no
@@ -45,8 +50,17 @@ which weaker version rather than collapsing to True/False.
                implementation and the quantification are. No 3D viewport is
                documented, and simultaneous multi-subject capture is not documented
                either.
-  DeepLabCut   the 3D module triangulates ONE animal from camera PAIRS; 2D
-               multi-animal (maDLC) is separate from it.
+  DeepLabCut   CORRECTED 2026-08-05. The cell used to read "1 animal, pairwise";
+               the multi-animal half was wrong. `docs/Overviewof3D` states "We also
+               support multi-animal 3D with this code" and that "single animal
+               DeepLabCut and multi-animal DeepLabCut (maDLC) projects are
+               supported", so multi-animal is a tick and the 3D cell no longer says
+               "1 animal". What IS still true is the pair limit: "Currently,
+               DeepLabCut supports triangulation using 2 cameras, but will expand to
+               more than 2 cameras in a future version", and the docs point users at
+               anipose or AcinoSet beyond two. Hence "pairwise" -- a real restriction
+               for a rig of five or eight cameras, and the reason it is not a plain
+               tick.
   Anipose      single-animal pipeline, CLI-driven.
   DANNCE       both DANNCE and SDANNCE infer 3D directly from image volumes, so
                there is no per-view 2D track set to associate -- the "-" in
@@ -58,8 +72,11 @@ which weaker version rather than collapsing to True/False.
                cloud-native open-source tools", Nat Methods 21, 1316-1328 (2024).
                Two cells need care and BOTH are hedged deliberately:
                * Multi-animal -- the docs describe "single-animal pose estimation"
-                 and multi-animal is not a documented feature, so "1 animal", the
-                 same treatment Label3D and JARVIS get.
+                 and multi-animal is not a documented feature, so a dash.
+               * 3D proofreading -- a dash. The "Unified Multi-view Viewer" inspects
+                 and compares predictions across all camera views, but that is 2D per
+                 view; no 3D viewport and no 3D correction is documented. Checked
+                 2026-08-05.
                * Multi-camera 3D -- the multi-view support is documented as
                  "Multiview: mirrored or fused frames" / "separate data streams"
                  with multi-view consistency and triangulation LOSSES and
@@ -74,23 +91,27 @@ which weaker version rather than collapsing to True/False.
 """
 
 NEEDS_CHECK = True
-CHECK_DATE = "2026-08-04"
+CHECK_DATE = "2026-08-05"
 
-COLS = ["", "Install", "Runs in", "Multi-animal", "Multi-camera 3D",
+#: "No installation" and "Browser-based" replace the old free-text "Install" and
+#: "Runs in" columns. They ask the two questions a reader actually has -- can I use
+#: this without installing anything, and does it run in a browser -- as booleans that
+#: can be scanned down a column, instead of strings ("conda/pip", "desktop",
+#: "browser + CLI") that have to be read and compared one at a time. The two are NOT
+#: the same question, which is the point: Lightning Pose serves a browser GUI but you
+#: must pip-install it first, so it is a tick in one column and a dash in the other.
+COLS = ["", "No installation", "Browser-based", "Multi-animal", "Multi-camera 3D",
         "Cross-view ID", "3D proofreading"]
 
-#: name, install, runs in, multi-animal, multi-cam 3D, cross-view ID, 3D proofreading
+#: name, no-install, browser-based, multi-animal, multi-cam 3D, cross-view ID,
+#: 3D proofreading
 TOOLS = [
-    ("LUC3D (this work)",  "none",       "browser",       True,       True,  True,  True),
-    ("SLEAP",              "conda/pip",  "desktop",       True,       "sleap-anipose",
-     False, "2D only"),
-    ("Label3D",            "MATLAB",     "desktop",       "1 animal", True,  False, True),
-    ("JARVIS (HybridNet)", "conda/pip",  "desktop",       "1 animal", True,  False,
-     "reproj. error"),
-    ("Lightning Pose",     "pip",        "browser + CLI", "1 animal",
-     "multi-view losses", False, False),
-    ("DeepLabCut",         "conda/pip",  "desktop",       True,       "1 animal, pairwise",
-     False, False),
-    ("Anipose",            "conda/pip",  "CLI",           False,      True,  False, False),
-    ("DANNCE / SDANNCE",   "conda/pip",  "CLI + MATLAB",  True,       True,  False, False),
+    ("LUC3D (this work)",  True,  True,  True,  True,  True,  True),
+    ("SLEAP",              False, False, True,  "sleap-anipose", False, "2D only"),
+    ("Label3D",            False, False, False, True,  False, True),
+    ("JARVIS (HybridNet)", False, False, False, True,  False, "reproj. error"),
+    ("Lightning Pose",     False, True,  False, "multi-view losses", False, False),
+    ("DeepLabCut",         False, False, True,  "pairwise", False, False),
+    ("Anipose",            False, False, False, True,  False, False),
+    ("DANNCE / SDANNCE",   False, False, True,  True,  False, False),
 ]
