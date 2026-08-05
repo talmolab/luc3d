@@ -29,9 +29,10 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load, median  # noqa: E402
-from src.style import MUTED, GREY, PERIWINKLE, TEAL, deposit, panel, save, use  # noqa: E402
+from src.style import MUTED, deposit, entity, panel, save, use  # noqa: E402
 
-DLT_C, REF_C = PERIWINKLE, TEAL
+#: Set-wide entity colours -- see the note in `fig4_01_solvers.py`.
+DLT_C, REF_C = entity("dlt"), entity("refined")
 GROUPS = [("reproj_p50", "cameras it used", "(enforced)"),
           ("heldout_p50", "a camera it never saw", None)]
 

@@ -30,10 +30,12 @@ import seaborn as sns
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (grid, GREY, PERIWINKLE, TEAL, deposit, footnote,  # noqa: E402
+from src.style import (MUTED, grid, GREY, deposit, entity, footnote,  # noqa: E402
                        save, text_legend, use)
 
-DLT_C, REF_C = PERIWINKLE, TEAL
+#: Set-wide entity colours, not a local pick -- see the note in `fig4_01_solvers.py`.
+#: DLT was periwinkle here, which is SLEAP's hue in Fig 7.
+DLT_C, REF_C = entity("dlt"), entity("refined")
 
 
 def build() -> pd.DataFrame:
@@ -76,6 +78,21 @@ def main():
     ax.set_ylim(0, None)
     text_legend(ax, [("DLT", DLT_C), ("refined", REF_C)], "above right", dy=0.16)
 
+    # THE MAGNITUDE, PRINTED WITH THE LEVELS RATHER THAN WITH THE STRIP. This is the
+    # antidote to the strip's own rescaling: the strip has to rescale (the sign flip is
+    # invisible on a 0-based axis, which is why it exists), but rescaling is also what
+    # lets a 0.06 px bar fill a panel, so a reader who reads only the strip sees a
+    # large effect. The number the strip cannot show is the ratio to the thing being
+    # compared -- worst case |Δ| = 0.14 px where the level is 3-4 px, i.e. <= 4% -- and
+    # it belongs up here, beside the levels, where it is read BEFORE the strip. The
+    # bottom half of this axes is empty at every camera count (the curves never come
+    # below 2.9 px on a 0-4.3 axis), which is the only free space in the panel; the
+    # strip's own footnote is already at the three lines that fit.
+    ax.text(0.03, 0.30, f"the two differ by ≤ {df.delta_p50.abs().max():.2f} px\n"
+                        f"at every camera count",
+            transform=ax.transAxes, color=MUTED, fontsize=6.5, ha="left", va="top",
+            linespacing=1.4)
+
     strip.axhline(0, color=GREY, lw=0.8, ls=(0, (3, 2)), zorder=1)
     for _, r in df.iterrows():
         # Each bar takes the WINNER's colour, so the sign flip reads without a key.
@@ -96,6 +113,10 @@ def main():
     # comparison with one dot per session, and it is the one to read for spread.
     # Lines wrap at ~32 characters: a 37-character first line ran off the page, and
     # the linter's `truncated()` check catches that, so keep them short.
+    # A FOURTH LINE DOES NOT FIT: it shortens both axes enough that the strip's own
+    # ±0.1 ticks collide and the DLT/refined key lands on the curves. The magnitude
+    # relative to the level -- the one thing this footnote was missing -- is printed in
+    # the axes above instead, where there is empty paper.
     footnote(strip, "Δ = refined − DLT, pooled\n"
                     "over n=1,417,879 keypoints\n"
                     "session-level spread: panel e")

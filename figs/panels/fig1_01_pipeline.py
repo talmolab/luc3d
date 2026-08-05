@@ -45,6 +45,32 @@ STAGES = [
 #: see `main()` for why the label is no longer inside the chevron.
 W, H, GAP, NOTCH = 2.05, 1.05, 0.36, 0.24
 
+#: Vertical extent of the drawing, in data units, cut to the INK. Top: the chevron's
+#: top edge at H/2 plus half of its 1.1 pt stroke (0.02 units). Bottom: the baseline
+#: of the "this work" label, which sits at about -2.10 -- measured off the render, not
+#: guessed. The panel used to declare (-2.22, H/2 + 0.30), i.e. 0.28 units of pure
+#: white above the chevrons, which is 2.8 mm of the figure at the scale below.
+YLIM = (-2.20, H / 2 + 0.06)
+
+#: Millimetres per data unit. THIS, NOT THE PANEL HEIGHT, IS THE FIXED QUANTITY.
+#: `blank()` sets aspect='equal' and the drawing is 14.8 units wide against 2.8 tall,
+#: so 180 mm of width is never the constraint: the axes is HEIGHT-bound and the scale
+#: is axes_height / (YLIM range). Every chevron, icon, arrow and bracket therefore
+#: prints at (panel height) x (this scale) -- but the TEXT does not, because fontsize
+#: is in points. So shrinking the panel closes the gaps BETWEEN the label lines in
+#: millimetres while the type stays 7.5/6.5 pt, and at the old 32 mm the sub-label
+#: baseline already cleared the two-line labels ("videos + / calibration") by only
+#: 0.6 mm. The height is consequently derived from the scale and the ink, and the
+#: only thing that came out of it is dead margin. 9.85 is the value the 32 mm version
+#: rendered at, so the marks print at exactly the size they did before.
+MM_PER_UNIT = 9.85
+#: constrained_layout's outer pad, in mm. Nothing is drawn outside the axes here, and
+#: the assembler already leaves 4.5 mm of lead above every row for the panel letter,
+#: so the default 1.06 mm on each side is 2.1 mm of dead figure.
+PAD_MM = 0.35
+#: Panel height in mm: the ink, at the scale above, plus the outer pad. Was 32.0.
+ROW_MM = MM_PER_UNIT * (YLIM[1] - YLIM[0]) + 2 * PAD_MM
+
 
 
 def chevron(ax, x, y, ours):
@@ -58,7 +84,10 @@ def chevron(ax, x, y, ours):
 
 def main():
     use()
-    fig, ax = grid(1, 1, span="full", row=32.0, despine=False)
+    fig, ax = grid(1, 1, span="full", row=ROW_MM, despine=False)
+    # `w_pad`/`h_pad` are INCHES. Trimmed to PAD_MM because the axes holds every mark
+    # this panel draws -- there is no tick label or title outside it to make room for.
+    fig.get_layout_engine().set(w_pad=PAD_MM / 25.4, h_pad=PAD_MM / 25.4)
     blank(ax)
 
     for i, (label, sub, ours, kind) in enumerate(STAGES):
@@ -97,7 +126,7 @@ def main():
     span = len(STAGES) * (W + GAP) - GAP
 
     ax.set_xlim(-0.35, span + 0.35)
-    ax.set_ylim(-2.22, H / 2 + 0.30)
+    ax.set_ylim(*YLIM)
     save(fig, 1, "a", "pipeline")
 
 

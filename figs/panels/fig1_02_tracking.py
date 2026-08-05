@@ -33,10 +33,37 @@ cam 7 was scaled by its 707 px WIDTH, printing its animals ~40% smaller than the
 need to be.
 
 THE LEDGER IS THE RESULT, and it is printed under the tiles rather than left to the
-caption: 26 per-camera track labels across 8 views collapse to 3 identities, with 24
-of 26 detections assigned. The 2 unassigned are named in `fig1.json` (`ledger.
-unassigned`) -- a partially-occluded animal in Camera3_sideC and Camera7_sideR --
-and the panel does not pretend the assignment is total.
+caption. It is one line and every number in it is a different quantity, so each is
+named for what it actually counts:
+
+  26 DETECTIONS, not "26 labels". A per-camera track label is a (camera, track) pair
+  -- `track_89` in cam 0 and `track_89` in cam 5 are two unrelated labels, because
+  the tracker numbers each view independently -- so 26 IS the number of things a
+  reader would have to reconcile by hand. But there are only 22 distinct label
+  STRINGS, and an earlier version of this line printed 26 and called it a label
+  count, which a reader who counts strings in the data cannot reproduce. Both
+  numbers are now on the artwork and both are in `fig1b_reid_ledger.csv`.
+
+  22 DISTINCT TRACK NAMES, 3 of them reused across cameras: `track_127` in cams 1
+  and 4, `track_89` in cams 0 and 5, `track_93` in cams 5, 6 and 7 (`ledger.
+  collidingNames`). Those coincidences are not correspondence -- they are a shared
+  counter -- and `track_127` is a different animal in cam 1 than in cam 4. So the
+  reuse strengthens the panel's claim rather than qualifying it: a label string does
+  not even identify an animal within one rig.
+
+  3 IDENTITIES, ONE PER ANIMAL IN EVERY VIEW. Checked, not asserted: the clause is
+  printed only when `ledger.viewsMissingAnIdentity` is empty AND
+  `assigned == identities x cameras` (24 = 3 x 8 here).
+
+  2 EXTRA DETECTIONS UNASSIGNED -- and they are EXTRA, not missing. An earlier
+  version of this docstring called them "a partially-occluded animal in
+  Camera3_sideC and Camera7_sideR", which contradicts the deposit: no view is
+  missing an animal (`viewsMissingAnIdentity == []`, and every one of the 8 views
+  carries all three identities). What cam 3 and cam 7 have is a FOURTH detection
+  (`track_226`, 14 nodes; `track_95`, 9 nodes) in a frame with three animals, and
+  re-ID's per-view assignment is one-to-one, so the surplus detection is deliberately
+  left over. That is what the `?` on the artwork marks: a detection with no identity,
+  not an animal with no detection.
 
 EVERY ANIMAL CARRIES ITS OWN LABEL, and without them the panel does not make its
 claim. The left pair is meant to show that the tracker's labels are PER CAMERA and
@@ -213,11 +240,17 @@ def main():
     j = load("fig1.json")
     led = j["ledger"]
 
-    # Deposit the ledger, so the numbers printed on the artwork are auditable.
+    # Deposit the ledger, so the numbers printed on the artwork are auditable. Every
+    # number in the printed line has a column here, including the reuse count and the
+    # reused names themselves -- the artwork says "3 reused across cameras" and a
+    # reader has to be able to check WHICH three.
     deposit(pd.DataFrame([{
         "detections": led["detections"], "distinct_track_names": led["distinctNames"],
+        "names_reused_across_cameras": len(led["collidingNames"]),
+        "reused_names": " ".join(led["collidingNames"]),
         "identities": led["identities"], "assigned": led["assigned"],
         "unassigned": len(led["unassigned"]), "cameras": j["stats"]["nCameras"],
+        "views_missing_an_identity": len(led["viewsMissingAnIdentity"]),
     }]), 1, "fig1b_reid_ledger.csv")
 
     tiles = []
@@ -347,11 +380,27 @@ def main():
     fig.text(0.994, 0.912, f"2 of {j['stats']['nCameras']} views", ha="right",
              va="bottom", color=MUTED, fontsize=7)
 
-    fig.text(0.5, 0.043,
-             f"{led['detections']} per-camera track labels in {j['stats']['nCameras']} "
-             f"views → {led['identities']} identities, one per animal in every view "
-             f"({led['assigned']} of {led['detections']} assigned)",
-             ha="center", va="center", color=MUTED, fontsize=7)
+    # THE LEDGER LINE. Each quantity is named for what it counts -- see the module
+    # docstring for why 26 is a DETECTION count and 22 a LABEL-STRING count, and why
+    # the 2 left over are EXTRA detections rather than a missing animal.
+    #
+    # "one per animal in every view" is CHECKED here, not asserted: it is the
+    # strongest claim on the line, and the deposit already carries what settles it.
+    # If a future run leaves a view short, the clause has to disappear rather than
+    # print a falsehood.
+    ncam = j["stats"]["nCameras"]
+    total = led["identities"] * ncam
+    every_view = not led["viewsMissingAnIdentity"] and led["assigned"] == total
+    extra = len(led["unassigned"])
+    line = (f"{led['detections']} detections in {ncam} views carry "
+            f"{led['distinctNames']} distinct track names "
+            f"({len(led['collidingNames'])} reused across cameras) → "
+            f"{led['identities']} identities")
+    line += (", one per animal in every view" if every_view
+             else f", {led['assigned']} of {led['detections']} detections assigned")
+    if extra:
+        line += f"; {extra} extra detection{'s' if extra != 1 else ''} unassigned"
+    fig.text(0.5, 0.043, line, ha="center", va="center", color=MUTED, fontsize=7)
     save(fig, 1, "b", "tracking")
 
 

@@ -20,10 +20,23 @@ C = 6, 7, 8 are. Two earlier drafts got this wrong in the same way and each time
 fix was too small: the first drew markers out to C = 8, and the second drew them at
 C = 2, 3, 4, 5 inside a band labelled "p measured, C <= 5", which reads as FOUR
 measured rig sizes and puts a spurious boundary at C = 5. Both the band and the
-extra markers are gone. There is now exactly one filled marker per curve, at C = 5,
-because there is exactly one measurement; every other point on both curves is a
-model, and the note in the top-left corner says so without dividing the axes into
+extra markers are gone. There is now exactly ONE filled marker on the panel, at
+C = 5 on the aided curve, because that is the one place a measurement exists; every
+other point on either curve is a model, and the note in the top-left corner says so
+in those words -- "Both curves are a model" -- without dividing the axes into
 regions. The ratio is quoted at that measured rig size and nowhere else.
+
+THE TWO CURVES ARE NOT THE SAME KIND OF CLAIM AND ARE NOT DRAWN THE SAME WAY.
+`traditional = C x 15` is a PREMISE -- that a labeller places every node in every
+view -- and nothing about it was measured at any C, not even at C = 5. The aided
+curves carry a correction rate measured on real held-out views. Until this pass both
+got a 2.0 pt stroke and a white-ringed marker at C = 5, so the assumption borrowed
+the measurement's authority and no reader could have told which was which. The
+assumed curve is now lighter (1.4 pt), LONG-dashed (so it reads as a different kind
+of line from the short-dashed tau = 5 px curve rather than as its sibling), carries
+NO marker, is named "traditional (assumed)" in the key, and has its premise spelled
+out under the axis as the identity it is: "assumed: 15 nodes x C views". Four
+signals for one distinction, because at 57 mm any one of them alone is missable.
 
 Every integer C is ticked. C is a count of cameras, not a continuum, and with only
 `2, 4, 6, 8` ticked the single measured marker at C = 5 sat between two ticks and the
@@ -42,8 +55,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load, median  # noqa: E402
-from src.style import (MUTED, GREY, INK, SALMON, TEAL, deposit, panel, save,  # noqa: E402
-                       text_legend, use)
+from src.style import (MUTED, GREY, INK, SALMON, TEAL, deposit, footnote,  # noqa: E402
+                       panel, save, text_legend, use)
 
 NODES = 15          # per-animal skeleton
 CMAX = 8            # model out to an 8-camera rig
@@ -91,22 +104,32 @@ def main():
     # 0.052 stack pitch is 7.7 pt against a 8.9 pt glyph box, so at key=2 the lines
     # overlapped and the first sat 0.8 pt from the page edge.
     fig, ax = panel("third", "std", key=3)
-    ax.plot(df.cameras, df.traditional, color=SALMON, lw=2.0)
+    # THE TWO CURVES ARE NOT THE SAME KIND OF OBJECT, so they are not drawn the same
+    # way. `traditional = C x 15` is a PREMISE about how labelling is done -- nothing
+    # about it was measured at any C -- while the aided curves carry a correction rate
+    # measured on real held-out views. Drawn identically (both 2.0 pt solid, both with
+    # a white-ringed marker) the assumption borrowed the authority of the measurement.
+    # It is now a lighter LONG-dashed line with no marker, and the key names it
+    # "(assumed)": long dashes so it cannot be read as the same kind of line as the
+    # short-dashed tau = 5 px curve, and no marker because a marker on this panel
+    # means "a measurement exists here" and none does on this curve -- not even at
+    # C = 5. Weight, dash and marker all say the same thing, because one signal alone
+    # is easy to miss at 57 mm.
+    ax.plot(df.cameras, df.traditional, color=SALMON, lw=1.4, ls=(0, (6, 2.5)))
     ax.plot(df.cameras, df[f"aided_tau{int(TAU_MAIN)}"], color=TEAL, lw=2.0)
     ax.plot(df.cameras, df[f"aided_tau{int(TAU_STRICT)}"], color=TEAL, lw=1.2,
             ls=(0, (2.5, 1.5)))
 
-    # ONE filled marker per curve, at the ONE rig size p was measured on. A marker
-    # here means "a measurement exists at this C" and nothing else, so there is
-    # nothing left for a reader to mistake for four measured rigs.
+    # ONE filled marker on the whole panel, at the ONE rig size p was measured on, on
+    # the ONE curve that carries a measurement. A marker here means "a measurement
+    # exists at this C" and nothing else, so there is nothing left for a reader to
+    # mistake for four measured rigs -- or for a measured traditional cost.
     m = df[df.measured]
     assert len(m) == 1, m
-    ax.plot(m.cameras, m.traditional, "o", color=SALMON, ms=5.5, mec="white", mew=1.0,
-            zorder=5)
     ax.plot(m.cameras, m[f"aided_tau{int(TAU_MAIN)}"], "o", color=TEAL, ms=5.5,
             mec="white", mew=1.0, zorder=5)
 
-    text_legend(ax, [("traditional", SALMON),
+    text_legend(ax, [("traditional (assumed)", SALMON),
                      ("reprojection-aided", TEAL)], "above",
                 xy=(0.14, 0.972), dy=0.064, transform=fig.transFigure)
 
@@ -155,6 +178,18 @@ def main():
     # have to extrapolate past the last tick to read the top of a curve.
     ax.set_yticks([0, 40, 80, 120])
     ax.set_xlabel("cameras in the rig, C")
+    # WHAT the assumption is, since "(assumed)" in the key says only that there is
+    # one. This is the premise the whole comparison rests on -- a labeller placing
+    # every one of the 15 nodes in every one of the C views -- and it is the panel's
+    # single biggest unmeasured quantity, so it is stated on the artwork rather than
+    # left to the caption. Written as the identity it is -- 15 x C -- because that is
+    # the most direct way to say "this curve is arithmetic, not data", and it echoes
+    # the word "assumed" in the key so the two are unmistakably the same claim.
+    # Under the axis and not in the wedge with the measurement note: the wedge takes
+    # two 7 pt lines before a third runs into the traditional line itself, and one
+    # centred line under a 57 mm axis takes ~30 characters before it reaches the
+    # panel edge (the full sentence, 37 characters, cleared the edge by 0.2 mm).
+    footnote(ax, f"assumed: {NODES} nodes × C views")
     ax.set_ylabel("manual placements\nper animal per frame")
     ax.set_xlim(2, CMAX)
     ax.set_ylim(0, CMAX * NODES * 1.10)

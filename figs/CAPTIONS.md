@@ -155,7 +155,7 @@ tolerance at which a labeller accepts a reprojection untouched and p the measure
 fraction that miss it. **Only one rig size was measured, and the panel says so rather
 than shading a region.** All 50 BMimica sessions are five-camera rigs, so p is a single
 number measured at C = 5 from a two-anchor solve with three held-out views — the one
-filled marker on each curve. Every other point on both curves, at C < 5 exactly as much
+filled marker on the whole panel. Every other point on both curves, at C < 5 exactly as much
 as at C > 5, is the model `aided = 2N + (C−2)·N·p` against `traditional = C·N` with
 N = 15. The 2.3× is annotated at that one measured C and nowhere else.
 (c) Where the reprojection lands in views that were not labelled, scored against the
@@ -197,7 +197,7 @@ views you *label*; the final reconstruction should still use every available vie
   τ = 5 px. The τ = 20 px row is deposited but appears on **no artwork** — do not quote
   its 2.49× as the figure's headline. The C = 8 value at τ = 10 px, **3.44×**
   (120 → 34.9), is an **extrapolation of the model past the one measured rig size**, not
-  a measurement; the panel marks this by carrying exactly one filled marker per curve,
+  a measurement; the panel marks this by carrying exactly one filled marker in total,
   not by shading a region.
 * Panel c: 38,322,720 held-out view measurements (every camera pair × every
   held-out view × every keypoint × 50 sessions). Median 4.32 px against the view's own

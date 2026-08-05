@@ -97,6 +97,16 @@ def main():
     #  * what the band is. It is the ACROSS-SESSION median of each session's own
     #    p25/p50/p75, which is neither a confidence interval on the plotted median
     #    nor any one session's IQR, and an unnamed ribbon is read as the former.
+    #
+    # THE BAND LABEL SAID "across-session p25-p75" AND THAT NAMES THE WRONG
+    # QUANTITY. Read plainly it says "the p25 to p75 OF THE SESSIONS", i.e. the
+    # spread of the 50 session medians -- which would be an interval on the plotted
+    # median, exactly the reading this note exists to prevent. What is drawn is the
+    # median of the 50 p25s to the median of the 50 p75s: a within-session spread
+    # summarised across sessions, i.e. the MEDIAN SESSION'S IQR. "median session
+    # p25-p75" says that in 24 characters and cannot be read as a CI, because a CI
+    # is not a property of one session.
+
     # A THIRD LINE naming the comparison floor was drafted here and does not fit: at
     # 7.5 pt three note lines plus the axis label squeeze a 57.3 x 52 mm panel until
     # the rotated y label runs off the top of the page. It lives in the figure
@@ -106,7 +116,7 @@ def main():
     # below by that alignment and is a COMPARISON floor, not this pipeline's
     # accuracy. The y label already says "vs proofread" rather than "3D error".
     footnote(ax, "DLT only · stride 200, as Fig 2\n"
-                 "band: across-session p25–p75")
+                 "band: median session p25–p75")
     save(fig, 4, "b", "accuracy_vs_cameras")
 
 

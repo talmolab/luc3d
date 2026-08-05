@@ -101,6 +101,23 @@ could have fixed either).
   projected pixel position (`fig1.json threeD.rigFraming.camScreen`) for a composer
   that wants to typeset its own names at the journal's size.
 
+  MEASURED ON THE CURRENT EXPORT, so this does not have to be re-litigated. The tile
+  prints 47.6 x 31.7 mm (78% of the video tile's area, not the quarter the earlier
+  portrait export gave), the crop is 1205 x 804 px of `tri3d-rig.png`'s 1600 x 900,
+  and the measured content box (274, 55)-(1226, 805) sits inside it with 126 px of
+  margin to spare -- so nothing is clipped, all 8 camera frustums are present and
+  countable, and with the app's labels off there is no overlapping type left to clip.
+  Effective resolution is ~640 dpi and the thinnest frustum edge is one device pixel,
+  i.e. 31.7 mm / 804 px = 0.040 mm on the page (median ink run 0.13 mm; the frustum
+  colour is 3.0:1 against the tile's #1a1a1a at the median and 6.7:1 at the stroke
+  core). That is thin, and THE CROP CANNOT MEANINGFULLY FIX IT: printed stroke width
+  is (tile mm)/(crop px), the crop is already only 7% taller than the content it must
+  contain, so `TILE_PAD` -> 0 buys 6.8% and nothing else does. The lever that would
+  work is a SMALLER export canvas (three.js `LineBasicMaterial` ignores `linewidth`,
+  so an edge is one device pixel at any canvas size and a bigger canvas therefore
+  prints THINNER), and that is a driver change with its own cost to the skeletons --
+  not a panel change. Left alone deliberately.
+
     python3 figs/panels/fig1_03_reconstruction.py
 """
 import sys

@@ -29,7 +29,7 @@ from matplotlib.patches import FancyBboxPatch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.diagram import blank, camera, free, lock, point, ray, residual, loop  # noqa: E402
-from src.style import MUTED, grid, GREY, INK, PERIWINKLE, TEAL, save, use  # noqa: E402
+from src.style import MUTED, entity, grid, GREY, INK, save, use  # noqa: E402
 
 #: The legacy panel drew each solver in its own outlined card with a thick coloured
 #: rule down the left edge; the restyle dropped both and left three unbounded
@@ -37,15 +37,27 @@ from src.style import MUTED, grid, GREY, INK, PERIWINKLE, TEAL, save, use  # noq
 #: "three solvers" legible as three things, so it is restored here.
 CARD = (-1.85, -3.55, 5.85, 4.42)   # x0, y0, x1, y1 in data coordinates
 
+#: THE SOLVER COLOURS COME FROM `entity()`, not from a local pick. DLT was drawn in
+#: periwinkle here, which is SLEAP's hue in Fig 7 -- a reader who learns periwinkle
+#: on one page was then told it meant something else on the next. `entity('dlt')`
+#: is the set-wide "the thing this work is compared against" colour and
+#: `entity('refined')` is the set-wide "this work" colour, so 4a, 4d, 4e and 4f all
+#: say the same thing with the same two hues. The third card is a BOUND rather than
+#: an entity -- a function that exists and is not reachable from the UI -- and stays
+#: grey.
+#:
+#: `ink` is the TEXT colour for the card's status tag and is not always `color`:
+#: GREY is #B3B3B3, i.e. 2.1:1 on white, which is below every legibility floor for
+#: type. Marks and rules may be GREY; words that must be read are MUTED.
 SOLVERS = [
     dict(title="Linear DLT", sub="algebraic error · closed form",
-         tag="app default", color=PERIWINKLE, fixed=True, curved=False,
+         tag="app default", color=entity("dlt"), fixed=True, curved=False,
          iterative=False),
     dict(title="Non-linear triangulation", sub="geometric error · native pixels",
-         tag="app menu: “Bundle Adjustment”", color=TEAL, fixed=True, curved=True,
-         iterative=False),
+         tag="app menu: “Bundle Adjustment”", color=entity("refined"), fixed=True,
+         curved=True, iterative=False),
     dict(title="Joint bundle adjustment", sub="cameras + structure · iterative",
-         tag="not wired to the UI", color=GREY, fixed=False, curved=True,
+         tag="not wired to the UI", color=GREY, ink=MUTED, fixed=False, curved=True,
          iterative=True),
 ]
 
@@ -72,6 +84,7 @@ def card(ax, s):
 
 def draw(ax, s):
     blank(ax)
+    ink = s.get("ink", s["color"])
     card(ax, s)
     cy_hi, cy_lo = 1.9, -1.9
     px, py = 3.4, 0.0
@@ -87,14 +100,17 @@ def draw(ax, s):
     point(ax, px, py, color=INK)
     residual(ax, px, py, px + 1.5, py + 1.0, s["color"], curved=s["curved"])
     if s["iterative"]:
-        loop(ax, px + 0.75, py - 1.3, r=0.5, color=s["color"], label="repeat")
+        # `ink`, not `color`: `loop()` draws its label in the colour it is given, and
+        # "repeat" at GREY is unreadable type. The arc darkening with it is fine --
+        # MUTED still recedes against the INK line art.
+        loop(ax, px + 0.75, py - 1.3, r=0.5, color=ink, label="repeat")
 
     ax.set_xlim(CARD[0] - 0.15, CARD[2] + 0.15)
     ax.set_ylim(CARD[1] - 0.12, CARD[3] + 0.12)
     # Title block reads top-down: what it is, what it minimises, what the app calls it.
     ax.text(-1.4, 4.3, s["title"], fontweight="bold", va="top", color=INK)
     ax.text(-1.4, 3.6, s["sub"], va="top", color=MUTED, fontsize=7)
-    ax.text(-1.4, 3.0, s["tag"], va="top", color=s["color"], fontsize=7)
+    ax.text(-1.4, 3.0, s["tag"], va="top", color=ink, fontsize=7)
 
 
 def main():

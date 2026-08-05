@@ -18,7 +18,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import MUTED, GREY, PERIWINKLE, TEAL, deposit, panel, save, use  # noqa: E402
+from src.style import MUTED, deposit, entity, panel, save, use  # noqa: E402
 
 
 def build() -> pd.DataFrame:
@@ -35,7 +35,8 @@ def main():
     deposit(df, 4, "fig4f_time_per_keypoint.csv")
 
     fig, ax = panel("quarter", "std")
-    colors = [PERIWINKLE, TEAL]
+    # Set-wide entity colours -- see the note in `fig4_01_solvers.py`.
+    colors = [entity("dlt"), entity("refined")]
     ax.bar(df.solver, df.us_per_keypoint, width=0.55, color=colors, zorder=2)
     for i, r in df.iterrows():
         # ONE DECIMAL, NOT ZERO. Rounded to integers the bars read "6" and "44",

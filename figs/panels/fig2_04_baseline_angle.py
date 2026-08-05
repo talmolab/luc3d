@@ -18,10 +18,35 @@ inside +/-25%, because least squares is dragged upward by the two outliers it is
 supposed to be diagnosing. The robust fit misses exactly the two genuine exceptions
 (both pair camera 2, the farthest camera), which is the point of the panel.
 
+THE 8-OF-10 IS DESCRIPTIVE AND THE ARTWORK NOW SAYS SO. `k` is median(err*sin theta)
+over these same ten pairs, so the +/-25% band is fitted AND scored on one set of
+points: roughly half of them sit near the curve by construction, and +/-25% is a wide
+target against a 2.7-12.6 mm range. Set in TEAL under a `k =` line it read as a test
+the law had passed. There is no test available here -- there are ten pairs and all ten
+went into `k`, so this design has no held-out pair to score against, and inventing one
+by refitting on eight would be worse than saying nothing. So the count is now led by
+"in-sample band:" and set in MUTED, one step back from `k` itself, and what the panel
+puts forward instead is the two MISSES: they are named on the data, in the reader's
+line of sight, because "which two pairs disagree with the law, and why" is the
+informative content and "8 of 10 agree" is not.
+
+The two EXTREMES carry their value (12.6, 2.7) because the panel's second finding is
+a RANGE -- 4.7x, free at annotation time -- and a range cannot be read off a scatter
+to one decimal. The curve carries its own name, `k / sin theta`, so the dashed line
+and its band are attributable without the caption.
+
 THIS IS NOT AN ARGUMENT FOR A WIDER RIG. No camera was ever moved; all ten points
 come from one fixed 5-camera geometry, the pairs share cameras and one calibration,
 and the observed range is only 13-31 deg. The extrapolation belongs in the
 Discussion, not on the artwork.
+
+TEN POINTS ARE NOT TEN OBSERVATIONS -- every pair carries the same n = 1,277,424
+keypoints, the same five cameras and one calibration, solved ten ways, so the
+effective n is well under ten. That disclosure lives in the FIGURE FOOTER
+(`assemble.py FOOTERS[2]`: "12,774,240 two-anchor solves in d", against the same
+footer's "1,277,424 keypoints" -- the 10x reuse is the quotient), which is exactly
+where the legacy figure carried it. It is deliberately NOT repeated here: a caveat
+printed twice on one page reads as two different caveats.
 
 Source: figs/out/fig2.json `per_session[].err3d_mm_by_pair`.
 
@@ -84,6 +109,13 @@ def main():
     ax.text(th[-1], floor + 0.25, f"all 5 views {floor:.1f} — comparison floor",
             color=PERIWINKLE, fontsize=7, ha="right", va="bottom")
 
+    # The curve is named ON the curve, in its own colour, just above the band's upper
+    # edge in the one stretch (theta ~ 25-33 deg) where neither a point nor the corner
+    # block is. Without it the dashed line and its band are unattributed on the
+    # artwork and a reader has to reach the caption to find out what is being fitted.
+    ax.text(25.4, k / math.sin(math.radians(25.4)) * (1 + BAND) + 0.35, "k / sin θ",
+            color=TEAL, fontsize=7, ha="left", va="bottom")
+
     ax.plot(df.baseline_deg, df.err3d_mm, "o", color=TEAL, ms=6, mec="white",
             mew=1.0, zorder=4)
     # Name only the two the robust law misses -- they are the informative ones.
@@ -94,9 +126,40 @@ def main():
                     (r.baseline_deg, r.err3d_mm), fontsize=7, color=MUTED,
                     textcoords="offset points", xytext=(6, 2))
 
-    ax.text(0.97, 0.95, f"k = {k:.2f} mm\n{int(df.within_band.sum())}/{len(df)} "
+    # The two EXTREMES carry their value, because the panel's second finding is a
+    # RANGE -- 12.6 mm down to 2.7 mm, 4.7x, free at annotation time -- and a range
+    # cannot be read off a scatter to one decimal. Legacy printed exactly these two
+    # numbers and they were lost in the restyle. Placed on the sides of each marker
+    # that are empty: below the worst pair, which already carries its name above, and
+    # up and to the RIGHT of the best. Neither centred-above nor right-of works for
+    # the best pair: centred above, the 30.3 deg pair is close enough that the label
+    # read as belonging to THAT marker, and level with it the label ran into the
+    # comparison-floor line's own label. Up-and-right clears both, and the 6 pt rise
+    # is the smallest that also clears the band FILL -- at 3 pt `lint_text.py`'s
+    # on-data check reports the label 25% inked.
+    worst, best = df.iloc[0], df.iloc[-1]
+    for r, xy, ha, va in ((worst, (0, -7), "center", "top"),
+                          (best, (5, 6), "left", "bottom")):
+        ax.annotate(f"{r.err3d_mm:.1f}", (r.baseline_deg, r.err3d_mm), fontsize=7,
+                    color=MUTED, ha=ha, va=va, textcoords="offset points",
+                    xytext=xy)
+
+    # WHAT THE 8/10 IS, said before the number rather than after it. `k` is
+    # median(err*sin theta) over these same ten pairs, so the +/-25% band is fitted
+    # and scored on one set of points -- roughly half sit near the curve by
+    # construction, and +/-25% is a wide target against a 2.7-12.6 mm range. Set in
+    # TEAL beside a bold count it read as a test the model had passed. It is not a
+    # test: this design has no held-out pair to score against (there are ten pairs and
+    # all ten went into k), so the honest framing is descriptive, and "in-sample band"
+    # leading the line is what makes it descriptive. The informative content is the
+    # two MISSES, which is why they and only they are named on the data.
+    ax.text(0.97, 0.97, f"k = {k:.2f} mm", transform=ax.transAxes, ha="right",
+            va="top", color=TEAL, fontsize=7)
+    # 0.885, not 0.865: at 0.865 the second line's descenders came within 0.1 pt of
+    # the `cam 0+2` label -- under the linter's tolerance, but touching.
+    ax.text(0.97, 0.885, f"in-sample band:\n{int(df.within_band.sum())}/{len(df)} "
             f"within ±{BAND:.0%}", transform=ax.transAxes, ha="right", va="top",
-            color=TEAL, fontsize=7)
+            color=MUTED, fontsize=7, linespacing=1.35)
 
     ax.set_xlabel("anchor-pair baseline angle (°)")
     ax.set_ylabel("3D error vs proofread (mm)")
