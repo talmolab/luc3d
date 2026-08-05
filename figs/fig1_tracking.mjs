@@ -30,7 +30,7 @@ import {
     launch, loadSession, gotoFrame, trackAll, triangulateAll, setColorMode,
     setTimelineMode, setOverlayStyle, setIdentityPalette, showCameraView,
     showInitialView, setLayout, set3dChrome, hide3dButtons, exportViews,
-    writeManifest, shootEl, clearOverlays, done, log, CAMS,
+    rigFit, writeManifest, shootEl, clearOverlays, done, log, CAMS,
 } from './_drive.mjs';
 
 const FRAME = Number(process.env.FRAME || 150);
@@ -38,6 +38,13 @@ const NANIMALS = Number(process.env.NANIMALS || 3);
 const VIEW_CAM = process.env.VIEW_CAM || 'Camera0_mid';
 const BRIGHT = Number(process.env.BRIGHT || 1.9);
 const cams = (process.env.CAMS || '').trim() ? process.env.CAMS.split(',') : CAMS;
+// Rig-tile geometry, in CSS px: the export lands at 2x this (deviceScaleFactor 2),
+// i.e. 1600x900. See the rig block below for why it is landscape, and why it is NOT
+// bigger than that.
+const RIG_W = Number(process.env.RIG_W || 800);
+const RIG_H = Number(process.env.RIG_H || 450);
+const RIG_CAM = process.env.RIG_CAM || 'Camera4_topR';
+const RIG_EL = Number(process.env.RIG_EL || 22);
 
 // Print geometry: the app's screen defaults are tuned for panes at ~1:3 CSS scale,
 // so at native resolution they are chunky X's that swamp a 40 mm tile.
@@ -95,11 +102,71 @@ try {
     // true like-for-like of that camera's 2D tile.
     await setLayout(page, { hideInfoPanel: true, timelineHeight: 0, threeDWidth: 'match' });
     await showCameraView(page, VIEW_CAM);
-    await set3dChrome(page, { labels: false });
+    // Rig chrome OFF for this tile: it sits beside VIEW_CAM's own video tile and the
+    // only thing being compared is the pose. From inside a camera the other frustums
+    // are edge-on slivers that read as stray lines, and the reference grid (a bare
+    // GridHelper at world Z=0, which on this rig floats ABOVE everything) can cut
+    // across the animals.
+    await set3dChrome(page, { labels: false, pyramids: false, spheres: false, grid: false });
     await shootEl(page, '#viewport3dContainer', 'tri3d-camview');
 
+    // ---- 3D: the rig overview -------------------------------------------------
+    // EXPORTED LANDSCAPE, FRAMED BY rigFit(), AND DELIBERATELY NOT HUGE. The previous
+    // rig export was `showInitialView()` into whatever pane the camview tile had left
+    // behind: 800x1696 PORTRAIT with the rig in ~19% of the frame, the ground-plane
+    // grid and the axis gizmo taking most of the rest, and the right-hand camera
+    // LABELS running off the edge of the canvas -- clipped in the source, so no crop
+    // could recover them. Four separate causes, all of them in the export rather than
+    // in the panel:
+    //
+    //   1. THE PANE ASPECT. `threeDWidth: 'match'` sizes the 3D pane to VIEW_CAM's
+    //      aspect for the camview tile; the rig is a wide, flat shell and wants the
+    //      opposite. RIG_W x RIG_H is 16:9, so the fit has room sideways instead of
+    //      spending the frame on empty arena, and nothing runs off an edge.
+    //   2. THE FRAMING. `showInitialView()` is the app's own fit to the scene BOUNDS
+    //      and it also resets the up vector to +Z -- which on this rig is DOWN, so it
+    //      renders the whole thing inverted, animals floating above the cameras.
+    //      `rigFit()` takes "up" from the data and fits the real content on screen.
+    //      It is still called first, because it is what clears the camera-view
+    //      declutter that hides VIEW_CAM's own frustum (viewport3d.showInitialView).
+    //   3. THE SIZE -- AND BIGGER IS WORSE HERE, which is counter-intuitive enough to
+    //      be worth the paragraph. This tile is LINE ART: three.js draws the camera
+    //      frustums with `LineBasicMaterial`, whose `linewidth` is ignored by every
+    //      WebGL backend, so every frustum edge is exactly ONE DEVICE PIXEL wide no
+    //      matter how large the canvas is. The printed weight of that line is
+    //      therefore (tile width in mm) / (crop width in px) -- it gets THINNER as the
+    //      export grows. A first re-staging at 4000x2560 put the crop at 3400 px for a
+    //      ~48 mm tile: 71 px/mm, a 0.014 mm stroke, which came out as a barely-there
+    //      grey smudge in the proof. At 1600x900 the crop is ~1270 px, 26 px/mm and a
+    //      0.038 mm stroke -- the same apparent weight the old 800 px export had, and
+    //      about the pixel density of the video tile beside it, while still carrying
+    //      1.3x the linear resolution of the old crop on a tile 1.6x the area. The
+    //      skeletons are unaffected either way (world-space spheres and tubes scale
+    //      with the canvas); only the 1-px chrome cares. `sphereSize` is raised to 3
+    //      so each camera also gets a solid dot -- real ink that survives print.
+    //   4. THE LABELS. The app's camera labels are screen-space bitmaps at a FIXED
+    //      pixel size, so they do not scale with the export either: enlarging the
+    //      canvas makes them smaller relative to the rig, not bigger, and framing the
+    //      rig tightly enough for them to be legible piles them on top of each other
+    //      (at 800 px they already overlapped AND clipped). They are therefore OFF,
+    //      and this tile carries geometry only -- how many cameras there are and where
+    //      they sit. `rigFit()` returns every camera's projected pixel position, so a
+    //      composer that wants names can typeset its own at the journal's size.
     await showInitialView(page);
-    await set3dChrome(page, { labels: true, pyramids: true, spheres: true });
+    // Height too, which setLayout() does not take: the pane is stretched to the full
+    // window height by the flex row, and 1280 px of it is what forced the portrait
+    // aspect in the first place.
+    await page.evaluate((h) => {
+        document.getElementById('viewport3dContainer').style.height = h + 'px';
+    }, RIG_H);
+    const rigPane = await setLayout(page, { threeDWidth: RIG_W });
+    await set3dChrome(page, {
+        labels: false, pyramids: true, spheres: true, grid: false,
+        pyramidLength: 22, sphereSize: 3,
+    });
+    const rig = await rigFit(page, {
+        startCam: RIG_CAM, elevation: RIG_EL, pad: 1.04, targetBias: 0.10, fill: 0.88,
+    });
     await shootEl(page, '#viewport3dContainer', 'tri3d-rig');
     await hide3dButtons(page, false);
 
@@ -180,7 +247,10 @@ try {
         distinctTrackLabels: detKeys.size, distinctTrackNames: distinctNames.size,
         before, after,
         timelines: { before: 'before-timeline.png', after: 'after-timeline.png' },
-        threeD: { camview: 'tri3d-camview.png', rig: 'tri3d-rig.png' },
+        threeD: {
+            camview: 'tri3d-camview.png', rig: 'tri3d-rig.png',
+            rigPane: rigPane.threeD, rigFraming: rig,
+        },
     });
 
     log(`[summary] frame ${FRAME}: ${detKeys.size} detections / per-camera track ` +

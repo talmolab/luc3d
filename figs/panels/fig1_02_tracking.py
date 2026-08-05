@@ -38,6 +38,33 @@ of 26 detections assigned. The 2 unassigned are named in `fig1.json` (`ledger.
 unassigned`) -- a partially-occluded animal in Camera3_sideC and Camera7_sideR --
 and the panel does not pretend the assignment is total.
 
+EVERY ANIMAL CARRIES ITS OWN LABEL, and without them the panel does not make its
+claim. The left pair is meant to show that the tracker's labels are PER CAMERA and
+carry no correspondence: `t89`/`t82`/`t94` in cam 0 against `t83`/`t93`/`t95`/`t96`
+in cam 7, seven labels for three animals in two of eight views. With the labels
+removed (as an earlier pass of this rewrite had it) the left pair is just three
+differently-coloured skeletons and nothing on the artwork shows what the 26 in the
+ledger line ARE. The right pair carries the identity the app assigned -- `1`, `2`,
+`3`, the same number for the same animal in both views, and `?` for the one
+detection re-ID left unassigned. So the collapse the ledger line counts is drawn:
+t89 and t83 both become 1.
+
+Labels are placed above each detection's own recorded bbox (`details[].box`, source
+pixels), pushed apart vertically when two animals are in contact -- the normal case
+here, not the exception -- and clamped inside the tile.
+
+WHY A WHITE CHIP AND A DARKENED HUE. The label has to be legible over both the black
+arena wall and a blown-out white mouse, and it has to pass `lint_text.py`'s on-data
+check, which reports any non-white text sitting on ink. An opaque white chip answers
+both: nothing shows through it, so the check measures white. The text is then the
+animal's manifest colour DARKENED until it clears 3.5:1 against that chip -- the raw
+per-track colours the app hands out are pastels (`#ffe66d`, `#a8e6cf`) that sit at
+1.3:1 on white and cannot be read at 6.5 pt. `on_white()` scales all three channels
+by one factor, so the hue that ties the label to its skeleton is preserved and only
+the lightness moves. The legacy figure instead used the raw colour with a black halo;
+that is lighter on the page but unreadable for the two palest tracks and trips the
+linter on every label.
+
 Colours are the Okabe-Ito palette spliced in by `setIdentityPalette()`, NOT the app's
 shipped IDENTITY_COLORS: those start #00ff00, #ff00ff, #00ffff, and under
 deuteranopia the green and magenta converge -- the two animals a reader is meant to
@@ -73,6 +100,20 @@ TILE_ASPECT = 1.34
 #: ~19 px of margin above and below cam 0's animals at 1280x1024.
 TILE_PAD = 0.06
 
+#: Track/identity label type size, in points. The floor is 5 pt (`lint_text.py`
+#: enforces it); the legacy figure used 5.8 pt and these are set a little larger
+#: because the crops below print the animals bigger than the legacy square crops did.
+LABEL_PT = 6.5
+#: Contrast the label text must clear against its white chip, WCAG-style. 3.5:1 is
+#: between the 3:1 graphical-object threshold and the 4.5:1 body-text one -- pushed
+#: to 4.5 the pale mint and pale yellow tracks darken so far that hue stops
+#: identifying them, which is the only thing the colour is there for.
+LABEL_CONTRAST = 3.5
+#: Gap between a detection's bbox top and its label baseline, in points.
+LABEL_GAP_PT = 1.8
+#: One typographic point in millimetres.
+MM_PER_PT = 25.4 / 72.0
+
 
 def bbox_for(manifest, cam):
     for v in manifest:
@@ -80,6 +121,74 @@ def bbox_for(manifest, cam):
             b = v["bbox"]
             return (b["x0"], b["y0"], b["x1"], b["y1"])
     return None
+
+
+def details_for(manifest, cam):
+    for v in manifest:
+        if v["name"] == cam:
+            return v["details"]
+    return []
+
+
+def _rel_luminance(rgb):
+    f = [(c / 12.92) if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2]
+
+
+def on_white(hex_color, target=LABEL_CONTRAST):
+    """`hex_color` darkened until it clears `target`:1 against white.
+
+    All three channels are scaled by one factor rather than run through a colour
+    space, so the ratios between them -- and therefore the hue a reader matches
+    against the skeleton -- are untouched and only the lightness moves. Returns an
+    RGB triple; a colour that already clears `target` comes back unchanged.
+    """
+    rgb = tuple(int(hex_color.lstrip("#")[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    k = 1.0
+    for _ in range(60):
+        if 1.05 / (_rel_luminance(tuple(c * k for c in rgb)) + 0.05) >= target:
+            break
+        k *= 0.96
+    return tuple(c * k for c in rgb)
+
+
+def short_label(d, stage):
+    """The label this detection carries IN THIS TILE, and the colour to set it in.
+
+    Left tiles: the tracker's own name, shortened `track_89` -> `t89` exactly as the
+    legacy figure did -- the full form is three times as wide and would not fit
+    beside a second animal. Right tiles: the identity, 1-based (`id_0` -> `1`), or
+    `?` for a detection re-ID did not assign. `?` is set in INK rather than in the
+    detection's leftover per-track colour, because an identity colour is precisely
+    what it does not have.
+    """
+    if stage == "before":
+        return d["track"].replace("track_", "t"), d["color"] or "#000000"
+    if d.get("identity"):
+        tail = str(d["identity"]).rsplit("_", 1)[-1]
+        return (str(int(tail) + 1) if tail.isdigit() else tail), d["color"] or "#000000"
+    return "?", INK
+
+
+def dodge(items, min_dy, min_dx):
+    """Push apart labels that would overprint; the lower of a colliding pair moves DOWN.
+
+    Two mice in contact is the normal case in this data, not the exception (cam 7's
+    `t95` and `t96` are 22 px apart horizontally and 28 px vertically), so their
+    labels land on top of each other unless something separates them. Ported from
+    the legacy figure's `dodge()`, in source pixels instead of millimetres.
+    """
+    placed = []
+    for it in sorted(items, key=lambda d: d["y"]):
+        for _ in range(12):
+            hit = next((p for p in placed
+                        if abs(it["x"] - p["x"]) < (it["w"] + p["w"]) / 2 + min_dx
+                        and abs(it["y"] - p["y"]) < min_dy), None)
+            if hit is None:
+                break
+            it["y"] = hit["y"] + min_dy
+        placed.append(it)
+    return items
 
 
 def crop_to_aspect(bbox, src_w, src_h, aspect, pad):
@@ -140,6 +249,7 @@ def main():
     # 199 mm and assemble.py warns past 200.
     fig.get_layout_engine().set(rect=(0, 0.080, 1, 0.825), wspace=0.01,
                                 w_pad=0.004, h_pad=0.004)
+    crops = []
     for ax, (p, bbox, cam) in zip(axes, tiles):
         # bbox=None: read the frame whole, then crop by setting the view limits.
         # imshow puts source pixels in data coordinates, so the axes shows exactly
@@ -148,15 +258,72 @@ def main():
         # (The whole 1280x1024 frame is embedded and clipped to the axes rather than
         # pre-cropped, which costs ~1 MB of PDF and nothing else -- Illustrator
         # honours the clip, and `load_tile`'s own crop cannot make this shape.)
-        tile(ax, p, None, badge=cam.split("_", 1)[1], corner="lower left")
+        # The badge carries the camera INDEX as well as its name (`cam 0 mid`, not
+        # `mid`). The claim being made is that a track label is per CAMERA, so the
+        # camera has to be identified; and panel c badges the same view `cam 0 mid`,
+        # so dropping the index here made one figure name one camera two ways.
+        tile(ax, p, None, badge=cam.replace("Camera", "cam ").replace("_", " "),
+             corner="lower left")
         sh, sw = ax.images[0].get_array().shape[:2]
         x0, y0, x1, y1 = crop_to_aspect(bbox, sw, sh, TILE_ASPECT, TILE_PAD)
         ax.set_xlim(x0, x1)
         ax.set_ylim(y1, y0)           # imshow's y axis runs downwards
+        crops.append((x0, y0, x1, y1))
     # constrained_layout only places the axes when the figure is drawn; before that
     # `get_position()` still returns the DEFAULT subplot params (left=0.125,
     # right=0.9), which put both headings ~7 mm to the right of their own pair.
+    # The labels below need the placed axes for the same reason: the pixels-per-point
+    # of a tile is only knowable once its printed width is.
     fig.canvas.draw()
+
+    # --- the per-animal labels ------------------------------------------------
+    for k, (stage, _) in enumerate(STAGES):
+        for i, cam in enumerate(CAMS):
+            ax = axes[2 * k + i]
+            x0, y0, x1, y1 = crops[2 * k + i]
+            # Source pixels per typographic point IN THIS TILE. The two cameras have
+            # different crop heights (cam 0 sees 675 px, cam 7 540 px, both printed
+            # ~33 mm tall), so one fixed pixel offset would print at two different
+            # sizes and one fixed pixel gap would clear the animal in one tile and
+            # not the other.
+            px_pt = (x1 - x0) / (ax.get_position().width * w) * MM_PER_PT
+            labs = []
+            for d in details_for(j[stage], cam):
+                s, col = short_label(d, stage)
+                # Half the chip's width: Arial bold digits and lower case run about
+                # 0.56 em, plus the chip's own 2 x 0.32 em of padding. It only has to
+                # be good enough to decide whether two labels can sit side by side --
+                # but not GENEROUS, because every pixel of over-estimate turns a pair
+                # that would have fitted into a dodge, and a dodged label drops out of
+                # the dark arena wall and onto its own animal. `t89` and `t82` are
+                # 124 px apart and were being dodged on a 130 px estimate.
+                half = (0.56 * len(s) + 0.64) * LABEL_PT * px_pt / 2
+                cx = min(max(d["centroid"][0], x0 + half), x1 - half)
+                labs.append(dict(x=cx, y=d["box"][1] - LABEL_GAP_PT * px_pt,
+                                 s=s, col=col, w=2 * half))
+            for it in dodge(labs, 1.45 * LABEL_PT * px_pt, 0.15 * LABEL_PT * px_pt):
+                # Kept inside the tile: a label the dodge pushed past the bottom edge
+                # would be clipped mid-glyph, and one above the top edge would land
+                # on the group heading.
+                yy = min(max(it["y"], y0 + 1.55 * LABEL_PT * px_pt),
+                         y1 - 0.4 * LABEL_PT * px_pt)
+                # va="bottom", not "center". The anchor is the top of the animal's own
+                # bbox, and imshow's y axis runs downwards, so "bottom" grows the chip
+                # UPWARD from the anchor -- clear of the animal. Centred on the same
+                # anchor, half of every chip hung over the top of its own mouse.
+                ax.text(it["x"], yy, it["s"], ha="center", va="bottom", zorder=6,
+                        color=on_white(it["col"]), fontsize=LABEL_PT,
+                        fontweight="bold", clip_on=True,
+                        # pad 0.32 em, not 0.18. matplotlib pads the text's TIGHT
+                        # glyph extents (`t82` has no ascender above x-height and no
+                        # descender, ~4.7 pt at 6.5 pt type) while PyMuPDF reports
+                        # the span box from the font's own ascent/descent (~7.5 pt),
+                        # so a chip that looks generous still left the arena wall
+                        # showing at the corners of the measured box -- 5% of it,
+                        # against `lint_text.py`'s 4.5% on-data threshold. The chip
+                        # has to cover the FONT box, not the glyphs.
+                        bbox=dict(boxstyle="round,pad=0.32,rounding_size=0.22",
+                                  fc="white", ec="none"))
 
     # Group headings sit over their own pair, so the before/after split is readable
     # without reading the caption.
@@ -165,6 +332,20 @@ def main():
         x = (a0.get_position().x0 + a1.get_position().x1) / 2
         fig.text(x, 0.912, heading, ha="center", va="bottom", fontweight="bold",
                  color=INK, fontsize=8)
+
+    # The step between the two GROUPS, marked in the heading strip directly over the
+    # boundary between the pairs, so the four tiles do not read as four unrelated
+    # pictures. It goes in the strip and not in the ~1.5 mm gutter between tiles 2
+    # and 3: at this row height the gutter cannot hold a legible glyph, and widening
+    # it would cost the tiles width, hence height, hence animal size. Reading across
+    # the strip it now says "per-camera tracks -> LUC3D identities", which is the
+    # panel in one line.
+    fig.text((axes[1].get_position().x1 + axes[2].get_position().x0) / 2, 0.912,
+             "→", ha="center", va="bottom", color=INK, fontsize=10)
+    # How much of the rig is on show. The ledger line counts all 8 views; without
+    # this the reader has no way to know these 4 tiles are 2 cameras, not 8.
+    fig.text(0.994, 0.912, f"2 of {j['stats']['nCameras']} views", ha="right",
+             va="bottom", color=GREY, fontsize=7)
 
     fig.text(0.5, 0.043,
              f"{led['detections']} per-camera track labels in {j['stats']['nCameras']} "

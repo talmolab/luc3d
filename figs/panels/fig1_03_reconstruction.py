@@ -37,33 +37,69 @@ no cost in magnification. `src.style.tile()`/`load_tile()` cannot do this -- the
 the bbox out to `max(w, h)` on both sides and always return a SQUARE -- so the crop
 is taken here and applied as view limits, and the cell widths are set from the
 aspects so no cell is wider than the tile it holds. The row of tiles went from 91 mm
-of the 180 to 162 mm.
+of the 180 to 162 mm, and to 170 mm once the landscape rig re-export let that tile's
+aspect open out from 1.25 to 1.50.
 
-The wins are in the two tiles that were paying for the square: the 3D view's crop
-drops 390 px -> 294 px (the old box carried 120 px of empty viewport above the
-animals) and the rig's 1113 px -> 638 px, so at equal row height the rig prints 1.7x
-larger and the 3D 1.3x. The video tile is the one that gains nothing: its animals
-span 637 of 1024 px, so the old square crop was already sized on their HEIGHT and
-there is no slack to take. It prints 0.95x -- the panel is 35 mm rather than the
-38 mm this rewrite was tuned at, because Fig 1 has to clear assemble.py's 200 mm
-ceiling and 3 mm came out of this row to pay for the figure-level footer. That 3 mm
-is worth ~9% on all three tiles if it is ever available again.
+The wins are in the two tiles that were paying for the square. Against the earlier
+PORTRAIT 3D exports (800x1696) the 3D view's crop dropped 390 px -> 294 px (the old
+box carried 120 px of empty viewport above the animals) and the rig's 1113 px ->
+638 px, so at equal row height the rig printed 1.7x larger and the 3D 1.3x. The
+video tile is the one that gains nothing: its animals span 637 of 1024 px, so the old
+square crop was already sized on their HEIGHT and there is no slack to take. It
+prints 0.95x -- the panel is 35 mm rather than the 38 mm this rewrite was tuned at,
+because Fig 1 has to clear assemble.py's 200 mm ceiling and 3 mm came out of this row
+to pay for the figure-level footer. That 3 mm is worth ~9% on all three tiles if it
+is ever available again.
 
-WHY THE RIG CROP CUTS THE GROUND PLANE. The rig render is 800x1696 of which the
-cameras, the labels and the animals occupy only x 262-800, y 630-1226; the rest is
-the viewport's ground-plane grid and axis gizmo, which are app chrome rather than
-data. Keeping them in frame cost more than half the tile's pixels.
+BOTH 3D TILES WERE THEN RE-EXPORTED -- see RE-STAGED below. At the same printed
+height the 3D view now carries 1178 px of source instead of 294, 4.0x the linear
+resolution. The rig gains far less, 803 px against 638 (1.26x), and deliberately so:
+it is LINE ART and a bigger export makes it WORSE, because three.js draws the camera
+frustums with `LineBasicMaterial`, whose `linewidth` WebGL ignores -- every frustum
+edge is one device pixel however large the canvas is, so its printed weight is (tile
+mm)/(crop px) and thins as the export grows. A 4000x2560 re-staging was tried first
+and its frustums came out as a barely-there grey smudge at 0.014 mm. The rig's win is
+in the other three defects (aspect, framing, clipping) plus a tile 1.2x wider at the
+same height, not in pixel count. See the fig1_tracking.mjs rig block for the
+arithmetic.
 
-KNOWN DEFECT -- THE PALETTE DOES NOT MATCH PANEL b. The 3D exports were staged
-BEFORE `setIdentityPalette()` existed, so they still carry the app's shipped
-`IDENTITY_COLORS` (#00ff00 green, #ff00ff magenta, #00ffff cyan) while panel b
-carries the colourblind-safe Okabe-Ito palette. Same three animals, two colour
-schemes inside one figure -- and the shipped green/magenta pair is exactly the one
-that converges under deuteranopia. `setIdentityPalette()` is wired into
-`fig2_protocol.mjs` and `fig5_panel_a.mjs` but NOT into `fig1_tracking.mjs`. THE FIX
-IS TO RE-STAGE: add `setIdentityPalette(page)` to `fig1_tracking.mjs` AFTER
-`trackAll()` (it rewrites `.color` on identities that already exist, so calling it
-earlier is a no-op) and re-run the driver. Do not recolour the PNGs.
+WHY THE RIG CROP IS STILL TIGHTER THAN THE FRAME. The ground-plane grid and the axis
+gizmo are app chrome, not data, and on this rig the grid (a bare GridHelper at world
+Z=0) floats ABOVE everything; they are now switched off at export time rather than
+cropped away. What is left over is the margin `rigFit()` leaves around the content,
+so the crop below is still taken on the measured content box.
+
+RE-STAGED (both defects below were in the EXPORTED PIXELS -- no panel-side change
+could have fixed either).
+
+  PALETTE. The 3D exports used to be staged BEFORE `setIdentityPalette()` existed, so
+  they carried the app's shipped `IDENTITY_COLORS` (#00ff00 green, #ff00ff magenta,
+  #00ffff cyan) while panel b carried the colourblind-safe Okabe-Ito palette: the
+  same three animals in two colour schemes inside one figure, and the shipped
+  green/magenta pair is exactly the one that converges under deuteranopia. Fixed at
+  the source: `fig1_tracking.mjs` now calls `setIdentityPalette(page)` AFTER
+  `trackAll()` -- the order matters, because `Identity`'s constructor reads the
+  palette only at construction time, so the helper rewrites `.color` on identities
+  that already exist and calling it any earlier is a no-op. Both 3D tiles are now
+  bluish-green / orange / sky blue, the same three colours panel b carries, read from
+  the same `fig1.json identityPalette`. The PNGs were re-exported, never recoloured.
+
+  THE RIG TILE'S GEOMETRY. It used to be `showInitialView()` into whatever pane the
+  camview tile had left behind: 800x1696 PORTRAIT with the rig in ~19% of the frame
+  and the right-hand camera labels running off the edge of the CANVAS -- clipped in
+  the source, so no crop could recover them, and what survived printed at ~4 pt. The
+  driver now sets the 3D pane to a landscape 800x450 CSS (1600x900 exported at
+  deviceScaleFactor 2) and frames it with `rigFit()`, which also fixes the
+  orientation: `showInitialView()` resets the up vector to +Z, which on this rig
+  points DOWN, so the old tile was rendered upside down with the cameras below the
+  animals. The ground-plane grid and axis gizmo are switched off rather than cropped.
+  The app's camera labels are switched OFF too: they are screen-space bitmaps at a
+  FIXED pixel size, so enlarging the canvas makes them smaller relative to the rig
+  rather than bigger, and framing the rig tightly enough for them to be legible piles
+  them on top of each other. This tile therefore carries geometry only -- how many
+  cameras there are and where they sit -- and `rigFit()` returns every camera's
+  projected pixel position (`fig1.json threeD.rigFraming.camScreen`) for a composer
+  that wants to typeset its own names at the journal's size.
 
     python3 figs/panels/fig1_03_reconstruction.py
 """
@@ -80,16 +116,20 @@ VIEW_CAM = "Camera0_mid"
 
 #: file, badge, CONTENT bbox in source pixels (None = use the manifest's own bbox),
 #: tile aspect (w:h). The bbox is what must stay in frame; the aspect is how far the
-#: crop opens out sideways to fill the row (see TILE SIZE above). The 3D tiles are
-#: 800x1696 of mostly empty viewport, so they name their content explicitly --
-#: measured, not guessed: these are the extents of the coloured (non-chrome) pixels.
-#: The rig's aspect is capped by its own source width: 800 px / 638 px = 1.25, which
-#: is why it is the narrow tile of the three -- and why the rig would benefit from a
-#: re-export at a landscape viewport far more than from any framing done here.
+#: crop opens out sideways to fill the row (see TILE SIZE above). Both 3D tiles are a
+#: viewport pane whose content sits well inside the frame, so they name their content
+#: explicitly -- MEASURED, not guessed: these are the extents of the pixels that
+#: differ from the viewport's #1a1a1a background by more than 40/255, i.e. the
+#: skeletons plus (rig only) the camera frustums and spheres.
+#:
+#: `tri3d-camview.png` is 3200x2560 and `tri3d-rig.png` 1600x900, both written by
+#: `node figs/fig1_tracking.mjs`. THE BBOXES BELONG TO THOSE EXPORTS: re-run the
+#: driver with a different pane size or rig framing and they must be re-measured, or
+#: the crop silently slides off the content.
 TILES = [
     ("after-f150-Camera0_mid.png", "cam 0 mid: video", None, 1.87),
-    ("fig1b-e-3d-camview-clean.png", "cam 0 mid: 3D", (156, 759, 393, 1034), 1.95),
-    ("fig1b-d2-3d-rig.png", "rig", (262, 630, 800, 1226), 1.25),
+    ("tri3d-camview.png", "cam 0 mid: 3D", (618, 926, 1573, 2027), 1.95),
+    ("tri3d-rig.png", "rig", (274, 55, 1227, 806), 1.50),
 ]
 #: Breathing room added to the bbox HEIGHT, as a fraction of it -- the number that
 #: sets how big everything prints, so it stays small.
@@ -122,8 +162,12 @@ def main():
             b = v["bbox"]
             bbox = (b["x0"], b["y0"], b["x1"], b["y1"])
 
-    print("  WARNING: the 3D exports predate setIdentityPalette() — their identity "
-          "colours do NOT match panel b. See the docstring.")
+    # The 3D tiles and panel b must be in the SAME identity palette; both come from
+    # the one driver run that recorded this. Report it rather than assert it -- the
+    # panel's job is not to gate the build, but a silent mismatch is what shipped once.
+    pal = (j.get("identityPalette") or {}).get("identities") or []
+    print("  identity palette (from fig1.json): "
+          + ", ".join(f"{d['name']} {d['color']}" for d in pal))
 
     fig, axes = plt.subplots(1, 3, figsize=(mm(SPAN["full"]), mm(35.0)),
                              layout="constrained",

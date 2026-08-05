@@ -115,18 +115,50 @@ outside the axes (`ax.text(0.5, -0.2, ...)`, `text_legend` at y = 1.04) is simpl
 off rather than silently growing the page. Use `footnote()` for notes under the axis
 and `text_legend()` for keys; both stay inside.
 
+## Fixed, and the wrong diagnosis that delayed it
+
+**Fig 1c's identity palette (fixed).** Fig 1c showed the same three animals in a
+different palette from Fig 1b — green/magenta/cyan against Okabe-Ito — which
+defeated the panel's whole purpose (comparing the 3D against the video tile beside
+it) and put the deuteranopia-converging pair back on the artwork.
+
+**The diagnosis recorded here was wrong**, and it cost a re-run to find out.
+This file previously said `setIdentityPalette()` was "not wired into
+`fig1_tracking.mjs`". It *was* wired, correctly, after `trackAll()`, and that
+driver's exports were already Okabe-Ito. The real cause: `panels/fig1_03_reconstruction.py`
+was reading `fig1b-e-3d-camview-clean.png` / `fig1b-d2-3d-rig.png` — output of the
+**older `fig1_gui.mjs`**, last written 2026-08-03, before the palette helper existed
+anywhere. The panel was consuming a stale driver's files, so re-running
+`fig1_tracking.mjs` could never have fixed it. It now reads `tri3d-camview.png` /
+`tri3d-rig.png`.
+
+Two lessons worth keeping: when an export looks stale, check WHICH driver writes the
+file the panel actually opens; and `fig1_gui.mjs` still writes those legacy names, so
+its 2026-08-03 PNGs will linger in `out/` and can be picked up again by mistake.
+
+**The rig tile (fixed), and a premise that was also wrong.** The old export was
+800x1696 portrait with the rig occupying ~19% of frame and camera labels clipped at
+the right edge. The obvious fix — export much larger — makes it **worse**, which was
+verified at 4000x2560: three.js `LineBasicMaterial` ignores `linewidth` on every
+WebGL backend, so a frustum edge is **1 device pixel at any canvas size**, and the
+camera labels are fixed-size bitmap sprites. Both therefore shrink *relative to the
+content* as the canvas grows: 3400 px of crop in a 48 mm tile is a 0.014 mm stroke,
+i.e. invisible. The export is sized to the print instead — 1600x900 landscape, a
+~1270 px crop at 26 px/mm giving a 0.038 mm stroke, matching the old apparent weight
+while carrying 1.26x the linear resolution on a 1.2x wider tile. Labels are off (they
+cannot be made legible at any size); `rigFit().camScreen` is in the manifest if a
+composer wants to typeset real names.
+
 ## Known defects in the current build
 
-* **Fig 1c is in the wrong identity palette.** `fig1b-e-3d-camview-clean.png` was
-  staged before `setIdentityPalette()` existed, so it carries the app's shipped
-  `IDENTITY_COLORS` (green/magenta/cyan) while Fig 1b carries Okabe-Ito — the same
-  three animals, two colour schemes, in one figure, and the shipped green/magenta
-  pair is exactly the one that converges under deuteranopia. Fix by adding
-  `setIdentityPalette(page)` to `fig1_tracking.mjs` **after** `trackAll()` and
-  re-running the driver; do not recolour the PNG.
-* **Fig 7d has no error bars** because `by_animals` deposits only a pooled IDF1 and
-  an n per cell. Do not describe its 3-animal cell as a crossover — see the panel's
-  docstring.
+* **Fig 7f cannot plot ByteTrack's points.** `detector_recall_corr.per_session`
+  carries recall / LUC3D / SLEAP / animals only, and ByteTrack's per-session IDF1
+  survives just as a *sorted* list, so session identity is gone. Its `r = 0.780` is
+  named on the artwork instead. Regenerating the pairing needs the bench re-run.
+* **Fig 7b has no intervals** because `by_bedding` deposits no per-session values.
+  It is a BETWEEN-session comparison (44 vs 30 different sessions) and is drawn as
+  grouped bars, not a paired slope, so it cannot be misread — but the animal mix
+  also differs (1 animal 21/44 vs 11/30) and that confound is stated, not removed.
 
 ## Things worth knowing
 
