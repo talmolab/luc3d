@@ -44,7 +44,7 @@ def main():
     widths = [0.14, 0.13, 0.18, 0.15, 0.15, 0.15, 0.13]
     x0 = [sum(widths[:i]) for i in range(len(COLS))]
 
-    fig, ax = plt.subplots(figsize=(mm(SPAN["full"]), mm(3.9 * (nrow + 2))),
+    fig, ax = plt.subplots(figsize=(mm(SPAN["full"]), mm(3.5 * (nrow + 2))),
                            layout="constrained")
     ax.set_axis_off()
     ax.set_xlim(0, 1)
@@ -62,7 +62,7 @@ def main():
                 f"{r.err_p50:.2f}", f"{r.err_p95:.2f}", f"{r.over_tau_pct:.2f}"]
         for j, v in enumerate(vals):
             ax.text(x0[j], row_y(i), v, va="center", fontsize=7,
-                    color=INK if j == 0 else GREY)
+                    color=INK)
 
     for y, lw in ((row_y(-1) + 0.6, 0.9), (row_y(-1) - 0.5, 0.6),
                   (row_y(nrow - 1) - 0.5, 0.9)):

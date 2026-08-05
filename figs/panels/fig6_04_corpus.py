@@ -78,7 +78,7 @@ def main():
     # row away, which is why the figure is a row taller than the table.
     HDR = nrow + 1.2
 
-    fig, ax = plt.subplots(figsize=(mm(SPAN["half"]), mm(4.8 * (nrow + 2.7))),
+    fig, ax = plt.subplots(figsize=(mm(SPAN["half"]), mm(4.2 * (nrow + 2.7))),
                            layout="constrained")
     ax.set_axis_off()
     ax.set_xlim(0, 1)
@@ -96,7 +96,7 @@ def main():
         vals = [r.corpus, r.cameras, r.animals, r.sessions_with_3d, r.frames, r.hours]
         for j, v in enumerate(vals):
             ax.text(x0[j], row_y(i), str(v), va="center", fontsize=7,
-                    color=INK if (j == 0 or last) else GREY,
+                    color=INK,
                     fontweight="bold" if last else "normal")
 
     for y, lw in ((HDR + 0.9, 0.9), (HDR - 0.9, 0.6),

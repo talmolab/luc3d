@@ -31,6 +31,8 @@ FIGURES = FIGS / "figures"
 TOL = 0.18
 #: Ignore spans this short (single glyphs, tick minus signs).
 MIN_CHARS = 2
+#: Nature's legibility floor, in points.
+MIN_PT = 5.0
 
 
 #: Badges burned onto image tiles are WHITE and are meant to sit on the picture.

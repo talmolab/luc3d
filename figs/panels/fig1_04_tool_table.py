@@ -51,7 +51,7 @@ def main():
     widths = [0.205, 0.105, 0.135, 0.125, 0.165, 0.150, 0.115]
     x0 = [sum(widths[:i]) for i in range(ncol)]
 
-    fig, ax = plt.subplots(figsize=(mm(SPAN["full"]), mm(4.4 * (nrow + 2))),
+    fig, ax = plt.subplots(figsize=(mm(SPAN["full"]), mm(3.9 * (nrow + 2))),
                            layout="constrained")
     ax.set_axis_off()
     ax.set_xlim(0, 1)
