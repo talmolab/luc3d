@@ -52,7 +52,7 @@ def main():
                        for k in ks])
     deposit(df, 6, "fig6c_detection_quality.csv")
 
-    fig, axes = grid(1, 3, span="full", row=38.0)
+    fig, axes = grid(1, 3, span="full", row=40.0)
     for ax, (col, label, color, scale, second) in zip(axes, PLOTS):
         y = df[col] * scale
         ax.plot(df.difficulty, y, color=color, lw=2.0, zorder=3)

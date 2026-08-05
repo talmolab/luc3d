@@ -44,7 +44,7 @@ def main():
     widths = [0.14, 0.13, 0.18, 0.15, 0.15, 0.15, 0.13]
     x0 = [sum(widths[:i]) for i in range(len(COLS))]
 
-    fig, ax = plt.subplots(figsize=(mm(SPAN["full"]), mm(4.2 * (nrow + 2))),
+    fig, ax = plt.subplots(figsize=(mm(SPAN["full"]), mm(3.9 * (nrow + 2))),
                            layout="constrained")
     ax.set_axis_off()
     ax.set_xlim(0, 1)

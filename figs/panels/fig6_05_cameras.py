@@ -34,9 +34,12 @@ def main():
 
     fig, axes = plt.subplots(2, 3, figsize=(mm(SPAN["half"]), mm(40.0)),
                              layout="constrained")
-    fig.get_layout_engine().set(rect=(0, 0.07, 1, 0.98))
+    # rect is (left, bottom, WIDTH, HEIGHT) -- not (left, bottom, right, top). As
+    # (0, 0.07, 1, 0.98) the band ran to y = 1.05, off the top of the page, and every
+    # tile lost its top ~5% (which is what was clipping the badges up there).
+    fig.get_layout_engine().set(rect=(0, 0.07, 1, 0.91))
     for ax, cam, p in zip(axes.ravel(), CAMS, paths):
-        tile(ax, p, None, badge=cam, corner="lower left")
+        tile(ax, p, None, badge=cam, corner="upper left")
     fig.text(0.5, 0.03, "one frame, six cameras · SLAP-2M", ha="center",
              va="center", color=GREY, fontsize=6.5)
     save(fig, 6, "b", "cameras")

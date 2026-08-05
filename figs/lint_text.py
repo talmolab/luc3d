@@ -112,8 +112,13 @@ def check(path: Path):
         t1, r1, z1 = ss[i]
         # off the page (or hanging over its edge)
         if not fitz.Rect(page_r).contains(r1):
-            if r1.x0 < page_r.x0 - 0.5 or r1.x1 > page_r.x1 + 0.5 \
-               or r1.y0 < page_r.y0 - 0.5 or r1.y1 > page_r.y1 + 0.5:
+            # 0.05 pt, not 0.5. Two independent overhangs of 0.15 pt and 0.3 pt
+            # slipped under the old tolerance and silently lost a digit of
+            # "P = 0.014" and part of a title -- the renderer drops off-page glyphs
+            # without complaint, so the tolerance has to be tighter than anything
+            # that can cost a character.
+            if r1.x0 < page_r.x0 - 0.05 or r1.x1 > page_r.x1 + 0.05 \
+               or r1.y0 < page_r.y0 - 0.05 or r1.y1 > page_r.y1 + 0.05:
                 issues.append(("clipped", t1, "", 0.0))
         for j in range(i + 1, len(ss)):
             t2, r2, z2 = ss[j]
