@@ -37,8 +37,11 @@ def main():
     df = build()
     deposit(df, 3, "fig3c_runtime.csv")
 
-    fig, ax = panel("third", "std", key=2)
+    # key must equal the number of entries stacked in the band. Three animal counts
+    # were being keyed as two, so the "4 animals" entry fell out of the reserved band
+    # and into the top of the plot.
     animals = sorted(df.animals.unique())
+    fig, ax = panel("third", "std", key=len(animals))
     for i, a in enumerate(animals):
         g = df[df.animals == a].sort_values("cameras")
         ax.plot(g.cameras, g.ms_per_frame, color=SET2[i], lw=2.0, zorder=3)

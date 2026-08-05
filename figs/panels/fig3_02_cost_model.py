@@ -32,7 +32,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (GREY, SALMON, SET2, annotate_series, deposit,  # noqa: E402
+from src.style import (GREY, SALMON, SET2, deposit, footnote,  # noqa: E402
                        panel, save, text_legend, use)
 
 CAMERAS = [2, 4, 6, 8]
@@ -57,7 +57,10 @@ def main():
     df = build()
     deposit(df, 3, "fig3b_cost_model.csv")
 
-    fig, ax = panel("third", "std", key=2)
+    # key=5, NOT key=2. The band panel() reserves has to match the number of entries
+    # actually stacked in it: at key=2 the 3rd and 4th camera entries fell out of the
+    # band and landed on the 10^20 tick label and the top of the plot.
+    fig, ax = panel("third", "std", key=5)
     for i, c in enumerate(CAMERAS):
         g = df[df.cameras == c]
         ax.plot(g.animals, g.exhaustive, color=SET2[i], lw=2.0, zorder=3)
@@ -66,27 +69,29 @@ def main():
 
     g = df[df.cameras == CAMERAS[-1]]
     ax.plot(g.animals, g.greedy, color=GREY, lw=2.0, ls=(0, (2.5, 1.5)), zorder=3)
-    # Bottom-right, in axes coords: at the curve's own height this label lay across
-    # the 4- and 6-camera exhaustive strokes.
-    # Pinned just above the right end of its OWN curve, in data coords, so it can
-    # never drift onto it -- a fixed axes-corner position crossed the dashed line.
-    ax.annotate("LUC3D (greedy)", (ANIMALS[-1], g.greedy.iloc[-1]),
-                textcoords="offset points", xytext=(-2, 7), ha="right",
-                va="bottom", color=GREY, fontweight="bold", fontsize=7)
 
     # A tractability rule, so the axis has a meaning a reader can act on.
     ax.axhline(1e6, color=SALMON, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
-    ax.text(ANIMALS[-1], 1.6e6, "10⁶ hypotheses/frame", color=SALMON, fontsize=7,
-            va="bottom", ha="right")
 
-    text_legend(ax, [(f"{c} cameras", SET2[i]) for i, c in enumerate(CAMERAS)],
-                "above")
+    # NO TEXT INSIDE THESE AXES, and that is deliberate rather than timid. Six curves
+    # over 20 decades leave no gap wide enough for a label: "LUC3D (greedy)" pinned
+    # above its own dashed curve lay across the 10^6 rule and the 2-camera stroke, and
+    # "10^6 hypotheses/frame" is ~90 pt of type on a ~110 pt axis, so at the one height
+    # it belongs -- just above the rule -- the 8-, 6- and 4-camera curves punch through
+    # it at A = 3.0, 3.4 and 4.2. Both are therefore named outside the axes instead --
+    # the greedy curve from the key band, the rule from the footnote -- and colour
+    # carries the match, which is unambiguous here: one grey dash, one salmon dot.
+    text_legend(ax, [(f"{c} cameras", SET2[i]) for i, c in enumerate(CAMERAS)]
+                + [("LUC3D (greedy)", GREY)], "above")
     ax.set_yscale("log")
     ax.set_xticks(ANIMALS)
     ax.set_xlabel("animals")
     ax.set_ylabel("hypotheses per frame")
     ax.set_ylim(1, 1e20)
     ax.set_yticks(np.logspace(0, 20, 6))
+    # AFTER set_xlabel, not before: footnote() APPENDS to the current x label, so a
+    # later set_xlabel silently throws the note away.
+    footnote(ax, "salmon rule: 10⁶ hypotheses/frame")
     save(fig, 3, "b", "cost_model")
 
 

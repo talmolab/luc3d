@@ -39,7 +39,10 @@ def main():
     wv = load("fig3_trackers.json")["slap2m"]["within_view"]
 
     rows = []
-    fig, ax = panel("third", "std", key=1)
+    # key=3, one reserved row per entry: at key=1 the band was a third of the height
+    # the three-name stack needs, so "SLEAP" and "ByteTrack" fell inside the axes,
+    # onto the 100 % y tick label and onto the curves themselves.
+    fig, ax = panel("third", "std", key=len(TRACKERS))
     for key, label, color in TRACKERS:
         v = np.sort(np.asarray(wv[key]["per_session"]))
         n = len(v)

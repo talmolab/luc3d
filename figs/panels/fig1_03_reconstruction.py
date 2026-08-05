@@ -74,7 +74,13 @@ def main():
 
     fig, axes = plt.subplots(1, 3, figsize=(mm(SPAN["full"]), mm(38.0)),
                              layout="constrained")
-    fig.get_layout_engine().set(rect=(0, 0.11, 1, 0.985))
+    # `rect` is `(left, bottom, WIDTH, HEIGHT)`, NOT `(left, bottom, right, top)`.
+    # Written as the latter, `(0, 0.11, 1, 0.985)` put the tiles' band from y = 0.11
+    # to y = 1.095 -- off the top of the page, so every tile lost its top ~9%, taking
+    # part of the burned-in camera names in the rig view with it. The band now really
+    # does stop inside the page. (The panel height stays 38 mm: Fig 1 assembles to
+    # 199 mm and assemble.py warns past 200.)
+    fig.get_layout_engine().set(rect=(0, 0.085, 1, 0.875))
     for ax, (name, badge, crop) in zip(axes, TILES):
         p = OUT / name
         if not p.exists():

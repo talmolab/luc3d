@@ -82,7 +82,17 @@ def main():
     # Reserve strips for the group headings and the ledger line. With
     # savefig.bbox=None nothing outside [0,1] is rendered, so text drawn at y=1.005
     # simply vanished -- the space has to be taken from the axes instead.
-    fig.get_layout_engine().set(rect=(0, 0.14, 1, 0.80))
+    #
+    # `rect` IS `(left, bottom, WIDTH, HEIGHT)`, NOT `(left, bottom, right, top)`.
+    # It was written as if it were the latter, so `(0, 0.14, 1, 0.80)` asked for a
+    # band running to y = 0.94 rather than to 0.80 -- the tiles grew straight up
+    # into the strip meant for the headings and the headings printed on the images
+    # (56% and 39% of their boxes inked). The band now really does stop short of the
+    # headings -- and the strips are trimmed to just what the two text lines need, so
+    # the tiles come out slightly LARGER than before rather than smaller. The panel
+    # height is unchanged on purpose: Fig 1 assembles to 199 mm and assemble.py warns
+    # past 200.
+    fig.get_layout_engine().set(rect=(0, 0.088, 1, 0.79))
     for ax, (p, bbox, cam) in zip(axes, tiles):
         tile(ax, p, bbox, badge=cam.split("_", 1)[1], pad=0.06,
              corner="lower left")
@@ -92,10 +102,10 @@ def main():
     for k, (_, heading) in enumerate(STAGES):
         a0, a1 = axes[2 * k], axes[2 * k + 1]
         x = (a0.get_position().x0 + a1.get_position().x1) / 2
-        fig.text(x, 0.845, heading, ha="center", va="bottom", fontweight="bold",
+        fig.text(x, 0.895, heading, ha="center", va="bottom", fontweight="bold",
                  color=INK, fontsize=8)
 
-    fig.text(0.5, 0.055,
+    fig.text(0.5, 0.048,
              f"{led['detections']} per-camera track labels in {j['stats']['nCameras']} "
              f"views → {led['identities']} identities, one per animal in every view "
              f"({led['assigned']} of {led['detections']} assigned)",

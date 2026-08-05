@@ -40,15 +40,19 @@ def main():
     deposit(pd.DataFrame({"detector_recall": recall, "luc3d_idf1": luc,
                           "sleap_idf1": sle}), 7, "fig7f_recall.csv")
 
-    fig, ax = panel("half", "std")
+    # Everything that names something lives in the reserved band ABOVE the plot.
+    # Inside the axes there is nowhere for it to go: the cloud hugs the diagonal
+    # over the whole range, so the "IDF1 = recall" label -- set along the line --
+    # printed on the line, and the two r values were a single teal block that
+    # coloured SLEAP's r as if it were LUC3D's.
+    entries = [(f"LUC3D r = {d['luc3d']['r']:.3f}", TEAL),
+               (f"SLEAP r = {d['sleap']['r']:.3f}", PERIWINKLE),
+               ("dashed: IDF1 = recall", GREY)]
+    fig, ax = panel("half", "std", key=len(entries))
     ax.plot([0, 1], [0, 1], color=GREY, lw=0.9, ls=(0, (2.5, 1.5)), zorder=1)
-    ax.text(0.62, 0.56, "IDF1 = recall", color=GREY, fontsize=6.5, rotation=38)
     ax.plot(recall, sle, "o", color=PERIWINKLE, ms=3, alpha=0.8, zorder=3)
     ax.plot(recall, luc, "o", color=TEAL, ms=3, alpha=0.8, zorder=4)
-
-    ax.text(0.03, 0.97, f"LUC3D r = {d['luc3d']['r']:.3f}\nSLEAP r = {d['sleap']['r']:.3f}",
-            transform=ax.transAxes, va="top", fontsize=6.5, color=TEAL,
-            fontweight="bold")
+    text_legend(ax, entries, "above")
     ax.set_xlabel("shared detector recall")
     ax.set_ylabel("session IDF1")
     ax.set_xlim(0, 1.02)

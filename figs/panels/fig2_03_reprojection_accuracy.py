@@ -70,7 +70,12 @@ def main():
     ref["reference"] = "fully-informed reference 3D"
     deposit(pd.concat([obs, ref]), 2, "fig2c_reprojection_accuracy.csv")
 
-    fig, ax = panel("third", "std", key=2)
+    # THREE key slots for TWO entries. `text_legend`'s "above" stack is spaced at
+    # 0.052 of the figure height = 7.7 pt, which is less than the 8.9 pt an 8 pt
+    # glyph box actually occupies: at key=2 the two lines' boxes overlapped each
+    # other by ~1 pt and the first one's ascenders came within 0.8 pt of the page
+    # edge. The extra slot buys the room to space them properly below.
+    fig, ax = panel("third", "std", key=3)
     ax.plot(obs.error_px, obs.cumulative_pct, color=TEAL, lw=2.0, zorder=3)
     ax.plot(ref.error_px, ref.cumulative_pct, color=TEAL, lw=1.2,
             ls=(0, (2.5, 1.5)), zorder=3)
@@ -86,7 +91,8 @@ def main():
     # Both curves are TEAL and differ only by dash, so the key must say so. Colouring
     # the second entry grey implied a grey curve that does not exist.
     text_legend(ax, [("— vs the view's own detection", TEAL),
-                     ("-- vs the reference 3D", TEAL)], "above")
+                     ("-- vs the reference 3D", TEAL)], "above",
+                xy=(0.14, 0.972), dy=0.064, transform=fig.transFigure)
     ax.set_xlim(0, 25.4)
     ax.set_ylim(0, 100)
     ax.set_yticks([0, 25, 50, 75, 100])

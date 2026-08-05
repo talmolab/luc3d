@@ -53,9 +53,12 @@ def main():
     ax.set_ylabel("found by residual (%)")
     ax.set_xlim(0, hi)
     ax.set_ylim(0, hi)
-    ax.text(0.03, 0.97, f"n = {len(df)}\nresidual wins in {wins}/{len(df)}",
-            transform=ax.transAxes, va="top", color=INK, fontsize=6.5,
-            fontweight="bold")
+    # LOWER RIGHT, which is the one corner that cannot collide: the residual wins
+    # in every session, so there is no point below the diagonal. In the upper left
+    # the block sat on the highest-scoring session's marker.
+    ax.text(0.98, 0.04, f"n = {len(df)}\nresidual wins in {wins}/{len(df)}",
+            transform=ax.transAxes, ha="right", va="bottom", color=INK,
+            fontsize=6.5, fontweight="bold")
     save(fig, 5, "d", "per_session")
 
 

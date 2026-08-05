@@ -72,17 +72,23 @@ def main():
     widths = [0.20, 0.14, 0.14, 0.17, 0.19, 0.16]
     x0 = [sum(widths[:i]) for i in range(len(COLS))]
 
-    fig, ax = plt.subplots(figsize=(mm(SPAN["half"]), mm(4.8 * (nrow + 2))),
+    # The header is TWO lines tall ("sessions / with 3D"), so it needs more than the
+    # one row-height a body row gets -- at one row height its two lines printed on
+    # the rules above and below it. `HDR` is its centre and the rules sit 0.9 of a
+    # row away, which is why the figure is a row taller than the table.
+    HDR = nrow + 1.2
+
+    fig, ax = plt.subplots(figsize=(mm(SPAN["half"]), mm(4.8 * (nrow + 2.7))),
                            layout="constrained")
     ax.set_axis_off()
     ax.set_xlim(0, 1)
-    ax.set_ylim(0, nrow + 1.4)
+    ax.set_ylim(0, HDR + 1.2)
 
     def row_y(i):
-        return nrow - i + 0.1
+        return nrow - i - 0.2
 
     for j, c in enumerate(COLS):
-        ax.text(x0[j], row_y(-1), c, fontweight="bold", va="center", color=INK,
+        ax.text(x0[j], HDR, c, fontweight="bold", va="center", color=INK,
                 fontsize=7)
 
     for i, r in df.iterrows():
@@ -93,7 +99,7 @@ def main():
                     color=INK if (j == 0 or last) else GREY,
                     fontweight="bold" if last else "normal")
 
-    for y, lw in ((row_y(-1) + 0.6, 0.9), (row_y(-1) - 0.5, 0.6),
+    for y, lw in ((HDR + 0.9, 0.9), (HDR - 0.9, 0.6),
                   (row_y(nrow - 2) - 0.5, 0.6), (row_y(nrow - 1) - 0.5, 0.9)):
         ax.plot([0, 1], [y, y], color=INK, lw=lw, clip_on=False)
 

@@ -35,8 +35,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (GREY, SALMON, TEAL, deposit, panel, save,  # noqa: E402
-                       text_legend, use)
+from src.style import (GREY, SALMON, TEAL, deposit, footnote, panel,  # noqa: E402
+                       save, text_legend, use)
 
 METRIC = "idf1_cross"
 
@@ -71,7 +71,11 @@ def main():
     df = build()
     deposit(df, 3, "fig3d_sweep.csv")
 
-    fig, ax = panel("half", "std", key=2)
+    # A THIRD, NOT A HALF. This panel shares its row with b and c, and the grid only
+    # closes at 180 mm if all three are "third": at "half" the row summed to 210.6 mm
+    # and `assemble.py` centres a row, so panel b was placed at x = -15.3 mm and its
+    # y axis was cut off the page. Nothing in a per-panel render shows that.
+    fig, ax = panel("third", "std", key=2)
     x = np.arange(len(df))                      # even spacing: r is not linear
 
     # ID switches, log, on the left.
@@ -83,12 +87,24 @@ def main():
     ax.tick_params(axis="y", colors=SALMON)
     ax.spines["left"].set_color(SALMON)
     # 12 ratios in one row overlapped at the low end, where they bunch (0, 0.25,
-    # 0.5, 1). Label every tick but drop the ones that collide.
+    # 0.5, 1). Label every tick but drop the ones that collide. The dropped set grew
+    # when the panel came down to a "third": 12 ticks over ~76 pt is 6.9 pt of pitch,
+    # measured, so an 11.5 pt "0.5" literally overlapped its neighbouring "1", and
+    # even the digits that technically cleared each other closed to a 2.4 pt gap and
+    # read as one run ("4 6 8"). What survives is exactly the set the docstring argues
+    # from -- 0 (the control), 1 and 2 (the two knees), 6 (shipped) and 24 (the end of
+    # the sweep) -- which also happens to be sparse enough to be legible. 1 and 2 are
+    # adjacent ticks and cannot be separated further; both are kept because the whole
+    # point of the panel is that IDF1 stops improving at one of them and switches at
+    # the other.
     ax.set_xticks(x)
-    ax.set_xticklabels(["0\n(no 3D term)" if v == 0 else
-                        (f"{v:g}" if v not in (0.25, 3.0, 12.0) else "")
+    ax.set_xticklabels([f"{v:g}" if v in (0, 1.0, 2.0, 6.0, 24.0) else ""
                         for v in df.r])
     ax.set_xlabel("r = corr3d / corr2d")
+    # "(no 3D term)" used to be the second line of the r = 0 tick label. Centred on
+    # the leftmost tick it is ~50 pt wide and ran off the left edge of the narrower
+    # panel, so the gloss moves under the axis where its width is the panel's.
+    footnote(ax, "r = 0: no 3D term at all")
 
     # Cross-view IDF1 on the right.
     ax2 = ax.twinx()

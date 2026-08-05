@@ -49,6 +49,15 @@ SERIES = [("capture_by_reproj", "cross-view residual", TEAL),
           ("capture_by_oracle", "oracle (ceiling)", SALMON)]
 MARK = "0.1"
 
+#: Where each series' value-at-MARK label goes, as (dx, dy) in points plus the
+#: vertical anchor. Hand-set per series and NOT symmetric on purpose: the three
+#: curves pass within ~5 percentage points of each other at the 10% budget, so a
+#: single offset rule puts at least one label on a neighbouring curve. Residual
+#: labels DOWN into the gap above the confidence curve; the other two label UP.
+LABEL_OFF = {"capture_by_reproj": (5, -4, "top"),
+             "capture_by_lowconf": (5, 5, "bottom"),
+             "capture_by_oracle": (5, 6, "bottom")}
+
 
 def main():
     use()
@@ -68,12 +77,16 @@ def main():
     df = pd.DataFrame(rows)
     deposit(df, 5, "fig5c_capture.csv")
 
-    fig, ax = panel("half", "std", key=1)
+    fig, ax = panel("half", "std", key=3)
     xs = [float(b) * 100 for b in budgets]
     ax.plot([0, max(xs)], [0, max(xs)], color=GREY, lw=0.9, ls=(0, (2.5, 1.5)),
             zorder=1)
-    ax.text(max(xs) * 0.72, max(xs) * 0.60, "random", color=GREY, fontsize=6.5,
-            rotation=20)
+    # BELOW the diagonal and unrotated. Set along the line it names it printed on
+    # top of it, and a rotated span's bounding box is far taller than the glyphs,
+    # so nudging it while keeping the rotation does not clear the stroke. Nothing
+    # else is ever drawn under the diagonal here -- every ranking beats random.
+    ax.text(max(xs) * 0.995, max(xs) * 0.60, "random", color=GREY, fontsize=6.5,
+            ha="right", va="top")
 
     for key, label, color in SERIES:
         g = df[df.ranking == label].sort_values("budget_pct")
@@ -82,9 +95,10 @@ def main():
         ax.plot(g.budget_pct, g.captured_pct, "o", color=color, ms=4, mec="white",
                 mew=0.8, zorder=4)
         v = g.loc[g.budget_pct == float(MARK) * 100, "captured_pct"].iloc[0]
+        dx, dy, va = LABEL_OFF[key]
         ax.annotate(f"{v:.0f}", (float(MARK) * 100, v), textcoords="offset points",
-                    xytext=(-9, 3), color=color, fontsize=6.5, fontweight="bold",
-                    ha="right")
+                    xytext=(dx, dy), color=color, fontsize=6.5, fontweight="bold",
+                    ha="left", va=va)
 
     ax.axvline(float(MARK) * 100, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
     ax.annotate("10% budget", (float(MARK) * 100, 1.0),

@@ -88,12 +88,22 @@ def main():
     ax.set_xticklabels(df.label)
     ax.set_xlabel("animals × cameras")
     ax.set_ylabel("exhaustive, ms per frame")
-    ax.set_ylim(1, ms[runnable].max() * 30)
+    # *60, not *30: the intractable slot's two-line label is anchored at 3.2x the
+    # tallest bar, and once the title took a second line the label no longer cleared
+    # the top of the axes. Headroom is cheap on a log axis.
+    ax.set_ylim(1, ms[runnable].max() * 60)
 
     # Both of these were free-floating text and both collided with the bars. The
     # agreement rate is the panel's headline, so it goes in the title position; the
     # provenance goes in the label.
-    ax.set_title(f"same grouping as LUC3D on {h['agreement_rate']:.3%} of "
+    #
+    # TWO LINES, AND IT MUST STAY TWO. Set as one line this title is ~195 pt of type
+    # on a 162 pt page: it ran 0.5 pt past the right edge -- just inside lint_text's
+    # clipped tolerance -- and PyMuPDF quietly dropped the off-page glyphs, so the
+    # linter saw a title ending at "99.999%" and reported nothing while the artwork
+    # lost "of 137,266 frames". The frame count is load-bearing (see READ THE FRAME
+    # COUNTS above), so it wraps rather than being cut.
+    ax.set_title(f"same grouping as LUC3D on\n{h['agreement_rate']:.3%} of "
               f"{h['frames_compared']:,} frames", color=TEAL, fontsize=7,
               fontweight="bold", loc="left")
     footnote(ax, "hypotheses/frame above each bar")

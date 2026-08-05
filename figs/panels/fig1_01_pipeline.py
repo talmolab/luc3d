@@ -41,7 +41,9 @@ STAGES = [
     ("export", ".slp 2.8 / H5", False, "file"),
 ]
 
-W, H, GAP, NOTCH = 2.05, 1.55, 0.36, 0.26
+#: Chevron geometry. The box holds the ICON ONLY and the label sits under it --
+#: see `main()` for why the label is no longer inside the chevron.
+W, H, GAP, NOTCH = 2.05, 1.05, 0.36, 0.24
 
 
 
@@ -62,13 +64,19 @@ def main():
     for i, (label, sub, ours, kind) in enumerate(STAGES):
         x = i * (W + GAP)
         color = chevron(ax, x, 0.0, ours)
-        # Icon above, label below -- the legacy arrangement. The icons carry the
-        # pipeline on their own, which is what makes it a schematic and not a row
-        # of captions.
-        icon(ax, kind, x + W / 2 - 0.24, 0.16, s=0.48, color=color)
-        ax.text(x + W / 2, -0.14, label, ha="center", va="top", color=INK,
-                fontsize=7.5, linespacing=1.2)
-        ax.text(x + W / 2, -H / 2 - 0.26, sub, ha="center", va="top", color=GREY,
+        # ICON INSIDE THE CHEVRON, LABEL UNDER IT. The label used to sit inside the
+        # chevron too, and it did not fit: a chevron is narrowest exactly where the
+        # notch cuts it, so the two-line labels ("videos + / calibration",
+        # "cross-view / re-ID") dropped through the bottom edge and the widest
+        # one-line label ("proofread 3D") ran out through the right point. Under the
+        # box there is the whole pitch to write in, so nothing has to be shrunk
+        # below the 7.5 pt this row already uses.
+        icon(ax, kind, x + W / 2 - 0.25, -0.25, s=0.50, color=color)
+        ax.text(x + W / 2, -H / 2 - 0.16, label, ha="center", va="top", color=INK,
+                fontsize=7.5, linespacing=1.25)
+        # Sub-labels are all on ONE baseline rather than hung off their own label,
+        # so the row reads as a row even though some labels wrap and some do not.
+        ax.text(x + W / 2, -1.42, sub, ha="center", va="top", color=GREY,
                 fontsize=6.5)
 
         if i:
@@ -82,14 +90,14 @@ def main():
     ours = [i for i, (_, _, o, _k) in enumerate(STAGES) if o]
     x0 = ours[0] * (W + GAP)
     x1 = ours[-1] * (W + GAP) + W
-    yb = -H / 2 - 0.62
-    ax.plot([x0, x0, x1, x1], [yb + 0.16, yb, yb, yb + 0.16], color=TEAL, lw=0.9)
-    ax.text((x0 + x1) / 2, yb - 0.12, "this work", ha="center", va="top",
+    yb = -1.80
+    ax.plot([x0, x0, x1, x1], [yb + 0.14, yb, yb, yb + 0.14], color=TEAL, lw=0.9)
+    ax.text((x0 + x1) / 2, yb - 0.10, "this work", ha="center", va="top",
             color=TEAL, fontsize=7, fontweight="bold")
     span = len(STAGES) * (W + GAP) - GAP
 
     ax.set_xlim(-0.35, span + 0.35)
-    ax.set_ylim(-H / 2 - 1.55, H / 2 + 0.30)
+    ax.set_ylim(-2.22, H / 2 + 0.30)
     save(fig, 1, "a", "pipeline")
 
 

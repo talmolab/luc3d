@@ -17,8 +17,8 @@ the other direction: what a hard session costs you is detections, not precision 
 the detections you get. Plotting only the error would have made difficulty look
 almost free.
 
-n per stratum is printed because the strata are far from balanced (13 sessions at
-difficulty 7, 10 each at 2 and 4).
+n per stratum is printed -- as a "rating:n" list under the x axis -- because the
+strata are far from balanced (13 sessions at difficulty 7, only 4 at difficulty 6).
 
 Source: figs/out/fig6_detections.json `by_difficulty`.
 
@@ -31,7 +31,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (GREY, PERIWINKLE, SALMON, deposit, panel, save,  # noqa: E402
+from src.style import (footnote, PERIWINKLE, SALMON, deposit, panel, save,  # noqa: E402
                        text_legend, use)
 
 
@@ -75,12 +75,14 @@ def main():
     ax2.spines["right"].set_color(SALMON)
     ax2.set_ylim(0, df.miss_rate.max() * 100 * 1.45)
 
-    for _, r in df.iterrows():
-        ax.text(r.difficulty, 0, f"n={int(r.n_sessions)}", ha="center", va="bottom",
-                color=GREY, fontsize=6.5)
-
+    # n per stratum goes UNDER the axis as one "rating:n" list, not as seven labels
+    # inside the plot: at this panel's width the in-plot labels were ~12 mm apart on
+    # a ~6 mm tick pitch, so they overprinted each other, the y axis and the
+    # difficulty-1 miss-rate marker. The counts themselves are unchanged.
     text_legend(ax, [("reprojection error", PERIWINKLE), ("miss rate", SALMON)],
                 "above")
+    footnote(ax, "n = " + ", ".join(f"{int(r.n_sessions)}"
+                                    for _, r in df.iterrows()) + " sessions")
     save(fig, 6, "s3", "difficulty_dual")
 
 

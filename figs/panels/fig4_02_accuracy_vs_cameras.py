@@ -61,13 +61,26 @@ def main():
 
     lo, hi = df.p50.iloc[0], df.p50.iloc[-1]
     # The span is the panel's whole point, so it goes on the artwork rather than
-    # only in the caption.
+    # only in the caption. This one is clear of the ribbon: p75 peaks at 8.6 mm at
+    # two cameras and has fallen to ~4 by x = 3.5.
     annotate_series(ax, 3.5, df.p75.max() * 0.92, f"{lo / hi:.1f}× span",
                     PINK, ha="center")
-    ax.annotate(f"{lo:.1f}", (2, lo), textcoords="offset points", xytext=(7, 4),
-                color=PINK, fontweight="bold")
-    ax.annotate(f"{hi:.1f}", (5, hi), textcoords="offset points", xytext=(0, -12),
-                color=PINK, fontweight="bold", ha="center")
+
+    # THE IQR RIBBON COUNTS AS INK, so an end label placed anywhere NEAR its own
+    # marker is on data: "4.7" offset up-and-right from (2, 4.75) measured 100% of its
+    # box inked, sitting inside a band that runs 2.6-8.6 mm there, and "1.2" offset
+    # below (5, 1.22) caught the band's lower edge at 9%.
+    #
+    # The one region adjacent to each end marker that the ribbon CANNOT reach is
+    # outside it in x -- `fill_between` spans exactly 2..5 -- so the two values are
+    # written horizontally outward from the end markers, and the x limits are widened
+    # to make that margin real rather than letting the labels sit on the spine. The
+    # limits move; no number and no datum does.
+    ax.set_xlim(1.32, 5.62)
+    ax.annotate(f"{lo:.1f}", (2, lo), textcoords="offset points", xytext=(-6, 0),
+                ha="right", va="center", color=PINK, fontweight="bold")
+    ax.annotate(f"{hi:.1f}", (5, hi), textcoords="offset points", xytext=(6, 0),
+                ha="left", va="center", color=PINK, fontweight="bold")
 
     ax.set_xticks([2, 3, 4, 5])
     ax.set_xlabel("cameras that saw the keypoint")

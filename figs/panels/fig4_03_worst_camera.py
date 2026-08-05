@@ -61,8 +61,12 @@ def main():
             whiskerprops=dict(color=INK, lw=0.8),
             capprops=dict(color=INK, lw=0.8),
             patch_artist=True)
-        ax.text(i, r.p95 + 0.6, f"n={r.n:,}", ha="center", va="bottom",
-                color=GREY, fontsize=7)
+        # "n=1,167,554" is 39 pt wide and the first box sits ~6 pt inside the axes, so
+        # centred on that box the label crossed the left spine. The leftmost n is
+        # therefore anchored at its box's centre and grows RIGHTWARD instead; the
+        # others have room on both sides and stay centred.
+        ax.text(i, r.p95 + 0.6, f"n={r.n:,}", va="bottom",
+                ha="left" if i == 0 else "center", color=GREY, fontsize=7)
         ax.text(i + 0.30, r.p50, f"{r.p50:.1f}", ha="left", va="center",
                 color=PINK, fontweight="bold")
 

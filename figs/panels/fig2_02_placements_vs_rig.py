@@ -30,8 +30,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load, median  # noqa: E402
-from src.style import (GREY, INK, SALMON, TEAL, annotate_series, deposit,  # noqa: E402
-                       panel, save, use)
+from src.style import (GREY, INK, SALMON, TEAL, deposit, panel, save,  # noqa: E402
+                       text_legend, use)
 
 NODES = 15          # per-animal skeleton
 CMAX = 8            # model out to an 8-camera rig
@@ -60,7 +60,15 @@ def main():
     df, ncam, p = build()
     deposit(df, 2, "fig2b_placements_vs_rig.csv")
 
-    fig, ax = panel("third", "std")
+    # A reserved band ABOVE the plot holds the two series names. They used to be
+    # written onto the data with `annotate_series`, and there is nowhere on this plot
+    # to put them: "traditional" landed on its own rising line and
+    # "reprojection-aided" sat across the dashed tau = 5 px curve.
+    #
+    # THREE slots for TWO entries, for the same reason as Fig 2c: `text_legend`'s
+    # 0.052 stack pitch is 7.7 pt against a 8.9 pt glyph box, so at key=2 the lines
+    # overlapped and the first sat 0.8 pt from the page edge.
+    fig, ax = panel("third", "std", key=3)
     # The measured band, drawn first so the curves sit on top of it.
     ax.axvspan(2, ncam, color=GREY, alpha=0.10, lw=0)
     ax.plot(df.cameras, df.traditional, color=SALMON, lw=2.0)
@@ -73,27 +81,44 @@ def main():
     ax.plot(m.cameras, m[f"aided_tau{int(TAU_MAIN)}"], "o", color=TEAL, ms=5,
             mec="white", mew=1.0)
 
-    annotate_series(ax, CMAX, CMAX * NODES - 4, "traditional", SALMON, ha="right",
-                    va="top")
-    annotate_series(ax, CMAX, 2 * NODES + 10, "reprojection-aided", TEAL,
-                    ha="right", va="bottom")
-    ax.text(CMAX, df[f"aided_tau{int(TAU_STRICT)}"].iloc[-1] + 2,
+    text_legend(ax, [("traditional", SALMON),
+                     ("reprojection-aided", TEAL)], "above",
+                xy=(0.14, 0.972), dy=0.064, transform=fig.transFigure)
+
+    # The two tolerances stay ON the plot, because each one names a specific curve
+    # and there are two teal curves. Both are pushed well clear of the line they
+    # label -- 6 units above the dashed one, 7 below the solid one -- since at this
+    # panel size a 2.0 pt line is ~2.5 data units thick on its own.
+    ax.text(CMAX, df[f"aided_tau{int(TAU_STRICT)}"].iloc[-1] + 6,
             f"τ = {TAU_STRICT:.0f} px", color=TEAL, ha="right", va="bottom",
             fontsize=7)
-    ax.text(CMAX, df[f"aided_tau{int(TAU_MAIN)}"].iloc[-1] - 3,
+    ax.text(CMAX, df[f"aided_tau{int(TAU_MAIN)}"].iloc[-1] - 7,
             f"τ = {TAU_MAIN:.0f} px", color=TEAL, ha="right", va="top", fontsize=7)
-    ax.text((2 + ncam) / 2, CMAX * NODES * 1.02, f"p measured, C ≤ {ncam}",
-            color=GREY, ha="center", va="top", fontsize=7)
+    # The band's own caption goes in the empty wedge above the traditional line on
+    # the left, INSIDE the axes: the panel saves at an exact size, so anything above
+    # y = 1 in axes coordinates is cut off rather than accommodated.
+    # Left-aligned just inside the band rather than centred on it: centred, the
+    # leading "p" hung over the y spine and read as clipped.
+    ax.text(2.12, CMAX * NODES * 1.10 * 0.985,
+            f"p measured, C ≤ {ncam}", color=GREY, ha="left", va="top",
+            fontsize=7)
 
-    # The ratio, at the measured rig size only.
+    # The ratio, at the measured rig size only. The label sits to the RIGHT of the
+    # arrow, in the wedge between the dashed tau = 5 px curve and the traditional
+    # line: to the left of the arrow, and at the arrow's own mid-height, it crossed
+    # the traditional line and the dashed curve respectively.
     aided = df.loc[df.cameras == ncam, f"aided_tau{int(TAU_MAIN)}"].iloc[0]
     trad = ncam * NODES
     ax.annotate("", (ncam - 0.35, trad), (ncam - 0.35, aided),
                 arrowprops=dict(arrowstyle="<->", lw=0.8, color=INK))
-    ax.text(ncam - 0.5, (trad + aided) / 2, f"{trad / aided:.1f}×", ha="right",
+    ax.text(ncam + 0.12, 62, f"{trad / aided:.1f}×", ha="left",
             va="center", fontweight="bold", color=INK)
 
     ax.set_xticks([2, 4, 6, 8])
+    # Explicit, because the shorter axes (the key band above it) made the locator
+    # stop at 100 while the traditional line runs to 120 -- the reader should not
+    # have to extrapolate past the last tick to read the top of a curve.
+    ax.set_yticks([0, 40, 80, 120])
     ax.set_xlabel("cameras in the rig, C")
     ax.set_ylabel("manual placements\nper animal per frame")
     ax.set_xlim(2, CMAX)

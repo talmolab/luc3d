@@ -22,9 +22,9 @@ Source: figs/out/fig6.json `mean_pose`.
 import sys
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.transforms import blended_transform_factory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
@@ -57,15 +57,22 @@ def main():
             s.set_visible(False)
         ax.set_xlabel(label, color=GREY, fontsize=7)
 
-    # A 20 mm scale bar on the first view, so the panel is a ruler.
+    # A 20 mm scale bar on the first view, so the panel is a ruler. ABOVE the axes,
+    # not inside it. `aspect="equal"` shrinks the axes BOX to the pose's own aspect
+    # rather than padding the limits, so the pose fills the box almost exactly and
+    # there is no empty corner in DATA space -- any bar placed as a fraction of the
+    # y range lands on the skeleton, which is what put the words on the nodes. The
+    # empty space is outside the box, so the bar is drawn with x in data units (so
+    # 20 mm is exactly 20 mm) and y in axes fractions, above the top edge.
     ax0 = np.atleast_1d(axes)[0]
     x0, x1 = ax0.get_xlim()
-    y0, y1 = ax0.get_ylim()
-    bx, by = x0 + 0.06 * (x1 - x0), y0 + 0.06 * (y1 - y0)
-    ax0.plot([bx, bx + 20.0], [by, by], color=INK, lw=1.6,
+    tr = blended_transform_factory(ax0.transData, ax0.transAxes)
+    bx, by = x0 + 0.02 * (x1 - x0), 1.22
+    ax0.plot([bx, bx + 20.0], [by, by], transform=tr, color=INK, lw=1.6,
              solid_capstyle="butt", clip_on=False)
-    ax0.text(bx + 10.0, by + 0.02 * (y1 - y0), "20 mm", ha="center", va="bottom",
-             color=INK, fontsize=6.5)
+    ax0.annotate("20 mm", (bx + 10.0, by), xycoords=tr, textcoords="offset points",
+                 xytext=(0, 3), ha="center", va="bottom", color=INK, fontsize=6.5,
+                 annotation_clip=False)
 
     fig.text(0.5, 0.01,
              f"generalised-Procrustes median of {mp['poses_used']:,} proofread "
