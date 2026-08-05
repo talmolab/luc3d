@@ -20,11 +20,10 @@ chevrons and the bracket beneath them mark the stages contributed here: cross-vi
 re-identification, triangulation and 3D proofreading. The 2D detector is not ours —
 per-view pose comes from SLEAP or any other predictor and LUC3D consumes `.slp`.
 **b**, One frame
-(frame 150) of an 8-camera, 3-mouse recording, 15-node skeleton. Left, the
+(frame 276) of an 8-camera, 3-mouse recording, 15-node skeleton. Left, the
 per-camera SLEAP tracks the app is given; right, the same two views after
 cross-view re-identification. Two of the eight views are shown: cam 0 mid, the
-view reconstructed in **c**, and cam 7 sideR, one of the two views in which
-per-camera tracking returned a fourth detection for three animals. Labels are the
+view reconstructed in **c**, and cam 7 sideR. Labels are the
 track name (left, abbreviated on the artwork — `t89` is `track_89`) and the identity
 (right, the app's `id_0`–`id_2` printed 1–3). Every detection carries its own label,
 and the labels *are* the correspondence: no ellipse, ring or connector is drawn
@@ -33,13 +32,14 @@ cam 7 is one animal and becomes identity **1** in both, which is the collapse th
 panel is about. Track colours are the app's arbitrary per-camera
 track colours and carry no meaning across views — that is what the panel is about;
 identity colours are shared by every view. Across all eight views the frame holds
-**26 detections, i.e. 26 per-camera track labels**, which resolve to **3
-identities, each present in all 8 views**. **24 of the 26** detections are
-assigned. The other two (`Camera3_sideC/track_226`, 14 of 15 nodes visible;
-`Camera7_sideR/track_95`, 9 of 15) are duplicate detections of an animal already
-matched in that view: assignment is one-to-one per view, so a duplicate is left
-unassigned and marked **?**, the app's own badge for a detection linked to no
-identity. Illustration; quantified in Figs 3 and 7. **c**, The same frame
+**24 detections** carrying **20 distinct track names**, which resolve to **3
+identities, each present in all 8 views** — every detection assigned, one per animal
+per view. Frame 276 was chosen for exactly that: of the 300 frames in the session
+only two (276 and 278) are fully clean in this sense, and the previously used frame
+150 carried two *duplicate* detections of animals already matched in their view,
+which assignment leaves over and the app badges **?**. That badge is a real state
+and the panel still renders it when it occurs; it is simply not what this panel is
+for. Illustration; quantified in Figs 3 and 7. **c**, The same frame
 triangulated. Left, cam 0 mid's video with the identity overlays; middle, LUC3D's
 3D viewport placed at that camera's own pose and field of view (its "Show Camera
 View"), rendered at the camera's aspect ratio and cropped to the identical
@@ -48,8 +48,8 @@ calibrated cameras plus the three reconstructed animals in their identity colour
 The rig tile carries geometry only — the app's camera name labels are switched off,
 because they are screen-space bitmaps at a fixed pixel size and pile up at the
 magnification this tile needs. Two *pairs* of cameras project within ~12 px of each
-other in the 799 × 450 render (`Camera0_mid`/`Camera4_topR`, 11.6 px;
-`Camera2_topC`/`Camera7_sideR`, 13.3 px; `fig1.json threeD.rigFraming.camScreen`), so
+other in the 799 × 450 render (`Camera0_mid`/`Camera4_topR`, 10.7 px;
+`Camera2_topC`/`Camera7_sideR`, 13.7 px; `fig1.json threeD.rigFraming.camScreen`), so
 fewer than eight frustums are separable by eye at this viewing angle; every camera's
 projected position is deposited for a composer that wants to typeset the names.
 All 3 animals were reconstructed, with all 45 of 45 3D
@@ -107,7 +107,7 @@ Triangulate All reconstructed 900 of 900 instance groups.
   lives in the gitignored `figs/session/`), the artwork says only "rig" and the
   caption says "eight calibrated cameras". If a reviewer asks for the split, quote
   the 4 + 4 from the calibration, not the names.
-* **22.** `distinctTrackNames` = 22 is the 26 per-camera track labels collapsed by
+* **20.** `distinctTrackNames` = 20 is the 24 per-camera detections collapsed by
   name. Three names are reused by more than one camera (`track_89` in cams 0 and
   5, `track_93` in cams 5, 6 and 7, `track_127` in cams 1 and 4). Two of those
   three coincidences happen to land on the same animal; `track_127` does not — it

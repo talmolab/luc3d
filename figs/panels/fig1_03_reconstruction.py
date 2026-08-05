@@ -44,7 +44,7 @@ The wins are in the two tiles that were paying for the square. Against the earli
 PORTRAIT 3D exports (800x1696) the 3D view's crop dropped 390 px -> 294 px (the old
 box carried 120 px of empty viewport above the animals) and the rig's 1113 px ->
 638 px, so at equal row height the rig printed 1.7x larger and the 3D 1.3x. The
-video tile is the one that gains nothing: its animals span 637 of 1024 px, so the old
+video tile is the one that gains nothing: its animals span 620 of 1024 px, so the old
 square crop was already sized on their HEIGHT and there is no slack to take. It
 prints 0.95x -- the panel is 35 mm rather than the 38 mm this rewrite was tuned at,
 because Fig 1 has to clear assemble.py's 200 mm ceiling and 3 mm came out of this row
@@ -52,8 +52,8 @@ to pay for the figure-level footer. That 3 mm is worth ~9% on all three tiles if
 is ever available again.
 
 BOTH 3D TILES WERE THEN RE-EXPORTED -- see RE-STAGED below. At the same printed
-height the 3D view now carries 1178 px of source instead of 294, 4.0x the linear
-resolution. The rig gains far less, 803 px against 638 (1.26x), and deliberately so:
+height the 3D view now carries 1122 px of source instead of 294, 3.8x the linear
+resolution. The rig gains far less, 801 px against 638 (1.26x), and deliberately so:
 it is LINE ART and a bigger export makes it WORSE, because three.js draws the camera
 frustums with `LineBasicMaterial`, whose `linewidth` WebGL ignores -- every frustum
 edge is one device pixel however large the canvas is, so its printed weight is (tile
@@ -103,12 +103,12 @@ could have fixed either).
 
   MEASURED ON THE CURRENT EXPORT, so this does not have to be re-litigated. The tile
   prints 47.6 x 31.7 mm (78% of the video tile's area, not the quarter the earlier
-  portrait export gave), the crop is 1205 x 804 px of `tri3d-rig.png`'s 1600 x 900,
-  and the measured content box (274, 55)-(1226, 805) sits inside it with 126 px of
+  portrait export gave), the crop is 1202 x 801 px of `tri3d-rig.png`'s 1600 x 900,
+  and the measured content box (272, 56)-(1227, 805) sits inside it with 123 px of
   margin to spare -- so nothing is clipped, all 8 camera frustums are present and
   countable, and with the app's labels off there is no overlapping type left to clip.
   Effective resolution is ~640 dpi and the thinnest frustum edge is one device pixel,
-  i.e. 31.7 mm / 804 px = 0.040 mm on the page (median ink run 0.13 mm; the frustum
+  i.e. 31.7 mm / 801 px = 0.040 mm on the page (median ink run 0.13 mm; the frustum
   colour is 3.0:1 against the tile's #1a1a1a at the median and 6.7:1 at the stroke
   core). That is thin, and THE CROP CANNOT MEANINGFULLY FIX IT: printed stroke width
   is (tile mm)/(crop px), the crop is already only 7% taller than the content it must
@@ -143,10 +143,14 @@ VIEW_CAM = "Camera0_mid"
 #: `node figs/fig1_tracking.mjs`. THE BBOXES BELONG TO THOSE EXPORTS: re-run the
 #: driver with a different pane size or rig framing and they must be re-measured, or
 #: the crop silently slides off the content.
+#:
+#: `{frame}` is filled from the manifest, never hard-coded: the driver names its
+#: exports by frame, so a literal frame number here silently kept reading the OLD
+#: tile after the driver was re-run on another frame.
 TILES = [
-    ("after-f150-Camera0_mid.png", "cam 0 mid: video", None, 1.87),
-    ("tri3d-camview.png", "cam 0 mid: 3D", (618, 926, 1573, 2027), 1.95),
-    ("tri3d-rig.png", "rig", (274, 55, 1227, 806), 1.50),
+    ("after-f{frame}-Camera0_mid.png", "cam 0 mid: video", None, 1.87),
+    ("tri3d-camview.png", "cam 0 mid: 3D", (594, 949, 1573, 1998), 1.95),
+    ("tri3d-rig.png", "rig", (272, 56, 1227, 805), 1.50),
 ]
 #: Breathing room added to the bbox HEIGHT, as a fraction of it -- the number that
 #: sets how big everything prints, so it stays small.
@@ -207,7 +211,8 @@ def main():
     # assemble.py's 200 mm ceiling, so this is where the trade lands.
     fig.get_layout_engine().set(rect=(0, 0.088, 1, 0.912), wspace=0.01,
                                 w_pad=0.004, h_pad=0.004)
-    for ax, (name, badge, crop, aspect) in zip(axes, TILES):
+    for ax, (name_tpl, badge, crop, aspect) in zip(axes, TILES):
+        name = name_tpl.format(frame=j["frame"])
         p = OUT / name
         if not p.exists():
             sys.exit(f"missing figs/out/{name} — run `node figs/fig1_tracking.mjs`")

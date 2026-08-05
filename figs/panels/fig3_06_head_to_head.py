@@ -90,6 +90,10 @@ from src.style import (MUTED, SALMON, TEAL, annotate_series, deposit,  # noqa: E
 #: dataset "both" and names the two detection pools but does not tag the rows, so
 #: the split is recorded here and CHECKED against the file's own session list -- a
 #: new bench session must be classified deliberately rather than defaulted.
+#: SLAP-2M's acquisition rate, used only to express the extrapolated per-frame cost
+#: as video time. The 4x6 configuration is a SLAP-2M rig.
+FPS = 50.0
+
 CORPUS = {
     "10072022131531": "SLAP-2M",
     "10072022142111": "SLAP-2M",
@@ -269,9 +273,18 @@ def main():
     # Same width limit, and tighter: footnote() folds the note into the x label, which
     # is CENTRED on the axes, so a line may only be ~2x the smaller side margin --
     # ~44 mm here. The provenance of the two rates is in the docstring and caption.
+    # The per-frame figure is correct but not graspable, so give it a unit a reader
+    # can check against their own experience: at SLAP-2M's 50 fps, ONE SECOND of
+    # video is 50 frames. That turns "about a day per frame" from an implausible
+    # number into an obviously intractable one, which is the panel's actual point.
+    days_per_s_video = df.exhaustive_hi_s.iloc[-1] * FPS / 86400.0
+    lo_h = df.exhaustive_lo_s.iloc[-1] / 3600.0
+    hi_h = df.exhaustive_hi_s.iloc[-1] / 3600.0
     footnote(ax, "○ not run, extrapolated:\n"
                  f"{df.hypotheses.iloc[-1] / 1e8:.1f}×10⁸ hyps × "
-                 f"{meta['rate_lo'] * 1e6:.0f}–{meta['rate'] * 1e6:.0f} µs")
+                 f"{meta['rate_lo'] * 1e6:.0f}–{meta['rate'] * 1e6:.0f} µs\n"
+                 f"= {lo_h:.0f}–{hi_h:.0f} h per frame\n"
+                 f"1 s of {FPS:g} fps video ≈ {days_per_s_video:.0f} days")
     save(fig, 3, "f", "head_to_head")
 
 

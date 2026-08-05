@@ -1,2 +1,2 @@
 detections,distinct_track_names,names_reused_across_cameras,reused_names,identities,assigned,unassigned,cameras,views_missing_an_identity
-26,22,3,track_89 track_127 track_93,3,24,2,8,0
+24,20,3,track_89 track_127 track_93,3,24,0,8,0

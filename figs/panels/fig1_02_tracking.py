@@ -28,53 +28,59 @@ TIGHT on the recorded animal bbox vertically, WIDE horizontally. That spends the
 54 mm on arena instead of on white space and costs nothing, because how big an
 animal PRINTS is set by the crop's height in pixels against the row's height in mm,
 not by the tile's width. It also stops the wider camera subsidising the narrower
-one: cam 7's animals span 510 px and cam 0's 637, and under the old square crop
-cam 7 was scaled by its 707 px WIDTH, printing its animals ~40% smaller than they
-need to be.
+one: on frame 276 cam 7's animals span 522 px vertically and cam 0's 620, and under
+the old square crop cam 7 would be scaled by its 652 px WIDTH, printing its animals
+~25% smaller than they need to be.
+
+THE FRAME IS CHOSEN, AND THE CHOICE IS PART OF THE ARGUMENT. Frame 276, not 150.
+At frame 150 two views (Camera3_sideC, Camera7_sideR) each carried a FOURTH detection
+in a three-animal scene -- a duplicate of an animal already matched in that view.
+Re-ID's per-view assignment is one-to-one, so the surplus was correctly left over and
+this panel drew it as `?`. That behaviour is right, and the `?` code path below is
+kept for exactly that reason; but it is the wrong thing for THIS panel to lead with.
+The panel exists to show 24 detections collapsing to 3 clean identities, and a stray
+`?` sends the reader looking for a failure instead. All 300 frames of the window were
+scanned for "every camera has exactly 3 detections AND re-ID assigned all of them";
+exactly two qualify (276 and 278) and the driver takes 276. See
+`figs/fig1_tracking.mjs` for the scan and the 276-vs-278 tie-break.
 
 THE LEDGER IS THE RESULT, and it is printed under the tiles rather than left to the
 caption. It is one line and every number in it is a different quantity, so each is
 named for what it actually counts:
 
-  26 DETECTIONS, not "26 labels". A per-camera track label is a (camera, track) pair
+  24 DETECTIONS, not "24 labels". A per-camera track label is a (camera, track) pair
   -- `track_89` in cam 0 and `track_89` in cam 5 are two unrelated labels, because
-  the tracker numbers each view independently -- so 26 IS the number of things a
-  reader would have to reconcile by hand. But there are only 22 distinct label
-  STRINGS, and an earlier version of this line printed 26 and called it a label
-  count, which a reader who counts strings in the data cannot reproduce. Both
-  numbers are now on the artwork and both are in `fig1b_reid_ledger.csv`.
+  the tracker numbers each view independently -- so 24 IS the number of things a
+  reader would have to reconcile by hand. But there are only 20 distinct label
+  STRINGS, and an earlier version of this line printed the detection count and called
+  it a label count, which a reader who counts strings in the data cannot reproduce.
+  Both numbers are now on the artwork and both are in `fig1b_reid_ledger.csv`.
 
-  22 DISTINCT TRACK NAMES, 3 of them reused across cameras: `track_127` in cams 1
-  and 4, `track_89` in cams 0 and 5, `track_93` in cams 5, 6 and 7 (`ledger.
+  20 DISTINCT TRACK NAMES, 3 of them reused across cameras: `track_89` in cams 0
+  and 5, `track_127` in cams 1 and 4, `track_93` in cams 5, 6 and 7 (`ledger.
   collidingNames`). Those coincidences are not correspondence -- they are a shared
-  counter -- and `track_127` is a different animal in cam 1 than in cam 4. So the
+  counter -- and `track_93` means a different animal in cam 5 than in cam 7. So the
   reuse strengthens the panel's claim rather than qualifying it: a label string does
   not even identify an animal within one rig.
 
   3 IDENTITIES, ONE PER ANIMAL IN EVERY VIEW. Checked, not asserted: the clause is
   printed only when `ledger.viewsMissingAnIdentity` is empty AND
-  `assigned == identities x cameras` (24 = 3 x 8 here).
-
-  2 EXTRA DETECTIONS UNASSIGNED -- and they are EXTRA, not missing. An earlier
-  version of this docstring called them "a partially-occluded animal in
-  Camera3_sideC and Camera7_sideR", which contradicts the deposit: no view is
-  missing an animal (`viewsMissingAnIdentity == []`, and every one of the 8 views
-  carries all three identities). What cam 3 and cam 7 have is a FOURTH detection
-  (`track_226`, 14 nodes; `track_95`, 9 nodes) in a frame with three animals, and
-  re-ID's per-view assignment is one-to-one, so the surplus detection is deliberately
-  left over. That is what the `?` on the artwork marks: a detection with no identity,
-  not an animal with no detection.
+  `assigned == identities x cameras` (24 = 3 x 8 here). On this frame both hold, so
+  there is no "N of M assigned" fallback and no "extra detections unassigned" tail --
+  the line ends on the claim. If a future run leaves a view short, or leaves a
+  detection over, those clauses come back automatically; they are not deleted, and
+  the `?` is not suppressed. Artwork and deposit cannot disagree.
 
 EVERY ANIMAL CARRIES ITS OWN LABEL, and without them the panel does not make its
 claim. The left pair is meant to show that the tracker's labels are PER CAMERA and
-carry no correspondence: `t89`/`t82`/`t94` in cam 0 against `t83`/`t93`/`t95`/`t96`
-in cam 7, seven labels for three animals in two of eight views. With the labels
-removed (as an earlier pass of this rewrite had it) the left pair is just three
-differently-coloured skeletons and nothing on the artwork shows what the 26 in the
+carry no correspondence: `t89`/`t82`/`t94` in cam 0 against `t83`/`t93`/`t95` in
+cam 7, six labels for three animals in two of eight views, with no clue in the
+strings themselves that t89 and t83 are the same mouse. With the labels removed (as
+an earlier pass of this rewrite had it) the left pair is just three
+differently-coloured skeletons and nothing on the artwork shows what the 24 in the
 ledger line ARE. The right pair carries the identity the app assigned -- `1`, `2`,
-`3`, the same number for the same animal in both views, and `?` for the one
-detection re-ID left unassigned. So the collapse the ledger line counts is drawn:
-t89 and t83 both become 1.
+`3`, the same number for the same animal in both views. So the collapse the ledger
+line counts is drawn: t89 and t83 both become 1.
 
 Labels are placed above each detection's own recorded bbox (`details[].box`, source
 pixels), pushed apart vertically when two animals are in contact -- the normal case
@@ -188,6 +194,11 @@ def short_label(d, stage):
     `?` for a detection re-ID did not assign. `?` is set in INK rather than in the
     detection's leftover per-track colour, because an identity colour is precisely
     what it does not have.
+
+    The `?` branch does NOT fire on the frame this panel ships (276: every detection
+    assigned). It is kept because it is the honest rendering of an unassigned
+    detection, and because the frame is a driver constant -- re-run on a frame with a
+    surplus detection and the artwork must say so rather than quietly drop it.
     """
     if stage == "before":
         return d["track"].replace("track_", "t"), d["color"] or "#000000"
@@ -200,9 +211,10 @@ def short_label(d, stage):
 def dodge(items, min_dy, min_dx):
     """Push apart labels that would overprint; the lower of a colliding pair moves DOWN.
 
-    Two mice in contact is the normal case in this data, not the exception (cam 7's
-    `t95` and `t96` are 22 px apart horizontally and 28 px vertically), so their
-    labels land on top of each other unless something separates them. Ported from
+    Two mice in contact is the normal case in this data, not the exception (on frame
+    276 cam 7's `t83` and `t93` are 126 px apart horizontally but only 26 px
+    vertically, and cam 0's `t89` and `t82` 122 px / 24 px), so their labels land on
+    top of each other unless something separates them. Ported from
     the legacy figure's `dodge()`, in source pixels instead of millimetres.
     """
     placed = []
@@ -256,7 +268,11 @@ def main():
     tiles = []
     for stage, _ in STAGES:
         for cam in CAMS:
-            p = OUT / f"{stage}-f150-{cam}.png"
+            # The frame comes from the manifest, never from a literal: the driver's
+            # exports are named by frame, so a hard-coded 150 here silently kept
+            # reading the OLD tiles after the driver was re-run on another frame --
+            # artwork and deposit disagreeing with each other.
+            p = OUT / f"{stage}-f{j['frame']}-{cam}.png"
             if not p.exists():
                 sys.exit(f"missing figs/out/{p.name} — run `node figs/fig1_tracking.mjs`")
             tiles.append((p, bbox_for(j[stage], cam), cam))
@@ -315,7 +331,7 @@ def main():
             ax = axes[2 * k + i]
             x0, y0, x1, y1 = crops[2 * k + i]
             # Source pixels per typographic point IN THIS TILE. The two cameras have
-            # different crop heights (cam 0 sees 675 px, cam 7 540 px, both printed
+            # different crop heights (cam 0 sees 657 px, cam 7 553 px, both printed
             # ~33 mm tall), so one fixed pixel offset would print at two different
             # sizes and one fixed pixel gap would clear the animal in one tile and
             # not the other.
@@ -329,7 +345,7 @@ def main():
                 # but not GENEROUS, because every pixel of over-estimate turns a pair
                 # that would have fitted into a dodge, and a dodged label drops out of
                 # the dark arena wall and onto its own animal. `t89` and `t82` are
-                # 124 px apart and were being dodged on a 130 px estimate.
+                # 122 px apart and were being dodged on a 130 px estimate.
                 half = (0.56 * len(s) + 0.64) * LABEL_PT * px_pt / 2
                 cx = min(max(d["centroid"][0], x0 + half), x1 - half)
                 labs.append(dict(x=cx, y=d["box"][1] - LABEL_GAP_PT * px_pt,

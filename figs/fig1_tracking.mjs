@@ -33,7 +33,22 @@ import {
     rigFit, writeManifest, shootEl, clearOverlays, done, log, CAMS,
 } from './_drive.mjs';
 
-const FRAME = Number(process.env.FRAME || 150);
+// FRAME 276, NOT 150 -- AND THE CHOICE IS THE PANEL'S ARGUMENT.
+// Panel b exists to show 3 x 8 = 24 detections collapsing to 3 identities, one per
+// animal in every view. At frame 150 two views (Camera3_sideC, Camera7_sideR) each
+// carried a FOURTH detection in a 3-animal scene -- a duplicate of an animal already
+// matched in that view -- and re-ID's per-view assignment is one-to-one, so the
+// surplus was correctly left unassigned and the panel drew it as `?`. That is a real
+// and defensible behaviour, but it is the wrong thing for THIS panel to lead with: a
+// stray `?` invites the reader to ask what went wrong instead of reading the collapse.
+// Every one of the 300 frames in this window was scanned (load once, Track All once,
+// then read s.frameGroups + getIdentityIdForTrack for all 300 -- no per-frame export)
+// for "every camera has exactly NANIMALS detections AND re-ID assigned all of them".
+// Exactly TWO frames qualify: 276 and 278. 276 is used; at 278 the third animal
+// (reared against the near wall in Camera7_sideR) has several skeleton edges falling
+// off it onto the black frame, which at 40 mm reads as noise. In both, all 3 animals
+// carry all 15 nodes in both figure cameras.
+const FRAME = Number(process.env.FRAME || 276);
 const NANIMALS = Number(process.env.NANIMALS || 3);
 const VIEW_CAM = process.env.VIEW_CAM || 'Camera0_mid';
 const BRIGHT = Number(process.env.BRIGHT || 1.9);
