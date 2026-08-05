@@ -93,7 +93,7 @@ the embedded font name differs.
 | `fig2_protocol.mjs` | Stages the reprojection-aided labelling protocol in the app for Fig 2a: label 2 anchors → triangulate from ONLY those two (via the app's Camera Views weights) → reprojections in the rest → accept/nudge. Records the app's own per-view reprojection errors. |
 | `fig2_measure.py` | Measures Fig 2b/2c on real proofread BMimica data. Run with the bench env. |
 | `fig5_panel_a.mjs` | Stages Fig 5a in the app: Track All -> Triangulate All with **all** views contributing, then exports the tiles plus the app's own per-view reprojection errors (`fig5a.json`). Exists because Fig 5a used to reuse Fig 2's **two-anchor** frame, which inflated every non-anchor residual by design and made its headline number an artefact. |
-| `probe.mjs`, `fig1_gui.mjs` | Earlier full-GUI screenshot passes. Kept because the whole-window shot is still useful for docs/slides, but it is **not** the figure — at print size the 8-pane GUI is illegible, which is why Fig 1b uses native-resolution crops instead. |
+| `probe.mjs`, `fig1_gui.mjs` | Earlier full-GUI screenshot passes. Kept because the whole-window shot is still useful for docs/slides, but it is **not** the figure — at print size the 8-pane GUI is illegible, which is why Fig 1b uses native-resolution crops instead. **Naming rule (enforced): every file these two write is prefixed `gui-`, and no `panels/*.py` may read a `gui-*` file.** They used to write `fig1b-*.png` / `probe-full.png`, names indistinguishable from Fig 1's real panel sources — which is how `panels/fig1_03_reconstruction.py` came to read two stale pre-`setIdentityPalette()` files for weeks (see below). Do not reintroduce figure-shaped names here; a panel's source must come from the driver named after that figure. |
 | `lint_text.py` | Finds overlapping and clipped text in the RENDERED panel PDFs, by measuring every text span's bounding box. Non-zero exit if anything is found, so it works as a pre-submission gate. This is the useful half of the legacy `lint.py`, reinstated for the same reason: these defects exist only in the emitted geometry and reading the generator source never finds them. It caught 55 on its first run. |
 | `legacy/` | The retired `nature.py` composite-SVG path (`fig1.py`…`fig6.py`, `lint.py`, `render.mjs`). Not part of the build; kept for the provenance in its docstrings. See `legacy/README.md`. |
 
@@ -133,8 +133,16 @@ anywhere. The panel was consuming a stale driver's files, so re-running
 `tri3d-rig.png`.
 
 Two lessons worth keeping: when an export looks stale, check WHICH driver writes the
-file the panel actually opens; and `fig1_gui.mjs` still writes those legacy names, so
-its 2026-08-03 PNGs will linger in `out/` and can be picked up again by mistake.
+file the panel actually opens; and an ambiguous filename is itself the bug — as long
+as `fig1_gui.mjs` wrote `fig1b-*` names, a re-run would recreate exactly the files
+that got picked up by mistake.
+
+**The trap is now disarmed.** `fig1_gui.mjs` and `probe.mjs` write only `gui-*`
+names (`gui-a-predictions.png` … `gui-i-full-matched.png`, `gui-probe-full.png`),
+both carry a header saying their output must not be read by any panel, and the 21
+orphaned `fig1b-*.png` / `probe-full.png` files were deleted from `out/` after
+grepping `panels/` to confirm nothing read them. `fig1b_reid_ledger.csv`
+(`panels/fig1_02_tracking.py`, under `data/fig1/`) is unrelated and stays.
 
 **The rig tile (fixed), and a premise that was also wrong.** The old export was
 800x1696 portrait with the rig occupying ~19% of frame and camera labels clipped at
