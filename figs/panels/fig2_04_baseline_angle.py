@@ -36,7 +36,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load, median  # noqa: E402
-from src.style import (GREY, PERIWINKLE, TEAL, deposit, panel, save, use)  # noqa: E402
+from src.style import (MUTED, GREY, PERIWINKLE, TEAL, deposit, panel, save, use)  # noqa: E402
 
 BAND = 0.25
 
@@ -91,7 +91,7 @@ def main():
     # two numbers reads as a range or a minus sign. The CSV keeps the raw key.
     for _, r in df[~df.within_band].iterrows():
         ax.annotate(f"cam {r.pair.replace('-', '+')}",
-                    (r.baseline_deg, r.err3d_mm), fontsize=7, color=GREY,
+                    (r.baseline_deg, r.err3d_mm), fontsize=7, color=MUTED,
                     textcoords="offset points", xytext=(6, 2))
 
     ax.text(0.97, 0.95, f"k = {k:.2f} mm\n{int(df.within_band.sum())}/{len(df)} "

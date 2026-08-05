@@ -43,7 +43,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, PERIWINKLE, SALMON, TEAL, deposit, panel,  # noqa: E402
+from src.style import (MUTED, footnote, GREY, PERIWINKLE, SALMON, TEAL, deposit, panel,  # noqa: E402
                        save, use)
 
 TRACKERS = [("luc3d", "LUC3D", TEAL), ("sleap", "SLEAP", PERIWINKLE),
@@ -91,7 +91,7 @@ def main():
                 f"{label}  {int((v >= MARK).sum())}/{len(v)} · {am[key]}/{n_cs}",
                 transform=ax.transAxes, ha="left", color=color, fontsize=7,
                 fontweight="bold")
-    ax.text(MARK - 0.015, 96, f"IDF1 ≥ {MARK}", color=GREY, fontsize=7, ha="right",
+    ax.text(MARK - 0.015, 96, f"IDF1 ≥ {MARK}", color=MUTED, fontsize=7, ha="right",
             rotation=90, va="top")
 
     ax.set_xlim(0, 1)

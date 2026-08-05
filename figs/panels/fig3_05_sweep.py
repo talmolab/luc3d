@@ -35,7 +35,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (GREY, SALMON, TEAL, deposit, footnote, panel,  # noqa: E402
+from src.style import (MUTED, GREY, SALMON, TEAL, deposit, footnote, panel,  # noqa: E402
                        save, text_legend, use)
 
 METRIC = "idf1_cross"
@@ -126,7 +126,7 @@ def main():
     ax.axvline(xr, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
     ax.annotate(f"shipped r = {SHIPPED_R:g}", (xr, 1.0),
                 xycoords=("data", "axes fraction"), xytext=(0, 2),
-                textcoords="offset points", color=GREY, fontsize=6.5,
+                textcoords="offset points", color=MUTED, fontsize=6.5,
                 ha="center", va="bottom")
 
     text_legend(ax, [("ID switches", SALMON), ("cross-view IDF1", TEAL)], "above")

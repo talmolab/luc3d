@@ -42,7 +42,7 @@ from matplotlib.lines import Line2D
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import OUT, load  # noqa: E402
 from src.diagram import blank, icon, point, ray  # noqa: E402
-from src.style import GREY, INK, SALMON, SPAN, TEAL, mm, save, tile, use  # noqa: E402
+from src.style import MUTED, GREY, INK, SALMON, SPAN, TEAL, mm, save, tile, use  # noqa: E402
 
 STEPS = ["label 2 anchor views", "triangulate",
          "reprojections appear", "accept or nudge"]
@@ -132,7 +132,7 @@ def schematic(ax):
     ax.text(px, py + 0.35, "3D", ha="center", va="bottom", color=SALMON,
             fontsize=6.5, fontweight="bold")
     ax.text(-2.4, -2.6, "2 views labelled", color=INK, fontsize=6.5)
-    ax.text(-2.4, -3.2, "other 6: weight 0", color=GREY, fontsize=6.5)
+    ax.text(-2.4, -3.2, "other 6: weight 0", color=MUTED, fontsize=6.5)
     ax.text(5.0, -2.6, "rest reprojected", color=TEAL, fontsize=6.5, ha="right")
     ax.set_xlim(-2.6, 5.2)
     ax.set_ylim(-3.6, 2.6)

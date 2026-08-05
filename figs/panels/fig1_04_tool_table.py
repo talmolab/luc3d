@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.style import SPAN, mm, GREY, INK, SALMON, TEAL, deposit, save, use  # noqa: E402
+from src.style import MUTED, SPAN, mm, GREY, INK, SALMON, TEAL, deposit, save, use  # noqa: E402
 from src.tools_table import CHECK_DATE, COLS, NEEDS_CHECK, TOOLS  # noqa: E402
 
 NO = "–"
@@ -72,10 +72,10 @@ def main():
             if v is True:
                 tick(ax, x0[j], row_y(i))
             elif v is False:
-                ax.text(x0[j], row_y(i), NO, va="center", color=GREY,
+                ax.text(x0[j], row_y(i), NO, va="center", color=MUTED,
                         fontsize=CELL_PT)
             else:
-                ax.text(x0[j], row_y(i), str(v), va="center", color=GREY,
+                ax.text(x0[j], row_y(i), str(v), va="center", color=MUTED,
                         fontsize=CELL_PT,
                         fontweight="bold" if first else "normal")
 

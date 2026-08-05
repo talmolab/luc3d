@@ -44,7 +44,7 @@ from matplotlib.patches import Rectangle
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.diagram import blank, icon, point, ray  # noqa: E402
-from src.style import GREY, INK, PERIWINKLE, TEAL, grid, save, use  # noqa: E402
+from src.style import MUTED, GREY, INK, PERIWINKLE, TEAL, grid, save, use  # noqa: E402
 
 #: Data-space box. The panel is 88 x 52 mm, so 10 x 5.9 data units keeps one unit
 #: square-ish in both directions and the geometry undistorted -- `aspect("equal")`
@@ -97,7 +97,7 @@ def draw_3d(ax):
     # reader. Below the line at this x there is nothing until the 3D term.
     lx = 7.00
     ly = a[1] + (lx - a[0]) / (b[0] - a[0]) * (b[1] - a[1])
-    ax.text(lx, ly - 0.30, "ray(d)", color=GREY, fontsize=6.5, ha="center",
+    ax.text(lx, ly - 0.30, "ray(d)", color=MUTED, fontsize=6.5, ha="center",
             va="top")
     t = (4.50, 2.66)
     f = foot_of_perpendicular(t, a, b)

@@ -48,7 +48,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, INK, PERIWINKLE, SALMON, TEAL, deposit, panel,  # noqa: E402
+from src.style import (MUTED, footnote, GREY, INK, PERIWINKLE, SALMON, TEAL, deposit, panel,  # noqa: E402
                        save, text_legend, use)
 
 SERIES = [("capture_by_reproj", "cross-view residual", TEAL),
@@ -92,7 +92,7 @@ def main():
     # top of it, and a rotated span's bounding box is far taller than the glyphs,
     # so nudging it while keeping the rotation does not clear the stroke. Nothing
     # else is ever drawn under the diagonal here -- every ranking beats random.
-    ax.text(max(xs) * 0.995, max(xs) * 0.60, "random", color=GREY, fontsize=6.5,
+    ax.text(max(xs) * 0.995, max(xs) * 0.60, "random", color=MUTED, fontsize=6.5,
             ha="right", va="top")
 
     for key, label, color in SERIES:
@@ -115,12 +115,12 @@ def main():
     # top-to-bottom 32 / 27 / 12 / 10 in curve order.
     ax.annotate(f"{float(MARK) * 100:.0f}",
                 (float(MARK) * 100, float(MARK) * 100), textcoords="offset points",
-                xytext=(5, -5), color=GREY, fontsize=6.5, fontweight="bold",
+                xytext=(5, -5), color=MUTED, fontsize=6.5, fontweight="bold",
                 ha="left", va="top")
     ax.axvline(float(MARK) * 100, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
     ax.annotate("10% budget", (float(MARK) * 100, 1.0),
                 xycoords=("data", "axes fraction"), xytext=(0, 2),
-                textcoords="offset points", color=GREY, fontsize=6.5,
+                textcoords="offset points", color=MUTED, fontsize=6.5,
                 ha="center", va="bottom")
     text_legend(ax, [(lab, c) for _, lab, c in SERIES], "above")
     ax.set_xlabel("keypoints reviewed, worst first (%)")

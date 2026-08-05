@@ -29,7 +29,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load, median  # noqa: E402
-from src.style import GREY, PERIWINKLE, TEAL, deposit, panel, save, use  # noqa: E402
+from src.style import MUTED, GREY, PERIWINKLE, TEAL, deposit, panel, save, use  # noqa: E402
 
 DLT_C, REF_C = PERIWINKLE, TEAL
 GROUPS = [("reproj_p50", "cameras it used", "(enforced)"),
@@ -92,7 +92,7 @@ def main():
         # axis, enough to clear the arrow between them.
         ax.text(centre - 0.14, hi + 0.30, f"{md:.2f}", ha="right", va="top",
                 fontweight="bold", color=DLT_C)
-        ax.text(centre, hi + 0.30, "→", ha="center", va="top", color=GREY)
+        ax.text(centre, hi + 0.30, "→", ha="center", va="top", color=MUTED)
         ax.text(centre + 0.14, hi + 0.30, f"{mb:.2f}", ha="left", va="top",
                 fontweight="bold", color=REF_C)
         wins = int((g.refined < g.dlt).sum())

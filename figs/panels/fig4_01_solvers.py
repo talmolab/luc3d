@@ -29,7 +29,7 @@ from matplotlib.patches import FancyBboxPatch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.diagram import blank, camera, free, lock, point, ray, residual, loop  # noqa: E402
-from src.style import grid, GREY, INK, PERIWINKLE, TEAL, save, use  # noqa: E402
+from src.style import MUTED, grid, GREY, INK, PERIWINKLE, TEAL, save, use  # noqa: E402
 
 #: The legacy panel drew each solver in its own outlined card with a thick coloured
 #: rule down the left edge; the restyle dropped both and left three unbounded
@@ -93,7 +93,7 @@ def draw(ax, s):
     ax.set_ylim(CARD[1] - 0.12, CARD[3] + 0.12)
     # Title block reads top-down: what it is, what it minimises, what the app calls it.
     ax.text(-1.4, 4.3, s["title"], fontweight="bold", va="top", color=INK)
-    ax.text(-1.4, 3.6, s["sub"], va="top", color=GREY, fontsize=7)
+    ax.text(-1.4, 3.6, s["sub"], va="top", color=MUTED, fontsize=7)
     ax.text(-1.4, 3.0, s["tag"], va="top", color=s["color"], fontsize=7)
 
 

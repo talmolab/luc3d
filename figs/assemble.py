@@ -194,11 +194,36 @@ def panel_pdf(fig_no: int, letter: str, slug: str) -> Path | None:
     return p if p.exists() else None
 
 
+def stale(fig_no: int) -> list[str]:
+    """Panels whose SOURCE is newer than their rendered PDF.
+
+    A composite silently embedding superseded panel content is reachable and was
+    reached: between two edits the committed figN.pdf carried a clipped row and a
+    miscoloured key while every file was present and looked complete. Nothing in
+    the build noticed, because `assemble` only checks that a panel PDF EXISTS.
+    """
+    out = []
+    for row in LAYOUTS.get(fig_no, []):
+        for letter, slug in row:
+            pdf = panel_pdf(fig_no, letter, slug)
+            if pdf is None:
+                continue
+            for src in (FIGS / "panels").glob(f"fig{fig_no}_*.py"):
+                if f'"{letter}", "{slug}"' in src.read_text():
+                    if src.stat().st_mtime > pdf.stat().st_mtime:
+                        out.append(f"fig{fig_no}{letter} ({src.name})")
+                    break
+    return out
+
+
 def assemble(fig_no: int) -> Path | None:
     if fig_no not in LAYOUTS:
         print(f"  fig{fig_no}: no layout defined in assemble.py")
         return None
     rows = LAYOUTS[fig_no]
+
+    for s_ in stale(fig_no):
+        print(f"  fig{fig_no}: STALE — {s_} is newer than its PDF; re-run its panel")
 
     resolved, missing = [], []
     for row in rows:

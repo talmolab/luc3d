@@ -26,7 +26,7 @@ from matplotlib.patches import FancyArrowPatch, Rectangle
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.diagram import blank, icon  # noqa: E402
-from src.style import GREY, INK, SALMON, TEAL, grid, save, use  # noqa: E402
+from src.style import MUTED, GREY, INK, SALMON, TEAL, grid, save, use  # noqa: E402
 
 NCOL, NROW = 8, 3          # the hypothesis grid
 WIN = (3, 1)               # which cell is the kept grouping
@@ -41,7 +41,7 @@ def box(ax, title, sub, accent):
             va="center")
     # 8.0, not 6.5: mathtext superscripts render at ~0.7x, so (A!)$^C$ at
     # 6.5 pt put its C at 4.55 pt -- under Nature's 5 pt floor.
-    ax.text(0.45, 4.10, sub, color=GREY, fontsize=8.0, va="center")
+    ax.text(0.45, 4.10, sub, color=MUTED, fontsize=8.0, va="center")
 
 
 def draw_exhaustive(ax):

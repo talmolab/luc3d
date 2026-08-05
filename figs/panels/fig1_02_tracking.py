@@ -79,7 +79,7 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import OUT, load  # noqa: E402
-from src.style import (GREY, INK, SPAN, deposit, mm, save, tile, use)  # noqa: E402
+from src.style import (MUTED, GREY, INK, SPAN, deposit, mm, save, tile, use)  # noqa: E402
 
 import pandas as pd  # noqa: E402
 
@@ -345,13 +345,13 @@ def main():
     # How much of the rig is on show. The ledger line counts all 8 views; without
     # this the reader has no way to know these 4 tiles are 2 cameras, not 8.
     fig.text(0.994, 0.912, f"2 of {j['stats']['nCameras']} views", ha="right",
-             va="bottom", color=GREY, fontsize=7)
+             va="bottom", color=MUTED, fontsize=7)
 
     fig.text(0.5, 0.043,
              f"{led['detections']} per-camera track labels in {j['stats']['nCameras']} "
              f"views → {led['identities']} identities, one per animal in every view "
              f"({led['assigned']} of {led['detections']} assigned)",
-             ha="center", va="center", color=GREY, fontsize=7)
+             ha="center", va="center", color=MUTED, fontsize=7)
     save(fig, 1, "b", "tracking")
 
 

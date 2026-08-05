@@ -26,7 +26,7 @@ from matplotlib.patches import FancyArrowPatch, Polygon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.diagram import blank, icon  # noqa: E402
-from src.style import grid, GREY, INK, SALMON, TEAL, save, use  # noqa: E402
+from src.style import MUTED, grid, GREY, INK, SALMON, TEAL, save, use  # noqa: E402
 
 #: label, sub-label, is-a-contribution-of-this-paper
 #: SIX stages, matching the legacy figure. Export is not decoration: emitting SLP
@@ -76,7 +76,7 @@ def main():
                 fontsize=7.5, linespacing=1.25)
         # Sub-labels are all on ONE baseline rather than hung off their own label,
         # so the row reads as a row even though some labels wrap and some do not.
-        ax.text(x + W / 2, -1.42, sub, ha="center", va="top", color=GREY,
+        ax.text(x + W / 2, -1.42, sub, ha="center", va="top", color=MUTED,
                 fontsize=6.5)
 
         if i:

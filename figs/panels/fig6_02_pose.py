@@ -32,7 +32,7 @@ from matplotlib.transforms import blended_transform_factory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import grid, GREY, INK, TEAL, deposit, save, use  # noqa: E402
+from src.style import MUTED, grid, GREY, INK, TEAL, deposit, save, use  # noqa: E402
 
 VIEWS = [((0, 1), "top (x–y)"), ((0, 2), "side (x–z)")]
 
@@ -81,7 +81,7 @@ def main():
     fig.text(0.5, 0.01,
              f"generalised-Procrustes median of {mp['poses_used']:,} proofread "
              f"poses · nose-to-trunk {mp['nose_to_trunk_mm']:.1f} mm",
-             ha="center", va="bottom", color=GREY, fontsize=6.5)
+             ha="center", va="bottom", color=MUTED, fontsize=6.5)
     fig.subplots_adjust(wspace=0.06, bottom=0.16)
     save(fig, 6, "s2", "mean_pose")
 

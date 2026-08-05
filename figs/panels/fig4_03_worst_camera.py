@@ -43,7 +43,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (GREY, INK, PINK, deposit, footnote, panel, save,  # noqa: E402
+from src.style import (MUTED, GREY, INK, PINK, deposit, footnote, panel, save,  # noqa: E402
                        use)
 
 STRATA = [("clean", "< 3"), ("mid", "3–10"), ("outlier", "≥ 10")]
@@ -97,7 +97,7 @@ def main():
         # therefore anchored at its box's centre and grows RIGHTWARD instead; the
         # others have room on both sides and stay centred.
         ax.text(i, r.p95 + 0.6, f"n={r.n:,}", va="bottom",
-                ha="left" if i == 0 else "center", color=GREY, fontsize=7)
+                ha="left" if i == 0 else "center", color=MUTED, fontsize=7)
         # +0.45 in y, not centred exactly on the median: box 0's median is 1.07 mm on
         # a 0-27 mm axis, so a vertically centred label straddled y = 0 and sat on the
         # x spine (the linter measured 12% of its box inked). x = 0.30 clears the

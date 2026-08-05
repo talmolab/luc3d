@@ -78,6 +78,76 @@ SKY = "#93C9DE"
 #: Box/whisker and general line ink in the reference (NOT pure black).
 INK = "#4C4D4C"
 
+#: Muted TEXT ink. 4.6:1 on white.
+#:
+#: `GREY` is `SET2[7]` -- a CATEGORICAL SERIES colour -- and it was being used as a
+#: text ink for load-bearing content: every cell of three data tables, the `n=`
+#: labels in 4c, the random baseline in 5c, provenance lines. At #B3B3B3 that is
+#: **2.1:1** contrast on white at 8 pt, i.e. below every accessibility floor there
+#: is, while the headers beside it sat at 8.6:1. Use MUTED for text that must be
+#: read but should recede; keep GREY for series marks and rules.
+MUTED = "#6E6E6E"
+
+# --------------------------------------------------------------------------
+# recurring entities
+# --------------------------------------------------------------------------
+# COLOUR MEANS ONE THING ACROSS THE WHOLE SET. Before this, the same three Set2
+# hues carried unrelated meanings on facing pages -- periwinkle was DLT in Fig 4
+# and SLEAP in Fig 7; salmon was the exhaustive baseline in Fig 3, the oracle
+# ceiling in Fig 5 and missing keypoints in Fig 6. A reader who learns a hue on
+# one page is then actively misled by the next.
+#
+# The scheme is a RULE, not a lookup table, which is why it can stay consistent:
+#
+#   TEAL        this work, whatever it is called in that figure
+#               (LUC3D, the refined solver, LUC3D's own cross-view residual)
+#   SALMON      the thing this work is being compared against
+#               (exhaustive association, DLT, ByteTrack)
+#   PERIWINKLE  SLEAP specifically -- a named third party that recurs across
+#               figures and therefore earns its own hue rather than sharing the
+#               generic comparator colour
+#   PINK        3D-MuPPET
+#   GREY        a BOUND, not a method: the oracle ceiling, the 1/C ceiling, random
+#
+# SALMON deliberately covers three different comparators. They never co-occur in
+# one panel, and "the alternative to ours" is a real shared meaning -- which is
+# more honest than minting a fifth hue and implying DLT and ByteTrack are
+# unrelated kinds of thing. What must NOT happen is periwinkle meaning DLT in one
+# figure and SLEAP in another; those genuinely are different kinds of thing.
+#
+# Only ENTITIES are reserved. A panel whose series are QUANTITIES rather than
+# entities -- Fig 6c's missing/error/tolerance, Fig 3's camera counts -- may use
+# the palette freely; there is nothing there to be consistent with.
+ENTITY = {
+    "luc3d": TEAL,
+    "refined": TEAL,
+    "residual": TEAL,
+    "sleap": PERIWINKLE,
+    "confidence": PERIWINKLE,   # the alternative ranking signal, not a tracker
+    "bytetrack": SALMON,
+    "exhaustive": SALMON,
+    "dlt": SALMON,
+    "3d-muppet": PINK,
+    "oracle": GREY,
+    "random": GREY,
+    "ceiling": GREY,
+}
+
+
+def entity(name):
+    """Colour for a recurring entity, so one hue means one thing set-wide.
+
+    Raises rather than falling back: a silent default is how the inconsistency
+    got in.
+    """
+    try:
+        return ENTITY[name.lower()]
+    except KeyError:
+        raise KeyError(
+            f"unknown entity {name!r} -- add it to ENTITY in src/style.py rather "
+            f"than picking a hue locally; see the rule above ENTITY") from None
+
+
 #: Panel size in inches. 3.0 x 2.5 in = 76.2 x 63.5 mm, the reference's own
 #: `plt.subplots(figsize=(3, 2.5))`.
 PANEL = (3.0, 2.5)

@@ -38,7 +38,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (GREY, SET2, deposit, footnote, panel, save,  # noqa: E402
+from src.style import (MUTED, GREY, SET2, deposit, footnote, panel, save,  # noqa: E402
                        text_legend, use)
 
 
@@ -94,7 +94,7 @@ def main():
     worst = df.ms_per_frame.max()
     ax.text(0.97, 0.06, f"worst case {worst:.1f} ms/frame\n"
             f"{20.0 / worst:.0f}× under the 20 ms budget at 50 fps",
-            transform=ax.transAxes, ha="right", va="bottom", color=GREY,
+            transform=ax.transAxes, ha="right", va="bottom", color=MUTED,
             fontsize=7)
     save(fig, 3, "d", "runtime_scaling")
 

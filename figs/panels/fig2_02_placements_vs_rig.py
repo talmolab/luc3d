@@ -42,7 +42,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load, median  # noqa: E402
-from src.style import (GREY, INK, SALMON, TEAL, deposit, panel, save,  # noqa: E402
+from src.style import (MUTED, GREY, INK, SALMON, TEAL, deposit, panel, save,  # noqa: E402
                        text_legend, use)
 
 NODES = 15          # per-animal skeleton
@@ -134,7 +134,7 @@ def main():
     # glyph hung over the spine and read as clipped.
     ax.text(2.12, CMAX * NODES * 1.10 * 0.985,
             f"one measured rig (marker): C = {ncam}.\nBoth curves are a model.",
-            color=GREY, ha="left", va="top", fontsize=7, linespacing=1.35)
+            color=MUTED, ha="left", va="top", fontsize=7, linespacing=1.35)
 
     # The ratio, at the measured rig size only. The label sits to the RIGHT of the
     # arrow, in the wedge between the dashed tau = 5 px curve and the traditional

@@ -32,7 +32,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import grid, GREY, INK, SET2, deposit, save, use  # noqa: E402
+from src.style import MUTED, grid, GREY, INK, SET2, deposit, save, use  # noqa: E402
 
 
 def centres(rig: dict):
@@ -63,7 +63,7 @@ def main():
         cams = centres(rig)
         if not cams:
             ax.text(0.5, 0.5, f"{corpus}\n(no extrinsics in fig6.json)",
-                    transform=ax.transAxes, ha="center", va="center", color=GREY,
+                    transform=ax.transAxes, ha="center", va="center", color=MUTED,
                     fontsize=7)
             ax.set_axis_off()
             continue

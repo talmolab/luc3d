@@ -21,7 +21,7 @@ from matplotlib.patches import FancyArrowPatch, Polygon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.diagram import blank, icon  # noqa: E402
-from src.style import GREY, INK, SPAN, TEAL, grid, mm, save, use  # noqa: E402
+from src.style import MUTED, GREY, INK, SPAN, TEAL, grid, mm, save, use  # noqa: E402
 
 #: label, sub, in-the-loop, icon
 STAGES = [
@@ -68,7 +68,7 @@ def main():
         icon(ax, kind, x + W / 2 - 0.24, 0.16, s=0.48, color=color)
         ax.text(x + W / 2, -0.14, label, ha="center", va="top", color=INK,
                 fontsize=7.5, linespacing=1.2)
-        ax.text(x + W / 2, -H / 2 - 0.26, sub, ha="center", va="top", color=GREY,
+        ax.text(x + W / 2, -H / 2 - 0.26, sub, ha="center", va="top", color=MUTED,
                 fontsize=6.5)
         if i:
             ax.add_patch(FancyArrowPatch(

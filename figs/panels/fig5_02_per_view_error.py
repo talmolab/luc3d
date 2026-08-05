@@ -53,7 +53,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (FIGS, GREY, SET2, deposit, footnote, grid, save,  # noqa: E402
+from src.style import (MUTED, FIGS, GREY, SET2, deposit, footnote, grid, save,  # noqa: E402
                        text_legend, tile, use)
 
 #: Fraction of the animal's longer bbox side added on EVERY side of the magnified
@@ -147,7 +147,7 @@ def main():
         # straight into a top-right corner value.
         ax_r.text(0.97, 0.03, f"{err:.1f} px", transform=ax_r.transAxes, ha="right",
                   va="bottom", color="white", fontsize=6.5, fontweight="bold")
-        fig.text(0.006, 0.014, KEY, color=GREY, fontsize=6.0, ha="left", va="bottom")
+        fig.text(0.006, 0.014, KEY, color=MUTED, fontsize=6.0, ha="left", va="bottom")
     else:
         # Never fabricate a tile: say what is missing and what makes it.
         print("  WARNING: figs/out/fig5a.json has no views.check exports — "
@@ -155,7 +155,7 @@ def main():
         for a in (ax_l, ax_r):
             a.set_axis_off()
             a.text(0.5, 0.5, "run\nnode figs/fig5_panel_a.mjs", ha="center",
-                   va="center", color=GREY, fontsize=6.5)
+                   va="center", color=MUTED, fontsize=6.5)
 
     worst = max(max(e["perView"].values()) for e in errs)
     ymax = 5.0 * math.ceil(worst / 5.0)

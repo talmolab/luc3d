@@ -55,7 +55,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, PERIWINKLE, PINK, SALMON, TEAL, deposit, panel,  # noqa: E402
+from src.style import (MUTED, footnote, GREY, PERIWINKLE, PINK, SALMON, TEAL, deposit, panel,  # noqa: E402
                        save, text_legend, use)
 
 #: (deposit key, name on the artwork, colour). The deposit calls SLEAP's entry
@@ -132,7 +132,7 @@ def main():
             f"1/C = {1 / NCAM:.2f}: ceiling for a per-camera tracker "
             "(SLEAP, ByteTrack)\n"
             "not a chance level — chance with 2 animals ≈ 0.5",
-            color=GREY, fontsize=6.5, va="bottom", linespacing=1.4)
+            color=MUTED, fontsize=6.5, va="bottom", linespacing=1.4)
 
     text_legend(ax, entries, "above")
     ax.set_xlim(-0.15, 1.05)

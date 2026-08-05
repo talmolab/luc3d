@@ -23,7 +23,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import GREY, INK, SALMON, deposit, panel, save, use  # noqa: E402
+from src.style import MUTED, GREY, INK, SALMON, deposit, panel, save, use  # noqa: E402
 
 BUDGET = "0.1"
 
@@ -45,7 +45,7 @@ def main():
 
     fig, ax = panel("half", "std")
     ax.plot([0, hi], [0, hi], color=GREY, lw=0.9, ls=(0, (2.5, 1.5)), zorder=1)
-    ax.text(hi * 0.66, hi * 0.58, "equal", color=GREY, fontsize=6.5, rotation=38)
+    ax.text(hi * 0.66, hi * 0.58, "equal", color=MUTED, fontsize=6.5, rotation=38)
     ax.plot(df.by_confidence_pct, df.by_residual_pct, "o", color=SALMON, ms=3.5,
             alpha=0.85, zorder=3)
 

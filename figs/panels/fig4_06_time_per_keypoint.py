@@ -18,7 +18,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import GREY, PERIWINKLE, TEAL, deposit, panel, save, use  # noqa: E402
+from src.style import MUTED, GREY, PERIWINKLE, TEAL, deposit, panel, save, use  # noqa: E402
 
 
 def build() -> pd.DataFrame:
@@ -46,7 +46,7 @@ def main():
 
     ratio = df.us_per_keypoint.iloc[1] / df.us_per_keypoint.iloc[0]
     ax.text(0.5, df.us_per_keypoint.max() * 1.22, f"{ratio:.1f}×", ha="center",
-            va="bottom", fontweight="bold", color=GREY)
+            va="bottom", fontweight="bold", color=MUTED)
     ax.set_ylim(0, df.us_per_keypoint.max() * 1.38)
     ax.set_ylabel("µs per keypoint")
     save(fig, 4, "f", "time_per_keypoint")
