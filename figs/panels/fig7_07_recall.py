@@ -58,7 +58,13 @@ from src.style import (footnote, GREY, entity, deposit, panel,  # noqa: E402
 #: C9). At 47 mm nothing is resized and no type is touched -- the axes just stops being
 #: taller than its content. It has to be the WHOLE figure: a row is as tall as its
 #: tallest panel, so shrinking one panel of a row buys nothing.
-ROW_H = 47.0
+#: 50.0, not 47/48. Fig 7 was already UNDER the 200 mm ceiling, and these
+#: panels' ink spans ~50 of 52 mm -- so trimming below 50 buys page height by
+#: SHORTENING THE AXES, not by removing blank. Most composite "blank" is the
+#: inter-row structure that carries the panel letters and titles (see the
+#: whitespace note in figs/README.md), so shrinking data plots to chase that
+#: metric is a bad trade. 50 mm is the strictly bbox-preserving floor.
+ROW_H = 50.0
 
 #: `text_legend`'s "above" branch hard-codes `dy = 0.052` in FIGURE coordinates -- i.e.
 #: 2.70 mm at the 52 mm height it was tuned for, but only 2.44 mm at 47 mm, and 8 pt

@@ -64,7 +64,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
 from src.style import INK, SALMON, TEAL, PERIWINKLE, deposit, grid, save, use  # noqa: E402
 
-H = 32.0        # mm; this figure's rows are height-budgeted -- see assemble.py
+#: Panel height in mm; this figure's rows are height-budgeted -- see assemble.py.
+#: 32, down from 34: the ink measured 32.3 of 34.0 mm on the 300 dpi render, so the
+#: rest was margin (review findings 6.12 / C9). This panel is alone in its row, so the
+#: 2 mm comes straight off the page. 32 is the measured FLOOR, not a guess: at 31 the
+#: "mean ± s.d." note in the middle sub-plot lands on its own error bars (`lint_text.py`
+#: ON DATA, 5% of its box inked), because that note is parked in AXES fractions while
+#: the bars it has to clear are in data units.
+H = 32.0
 FOOT = 0.135    # fraction of H reserved at the bottom for the n-per-stratum line
 
 #: column, label, colour, scale to %, s.d. column, secondary series (p95),

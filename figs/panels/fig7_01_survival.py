@@ -72,7 +72,13 @@ CORPUS = "SLAP-2M corpus · a is BMimica"
 #: tallest panel, so shrinking one panel of a pair buys nothing. 48 rather than 47
 #: because its row-mate 7d bottoms out there (see that file), and a row is as tall
 #: as its tallest panel -- 47 here would only add 1 mm of white under this panel.
-ROW_H = 48.0
+#: 50.0, not 47/48. Fig 7 was already UNDER the 200 mm ceiling, and these
+#: panels' ink spans ~50 of 52 mm -- so trimming below 50 buys page height by
+#: SHORTENING THE AXES, not by removing blank. Most composite "blank" is the
+#: inter-row structure that carries the panel letters and titles (see the
+#: whitespace note in figs/README.md), so shrinking data plots to chase that
+#: metric is a bad trade. 50 mm is the strictly bbox-preserving floor.
+ROW_H = 50.0
 
 
 

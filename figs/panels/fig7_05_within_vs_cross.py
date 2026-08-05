@@ -104,7 +104,13 @@ NCAM = 5
 #: the ink is the same ink: nothing is resized, no type is touched, the axes simply
 #: stops being taller than its content. A row is as tall as its TALLEST panel, so this
 #: only pays if its row-mate (7b) comes down with it, which it does.
-ROW_H = 47.0
+#: 50.0, not 47/48. Fig 7 was already UNDER the 200 mm ceiling, and these
+#: panels' ink spans ~50 of 52 mm -- so trimming below 50 buys page height by
+#: SHORTENING THE AXES, not by removing blank. Most composite "blank" is the
+#: inter-row structure that carries the panel letters and titles (see the
+#: whitespace note in figs/README.md), so shrinking data plots to chase that
+#: metric is a bad trade. 50 mm is the strictly bbox-preserving floor.
+ROW_H = 50.0
 
 #: `text_legend`'s "above" branch hard-codes `dy = 0.052` in FIGURE coordinates, i.e.
 #: 2.70 mm at the 52 mm height it was tuned for and 2.44 mm at 47 mm -- and 8 pt type

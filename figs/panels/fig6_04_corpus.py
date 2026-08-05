@@ -65,7 +65,41 @@ from src.style import INK, SPAN, deposit, mm, save, use  # noqa: E402
 #: corpus name -> the key in fig6.json holding its per-session records, and whether
 #: panels c, d and f measure it.
 SOURCES = {"BMimica": ("bmimica", False), "SLAP-2M": ("slap2m", True)}
-LINE = 4.05      # mm per table line
+
+#: mm per table line -- the ROW PITCH, and the one number that sets how much of this
+#: panel is white. At 4.05 the 300 dpi render was 48.5% blank scanlines, the highest in
+#: Fig 6 (review finding 6.12), and every one of those runs was INTERLINE: 7 pt body
+#: type sets a ~2.5 mm box in a 4.05 mm pitch, i.e. 1.6x leading, so the blank was
+#: leading and nothing else. 3.60 mm is 1.46x -- still airier than 6f's 1.15x, which is
+#: the densest table in the set and perfectly readable -- and takes the panel from
+#: 36.45 to 32.4 mm.
+#:
+#: WHAT THAT DOES AND DOES NOT BUY. It does NOT shorten the page: this panel shares its
+#: row with 6d and a row is as tall as its tallest panel, so the 4 mm becomes white
+#: BELOW the table rather than white inside it. 6d's own floor is 36 mm (its four-entry
+#: key; see that file), so 4.05 could only have been justified as "fill the slot". The
+#: pitch is reduced anyway because the table itself reads better tighter -- a reader
+#: scans a 7-row table as a block, and 1.6x leading breaks it into seven separate
+#: lines -- and because the next reviewer measuring blankness measures the PANEL.
+LINE = 3.60
+
+#: Rule geometry, and the two kinds are pinned DIFFERENTLY on purpose -- getting this
+#: wrong is how the first attempt at the tighter pitch ruled through six cells.
+#:
+#: An OUTER rule (above the header, below the last row) has type on one side only, so
+#: its clearance is a typographic distance and belongs in MILLIMETRES: 7 pt type sets a
+#: ~2.84 mm span box, i.e. ~1.42 mm above its baseline, and a rule expressed as a
+#: fraction of the pitch would have walked in from 2.6 mm to 2.3 mm when LINE dropped.
+RULE_MM = {"top": 2.63, "bottom": 2.23}
+#: An INTERIOR rule has type on BOTH sides, so it must sit at the MIDPOINT of the gap
+#: and therefore belongs in ROW UNITS -- mm-pinning it is exactly the error: at
+#: LINE = 3.60 adjacent 2.84 mm boxes are only 0.52 mm apart, so a rule pinned 2.03 mm
+#: below one baseline lands 0.05 mm off the next row's box and `lint_text.py` reports
+#: the whole last row as ON DATA. Both are 0.5 because every baseline in this table
+#: is exactly one unit from the next -- `row_y(-1)` is 7.9, not 8.1 (len(ROWS) is 7),
+#: which is worth stating because assuming a 1.2-unit header gap puts the rule 0.7 pt
+#: INSIDE the first body row and lint reports it as ink under "Cameras".
+RULE_U = {"header": 0.5, "body": 0.5}
 ROWS = ["Cameras", "Animals", "Sessions with 3D", "Frames", "Hours", "Nodes",
         "Measured in c, d, f"]
 
@@ -159,9 +193,13 @@ def main():
             ax.text(x0[j + 1], row_y(i), cells[c][r], va="center", fontsize=7,
                     color=INK, fontweight="bold" if last else "normal")
 
-    for y, lw in ((row_y(-1) + 0.65, 0.9), (row_y(-1) - 0.55, 0.6),
-                  (row_y(len(ROWS) - 2) - 0.5, 0.6),
-                  (row_y(len(ROWS) - 1) - 0.55, 0.9)):
+    # The two outer rules convert from mm to row units here; the two interior rules are
+    # already in row units because they have to stay on the midpoint (see RULE_MM /
+    # RULE_U).
+    for y, lw in ((row_y(-1) + RULE_MM["top"] / LINE, 0.9),
+                  (row_y(-1) - RULE_U["header"], 0.6),
+                  (row_y(len(ROWS) - 2) - RULE_U["body"], 0.6),
+                  (row_y(len(ROWS) - 1) - RULE_MM["bottom"] / LINE, 0.9)):
         ax.plot([0, 1], [y, y], color=INK, lw=lw, clip_on=False)
 
     save(fig, 6, "e", "corpora")

@@ -75,7 +75,14 @@ LINE = 2.90      # mm per table line
 #: single-line headers were clear, which is exactly the tell).
 HDR_Y = 8.10     # centre of the header block
 RULES = (9.25, 7.15, -0.15)   # above header, below header, below body
-YTOP = 9.60
+#: Top of the y range, i.e. how much dead space sits above the top rule. 9.35, down
+#: from 9.60: the two-line 6.6 pt header block spans up to 9.04, the top rule is at
+#: 9.25, and 0.35 units above THAT was 1.0 mm of nothing on top of constrained_layout's
+#: own ~1.06 mm pad (review findings 6.12 / C9). This is the whole recoverable slack in
+#: this panel -- the body pitch is already 2.85 mm for a 2.84 mm 7 pt span box, i.e. the
+#: densest table in the set, and the remaining blank scanlines are that box's own
+#: internal white plus the two layout pads. Do not chase them.
+YTOP = 9.35
 
 
 def main():

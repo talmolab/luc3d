@@ -94,14 +94,15 @@ from src.style import deposit, footnote, panel, save, use  # noqa: E402
 RAMP = {1: "#FC8D62", 2: "#E0653C", 3: "#B24420", 4: "#7A2A0E"}
 MARKS = {1: "o", 2: "s", 3: "^", 4: "D"}
 
-#: Panel height in mm, and the key's line pitch in POINTS. 5.14 pt (1.81 mm) is what
-#: the old axes-fraction stack produced at the old 38 mm height, so the key is
-#: unchanged on the page -- see the comment at the stack for why the unit matters.
+#: Panel height in mm, and the key's line pitch in POINTS. 5.91 pt is MEASURED off the
+#: old render: at the old 38 mm the axes-fraction stack put the four key baselines
+#: exactly 5.912 pt apart, so pinning that number leaves the key identical on the
+#: page -- see the comment at the stack for why the unit has to change at all.
 #: 36 mm rather than 38: the ink measured 35.8 of 38.0 mm on the 300 dpi render, so
 #: the last 2.2 mm was margin (review findings 6.12 / C9). This panel sets its row's
 #: height -- 6e beside it is shorter -- so the 2 mm comes straight off the page.
 ROW_H = 36.0
-KEY_DY_PT = 5.6
+KEY_DY_PT = 5.91
 
 
 def build(sessions):

@@ -69,7 +69,13 @@ LUC3D, SLEAP = entity("luc3d"), entity("sleap")
 #: C9). At 47 mm nothing is resized and no type is touched -- the axes just stops being
 #: taller than its content. It has to be the WHOLE figure: a row is as tall as its
 #: tallest panel, so shrinking one panel of a pair buys nothing.
-ROW_H = 48.0
+#: 50.0, not 47/48. Fig 7 was already UNDER the 200 mm ceiling, and these
+#: panels' ink spans ~50 of 52 mm -- so trimming below 50 buys page height by
+#: SHORTENING THE AXES, not by removing blank. Most composite "blank" is the
+#: inter-row structure that carries the panel letters and titles (see the
+#: whitespace note in figs/README.md), so shrinking data plots to chase that
+#: metric is a bad trade. 50 mm is the strictly bbox-preserving floor.
+ROW_H = 50.0
 
 
 
