@@ -66,14 +66,16 @@ COLS = [("Difficulty", 0.088, "difficulty"),
         ("Error p95\n(px)", 0.104, "err_p95"),
         ("Error p99\n(px)", 0.104, "err_p99"),
         ("> 20 px\n(%)", 0.105, "over_tau_pct")]
-LINE = 2.95      # mm per table line
+LINE = 2.90      # mm per table line
 #: Vertical layout in ROW UNITS, with the two-line header given 1.5 of them. Measured
-#: rather than nudged: at this LINE one unit is ~3.2 mm and 7 pt type is ~0.77 of a
+#: rather than nudged: at this LINE one unit is ~3.1 mm and 7 pt type is ~0.75 of a
 #: unit, so a rule less than ~0.5 units from a baseline strikes through the type -- the
-#: previous spacing ruled straight across the difficulty-1 row.
-HDR_Y = 8.05     # header baseline centre
-RULES = (8.95, 7.15, -0.15)   # above header, below header, below body
-YTOP = 9.35
+#: first spacing ruled straight across the difficulty-1 row, and the second put the top
+#: rule inside the SIX two-line headers' first-line span boxes (12 lint hits: only the
+#: single-line headers were clear, which is exactly the tell).
+HDR_Y = 8.10     # centre of the header block
+RULES = (9.25, 7.15, -0.15)   # above header, below header, below body
+YTOP = 9.60
 
 
 def main():
@@ -109,20 +111,19 @@ def main():
 
     nrow = len(df)
     x0 = [sum(w for _h, w, _k in COLS[:j]) for j in range(len(COLS))]
-    HDR = nrow + 0.55                          # centre of the two-line header
 
-    fig, ax = plt.subplots(figsize=(mm(SPAN["full"]), mm(LINE * (nrow + 2.6))),
+    fig, ax = plt.subplots(figsize=(mm(SPAN["full"]), mm(LINE * (YTOP + 0.55))),
                            layout="constrained")
     ax.set_axis_off()
     ax.set_xlim(0, 1)
-    ax.set_ylim(0, nrow + 2.0)
+    ax.set_ylim(0, YTOP)
 
     def row_y(i):
-        return nrow - i - 0.55
+        return nrow - 1 - i + 0.5
 
     for j, (h, _w, _k) in enumerate(COLS):
-        ax.text(x0[j], HDR, h, fontweight="bold", va="center", color=INK, fontsize=6.6,
-                linespacing=1.15)
+        ax.text(x0[j], HDR_Y, h, fontweight="bold", va="center", color=INK,
+                fontsize=6.6, linespacing=1.15)
     for i, r in df.iterrows():
         for j, (_h, _w, key) in enumerate(COLS):
             v = r[key]
@@ -130,8 +131,7 @@ def main():
                 if key in fmt else str(v)
             ax.text(x0[j], row_y(i), txt, va="center", fontsize=7, color=INK)
 
-    for y, lw in ((HDR + 0.85, 0.9), (HDR - 0.85, 0.6),
-                  (row_y(nrow - 1) - 0.5, 0.9)):
+    for y, lw in zip(RULES, (0.9, 0.6, 0.9)):
         ax.plot([0, 1], [y, y], color=INK, lw=lw, clip_on=False)
     save(fig, 6, "f", "difficulty_strata")
 

@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 """
-Fig 6c -- reprojection error and miss rate by session difficulty.
+Fig 6s3 (SUPPLEMENTARY) -- reprojection error and miss rate by session difficulty,
+on ONE pair of axes.
+
+NOT the main-figure 6c, which is `fig6_06_detection_quality.py`. This file's docstring
+used to say "Fig 6c" while `save()` writes `fig6s3_difficulty_dual`, so a caption
+written from it cited the wrong panel. Kept as a supplement because it is the only
+place the two quantities appear on a shared x with a twin y, which is the compact form
+worth having next to the three-panel main version.
 
 THIS PANEL EXISTS BECAUSE THE FIRST VERSION OF FIG 6 WAS REJECTED, CORRECTLY. That
 version showed a rig scatter and a mean skeleton -- camera calibrations and an
 average pose, neither of which says anything about what is IN these datasets. What
 makes a session hard is measurable, and this is the measurement.
 
-Difficulty is the corpus's own 2-7 rating from `_multi_master.tsv`, not a post-hoc
-split, so it is not circular with the metric being plotted.
+Difficulty is the corpus's own 1-7 rating from `_multi_master.tsv`, not a post-hoc
+split, so it is not circular with the metric being plotted. (This docstring said
+"2-7"; the deposit has all seven ratings, 1 through 7.)
 
 TWO AXES, BECAUSE THEY DISAGREE. Reprojection error rises only gently with
 difficulty, while the MISS RATE -- the fraction of ground-truth keypoints with no
-detection at all -- rises much more steeply. That is the same finding as Fig 7b from
+detection at all -- rises much more steeply. That is the same finding as Fig 7e from
 the other direction: what a hard session costs you is detections, not precision on
 the detections you get. Plotting only the error would have made difficulty look
 almost free.
 
 n per stratum is printed -- as a "rating:n" list under the x axis -- because the
-strata are far from balanced (13 sessions at difficulty 7, only 4 at difficulty 6).
+strata are far from balanced: n = 12, 13, 9, 13, 10, 4, 13 over ratings 1-7, so 13
+sessions at difficulty 7 against only 4 at difficulty 6. (This docstring previously
+said "10 each at 2 and 4"; the deposit says 13 at each.)
 
 Source: figs/out/fig6_detections.json `by_difficulty`.
 

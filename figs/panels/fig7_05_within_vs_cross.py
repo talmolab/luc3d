@@ -86,11 +86,14 @@ def main():
                      "ratio": c / w if w else float("nan"),
                      "n_sessions": wv["n_sessions"]})
         ax.plot([0, 1], [w, c], color=color, lw=2.0, zorder=3)
+        # errorbar, and ms=3.2 rather than 5: LUC3D's interval is +-0.04, which a
+        # 5 pt marker covers completely -- the whiskers were drawn and invisible.
+        # Caps make a +-0.04 interval readable at a plot height of ~25 mm.
         for x, s in ((0, wv), (1, cv)):
-            ax.plot([x, x], [s["ci95_lo"], s["ci95_hi"]], color=color, lw=1.0,
-                    solid_capstyle="butt", zorder=3)
-        ax.plot([0, 1], [w, c], "o", color=color, ms=5, mec="white", mew=1.0,
-                zorder=4)
+            ax.errorbar([x], [s["mean"]],
+                        yerr=[[s["mean"] - s["ci95_lo"]], [s["ci95_hi"] - s["mean"]]],
+                        fmt="o", color=color, ms=3.2, mec="white", mew=0.6,
+                        elinewidth=1.0, capsize=1.8, capthick=1.0, zorder=5)
         entries.append((f"{name}  {w:.3f} → {c:.3f} ×{c / w:.2f}", color))
 
     df = pd.DataFrame(rows)
@@ -103,7 +106,7 @@ def main():
     ax.axhline(1 / NCAM, color=GREY, lw=0.8, ls=(0, (2.5, 1.5)), zorder=1)
     # Anchored at the axes' left edge (x = -0.13), not at x = 0, so the two lines fit
     # inside the plot without running under the tracker values.
-    ax.text(-0.13, 1 / NCAM + 0.03,
+    ax.text(-0.13, 1 / NCAM + 0.015,
             f"1/C = {1 / NCAM:.2f}: ceiling for a per-camera tracker "
             "(SLEAP, ByteTrack)\n"
             "not a chance level — chance with 2 animals ≈ 0.5",
@@ -115,6 +118,9 @@ def main():
     ax.set_xticklabels(["within view", "cross view"])
     ax.set_ylabel("IDF1")
     ax.set_ylim(0, 0.95)
+    # Explicit: the shorter plot made matplotlib fall back to 0.0 / 0.5 alone, and
+    # a reader cannot place the 0.20 rule against two ticks.
+    ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8])
     # "full" distinguishes these from Fig 3d's 6,000-frame leading windows over the
     # same corpus. `drift_abs_max` and the cross-view win counts are deposited and
     # were on the legacy panel; both had been dropped.

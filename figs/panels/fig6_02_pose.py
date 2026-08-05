@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Fig 6b -- the mean proofread pose, and the scale of the animal.
+Fig 6s2 (SUPPLEMENTARY) -- the mean proofread pose, and the scale of the animal.
+
+NOT the main-figure 6b, which is `fig6_05_cameras.py`. This file's docstring used to
+say "Fig 6b" while `save()` writes `fig6s2_mean_pose`, so both files claimed the same
+letter and a caption written from either could cite the wrong panel.
 
 The generalised-Procrustes median of 1,802 complete proofread poses. Nose-to-trunk
 comes out at 64.5 mm, which independently agrees with the ~67 mm median bone length

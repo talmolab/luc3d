@@ -64,7 +64,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
 from src.style import INK, SALMON, TEAL, PERIWINKLE, deposit, grid, save, use  # noqa: E402
 
-H = 35.0        # mm; this figure's rows are height-budgeted -- see assemble.py
+H = 34.0        # mm; this figure's rows are height-budgeted -- see assemble.py
 FOOT = 0.135    # fraction of H reserved at the bottom for the n-per-stratum line
 
 #: column, label, colour, scale to %, s.d. column, secondary series (p95),

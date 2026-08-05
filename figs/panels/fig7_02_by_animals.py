@@ -129,12 +129,14 @@ def main():
         ax.plot([lo, hi], [by, by], color=GREY, lw=0.8, zorder=1)
         for xe in (lo, hi):
             ax.plot([xe, xe], [by, by + lim * 0.05], color=GREY, lw=0.8, zorder=1)
+    # INK for the notes, GREY for the brackets: the notes carry results and GREY
+    # (#B3B3B3) is a series colour at 2.1:1 on white.
     ax.text(-0.55, ty, "1 animal: nothing to\nassociate across views",
-            color=GREY, fontsize=6, ha="left", va="top", linespacing=1.35)
+            color=INK, fontsize=6, ha="left", va="top", linespacing=1.35)
     ax.text(1.15, ty,
             f"≥ 2 animals pooled: {m_mean:+.3f}\n"
             f"(n = {len(multi)}, {m_wins}/{len(multi)}, P = {m_p:.2f})",
-            color=GREY, fontsize=6, ha="left", va="top", linespacing=1.35)
+            color=INK, fontsize=6, ha="left", va="top", linespacing=1.35)
 
     a = pv["all"]
     # TWO lines. On one line this note is wider than the 88 mm panel, and since the

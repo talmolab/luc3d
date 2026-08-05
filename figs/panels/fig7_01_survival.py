@@ -97,11 +97,15 @@ def main():
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 100)
     ax.set_yticks([0, 25, 50, 75, 100])
-    ax.set_xlabel("IDF1 threshold")
+    # "session mean over 6 cameras" belongs in the axis label, not the footer: the
+    # unit of replication is the session, and each session's IDF1 is the mean of its
+    # six per-camera scores. The legacy footer said so and it had been dropped; on the
+    # label it is next to the quantity it qualifies, and the footer lines stay narrow
+    # enough not to hang off an 88 mm panel.
+    ax.set_xlabel(f"IDF1 threshold, session mean over {N_CAMERAS} cameras")
     ax.set_ylabel("% of sessions at or above")
     luc = wv["luc3d"]
-    footnote(ax, f"one step per session; n = {luc['n_sessions']} SLAP-2M sessions "
-             f"× {N_CAMERAS} cameras\n"
+    footnote(ax, f"one step per session; n = {luc['n_sessions']} SLAP-2M sessions\n"
              f"counts: sessions ≥ {MARK} · camera-sessions won "
              f"({am['tie']} of {n_cs} tied)\n"
              f"LUC3D within-view IDF1: mean {luc['mean']:.3f}, "

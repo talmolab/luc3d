@@ -125,7 +125,7 @@ def main():
     counts = sorted(df.animals.unique())
     totals = {a: int(ba[str(a)]["n_sessions"]) for a in counts if str(a) in ba}
 
-    fig, ax = panel("half", 39.0)
+    fig, ax = panel("half", 38.0)
     for a in counts:
         g = df[df.animals == a].sort_values("difficulty")
         c = RAMP.get(a, "#7A2A0E")

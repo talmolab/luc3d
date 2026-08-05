@@ -39,7 +39,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, INK, PERIWINKLE, TEAL, deposit, panel, save,  # noqa: E402
+from src.style import (footnote, INK, PERIWINKLE, deposit, panel, save,  # noqa: E402
                        use)
 
 
@@ -69,7 +69,7 @@ def main():
 
     top = fp["ci95_hi"] * 1.62
     ax.set_xlim(-0.7, 0.7)
-    ax.set_ylim(-top * 0.22, top)
+    ax.set_ylim(-top * 0.17, top)
     ax.set_xticks([0])
     ax.set_xticklabels(["LUC3D − SLEAP"])
     ax.tick_params(axis="x", length=0)
@@ -84,8 +84,10 @@ def main():
             f"{fp['mean']:+.1f} [{fp['ci95_lo']:+.1f}, {fp['ci95_hi']:+.1f}]\n"
             f"median {fp['median']:+.1f}",
             color=PERIWINKLE, fontsize=6, va="top", linespacing=1.35)
-    ax.text(-0.66, -top * 0.20, f"SLEAP fewer in {n - luc_better} of {n}",
-            color=GREY, fontsize=6, va="bottom")
+    # INK, not GREY: this line IS the panel's finding, and GREY (#B3B3B3) is a
+    # series colour at 2.1:1 on white -- too light to carry a result.
+    ax.text(-0.66, -top * 0.15, f"SLEAP fewer in {n - luc_better} of {n}",
+            color=INK, fontsize=6, va="bottom")
     footnote(ax, f"per camera-session\nn = {n} sessions\nmean ± 95% CI")
     save(fig, 7, "g", "fragmentations")
 

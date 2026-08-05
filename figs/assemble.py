@@ -92,7 +92,7 @@ FOOTERS = {
         "e: both corpora, read from the files."],
     7: ["Identical identity-stripped detections for every tracker shown. "
         "Session-level statistics throughout; SHIPPED LUC3D configuration.",
-        "a: 50 BMimica sessions, 5 cameras, 2 mice. b-f: 74 SLAP-2M sessions. "
+        "a: 50 BMimica sessions, 5 cameras, 2 mice. b-g: 74 SLAP-2M sessions. "
         "See caption for n and method."],
 }
 
