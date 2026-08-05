@@ -373,7 +373,13 @@ exhaustive method is our reimplementation of the published per-frame procedure, 
 authors' code.** It is undefined on any frame where a camera does not detect exactly `N`
 animals, because `A!` per view is then ill-posed: of **198,292** frames considered,
 **137,266 (69.2%)** were eligible and **61,026 (30.8%)** were skipped and counted, not
-silently dropped (per-configuration eligibility 68.2 / 79.2 / 80.5%). Panel **e** is 8
+silently dropped (per-configuration eligibility 68.2 / 79.2 / 80.5%). The skipped frames
+are the occluded ones, i.e. exactly the frames association finds hardest, so exhaustive
+never faced them. The eligible frames are also not evenly spread across the difficulty
+range the panel spans: **122,830 of 137,266 (89.5%)** come from the single easiest
+configuration (2 animals × 5 cameras, 32 hypotheses) and only **161 frames (0.12%)** test
+3 animals. So the 99.999% agreement is a statement about an almost-entirely-two-animal,
+occlusion-free sample; the panel prints all three of these figures. Panel **e** is 8
 BMimica sessions on a fixed **6,000-frame leading window per cell**, identical across all
 24 cells (~3% of a session; see *Pending* above — the artwork's own footer states the
 window).

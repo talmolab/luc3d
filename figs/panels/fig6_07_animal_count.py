@@ -80,6 +80,7 @@ Source: figs/out/fig6_detections.json `sessions` (per-session) and `by_animals`.
 import sys
 from pathlib import Path
 
+import matplotlib.transforms as mtransforms
 import numpy as np
 import pandas as pd
 
@@ -92,6 +93,15 @@ from src.style import deposit, footnote, panel, save, use  # noqa: E402
 #: rest of the set already sets in that colour.
 RAMP = {1: "#FC8D62", 2: "#E0653C", 3: "#B24420", 4: "#7A2A0E"}
 MARKS = {1: "o", 2: "s", 3: "^", 4: "D"}
+
+#: Panel height in mm, and the key's line pitch in POINTS. 5.14 pt (1.81 mm) is what
+#: the old axes-fraction stack produced at the old 38 mm height, so the key is
+#: unchanged on the page -- see the comment at the stack for why the unit matters.
+#: 36 mm rather than 38: the ink measured 35.8 of 38.0 mm on the 300 dpi render, so
+#: the last 2.2 mm was margin (review findings 6.12 / C9). This panel sets its row's
+#: height -- 6e beside it is shorter -- so the 2 mm comes straight off the page.
+ROW_H = 36.0
+KEY_DY_PT = 5.6
 
 
 def build(sessions):
@@ -125,7 +135,7 @@ def main():
     counts = sorted(df.animals.unique())
     totals = {a: int(ba[str(a)]["n_sessions"]) for a in counts if str(a) in ba}
 
-    fig, ax = panel("half", 38.0)
+    fig, ax = panel("half", ROW_H)
     for a in counts:
         g = df[df.animals == a].sort_values("difficulty")
         c = RAMP.get(a, "#7A2A0E")
@@ -160,12 +170,22 @@ def main():
     # by colour alone, which is fine for two hues and not fine for four steps of one
     # ordinal ramp -- and two of these four counts appear as bare markers with no
     # line, so shape is the only thing that identifies them.
+    # STACKED IN POINTS, NOT IN AXES FRACTIONS, and that is what lets this panel be
+    # shorter than 38 mm. The stack used `y = 0.965 - i * 0.098`, i.e. a fraction of
+    # the AXES height: 1.81 mm a line at the old 38 mm (already tight against a 6 pt
+    # span box of ~2.12 mm, and visually fine), but 1.52 mm at 35 mm and 1.32 mm at
+    # 33 mm -- so every millimetre off the panel silently tightened the key until the
+    # four entries printed on top of each other (`lint_text.py` OVERLAP 20-38%). The
+    # key was the panel's height floor, and only because its spacing was expressed in
+    # the wrong unit. `offset_copy` in POINTS pins the line pitch to KEY_DY_PT
+    # regardless of panel height, so the key reads identically at any of them.
+    kt = mtransforms.offset_copy(ax.transAxes, fig=fig, y=0, units="points")
     for i, a in enumerate(counts):
-        yk = 0.965 - i * 0.098
-        ax.plot([0.035], [yk], MARKS.get(a, "o"), transform=ax.transAxes, ms=3.6,
+        t = mtransforms.offset_copy(kt, fig=fig, y=-i * KEY_DY_PT, units="points")
+        ax.plot([0.035], [0.965], MARKS.get(a, "o"), transform=t, ms=3.6,
                 color=RAMP.get(a, "#7A2A0E"), clip_on=False, zorder=6)
-        ax.text(0.075, yk, f"{a} animal{'s' if a > 1 else ''}  n = "
-                           f"{totals.get(a, 0)}", transform=ax.transAxes,
+        ax.text(0.075, 0.965, f"{a} animal{'s' if a > 1 else ''}  n = "
+                              f"{totals.get(a, 0)}", transform=t,
                 ha="left", va="center", color=RAMP.get(a, "#7A2A0E"),
                 fontsize=6.0, fontweight="bold")
     marg = ", ".join(f"{ba[str(a)]['miss_rate'] * 100:.1f}" for a in counts

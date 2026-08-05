@@ -55,6 +55,13 @@ BAR_W = 0.26
 #: tallest panel, so shrinking one panel of a pair buys nothing.
 ROW_H = 47.0
 
+#: `text_legend`'s "above" branch hard-codes `dy = 0.052` in FIGURE coordinates: 2.70
+#: mm at the 52 mm height it was tuned for, 2.44 mm at 47 mm. An 8 pt span box is
+#: ~3.24 mm, so at the shorter height the three names overlapped by 23% of a box and
+#: `lint_text.py` failed. Passing `dy` with an explicit `transform` (which is how that
+#: branch is bypassed) holds the spacing at 2.70 mm, so the key reads unchanged.
+KEY_DY = 0.052 * 52.0 / ROW_H
+
 
 
 def main():
@@ -83,7 +90,8 @@ def main():
             ax.text(px, v / 1e3 + (0.02 + lift) * top / 1e3, f"{v:,}", ha="center",
                     va="bottom", color=color, fontsize=6, fontweight="bold")
 
-    text_legend(ax, [(lab, c) for _, lab, c in TRACKERS], "above")
+    text_legend(ax, [(lab, c) for _, lab, c in TRACKERS], "above", dy=KEY_DY,
+                xy=(0.14, 0.985), transform=fig.transFigure)
     ax.set_xticks(x)
     ax.set_xticklabels([n for _, n in TERMS])
     ax.set_xlim(-0.45, len(TERMS) - 0.55)

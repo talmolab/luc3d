@@ -99,6 +99,12 @@ def main():
     ax.set_xlim(-0.62, len(groups) - 0.38)
     ax.set_ylabel("IDF1  /  recall")
     ax.set_ylim(0, 0.95)
+    # PINNED, and pinned to 7a's ticks. This is the same quantity on the same 0-0.95
+    # range as 7a, so the two panels of the row must be readable against each other --
+    # and left to itself matplotlib re-chose 0.00/0.25/0.50/0.75 the moment the panel
+    # got shorter, which silently changed both the gridding and the number of
+    # significant figures on a panel whose data had not moved.
+    ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8])
 
     # The animal-count composition of the two groups, from the deposited per-animal
     # bedding counts -- the confound a reader has to be told about.

@@ -31,7 +31,7 @@ Of the three fixes available, a genuine log axis is the only one that fixes the
 GEOMETRY: rotating all 12 labels to 90 deg would make them legible but leaves the
 spacing false, and printing "x is an index, spacing is not proportional" is honest
 but still unreadable. The cost of the log axis is that a subset of ticks is still
-labelled -- 0, 0.5, 1, 2, 6, 24, which is what fits at 8 pt in 30 mm -- but that is
+labelled -- 0, 1, 2, 6, 24, which is what fits at 8 pt in 30 mm -- but that is
 now harmless, because positions are proportional and interpolating between labelled
 decades is exactly what a log axis is for. Every sampled r is still visible: each is
 drawn with its own marker.
@@ -74,10 +74,13 @@ SHIPPED_R = 6.0
 BREAK_DEC = 0.20
 
 #: Which r values get a tick LABEL. Every r is drawn (each has a marker); these are
-#: the ones whose labels fit at 8 pt in a ~30 mm plot without colliding -- the set
-#: the panel's argument is made from (0 the control, 1 and 2 the two knees, 6 the
-#: shipped ratio, 24 the end of the sweep) plus 0.5 to anchor the low end.
-LABELLED_R = (0.0, 0.5, 1.0, 2.0, 6.0, 24.0)
+#: the ones whose labels fit at 8 pt in a ~30 mm plot without colliding, and they are
+#: exactly the set the panel's argument is made from: 0 the control, 1 and 2 the two
+#: knees, 6 the shipped ratio, 24 the end of the sweep. MEASURED, not guessed -- an
+#: earlier version also labelled 0.5, whose glyphs ended 0.80 mm (2.3 pt) from the
+#: "1" beside it, i.e. one space width: PyMuPDF read the two as a single "0.5 1" span
+#: and so would a reader. The remaining gaps are 3.2 / 2.0 / 4.1 / 4.7 mm.
+LABELLED_R = (0.0, 1.0, 2.0, 6.0, 24.0)
 
 
 def build() -> pd.DataFrame:
@@ -122,11 +125,17 @@ def main():
     zero_x = first * 10 ** -BREAK_DEC             # where the r = 0 datum is drawn
     x = np.where(r > 0, r, zero_x)
     pos = r > 0
+    # Row 0 is r = 0 only because build() sorts ascending and the control is in the
+    # sweep. Checked rather than assumed: if the control ever drops out of the JSON,
+    # `x[:2]` would silently draw a "break" connector between two real ratios.
+    has_zero = bool(r[0] == 0.0) and bool(pos[1:].all())
 
     def series(axis, y, color, ms):
         """One series: solid over the log region, DOTTED across the break."""
         axis.plot(x[pos], y[pos], color=color, lw=2.0, zorder=3)
-        axis.plot(x[:2], y[:2], color=color, lw=1.2, ls=(0, (1.4, 1.2)), zorder=3)
+        if has_zero:
+            axis.plot(x[:2], y[:2], color=color, lw=1.2, ls=(0, (1.4, 1.2)),
+                      zorder=3)
         axis.plot(x, y, "o", color=color, ms=ms, mec="white", mew=0.8, zorder=4)
 
     # ID switches, log, on the left.
@@ -140,24 +149,26 @@ def main():
     # Limits in decades either side, so the r = 0 slot and the 24 label both clear
     # the spines. Minor ticks off: on a log axis they are a grey haze at this size,
     # and every sampled r already carries a marker.
-    ax.set_xlim(zero_x * 10 ** -0.22, 24 * 10 ** 0.11)
-    ax.set_xticks([zero_x if v == 0 else v for v in LABELLED_R])
-    ax.set_xticklabels([f"{v:g}" for v in LABELLED_R])
+    ax.set_xlim((zero_x if has_zero else first) * 10 ** -0.22, 24 * 10 ** 0.11)
+    ticks = [v for v in LABELLED_R if v > 0 or has_zero]
+    ax.set_xticks([zero_x if v == 0 else v for v in ticks])
+    ax.set_xticklabels([f"{v:g}" for v in ticks])
     ax.xaxis.set_minor_locator(NullLocator())
     ax.set_xlabel("r = corr3d / corr2d (log)")
     # THE BREAK, ON THE SPINE. Two slashes with the spine whited out between them, so
     # the one position on this axis that is not to scale says so. Drawn in the x-axis
     # transform (x in data, y in axes fractions) and unclipped, so it sits ON the
     # spine rather than inside the data area.
-    tr = ax.get_xaxis_transform()
-    mid = (zero_x * first) ** 0.5
-    ax.plot([mid * 10 ** -0.055, mid * 10 ** 0.055], [0, 0], color="white",
-            lw=1.6, transform=tr, clip_on=False, zorder=5,
-            solid_capstyle="butt")
-    for off in (-0.030, 0.030):
-        ax.plot([mid * 10 ** (off - 0.022), mid * 10 ** (off + 0.022)],
-                [-0.030, 0.030], color=MUTED, lw=0.8, transform=tr,
-                clip_on=False, zorder=6)
+    if has_zero:
+        tr = ax.get_xaxis_transform()
+        mid = (zero_x * first) ** 0.5
+        ax.plot([mid * 10 ** -0.055, mid * 10 ** 0.055], [0, 0], color="white",
+                lw=1.6, transform=tr, clip_on=False, zorder=5,
+                solid_capstyle="butt")
+        for off in (-0.030, 0.030):
+            ax.plot([mid * 10 ** (off - 0.022), mid * 10 ** (off + 0.022)],
+                    [-0.030, 0.030], color=MUTED, lw=0.8, transform=tr,
+                    clip_on=False, zorder=6)
     # "(no 3D term)" used to be the second line of the r = 0 tick label. Centred on
     # the leftmost tick it is ~50 pt wide and ran off the left edge of the narrower
     # panel, so the gloss moves under the axis where its width is the panel's.
@@ -165,7 +176,7 @@ def main():
     # the restyle dropped it. In a figure whose panel f runs LUC3D against an
     # exhaustive baseline, an unlabelled two-series ablation reads as a
     # between-method comparison, which this one is not.
-    footnote(ax, "r = 0 = no 3D term, past the break\n"
+    footnote(ax, "r = 0: no 3D term, left of the break\n"
                  "both series are LUC3D against itself")
 
     # Cross-view IDF1 on the right.

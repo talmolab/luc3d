@@ -69,7 +69,7 @@ LUC3D, SLEAP = entity("luc3d"), entity("sleap")
 #: C9). At 47 mm nothing is resized and no type is touched -- the axes just stops being
 #: taller than its content. It has to be the WHOLE figure: a row is as tall as its
 #: tallest panel, so shrinking one panel of a pair buys nothing.
-ROW_H = 50.0
+ROW_H = 48.0
 
 
 
@@ -123,7 +123,12 @@ def main():
     ax.set_xticklabels([f"{int(r.animals)}\n{int(r.wins)}/{int(r.n_sessions)}"
                         for _, r in df.iterrows()])
     ax.set_xlabel("animals · wins / sessions", labelpad=2)
-    ax.set_ylabel("Δ IDF1, LUC3D − SLEAP")
+    # TWO LINES. Rotated, this label sets ~30 mm of type against a ~19 mm axis at
+    # this row height, and a rotated label cannot be shrunk by constrained_layout --
+    # it is centred on the axes and simply overhangs, so at anything under 52 mm the
+    # page cut its ends off (`lint_text.py` CLIPPED). Wrapped it costs width, of
+    # which an 88 mm panel has plenty.
+    ax.set_ylabel("Δ IDF1\nLUC3D − SLEAP")
     ax.set_xlim(-0.6, len(df) - 0.2)
     lim = max(df.ci95_hi.max(), -df.ci95_lo.min()) * 1.9
     ax.set_ylim(-lim, lim)
@@ -137,7 +142,10 @@ def main():
     # 2/3/4 cells carrying their pooled statistic. Both notes live BELOW the data
     # rather than beside it -- placed at the top of the axes the 1-animal note landed
     # on that cell's own "+0.141" label (23% overlap). `by` is well below the
-    # 3-animal CI's -0.079, so neither rule crosses a mark.
+    # 3-animal CI's -0.079, so neither rule crosses a mark. `by` is a fraction of
+    # `lim`, i.e. pinned in DATA units, so shortening the panel moves the bracket and
+    # the '-0.030' label it sits under by the same amount; at 47 mm they met (5% of
+    # the label's box inked) and 48 mm is the measured floor where they do not.
     by = -lim * 0.37
     ty = by - lim * 0.07
     for lo, hi in ((-0.28, 0.28), (0.72, 3.28)):

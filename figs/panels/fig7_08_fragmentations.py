@@ -88,6 +88,10 @@ def main():
     ax.set_xticklabels(["LUC3D − SLEAP"])
     ax.tick_params(axis="x", length=0)
     ax.set_ylabel("Δ fragmentations")
+    # PINNED. Left to itself matplotlib dropped to 0/20/40 when the panel got shorter,
+    # which halves the resolution a reader has for placing the +24.0 mean and the
+    # +14.1 median against the axis -- a tick change caused by the page, not the data.
+    ax.set_yticks([0, 10, 20, 30, 40])
     # The numbers go in a LEFT-ALIGNED block in the empty band above the interval,
     # not beside their own marks: this panel is 38 mm wide, and a "median +14.1" set
     # to the right of the median rule ran off the page (the renderer drops the

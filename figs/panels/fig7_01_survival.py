@@ -69,8 +69,10 @@ CORPUS = "SLAP-2M corpus · a is BMimica"
 #: 196.3 mm with 19.3% of its scanlines carrying no ink at all (review findings 6.12 /
 #: C9). At 47 mm nothing is resized and no type is touched -- the axes just stops being
 #: taller than its content. It has to be the WHOLE figure: a row is as tall as its
-#: tallest panel, so shrinking one panel of a pair buys nothing.
-ROW_H = 47.0
+#: tallest panel, so shrinking one panel of a pair buys nothing. 48 rather than 47
+#: because its row-mate 7d bottoms out there (see that file), and a row is as tall
+#: as its tallest panel -- 47 here would only add 1 mm of white under this panel.
+ROW_H = 48.0
 
 
 
@@ -130,8 +132,15 @@ def main():
     # on-data check is the backstop.
     ax.text(0.03, 0.31, CORPUS, transform=ax.transAxes, ha="left", va="baseline",
             color=MUTED, fontsize=6.5)
-    ax.text(MARK - 0.015, 96, f"IDF1 ≥ {MARK}", color=MUTED, fontsize=7, ha="right",
-            rotation=90, va="top")
+    # HORIZONTAL, NOT ROTATED, and this is a height consequence rather than a taste
+    # change. Set along the rule the label is ~11 mm of type; against the 25 mm axis
+    # this panel had at 52 mm that reached down to about the 52% line and cleared
+    # every curve, but against a ~20 mm axis it reaches to ~41% and crosses LUC3D's
+    # step at x = 0.9 (`lint_text.py`: ON DATA, 8% of its box inked). Laid flat it
+    # spends the panel's WIDTH, of which there is far more to spare: it occupies
+    # x = 0.70-0.88 at y = 98, where the highest curve is still 35 points below.
+    ax.text(MARK - 0.02, 98, f"IDF1 ≥ {MARK}", color=MUTED, fontsize=7,
+            ha="right", va="top")
 
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 100)
@@ -142,7 +151,11 @@ def main():
     # label it is next to the quantity it qualifies, and the footer lines stay narrow
     # enough not to hang off an 88 mm panel.
     ax.set_xlabel(f"IDF1 threshold, session mean over {N_CAMERAS} cameras")
-    ax.set_ylabel("% of sessions at or above")
+    # TWO LINES: rotated, this label is ~40 mm of type against a ~20 mm axis at this
+    # row height. A rotated label cannot be shrunk to fit -- constrained_layout
+    # centres it and lets it overhang -- so at anything under 52 mm the page cut its
+    # ends off (`lint_text.py` CLIPPED). Wrapping spends width, not height.
+    ax.set_ylabel("% of sessions\nat or above")
     luc = wv["luc3d"]
     footnote(ax, f"one step per session; n = {luc['n_sessions']} SLAP-2M sessions\n"
              f"counts: sessions ≥ {MARK} · camera-sessions won "
