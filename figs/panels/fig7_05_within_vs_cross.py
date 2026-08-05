@@ -38,6 +38,12 @@ Every mean now carries its deposited 95% CI (`ci95_lo`/`ci95_hi`, bootstrap over
 sessions) at both ends of its slope; the panel previously plotted bare means, so a
 reader could not see that LUC3D's two intervals coincide (the no-drift result).
 
+FOUR TRACKERS HERE, THREE IN b-g, AND THE KEY SAYS WHY. 3D-MuPPET is measured on
+BMimica only; the SLAP-2M deposit has no 3D-MuPPET column anywhere. The tracker sets
+genuinely differ between the two corpora, but a reader who is not told that reads the
+missing fourth series as a dropped comparison -- so its key entry carries
+"· BMimica only", right where the question comes up.
+
 Source: figs/out/fig3_trackers.json `bmimica_50_sessions`, `bmimica_wins`, `caveats`.
 
     python3 figs/panels/fig7_05_within_vs_cross.py
@@ -53,11 +59,24 @@ from src.style import (footnote, GREY, PERIWINKLE, PINK, SALMON, TEAL, deposit, 
                        save, text_legend, use)
 
 #: (deposit key, name on the artwork, colour). The deposit calls SLEAP's entry
-#: "SLEAP per-camera"; the artwork says "SLEAP" so the name matches panels c-f --
+#: "SLEAP per-camera"; the artwork says "SLEAP" so the name matches panels c-g --
 #: the figure used to call the same tracker two different things -- and the
-#: per-camera / cross-view split is stated once in the footer instead.
+#: per-camera-ness is carried at the 0.20 rule instead, which is the one place it is
+#: load-bearing: the rule is the ceiling *because* SLEAP and ByteTrack label each
+#: camera on its own, and both names are printed there.
 ORDER = [("LUC3D", "LUC3D", TEAL), ("SLEAP per-camera", "SLEAP", PERIWINKLE),
          ("ByteTrack", "ByteTrack", SALMON), ("3D-MuPPET", "3D-MuPPET", PINK)]
+
+#: WHY THIS PANEL HAS FOUR SERIES AND b-g HAVE THREE, said next to the series that is
+#: only here. 3D-MuPPET is measured on BMimica alone: `fig3_trackers.json` lists it
+#: under `bmimica_50_sessions` and nowhere under `slap2m`, whose `within_view`,
+#: `error_decomposition` and paired tables carry luc3d/sleap/bytetrack only. Read with
+#: the figure footer ("a: 50 BMimica sessions ... b-g: 74 SLAP-2M sessions") that is a
+#: complete answer to "where did the fourth tracker go", and it rides in the key band
+#: `panel(key=...)` has already reserved, so it costs no axes height -- see the
+#: footnote comment below for what a fourth footnote line would have cost instead.
+#: Entry measures 65.6 mm from the key's x = 12.3 mm, i.e. 77.9 of 88 mm.
+CORPUS_NOTE = {"3D-MuPPET": "· BMimica only"}
 NCAM = 5
 
 
@@ -94,7 +113,10 @@ def main():
                         yerr=[[s["mean"] - s["ci95_lo"]], [s["ci95_hi"] - s["mean"]]],
                         fmt="o", color=color, ms=3.2, mec="white", mew=0.6,
                         elinewidth=1.0, capsize=1.8, capthick=1.0, zorder=5)
-        entries.append((f"{name}  {w:.3f} → {c:.3f} ×{c / w:.2f}", color))
+        entry = f"{name}  {w:.3f} → {c:.3f} ×{c / w:.2f}"
+        if name in CORPUS_NOTE:
+            entry += f"  {CORPUS_NOTE[name]}"
+        entries.append((entry, color))
 
     df = pd.DataFrame(rows)
     deposit(df, 7, "fig7a_within_vs_cross.csv")
@@ -132,6 +154,12 @@ def main():
     # panel; the x label is centred on the axes, so anything wider than the axis
     # extent hangs off the left of the page and the renderer drops the overhang
     # without complaint. Every line here is under 64 mm.
+    #
+    # A FOURTH LINE IS NOT FREE, which is why the "BMimica only" note rides in the
+    # key instead (see CORPUS_NOTE). `footnote` folds into the x label, so each line
+    # is 3.2 mm taken out of THIS panel's axes: measured, a fourth line shrinks the
+    # plot from 22.0 to 18.8 mm, and the two-line ceiling annotation then fills a
+    # third of the data area. The key band is already reserved by `panel(key=4)`.
     footnote(ax, f"n = {int(df.n_sessions.iloc[0])} full BMimica sessions, "
              f"{NCAM} cameras, 2 mice\n"
              f"mean ± 95% CI; LUC3D drift ≤ {drift:.3f} in every session\n"

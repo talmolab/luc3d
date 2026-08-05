@@ -87,8 +87,11 @@ def main():
     ax.plot(df.baseline_deg, df.err3d_mm, "o", color=TEAL, ms=6, mec="white",
             mew=1.0, zorder=4)
     # Name only the two the robust law misses -- they are the informative ones.
+    # `cam 1+2`, not the raw key `1-2`: these are camera PAIRS, and a hyphen between
+    # two numbers reads as a range or a minus sign. The CSV keeps the raw key.
     for _, r in df[~df.within_band].iterrows():
-        ax.annotate(r.pair, (r.baseline_deg, r.err3d_mm), fontsize=7, color=GREY,
+        ax.annotate(f"cam {r.pair.replace('-', '+')}",
+                    (r.baseline_deg, r.err3d_mm), fontsize=7, color=GREY,
                     textcoords="offset points", xytext=(6, 2))
 
     ax.text(0.97, 0.95, f"k = {k:.2f} mm\n{int(df.within_band.sum())}/{len(df)} "

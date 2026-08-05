@@ -12,7 +12,7 @@ reference 3D. The gap between them (~1.65 px at the median) is the held-out view
 own detection noise -- error a labeller would have introduced by hand in that view
 anyway. So the solid curve is conservative and the dashed one is
 optimistic-by-shared-bias, and every headline number quotes the SOLID one:
-median 4.32 px, 99.68% within 20 px.
+median 4.32 px, 94.6% within the marked tau = 10 px, 99.68% within 20 px.
 
 An earlier draft plotted only the flattering curve. Both are drawn here precisely so
 that choice is visible rather than silent.
@@ -80,15 +80,22 @@ def main():
     ax.plot(ref.error_px, ref.cumulative_pct, color=TEAL, lw=1.2,
             ls=(0, (2.5, 1.5)), zorder=3)
     ax.axvline(TAU_MAIN, color=SALMON, lw=0.8, ls=(0, (2.5, 1.5)), zorder=1)
-    ax.text(TAU_MAIN + 0.5, 8, f"τ = {TAU_MAIN:.0f} px", color=SALMON, fontsize=7,
-            va="bottom")
+    # LEFT of the rule: the right-hand side now carries the four-line number stack,
+    # and the bottom entry of that stack sat on this label.
+    ax.text(TAU_MAIN - 0.6, 8, f"τ = {TAU_MAIN:.0f} px", color=SALMON, fontsize=7,
+            ha="right", va="bottom")
 
-    ax.text(11.5, 46, f"median {obs_agg['p50']:.2f} px", color=TEAL, fontsize=7)
+    ax.text(11.5, 52, f"median {obs_agg['p50']:.2f} px", color=TEAL, fontsize=7)
     # One decimal, matching the caption. `:.0f` printed 59.898% as "60%", so the
     # artwork and the caption disagreed on the same quantity -- and 60 reads as a
     # round number someone chose rather than a measurement.
-    ax.text(11.5, 34, f"{obs_agg['acc5'] * 100:.1f}% ≤ 5 px", color=INK, fontsize=7)
-    ax.text(11.5, 22, f"{obs_agg['acc20'] * 100:.2f}% ≤ 20 px", color=INK,
+    ax.text(11.5, 40, f"{obs_agg['acc5'] * 100:.1f}% ≤ 5 px", color=INK, fontsize=7)
+    # The 10 px value is not optional: tau = 10 px is the ONE tolerance this panel
+    # draws a rule for, so leaving it unquantified made the axis mark the tolerance
+    # the artwork then refused to answer. Salmon, matching the rule it reads off.
+    ax.text(11.5, 28, f"{obs_agg['acc10'] * 100:.1f}% ≤ {TAU_MAIN:.0f} px",
+            color=SALMON, fontsize=7)
+    ax.text(11.5, 16, f"{obs_agg['acc20'] * 100:.2f}% ≤ 20 px", color=INK,
             fontsize=7)
 
     # Both curves are TEAL and differ only by dash, so the key must say so. Colouring

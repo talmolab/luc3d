@@ -37,15 +37,32 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import OUT, load  # noqa: E402
 from src.diagram import blank, icon, point, ray  # noqa: E402
 from src.style import GREY, INK, SALMON, SPAN, TEAL, mm, save, tile, use  # noqa: E402
 
-STEPS = ["1  label 2 anchor views", "2  triangulate",
-         "3  reprojections appear", "4  accept or nudge"]
+STEPS = ["label 2 anchor views", "triangulate",
+         "reprojections appear", "accept or nudge"]
 REPROJ_CAMS = ["Camera0_mid", "Camera2_topC"]
+#: width / height of one grid cell, measured off the laid-out figure below. The
+#: magnified crop is cut to exactly this so it FILLS its cell: a square crop in a
+#: 1.19 cell is height-bound, which throws away 16% of the available width and,
+#: with it, 16% of the magnification for free.
+CELL_AR = 32.59 / 27.35
+
+
+def cam_label(name):
+    """`Camera1_topB` -> `cam 1 topB`.
+
+    The camera INDEX is load-bearing here: the panel's whole claim is about which
+    views were labelled and which were only reprojected into, so a badge reading
+    just `topB` is unattributable. Fig 1b badges its tiles the same way.
+    """
+    idx, view = name.removeprefix("Camera").split("_", 1)
+    return f"cam {idx} {view}"
 
 
 def bbox_of(views, name):
@@ -54,6 +71,51 @@ def bbox_of(views, name):
             b = v["bbox"]
             return (b["x0"], b["y0"], b["x1"], b["y1"])
     return None
+
+
+def view_of(views, name):
+    return next(v for v in views if v["name"] == name)
+
+
+def zoom_on_largest(view, ar=CELL_AR, pad=0.20):
+    """A RECTANGULAR crop on the biggest instance in a view, at aspect `ar`.
+
+    `load_tile` deliberately squares its crop so a ROW of tiles shares one aspect,
+    which is right for the four source views but wrong for the one magnified tile:
+    it is alone in its slot, and the reader has to see the offset between the
+    reprojected overlay and the animal under it. Two things were costing that:
+      * the crop was square in a 1.19 cell, so it rendered height-bound at 27 mm
+        in a 33 mm slot;
+      * it was 60% of the WHOLE-frame animal bbox taken from the top-left corner,
+        which on this frame cuts off the tail of `id_0` at x = 649 -- and the tail
+        is exactly where the two-anchor reprojection sits farthest from the
+        detection (the per-view spread runs out to 24.6 px).
+    Framing on the largest instance's own box from the manifest keeps that offset
+    in frame at 6.9 source px/mm instead of 11.7, i.e. a ~15 px reprojection gap
+    becomes ~2.2 mm on the page rather than ~1.3 mm. The neighbouring animal is
+    clipped at the left edge, which is what the labeller sees on screen anyway.
+    """
+    b = max(view["details"],
+            key=lambda d: (d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1])
+            )["box"]
+    w, h = (b[2] - b[0]) * (1 + pad), (b[3] - b[1]) * (1 + pad)
+    w = max(w, h * ar)
+    h = w / ar
+    cx, cy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
+    return (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+
+
+def chevron(fig, x, y, *, h=0.023, w=0.010, color=GREY, lw=1.2):
+    """A `>` between two steps, drawn (not typeset) in figure coordinates.
+
+    The four tiles columns sit in 12.4 mm gutters, so a 1.8 x 3.6 mm chevron has
+    room in the middle of one without coming near a tile. Drawn as a polyline
+    rather than a `>` glyph because Fig 1a's typeset chevrons are the reason
+    `lint_text.py` reports text ON DATA there -- noise that hides real hits.
+    """
+    fig.add_artist(Line2D([x - w / 2, x + w / 2, x - w / 2], [y + h, y, y - h],
+                          transform=fig.transFigure, color=color, lw=lw,
+                          solid_capstyle="round", clip_on=False))
 
 
 def schematic(ax):
@@ -98,7 +160,7 @@ def main():
         if not f.exists():
             sys.exit(f"missing figs/out/{f.name} — run `node figs/fig2_protocol.mjs`")
         tile(cells[(r, 0)], f, bbox_of(va, cam),
-             badge=f"{cam.split('_', 1)[1]} · anchor", pad=0.06)
+             badge=f"{cam_label(cam)} · anchor", pad=0.06)
 
     # --- 2: the solve, and what it produced -------------------------------
     schematic(cells[(0, 1)])
@@ -108,13 +170,17 @@ def main():
     # --- 3: two views nobody labelled -------------------------------------
     for r, cam in enumerate(REPROJ_CAMS):
         tile(cells[(r, 2)], OUT / f"fig2p-reproj-f150-{cam}.png", bbox_of(vr, cam),
-             badge=f"{cam.split('_', 1)[1]} · not labelled", pad=0.06)
+             badge=f"{cam_label(cam)} · not labelled", pad=0.06)
 
     # --- 4: magnified, and the measured error split -----------------------
-    b = bbox_of(vr, "Camera0_mid")
-    zoom = (b[0], b[1], b[0] + (b[2] - b[0]) * 0.6, b[1] + (b[3] - b[1]) * 0.6)
-    tile(cells[(0, 3)], OUT / "fig2p-reproj-f150-Camera0_mid.png", zoom,
-         badge="magnified", pad=0.0)
+    # The whole image goes in and the crop is done with the LIMITS, because that is
+    # the only way to get a non-square window through `tile` (`load_tile` squares
+    # any bbox it is given). Badges are in axes coordinates, so they follow.
+    zoom = zoom_on_largest(view_of(vr, "Camera0_mid"))
+    ax0 = tile(cells[(0, 3)], OUT / "fig2p-reproj-f150-Camera0_mid.png", None,
+               badge=f"{cam_label('Camera0_mid')} · magnified")
+    ax0.set_xlim(zoom[0], zoom[2])
+    ax0.set_ylim(zoom[3], zoom[1])
 
     ax = cells[(1, 3)]
     blank(ax)
@@ -129,10 +195,20 @@ def main():
             ("solid = detected", GREY, "normal")]):
         ax.text(0.0, 0.95 - i * 0.17, t, color=c, fontweight=w, fontsize=7, va="top")
 
+    # The step number goes in a filled disc and consecutive steps are joined by a
+    # chevron: four bold titles in a row are four titles, whereas 1 > 2 > 3 > 4 is a
+    # PROCEDURE, which is the only thing this panel is claiming.
+    fig.canvas.draw()                    # so get_position() is the laid-out one
     for k, title in enumerate(STEPS):
-        x = cells[(0, k)].get_position().x0
-        fig.text(x, 0.94, title, ha="left", va="bottom", fontweight="bold",
-                 color=INK, fontsize=8)
+        p = cells[(0, k)].get_position()
+        fig.text(p.x0 + 0.008, 0.945, str(k + 1), ha="center", va="center",
+                 fontweight="bold", color="white", fontsize=7,
+                 bbox=dict(boxstyle="circle,pad=0.32", fc=INK, ec="none"))
+        fig.text(p.x0 + 0.024, 0.94, title, ha="left", va="bottom",
+                 fontweight="bold", color=INK, fontsize=8)
+        if k:
+            prev = cells[(0, k - 1)].get_position()
+            chevron(fig, (prev.x1 + p.x0) / 2, (p.y0 + p.y1) / 2)
 
     save(fig, 2, "a", "protocol")
 

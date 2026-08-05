@@ -201,8 +201,8 @@ views you *label*; the final reconstruction should still use every available vie
   not by shading a region.
 * Panel c: 38,322,720 held-out view measurements (every camera pair × every
   held-out view × every keypoint × 50 sessions). Median 4.32 px against the view's own
-  detection (p90 8.49, p99 14.91; **59.9%** ≤ 5 px — the panel prints this rounded to
-  60% — and 99.68% ≤ 20 px) and 2.67 px against the reference 3D. Between-session spread
+  detection (p90 8.49, p99 14.91; **59.9%** ≤ 5 px, **94.6%** ≤ the marked
+  τ = 10 px, and 99.68% ≤ 20 px) and 2.67 px against the reference 3D. Between-session spread
   is small: per-session medians 2.79–4.91 px, and 98.99–99.88% within 20 px in every
   session.
 * Panel d: 12,774,240 two-anchor solves (10 pairs × 50 sessions). Both

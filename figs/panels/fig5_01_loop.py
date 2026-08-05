@@ -33,10 +33,28 @@ STAGES = [
 ]
 W, H, GAP, NOTCH = 2.05, 1.55, 0.36, 0.26
 
+#: THE PANEL'S HEIGHT IS DERIVED, NOT CHOSEN, because `blank()` sets an EQUAL aspect.
+#: The row is 180 mm wide and the diagram is only ~124 mm of that, so the axes is
+#: height-limited: the drawing's scale is `(row - PAD) / (Y_TOP - Y_BOT)` mm per data
+#: unit and the row height alone decides how big a chevron is. The panel used to be
+#: 36 mm tall with `ylim` (-2.325, 1.075) -- 9.97 mm per unit, 2.75 mm of dead paper
+#: above the chevrons and 6.2 mm below the bracket label, i.e. 40% of the panel blank
+#: with nothing drawn in it. Trimming the y range to the ink (plus a 0.9 mm margin)
+#: and recomputing the row at the SAME mm-per-unit takes 7.2 mm off this panel (Fig 5
+#: assembles at 179 mm rather than 186) while leaving every chevron and every glyph
+#: exactly the size it was -- verified by the ink bbox of the rendered PNG, which is
+#: 588 x 2814 px before and after at 600 dpi. Do NOT set
+#: `row` by hand here: a row that does not match the y range rescales the artwork.
+MM_PER_UNIT = 9.966       # measured on the 36 mm version
+PAD_MM = 2.12             # constrained_layout's top+bottom pad, absolute, not scaled
+Y_TOP = H / 2 + 0.11      # 0.11 = 0.9 mm above the chevrons' outer stroke
+Y_BOT = -1.79             # 0.9 mm below the "one frame at a time" label
+ROW_MM = (Y_TOP - Y_BOT) * MM_PER_UNIT + PAD_MM   # 28.8 mm
+
 
 def main():
     use()
-    fig, ax = grid(1, 1, span="full", row=36.0, despine=False)
+    fig, ax = grid(1, 1, span="full", row=ROW_MM, despine=False)
     blank(ax)
 
     for i, (label, sub, inloop, kind) in enumerate(STAGES):
@@ -66,7 +84,7 @@ def main():
             color=TEAL, fontsize=7, fontweight="bold")
 
     ax.set_xlim(-0.35, len(STAGES) * (W + GAP) - GAP + 0.35)
-    ax.set_ylim(-H / 2 - 1.55, H / 2 + 0.30)
+    ax.set_ylim(Y_BOT, Y_TOP)
     save(fig, 5, "b", "loop")
 
 

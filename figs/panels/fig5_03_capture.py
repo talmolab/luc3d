@@ -25,6 +25,13 @@ At a 10% budget the residual finds ~27% of the correction against the oracle's ~
 and confidence's ~12%, i.e. most of the achievable gain from a signal that needs no
 ground truth.
 
+ALL FOUR VALUES AT THE 10% RULE ARE PRINTED, random included. Random's 10 is what makes
+the comparison land: reviewing 10% at random finds 10%, so detector confidence's 12 is
+barely better than not ranking at all, while the residual's 27 is 2.7x random and 85%
+of the oracle's 32. With the 10 left off the page the reader has to derive the baseline
+from the diagonal before the confidence curve's weakness is visible -- and the legacy
+panel printed it.
+
 MIND THE KEY NAME. `fig6_detections.json` is read by BOTH Fig 5 and Fig 6, so its
 schema is additive-only; a mismatch in exactly this file (`capture_oracle` vs
 `capture_by_oracle`) silently dropped this panel's oracle series once already.
@@ -100,6 +107,16 @@ def main():
                     xytext=(dx, dy), color=color, fontsize=6.5, fontweight="bold",
                     ha="left", va=va)
 
+    # THE RANDOM BASELINE'S VALUE, in the same style as the three series'. Random has
+    # no deposited curve -- it IS the diagonal, y = x -- so the number comes from the
+    # budget itself rather than from `df`. Placed BELOW-right of (10, 10): the diagonal
+    # rises to the right, so a label anchored va="top" 5 pt under the point clears both
+    # the dashed rule and the confidence curve above it, and the four values then read
+    # top-to-bottom 32 / 27 / 12 / 10 in curve order.
+    ax.annotate(f"{float(MARK) * 100:.0f}",
+                (float(MARK) * 100, float(MARK) * 100), textcoords="offset points",
+                xytext=(5, -5), color=GREY, fontsize=6.5, fontweight="bold",
+                ha="left", va="top")
     ax.axvline(float(MARK) * 100, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
     ax.annotate("10% budget", (float(MARK) * 100, 1.0),
                 xycoords=("data", "axes fraction"), xytext=(0, 2),
