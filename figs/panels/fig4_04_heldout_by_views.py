@@ -30,7 +30,8 @@ import seaborn as sns
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import grid, GREY, PERIWINKLE, TEAL, deposit, save, text_legend, use  # noqa: E402
+from src.style import (grid, GREY, PERIWINKLE, TEAL, deposit, footnote,  # noqa: E402
+                       save, text_legend, use)
 
 DLT_C, REF_C = PERIWINKLE, TEAL
 
@@ -52,11 +53,17 @@ def main():
     df = build()
     deposit(df, 4, "fig4d_heldout_by_views.csv")
 
-    # Shared x, 2:1 heights -- the strip is a readout of the panel above it, not a
+    # Shared x, 2.7:1 heights -- the strip is a readout of the panel above it, not a
     # second panel, so it gets no x label of its own and no top spine.
+    #
+    # IT WAS 2.1:1 AND THAT WAS TOO MUCH ROOM for what it says. The differences are
+    # 0.06-0.14 px on a 3-4 px level and the bars fill a +-0.1 px axis, so the strip
+    # was giving maximum visual prominence to an effect this figure's own text calls
+    # negligible. The strip has to stay -- the SIGN FLIP is the finding and a 0-based
+    # level axis cannot show it -- but it is sized as the footnote it is.
     fig, (ax, strip) = grid(
         2, 1, span="third", row="std", sharex=True, despine=False,
-        gridspec_kw={"height_ratios": [2.1, 1.0]},
+        gridspec_kw={"height_ratios": [2.7, 1.0]},
     )
     sns.despine(ax=ax, top=True, right=True)
     sns.despine(ax=strip, top=True, right=True)
@@ -80,6 +87,18 @@ def main():
     strip.set_ylabel("Δ (px)")
     strip.set_xticks(df.cameras)
     strip.set_xlabel("cameras the solver was given")
+    # WHAT THE STRIP IS NOT: an interval. Every bar pools all 1,417,879 keypoints of
+    # all 50 sessions into one number, and those sessions are correlated -- three
+    # calibrations, one rig -- so the bar has no error bar and could not honestly be
+    # given one from this deposit, which stores only by-k pooled percentiles. Say the
+    # sample size, say the magnitude relative to the level, and point at the panel
+    # that does treat the session as the unit. Panel e's held-out group is the same
+    # comparison with one dot per session, and it is the one to read for spread.
+    # Lines wrap at ~32 characters: a 37-character first line ran off the page, and
+    # the linter's `truncated()` check catches that, so keep them short.
+    footnote(strip, "Δ = refined − DLT, pooled\n"
+                    "over n=1,417,879 keypoints\n"
+                    "session-level spread: panel e")
 
     save(fig, 4, "d", "heldout_by_views")
 

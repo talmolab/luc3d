@@ -27,7 +27,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load, median  # noqa: E402
-from src.style import PINK, annotate_series, deposit, panel, save, use  # noqa: E402
+from src.style import (PINK, annotate_series, deposit, footnote, panel,  # noqa: E402
+                       save, use)
 
 KS = ["2", "3", "4", "5"]
 
@@ -86,6 +87,26 @@ def main():
     ax.set_xlabel("cameras that saw the keypoint")
     ax.set_ylabel("3D error vs proofread (mm)")
     ax.set_ylim(0, None)
+
+    # THIS PANEL IS THE ONE PANEL IN FIG 4 FROM A DIFFERENT RUN, and until now the
+    # only place that was said was the figure footer's "b 1,277,424 at stride 200".
+    # It is a Fig 2 measurement: DLT only, stride 200, aligned to the proofread
+    # reference by RANSAC-Procrustes. So three things go on the axis --
+    #  * DLT only, so no reader takes the curve for a solver comparison;
+    #  * the sampling, so it is not read as the stride-60 run c-f use;
+    #  * what the band is. It is the ACROSS-SESSION median of each session's own
+    #    p25/p50/p75, which is neither a confidence interval on the plotted median
+    #    nor any one session's IQR, and an unnamed ribbon is read as the former.
+    # A THIRD LINE naming the comparison floor was drafted here and does not fit: at
+    # 7.5 pt three note lines plus the axis label squeeze a 57.3 x 52 mm panel until
+    # the rotated y label runs off the top of the page. It lives in the figure
+    # footer instead (`assemble.FOOTERS[4]`), which is where figure-level provenance
+    # belongs -- the reference is brought into this pipeline's frame by
+    # RANSAC-Procrustes and carries its own reprojection error, so 1.2 mm is bounded
+    # below by that alignment and is a COMPARISON floor, not this pipeline's
+    # accuracy. The y label already says "vs proofread" rather than "3D error".
+    footnote(ax, "DLT only · stride 200, as Fig 2\n"
+                 "band: across-session p25–p75")
     save(fig, 4, "b", "accuracy_vs_cameras")
 
 

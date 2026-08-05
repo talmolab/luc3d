@@ -38,7 +38,10 @@ def main():
     colors = [PERIWINKLE, TEAL]
     ax.bar(df.solver, df.us_per_keypoint, width=0.55, color=colors, zorder=2)
     for i, r in df.iterrows():
-        ax.text(i, r.us_per_keypoint + 1.0, f"{r.us_per_keypoint:.0f}", ha="center",
+        # ONE DECIMAL, NOT ZERO. Rounded to integers the bars read "6" and "44",
+        # and a reader who divides them gets 7.3x against a printed 6.9x -- the
+        # ratio is right (43.79 / 6.33 = 6.92) and the labels were what lied.
+        ax.text(i, r.us_per_keypoint + 1.0, f"{r.us_per_keypoint:.1f}", ha="center",
                 va="bottom", fontweight="bold", color=colors[i])
 
     ratio = df.us_per_keypoint.iloc[1] / df.us_per_keypoint.iloc[0]

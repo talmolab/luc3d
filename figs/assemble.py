@@ -76,8 +76,15 @@ FOOTERS = {
         "identical across all 24 cells.",
         "f: exhaustive is our reimplementation of the published per-frame procedure. "
         "IDF1 and switches via motmetrics on a shared identity-stripped pool."],
+    # "All panels" was doing too much work: b is not from the run c-f are from, and
+    # the only place that was said was the stride. The second line now attributes it,
+    # names the alignment its floor is bounded by, and says the floor is a comparison
+    # floor -- the panel itself carries the short form ("DLT only, stride 200, as
+    # Fig 2" and "band: across-session p25-p75"), which is all a 57 mm panel will take.
     4: ["All panels: the same 50 BMimica sessions, 5 cameras, 3 calibrations. "
         "c-f 4,253,636 keypoints at stride 60; b 1,277,424 at stride 200.",
+        "b is the Fig 2 measurement: DLT only, brought into this pipeline's frame by "
+        "RANSAC-Procrustes, so its floor is a comparison floor, not accuracy.",
         "Median lens-distortion displacement 8.42 px (p95 23.36). See caption for "
         "what is enforced rather than observed."],
     5: ["a: one frame of an 8-camera recording in LUC3D, 3D solved from all 8 views "
@@ -95,6 +102,59 @@ FOOTERS = {
         "a: 50 BMimica sessions, 5 cameras, 2 mice. b-g: 74 SLAP-2M sessions. "
         "See caption for n and method."],
 }
+
+#: (figure, letter) -> panel title, drawn beside the letter at assembly.
+#:
+#: The legacy set gave every panel a bold title and the restyle dropped all of them,
+#: leaving bare letters. `figures-mimic-mjx` has no panel titles -- but it also does
+#: not assemble, and its letters are added by hand in Illustrator where a title would
+#: be typed alongside. Dropping the titles cost real navigation: seven figures of
+#: unlabelled letters make the reader carry the caption to understand any panel.
+#:
+#: They are drawn HERE, not in the panels, for two reasons. Panel scripts have no
+#: vertical headroom for a title (fig4's b/c/d had to shed y-label lines just to fit
+#: their provenance), and a title inside a panel would scale with the panel while the
+#: letter beside it did not. At assembly both are one typographic unit.
+TITLES = {
+    (1, "a"): "Pipeline",
+    (1, "b"): "Cross-view re-identification",
+    (1, "c"): "Triangulated 3D",
+    (1, "d"): "Capability comparison",
+    (2, "a"): "Protocol",
+    (2, "b"): "Placements vs rig size",
+    (2, "c"): "Cost of two anchors",
+    (2, "d"): "Anchor-pair geometry",
+    (3, "a"): "Grouping strategies",
+    (3, "b"): "Association cost",
+    (3, "c"): "Hypotheses per frame",
+    (3, "d"): "Association runtime",
+    (3, "e"): "3D-term ablation",
+    (3, "f"): "Time per frame",
+    (4, "a"): "Triangulation solvers",
+    (4, "b"): "Accuracy vs cameras used",
+    (4, "c"): "Dropping the worst camera",
+    (4, "d"): "Error in an unused camera",
+    (4, "e"): "Per session, both solvers",
+    (4, "f"): "Time per keypoint",
+    (5, "a"): "Per-view reprojection error",
+    (5, "b"): "Proofreading loop",
+    (5, "c"): "Correction found per review budget",
+    (5, "d"): "Per session, 10% budget",
+    (6, "a"): "Rig and 3D",
+    (6, "b"): "One frame, six cameras",
+    (6, "c"): "Detection quality",
+    (6, "d"): "Animal-count control",
+    (6, "e"): "Corpora",
+    (6, "f"): "Difficulty strata",
+    (7, "a"): "Within- vs cross-view IDF1",
+    (7, "b"): "Bedding invariance",
+    (7, "c"): "Within-view IDF1 per session",
+    (7, "d"): "Per-session paired difference",
+    (7, "e"): "Error composition",
+    (7, "f"): "IDF1 vs detector recall",
+    (7, "g"): "Fragmentation",
+}
+TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 
 #: figure -> [row, ...] where a row is [(letter, slug), ...].
 #: NO SIZES HERE. Panels are built on the column grid in src/style.py and saved at
@@ -204,8 +264,17 @@ def assemble(fig_no: int) -> Path | None:
         page.show_pdf_page(
             fitz.Rect(x * MM, y * MM, (x + w) * MM, (y + h) * MM), src, 0)
         src.close()
-        page.insert_text(fitz.Point(max(0.6, x - 2.0) * MM, (y - 1.2) * MM), letter,
+        lx = max(0.6, x - 2.0)
+        page.insert_text(fitz.Point(lx * MM, (y - 1.2) * MM), letter,
                          fontname="hebo", fontsize=LETTER_PT, color=INK)
+        # Title beside the letter, as the legacy set had it. Skipped silently when a
+        # panel has no entry, so a newly added panel is not blocked on naming it --
+        # but check TITLES after any re-lettering, because a title that has drifted
+        # onto the wrong panel is worse than none.
+        title = TITLES.get((fig_no, letter))
+        if title:
+            page.insert_text(fitz.Point((lx + 4.4) * MM, (y - 1.2) * MM), title,
+                             fontname="hebo", fontsize=TITLE_PT, color=INK)
 
     fy = page_h - MARGIN - FOOTER_LEAD * (len(foot) - 0.35)
     for line in foot:

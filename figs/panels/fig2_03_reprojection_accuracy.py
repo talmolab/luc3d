@@ -84,7 +84,10 @@ def main():
             va="bottom")
 
     ax.text(11.5, 46, f"median {obs_agg['p50']:.2f} px", color=TEAL, fontsize=7)
-    ax.text(11.5, 34, f"{obs_agg['acc5'] * 100:.0f}% ≤ 5 px", color=INK, fontsize=7)
+    # One decimal, matching the caption. `:.0f` printed 59.898% as "60%", so the
+    # artwork and the caption disagreed on the same quantity -- and 60 reads as a
+    # round number someone chose rather than a measurement.
+    ax.text(11.5, 34, f"{obs_agg['acc5'] * 100:.1f}% ≤ 5 px", color=INK, fontsize=7)
     ax.text(11.5, 22, f"{obs_agg['acc20'] * 100:.2f}% ≤ 20 px", color=INK,
             fontsize=7)
 
