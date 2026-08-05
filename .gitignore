@@ -53,11 +53,24 @@ _real-roundtrip-*.slp
 # sequence-workflow harness fixtures/outputs (tests/e2e/sequence-lazy-workflow.mjs)
 _seq-*.slp
 
-# Paper figures (figs/): the SCRIPTS are tracked, the inputs and outputs are not.
-# figs/session/ is a trimmed multi-camera clip rebuilt by figs/build_fig_session.py
-# from _bugdata; figs/out/ is generated PNG/SVG. Notes in figs/ ARE tracked, which
-# needs an explicit negation because *.md above ignores markdown repo-wide.
+# Paper figures (figs/). Layout follows talmolab/figures-mimic-mjx:
+#   figs/panels/   one script per panel                     TRACKED
+#   figs/src/      shared style + loaders                   TRACKED
+#   figs/data/     small plot-ready CSVs, one per panel     TRACKED  <- deliberately
+#   figs/figures/  the rendered panel PDFs + composites     TRACKED  <- deliberately
+#   figs/out/      the raw measurement deposits + app PNGs  ignored (large, machine-local)
+#   figs/session/  trimmed multi-camera clip, rebuilt by build_fig_session.py
+#
+# data/ and figures/ ARE tracked so the figures are buildable and auditable from a
+# fresh clone without re-running the measurement pass (which needs the bench env and
+# the raw corpora). That is the reference repo's idiom: the expensive pass deposits,
+# the plotting pass reads a committed table.
 figs/session/
 figs/out/
 figs/node_modules
+figs/.venv/
+figs/__pycache__/
+figs/**/__pycache__/
 !figs/*.md
+!figs/data/**
+!figs/figures/**

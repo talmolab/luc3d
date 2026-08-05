@@ -1,0 +1,233 @@
+"""
+Line-art primitives for the schematic panels.
+
+The data panels take their look from `figures-mimic-mjx`. The schematics take
+theirs from the Cheese3D paper's rig/pipeline diagrams: flat line art at a single
+stroke weight, no 3D shading or drop shadows, no gradients, colour used only to
+carry meaning (a camera that moves vs one held fixed), and every element labelled
+in the same 8 pt Arial as the data panels so a reader crossing from a schematic to
+a plot does not change type size.
+
+Deliberately small. `nature.py` grew a 40-method drawing API and the figures grew
+to match -- the composite panels ended up carrying more annotation than data, which
+is the "slop" this rewrite is undoing. Anything more elaborate than the primitives
+here should be drawn in Illustrator at assembly time, not generated.
+
+All coordinates are in axes data space, and every helper returns nothing: draw onto
+a `blank()` axes and set the limits yourself.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+from matplotlib.patches import (Circle, Ellipse, FancyArrowPatch, Polygon,
+                                Rectangle)
+
+from .style import GREY, INK
+
+#: One stroke weight for the whole schematic, matching the data panels' axes.
+LW = 0.9
+
+
+def blank(ax):
+    """Strip an axes to bare paper: no spines, no ticks, equal aspect."""
+    for s in ax.spines.values():
+        s.set_visible(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_aspect("equal")
+    return ax
+
+
+def camera(ax, x, y, s=1.0, color=INK, angle=0.0, label=None, labelpos="below"):
+    """A camera: body + lens cone, drawn as flat line art pointing +x.
+
+    `angle` rotates it about (x, y) in degrees, so a rig can be drawn by placing
+    each camera on its real bearing.
+    """
+    th = np.radians(angle)
+    R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+
+    def place(pts):
+        return (np.asarray(pts) * s) @ R.T + (x, y)
+
+    # Explicit closed polygons. `Path(verts, closed=True)` needs matching `codes`
+    # to actually close, and silently drew open chevrons instead of a camera.
+    body = place([(-0.9, -0.6), (0.35, -0.6), (0.35, 0.6), (-0.9, 0.6)])
+    ax.add_patch(Polygon(body, closed=True, fill=False, ec=color, lw=LW,
+                         joinstyle="miter"))
+    cone = place([(0.35, -0.5), (1.05, -0.9), (1.05, 0.9), (0.35, 0.5)])
+    ax.add_patch(Polygon(cone, closed=True, fill=False, ec=color, lw=LW,
+                         joinstyle="miter"))
+    if label:
+        dy = -1.5 * s if labelpos == "below" else 1.5 * s
+        ax.text(x, y + dy, label, ha="center",
+                va="top" if labelpos == "below" else "bottom", color=color)
+
+
+def lock(ax, x, y, s=1.0, color=GREY):
+    """A padlock: this camera is held FIXED by the solver."""
+    ax.add_patch(Rectangle((x - 0.32 * s, y - 0.28 * s), 0.64 * s, 0.5 * s,
+                           fill=False, ec=color, lw=LW * 0.8))
+    t = np.linspace(np.pi, 0, 24)
+    ax.plot(x + 0.2 * s * np.cos(t), y + 0.22 * s + 0.2 * s * np.sin(t),
+            color=color, lw=LW * 0.8)
+
+
+def free(ax, x, y, s=1.0, color=INK):
+    """A short double arrow: this camera is FREE to move (joint bundle adjustment)."""
+    ax.add_patch(FancyArrowPatch((x - 0.5 * s, y - 0.35 * s),
+                                 (x + 0.5 * s, y + 0.35 * s),
+                                 arrowstyle="<|-|>", mutation_scale=6,
+                                 color=color, lw=LW * 0.8, shrinkA=0, shrinkB=0))
+
+
+def ray(ax, x0, y0, x1, y1, color=GREY, ls="-", lw=None):
+    """A sight line from a camera to a point."""
+    ax.plot([x0, x1], [y0, y1], color=color, ls=ls, lw=lw or LW * 0.8, zorder=1)
+
+
+def point(ax, x, y, color=INK, r=0.16, filled=True):
+    """A reconstructed 3D point."""
+    ax.add_patch(Circle((x, y), r, facecolor=color if filled else "white",
+                        edgecolor=color, lw=LW, zorder=4))
+
+
+def residual(ax, x0, y0, x1, y1, color, curved=False, label=None):
+    """The residual a solver minimises.
+
+    `curved=True` bows the connector, which is how the native-distorted-space
+    solvers are distinguished from DLT's straight algebraic offset -- the one real
+    geometric distinction between them, so it is drawn rather than captioned.
+    """
+    if curved:
+        p = FancyArrowPatch((x0, y0), (x1, y1), connectionstyle="arc3,rad=0.35",
+                            arrowstyle="-", color=color, lw=LW * 1.3,
+                            linestyle=(0, (2.5, 1.5)), shrinkA=0, shrinkB=0,
+                            zorder=3)
+        ax.add_patch(p)
+    else:
+        ax.plot([x0, x1], [y0, y1], color=color, lw=LW * 1.3,
+                ls=(0, (2.5, 1.5)), zorder=3)
+    ax.add_patch(Circle((x1, y1), 0.11, facecolor=color, edgecolor="none",
+                        zorder=4))
+    if label:
+        ax.text((x0 + x1) / 2, (y0 + y1) / 2 + 0.3, label, color=color,
+                ha="center", va="bottom", fontsize=7)
+
+
+def loop(ax, x, y, r=0.55, color=INK, label=None):
+    """A circular arrow: this solver ITERATES."""
+    t = np.linspace(0.35 * np.pi, 1.85 * np.pi, 60)
+    ax.plot(x + r * np.cos(t), y + r * np.sin(t), color=color, lw=LW)
+    ax.add_patch(FancyArrowPatch(
+        (x + r * np.cos(t[-2]), y + r * np.sin(t[-2])),
+        (x + r * np.cos(t[-1]), y + r * np.sin(t[-1])),
+        arrowstyle="-|>", mutation_scale=7, color=color, lw=0, shrinkA=0,
+        shrinkB=0))
+    if label:
+        ax.text(x, y - r - 0.25, label, ha="center", va="top", color=color,
+                fontsize=7)
+
+
+# --------------------------------------------------------------------------
+# the pipeline icon set
+# --------------------------------------------------------------------------
+# Ported from the legacy `nature.py`'s `icon()`, and kept for the reason its
+# docstring gave: "a reader should be able to follow the stages from the icons
+# alone, which is the difference between a schematic and a row of captions."
+# The first pass of this rewrite dropped them and the flow charts became exactly
+# that row of captions.
+#
+# Same shapes, same proportions, redrawn in matplotlib. Every icon is drawn into
+# the unit box (x, y) .. (x+s, y+s) so a stage can place one without measuring.
+
+def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
+    """One pipeline glyph in the box (x, y, s, s).
+
+    kinds: camera, cameras, skeleton, ids, triangulate, cube, check, file, mouse
+
+    COORDINATES ARE FLIPPED relative to the legacy source. `nature.py` drew these
+    in SVG, where y grows DOWNWARD; matplotlib's y grows upward, so a direct port
+    mirrors every glyph vertically -- the checkmark came out as a caret and the
+    multi-camera icon hung its cameras below the subject instead of above it.
+    `Y(f)` maps a legacy fraction to the matplotlib box, and every vertical term
+    below goes through it.
+    """
+    lw = lw or LW * 0.85
+    cx = x + s / 2
+
+    def Y(f):
+        return y + (1.0 - f) * s
+
+    def L(x1, f1, x2, f2):
+        ax.plot([x1, x2], [Y(f1), Y(f2)], color=color, lw=lw,
+                solid_capstyle="round", zorder=3)
+
+    def box(bx, f_top, bw, fh):
+        # f_top is the legacy (y-down) top edge; height fh in fractions.
+        ax.add_patch(Rectangle((bx, Y(f_top + fh)), bw, fh * s, fill=False,
+                               ec=color, lw=lw, zorder=3))
+
+    def dot(dx, f, r):
+        ax.add_patch(Circle((dx, Y(f)), r, facecolor=color, edgecolor="none",
+                            zorder=4))
+
+    if kind == "camera":
+        box(x, 0.28, s * 0.62, 0.44)
+        ax.add_patch(Polygon([(x + s * 0.62, Y(0.42)), (x + s, Y(0.28)),
+                              (x + s, Y(0.72)), (x + s * 0.62, Y(0.58))],
+                             closed=True, fill=False, ec=color, lw=lw, zorder=3))
+    elif kind == "cameras":
+        for a in (-1, 0, 1):
+            bx = cx + a * s * 0.36
+            box(bx - s * 0.10, 0.10, s * 0.20, 0.14)
+            L(bx, 0.24, cx, 0.80)
+        dot(cx, 0.86, s * 0.08)
+    elif kind == "skeleton":
+        pts = [(0.20, 0.72), (0.40, 0.40), (0.62, 0.52), (0.84, 0.26)]
+        for i in range(len(pts) - 1):
+            L(x + pts[i][0] * s, pts[i][1], x + pts[i + 1][0] * s, pts[i + 1][1])
+        L(x + 0.40 * s, 0.40, x + 0.34 * s, 0.14)
+        L(x + 0.62 * s, 0.52, x + 0.70 * s, 0.82)
+        for px, py in pts:
+            dot(x + px * s, py, s * 0.075)
+    elif kind == "ids":
+        for dy in (0.16, 0.44, 0.72):
+            box(x, dy, s * 0.42, 0.20)
+            L(x + s * 0.52, dy + 0.10, x + s, dy + 0.10)
+    elif kind == "triangulate":
+        L(x + s * 0.06, 0.12, x + s * 0.92, 0.50)
+        L(x + s * 0.06, 0.88, x + s * 0.92, 0.50)
+        box(x + s * 0.00, 0.05, s * 0.14, 0.14)
+        box(x + s * 0.00, 0.81, s * 0.14, 0.14)
+        dot(x + s * 0.92, 0.50, s * 0.10)
+    elif kind == "cube":
+        o = 0.22
+        box(x, o, s * (1 - o), 1 - o)
+        box(x + o * s, 0.0, s * (1 - o), 1 - o)
+        L(x, o, x + o * s, 0.0)
+        L(x + s * (1 - o), o, x + s, 0.0)
+        L(x, 1.0, x + o * s, 1 - o)
+        L(x + s * (1 - o), 1.0, x + s, 1 - o)
+    elif kind == "check":
+        L(x + s * 0.16, 0.54, x + s * 0.40, 0.78)
+        L(x + s * 0.40, 0.78, x + s * 0.86, 0.20)
+    elif kind == "file":
+        f = 0.26
+        ax.add_patch(Polygon([(x + s * 0.16, Y(0.06)),
+                              (x + s * (0.84 - f), Y(0.06)),
+                              (x + s * 0.84, Y(0.06 + f)),
+                              (x + s * 0.84, Y(0.94)),
+                              (x + s * 0.16, Y(0.94))],
+                             closed=True, fill=False, ec=color, lw=lw, zorder=3))
+        for dy in (0.44, 0.62, 0.80):
+            L(x + s * 0.30, dy, x + s * 0.70, dy)
+    elif kind == "mouse":
+        ax.add_patch(Ellipse((cx, Y(0.5)), s * 0.68, s * 0.40, fill=False,
+                             ec=color, lw=lw, zorder=3))
+        L(cx + s * 0.34, 0.50, cx + s * 0.48, 0.40)
+        L(cx - s * 0.34, 0.50, cx - s * 0.50, 0.64)
+    else:
+        raise ValueError(f"unknown icon kind: {kind}")
+    return x, y, s, s

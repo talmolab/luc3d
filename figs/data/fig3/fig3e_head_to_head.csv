@@ -1,0 +1,5 @@
+label,animals,cameras,hypotheses,s_per_frame,frames_computed,dataset
+2×5,2,5,32,0.008139965806399089,122830,BMimica
+2×6,2,6,64,0.01560182136602452,14275,SLAP-2M
+3×5,3,5,7776,2.699496894409938,161,SLAP-2M
+4×6,4,6,191102976,,0,SLAP-2M

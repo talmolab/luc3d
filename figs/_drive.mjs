@@ -19,7 +19,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(__dirname, '..');
 export const outDir = path.join(__dirname, 'out');
-export const SESSION_REL = 'figs/session';
+// Which session folder to load, relative to the repo root. Fig 1/2 use the trimmed
+// 8-camera HardFight clip; Fig 6 points this at a SLAP-2M session instead.
+export const SESSION_REL = process.env.SESSION_REL || 'figs/session';
 export const CAMS = ['Camera0_mid', 'Camera1_topB', 'Camera2_topC', 'Camera3_sideC',
                      'Camera4_topR', 'Camera5_topL', 'Camera6_sideL', 'Camera7_sideR'];
 
@@ -348,17 +350,229 @@ export async function showInitialView(page) {
     await page.waitForTimeout(800);
 }
 
-/** Hide the camera frustums/labels in the 3D view (they dominate a zoomed-in shot). */
-export async function set3dChrome(page, { labels, spheres, pyramids } = {}) {
-    await page.evaluate(({ labels, spheres, pyramids }) => {
+/**
+ * Frame the WHOLE RIG -- every camera frustum plus the animals -- from a chosen
+ * orbit angle, zoomed out only as far as it takes to fit.
+ *
+ * `showInitialView()` (the app's own fit) frames the scene's own bounds, which on
+ * this rig leaves the animals a few pixels across: unusable in print. This instead
+ * fits a bounding sphere over the camera positions AND the 3D points, so "zoomed
+ * out just enough" is computed rather than guessed.
+ *
+ *   startCam     take the orbit AZIMUTH from this real camera, so the view is
+ *                anchored to an actual viewpoint in the rig rather than an
+ *                arbitrary angle. Its own elevation is returned for reference.
+ *   elevation    degrees above the horizontal. Low elevation puts the overhead
+ *                cameras high in the frame and the animals low, which is what a
+ *                reader needs to see that the rig looks DOWN at the arena.
+ *   pad          multiplies the fitting distance (1.0 = tight fit).
+ *   targetBias   raises the look-at point by this fraction of the scene radius,
+ *                which pushes the animals toward the bottom of the frame and gives
+ *                the cameras the upper part of it.
+ */
+export async function rigFit(page, { startCam = null, elevation = 22, pad = 1.12,
+                                     targetBias = 0.28, fov = 50, fill = 0.86 } = {}) {
+    const res = await page.evaluate(({ startCam, elevation, pad, targetBias, fov, fill }) => {
+        const v = window.__lucid.viewport3d;
+        const s = window.__lucid.state.session;
+        if (!v || !s) return null;
+        // Every rig camera's world position, via the app's own -R^T t.
+        const cams = v.cameras.map(c => ({
+            name: c.name,
+            p: v._computeCameraPosition(c.rotationMatrix, c.tvec),
+        }));
+        // The animals, this frame.
+        const gs = s.instanceGroups.get(window.__lucid.state.currentFrame) || [];
+        const pts = [];
+        for (const g of gs) {
+            const p = g.points3d;
+            if (!p) continue;
+            for (let i = 0; i + 2 < p.length; i += 3) {
+                if (Number.isFinite(p[i]) && Number.isFinite(p[i + 1]) && Number.isFinite(p[i + 2])) {
+                    pts.push([p[i], p[i + 1], p[i + 2]]);
+                }
+            }
+        }
+        if (!pts.length) return { n: 0 };
+        const mean = (a, k) => a.reduce((s2, q) => s2 + q[k], 0) / a.length;
+        const animals = [mean(pts, 0), mean(pts, 1), mean(pts, 2)];
+        const camMean = [mean(cams.map(c => c.p), 0), mean(cams.map(c => c.p), 1),
+                         mean(cams.map(c => c.p), 2)];
+
+        // WHICH WAY IS UP. This rig's calibration frame has +Z pointing DOWN: the
+        // overhead cameras have a SMALLER z than the animals on the floor. Assuming
+        // Z-up (the app's viewport default) renders the rig upside down -- animals
+        // floating above the cameras, which is how the first pass of this panel came
+        // out. So take "up" from the data: the cameras really are above the animals,
+        // so whichever Z direction points from the animals toward the cameras is up.
+        const zsign = camMean[2] < animals[2] ? -1 : 1;
+
+        // Orbit azimuth: from a real camera if asked, else keep the current one.
+        let az;
+        const sc = startCam ? cams.find(c => c.name === startCam) : null;
+        if (sc) {
+            az = Math.atan2(sc.p[1] - animals[1], sc.p[0] - animals[0]);
+        } else {
+            az = Math.atan2(v.threeCamera.position.y - animals[1],
+                            v.threeCamera.position.x - animals[0]);
+        }
+        // Elevation of the chosen camera above the animals, in the corrected frame.
+        const startElev = sc
+            ? Math.atan2(zsign * (sc.p[2] - animals[2]),
+                         Math.hypot(sc.p[0] - animals[0], sc.p[1] - animals[1])) * 180 / Math.PI
+            : null;
+
+        // Aim a little way UP from the animals so they sit low in the frame and the
+        // cameras get the upper part of it.
+        let spread = 0;
+        for (const q of cams.map(c => c.p).concat(pts)) {
+            const d = Math.hypot(q[0] - animals[0], q[1] - animals[1], q[2] - animals[2]);
+            if (d > spread) spread = d;
+        }
+        const target = [animals[0], animals[1], animals[2] + zsign * targetBias * spread];
+        // Bounding sphere about that target, so nothing is cropped.
+        let radius = 0;
+        for (const q of cams.map(c => c.p).concat(pts)) {
+            const d = Math.hypot(q[0] - target[0], q[1] - target[1], q[2] - target[2]);
+            if (d > radius) radius = d;
+        }
+        const el = elevation * Math.PI / 180;
+        // Distance that fits the sphere in the NARROWER of the two FOVs.
+        const aspect = v.threeCamera.aspect || 1;
+        const vfov = fov * Math.PI / 180;
+        const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
+        const dist = radius / Math.sin(Math.min(vfov, hfov) / 2) * pad;
+        v.threeCamera.fov = fov;
+        v.threeCamera.up.set(0, 0, zsign);
+        v.controls.target.set(target[0], target[1], target[2]);
+        v.threeCamera.position.set(
+            target[0] + dist * Math.cos(el) * Math.cos(az),
+            target[1] + dist * Math.cos(el) * Math.sin(az),
+            target[2] + zsign * dist * Math.sin(el),
+        );
+        v.threeCamera.lookAt(target[0], target[1], target[2]);
+        v.threeCamera.updateProjectionMatrix();
+        v.controls.update();
+
+        // SCREEN-SPACE FIT. Fitting a bounding SPHERE about a chosen target is safe
+        // but both loose and off-centre: the rig is a flat-ish shell, not a ball, and
+        // its centroid is not where the content lands on screen. The first pass of
+        // this panel used ~40% of the frame with everything crowded into one corner.
+        // Instead, iterate on what the render actually shows -- project the real
+        // content, take its NDC bounding box, then (i) scale the viewing distance so
+        // the box spans `fill` of the frame and (ii) PAN so the box is centred.
+        // Panning moves the target and the camera together, so orientation (and
+        // therefore which way is up) is untouched. Cameras still end up in the upper
+        // part of the frame and animals in the lower part because that is their real
+        // arrangement once the up vector is right -- it does not need to be forced.
+        const content = cams.map(c => c.p).concat(pts);
+        const rect0 = v.renderer.domElement.getBoundingClientRect();
+        const projectNDC = (p) => new THREE.Vector3(p[0], p[1], p[2]).project(v.threeCamera);
+        for (let pass = 0; pass < 4; pass++) {
+            let nx0 = Infinity, ny0 = Infinity, nx1 = -Infinity, ny1 = -Infinity;
+            for (const p of content) {
+                const q = projectNDC(p);
+                if (q.x < nx0) nx0 = q.x;
+                if (q.x > nx1) nx1 = q.x;
+                if (q.y < ny0) ny0 = q.y;
+                if (q.y > ny1) ny1 = q.y;
+            }
+            const spanX = nx1 - nx0, spanY = ny1 - ny0;
+            const span = Math.max(spanX, spanY);           // NDC spans [-1,1] => 2 is full
+            if (!(span > 1e-6)) break;
+
+            // --- pan so the content box is centred ---
+            const cxNdc = (nx0 + nx1) / 2, cyNdc = (ny0 + ny1) / 2;
+            const camPos = v.threeCamera.position;
+            const fwd = new THREE.Vector3(target[0] - camPos.x, target[1] - camPos.y,
+                                          target[2] - camPos.z);
+            const dist2 = fwd.length();
+            fwd.normalize();
+            const upv0 = new THREE.Vector3(0, 0, zsign);
+            const right = new THREE.Vector3().crossVectors(fwd, upv0).normalize();
+            const upv = new THREE.Vector3().crossVectors(right, fwd).normalize();
+            const vfov2 = v.threeCamera.fov * Math.PI / 180;
+            const hfov2 = 2 * Math.atan(Math.tan(vfov2 / 2) * (v.threeCamera.aspect || 1));
+            const shift = new THREE.Vector3()
+                .addScaledVector(right, cxNdc * Math.tan(hfov2 / 2) * dist2)
+                .addScaledVector(upv, cyNdc * Math.tan(vfov2 / 2) * dist2);
+            target[0] += shift.x; target[1] += shift.y; target[2] += shift.z;
+            camPos.add(shift);
+
+            // --- scale the distance so the box fills the frame ---
+            const k = span / (2 * fill);                   // >1 too big, <1 too small
+            const cur = new THREE.Vector3(camPos.x - target[0], camPos.y - target[1],
+                                          camPos.z - target[2]).multiplyScalar(k);
+            v.threeCamera.position.set(target[0] + cur.x, target[1] + cur.y, target[2] + cur.z);
+            v.controls.target.set(target[0], target[1], target[2]);
+            v.threeCamera.lookAt(target[0], target[1], target[2]);
+            v.threeCamera.updateProjectionMatrix();
+            v.controls.update();
+        }
+        if (v.renderer) v.renderer.render(v.scene, v.threeCamera);
+
+        // Where each camera and each animal LANDED in the rendered pixels. The app's
+        // own 3D labels are screen-space bitmaps sized for interactive use: at print
+        // size they overlap into an unreadable pile. Returning the projected
+        // positions lets the figure draw its own labels, typeset to the journal's
+        // spec, with leaders where they would otherwise collide.
+        const rect = rect0;
+        const project = (p) => {
+            const q = new THREE.Vector3(p[0], p[1], p[2]).project(v.threeCamera);
+            return {
+                x: +(((q.x + 1) / 2) * rect.width).toFixed(1),
+                y: +(((1 - q.y) / 2) * rect.height).toFixed(1),
+                behind: q.z > 1,
+            };
+        };
+        return {
+            n: pts.length, nCams: cams.length, zsign,
+            radius: +radius.toFixed(1), dist: +dist.toFixed(1),
+            azimuth_deg: +(az * 180 / Math.PI).toFixed(1),
+            elevation_deg: elevation,
+            startCam, startCamElevation_deg: startElev === null ? null : +startElev.toFixed(1),
+            pane: [Math.round(rect.width), Math.round(rect.height)],
+            camScreen: cams.map(c => ({ name: c.name, ...project(c.p) })),
+            animalsScreen: project(animals),
+        };
+    }, { startCam, elevation, pad, targetBias, fov, fill });
+    log('[rigFit] ' + JSON.stringify(res));
+    await page.waitForTimeout(400);
+    return res;
+}
+
+/**
+ * Camera frustums / labels / reference grid in the 3D view.
+ *
+ * NOTE the rebuild call is `addCameraPyramids()`. An earlier version of this helper
+ * guarded on `updateCameras()`, which does not exist on the viewport -- so the flags
+ * were set and never applied, and `labels: false` silently did nothing.
+ */
+export async function set3dChrome(page, { labels, spheres, pyramids, grid,
+                                        pyramidLength, sphereSize } = {}) {
+    await page.evaluate(({ labels, spheres, pyramids, grid, pyramidLength, sphereSize }) => {
         const v = window.__lucid.viewport3d;
         if (!v) return;
+        if (grid !== undefined && v.scene) {
+            // The reference grid is a bare THREE.GridHelper added straight to the
+            // scene at world Z=0. On this rig Z=0 is ABOVE everything, so the grid
+            // floats over the frustums and reads as a mystery plane in print.
+            v.scene.traverse((c) => {
+                if (c.type === 'GridHelper' || c.isGridHelper) c.visible = grid;
+            });
+        }
+        // Frustum and marker SIZE. The defaults (pyramidLength 40, sphere 3) are for
+        // an interactive view; in a 58 mm panel the pyramids overlap into a thicket
+        // and dwarf the animals they are pointed at.
+        if (pyramidLength !== undefined) v.pyramidLength = pyramidLength;
+        if (sphereSize !== undefined) v.cameraSphereSize = sphereSize;
         if (labels !== undefined) v.showCameraLabels = labels;
         if (spheres !== undefined) v.showCameraSpheres = spheres;
         if (pyramids !== undefined) v.showCameraPyramids = pyramids;
-        if (typeof v.updateCameras === 'function') v.updateCameras();
+        if (typeof v.addCameraPyramids === 'function') v.addCameraPyramids();
+        else if (typeof v.updateCameras === 'function') v.updateCameras();
         if (v.renderer) v.renderer.render(v.scene, v.threeCamera);
-    }, { labels, spheres, pyramids });
+    }, { labels, spheres, pyramids, grid, pyramidLength, sphereSize });
     await page.waitForTimeout(300);
 }
 
@@ -399,6 +613,163 @@ export async function shootEl(page, selector, name) {
  * 40 mm figure tile. Sets the real Visibility sliders (so the app's own
  * getVisibilitySettings() picks them up) and redraws.
  */
+/**
+ * Toggle the overlay VISIBILITY checkboxes -- the app's real controls, the same ones
+ * a user clicks in the Visibility panel: `user`, `predicted`, `reprojections`,
+ * `errors`, `legend`. Fig 2's protocol panels turn predictions OFF in the views that
+ * are standing in for "not yet labelled", so what remains in those views is only
+ * what LUC3D drew for you: the reprojection.
+ */
+export async function setVisibility(page, opts = {}) {
+    const applied = await page.evaluate(async (o) => {
+        const ids = {
+            user: 'visUser', predicted: 'visPredicted', reprojections: 'visReprojections',
+            errors: 'visErrors', legend: 'visLegend',
+        };
+        const out = {};
+        for (const [k, id] of Object.entries(ids)) {
+            if (o[k] === undefined) continue;
+            const el = document.getElementById(id);
+            if (!el) { out[k] = null; continue; }
+            if (el.checked !== o[k]) el.click();       // click, so the app's handler runs
+            out[k] = el.checked;
+        }
+        const r = await import('/ui/rendering.js');
+        r.drawAllOverlays(window.__lucid.state.currentFrame);
+        return out;
+    }, opts);
+    await page.waitForTimeout(400);
+    log('[visibility] ' + JSON.stringify(applied));
+    return applied;
+}
+
+/**
+ * Include/exclude camera views for tracking AND triangulation, through the app's own
+ * Camera Views weights (Tracking Wizard ▸ Camera Views; weight 1 = included,
+ * 0 = excluded). Fig 2 uses this to triangulate from ONLY the two anchor views, so
+ * the reprojections drawn into the other views really are derived from two views --
+ * not from all eight and then relabelled as if they were.
+ *
+ * `anchors` is the list of camera names to KEEP; everything else goes to weight 0.
+ */
+export async function setAnchorViews(page, anchors) {
+    const res = await page.evaluate(async (keep) => {
+        const st = await import('/ui/settings.js');
+        const s = window.__lucid.state.session;
+        const map = {};
+        for (const c of s.cameras) map[c.name] = keep.includes(c.name) ? 1 : 0;
+        st.setCameraWeights(map);
+        return { weights: st.getCameraWeights(), included: keep };
+    }, anchors);
+    log('[anchorViews] ' + JSON.stringify(res));
+    await page.waitForTimeout(200);
+    return res;
+}
+
+/**
+ * The app's own per-view reprojection errors for the current frame, straight out of
+ * state.triangulationResults -- the same numbers the Instance Info panel shows. Used
+ * so Fig 2's annotations quote what this run measured rather than a round number.
+ */
+export async function reprojErrors(page) {
+    const res = await page.evaluate(async () => {
+        const st = window.__lucid.state;
+        const f = st.currentFrame;
+        // state.triangulationResults ACCUMULATES per frame -- re-triangulating after
+        // changing the camera weights appends a second set rather than replacing the
+        // first, so reading it straight gives a mix of the old and new solves. Drop
+        // the frame's entry and let the renderer recompute it, which also guarantees
+        // the numbers correspond to the camera weights currently in force.
+        if (st.triangulationResults) st.triangulationResults.delete(f);
+        const s = st.session;
+        for (const g of (s.instanceGroups.get(f) || [])) {
+            // Reset to EMPTY containers, not null: getReprojectedInstance() does a
+            // .get() on the Map and rendering.js does Object.keys() on the object,
+            // so nulling them throws instead of forcing a recompute.
+            g.reprojectedInstances = new Map();
+            g.reprojections = {};
+        }
+        const r = await import('/ui/rendering.js');
+        r.drawAllOverlays(f);
+        const rs = st.triangulationResults && st.triangulationResults.get(f);
+        if (!rs) return null;
+        const mean = (a) => {
+            const v = (a || []).filter(x => Number.isFinite(x));
+            return v.length ? v.reduce((p, q) => p + q, 0) / v.length : null;
+        };
+        return rs.map((res2) => {
+            // errors is { cameraName: [perKeypointError, ...] } -- an ARRAY per view,
+            // not a scalar. Average the finite entries to get that view's error.
+            const per = {};
+            for (const [nm, arr] of Object.entries(res2.errors || {})) {
+                const m = mean(arr);
+                if (m != null) per[nm] = +m.toFixed(2);
+            }
+            const g = res2.group || {};
+            return {
+                identity: g.identity != null ? g.identity
+                          : (g.identityId != null ? g.identityId : null),
+                meanError: Number.isFinite(res2.meanError) ? +res2.meanError.toFixed(2) : null,
+                perView: per,
+                nViews: Object.keys(per).length,
+            };
+        });
+    });
+    log('[reprojErrors] ' + JSON.stringify(res));
+    return res;
+}
+
+/**
+ * Okabe-Ito identity colours, applied to the LIVE app rather than to the app's source.
+ *
+ * `pose/pose-data.js` ships IDENTITY_COLORS as saturated primaries -- '#00ff00',
+ * '#ff00ff', '#00ffff' for the first three identities. Those are the three that appear
+ * in every figure that shows more than one animal, and under deuteranopia the green and
+ * the magenta converge: the two mice a reader is meant to tell apart become the same
+ * colour. Nature requires figures to be legible to colourblind readers, so the tiles
+ * have to be re-exported with an accessible palette.
+ *
+ * This mutates the module's exported `var` and then rewrites `.color` on every identity
+ * already constructed (the constructor only reads the palette at construction time, so
+ * changing the array alone would leave a loaded session on the old colours). The app on
+ * disk is deliberately NOT edited: its palette is tuned for on-screen work against dark
+ * video, several figures depend on the app rendering exactly what a user sees, and
+ * changing a shared app constant to serve the figure pipeline is the kind of edit that
+ * breaks verified-working behaviour elsewhere.
+ *
+ * Pass `colors` to override. Default order keeps hue separation maximal for the first
+ * three, which is where it matters.
+ */
+export async function setIdentityPalette(page, colors = null) {
+    const OKABE_ITO = [
+        '#00b478',  // bluish green, lifted for contrast against dark video
+        '#e69f00',  // orange
+        '#56b4e9',  // sky blue
+        '#cc79a7',  // reddish purple
+        '#f0e442',  // yellow
+        '#0072b2',  // blue
+        '#d55e00',  // vermillion
+        '#999999',  // grey
+    ];
+    const res = await page.evaluate(async (pal) => {
+        const pd = await import('/pose/pose-data.js');
+        // exported `var`, so assignable; splice in place so any module that captured a
+        // reference to the array sees the change too
+        pd.IDENTITY_COLORS.length = 0;
+        for (const c of pal) pd.IDENTITY_COLORS.push(c);
+        const s = window.__lucid.state.session;
+        const applied = [];
+        for (const id of (s.identities || [])) {
+            id.color = pal[id.id % pal.length];
+            applied.push({ id: id.id, name: id.name, color: id.color });
+        }
+        return { palette: pal.length, identities: applied };
+    }, colors || OKABE_ITO);
+    log('[identityPalette] ' + JSON.stringify(res));
+    await page.waitForTimeout(120);
+    return res;
+}
+
 export async function setOverlayStyle(page, opts = {}) {
     const applied = await page.evaluate(async (o) => {
         const set = (id, v) => {
@@ -416,6 +787,9 @@ export async function setOverlayStyle(page, opts = {}) {
             userLabelSize: set('visUserLabelSize', o.userLabelSize),
             reprojNodeSize: set('visReprojNodeSize', o.reprojNodeSize),
             reprojEdgeWeight: set('visReprojEdgeWeight', o.reprojEdgeWeight),
+            // 0 hides the reprojection's identity labels. A magnified crop is the
+            // one place they hurt: a label sized for a whole pane covers the animal.
+            reprojLabelSize: set('visReprojLabelSize', o.reprojLabelSize),
         };
         const r = await import('/ui/rendering.js');
         r.drawAllOverlays(window.__lucid.state.currentFrame);

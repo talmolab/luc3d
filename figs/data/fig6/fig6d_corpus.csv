@@ -1,0 +1,4 @@
+corpus,cameras,animals,sessions_with_3d,frames,hours
+BMimica,5,2,56/56,"10,084,734",18.7 @150 fps
+SLAP-2M,8,1–4,74/84,"1,954,440",10.9 @50 fps
+total,,,130,"12,039,174",29.5

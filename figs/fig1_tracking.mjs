@@ -28,9 +28,9 @@
  */
 import {
     launch, loadSession, gotoFrame, trackAll, triangulateAll, setColorMode,
-    setTimelineMode, setOverlayStyle, showCameraView, showInitialView, setLayout,
-    set3dChrome, hide3dButtons, exportViews, writeManifest, shootEl, clearOverlays,
-    done, log, CAMS,
+    setTimelineMode, setOverlayStyle, setIdentityPalette, showCameraView,
+    showInitialView, setLayout, set3dChrome, hide3dButtons, exportViews,
+    writeManifest, shootEl, clearOverlays, done, log, CAMS,
 } from './_drive.mjs';
 
 const FRAME = Number(process.env.FRAME || 150);
@@ -41,9 +41,18 @@ const cams = (process.env.CAMS || '').trim() ? process.env.CAMS.split(',') : CAM
 
 // Print geometry: the app's screen defaults are tuned for panes at ~1:3 CSS scale,
 // so at native resolution they are chunky X's that swamp a 40 mm tile.
+// userLabelSize is 1, NOT 0. In ID colour mode the app also labels PREDICTED
+// instances with their identity (ui/overlays.js step 3a), sizing that text from
+// `(userOpts && userOpts.labelSize) || 11` -- so a 0 falls through to the 11 px
+// default and the identity pills get BAKED INTO the exported canvas. They then
+// collide with the labels fig1.py draws from the manifest (two mice close
+// together printed "id_1" over "id_0" in the first pass) and they spell the
+// internal ids. 1 keeps the slider positive so nothing else changes behaviour
+// while rendering the pill at ~3 px, i.e. invisible in a 1280 px tile: every
+// visible annotation is then drawn by the composer, from the manifest.
 const PRINT_STYLE = {
     predNodeSize: 5, predEdgeWeight: 3,
-    userNodeSize: 5, userEdgeWeight: 3, userLabelSize: 0,
+    userNodeSize: 5, userEdgeWeight: 3, userLabelSize: 1,
     reprojNodeSize: 5, reprojEdgeWeight: 3,
 };
 
@@ -62,6 +71,12 @@ try {
 
     // ---- AFTER: cross-view identities ----------------------------------------
     const tracked = await trackAll(page, NANIMALS);
+    // Colourblind-safe identity colours. The app's shipped IDENTITY_COLORS start
+    // #00ff00, #ff00ff, #00ffff -- i.e. exactly the three identities in this frame --
+    // and under deuteranopia the green and the magenta converge, so the two animals
+    // the panel exists to tell apart become the same colour. AFTER trackAll: the
+    // Identity constructor reads the palette once, at construction time.
+    const palette = await setIdentityPalette(page);
     await clearOverlays(page);
     await gotoFrame(page, FRAME);
     await setColorMode(page, 'id');
@@ -111,26 +126,71 @@ try {
         };
     }, FRAME);
 
-    // Distinct track labels used for these 3 animals in this ONE frame across all
-    // views -- the number the "no cross-view correspondence" claim rests on.
-    const distinct = new Set();
-    for (const v of before) for (const d of v.details) if (d.track) distinct.add(v.name + '/' + d.track);
+    // The association ledger for this ONE frame, across ALL views. Three numbers
+    // that are easy to conflate, so all three are written out and named:
+    //
+    //   detections       one per (camera, track) pair = every 2D instance in the
+    //                    frame. This is the count of per-camera track LABELS the
+    //                    reader is asked to reconcile, and the number the "no
+    //                    cross-view correspondence" claim rests on.
+    //   distinctNames    the same set collapsed by track NAME. Strictly smaller
+    //                    whenever two cameras happen to have numbered unrelated
+    //                    tracks the same (track_89 in cam0 and cam5 here) -- the
+    //                    collisions are coincidence, and `track_127` even means a
+    //                    DIFFERENT animal in cam1 than in cam4, so this number
+    //                    must NOT be quoted as "labels to reconcile". Reported
+    //                    only so the coincidence can be stated.
+    //   assigned         detections that came out of Track All with an identity.
+    //                    Less than `detections` when a view has more detections
+    //                    than there are animals: the per-view assignment is
+    //                    one-to-one, so a duplicate detection of an animal that is
+    //                    already matched is deliberately left unassigned.
+    const detKeys = new Set();
+    for (const v of before) for (const d of v.details) if (d.track) detKeys.add(v.name + '/' + d.track);
     const distinctNames = new Set();
     for (const v of before) for (const d of v.details) if (d.track) distinctNames.add(d.track);
+    const collidingNames = [...distinctNames].filter(
+        n => before.filter(v => v.details.some(d => d.track === n)).length > 1);
+    let assigned = 0, unassigned = [];
+    for (const v of after) for (const d of v.details) {
+        if (d.identity) assigned++;
+        else unassigned.push({ camera: v.name, track: d.track, nVisible: d.nVisible });
+    }
+    // Identities are only "consistent across all N views" if every view really
+    // carries every identity. Checked here rather than asserted in the caption.
+    const idNames = [...new Set(after.flatMap(v => v.details.map(d => d.identity).filter(Boolean)))];
+    const viewsMissingAnIdentity = after
+        .filter(v => idNames.some(id => !v.details.some(d => d.identity === id)))
+        .map(v => v.name);
+
+    const ledger = {
+        detections: detKeys.size,
+        distinctNames: distinctNames.size,
+        collidingNames,
+        identities: idNames.length,
+        assigned,
+        unassigned,
+        viewsMissingAnIdentity,
+    };
 
     writeManifest('fig1', {
         session: loaded, frame: FRAME, nAnimals: NANIMALS, viewCam: VIEW_CAM,
         brightness: BRIGHT, overlayStyle: PRINT_STYLE, cameras: cams,
-        tracked, triangulated: tri, stats,
-        distinctTrackLabels: distinct.size, distinctTrackNames: distinctNames.size,
+        tracked, triangulated: tri, stats, ledger, identityPalette: palette,
+        distinctTrackLabels: detKeys.size, distinctTrackNames: distinctNames.size,
         before, after,
         timelines: { before: 'before-timeline.png', after: 'after-timeline.png' },
         threeD: { camview: 'tri3d-camview.png', rig: 'tri3d-rig.png' },
     });
 
-    log(`[summary] frame ${FRAME}: ${distinct.size} per-camera track labels ` +
-        `(${distinctNames.size} distinct names) across ${cams.length} views -> ` +
-        `${tracked.identities} identities; ${tri.with3d}/${tri.groups} groups with 3D`);
+    log(`[summary] frame ${FRAME}: ${detKeys.size} detections / per-camera track ` +
+        `labels across ${cams.length} views (${distinctNames.size} distinct names; ` +
+        `${collidingNames.length} name(s) reused by >1 camera) -> ` +
+        `${tracked.identities} identities, ${assigned} assigned, ` +
+        `${unassigned.length} unassigned [` +
+        unassigned.map(u => `${u.camera}/${u.track}`).join(', ') + `]; ` +
+        `views missing an identity: ${viewsMissingAnIdentity.length}; ` +
+        `${tri.with3d}/${tri.groups} groups with 3D`);
 } finally {
     await done(ctx);
 }

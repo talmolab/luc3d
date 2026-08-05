@@ -25,8 +25,8 @@
  */
 import {
     launch, loadSession, gotoFrame, trackAll, triangulateAll, setColorMode,
-    showCameraView, showInitialView, set3dChrome, setLayout, hide3dButtons, clearOverlays,
-    shoot, shootEl, done, log,
+    setIdentityPalette, showCameraView, showInitialView, set3dChrome, setLayout,
+    hide3dButtons, clearOverlays, shoot, shootEl, done, log,
 } from './_drive.mjs';
 
 const FRAME = Number(process.env.FRAME || 150);
@@ -46,6 +46,8 @@ try {
 
     // (b) After the cross-view tracker: 3 global identities, same color everywhere.
     await trackAll(page, NANIMALS);
+    // Colourblind-safe identity colours; must follow trackAll (see fig1_tracking.mjs).
+    await setIdentityPalette(page);
     await clearOverlays(page);
     await setColorMode(page, 'id');
     await gotoFrame(page, FRAME);
