@@ -174,7 +174,12 @@ def assemble(fig_no: int) -> Path | None:
         # two-panel row. 0.05 mm is far below anything that could clip a glyph.
         if row_w > PAGE_W + 0.05:
             over.append((", ".join(l for l, *_ in row), row_w))
-        x = max(MARGIN, (PAGE_W - row_w) / 2.0)
+        # Centre, with NO lower clamp. A `max(MARGIN, ...)` clamp was tried and is
+        # wrong: for a full-width 180 mm panel it yields x = 3, so 3 mm of the panel
+        # fell off the right of every figure -- it cut the 4th tile of fig1b and the
+        # "3D proofreading" column of fig1d. The clamp existed to stop a negative x,
+        # which the row guard above now makes impossible.
+        x = (PAGE_W - row_w) / 2.0
         for letter, p, w, h in row:
             placements.append((letter, p, x, y, w, h))
             x += w + GUTTER
