@@ -39,7 +39,9 @@ def box(ax, title, sub, accent):
     ax.add_patch(Rectangle((0, 0), 0.16, 5.0, facecolor=accent, edgecolor="none"))
     ax.text(0.45, 4.62, title, fontweight="bold", color=INK, fontsize=7.5,
             va="center")
-    ax.text(0.45, 4.10, sub, color=GREY, fontsize=6.5, va="center")
+    # 8.0, not 6.5: mathtext superscripts render at ~0.7x, so (A!)$^C$ at
+    # 6.5 pt put its C at 4.55 pt -- under Nature's 5 pt floor.
+    ax.text(0.45, 4.10, sub, color=GREY, fontsize=8.0, va="center")
 
 
 def draw_exhaustive(ax):

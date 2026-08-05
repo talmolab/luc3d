@@ -82,7 +82,9 @@ def draw_2d(ax):
             ha="center", va="bottom")
     ax.text(det[0] + 0.26, det[1] - 0.04, "detection d", color=INK, fontsize=6.5,
             ha="left", va="center")
-    ax.text(0.40, 3.42, EQ_2D, color=PERIWINKLE, fontsize=7.0, va="center")
+    # 8.0, not 7.0: mathtext sub/superscripts render at ~0.7x, so a 7 pt
+    # equation puts its w_k subscript at 4.9 pt, under the 5 pt floor.
+    ax.text(0.40, 3.42, EQ_2D, color=PERIWINKLE, fontsize=8.0, va="center")
 
 
 def draw_3d(ax):
@@ -104,7 +106,7 @@ def draw_3d(ax):
     # BESIDE the point, not above it: above, it closed to ~1 mm of the 2D equation.
     ax.text(t[0] - 0.28, t[1], "target t", color=TEAL, fontsize=6.5, ha="right",
             va="center")
-    ax.text(0.40, 0.58, EQ_3D, color=TEAL, fontsize=7.0, va="center")
+    ax.text(0.40, 0.58, EQ_3D, color=TEAL, fontsize=8.0, va="center")
 
 
 def main():

@@ -5,68 +5,102 @@ Fig 7b -- bedding invariance: does the tracker survive a change of background?
 White mice on white bedding is the hard case; black bedding is the easy one. The
 SAME identity-stripped detections feed every tracker, and detector recall barely
 moves between the two conditions (delta 0.004), so any drop is the TRACKER's, not
-the detector's. That control is drawn as the dashed line and is what makes the
-comparison interpretable.
+the detector's. That control is drawn as the fourth, grey pair.
 
 LUC3D loses 0.012, SLEAP 0.079, ByteTrack 0.148. The reason is geometric: LUC3D's
 association is dominated by the 3D term (Fig 3d), which does not care what the
 bedding looks like, while a per-camera appearance/motion tracker degrades with
 contrast.
 
-Source: figs/out/fig3_trackers.json `slap2m.by_bedding`.
+THIS IS A BETWEEN-SESSION COMPARISON AND IS NOW DRAWN AS ONE. An earlier version was
+a slopegraph: one line per tracker joining its black-bedding score to its
+white-bedding score. That shape means a repeated measure -- the same units under two
+conditions -- and these are not. `by_bedding` is n = 44 BLACK sessions and n = 30
+WHITE ones: 74 different recordings split into two groups, never the same session
+under two beddings. The line implied a pairing that does not exist, so the panel is
+now grouped bars (solid = black, open = white), an idiom that cannot be read as
+paired.
+
+THE OTHER CONFOUND IS PRINTED TOO, because ruling out the detector does not rule out
+everything else. `paired_vs_sleap[*].bedding` deposits the animal-count composition of
+each group: the black group is 21/44 single-animal, the white group 11/30, and the two
+groups also differ in difficulty. The recall control (delta 0.004) rules out a
+DETECTION confound only. There are no intervals because the deposit carries one pooled
+IDF1 per condition, not per-session values.
+
+Source: figs/out/fig3_trackers.json `slap2m.by_bedding`, `slap2m.paired_vs_sleap`.
 
     python3 figs/panels/fig7_06_bedding.py
 """
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, PERIWINKLE, SALMON, TEAL, deposit, panel, save,  # noqa: E402
-                       use)
+from src.style import (footnote, GREY, INK, PERIWINKLE, SALMON, TEAL, deposit, panel,  # noqa: E402
+                       save, use)
 
 TRACKERS = [("luc3d", "LUC3D", TEAL), ("sleap", "SLEAP", PERIWINKLE),
             ("bytetrack", "ByteTrack", SALMON)]
 CONDS = ["black", "white"]
+BAR_W = 0.34
 
 
 def main():
     use()
-    bb = load("fig3_trackers.json")["slap2m"]["by_bedding"]
+    t = load("fig3_trackers.json")
+    bb = t["slap2m"]["by_bedding"]
+    pv = t["slap2m"]["paired_vs_sleap"]
+
+    # Groups: the three trackers, then the shared detector as the control. The
+    # control is a rate on the same 0-1 axis, which is why the legacy panel drew it
+    # here rather than in a panel of its own.
+    groups = [(lab, color, [bb[c][k]["idf1"] for c in CONDS])
+              for k, lab, color in TRACKERS]
+    groups.append(("detector\nrecall", GREY,
+                   [bb[c]["detector_recall"] for c in CONDS]))
 
     rows = []
     fig, ax = panel("half", "std")
-    for key, label, color in TRACKERS:
-        ys = [bb[c][key]["idf1"] for c in CONDS]
-        ax.plot([0, 1], ys, color=color, lw=2.0, zorder=3)
-        ax.plot([0, 1], ys, "o", color=color, ms=5, mec="white", mew=1.0, zorder=4)
-        ax.annotate(f"{label} Δ{ys[0] - ys[1]:+.3f}".replace("+", ""), (1, ys[1]),
-                    textcoords="offset points", xytext=(8, 0), color=color,
-                    fontsize=6.5, fontweight="bold", va="center",
-                    annotation_clip=False)
-        rows += [{"tracker": label, "bedding": c, "idf1": y,
+    x = np.arange(len(groups))
+    for i, (lab, color, ys) in enumerate(groups):
+        # Solid = black bedding, open = white bedding. The fills are a mnemonic for
+        # the condition, and no bar touches another group's, so nothing here can be
+        # mistaken for a within-session change.
+        ax.bar(i - BAR_W / 2, ys[0], width=BAR_W, color=color, zorder=2)
+        ax.bar(i + BAR_W / 2, ys[1], width=BAR_W, facecolor="white",
+               edgecolor=color, lw=0.9, zorder=2)
+        ax.text(i, max(ys) + 0.035, f"Δ{ys[0] - ys[1]:.3f}", ha="center",
+                va="bottom", color=color, fontsize=6.5, fontweight="bold")
+        rows += [{"series": lab.replace("\n", " "), "bedding": c, "value": y,
                   "n_sessions": bb[c]["n_sessions"]} for c, y in zip(CONDS, ys)]
 
-    # The control: the detector sees essentially the same thing in both conditions,
-    # so the tracker drops are the trackers' own.
-    rec = [bb[c]["detector_recall"] for c in CONDS]
-    ax.plot([0, 1], rec, color=GREY, lw=1.2, ls=(0, (2.5, 1.5)), zorder=2)
-    ax.annotate(f"detector recall Δ{rec[0] - rec[1]:.3f}", (1, rec[1]),
-                textcoords="offset points", xytext=(8, 8), color=GREY,
-                fontsize=6.5, va="center", annotation_clip=False)
-    rows += [{"tracker": "detector recall", "bedding": c, "idf1": y,
-              "n_sessions": bb[c]["n_sessions"]} for c, y in zip(CONDS, rec)]
-
     deposit(pd.DataFrame(rows), 7, "fig7b_bedding.csv")
-    ax.set_xlim(-0.15, 1.15)
-    ax.set_xticks([0, 1])
-    ax.set_xticklabels([f"{c} bedding" for c in CONDS])
-    ax.set_ylabel("IDF1")
+    ax.set_xticks(x)
+    ax.set_xticklabels([lab for lab, _, _ in groups])
+    ax.tick_params(axis="x", length=0)
+    ax.set_xlim(-0.62, len(groups) - 0.38)
+    ax.set_ylabel("IDF1  /  recall")
     ax.set_ylim(0, 0.95)
-    footnote(ax, f"n = {bb['black']['n_sessions']} + {bb['white']['n_sessions']} "
-            f"SLAP-2M sessions; identical detections")
+
+    # The animal-count composition of the two groups, from the deposited per-animal
+    # bedding counts -- the confound a reader has to be told about.
+    one = pv["1"]["bedding"]
+    nb, nw = bb["black"]["n_sessions"], bb["white"]["n_sessions"]
+    # FOUR SHORT LINES. The x label is centred on the axes, so a line wider than the
+    # axis extent hangs off the page and the renderer silently drops the overhang --
+    # at 7.5 pt (what `footnote` sets) the two-clause versions of lines 2 and 3
+    # measured 77 and 79 mm on an 88 mm panel and lost their opening words. Nothing
+    # here is dropped: every line is under 74 mm.
+    footnote(ax,
+             f"solid = black bedding (n = {nb}) · open = white bedding (n = {nw})\n"
+             "BETWEEN-SESSION: different sessions, not paired\n"
+             f"animal mix differs too (1 animal {one['black']}/{nb} vs "
+             f"{one['white']}/{nw})\n"
+             "no per-session values deposited, so no intervals")
     save(fig, 7, "b", "bedding")
 
 

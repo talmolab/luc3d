@@ -13,9 +13,16 @@ about the detector than the tracker. Counts of the controllable errors are what
 separate the trackers -- ID switches LUC3D 3,710 against ByteTrack 12,305 on the
 same 15,947,278 ground-truth instances, a 3.3x reduction.
 
-NOTE SLEAP'S SWITCH COUNT IS ESSENTIALLY LUC3D'S (3,608 vs 3,710) -- LUC3D does not
-win on within-view switches, and the panel does not pretend otherwise. Its advantage
-is cross-view (Fig 7a) and under changing background (Fig 7b).
+EXACT COUNTS, NOT "3.7k". The bars were labelled to one decimal in thousands, which
+rounded away the two comparisons the panel exists to support: SLEAP's switch count is
+essentially LUC3D's (3,608 vs 3,710 -- as "3.6k" vs "3.7k" that reads as a 3%
+difference on numbers rounded to +-50), and ByteTrack's 3.3x ratio is not recoverable
+from "12.3k / 3.7k". The full integers are printed.
+
+NOTE LUC3D DOES NOT WIN ON WITHIN-VIEW SWITCHES, and the panel does not pretend
+otherwise: SLEAP's 3,608 is fractionally better. LUC3D's advantage is cross-view
+(Fig 7a) and under changing background (Fig 7b) -- and it fragments MORE than SLEAP,
+which is the panel next door (Fig 7g).
 
 Source: figs/out/fig3_trackers.json `slap2m.error_decomposition`.
 
@@ -29,12 +36,13 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, PERIWINKLE, SALMON, TEAL, deposit, panel, save,  # noqa: E402
+from src.style import (footnote, PERIWINKLE, SALMON, TEAL, deposit, panel, save,  # noqa: E402
                        text_legend, use)
 
 TRACKERS = [("luc3d", "LUC3D", TEAL), ("sleap", "SLEAP", PERIWINKLE),
             ("bytetrack", "ByteTrack", SALMON)]
 TERMS = [("false_positives", "false positives"), ("id_switches", "ID switches")]
+BAR_W = 0.26
 
 
 def main():
@@ -46,26 +54,33 @@ def main():
                        for k, lab, _ in TRACKERS for key, name in TERMS])
     deposit(df, 7, "fig7e_error_decomposition.csv")
 
-    fig, ax = panel("half", "std", key=1)
+    # 80 mm rather than a half: this row now carries three panels (e, f, g) and the
+    # six exact counts need the width. At 88 mm the row would not fit 180 mm.
+    fig, ax = panel(80.0, "std", key=1)
+    top = max(ed[k]["false_positives"] for k, _, _ in TRACKERS) * 1.30
     x = np.arange(len(TERMS))
-    w = 0.26
     for i, (k, lab, color) in enumerate(TRACKERS):
-        vals = [ed[k][key] / 1e3 for key, _ in TERMS]
-        pos = x + (i - 1) * w
-        ax.bar(pos, vals, width=w, color=color, zorder=2)
-        for px, v in zip(pos, vals):
-            ax.text(px, v + 1.5, f"{v * 1e3 / 1e3:.1f}k", ha="center", va="bottom",
-                    color=color, fontsize=6, fontweight="bold")
+        vals = [ed[k][key] for key, _ in TERMS]
+        pos = x + (i - 1) * BAR_W
+        ax.bar(pos, [v / 1e3 for v in vals], width=BAR_W, color=color, zorder=2)
+        for j, (px, v) in enumerate(zip(pos, vals)):
+            # The two switch counts differ by 3% (3,710 vs 3,608), so their labels
+            # would sit at the same height on adjacent bars. Stagger the middle
+            # tracker upward; the FP group is spread enough not to need it.
+            lift = 0.055 if (j == 1 and i == 1) else 0.0
+            ax.text(px, v / 1e3 + (0.02 + lift) * top / 1e3, f"{v:,}", ha="center",
+                    va="bottom", color=color, fontsize=6, fontweight="bold")
 
     text_legend(ax, [(lab, c) for _, lab, c in TRACKERS], "above")
     ax.set_xticks(x)
     ax.set_xticklabels([n for _, n in TERMS])
+    ax.set_xlim(-0.45, len(TERMS) - 0.55)
     ax.set_ylabel("errors (thousands)")
-    ax.set_ylim(0, max(ed[k]["false_positives"] for k, _, _ in TRACKERS) / 1e3 * 1.30)
+    ax.set_ylim(0, top / 1e3)
     lo = min(ed[k]["fn_share"] for k, _, _ in TRACKERS)
     hi = max(ed[k]["fn_share"] for k, _, _ in TRACKERS)
     footnote(ax, f"{ed['luc3d']['gt_instances']:,} ground-truth instances\n"
-            f"false negatives are {lo:.1%}–{hi:.1%} of every tracker's error")
+             f"false negatives: {lo:.1%}–{hi:.1%} of every tracker's error")
     save(fig, 7, "e", "decomposition")
 
 

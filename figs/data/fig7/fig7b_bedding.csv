@@ -1,4 +1,4 @@
-tracker,bedding,idf1,n_sessions
+series,bedding,value,n_sessions
 LUC3D,black,0.74074534377238,44
 LUC3D,white,0.7291272520776643,30
 SLEAP,black,0.693506925862615,44

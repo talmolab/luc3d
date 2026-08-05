@@ -67,11 +67,15 @@ FOOTERS = {
         "1,277,424 keypoints.",
         "Every session enters every panel: 38,322,720 held-out view measurements in "
         "c; 12,774,240 two-anchor solves in d. See caption."],
-    3: ["b: exact arithmetic. c: measured by scripts/bench/bench_crossview.mjs. "
-        "d: 8 BMimica sessions, a fixed 6,000-frame leading window per cell, "
+    # NOTE: these letters shifted when the cost-terms schematic was restored as b.
+    # A footer that names the wrong panels is worse than none, so it moves with the
+    # layout above -- check both together.
+    3: ["b: the cost function as implemented. c: exact arithmetic. "
+        "d: measured by scripts/bench/bench_crossview.mjs.",
+        "e: 8 BMimica sessions, a fixed 6,000-frame leading window per cell, "
         "identical across all 24 cells.",
-        "e: exhaustive is our reimplementation of the published per-frame procedure. "
-        "IDF1 and ID-switches via motmetrics on a shared identity-stripped pool."],
+        "f: exhaustive is our reimplementation of the published per-frame procedure. "
+        "IDF1 and switches via motmetrics on a shared identity-stripped pool."],
     4: ["All panels: the same 50 BMimica sessions, 5 cameras, 3 calibrations. "
         "c-f 4,253,636 keypoints at stride 60; b 1,277,424 at stride 200.",
         "Median lens-distortion displacement 8.42 px (p95 23.36). See caption for "
@@ -106,8 +110,8 @@ LAYOUTS = {
         [("b", "placements_vs_rig"), ("c", "reprojection_accuracy"),
          ("d", "baseline_angle")]],
     3: [[("a", "association")],
-        [("b", "cost_model"), ("c", "runtime_scaling"), ("d", "sweep")],
-        [("e", "head_to_head")]],
+        [("b", "cost_terms"), ("c", "cost_model")],
+        [("d", "runtime_scaling"), ("e", "sweep"), ("f", "head_to_head")]],
     4: [[("a", "solvers")],
         [("b", "accuracy_vs_cameras"), ("c", "worst_camera"),
          ("d", "heldout_by_views")],
@@ -121,7 +125,7 @@ LAYOUTS = {
         [("f", "difficulty_strata")]],
     7: [[("a", "within_vs_cross"), ("b", "bedding")],
         [("c", "survival"), ("d", "by_animals")],
-        [("e", "decomposition"), ("f", "recall")]],
+        [("e", "decomposition"), ("f", "recall"), ("g", "fragmentations")]],
 }
 
 

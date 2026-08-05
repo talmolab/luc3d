@@ -1,0 +1,8 @@
+attribute,BMimica,SLAP-2M,Total
+Cameras,5,8 (6 proofread),–
+Animals,2,1–4,1–4
+Sessions with 3D,56 of 56,74 of 84,130 of 140
+Frames,"10,084,734","1,954,440","12,039,174"
+Hours,18.7 @150 fps,10.9 @50 fps,29.5
+Nodes,15,15,15
+"Measured in c, d, f",no,yes,no

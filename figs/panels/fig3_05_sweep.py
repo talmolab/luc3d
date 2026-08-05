@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 3d -- 3D-term ablation: ID switches and cross-view IDF1 against r = corr3d/corr2d.
+Fig 3e -- 3D-term ablation: ID switches and cross-view IDF1 against r = corr3d/corr2d.
 
 THE SWEEP IS ONE-DIMENSIONAL AND THIS PANEL SAYS SO. The cost function sums a 2D and
 a 3D term, and only their RATIO matters -- all 24 (corr2d, corr3d) cells collapse
@@ -25,7 +25,7 @@ THE METRIC IS IDF1, NOT HOTA. Nothing in luc3d-bench computes HOTA. Do not relab
 
 Source: figs/out/fig3_sweep.json `cells`.
 
-    python3 figs/panels/fig3_04_sweep.py
+    python3 figs/panels/fig3_05_sweep.py
 """
 import sys
 from pathlib import Path
@@ -54,7 +54,7 @@ def build() -> pd.DataFrame:
     for r, g in df.groupby("r"):
         if g[METRIC].nunique() > 1 or g["switches"].nunique() > 1:
             sys.exit(
-                f"fig3d: cells with r={r:g} disagree "
+                f"fig3e: cells with r={r:g} disagree "
                 f"({sorted(g[METRIC].unique())}, switches {sorted(g.switches.unique())})"
                 " — the sweep is no longer one-dimensional in corr3d/corr2d, so this "
                 "panel's collapse is invalid. Plot the full grid instead.")
@@ -69,12 +69,13 @@ def build() -> pd.DataFrame:
 def main():
     use()
     df = build()
-    deposit(df, 3, "fig3d_sweep.csv")
+    deposit(df, 3, "fig3e_sweep.csv")
 
-    # A THIRD, NOT A HALF. This panel shares its row with b and c, and the grid only
-    # closes at 180 mm if all three are "third": at "half" the row summed to 210.6 mm
-    # and `assemble.py` centres a row, so panel b was placed at x = -15.3 mm and its
-    # y axis was cut off the page. Nothing in a per-panel render shows that.
+    # A THIRD, NOT A HALF. This panel shares its row with d and f, and the grid only
+    # closes at 180 mm if all three are "third": at "half" that row summed to 210.6 mm
+    # and `assemble.py` used to CENTRE an over-wide row, so its first panel was placed
+    # at x = -15.3 mm and had its y axis cut off the page. Nothing in a per-panel
+    # render shows that; `assemble.py` now refuses the row instead.
     fig, ax = panel("third", "std", key=2)
     x = np.arange(len(df))                      # even spacing: r is not linear
 
@@ -104,7 +105,12 @@ def main():
     # "(no 3D term)" used to be the second line of the r = 0 tick label. Centred on
     # the leftmost tick it is ~50 pt wide and ran off the left edge of the narrower
     # panel, so the gloss moves under the axis where its width is the panel's.
-    footnote(ax, "r = 0: no 3D term at all")
+    # Legacy printed "LUC3D only · both series are this tracker" on this panel and
+    # the restyle dropped it. In a figure whose panel f runs LUC3D against an
+    # exhaustive baseline, an unlabelled two-series ablation reads as a
+    # between-method comparison, which this one is not.
+    footnote(ax, "r = 0: no 3D term at all\n"
+                 "both series are LUC3D against itself")
 
     # Cross-view IDF1 on the right.
     ax2 = ax.twinx()
@@ -124,7 +130,7 @@ def main():
                 ha="center", va="bottom")
 
     text_legend(ax, [("ID switches", SALMON), ("cross-view IDF1", TEAL)], "above")
-    save(fig, 3, "d", "sweep")
+    save(fig, 3, "e", "sweep")
 
 
 if __name__ == "__main__":
