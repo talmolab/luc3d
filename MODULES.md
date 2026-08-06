@@ -327,7 +327,23 @@ session graph that holds them.
   correction history. No frame materialization, so nothing hydrates or evicts.
   Returns `{entries, groups, frames}`. Guarded by the `swapIdentitiesForward
   (#172)` block in `tests/test-identity.js` and end to end by
-  `tests/e2e/identity-switch-propagates-to-end.mjs`), group assignment
+  `tests/e2e/identity-switch-propagates-to-end.mjs`;
+  `swapIdentitiesForwardInCamera(startFrame, cameraName, identityA, identityB)` —
+  the **single-view** counterpart (luc3d #201). Same dense value swap, forward to
+  the end of the project, but restricted to ONE camera: this is how an ID is
+  corrected in one view (ungroup → switch the ID on that view's Ungrouped row →
+  regroup), where the per-camera tracker crossed two animals in one camera and the
+  other views are already right. Not `propagateIdentity`, even though that is
+  already per-camera — it follows one raw track and dies at the first fragment
+  boundary, which is exactly the #172 truncation. Differs from
+  `swapIdentitiesForward` in one substantive way: it deliberately does NOT rewrite
+  `instanceGroups[*].identityId`, since that is a single field shared by every
+  view and writing it would leak the correction into the other cameras (`groups`
+  in the result is therefore always 0, kept only so the shape matches for
+  `describeIdentitySwitch`). Both the frame and camera filters are arithmetic on
+  the packed key. Guarded by `tests/test-ungroup-retains-identity.mjs` (incl. a
+  fragmented-raw-track case) and end to end by
+  `tests/e2e/ungroup-retains-identity.mjs`), group assignment
   (`assignIdentityToGroup`), lookup (`getIdentityIdForTrack`/
   `getIdentityForTrack` — per-frame only, return null with no fallback;
   `isExplicitNoIdentity`; `isNoIdTrack(trackIdx)` — true for the dedicated
@@ -449,9 +465,26 @@ session graph that holds them.
   instead of restoring the original naming. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
   group editing (`createGroupFromUnlinked` — when no identity is passed it
-  derives one from the first member's track, but only if that member HAS a
+  prefers an identity the members ALREADY read as (the first tracked member with
+  a per-frame entry, skipping trackless ones), and only then derives one from the
+  first member's track, and only if that member HAS a
   track: grouping trackless instances yields a group with NO identity (-1), not
-  a fabricated "id_null"; `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
+  a fabricated "id_null". Preferring the held identity is what lets an
+  ungroup → re-assign one row → regroup round trip keep the animal's ID instead
+  of renaming it to `id_<rawTrackIdx>` (luc3d #201);
+  `unlinkGroup` — **retains identity** by stamping the disbanding group's
+  `identityId` into `frameIdentityMap` for each member
+  (`_retainIdentityOnUnlink`) before the group object (and with it the
+  `group.identityId` fallback every identity reader relies on) is dropped.
+  Without it, ungrouping reset every Ungrouped row's ID to "—" and discarded the
+  assignment, making "swap the ID in one view" destructive (luc3d #201). It only
+  fills in what the tracker path (`commitTrackedFrame`) already writes, and is
+  conservative: it skips trackless members (their null track keys one shared
+  per-camera slot), never overwrites an existing positive entry (that entry is
+  what readers already prefer over `group.identityId`), and skips a raw-trackIdx
+  key still shared with another group in the frame (the ambiguous-`-1` collision
+  case — claiming it would mis-color the group still holding it);
+  `removeInstanceGroup`, `assignToGroup`), repair
   (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
   `_promoteIfMixed`), skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
@@ -1690,6 +1723,19 @@ triangulation, multi-frame assignment modal, track/identity helpers.
     (`assignIdentityToGroup` + `Session.propagateIdentity`), the only continuity
     signal available in that state.
 
+  The optional `scopeCamera` argument restricts either mode to ONE camera
+  (luc3d #201), via `Session.swapIdentitiesForwardInCamera` in swap mode. Passed
+  by the two UNGROUPED call sites — the unlinked-row dropdown in
+  `ui/info-panel.js` and the `selectedUnlinked` branch of
+  `assignIdentityToSelected` — and omitted by the group ones. Rationale: an
+  ungrouped instance is one 2D detection belonging to no cross-view bundle, so a
+  correction on it speaks for that camera only, and fixing a single view is the
+  reason to ungroup at all (ungroup → switch the wrong view → regroup). The
+  all-views argument holds for a GROUP, which by definition asserts one animal
+  across cameras. A scoped swap does not pin `group.identityId` (there is no group,
+  and that field is shared by all views). The result carries `camera` so
+  `describeIdentitySwitch` reports "cam2 only" instead of claiming "all views".
+
   This replaced a `for (cam of sel.instances) propagateIdentityForward(...)` loop
   that was scoped to **one raw track and only the cameras the group was visible in
   on that frame**, so a switch covered a few hundred frames of a multi-thousand-
@@ -1883,8 +1929,14 @@ on reload); see `ui/app-state.js`.
   `applyIdentitySwitch` subsumes it). Both identity `<select>`s (the
   Linked Instance Groups row and the unlinked row) drive their change through
   `applyIdentitySwitch`, so a manual ID switch exchanges the two identities to the
-  end of the timeline in every view (luc3d #172) and reports its real count via
-  `describeIdentitySwitch`.
+  end of the timeline (luc3d #172) and reports its real count via
+  `describeIdentitySwitch`. They differ in SCOPE: the grouped row switches every
+  view, while the **unlinked row passes its own camera as `scopeCamera`** so the
+  correction touches that view only (luc3d #201) — the ungroup → fix one view →
+  regroup workflow. The unlinked row's ID `<select>` pre-selects from
+  `getIdentityIdForTrack`, which is why `Session.unlinkGroup` has to retain the
+  disbanded group's identity in `frameIdentityMap` for the row to read as anything
+  but "—".
 - `./sessions-panes.js` — `populateSessionsPanel`, `populateViewStrip`,
   `populateSessionStrip`.
 

@@ -2023,14 +2023,17 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 (function (inst, sel, camNameForId) {
                     function applyIdentity(newIdVal) {
                         if (newIdVal >= 0) {
-                            // Forward-only, swap-aware (issue #155) AND
-                            // whole-timeline / all-views (luc3d #172): an ID
-                            // switch on an unlinked instance means the same
-                            // "these two animals are the other way round from
-                            // here on" as it does for a group.
+                            // Forward-only and swap-aware (issue #155),
+                            // whole-timeline (luc3d #172), but scoped to THIS
+                            // CAMERA (luc3d #201). This row is one view's
+                            // detached detection, and correcting a single view is
+                            // the reason to ungroup at all: ungroup, fix the view
+                            // that's wrong, regroup. A GROUP's switch stays
+                            // all-views — see `applyIdentitySwitch`.
                             markDirty();
                             var resUl = applyIdentitySwitch(state.session, state.currentFrame,
-                                [[camNameForId, inst.trackIdx]], null, newIdVal);
+                                [[camNameForId, inst.trackIdx]], null, newIdVal,
+                                camNameForId);
                             var idObjUl = state.session.getIdentity(newIdVal);
                             setStatus(describeIdentitySwitch(state.session, resUl,
                                 idObjUl ? idObjUl.name : String(newIdVal)), 'success');
