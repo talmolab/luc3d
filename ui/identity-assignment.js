@@ -313,9 +313,30 @@ function resolveCurrentIdentityId(session, frameIdx, camTrackPairs, groupIdentit
  * @param {string} [scopeCamera] restrict the swap to this camera — pass the
  *   unlinked instance's own camera for a single-view correction; omit for a
  *   group (all views).
+ * @param {Object} [unlinkedInstance] the unlinked row's own Instance. Needed
+ *   for a TRACKLESS instance (luc3d #201): `frameIdentityMap` cannot key a
+ *   null track, so its identity lives on the instance
+ *   (`Instance.identityId`) and the correction is per-frame by nature — no
+ *   track means no linkage to carry it to other frames. Ignored when the
+ *   instance has a track.
  * @returns {{mode:string, frames:number, entries:number, oldIdentityId:(number|null), camera:(string|null)}}
  */
-export function applyIdentitySwitch(session, frameIdx, camTrackPairs, group, newIdentityId, scopeCamera) {
+export function applyIdentitySwitch(session, frameIdx, camTrackPairs, group, newIdentityId, scopeCamera, unlinkedInstance) {
+    // TRACKLESS unlinked row: per-frame instance-level assignment (with an
+    // in-frame swap against the row already holding the target identity), not
+    // a map operation — there is no track for the map to key or to propagate
+    // along. See Session.assignIdentityToUnlinkedTrackless.
+    if (unlinkedInstance && unlinkedInstance.trackIdx == null &&
+        scopeCamera && newIdentityId != null && newIdentityId >= 0 &&
+        session.assignIdentityToUnlinkedTrackless) {
+        var tr = session.assignIdentityToUnlinkedTrackless(
+            frameIdx, scopeCamera, unlinkedInstance, newIdentityId);
+        return {
+            mode: 'frame', frames: 1, entries: tr.swappedWithOther ? 2 : 1,
+            oldIdentityId: tr.oldIdentityId, camera: scopeCamera,
+        };
+    }
+
     var oldIdentityId = resolveCurrentIdentityId(
         session, frameIdx, camTrackPairs, group ? group.identityId : null);
 
@@ -380,6 +401,14 @@ export function describeIdentitySwitch(session, result, identityName) {
         msg += ' (swapped ' + result.frames + ' frames to end of timeline, ' +
             (result.camera ? result.camera + ' only' : 'all views') +
             (oldName ? ' — was ' + oldName : '') + ')';
+    } else if (result.mode === 'frame') {
+        // Trackless: the instance has no track linkage, so the correction is
+        // honestly per-frame — say so instead of implying propagation.
+        var oldNameF = null;
+        var oldIdentF = session.getIdentity ? session.getIdentity(result.oldIdentityId) : null;
+        if (oldIdentF) oldNameF = oldIdentF.name;
+        msg += ' (this frame, ' + (result.camera ? result.camera + ' only' : 'one view') +
+            ' — trackless instance' + (oldNameF ? ', was ' + oldNameF : '') + ')';
     } else {
         msg += ' (propagated to ' + result.frames + ' future instances' +
             (result.camera ? ' in ' + result.camera : '') + ')';
@@ -424,7 +453,7 @@ export function assignIdentityToSelected(identityId, identityName) {
         // to its own camera (luc3d #201).
         result = applyIdentitySwitch(session, state.currentFrame,
             [[selUl.cameraName, selUl.instance.trackIdx]], null, identityId,
-            selUl.cameraName);
+            selUl.cameraName, selUl.instance);
     }
 
     drawAllOverlays(state.currentFrame);

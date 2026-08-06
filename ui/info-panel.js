@@ -2017,8 +2017,10 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 newIdOptUl.value = '__new__';
                 newIdOptUl.textContent = '(+) New ID';
                 idSelectUl.appendChild(newIdOptUl);
-                // Pre-select based on the per-frame identity for this track.
-                var currentIdForTrack = state.session.getIdentityIdForTrack(cam.name, ul.instance.trackIdx, state.currentFrame);
+                // Pre-select from the canonical unlinked-identity resolver:
+                // the per-frame entry for a tracked instance, the retained
+                // instance-level identity for a trackless one (luc3d #201).
+                var currentIdForTrack = state.session.getIdentityIdForUnlinkedInstance(cam.name, ul.instance, state.currentFrame);
                 idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
                 (function (inst, sel, camNameForId) {
                     function applyIdentity(newIdVal) {
@@ -2033,12 +2035,15 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             markDirty();
                             var resUl = applyIdentitySwitch(state.session, state.currentFrame,
                                 [[camNameForId, inst.trackIdx]], null, newIdVal,
-                                camNameForId);
+                                camNameForId, inst);
                             var idObjUl = state.session.getIdentity(newIdVal);
                             setStatus(describeIdentitySwitch(state.session, resUl,
                                 idObjUl ? idObjUl.name : String(newIdVal)), 'success');
                         } else {
-                            state.session.clearTrackIdentity(inst.trackIdx, camNameForId);
+                            // "—": a trackless row's identity lives on the
+                            // instance (luc3d #201); a tracked row's in the map.
+                            if (inst.trackIdx == null) inst.identityId = null;
+                            else state.session.clearTrackIdentity(inst.trackIdx, camNameForId);
                             markDirty();
                         }
                         drawAllOverlays(state.currentFrame);

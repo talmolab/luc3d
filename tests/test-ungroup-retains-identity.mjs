@@ -105,10 +105,11 @@ function makeSession(writeFrameIdentities) {
 
 /**
  * What the Ungrouped Instances row shows, verbatim from `ui/info-panel.js`
- * (and what `getInstanceColor` colors it by): the per-frame entry, full stop.
+ * (and what `getInstanceColor` colors it by): the per-frame entry for a
+ * TRACKED instance, the instance-level retained identity for a TRACKLESS one.
  */
 function rowIdentity(session, ul) {
-    const v = session.getIdentityIdForTrack(ul.cameraName, ul.instance.trackIdx, FRAME);
+    const v = session.getIdentityIdForUnlinkedInstance(ul.cameraName, ul.instance, FRAME);
     return v != null && v >= 0 ? v : null;
 }
 
@@ -170,14 +171,84 @@ group('retention skips a raw-trackIdx key still shared with another group');
         'the unambiguous views still retain animal_A');
 }
 
-group('retention skips trackless members rather than claiming the shared null slot');
+group('TRACKLESS members retain the identity ON THE INSTANCE, not in the map');
 {
+    // frameIdentityMap is keyed by raw trackIdx, so a null track keys one
+    // shared per-camera slot that cannot name an individual — the map must NOT
+    // be written. But the identity must not be LOST either (the reporter's
+    // recurrence of #201: untracked predictions / manual annotations grouped
+    // and identified, then ungrouped — every row read "—" and the assignment
+    // was unrecoverable). It is retained on the Instance itself.
     const env = makeSession(false);
     CAM_NAMES.forEach(function (cn) { env.groups[0].instances.get(cn).trackIdx = null; });
     const unlinked = env.session.unlinkGroup(FRAME, env.groups[0]);
     unlinked.forEach(function (ul) {
         eq(env.session.getFrameIdentityValue(FRAME, ul.cameraName, null), undefined,
             'no entry written to the trackless slot for ' + ul.cameraName);
+        eq(ul.instance.identityId, env.idA,
+            'the instance itself carries animal_A for ' + ul.cameraName);
+        eq(rowIdentity(env.session, ul), env.idA,
+            'the Ungrouped row for ' + ul.cameraName + ' still reads animal_A');
+    });
+}
+
+group('trackless retention overwrites a stale instance-level identity');
+{
+    // While grouped, group.identityId is the freshest truth for a trackless
+    // member (identity switches pin the group field; they cannot write the
+    // map for a null track). So unlink must stamp the group's CURRENT
+    // identity even if the instance carries an older one.
+    const env = makeSession(false);
+    CAM_NAMES.forEach(function (cn) {
+        const inst = env.groups[0].instances.get(cn);
+        inst.trackIdx = null;
+        inst.identityId = env.idB;   // stale — the group says animal_A
+    });
+    const unlinked = env.session.unlinkGroup(FRAME, env.groups[0]);
+    unlinked.forEach(function (ul) {
+        eq(ul.instance.identityId, env.idA,
+            'unlink stamps the group\'s current identity for ' + ul.cameraName);
+    });
+}
+
+group('regroup honors a TRACKLESS member\'s retained identity, then consumes it');
+{
+    const env = makeSession(false);
+    CAM_NAMES.forEach(function (cn) { env.groups[0].instances.get(cn).trackIdx = null; });
+    const unlinked = env.session.unlinkGroup(FRAME, env.groups[0]);
+    const regrouped = env.session.createGroupFromUnlinked(FRAME, unlinked);
+    eq(regrouped.identityId, env.idA, 'regrouped trackless group is still animal_A');
+    CAM_NAMES.forEach(function (cn) {
+        eq(regrouped.instances.get(cn).identityId, null,
+            'the group now owns the identity — instance-level copy cleared for ' + cn);
+    });
+}
+
+group('trackless in-frame ID switch swaps with the row already holding the target');
+{
+    // The one-view correction on trackless rows: no track linkage exists, so
+    // the switch is per-frame — but within the frame it keeps the view
+    // duplicate-free by handing the vacated identity to the row that held the
+    // target, mirroring the tracked swap semantics.
+    const env = makeSession(false);
+    env.groups.forEach(function (g) {
+        CAM_NAMES.forEach(function (cn) { g.instances.get(cn).trackIdx = null; });
+    });
+    const ulA = env.session.unlinkGroup(FRAME, env.groups[0]);
+    const ulB = env.session.unlinkGroup(FRAME, env.groups[1]);
+    const instA1 = ulA.find(function (u) { return u.cameraName === CAM_NAMES[1]; }).instance;
+    const instB1 = ulB.find(function (u) { return u.cameraName === CAM_NAMES[1]; }).instance;
+
+    const r = env.session.assignIdentityToUnlinkedTrackless(FRAME, CAM_NAMES[1], instA1, env.idB);
+    eq(instA1.identityId, env.idB, 'the corrected row now reads animal_B');
+    eq(instB1.identityId, env.idA, 'cam1\'s other row took the vacated animal_A');
+    eq(r.oldIdentityId, env.idA, 'reports the identity swapped away from');
+    // The other cameras' rows are untouched.
+    [CAM_NAMES[0], CAM_NAMES[2]].forEach(function (cn) {
+        eq(ulA.find(function (u) { return u.cameraName === cn; }).instance.identityId, env.idA,
+            cn + ' still reads animal_A');
+        eq(ulB.find(function (u) { return u.cameraName === cn; }).instance.identityId, env.idB,
+            cn + ' still reads animal_B');
     });
 }
 
