@@ -370,6 +370,30 @@ session graph that holds them.
   `remapTracksFromIdentity` callback is one direct `Map.get` per instance row
   instead of re-deriving the same fact via `getIdentityIdForTrack` +
   `idToTrackIdx.get` (two hash lookups) on every row.
+  **Per-row resolution of ambiguous raw tracks (luc3d #203).** Step 2 skips
+  `frameIdentityMap`'s explicit `-1` "ambiguous" entries (written by
+  `commitTrackedFrame` when one camera's raw tracker briefly gives two animals the
+  same `trackIdx`, "most common on the first frame or two"). But
+  `oldKeyToNewTrackIdx` is also what step 4 remaps the COLUMNAR STORE through, and
+  an absent key there means *no track* — so those instances kept the right track in
+  memory (step 3's `instanceToIdentity` fallback) and went **trackless in the
+  store**, permanently: trackless on export, a hole at the start of the Tracks
+  Timeline, and store-derived `trackOccupancy` disagreeing with resident
+  `frameGroups` for exactly the first frames. Step 2b now also builds
+  **`rowClaim`**, keyed `(frame, camera, offsetInFrame)` from each group member's
+  `_rawInstIndex`, which the step-4 callback consults FIRST — so each store row is
+  resolved by its own group's identity even when two animals share one raw
+  `trackIdx` on that frame (the callback's new `offsetInFrame` argument is what
+  makes this possible; see `loading/sio-lazy-loader.js`). A per-track `rawClaim`
+  fallback covers a member with no `_rawInstIndex`, and refuses to guess when two
+  identities contest one key — those are counted and returned as
+  **`ambiguousRawKeys`** (also `console.warn`ed and surfaced by
+  `ui/ui-wiring.js`'s status line) rather than dropped silently. The return value
+  is now `{tracks, instances, lazyErrorRows, ambiguousRawKeys}`. Guarded by the
+  `propagateIdentitiesToTracks run twice (luc3d #203)` block in
+  `tests/test-lazy-reopen.js`, which also pins the whole-operation invariant:
+  after every run, the Timeline's `maxTrackIdx + 1` must equal
+  `session.tracks.length`, checked per source so a failure names the culprit.
   `propagateTracksToIdentities`'s lazy sweep now memoizes
   `getOrCreateIdentityForTrack` per distinct `trackIdx` (a local
   `identityForTrack` Map) — that lookup is a LINEAR SCAN over
@@ -3532,12 +3556,19 @@ companion, used by `Session.propagateIdentitiesToTracks`: rebuilds each
 underlying `labels.tracks` (shared by reference with its
 `_lazyDataStore.tracks` — mutated in place, so both stay in sync; a shared
 project-`.slp` store is only rebuilt once) to `newTrackNames`, then for every
-instance row calls `remapFn(camName, frameIdx, oldTrackIdx)` and writes the
-result into `instancesData.track` in place — the same array `appendStore`
+instance row calls `remapFn(camName, frameIdx, oldTrackIdx, offsetInFrame)` and
+writes the result into `instancesData.track` in place — the same array `appendStore`
 (export, `import-export/slp-streaming-write.js`) and `materializeFrame`
 (re-materializing an evicted/revisited frame) both read by reference, so the
 propagated track survives eviction/reload and is exported correctly with no
-new writer plumbing. Also rebuilds THIS camera's `trackOccupancy` entry (via
+new writer plumbing. **`offsetInFrame`** (the row's index within its camera-frame,
+the same quantity `forEachInstanceRow` reports, matching `InstanceGroup` members'
+`_rawInstIndex`) lets a caller decide **per row** rather than per track — added for
+luc3d #203, where a raw-trackIdx collision meant a track-keyed callback had no
+answer that was right for both of the two rows sharing that trackIdx, so both were
+abandoned as trackless in the first frames of a project. Existing 3-argument
+callbacks (`swapTracksInStore` in `ui/identity-assignment.js`) are unaffected. Also
+rebuilds THIS camera's `trackOccupancy` entry (via
 `_computeSparseOccupancy`) from the just-remapped column — fixes a bug where
 the Tracks Timeline never reflected a propagate on a lazy session: `session.
 trackOccupancy` is the SAME Map object as `this.trackOccupancy` (aliased by

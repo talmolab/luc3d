@@ -820,6 +820,15 @@ export function setupMenus() {
             // with the shorter identity-derived list.
             setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks, but ' + res.lazyErrorRows +
                 ' row(s) failed to remap — export will be INCOMPLETE. See console for details.', 'error');
+        } else if (res.ambiguousRawKeys > 0) {
+            // Two different identities genuinely share one raw (frame, camera,
+            // trackIdx) and neither the grouping nor the store can say which row
+            // is which, so those rows stay trackless (luc3d #203). Reported rather
+            // than left as an unexplained gap near the start of the video.
+            setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks from identities (' +
+                res.instances + ' instances updated), but ' + res.ambiguousRawKeys +
+                ' (frame, camera, track) key(s) are shared by two identities and stayed trackless. ' +
+                'See console.', 'warning');
         } else {
             setStatus('Propagate IDs → Tracks: ' + res.tracks + ' tracks from identities (' +
                 res.instances + ' instances updated)', 'success');
