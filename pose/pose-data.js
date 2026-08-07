@@ -500,6 +500,17 @@ export class Instance {
         this.trackIdx = trackIdx;
         this.type = type;
         this.score = score;
+        /**
+         * @type {number|null} Identity carried by a TRACKLESS UNLINKED
+         * instance (luc3d #201). `frameIdentityMap` is keyed by raw trackIdx,
+         * so a null track keys one shared per-camera slot that cannot name an
+         * individual — this field is where an ungrouped trackless detection's
+         * identity lives instead. Stamped by `Session.unlinkGroup` from the
+         * disbanding group's `identityId`, consumed (and cleared) when the
+         * instance joins a group again. Ignored while the instance is grouped
+         * or has a track; not persisted to SLP.
+         */
+        this.identityId = null;
         /** @type {boolean} Whether the user has edited this instance */
         this.modified = false;
         /** @type {Float64Array|null} Backup of original coords before editing */
@@ -1708,6 +1719,28 @@ export class Session {
     }
 
     /**
+     * Identity of an UNLINKED instance (luc3d #201): the per-frame map entry
+     * for a TRACKED instance (exactly `getIdentityIdForTrack`), the
+     * instance-level retained identity for a TRACKLESS one — the map cannot
+     * represent a null track (one shared per-camera slot), so `unlinkGroup`
+     * stamps the disbanding group's identity onto the instance instead. The
+     * single resolver for everything that reads an ungrouped row's identity
+     * (info panel, 2D color, regroup derivation).
+     * @param {string} cameraName
+     * @param {Instance} instance
+     * @param {number} frameIdx
+     * @returns {number|null} identityId or null
+     */
+    getIdentityIdForUnlinkedInstance(cameraName, instance, frameIdx) {
+        if (!instance) return null;
+        if (instance.trackIdx != null) {
+            return this.getIdentityIdForTrack(cameraName, instance.trackIdx, frameIdx);
+        }
+        return (instance.identityId != null && instance.identityId >= 0)
+            ? instance.identityId : null;
+    }
+
+    /**
      * True iff the tracker explicitly marked this (frame, camera, track) as
      * having NO identity — the negative sentinel written by
      * matchFrameInstances' Issue #6 guard for visible-but-ungrouped instances.
@@ -2038,6 +2071,74 @@ export class Session {
     }
 
     /**
+     * Exchange two identities from `startFrame` to the END of the project in ONE
+     * camera only (luc3d #201).
+     *
+     * This is how you correct an ID in a single view: ungroup, then switch the
+     * ID on that view's Ungrouped row. The per-camera tracker crossed two
+     * animals in one camera while the other views are already right, so the
+     * correction must not touch them — which is exactly what
+     * `swapIdentitiesForward` (all views, by design) would do.
+     *
+     * Why not `propagateIdentity`, which is already per-camera: it follows one
+     * raw `(camera, trackIdx)` pair forward and therefore dies at the first
+     * fragment boundary of that raw track. That truncation IS issue #172 — on
+     * real tracker output the same animal is track 4 for a few hundred frames,
+     * then 12, then 20. Swapping identity VALUES needs no track continuity, so a
+     * single-view correction reaches every frame and every raw track fragment in
+     * that camera, in one pass.
+     *
+     * `instanceGroups[*].identityId` is deliberately NOT rewritten (the one
+     * substantive difference from `swapIdentitiesForward`): it is a single
+     * per-group field shared by every view, so changing it would assert the swap
+     * for all cameras — the very thing this scoping exists to avoid. A group's
+     * members are unlinked at the moment this runs, so there is no group-level
+     * value that legitimately describes one camera.
+     *
+     * @param {number} startFrame inclusive
+     * @param {string} cameraName the ONLY camera affected
+     * @param {number} identityA
+     * @param {number} identityB
+     * @returns {{entries:number, groups:number, frames:number}} `groups` is
+     *   always 0 — see above; kept so the result shape matches
+     *   `swapIdentitiesForward` for `describeIdentitySwitch`.
+     */
+    swapIdentitiesForwardInCamera(startFrame, cameraName, identityA, identityB) {
+        var entries = 0;
+        var touchedFrames = new Set();
+        if (identityA == null || identityB == null || identityA === identityB) {
+            return { entries: 0, groups: 0, frames: 0 };
+        }
+        var camIdx = this._fimCamIdx(cameraName);
+        if (camIdx < 0) return { entries: 0, groups: 0, frames: 0 };
+        // Only VALUES change, so mutating during iteration is safe (no key is
+        // added or removed) — same argument as `swapIdentitiesForward`. The
+        // frame AND camera filters are pure arithmetic on a packed key (no
+        // decode, no allocation) so this stays one cheap pass over the 2.6M-entry
+        // real project.
+        for (var entry of this.frameIdentityMap) {
+            var k = entry[0], v = entry[1];
+            if (v !== identityA && v !== identityB) continue;
+            var f;
+            if (_fimIsPacked(k)) {
+                f = Math.floor(k / FIM_CAM_STRIDE);
+                if (f < startFrame) continue;
+                if (Math.floor((k - f * FIM_CAM_STRIDE) / FIM_TRACK_STRIDE) !== camIdx) continue;
+            } else {
+                var parts = _parseFrameIdentityKey(String(k));
+                if (!parts) continue;
+                f = parts.frameIdx;
+                if (f < startFrame) continue;
+                if (parts.camName !== cameraName) continue;
+            }
+            this.frameIdentityMap.set(k, v === identityA ? identityB : identityA);
+            entries++;
+            touchedFrames.add(f);
+        }
+        return { entries: entries, groups: 0, frames: touchedFrames.size };
+    }
+
+    /**
      * Stamp `identityId` onto (cameraName, trackIdx) at one frame, preserving
      * per-frame uniqueness. Shared by both passes of `propagateIdentity` so the
      * resident and store-driven paths cannot drift.
@@ -2208,11 +2309,33 @@ export class Session {
         const fg = this.frameGroups.get(frameIdx);
         if (!fg) throw new Error('No FrameGroup for frame ' + frameIdx);
 
-        // Determine identity. Derive it from the first member's track only when
-        // that member actually HAS a track. Grouping trackless instances
+        // Determine identity. An identity the members ALREADY read as wins over
+        // anything derived from their raw track numbering (luc3d #201): after an
+        // ungroup, deriving "id_<trackIdx>" from the first member's per-camera
+        // track index renamed the animal, so the ungroup -> re-assign one row ->
+        // regroup round trip could not preserve an ID even once `unlinkGroup`
+        // retained it. Members are scanned in order and the first real identity
+        // wins, matching how `resolveCurrentIdentityId` reads a selection.
+        // TRACKLESS members count too, via their instance-level retained
+        // identity (`getIdentityIdForUnlinkedInstance`) — the "a trackless
+        // group gets no FABRICATED identity" rule below is untouched (a null
+        // track must not mint an "id_null"), but a real identity a trackless
+        // member carries is as good as a tracked one's.
+        if (identityId === undefined || identityId < 0) {
+            identityId = -1;
+            for (let i = 0; i < unlinkedList.length; i++) {
+                const ulm = unlinkedList[i];
+                if (!ulm.instance) continue;
+                const held = this.getIdentityIdForUnlinkedInstance(
+                    ulm.cameraName, ulm.instance, frameIdx);
+                if (held != null && held >= 0) { identityId = held; break; }
+            }
+        }
+        // Otherwise derive it from the first member's track — but only when that
+        // member actually HAS a track. Grouping trackless instances
         // (trackIdx == null) must yield a group with NO identity (-1) — do NOT
         // fabricate an "id_null" identity from a null track value.
-        if (identityId === undefined || identityId < 0) {
+        if (identityId < 0) {
             const firstTrackIdx = unlinkedList[0].instance.trackIdx;
             if (firstTrackIdx == null) {
                 identityId = -1;
@@ -2229,6 +2352,10 @@ export class Session {
             group.addInstance(ul.cameraName, ul.instance);
             fg.addInstance(ul.cameraName, ul.instance);
             fg.removeUnlinkedById(ul.id);
+            // The group owns the identity from here — drop the instance-level
+            // retained copy so it cannot go stale against later group-level
+            // switches (unlinkGroup re-stamps it if the group disbands again).
+            ul.instance.identityId = null;
         }
 
         // Mixed groups (user + predicted) are treated as user. Promote
@@ -2443,6 +2570,21 @@ export class Session {
      * Unlink an InstanceGroup: remove the group but return its instances
      * to the unlinked pool instead of deleting them.
      *
+     * Identity is RETAINED (luc3d #201). `group.identityId` dies with the group
+     * object, and every downstream identity reader — the info panel's Ungrouped
+     * row, `ui/overlays.js` `getInstanceColor`, the export paths, save/load —
+     * resolves an unlinked instance's identity through `frameIdentityMap` alone,
+     * with no group-level fallback available once the group is gone. So the
+     * group's identity is stamped into the map for each member before it is
+     * dropped. Without this, ungrouping reset every row's ID to "—" and threw
+     * the assignment away, which made "swap the ID in one view" (the reported
+     * workflow: ungroup both -> re-assign one row -> regroup) destructive.
+     *
+     * This only fills in a fact the tracker path already records —
+     * `commitTrackedFrame` writes the same per-frame entries for every group
+     * member — so it brings the grouping paths that set `identityId` alone
+     * (`assignIdentityToGroup`, `createGroupFromUnlinked`) into line with it.
+     *
      * @param {number} frameIdx
      * @param {InstanceGroup} group - The group to unlink
      * @returns {UnlinkedInstance[]} The newly created unlinked instances
@@ -2494,6 +2636,7 @@ export class Session {
                     instance.type = 'user';
                     instance.modified = true;
                 }
+                this._retainIdentityOnUnlink(frameIdx, camName, instance, group.identityId);
                 const ul = new UnlinkedInstance(instance, camName);
                 fg.addUnlinkedInstance(camName, ul);
                 newUnlinked.push(ul);
@@ -2501,6 +2644,54 @@ export class Session {
         }
 
         return newUnlinked;
+    }
+
+    /**
+     * Preserve a disbanding group's identity as a per-frame entry for one
+     * member, so the detached instance still reads as the same animal
+     * (luc3d #201). Called by `unlinkGroup` per member; deliberately
+     * conservative — it only ever ADDS a fact that was implicit in
+     * `group.identityId`, and never changes an identity anything already
+     * resolves today:
+     *
+     *  - A **trackless** member keeps the identity ON THE INSTANCE
+     *    (`instance.identityId`) instead of in the map: `frameIdentityMap` is
+     *    keyed by raw trackIdx, and a null track keys one shared "-1" slot per
+     *    camera, so two trackless instances in one view cannot be told apart
+     *    there. The stamp OVERWRITES any older instance-level value — while
+     *    grouped, `group.identityId` is the freshest truth for a trackless
+     *    member (identity switches pin the group field; they cannot write the
+     *    map for a null track), so a pre-existing instance value is stale by
+     *    definition. This is the reporter's recurrence of #201: untracked
+     *    predictions / manual annotations grouped and identified, then
+     *    ungrouped — the map-only retention below never fired and every row
+     *    read "—".
+     *  - An existing **positive** map entry is left alone. It is what the
+     *    grouped row and the 2D color path already prefer over
+     *    `group.identityId`, so overwriting it would change the displayed
+     *    identity rather than preserve it.
+     *  - A key still **shared with another group in this frame** is skipped.
+     *    That is the raw-trackIdx collision `commitTrackedFrame` guards with an
+     *    explicit -1: the key cannot name one animal, and claiming it for the
+     *    departing group would mis-color the group that is still there.
+     */
+    _retainIdentityOnUnlink(frameIdx, camName, instance, identityId) {
+        if (identityId == null || identityId < 0) return;
+        const trackIdx = instance ? instance.trackIdx : null;
+        if (trackIdx == null) {
+            if (instance) instance.identityId = identityId;
+            return;
+        }
+        const existing = this.getFrameIdentityValue(frameIdx, camName, trackIdx);
+        if (existing != null && existing >= 0) return;
+        const siblings = this.instanceGroups.get(frameIdx);
+        if (siblings) {
+            for (let i = 0; i < siblings.length; i++) {
+                const other = siblings[i].instances.get(camName);
+                if (other && other.trackIdx === trackIdx) return;
+            }
+        }
+        this.setFrameIdentity(frameIdx, camName, trackIdx, identityId);
     }
 
     /**
@@ -2518,7 +2709,45 @@ export class Session {
         group.addInstance(unlinked.cameraName, unlinked.instance);
         fg.addInstance(unlinked.cameraName, unlinked.instance);
         fg.removeUnlinkedById(unlinked.id);
+        // The group owns the identity from here (see createGroupFromUnlinked).
+        unlinked.instance.identityId = null;
         group.markDirty();
+    }
+
+    /**
+     * Assign an identity to a TRACKLESS unlinked instance (luc3d #201) — the
+     * one-view correction for detections `frameIdentityMap` cannot key (a null
+     * track is one shared per-camera slot). Per-frame by nature: with no track
+     * there is no linkage to carry the correction to other frames. Within the
+     * frame it keeps the camera duplicate-free by handing the vacated identity
+     * to the trackless unlinked row that already held the target, mirroring
+     * the tracked swap semantics.
+     *
+     * @param {number} frameIdx
+     * @param {string} camName the instance's own camera
+     * @param {Instance} instance TRACKLESS unlinked instance to correct
+     * @param {number} identityId the new identity (>= 0)
+     * @returns {{oldIdentityId:(number|null), swappedWithOther:boolean}}
+     */
+    assignIdentityToUnlinkedTrackless(frameIdx, camName, instance, identityId) {
+        var oldIdentityId = (instance.identityId != null && instance.identityId >= 0)
+            ? instance.identityId : null;
+        var swappedWithOther = false;
+        var fg = this.frameGroups.get(frameIdx);
+        var pool = fg ? fg.getUnlinkedInstances(camName) : null;
+        if (pool && identityId != null && identityId >= 0) {
+            for (var i = 0; i < pool.length; i++) {
+                var other = pool[i].instance;
+                if (!other || other === instance || other.trackIdx != null) continue;
+                if (other.identityId === identityId) {
+                    other.identityId = oldIdentityId;
+                    swappedWithOther = true;
+                    break;
+                }
+            }
+        }
+        instance.identityId = (identityId != null && identityId >= 0) ? identityId : null;
+        return { oldIdentityId: oldIdentityId, swappedWithOther: swappedWithOther };
     }
 }
 
