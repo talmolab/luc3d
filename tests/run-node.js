@@ -462,7 +462,7 @@ for (var h = 0; h < helperNames.length; h++) {
 
 // Load source files
 var srcDir = path.join(__dirname, '..');
-var srcFiles = ['pose/pose-data.js', 'import-export/skeleton-json.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'ui/timeline-visibility.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js', 'ui/app-state.js', 'ui/timeline-controller.js'];
+var srcFiles = ['ui/video-filters.js', 'pose/pose-data.js', 'import-export/skeleton-json.js', 'pose/triangulation.js', 'ui/viewport3d.js', 'import-export/file-io.js', 'import-export/slp-merge.js', 'ui/interaction.js', 'ui/overlays.js', 'ui/timeline.js', 'ui/timeline-visibility.js', 'import-export/visibility-metadata.js', 'loading/video.js', 'ui/loading-progress-modal.js', 'import-export/slp-import.js', 'ui/app-state.js', 'ui/timeline-controller.js'];
 for (var i = 0; i < srcFiles.length; i++) {
     try { loadScript(path.join(srcDir, srcFiles[i])); }
     catch(e) { console.log(srcFiles[i] + ': ' + e.message.substring(0, 120)); }
@@ -554,6 +554,8 @@ var testFiles = [
     'test-save-load-json.js',
     'test-tracker.js',
     'test-rotation.js',
+    'test-video-contrast.js',
+    'test-visibility-metadata.js',
     // Prompt 4 / Block 1 — pre-implementation failing tests.
     'test-timeline-tree-grouping.js',
     'test-timeline-scroll.js',

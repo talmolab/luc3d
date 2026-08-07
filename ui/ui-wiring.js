@@ -84,6 +84,7 @@ import {
 import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
 } from './track-identity-ops.js';
+import { setSessionRotation } from './video-filters.js';
 
 // ============================================
 // Rename Track / Identity modal
@@ -1677,7 +1678,7 @@ export function setupUI() {
     });
 
     // --- Video Rotation (Shift + R + Arrow chord) ---
-    var _rotState = { active: false, direction: 0, lastTime: 0, rafId: 0 };
+    var _rotState = { active: false, direction: 0, lastTime: 0, rafId: 0, view: null };
     var _rKeyDown = false; // tracks the `R` modifier for the rotation chord
 
     document.addEventListener('keydown', function (e) {
@@ -1707,6 +1708,10 @@ export function setupUI() {
         if (!view) { _rotState.active = false; return; }
         var dt = (now - _rotState.lastTime) / 1000;
         var degrees = 60 * dt * _rotState.direction;
+        // `view.rotation` keeps the FRACTIONAL value so the animation stays
+        // smooth; the session store takes the rounded degree (see
+        // `clampRotationSetting`). Persisted on keyup, not per frame — see the
+        // handler below.
         view.rotation = clampRotation((view.rotation || 0) + degrees);
         _rotState.lastTime = now;
         // Only update the CSS transform — don't redraw overlays during animation
@@ -1730,6 +1735,9 @@ export function setupUI() {
                 _rotState.active = true;
                 _rotState.direction = dir;
                 _rotState.lastTime = performance.now();
+                // Remember which view this gesture is rotating so keyup persists
+                // the right one even if the active pane changed meanwhile.
+                _rotState.view = view;
                 _rotState.rafId = requestAnimationFrame(rotationLoop);
             }
             return;
@@ -1740,6 +1748,21 @@ export function setupUI() {
         if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Shift' || e.code === 'KeyR') && _rotState.active) {
             _rotState.active = false;
             if (_rotState.rafId) { cancelAnimationFrame(_rotState.rafId); _rotState.rafId = 0; }
+            // Commit the gesture's final angle to the session ONCE, here, rather
+            // than on every animation frame — rotation is project state saved
+            // into the .slp, and a 60 Hz markDirty() would be pure churn.
+            var rotated = _rotState.view;
+            _rotState.view = null;
+            if (rotated) {
+                var finalDeg = setSessionRotation(state.session, rotated.name, rotated.rotation);
+                // Snap the view off the fractional animation value onto the
+                // integer the session actually stored, so what renders after the
+                // gesture is exactly what a reopen will render.
+                rotated.rotation = finalDeg;
+                if (videoController) videoController.applyZoom(rotated);
+                syncRotationUI(rotated);
+                markDirty();
+            }
             // Redraw overlays once at the final rotation angle
             drawAllOverlays(state.currentFrame);
         }
