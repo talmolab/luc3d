@@ -43,6 +43,7 @@ import {
 } from './slp-streaming-write.js';
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -1027,7 +1028,7 @@ export function saveProject() {
         var projectData = {
             version: 3,
             sessions: state.sessions.map(function(sess, si) {
-                return {
+                var sessData = {
                     name: sess.name,
                     skeleton: {
                         name: sess.skeleton.name,
@@ -1055,6 +1056,11 @@ export function saveProject() {
                     }).filter(Boolean),
                     frames: serializeSessionFrames(sess),
                 };
+                // Session-scoped Visibility-panel state, same keys and the same
+                // omit-the-defaults rule as the `.slp` writers — the project
+                // JSON puts them at the session-dict level rather than under a
+                // `metadata.lucid`.
+                return writeVisibilityMetadata(sessData, sess);
             }),
         };
 
@@ -1096,6 +1102,9 @@ export function saveProject() {
         }),
         frames: {},
     };
+    // Session-scoped Visibility-panel state (see the v3 branch above). `_restoreProjectV2`
+    // reads these at this same level for both the v2 and v3 shapes.
+    writeVisibilityMetadata(projectData, state.session);
 
     // Serialize each frame
     for (const [frameIdx, fg] of state.session.frameGroups) {
@@ -1653,6 +1662,9 @@ function _restoreProjectV2(data) {
         }
     }
     if (data.trustTracks != null) session.trustTracks = data.trustTracks;
+    // Session-scoped Visibility-panel state. Shared by the v2 (whole document)
+    // and v3 (per-session dict) shapes — both put these keys at this level.
+    readVisibilityMetadata(session, data);
     // Legacy global identity map (removed). Captured here and migrated to
     // per-frame entries after frame groups load (see end of this function).
     var legacyGlobalIdentities = data.trackIdentityMap || null;
