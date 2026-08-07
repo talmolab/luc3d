@@ -2732,9 +2732,11 @@ function _fmtBytes(bytes) {
  * instance mounted in the modal) so the user can orbit/zoom to choose the
  * camera angle. Controls: prev/play/next transport, a progress bar with two
  * draggable start/end nodes (defaulted to the first/last frame) backed by two
- * editable, validated Start/End number fields, an editable FPS, a resolution
- * picker (360p / 720p / 1080p / 2K — sets output dims and the matching H.264
- * level), and a live duration readout. On Export, the chosen frame range is
+ * editable, validated Start/End number fields, an editable FPS, a `Quality`
+ * picker (480p / 720p / 1080p / 2160p — the tiers shared with "Export Video
+ * Overlays" via `RES_PRESETS`, each stating its pixel size; sets output dims and,
+ * through `h264CodecFor`, the matching H.264 level) echoed back by a live
+ * `Output` readout, and a live duration readout. On Export, the chosen range is
  * rendered into the modal viewport at the chosen resolution and encoded to an
  * .mp4 via ui/video-encode.js (mediabunny), streaming to disk when the browser
  * offers a save-file picker.

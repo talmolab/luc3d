@@ -1710,12 +1710,21 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   frame) backed by two **editable, validated Start/End fields** (illegal input —
   non-integer, out of `[0, lastFrame]`, or crossing the other bound — is rejected
   and reverted); an editable FPS (duration = selectedFrames / fps); a
-  **resolution picker** (360p/720p/1080p/2K) that sets the output dimensions and
-  the matching H.264 level (`avc1.42001E` / `42001F` / `420028` / `420032`); live
-  readouts for **Duration**, **Exported Frames** (= selected range, updates with
-  the Start/End nodes/fields) and **Estimated File Size** (`_v3dBitrate` ×
-  duration ÷ 8, formatted by `_fmtBytes`; recomputed on range/FPS/resolution
-  change — same bitrate the encoder is configured with); and
+  **`Quality` picker** — the four shared tiers **480p (854×480) / 720p (1280×720)
+  / 1080p (1920×1080) / 2160p (3840×2160)**, each label stating its pixel size.
+  `V3D_RES` is **DERIVED from `RES_PRESETS`** in `ui/overlay-export-layout.js`
+  (`refW` is the exact width here, since this viewport is always 16:9) and its
+  H.264 level comes from that module's **`h264CodecFor`** — it used to be a
+  hand-written per-tier table that had already drifted (it claimed level 3.0 for
+  640×360 where the shared table says 3.1), and a wrong level only surfaces
+  mid-export at one resolution. Live readouts for **Output** (the chosen tier
+  echoed back as literal `W×H` + the Mbps it implies, so the resolution is on
+  screen and not only inside the dropdown), **Duration**, **Exported Frames**
+  (= selected range, updates with the Start/End nodes/fields) and **Estimated
+  File Size** (the shared **`estimatedBytes`**, not a local copy of
+  `bitrate × duration ÷ 8` — the same number decides whether the export streams
+  to disk, so the readout and that decision cannot drift; formatted by
+  `_fmtBytes`, recomputed on range/FPS/quality change); and
   Cancel / Export (all inputs disabled + playback stopped during an export).
   Export renders only the selected `[start, end]` range into the viewport at the
   chosen resolution (`renderer.setPixelRatio(1)` + `setSize(W,H)` + matching
@@ -2221,12 +2230,21 @@ the classic-script unit runner and exercised without a browser dock.
   the output canvas (the dock is fitted first, so a mismatched output aspect
   letterboxes the whole composition rather than distorting it). Integer pixels,
   clamped into bounds, never degenerate.
-- `outputSizeFor(aspect, presetKey)` — height from `RES_PRESETS`
-  (**480p / 720p / 1080p / 2K**; keys ARE the height, so `1440` carries the `2K`
-  label, matching `V3D_RES` in `ui/export-modals.js` where 2K means 2560×1440),
-  width from the aspect, clamped to `MAX_OUT_DIM` (3840)
-  with the height recomputed so the aspect holds. **Always even**: `VideoEncoder`
-  rejects odd H.264 (yuv420) dimensions, so an odd size is a hard export failure.
+- `outputSizeFor(aspect, presetKey)` — height from `RES_PRESETS`, width from the
+  aspect, clamped to `MAX_OUT_DIM` (3840) with the height recomputed so the aspect
+  holds. **Always even**: `VideoEncoder` rejects odd H.264 (yuv420) dimensions, so
+  an odd size is a hard export failure.
+  `RES_PRESETS` is the **one quality-tier table both video-export modals use** —
+  **480 / 720 / 1080 / 2160**, keys ARE the height, labels state the pixel size
+  (`2160p (3840×2160)`). `ui/export-modals.js` builds its `V3D_RES` from it, so
+  the two modals cannot offer different choices again. Each entry's `refW` is the
+  16:9 reference width: the exact output width for the always-16:9 3D viewport,
+  and only a label hint here, where the real width follows the composition aspect.
+  Note `2160`'s `refW` (3840) is exactly `MAX_OUT_DIM` — one pixel more and every
+  16:9 4K export would silently clamp and lose height (pinned by a test).
+  `sanitizeSettings` maps a retired key (`360`, then `1440`/`2K`) to `DEFAULT_RES`
+  rather than to the nearest surviving tier, so reopening the modal cannot
+  silently ~2.25× the pixels, bitrate and file size of the next export.
 - `outputSizeFrom(settings, aspect)` / `RES_CUSTOM` / `clampOutDim(n)` /
   `customAspect(settings)` — the editable-dimensions path. `res: 'custom'` uses
   `settings.outW` × `settings.outH` verbatim instead of deriving the width from
@@ -2235,9 +2253,14 @@ the classic-script unit runner and exercised without a browser dock.
   `customAspect` returns the aspect the modal must **shape the dock to** (null
   for a preset, where dock and output agree already) — shaping it is what stops
   `computeTileRects` from burning letterbox bars into a custom-size export.
-- `h264CodecFor(W, H)`, `bitrateFor(W, H, fps, quality)`, `QUALITY_BPP`.
+- `h264CodecFor(W, H)`, `bitrateFor(W, H, fps, quality)`, `QUALITY_BPP`. **Both
+  video-export modals call these** — `showExport3DVideoModal`'s `_v3dBitrate` is
+  now just `bitrateFor(W, H, fps, 'medium')`. Its own copy clamped to
+  [2, 24] Mbps against this module's [1, 48] Mbps, so it doubled the bitrate (and
+  its own size estimate) at the smallest tier and would have capped the 2160p tier
+  at 24 Mbps instead of the 29.9 Mbps the formula asks for.
 - `estimatedBytes(W, H, fps, quality, nFrames)` — expected size of one output
-  file. The modal's summary line AND the streaming decision both read this, so
+  file. Both modals' summary lines AND both streaming decisions read this, so
   the size the UI promises cannot drift from the size the export plans for.
   Returns 0 for a degenerate fps/range rather than `NaN`/`Infinity`.
 - `shouldStreamToDisk(totalBytes)` / `STREAM_TO_DISK_BYTES` (256 MB) — the
@@ -2297,10 +2320,17 @@ version: `index.html`'s CSS, `sessions-panes.js`, and this module), seeded via
 range (**1-based display**, 0-based internally, matching the issue) at the top,
 then layers, per-layer appearance, background, and quality/output.
 
-**Output dimensions.** Quality & Output has a Resolution picker (480p / 720p /
-1080p / 2K, plus **Custom**) and a live `width × height` row. Quality itself is a
-separate control — it is the bitrate tier (low / medium / high via `QUALITY_BPP`),
-not a resolution. The fields always show the size the
+**Output dimensions.** Quality & Output has a Resolution picker — the four shared
+tiers **480p (854×480) / 720p (1280×720) / 1080p (1920×1080) / 2160p (3840×2160)**
+from `RES_PRESETS`, plus **Custom** — and a live `width × height` row. Quality
+itself is a *separate* control here: it is the bitrate tier (low / medium / high
+via `QUALITY_BPP`), not a resolution, which is why this modal keeps both where
+`showExport3DVideoModal` labels its single tier picker `Quality`. `resTierLabel()`
+names the chosen tier in the summary line next to the literal `W×H`, because the
+two can legitimately disagree — a preset fixes only the HEIGHT, so a very wide
+composition clamps the derived width to `MAX_OUT_DIM` and recomputes the height,
+and "2160p" can encode at 3840×960 (reported as `2160p (width-capped)`). The
+fields always show the size the
 export will really be — for a preset that is the derived size, refreshed by
 `syncOutFields()` out of `refreshSummary()` as the composition changes — and
 typing in either one is itself the gesture that switches Resolution to Custom, so

@@ -283,7 +283,7 @@ export function saveOverlayExportSettings(s) {
  * the video's own resolution — so "marker size 4" means 4 video pixels there.
  * Here the canvas is a composition tile whose size has nothing to do with the
  * video's, so the same 4 would render at a wildly different apparent size, and
- * would CHANGE with the resolution preset: a 360p export and a 1440p export of
+ * would CHANGE with the resolution preset: a 480p export and a 2160p export of
  * the same layout would not look alike. Pre-multiplying by the fit scale pins
  * one meaning of "size 4" across the app, the preview and every output
  * resolution. (Sub-pixel results are fine — canvas strokes/arcs are not
