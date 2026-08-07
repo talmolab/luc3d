@@ -207,6 +207,33 @@
             assertEqual(__OverlayExportLayout.bitrateFor(1920, 1080, 30, 'nonsense'), mid, 'unknown quality → medium');
         });
 
+        it('reports when the bitrate clamp makes two Quality tiers identical', () => {
+            // The [1, 48] Mbps clamp can collapse adjacent tiers, and then picking
+            // a different Quality changes NOTHING — not the estimate, not the
+            // encoded file. `bitrateIsClamped` exists so the modal can say so
+            // instead of looking broken.
+            const L = __OverlayExportLayout;
+            // Defaults (1080p30): every tier is inside the band and they differ.
+            ['low', 'medium', 'high'].forEach(q => {
+                assertTrue(!L.bitrateIsClamped(1920, 1080, 30, q), q + ' unclamped at 1080p30');
+            });
+            // 2160p60 pins medium AND high to the 48 Mbps ceiling — the collision
+            // the note warns about, asserted as an actual equality so this test
+            // fails if the band or the bpp table moves.
+            assertTrue(L.bitrateIsClamped(3840, 2160, 60, 'medium'), 'medium clamped at 2160p60');
+            assertTrue(L.bitrateIsClamped(3840, 2160, 60, 'high'), 'high clamped at 2160p60');
+            assertEqual(L.bitrateFor(3840, 2160, 60, 'medium'), L.bitrateFor(3840, 2160, 60, 'high'),
+                'medium and high really do encode identically there');
+            // …and the floor collides at the small end.
+            assertTrue(L.bitrateIsClamped(640, 360, 30, 'low'), 'low clamped at 640x360@30');
+            assertEqual(L.bitrateFor(640, 360, 30, 'low'), L.bitrateFor(640, 360, 30, 'medium'),
+                'low and medium collide at the floor');
+            // An unknown tier resolves to medium in BOTH functions, or the note
+            // would disagree with the bitrate it is describing.
+            assertEqual(L.bitrateIsClamped(640, 360, 30, 'nonsense'),
+                L.bitrateIsClamped(640, 360, 30, 'medium'), 'unknown quality → medium here too');
+        });
+
         it('estimates output bytes from the bitrate actually used', () => {
             // The modal's summary line and the streaming decision must be the
             // SAME number — if they drift, the UI promises one size and the

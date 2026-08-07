@@ -2253,6 +2253,12 @@ the classic-script unit runner and exercised without a browser dock.
   `customAspect` returns the aspect the modal must **shape the dock to** (null
   for a preset, where dock and output agree already) — shaping it is what stops
   `computeTileRects` from burning letterbox bars into a custom-size export.
+- `bitrateIsClamped(W, H, fps, quality)` — true when `bitrateFor`'s [1, 48] Mbps
+  band actually bit. The clamp makes adjacent Quality tiers **collide**: at
+  3840×2160@60 `medium` and `high` are BOTH 48 Mbps, and at 640×360@30 `low` and
+  `medium` are BOTH 1 Mbps. There, changing Quality changes neither the estimate
+  nor the encoded file — and with nothing saying so, a correctly-wired picker just
+  looks broken, which is why the modal's output note surfaces it.
 - `h264CodecFor(W, H)`, `bitrateFor(W, H, fps, quality)`, `QUALITY_BPP`. **Both
   video-export modals call these** — `showExport3DVideoModal`'s `_v3dBitrate` is
   now just `bitrateFor(W, H, fps, 'medium')`. Its own copy clamped to
@@ -2312,7 +2318,30 @@ composition and its user / predicted / reprojected overlay layers.
 `loadOverlayExportSettings()`, and a re-export of `TILE_3D`.
 
 **Layout.** `[views strip] [composition dock] [settings panel]`. The strip lists
-one thumbnail per video plus one for the 3D grid; drag or double-click to dock.
+the **3D grid FIRST**, then one thumbnail per video; drag or double-click to dock.
+An entry that IS docked is **highlighted** — accent border + `--accent-dim` wash +
+a dot, matching `.session-strip-item.active` (`styles.css:360`) — by
+`refreshStripHighlights()`. That used to be inverted: a docked entry was faded to
+`opacity: 0.55`, which reads as *disabled*, the opposite of selected. It runs from
+exactly three sites, which is exhaustive because they are the only three that
+mutate the `tiles` map behind `isDocked`: `buildStrip()`, `TilePane.init` (the sole
+choke point for every add — dockview always calls `init` from `addPanel`, even for
+an inactive stacked tab) and `onDidRemovePanel` (tab X, whole-group close,
+close-everything). A panel MOVE deliberately gets no hook: dockview wraps moves in
+`movingLock` so neither event fires, and a moved panel keeps its id, so the docked
+SET is unchanged by definition.
+**Strip order is independent of DOCK order**: the 3D tile is still SEEDED last, a
+column to the right of the whole video grid (`seedLayoutPlan`). Reordering the
+strip must not move the tile, or every existing user's exported frame layout would
+shift; `tests/e2e/overlay-export-modal.mjs` asserts the tile's geometry stays right
+of the cameras, and `tests/test-overlay-export-layout.js`'s "3D docked last" pins
+the plan.
+**`qualityPhrase(W, H, fps, approx)`** builds the Quality half of the output note —
+tier name, the Mbps it really encodes at, and a "capped" warning from
+`bitrateIsClamped`. Bitrate is the one output setting a still preview CANNOT show
+(it exists only after H.264 encoding), so this text is the whole of the live
+feedback for the Quality picker; naming the tier in only the stitched branch is
+what made a correctly-wired picker read as inert in individual mode.
 The middle is its **own `DockviewComponent` instance** (same pinned
 `dockview-core@6.6.1` as `ui/sessions-panes.js` — **three** pins now share that
 version: `index.html`'s CSS, `sessions-panes.js`, and this module), seeded via
@@ -2421,18 +2450,16 @@ the app, then persisted to `localStorage` — surviving session switches within 
 project and page reloads. The **layout** is deliberately NOT persisted; a
 reopened modal re-seeds from the main-window mirror.
 
-**KNOWN GAP — unlinked instances are not exported.** Neither the preview nor the
-encoded frames draw them: `toOverlayFrameGroup` copies only
-`frameGroup.instances` (not `frameGroup.unlinkedInstances`), and
-`overlayOptionsFrom` never sets `options.unlinkedInstances`, so
-`drawFrameOverlays` sees `[]` and skips **both** `drawUnlinkedInstances` passes.
-An unlinked detection is therefore silently absent from an exported video —
-skeleton as well as `?` badge — with no UI hint that anything was dropped.
-`ui/rendering.js:272` is the only place unlinked instances are ever passed in.
-`overlayOptionsFrom` already pins `showUnlinkedBadge: false` so that closing this
-gap cannot drag the editing prompt into the video along with the skeleton; the
-rest (threading the unlinked list through, and a layer checkbox to gate it) is
-not done.
+**Unlinked instances ARE drawn**, in the preview and in the encoded frames, by
+`collectUnlinked(frameGroup, viewName)` — which reads the RAW `FrameGroup` via
+`getUnlinkedInstances()` (NOT the `toOverlayFrameGroup` copy, which carries only
+`frameGroup.instances`) and filters by the User/Predicted layer checkboxes, so
+unticking a layer drops its unlinked instances too. It is assigned onto the
+options as `opts.unlinkedInstances = …` rather than passed in the
+`overlayOptionsFrom` literal — worth knowing, because a grep for
+`unlinkedInstances:` misses it and makes the export look like it drops them.
+`overlayOptionsFrom` pins **`showUnlinkedBadge: false`**, so the skeleton is
+exported but the amber `?` editing prompt is not.
 
 **Imports from project modules.**
 - `./app-state.js` — `state`, `videoController`, `getActiveSession`.

@@ -121,6 +121,9 @@ try {
     check(strip.includes('cam1') && strip.includes('cam2') && strip.includes('cam3'),
         'strip has an icon per video in the session');
     check(strip.includes('__3d__'), 'strip has an icon for the 3D grid itself');
+    check(strip[0] === '__3d__', `the 3D entry LEADS the strip (got "${strip[0]}")`);
+    check(strip.slice(1).join(',') === 'cam1,cam2,cam3',
+        `the cameras follow it in session order (got ${strip.slice(1).join(',')})`);
 
     // ---- dock seeding ------------------------------------------------------
     const seeded = await page.evaluate(() =>
@@ -133,6 +136,44 @@ try {
         Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'))
             .filter(el => el.querySelector('.ov-strip-dot').style.display !== 'none').length);
     check(stripMarked === 4, `every seeded view is marked docked in the strip (got ${stripMarked})`);
+
+    // Reordering the STRIP must not have moved the TILE. Asserted on geometry, not
+    // DOM order — dockview's DOM order is nested-branch order and proves nothing.
+    const dockGeom = await page.evaluate(() => {
+        const rect = (n) => document.querySelector(`#ovDock [data-view-name="${n}"]`).getBoundingClientRect();
+        return { threeD: rect('__3d__').left, cams: ['cam1', 'cam2', 'cam3'].map(n => rect(n).left) };
+    });
+    check(dockGeom.cams.every(l => l < dockGeom.threeD),
+        `the 3D TILE is still seeded right of the whole video grid (3D at ${dockGeom.threeD}, cams at ${dockGeom.cams.join(', ')})`);
+
+    // The strip's HIGHLIGHTED set must equal the dock's tile set, after every route
+    // that can add or remove a tile. Compare SETS, not counts — a count passes even
+    // when the wrong entry is lit.
+    const stripVsDock = () => page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'));
+        const lit = items.filter(el => el.classList.contains('ov-strip-docked'))
+            .map(el => el.getAttribute('data-view-name')).sort();
+        const dot = items.filter(el => el.querySelector('.ov-strip-dot').style.display !== 'none')
+            .map(el => el.getAttribute('data-view-name')).sort();
+        const docked = Array.from(new Set(Array.from(document.querySelectorAll('#ovDock [data-view-name]'))
+            .map(el => el.getAttribute('data-view-name')))).sort();
+        return { lit, dot, docked, agree: lit.join(',') === docked.join(',') && dot.join(',') === docked.join(',') };
+    });
+    let hl = await stripVsDock();
+    check(hl.agree, `every seeded view is highlighted in the strip (lit ${hl.lit}, docked ${hl.docked})`);
+
+    // A docked entry must be HIGHLIGHTED, not dimmed. It used to be faded to
+    // opacity 0.55, which reads as disabled — the opposite of selected.
+    const look = await page.evaluate(() => {
+        const d = Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'))
+            .find(e => e.classList.contains('ov-strip-docked'));
+        const u = Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'))
+            .find(e => !e.classList.contains('ov-strip-docked'));
+        const cs = getComputedStyle(d);
+        return { opacity: cs.opacity, border: cs.borderTopColor, bg: cs.backgroundColor, hasUndocked: !!u };
+    });
+    check(look.opacity === '1', `a docked entry is NOT faded (opacity ${look.opacity})`);
+    check(look.border !== 'rgb(68, 68, 68)', `a docked entry takes the accent border (got ${look.border})`);
 
     // ---- 1-BASED frame range ----------------------------------------------
     const range = await page.evaluate(() => ({
@@ -235,6 +276,90 @@ try {
     check(afterClose.tiles === 3, `closing a tab removes it from the composition (got ${afterClose.tiles})`);
     check(afterClose.marked === 3, `the strip un-marks the removed view (got ${afterClose.marked})`);
     check(/3 files/.test(afterClose.summary), `summary follows the composition (got "${afterClose.summary}")`);
+    // The CLEARING direction of the highlight — the one most likely to regress,
+    // since a stale highlight looks fine until you compare it to the dock.
+    hl = await stripVsDock();
+    check(hl.agree, `closing a tile clears exactly that entry's highlight (lit ${hl.lit}, docked ${hl.docked})`);
+    check(hl.lit.length === 3, `three entries remain highlighted (got ${hl.lit.length})`);
+
+    // ---- Quality gives live feedback in BOTH output modes -------------------
+    // Bitrate is the one output setting a still preview cannot show — it exists
+    // only after H.264 encoding — so this text IS the whole of the live feedback
+    // for the Quality picker. It used to be named only in the stitched branch, so
+    // in individual mode the picker looked completely inert.
+    // This phase drives ovMode/ovRes/ovFps/ovQuality, which later checks assert on,
+    // so snapshot them and put them back at the end — a test that leaves shared
+    // state mutated makes the NEXT test fail for reasons that have nothing to do
+    // with it.
+    const qEntry = await page.evaluate(() => ({
+        mode: document.getElementById('ovMode').value,
+        res: document.getElementById('ovRes').value,
+        fps: document.getElementById('ovFps').value,
+        quality: document.getElementById('ovQuality').value,
+    }));
+    for (const mode of ['stitched', 'individual']) {
+        const notes = await page.evaluate(async (m) => {
+            const set = (id, v) => {
+                const el = document.getElementById(id);
+                el.value = v;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            };
+            set('ovMode', m);
+            set('ovRes', '1080');   // a tier where all three sit inside the clamp
+            const out = {};
+            for (const q of ['low', 'medium', 'high']) {
+                set('ovQuality', q);
+                await new Promise(r => setTimeout(r, 120));
+                out[q] = {
+                    note: document.getElementById('ovOutNote').textContent,
+                    summary: document.getElementById('ovSummary').textContent,
+                };
+            }
+            return out;
+        }, mode);
+        const texts = ['low', 'medium', 'high'].map(q => notes[q].note);
+        check(new Set(texts).size === 3,
+            `${mode}: the output note changes for every Quality tier (${new Set(texts).size}/3 distinct)`);
+        ['low', 'medium', 'high'].forEach(q => {
+            check(notes[q].note.includes(q), `${mode}/${q}: the note names the tier`);
+            check(/\d+\.\d+ Mbps/.test(notes[q].note), `${mode}/${q}: the note states a Mbps figure`);
+        });
+        const sizes = ['low', 'medium', 'high'].map(q => notes[q].summary);
+        check(new Set(sizes).size === 3,
+            `${mode}: the estimated size also changes per tier (${new Set(sizes).size}/3 distinct)`);
+        check(!texts.some(t => /capped/.test(t)),
+            `${mode}: no spurious "capped" warning at 1080p, where no tier is clamped`);
+    }
+    // …and the clamp warning DOES appear where tiers really do collide.
+    const cappedNote = await page.evaluate(async () => {
+        const set = (id, v) => {
+            const el = document.getElementById(id);
+            el.value = v;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        set('ovMode', 'stitched');
+        set('ovRes', '2160');
+        set('ovFps', '60');
+        set('ovQuality', 'high');
+        await new Promise(r => setTimeout(r, 150));
+        return document.getElementById('ovOutNote').textContent;
+    });
+    check(/capped/.test(cappedNote),
+        `at 2160p60 the note warns that the tier is capped (got "${cappedNote}")`);
+
+    // Restore what this phase perturbed, in the order the controls depend on.
+    await page.evaluate(async (e) => {
+        const set = (id, v) => {
+            const el = document.getElementById(id);
+            el.value = v;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        set('ovFps', e.fps);
+        set('ovRes', e.res);
+        set('ovQuality', e.quality);
+        set('ovMode', e.mode);
+        await new Promise(r => setTimeout(r, 200));
+    }, qEntry);
 
     // ---- settings persist across a close/reopen ---------------------------
     await page.evaluate(() => {

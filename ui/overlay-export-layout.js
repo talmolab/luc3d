@@ -160,6 +160,21 @@ export function bitrateFor(W, H, fps, quality) {
 }
 
 /**
+ * True when `bitrateFor`'s [1, 48] Mbps clamp actually bit — i.e. the requested
+ * bits-per-pixel could not be honoured at this size and fps.
+ *
+ * The modal needs this because the clamp makes adjacent Quality tiers COLLIDE: at
+ * 3840x2160 @ 60 fps `medium` and `high` are BOTH 48 Mbps, and at or below about
+ * 640x360 @ 30 `low` and `medium` are BOTH 1 Mbps. In those configurations picking
+ * a different tier changes neither the size estimate nor the encoded file — and
+ * with nothing in the UI saying so, a correctly-wired picker just looks broken.
+ */
+export function bitrateIsClamped(W, H, fps, quality) {
+    var bpp = QUALITY_BPP[quality] != null ? QUALITY_BPP[quality] : QUALITY_BPP.medium;
+    return Math.round(W * H * fps * bpp) !== bitrateFor(W, H, fps, quality);
+}
+
+/**
  * Expected size of one output file, in bytes. This is the number the modal's
  * summary line shows, and the same number that decides whether the export needs
  * a streaming destination — the two must not drift apart.

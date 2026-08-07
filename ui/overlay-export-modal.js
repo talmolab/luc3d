@@ -43,7 +43,7 @@ import { setStatus } from '../import-export/save-load.js';
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
     fitRect, computeTileRects, outputSizeFor, outputSizeFrom, customAspect, clampOutDim,
-    h264CodecFor, bitrateFor, estimatedBytes, shouldStreamToDisk,
+    h264CodecFor, bitrateFor, bitrateIsClamped, estimatedBytes, shouldStreamToDisk,
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
 } from './overlay-export-layout.js';
@@ -338,7 +338,7 @@ export function showOverlayExportModal() {
         // preview. `onDidLayoutChange` alone is not enough: it fires before the
         // new sizes have settled.
         if (tileResizeObserver) { try { tileResizeObserver.observe(this.element); } catch (e) { /* ignore */ } }
-        markStripDocked();
+        refreshStripHighlights();
     };
     TilePane.prototype.dispose = function () { /* removal handled via onDidRemovePanel */ };
 
@@ -367,7 +367,7 @@ export function showOverlayExportModal() {
         var tile = tiles.get(event.id);
         if (tile && tile.is3d) dispose3D();
         tiles.delete(event.id);
-        markStripDocked();
+        refreshStripHighlights();
         refreshSummary();
     });
     dockApi.onDidLayoutChange(function () { schedulePreview(); });
@@ -520,8 +520,16 @@ export function showOverlayExportModal() {
 
     function stripEntries() {
         var out = [];
-        for (var i = 0; i < state.views.length; i++) out.push({ name: state.views[i].name, is3d: false });
+        // The 3D viewer leads the strip: it is the one entry that is not a camera,
+        // so putting it first keeps the camera list below it unbroken.
+        //
+        // STRIP ORDER ONLY. The dock's seed order is decided independently by
+        // `seedLayoutPlan(state.views.map(...), has3D)` in `seedLayout()`, which
+        // still docks the 3D tile LAST — a full-height column to the right of the
+        // whole video grid. Reordering the strip must not move the tile, or every
+        // existing user's exported frame layout would change under them.
         if (has3D) out.push({ name: TILE_3D, is3d: true, label: '3D View' });
+        for (var i = 0; i < state.views.length; i++) out.push({ name: state.views[i].name, is3d: false });
         return out;
     }
 
@@ -563,16 +571,52 @@ export function showOverlayExportModal() {
 
             if (entry.is3d) draw3DGlyph(thumb);
         });
-        markStripDocked();
+        refreshStripHighlights();
     }
 
-    function markStripDocked() {
+    /**
+     * Paint each strip entry's docked / not-docked state.
+     *
+     * A view that IS in the composition is HIGHLIGHTED — accent border plus an
+     * accent-dim wash, the same treatment `.session-strip-item.active` gives an
+     * active strip thumbnail in the main window (styles.css:360) — and a view that
+     * is not in the composition falls back to the plain resting border. This used
+     * to be the other way round: a docked entry was faded to `opacity: 0.55`,
+     * which reads as "disabled", i.e. the exact OPPOSITE of selected. The dot
+     * stays: it mirrors `.view-strip-item .strip-status.in-dock`, the main window's
+     * own docked marker.
+     *
+     * `border-COLOR`, never border-width, and no outline: the entries sit in a
+     * narrow column, and growing the box would reflow the strip as tiles come and go.
+     *
+     * BOTH branches write BOTH properties. Letting the not-docked branch fall back
+     * to whatever `cssText` baked in at build time is precisely how this kind of
+     * state goes stale after one close-and-re-add cycle.
+     *
+     * Call sites — all three, and they are exhaustive because `tiles` (the source
+     * of truth behind `isDocked`) is mutated in exactly three places:
+     *   1. `buildStrip()`             — initial paint
+     *   2. `TilePane.prototype.init`  — the sole choke point for every add (seed,
+     *      double-click, drag-to-dock: dockview always calls `init` from
+     *      `addPanel`, even for a panel added as an inactive stacked tab)
+     *   3. `dockApi.onDidRemovePanel` — every remove (tab X, whole-group close,
+     *      close-everything)
+     * A panel MOVE deliberately gets no hook: dockview wraps every move in
+     * `movingLock`, so neither add nor remove fires — and it must not, since a
+     * moved panel keeps its id and the docked SET is unchanged by definition.
+     */
+    function refreshStripHighlights() {
         var items = stripEl.querySelectorAll('.ov-strip-item');
         for (var i = 0; i < items.length; i++) {
-            var name = items[i].getAttribute('data-view-name');
+            var docked = isDocked(items[i].getAttribute('data-view-name'));
             var dot = items[i].querySelector('.ov-strip-dot');
-            if (dot) dot.style.display = isDocked(name) ? '' : 'none';
-            items[i].style.opacity = isDocked(name) ? '0.55' : '1';
+            if (dot) dot.style.display = docked ? '' : 'none';
+            // A class as well as inline style: it names WHAT the state is rather
+            // than what it happens to look like, which is what the e2e asserts on.
+            if (docked) items[i].classList.add('ov-strip-docked');
+            else items[i].classList.remove('ov-strip-docked');
+            items[i].style.borderColor = docked ? 'var(--accent,#4a9eff)' : 'var(--border-color,#444)';
+            items[i].style.background = docked ? 'var(--accent-dim,rgba(102,126,234,0.25))' : '#1b1b1b';
         }
     }
 
@@ -1136,8 +1180,8 @@ export function showOverlayExportModal() {
                 ' · ' + nFrames + ' frames · ~' + fmtBytes(bytes);
             if (outNote) {
                 outNote.textContent = 'One .mp4 laid out exactly as the composition (' +
-                    size.width + '×' + size.height + ' at ' + settings.quality + ' quality, ' +
-                    (bitrateFor(size.width, size.height, fps, settings.quality) / 1e6).toFixed(1) + ' Mbps).';
+                    size.width + '×' + size.height + ' at ' +
+                    qualityPhrase(size.width, size.height, fps, false) + ').';
             }
         } else {
             var total = 0;
@@ -1152,15 +1196,43 @@ export function showOverlayExportModal() {
             summaryEl.textContent = n + ' file' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(null) +
                 ' · ' + nFrames + ' frames · ~' + fmtBytes(total);
             if (outNote) {
+                // Quality is named here TOO. It used to appear only in the stitched
+                // branch, so in this mode the ONLY visible effect of changing
+                // Quality was the summary's ~size estimate — easy to miss, and a
+                // large part of why the picker was reported as doing nothing.
                 outNote.textContent = settings.res === RES_CUSTOM
-                    ? 'One .mp4 per tile (' + n + '), each ' + firstSize.width + '×' + firstSize.height + ', same appearance settings.'
+                    ? 'One .mp4 per tile (' + n + '), each ' + firstSize.width + '×' + firstSize.height +
+                      ' at ' + qualityPhrase(firstSize.width, firstSize.height, fps, false) +
+                      ', same appearance settings.'
                     // Each file gets its own WIDTH (its tile's aspect) but the same
                     // tier HEIGHT, so naming the height is accurate for all of them
-                    // where naming a single W×H would not be.
+                    // where naming a single W×H would not be — and the bitrate
+                    // scales with that width, hence the `~`.
                     : 'One .mp4 per tile (' + n + ' file' + (n === 1 ? '' : 's') + '), each ' +
-                      firstSize.height + 'px tall at its own aspect, same appearance settings.';
+                      firstSize.height + 'px tall at its own aspect, ' +
+                      qualityPhrase(firstSize.width, firstSize.height, fps, true) +
+                      ', same appearance settings.';
             }
         }
+    }
+
+    /**
+     * The Quality tier phrased for the output note: the tier name, the bitrate it
+     * actually encodes at, and — when `bitrateFor`'s [1, 48] Mbps clamp bit — the
+     * fact that the tier could not be honoured. `approx` prefixes a `~` for the
+     * individual-files-with-a-preset case, where every file shares the tier HEIGHT
+     * but carries its own width, so the bitrate varies file to file.
+     *
+     * Bitrate is the one output setting a still preview CANNOT show — it exists
+     * only after H.264 encoding — so this readout is the whole of the live feedback
+     * for the Quality picker. Naming the tier in only one of the two output modes
+     * is what made a correctly-wired picker read as inert.
+     */
+    function qualityPhrase(W, H, fps, approx) {
+        return settings.quality + ' quality, ' + (approx ? '~' : '') +
+            (bitrateFor(W, H, fps, settings.quality) / 1e6).toFixed(1) + ' Mbps' +
+            (bitrateIsClamped(W, H, fps, settings.quality)
+                ? ' (capped — a neighbouring tier can encode identically)' : '');
     }
 
     /**
