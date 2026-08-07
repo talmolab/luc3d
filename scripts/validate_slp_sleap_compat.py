@@ -29,13 +29,21 @@ Or from the SLEAP repo, which provisions its pinned sleap-io:
     uv run python <luc3d>/scripts/validate_slp_sleap_compat.py \
         --compare /path/cam_C_lucid_export.slp /path/cam_C_SLEAPGUI_export.slp
 
+    # Prove LUCID's own metadata.lucid survives a SLEAP-side round trip:
+    uv run python <luc3d>/scripts/validate_slp_sleap_compat.py \
+        --metadata-roundtrip /path/project.slp
+
 Exit code is 0 only when every check passes; non-zero on any load failure,
-empty track list, or comparison mismatch — so it is safe to gate CI / e2e on.
+empty track list, comparison mismatch, or metadata loss — so it is safe to gate
+CI / e2e on.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import tempfile
+from pathlib import Path
 
 
 def _load():
@@ -126,6 +134,93 @@ def compare(lucid_path, gui_path):
     return ok
 
 
+def _read_lucid_metadata(path):
+    """Pull `sessions_json[*].metadata.lucid` straight out of the HDF5.
+
+    Deliberately NOT via `sio.load_slp` — Python sleap_io carries the session
+    `metadata` dict through faithfully but does not expose it as an attribute on
+    its RecordingSession object, so reading it back requires going to the file.
+    That is true of LUCID's long-standing keys (`sessionName`, `tracks`,
+    `identities`, ...) as much as the newer Visibility ones.
+
+    Returns a list of per-session lucid dicts (empty list when absent).
+    """
+    import h5py
+    import numpy as np
+
+    with h5py.File(path, "r") as handle:
+        if "sessions_json" not in handle:
+            return []
+        raw = handle["sessions_json"][()]
+    if isinstance(raw, np.ndarray):
+        raw = raw[0]
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    parsed = json.loads(raw)
+    sessions = parsed if isinstance(parsed, list) else [parsed]
+    return [(s.get("metadata") or {}).get("lucid", {}) for s in sessions]
+
+
+# Session-scoped Visibility-panel settings (see
+# import-export/visibility-metadata.js). Optional by design — a project nobody
+# adjusted carries none of them, which is what keeps its bytes unchanged.
+VISIBILITY_KEYS = (
+    "videoBrightness", "videoContrast", "videoRotation",
+    "hiddenCameras", "hiddenTracks", "hiddenIdentities",
+)
+
+
+def metadata_roundtrip(path):
+    """Assert LUCID's `metadata.lucid` survives a SLEAP-side load + re-save.
+
+    This is what makes the Visibility settings (and every other lucid key) safe
+    to store there: sleap_io treats the dict as opaque JSON, so a user who opens
+    a LUCID project in the SLEAP GUI and saves it must not silently strip them.
+    """
+    sio = _load()
+    try:
+        before = _read_lucid_metadata(path)
+        labels = sio.load_slp(path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"FAIL  {path}\n      load error: {type(exc).__name__}: {exc}")
+        return False
+
+    if not before:
+        print(f"OK    {path}\n      no sessions_json/metadata.lucid — nothing to round-trip")
+        return True
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = str(Path(tmp) / "resaved.slp")
+        try:
+            sio.save_slp(labels, out)
+            after = _read_lucid_metadata(out)
+        except Exception as exc:  # noqa: BLE001
+            print(f"FAIL  {path}\n      re-save error: {type(exc).__name__}: {exc}")
+            return False
+
+    print(f"OK    {path}")
+    if len(before) != len(after):
+        print(f"FAIL  session count changed on re-save: {len(before)} -> {len(after)}")
+        return False
+
+    ok = True
+    for idx, (b, a) in enumerate(zip(before, after)):
+        vis = sorted(k for k in b if k in VISIBILITY_KEYS)
+        print(f"      session {idx}: metadata.lucid keys={sorted(b)}")
+        print(f"      session {idx}: visibility keys={vis or '(none — all default)'}")
+        missing = sorted(set(b) - set(a))
+        changed = sorted(k for k in b if k in a and a[k] != b[k])
+        if missing:
+            print(f"FAIL  session {idx}: keys DROPPED by the re-save: {missing}")
+            ok = False
+        if changed:
+            print(f"FAIL  session {idx}: keys ALTERED by the re-save: {changed}")
+            ok = False
+    if ok:
+        print("      every metadata.lucid key survived the SLEAP round trip unchanged")
+    return ok
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("slp", nargs="*", help="One or more .slp files to validate")
@@ -140,10 +235,20 @@ def main(argv=None):
         action="store_true",
         help="Do not fail on an empty track list (off by default)",
     )
+    parser.add_argument(
+        "--metadata-roundtrip",
+        nargs="+",
+        metavar="SLP",
+        help="Assert each file's metadata.lucid (incl. the session-scoped "
+             "Visibility settings) survives a sleap_io load + re-save unchanged",
+    )
     args = parser.parse_args(argv)
 
-    if not args.slp and not args.compare:
-        parser.error("provide at least one .slp to validate, or --compare A B")
+    if not args.slp and not args.compare and not args.metadata_roundtrip:
+        parser.error(
+            "provide at least one .slp to validate, --compare A B, "
+            "or --metadata-roundtrip SLP..."
+        )
 
     ok = True
     for path in args.slp:
@@ -151,6 +256,9 @@ def main(argv=None):
         print()
     if args.compare:
         ok = compare(args.compare[0], args.compare[1]) and ok
+    for path in args.metadata_roundtrip or []:
+        ok = metadata_roundtrip(path) and ok
+        print()
 
     print("\n=== RESULT:", "PASS ===" if ok else "FAIL ===")
     return 0 if ok else 1

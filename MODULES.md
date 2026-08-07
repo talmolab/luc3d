@@ -543,12 +543,21 @@ session graph that holds them.
   `_promoteIfMixed`), skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
   (`renameCameraInAllData`).
-  **`videoContrast`** (issue #149) — `{ cameraName: int }`, each an integer in
-  [−100, 100]. Display-only (a CSS filter on the view canvas) but **per-session**
-  and persisted in the `.slp` (`metadata.lucid.videoContrast`): `state.views` is
-  rebuilt from scratch on every session switch, so a per-view field would
-  silently reset. Default (0) entries are never stored — see
-  `ui/video-filters.js`, which owns every read/write.
+  **`videoContrast`** / **`videoBrightness`** / **`videoRotation`** (issue #149
+  and follow-ups) — three `{ cameraName: int }` maps: contrast in [−100, 100],
+  brightness percentage in [0, 200], rotation degrees in [−179, 180]. All
+  **per-session** and persisted in the `.slp` (`metadata.lucid.videoContrast` /
+  `videoBrightness` / `videoRotation`): `state.views` is rebuilt from scratch on
+  every session switch, so a per-view field would silently reset — which is
+  exactly what brightness used to do when it lived on `view._brightness`.
+  Contrast and brightness are display-only (CSS filters on the view canvas);
+  rotation is not — the renderer and hit-testing read `view.rotation`, which
+  `restoreViewRotation` re-seeds from here at pane build. Default entries (0 /
+  100 / 0) are never stored — see `ui/video-filters.js`, which owns every
+  read/write, and `import-export/visibility-metadata.js` for the `.slp` mapping.
+  The timeline's `_hiddenCameras` / `_hiddenTracks` / `_hiddenIdentities` Sets
+  are session-scoped and persisted the same way (see
+  `ui/timeline-visibility.js`).
 - `clonePoints(points)` — deep-clone helper for `[u,v]|null` arrays.
 - `mat3x3Multiply`, `mat3x3Multiply3x4` — matrix utilities used by
   `Camera` and `triangulation.js`.
@@ -2423,9 +2432,12 @@ multi-video docking layout.
 - `panelRenderers` — Map of panelId → VideoPaneRenderer.
 - `multiSelectViews`, `clearMultiSelect`.
 - `refreshPaneInteractions`.
-- `clampRotation`, `syncRotationUI`.
+- `clampRotation` (a **re-export** of `ui/video-filters.js`'s, which is where the
+  function now lives — existing importers are unaffected), `syncRotationUI`.
 - `applyVideoFilters(view)` — write the COMBINED brightness+contrast CSS filter
   onto a view's canvas (see below).
+- `restoreViewRotation(view)` — re-seed `view.rotation` from the session, the
+  non-CSS counterpart of `applyVideoFilters` (see below).
 - `populateViewStrip`, `populateSessionsPanel`, `populateSessionStrip`.
 - `showMoveVideoModal`.
 - `removeSession`, `switchSession` (async).
@@ -2448,8 +2460,12 @@ multi-video docking layout.
 - `../loading/video.js` — `OnDemandVideoDecoder`.
 - `../import-export/save-load.js` — `setStatus`, `showLoading`,
   `hideLoading`, `quickSave`, `markDirty`.
-- `./video-filters.js` — `CONTRAST_MIN`, `CONTRAST_MAX`, `buildVideoFilter`,
-  `getSessionContrast`, `setSessionContrast`.
+- `./video-filters.js` — the `CONTRAST_*` / `BRIGHTNESS_*` / `ROTATION_*`
+  bounds, `clampContrast` / `clampBrightness` / `clampRotation` /
+  `clampRotationSetting`, `buildVideoFilter`, and the three per-session
+  get/set pairs. `clampRotation` is **re-exported** from here so
+  `ui/ui-wiring.js` (which has always imported it from this module) is
+  unaffected by the move.
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `./identity-assignment.js` — `autoAssignState`.
@@ -2505,25 +2521,36 @@ from within one already-open project `.slp` yet.
 strip (top), session strip (bottom), per-pane brightness/contrast/rotation
 controls, switch-session UX, move-video-between-sessions modal.
 
-**Video display filters — brightness + contrast (issue #149).**
-`populateVideoBrightnessTable` and `populateVideoContrastTable` render the
-Visibility tab's per-view tables (`#visVideoBrightnessTable`,
-`#visVideoContrastTable`, each with a `Select All Videos` link toggle), and both
-funnel into the single **`applyVideoFilters(view)`**, which composes
-`buildVideoFilter(view._brightness, getSessionContrast(state.session,
-view.name))` (`ui/video-filters.js`) into ONE `style.filter` string. They must
-share one writer: both settings target the same CSS property, so applying them
-independently would have the second write erase the first.
-The two settings differ in where they live:
-- **Brightness** stays on the transient view object (`view._brightness`), so it
-  resets on a session switch — pre-existing behavior, unchanged.
-- **Contrast** lives on the SESSION (`session.videoContrast`, an integer in
-  [−100, 100] per camera) and is persisted in the `.slp`
-  (`metadata.lucid.videoContrast`). `switchSession` throws `state.views` away and
-  rebuilds every pane, so `VideoPaneRenderer.init`/`update` call
-  `applyVideoFilters` right after assigning `view.canvas` — that is what restores
-  each session's own contrast on a switch (and on a reopen). A slider edit calls
-  `markDirty()`: contrast is project state, not a browser-local preference.
+**Video display settings — brightness, contrast (issue #149) and rotation.**
+`populateVideoBrightnessTable`, `populateVideoContrastTable` and
+`populateVideoRotationTable` render the Visibility tab's per-view tables
+(`#visVideoBrightnessTable`, `#visVideoContrastTable` — each with a `Select All
+Videos` link toggle — and `#visVideoRotationTable`, which is per-camera only).
+
+All three are stored **per SESSION** (`session.videoBrightness` /
+`videoContrast` / `videoRotation`) and persisted in the `.slp` via
+`import-export/visibility-metadata.js`. `switchSession` throws `state.views`
+away and rebuilds every pane, so a per-view field silently resets — which is
+precisely what brightness did before it moved onto the session. Any slider edit
+calls `markDirty()`: these are project state, not browser-local preferences.
+
+They restore in two different ways, because only two of them are CSS filters:
+- **Brightness + contrast** funnel into the single
+  **`applyVideoFilters(view)`**, which composes
+  `buildVideoFilter(getSessionBrightness(...), getSessionContrast(...))` into ONE
+  `style.filter` string. They must share one writer: both target the same CSS
+  property, so applying them independently would have the second write erase the
+  first.
+- **Rotation** is not display-only — the renderer and hit-testing read
+  `view.rotation`. **`restoreViewRotation(view)`** re-seeds that field from the
+  session; without it a saved rotation would load into the session and show
+  correctly in the table while the video rendered un-rotated.
+
+`VideoPaneRenderer.init`/`update` call `restoreViewRotation` then
+`applyVideoFilters` right after assigning `view.canvas` — that is what restores
+each session's own settings on a switch (and on a reopen). The hold-to-rotate
+gesture in `ui/ui-wiring.js` keeps a FRACTIONAL `view.rotation` while animating
+and commits the rounded degree to the session once, on keyup.
 `applyVideoFilters` also writes the filter onto any **duplicate panes** of the
 same view. Mirror panes receive their pixels via `drawImage`
 (`renderDuplicatePanels`), which copies raw pixel data and does not inherit the
@@ -3008,13 +3035,25 @@ so it loads cleanly in the headless node test runner without dragging in
   `renameHiddenIdentity(session, oldName, newName)` — migrate hidden-set
   membership when the user renames a track / identity, so the toggle stays
   applied to the renamed entity.
+- `serializeHiddenSets(session)` → a partial `metadata.lucid` fragment carrying
+  only the NON-EMPTY sets (`hiddenCameras` / `hiddenTracks` /
+  `hiddenIdentities`), or **`null`** when nothing is hidden. Names are sorted,
+  so the written bytes depend on which entities are hidden and not on the order
+  the user clicked them.
+- `ingestHiddenSets(session, lucid)` — merge saved arrays back onto the Sets.
+  Reads all three keys off ONE object, so a caller cannot wire up two of the
+  three and silently drop the last. Additive, idempotent, and tolerant of a
+  missing/garbage payload. Returns the count applied.
 
 **Per-session state.** Lives directly on the `session` object as `Set<string>`
 fields (keyed by entity NAME, including identities). Empty by default — fresh
 sessions / new entities default to visible. Naming convention `_foo`
-mirrors Block 1's `_timelineHeight` / `_timelineCollapsed`. **In-memory only**;
-no round-trip through `save-load.js` (intentional per Block 2 spec — toggles
-don't persist across project reload).
+mirrors Block 1's `_timelineHeight` / `_timelineCollapsed`. Never cached in
+localStorage (a browser-local cache would be wrong for what is project state),
+but **persisted per session into the `.slp`** via the serialize/ingest pair
+above — which is also why `ingestHiddenSets` does not validate names against
+the session's current entities: a stale entry is harmless (it simply never
+matches), exactly as it is after a delete.
 
 **Global mirror.** Bottom of the file exposes the same surface on
 `window.TimelineVisibility.*` and individually on `window.toggleCameraVisibility`
@@ -3025,10 +3064,11 @@ under either lookup style.
 **Imports from project modules.** None.
 
 **Imported by.** `ui/info-panel.js` (toggle helpers + list helpers),
-`ui/ui-wiring.js` (rename-migration helpers). `ui/timeline.js` intentionally
-does **not** import this module — it inlines its own `ensureHiddenSets`
-equivalent so the timeline core stays decoupled from the visibility-panel
-wiring.
+`ui/ui-wiring.js` (rename-migration helpers),
+`import-export/visibility-metadata.js` (the serialize/ingest pair).
+`ui/timeline.js` intentionally does **not** import this module — it inlines its
+own `ensureHiddenSets` equivalent so the timeline core stays decoupled from the
+visibility-panel wiring.
 
 **User-facing features.** Backs the **Info Panel → Visibility → Timeline**
 subsection (Views / Tracks / Identities lists). Toggling off any entity
@@ -3091,11 +3131,24 @@ covered by `tests/test-track-identity-modals.js`; the lazy/durable half of
 
 ### ui/video-filters.js
 
-**Purpose.** Per-view video display filters — brightness and contrast (issue
-#149). Pure and DOM-free: it imports NO project modules, so it can be bridged
-into `tests/test-runner.html` and the `vm` sandbox runner without dragging
-`app.js` in. `ui/sessions-panes.js` owns the DOM half (the Visibility-tab
-tables) and calls in here for the math and the per-session store.
+**Purpose.** Per-CAMERA video display settings — brightness, contrast (issue
+#149) and rotation. Pure and DOM-free: it imports NO project modules, so it can
+be bridged into `tests/test-runner.html` and the `vm` sandbox runner without
+dragging `app.js` in. `ui/sessions-panes.js` owns the DOM half (the
+Visibility-tab tables) and calls in here for the math and the per-session stores.
+
+**One store shape, three settings.** All three are per-camera and live on the
+SESSION as a plain `{ cameraName: value }` map (`Session.videoBrightness` /
+`videoContrast` / `videoRotation`), because `state.views` is rebuilt from
+scratch on every session switch — anything parked on a view silently resets.
+Each has a default that is NEVER written to the map or to the `.slp`, so a
+project the user never adjusted serializes exactly as before these settings
+existed. The four store primitives (`readSetting` / `writeSetting` /
+`serializeSetting` / `ingestSetting`) are shared by all three, so a change to
+the default-omission rule cannot apply to two of them and silently skip the
+third. Brightness and contrast are pure CSS `filter` components; rotation is a
+geometric transform the renderer and hit-testing consume via `view.rotation`
+(this module owns only its clamp, its store and its serialization).
 
 **The contrast mapping.** CSS `filter: contrast(k)` is a per-channel linear
 transfer function pivoted on mid-grey — `out = k * in + (0.5 - 0.5 * k)` on
@@ -3107,10 +3160,22 @@ brightness slider's 0..200 % → `brightness(0..2)`.
 
 **Key exports.**
 - `CONTRAST_MIN` / `CONTRAST_MAX` / `CONTRAST_DEFAULT` (−100 / 100 / 0),
-  `BRIGHTNESS_MIN` / `BRIGHTNESS_MAX` / `BRIGHTNESS_DEFAULT` (0 / 200 / 100).
+  `BRIGHTNESS_MIN` / `BRIGHTNESS_MAX` / `BRIGHTNESS_DEFAULT` (0 / 200 / 100),
+  `ROTATION_MIN` / `ROTATION_MAX` / `ROTATION_DEFAULT` (−179 / 180 / 0).
 - `clampContrast(v)` / `clampBrightness(v)` — coerce anything (number, slider
   string, `null`, `NaN`, out-of-range) to a valid integer setting; junk falls
   back to the default rather than producing `NaN`.
+- `clampRotation(deg)` — wrap degrees into (−180, 180]. **Moved here verbatim
+  from `ui/sessions-panes.js`** (which re-exports it, so `ui/ui-wiring.js` and
+  any other importer are unaffected) to put it in the dependency-free module the
+  test runners can bridge. Deliberately does NOT round: the hold-to-rotate loop
+  in `ui/ui-wiring.js` advances by a fractional `60 * dt` per frame and needs the
+  sub-degree precision to look smooth.
+- `clampRotationSetting(v)` — what the store and the `.slp` hold: an INTEGER
+  degree in [−179, 180]. Rounds **before** wrapping, because `clampRotation`
+  maps into (−180, 180] — an open lower bound — so an input just under −179
+  comes back as ~180.9999, and rounding that afterwards would yield 181, one
+  past the max. Round-then-wrap is closed under the integer range.
 - `contrastFactor(v)` / `brightnessFactor(v)` — slider value → CSS amount.
 - `buildVideoFilter(brightness, contrast)` → the COMBINED filter string
   (`''` / `'brightness(1.15)'` / `'brightness(1.15) contrast(0.6)'`). Both
@@ -3118,29 +3183,35 @@ brightness slider's 0..200 % → `brightness(0..2)`.
   writing them separately makes the second assignment erase the first. Identity
   components are omitted, and an all-identity pair yields `''`, so an untouched
   project leaves `style.filter` exactly as it was before contrast existed.
-- `getSessionContrast(session, camName)` / `setSessionContrast(session, camName,
-  value)` — the per-session store (`Session.videoContrast`). The SESSION, not the
-  view, is the source of truth: `state.views` is rebuilt from scratch on every
-  session switch, so a per-view field would silently reset. `set` returns the
-  clamped value actually stored and **deletes** default (0) entries.
-- `serializeVideoContrast(session)` → the `metadata.lucid.videoContrast` payload
-  or **`null`** when nothing is worth writing (writers must omit the key on
-  `null`, which is what keeps untouched projects byte-identical —
-  `tests/e2e/save-golden-digest.mjs`).
-- `ingestVideoContrast(session, raw)` — merge a saved payload in, clamping and
-  dropping anything unusable; tolerates a missing/garbage payload (older `.slp`
-  files have no such key). Returns the count applied.
+- `getSession{Contrast,Brightness,Rotation}(session, camName)` /
+  `setSession{Contrast,Brightness,Rotation}(session, camName, value)` — the
+  per-session stores. The SESSION, not the view, is the source of truth:
+  `state.views` is rebuilt from scratch on every session switch, so a per-view
+  field would silently reset. `set` returns the clamped value actually stored
+  and **deletes** default entries.
+- `serializeVideo{Contrast,Brightness,Rotation}(session)` → the matching
+  `metadata.lucid` payload or **`null`** when nothing is worth writing (writers
+  must omit the key on `null`, which is what keeps untouched projects
+  byte-identical — `tests/e2e/save-golden-digest.mjs`).
+- `ingestVideo{Contrast,Brightness,Rotation}(session, raw)` — merge a saved
+  payload in, clamping and dropping anything unusable; tolerates a
+  missing/garbage payload (older `.slp` files have no such key). Returns the
+  count applied.
+
+Callers normally reach the serialize/ingest half through
+`import-export/visibility-metadata.js` rather than one setting at a time.
 
 **Imports from project modules.** None, by design.
 
-**Imported by.** `ui/sessions-panes.js` (the tables + `applyVideoFilters`),
-`import-export/file-io.js` and `import-export/slp-streaming-write.js` (write
-`metadata.lucid.videoContrast`), `import-export/slp-import.js` and
-`loading/session-loader.js` (read it back), `import-export/save-load.js` (the
-legacy v2/v3 project-JSON path). Bridged into `tests/test-runner.html` and
-covered by `tests/test-video-contrast.js`; the real-app half (slider → canvas
-filter, session switch, save/reopen through both writers) is covered by
-`tests/e2e/contrast-slider-roundtrip.mjs`.
+**Imported by.** `ui/sessions-panes.js` (the three tables + `applyVideoFilters`
++ `restoreViewRotation`, and the `clampRotation` re-export), `ui/ui-wiring.js`
+(`setSessionRotation`, to commit the hold-to-rotate gesture),
+`import-export/visibility-metadata.js` (the `metadata.lucid` mapping every
+reader and writer goes through). Bridged into `tests/test-runner.html` and
+covered by `tests/test-video-contrast.js` (contrast) and
+`tests/test-visibility-metadata.js` (brightness, rotation); the real-app halves
+are `tests/e2e/contrast-slider-roundtrip.mjs` and
+`tests/e2e/visibility-settings-roundtrip.mjs`.
 
 ---
 
@@ -3214,13 +3285,35 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `updateVideoGridDisplay`, `showViewIndicator`.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
 
+**Visibility panel — the global/session split.** `saveVisSettings` /
+`restoreVisSettings` cache the panel's **global appearance preferences** (the
+`visSliderIds` / `visCheckIds` / `visStyleIds` lists — User, Predicted,
+Reprojections, Display Legend and 3D Viewer) in
+`localStorage.visibilitySettings`. Those are browser-local display taste, shared
+across every session, and are deliberately **not** written into the `.slp`:
+baking them into the project file would make opening a colleague's project
+silently reassign your node sizes and 3D widgets. The panel's *session-scoped*
+settings — per-camera video brightness / contrast / rotation and the timeline
+hidden sets — take the opposite route and persist per session via
+`import-export/visibility-metadata.js`; they never touch localStorage.
+
+**Hold-to-rotate (`Shift+R` + `←`/`→`).** `rotationLoop` advances
+`view.rotation` by a fractional `60 * dt` every frame so the animation stays
+smooth, and keeps the session store out of it. The gesture is committed **once,
+on keyup**: `setSessionRotation` stores the rounded degree, `view.rotation`
+snaps onto exactly that value (so what renders after the gesture is what a
+reopen will render), and `markDirty()` fires. Persisting per animation frame
+would be 60 Hz of churn on project state.
+
 **Imports from project modules.** Nearly every other module — see file
 header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`,
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js`, `export-modals.js`,
-`sessions-panes.js`, `settings.js`, `settings-modal.js`.
+`sessions-panes.js`, `settings.js`, `settings-modal.js`,
+`video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
+`sessions-panes.js`, which re-exports it).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
 `ui/layout-controls.js`, `loading/session-loader.js`,
@@ -3566,8 +3659,8 @@ blank until the user manually re-ran Triangulate All. Covered by
   `../import-export/slp-import.js`, `../ui/loading-progress-modal.js`,
   `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
-  `../ui/video-filters.js` (`ingestVideoContrast`, for the lazy-reopen read of
-  `metadata.lucid.videoContrast`).
+  `../import-export/visibility-metadata.js` (`readVisibilityMetadata`, for the
+  lazy-reopen read of the session-scoped Visibility settings).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `ui/info-panel.js`,
@@ -4093,6 +4186,68 @@ keyboard transport.
 
 ## import-export/
 
+### import-export/visibility-metadata.js
+
+**Purpose.** The `metadata.lucid` ↔ `Session` mapping for the Visibility panel's
+SESSION-SCOPED settings. One module owns the key list so a writer and a reader
+cannot drift: adding a setting means touching this file and nothing else.
+
+**What it covers, and what it deliberately does not.** The Visibility panel
+holds two kinds of state:
+- **Session-scoped** — per-camera video brightness / contrast / rotation and the
+  timeline's hidden camera / track / identity sets. These describe *this
+  project's* videos and entities, so they belong in the project file. That is
+  everything this module handles.
+- **Global appearance preferences** — the User / Predicted / Reprojections /
+  Display Legend / 3D Viewer sliders, styles and toggles. Those are browser-local
+  display taste, shared across every session, and stay in
+  `localStorage.visibilitySettings` (see `ui/ui-wiring.js`). They are **not**
+  written here on purpose: baking them into the `.slp` would make opening a
+  colleague's project silently reassign your node sizes and 3D widgets.
+
+**Key exports.**
+- `VISIBILITY_METADATA_KEYS` — every key this module may write
+  (`videoBrightness`, `videoContrast`, `videoRotation`, `hiddenCameras`,
+  `hiddenTracks`, `hiddenIdentities`). Exported so tests can assert a default
+  project carries none of them without duplicating the list.
+- `writeVisibilityMetadata(lucid, session)` — mutate a `metadata.lucid` dict in
+  place, adding only non-default settings; returns the same dict.
+- `readVisibilityMetadata(session, lucid)` — read them all back onto a session.
+
+**Three invariants the callers depend on.**
+1. **Defaults are never written.** Every helper returns `null` / omits the key at
+   its default, so a project nobody adjusted produces byte-identical output to
+   one saved before these settings existed — pinned by
+   `tests/e2e/save-golden-digest.mjs`.
+2. **Only `lucid` is touched.** The writer reads nothing else off the session's
+   metadata, so it cannot disturb `sessionName` / `tracks` / `frameIdentityMap` /
+   `identities` / `skeleton` / `identityId` or any future sibling.
+3. **Reads tolerate absence and garbage.** Every key is optional; a `.slp`
+   written before this existed, or by SLEAP or another tool, simply has none of
+   them and loads unchanged. Nothing here throws on a malformed payload.
+
+Purely additive to the file format: these are optional keys inside LUCID's own
+`metadata.lucid` dict, which sleap-io and sleap-io.js round-trip as opaque JSON,
+so files stay readable by the SLEAP GUI.
+
+**Imports from project modules.** `../ui/video-filters.js`,
+`../ui/timeline-visibility.js` — both dependency-free leaves, so this module
+bridges into the test runners without pulling `app.js` in.
+
+**Imported by.** The four writers — `import-export/file-io.js`
+(`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
+(`buildSessionRefGraph`), and `import-export/save-load.js` (`saveProject`, both
+the v2 and v3 project-JSON shapes) — and the three readers —
+`import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
+(`handleLoadProjectSlpLazy`), and `import-export/save-load.js`
+(`_restoreProjectV2`).
+
+**Tests.** `tests/test-visibility-metadata.js` (unit; bridged as
+`window.__VisibilityMetadata`) and
+`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers).
+
+---
+
 ### import-export/skeleton-json.js
 
 **Purpose.** Pure, DOM-free (de)serialization for standalone `.skeleton.json`
@@ -4275,9 +4430,10 @@ exports via the eager path; partially-resident refuses and says so).
 - `./slp-merge.js` — `validateSkeletonCompatibility`.
 - `../pose/triangulation.js` — `getOrComputeReprojectedInstance`,
   `sweepLazyFrameWindows`.
-- `../ui/video-filters.js` — `serializeVideoContrast` (writes
-  `metadata.lucid.videoContrast`; dependency-free, so it adds nothing to
-  this module's import graph).
+- `./visibility-metadata.js` — `writeVisibilityMetadata` (writes the
+  session-scoped Visibility settings into `metadata.lucid`; its only deps are
+  two dependency-free `ui/` leaves, so it adds nothing to this module's import
+  graph).
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
@@ -4466,8 +4622,10 @@ corrections.
 
 **Imports.** `window.SleapIO` (streaming writer API); `_buildSioPoints`
 (`import-export/file-io.js`); `points3dNodeCount` (`pose/pose-data.js`);
-`serializeVideoContrast` (`ui/video-filters.js`, for
-`metadata.lucid.videoContrast`). **Imported by.** `import-export/save-load.js`
+`writeVisibilityMetadata` (`import-export/visibility-metadata.js`, for the
+session-scoped Visibility settings in `metadata.lucid` — must stay in lockstep
+with the eager writer in `file-io.js`, which is why both call the one helper).
+**Imported by.** `import-export/save-load.js`
 (`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
 `finalizeMultiSessionSave`).
 
@@ -4604,9 +4762,11 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`,
-  `./slp-import.js`, `../ui/video-filters.js`
-  (`serializeVideoContrast`/`ingestVideoContrast` for the legacy v2/v3
-  project-JSON `videoContrast` key).
+  `./slp-import.js`, `./visibility-metadata.js`
+  (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
+  Visibility settings in the legacy v2/v3 project JSON — the same keys and the
+  same omit-the-defaults rule as the `.slp` writers, just at the session-dict
+  level rather than under a `metadata.lucid`).
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/slp-import.js`,
@@ -4756,8 +4916,8 @@ cancels every cold eviction timer, and re-initialises both arrays.
   `../loading/session-loader.js`, `./save-load.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
-  `../ui/sessions-panes.js`, `../ui/video-filters.js`
-  (`ingestVideoContrast`). Also spawns
+  `../ui/sessions-panes.js`, `./visibility-metadata.js`
+  (`readVisibilityMetadata`). Also spawns
   `../loading/frame-worker.js` (twice) via `new Worker(new URL(...))`.
 
 **Imported by.** `import-export/save-load.js`, `ui/ui-wiring.js`.

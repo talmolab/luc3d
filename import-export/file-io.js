@@ -15,8 +15,9 @@ import { Camera, Skeleton, Instance, Identity,
          toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js';
 import { validateSkeletonCompatibility } from './slp-merge.js';
 import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js';
-// Dependency-free (imports no project modules) — safe for this module's graph.
-import { serializeVideoContrast } from '../ui/video-filters.js';
+// Only pulls in the two dependency-free `ui/` leaf modules — safe for this
+// module's graph.
+import { writeVisibilityMetadata } from './visibility-metadata.js';
 
 // ============================================
 // Generic file picker
@@ -2131,11 +2132,10 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         },
         tracks: session.tracks,
     };
-    // Per-camera video contrast (Visibility ▸ Video Contrast, issue #149).
-    // Written only when a non-default value exists so an untouched project's
-    // bytes are unchanged (tests/e2e/save-golden-digest.mjs).
-    var sessContrast = serializeVideoContrast(session);
-    if (sessContrast) sioSession.metadata.lucid.videoContrast = sessContrast;
+    // Session-scoped Visibility-panel state. Every one of these is written ONLY
+    // when it holds a non-default value, so an untouched project's bytes are
+    // unchanged (tests/e2e/save-golden-digest.mjs).
+    writeVisibilityMetadata(sioSession.metadata.lucid, session);
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });

@@ -318,6 +318,11 @@ export function populateTimelineVisibility(session) {
             catch (e) { /* non-fatal */ }
         }
         populateTimelineVisibility(session);
+        // The hidden sets are saved into the .slp
+        // (`metadata.lucid.hiddenCameras` / `hiddenTracks` / `hiddenIdentities`),
+        // so toggling one leaves the project unsaved — same rule as the
+        // brightness / contrast / rotation tables.
+        markDirty();
     }
 
     var i;

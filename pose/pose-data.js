@@ -1123,6 +1123,23 @@ export class Session {
          * Default (0) entries are never stored; see `ui/video-filters.js`.
          */
         this.videoContrast = {};
+        /**
+         * @type {Object<string, number>} cameraName -> brightness percentage,
+         * an integer in [0, 200]. Same lifecycle as `videoContrast` above
+         * (`metadata.lucid.videoBrightness`); default (100) entries are never
+         * stored. Before this was session-backed it lived on the transient view
+         * object, so it silently reset on every session switch.
+         */
+        this.videoBrightness = {};
+        /**
+         * @type {Object<string, number>} cameraName -> rotation in degrees, an
+         * integer in [-179, 180]. Unlike brightness/contrast this is NOT
+         * display-only: the renderer and hit-testing consume it via
+         * `view.rotation`, which is restored from here whenever a pane is built.
+         * Persisted as `metadata.lucid.videoRotation`; default (0) entries are
+         * never stored.
+         */
+        this.videoRotation = {};
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */

@@ -3,11 +3,11 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 39 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 40 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (6 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video display filters, settings (20 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video display settings, settings (20 files)
 - `loading/` — video decoding, session loading, SLP/package readers, web workers (6 files)
-- `import-export/` — file I/O, save/load, SLP import/merge (7 files)
+- `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata (8 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
 
@@ -282,6 +282,37 @@ python3 -m http.server 8080
     `/session_data` needs sleap-io >= the #546 release). *Interop gate:
     `scripts/validate_slp_sleap_compat.py` (needs a SLEAP Python env).*
 
+## Session-scoped Visibility settings in `metadata.lucid`
+
+The Visibility panel's **session-scoped** state persists per session in the
+`.slp`, under LUCID's own `metadata.lucid` dict: `videoBrightness`,
+`videoContrast` and `videoRotation` (each `{ cameraName: int }`) plus
+`hiddenCameras` / `hiddenTracks` / `hiddenIdentities` (sorted name arrays).
+Everything goes through **one** module, `import-export/visibility-metadata.js`
+(`writeVisibilityMetadata` / `readVisibilityMetadata`, `VISIBILITY_METADATA_KEYS`),
+which the four writers and three readers all call — adding a setting means
+touching that file and nothing else.
+
+Three rules hold, and there are tests pinning each:
+- **Defaults are never written.** Every key is omitted at its default, so a
+  project nobody adjusted is byte-identical to one saved before these settings
+  existed — `tests/e2e/save-golden-digest.mjs` must not move.
+- **Nothing else in `metadata.lucid` is touched** (`sessionName`, `tracks`,
+  `identities`, `skeleton`, `frameIdentityMap`, `trustTracks`, `identityId`, …).
+- **Purely additive to the format.** These are optional keys in a dict sleap-io
+  and sleap-io.js round-trip as opaque JSON, so files stay SLEAP-GUI readable and
+  no other `.slp` import/export path changes.
+
+The panel's **global appearance preferences** (User / Predicted / Reprojections /
+Display Legend / 3D Viewer) deliberately stay in
+`localStorage.visibilitySettings` — they are browser-local display taste, not
+project state. Do not move them into the `.slp`.
+
+Coverage: `tests/test-visibility-metadata.js` (unit) and
+`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers);
+`tests/test-video-contrast.js` + `tests/e2e/contrast-slider-roundtrip.mjs` cover
+the contrast half.
+
   All h5wasm is now LUCID's local vendored 0.10.3 (PR 5.2b): the importmap `h5wasm`
   → local ESM, the `index.html` `<script>` global + `readSlpStreaming`'s `h5wasmUrl`
   → local IIFE, and the module workers import the local ESM — no CDN h5wasm fetch on
@@ -307,7 +338,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1201 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1333 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```
@@ -344,8 +375,11 @@ node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file p
 - Require: h5py, numpy
 - `scripts/validate_slp_sleap_compat.py` — Assert LUCID-exported `.slp` files are
   SLEAP-GUI compatible (load via `sleap_io`, non-empty tracks, optional
-  `--compare` against a native SLEAP-GUI export). Headless half of `lucid-e2e`
-  Stage 4; run via `uv run python` from the SLEAP repo.
+  `--compare` against a native SLEAP-GUI export, and `--metadata-roundtrip` to
+  assert `metadata.lucid` — including the session-scoped Visibility settings —
+  survives a `sleap_io` load + re-save unchanged). Headless half of `lucid-e2e`
+  Stage 4; run via `uv run python` from the SLEAP repo, or standalone with
+  `uv run --with sleap-io --with numpy --with h5py python …`.
 
 ## Maintenance
 **When modifying any module, always update the corresponding entry in `MODULES.md` to reflect the change — including exports, dependencies, and purpose.**

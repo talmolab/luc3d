@@ -45,8 +45,16 @@ import { OnDemandVideoDecoder } from '../loading/video.js';
 import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
+    BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
+    ROTATION_MIN, ROTATION_MAX, clampRotation, clampRotationSetting,
     buildVideoFilter, getSessionContrast, setSessionContrast,
+    getSessionBrightness, setSessionBrightness,
+    getSessionRotation, setSessionRotation,
 } from './video-filters.js';
+// `clampRotation` moved to the dependency-free `video-filters.js` so the test
+// runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
+// module map) have always imported it from this module.
+export { clampRotation };
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
@@ -131,10 +139,11 @@ class VideoPaneRenderer {
             view.overlayCanvas = overlayCanvas;
             view.overlayCtx = overlayCanvas.getContext('2d');
             view.wrapper = wrapper;
-            // Brand-new canvas — re-apply the view's display filters. Contrast
-            // lives on the SESSION, so a session switch (which rebuilds every
-            // view and pane) must repaint the filter from the session's stored
-            // value rather than start clean.
+            // Brand-new canvas — re-apply the view's display settings. All of
+            // brightness, contrast and rotation live on the SESSION, so a
+            // session switch (which rebuilds every view and pane) must restore
+            // them from the session's stored values rather than start clean.
+            restoreViewRotation(view);
             applyVideoFilters(view);
         }
 
@@ -173,6 +182,7 @@ class VideoPaneRenderer {
                 view.overlayCanvas = overlayCanvas;
                 view.overlayCtx = overlayCanvas.getContext('2d');
                 view.wrapper = wrapper;
+                restoreViewRotation(view);
                 applyVideoFilters(view);
             }
             requestAnimationFrame(function () { refreshPaneInteractions(); });
@@ -530,6 +540,13 @@ export function clearMultiSelect() {
     });
 }
 
+/**
+ * Visibility tab → Video Brightness. Like the Video Contrast table below, the
+ * value is stored PER SESSION (`session.videoBrightness`, persisted in the
+ * `.slp`) rather than on the transient view object — before that it lived on
+ * `view._brightness` and silently reset on every session switch, because
+ * `state.views` is rebuilt from scratch.
+ */
 function populateVideoBrightnessTable() {
     var container = document.getElementById('visVideoBrightnessTable');
     if (!container) return;
@@ -539,11 +556,13 @@ function populateVideoBrightnessTable() {
         var row = document.createElement('div');
         row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px;';
 
+        var currentB = getSessionBrightness(state.session, view.name);
+
         var slider = document.createElement('input');
         slider.type = 'range';
-        slider.min = '0';
-        slider.max = '200';
-        slider.value = view._brightness != null ? view._brightness : 100;
+        slider.min = String(BRIGHTNESS_MIN);
+        slider.max = String(BRIGHTNESS_MAX);
+        slider.value = String(currentB);
         slider.step = '1';
         slider.style.cssText = 'width:120px;flex-shrink:0;';
         slider.dataset.viewIdx = vi;
@@ -551,7 +570,7 @@ function populateVideoBrightnessTable() {
         var valLabel = document.createElement('span');
         valLabel.className = 'vis-val';
         valLabel.style.cssText = 'min-width:32px;text-align:right;flex-shrink:0;';
-        valLabel.textContent = slider.value + '%';
+        valLabel.textContent = currentB + '%';
 
         var camLabel = document.createElement('span');
         camLabel.style.cssText = 'color:var(--text-primary,#e0e0e0);white-space:nowrap;flex-shrink:0;';
@@ -571,12 +590,14 @@ function populateVideoBrightnessTable() {
 
         slider.addEventListener('input', (function(idx, vl) {
             return function(e) {
-                var val = parseInt(e.target.value);
-                vl.textContent = val + '%';
+                // Clamp once, up front, and drive the store, the labels and the
+                // sibling sliders from the SAME value — so the UI can never show
+                // a number the session didn't actually accept.
+                var val = clampBrightness(e.target.value);
                 var linked = document.getElementById('visVideoBrightnessLink');
                 if (linked && linked.checked) {
                     for (var i = 0; i < state.views.length; i++) {
-                        state.views[i]._brightness = val;
+                        setSessionBrightness(state.session, state.views[i].name, val);
                         applyVideoFilters(state.views[i]);
                     }
                     var sliders = container.querySelectorAll('input[type=range]');
@@ -584,9 +605,14 @@ function populateVideoBrightnessTable() {
                     sliders.forEach(function(s) { s.value = val; });
                     vals.forEach(function(v) { v.textContent = val + '%'; });
                 } else {
-                    state.views[idx]._brightness = val;
+                    setSessionBrightness(state.session, state.views[idx].name, val);
+                    vl.textContent = val + '%';
                     applyVideoFilters(state.views[idx]);
                 }
+                // Brightness is project state (saved into the .slp), not a
+                // browser-local display preference — an edit leaves the project
+                // unsaved.
+                markDirty();
             };
         })(vi, valLabel));
 
@@ -697,7 +723,7 @@ function populateVideoContrastTable() {
 export function applyVideoFilters(view) {
     if (!view) return;
     var filter = buildVideoFilter(
-        view._brightness != null ? view._brightness : 100,
+        getSessionBrightness(state.session, view.name),
         getSessionContrast(state.session, view.name)
     );
     if (view.canvas) view.canvas.style.filter = filter;
@@ -709,13 +735,32 @@ export function applyVideoFilters(view) {
     }
 }
 
-export function clampRotation(deg) {
-    deg = deg % 360;
-    if (deg > 180) deg -= 360;
-    if (deg < -179) deg += 360;
-    return deg;
+/**
+ * Re-seed a view's `rotation` from the session it belongs to.
+ *
+ * The counterpart of `applyVideoFilters` for the one Visibility setting that is
+ * not a CSS filter. Views are transient — `state.views` is rebuilt from scratch
+ * on every session switch and each pane gets a brand-new canvas — so without
+ * this a saved rotation would load into the session and show correctly in the
+ * Visibility table, yet render un-rotated.
+ *
+ * Called at pane construction, before the first `applyZoom`.
+ */
+export function restoreViewRotation(view) {
+    if (!view) return;
+    view.rotation = getSessionRotation(state.session, view.name);
 }
 
+/**
+ * Visibility tab → Video Rotation. Session-backed like the brightness and
+ * contrast tables (`session.videoRotation`, persisted in the `.slp`).
+ *
+ * Rotation differs from those two in that it is not display-only: the renderer
+ * and hit-testing read `view.rotation`, so every write updates BOTH the session
+ * (the durable source of truth) and the view (what the frame loop consumes).
+ * `restoreViewRotation` re-seeds the view from the session whenever a pane is
+ * built.
+ */
 function populateVideoRotationTable() {
     var container = document.getElementById('visVideoRotationTable');
     if (!container) return;
@@ -725,21 +770,23 @@ function populateVideoRotationTable() {
         var row = document.createElement('div');
         row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px;';
 
+        var currentR = getSessionRotation(state.session, view.name);
+
         var slider = document.createElement('input');
         slider.type = 'range';
-        slider.min = '-179';
-        slider.max = '180';
-        slider.value = Math.round(view.rotation || 0);
+        slider.min = String(ROTATION_MIN);
+        slider.max = String(ROTATION_MAX);
+        slider.value = String(currentR);
         slider.step = '1';
         slider.style.cssText = 'width:120px;flex-shrink:0;';
         slider.dataset.viewIdx = vi;
 
         var numInput = document.createElement('input');
         numInput.type = 'number';
-        numInput.min = '-179';
-        numInput.max = '180';
+        numInput.min = String(ROTATION_MIN);
+        numInput.max = String(ROTATION_MAX);
         numInput.step = '1';
-        numInput.value = Math.round(view.rotation || 0);
+        numInput.value = String(currentR);
         numInput.style.cssText = 'width:48px;flex-shrink:0;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:right;padding:2px 4px;-moz-appearance:textfield;';
         numInput.classList.add('no-spinner');
         numInput.dataset.viewIdx = vi;
@@ -761,12 +808,16 @@ function populateVideoRotationTable() {
 
         (function(idx, sl, ni) {
             function applyRotation(val) {
-                val = clampRotation(parseInt(val) || 0);
+                val = clampRotationSetting(val);
+                setSessionRotation(state.session, state.views[idx].name, val);
                 state.views[idx].rotation = val;
                 sl.value = val;
                 ni.value = val;
                 if (videoController) videoController.applyZoom(state.views[idx]);
                 drawAllOverlays(state.currentFrame);
+                // Rotation is project state (saved into the .slp), not a
+                // browser-local display preference.
+                markDirty();
             }
             sl.addEventListener('input', function() { applyRotation(sl.value); });
             ni.addEventListener('change', function() { applyRotation(ni.value); });
