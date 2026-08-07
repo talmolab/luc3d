@@ -70,6 +70,7 @@ import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/se
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+import { ingestVideoContrast } from '../ui/video-filters.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2247,6 +2248,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         if (lucid.frameIdentityMap) session.ingestFrameIdentityEntries(lucid.frameIdentityMap);
         if (lucid.trustTracks != null) session.trustTracks = lucid.trustTracks;
+        // Per-camera video contrast (issue #149) — the lazy-reopen mirror of the
+        // eager read in import-export/slp-import.js.
+        ingestVideoContrast(session, lucid.videoContrast);
 
         session.lazyLoader = loader;
         session._lazyReopened = true;

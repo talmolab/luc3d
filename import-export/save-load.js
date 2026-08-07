@@ -43,6 +43,7 @@ import {
 } from './slp-streaming-write.js';
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+import { serializeVideoContrast, ingestVideoContrast } from '../ui/video-filters.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -1042,6 +1043,7 @@ export function saveProject() {
                         return { id: id.id, name: id.name, color: id.color };
                     }),
                     trustTracks: sess.trustTracks || false,
+                    videoContrast: serializeVideoContrast(sess) || {},
                     frameIdentityMap: sess.frameIdentityMap
                         ? sess.exportFrameIdentityEntries()
                         : [],
@@ -1088,6 +1090,7 @@ export function saveProject() {
             return { id: id.id, name: id.name, color: id.color };
         }),
         trustTracks: state.session.trustTracks || false,
+        videoContrast: serializeVideoContrast(state.session) || {},
         frameIdentityMap: state.session.frameIdentityMap
             ? state.session.exportFrameIdentityEntries()
             : [],
@@ -1653,6 +1656,9 @@ function _restoreProjectV2(data) {
         }
     }
     if (data.trustTracks != null) session.trustTracks = data.trustTracks;
+    // Per-camera video contrast (issue #149). Shared by the v2 (whole document)
+    // and v3 (per-session dict) shapes — both put the key at this level.
+    ingestVideoContrast(session, data.videoContrast);
     // Legacy global identity map (removed). Captured here and migrated to
     // per-frame entries after frame groups load (see end of this function).
     var legacyGlobalIdentities = data.trackIdentityMap || null;

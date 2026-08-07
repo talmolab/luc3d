@@ -53,6 +53,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+import { ingestVideoContrast } from '../ui/video-filters.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -984,6 +985,11 @@ export async function handleLoadSlpFile(slpFile) {
         // session's track index by NAME (see remapGlobalTrackToSession). For
         // non-lucid SLPs sessTracks IS the global list, so no remap is needed.
         var hasPerSessionTracks = false;
+        // Per-camera video contrast (issue #149). Declared per iteration (`var`
+        // is function-scoped and this is a session loop — without the explicit
+        // reset a session lacking the key would inherit the previous session's
+        // map). Ingested right after the Session is constructed below.
+        var earlyContrast = null;
 
         if (slpData.sessions && slpData.sessions[slpSessIdx]) {
             var earlyMeta = slpData.sessions[slpSessIdx].metadata;
@@ -997,6 +1003,7 @@ export async function handleLoadSlpFile(slpFile) {
                     sessTracks = earlyMeta.lucid.tracks.slice();
                     hasPerSessionTracks = true;
                 }
+                earlyContrast = earlyMeta.lucid.videoContrast || null;
             }
         }
 
@@ -1026,6 +1033,7 @@ export async function handleLoadSlpFile(slpFile) {
 
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
+        ingestVideoContrast(session, earlyContrast);
 
         // Populate FrameGroups from worker's frames array (yield every 20K for UI)
         var BATCH = 20000;
