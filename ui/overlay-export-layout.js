@@ -292,6 +292,8 @@ export function saveOverlayExportSettings(s) {
  *
  * All interaction state (selection / hover / drag / assignment) is explicitly
  * nulled: an export has no cursor, and a stray highlight would be burned in.
+ * `showUnlinkedBadge: false` belongs to that same family — the "?" on an unlinked
+ * instance is an editing prompt, and nobody watching an .mp4 can act on it.
  */
 export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
     var u = settings.user, p = settings.pred, r = settings.reproj;
@@ -343,6 +345,9 @@ export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
         assignmentMode: false,
         selectedUnlinkedId: null,
         editGroupTarget: null,
+        // No "?" badges on unlinked instances. Their dashed edges and reduced
+        // opacity still mark them as unlinked; only the editing prompt is dropped.
+        showUnlinkedBadge: false,
     };
 }
 

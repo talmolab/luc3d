@@ -2421,6 +2421,19 @@ the app, then persisted to `localStorage` — surviving session switches within 
 project and page reloads. The **layout** is deliberately NOT persisted; a
 reopened modal re-seeds from the main-window mirror.
 
+**KNOWN GAP — unlinked instances are not exported.** Neither the preview nor the
+encoded frames draw them: `toOverlayFrameGroup` copies only
+`frameGroup.instances` (not `frameGroup.unlinkedInstances`), and
+`overlayOptionsFrom` never sets `options.unlinkedInstances`, so
+`drawFrameOverlays` sees `[]` and skips **both** `drawUnlinkedInstances` passes.
+An unlinked detection is therefore silently absent from an exported video —
+skeleton as well as `?` badge — with no UI hint that anything was dropped.
+`ui/rendering.js:272` is the only place unlinked instances are ever passed in.
+`overlayOptionsFrom` already pins `showUnlinkedBadge: false` so that closing this
+gap cannot drag the editing prompt into the video along with the skeleton; the
+rest (threading the unlinked list through, and a layer checkbox to gate it) is
+not done.
+
 **Imports from project modules.**
 - `./app-state.js` — `state`, `videoController`, `getActiveSession`.
 - `./viewport3d.js` — `Viewport3D`.
@@ -2627,6 +2640,23 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
   `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
+  **`drawUnlinkedInstances` "?" badge is suppressible:** the amber `?` on an
+  unlinked instance is an **editing affordance** ("assign me"), so
+  `options.showUnlinkedBadge` (**default `true`** — a missing option must never
+  silently strip it) turns it off while KEEPING the other two unlinked cues, the
+  dashed edges and the reduced opacity. Hiding the badge must never hide the
+  detection. `drawFrameOverlays` spreads the flag into `unlinkedOpts`, which both
+  of its `drawUnlinkedInstances` passes (`typeFilter: 'predicted'` then `'user'`)
+  receive, so **one flag covers both types** — the badge block sits outside the
+  `isPredicted` branch, and a per-type regression would only show on one pass.
+  Two callers set it: the Visibility panel's `visUnlinkedBadge` toggle (via
+  `getVisibilitySettings`) and `overlayOptionsFrom` for video export, which pins
+  it `false` for the same reason it nulls selection/hover/drag — nobody watching
+  an `.mp4` can act on an editing prompt. Covered by
+  `tests/test-unlinked-badge.js` (pixel-level, both types, plus a whole-canvas
+  diff asserting **nothing outside the badge disc changes**) and
+  `tests/e2e/unlinked-badge-toggle.mjs` (the checkbox → settings → repaint →
+  localStorage → reload chain).
   **`drawUnlinkedInstances` same-trackIdx collision fix:** an unlinked
   instance (no group, no identity — e.g. an animal visible in only 1 camera
   this frame, so `commitTrackedFrame`'s `members.length < 2` check never
@@ -2695,6 +2725,18 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `setReprojErrorVisible(visible)` — show/hide the reproj-error info
   column.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
+  Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
+  Show "?" badge* toggle, `#visUnlinkedBadge`), passed straight through to
+  `drawFrameOverlays` in `drawAllOverlays`. Read via a `checkVal(id, fallback)`
+  helper that mirrors the existing `styleVal` tolerance and **defaults `true`
+  when the element is absent**: the headless runners build a partial DOM, and a
+  bare `.checked` on a missing node throws and takes the whole render down.
+  It is registered in `ui-wiring.js`'s `visCheckIds` (so it persists to
+  `localStorage`, and an older stored blob without the key keeps the HTML
+  `checked` default — no migration) and in the checkbox change-listener list (so
+  toggling repaints immediately rather than waiting for the next frame step).
+  Unlike the other entries in that list it needs no deselect sweep: it changes
+  only what is painted, never which instances exist.
   Each of `userOpts` / `predictedOpts` / `reprojOpts` now carries a `nodeStyle`
   (`'circle'`/`'x'`/`'triangle'`/`'square'`) read from the per-section Node
   Style button group (`visUserNodeStyle` / `visPredNodeStyle` /

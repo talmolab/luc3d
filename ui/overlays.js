@@ -1445,6 +1445,9 @@ export function drawInstanceTypeIndicator(ctx, points, type, options) {
  * @param {number[]} [options.assignmentSelectedIds] - IDs of unlinked instances selected for assignment
  * @param {string}   [options.assignmentColor] - Color for assignment selection highlight
  * @param {string}   [options.typeFilter] - If set, only draw instances matching this type ('user' or 'predicted')
+ * @param {boolean}  [options.showUnlinkedBadge=true] - Draw the "?" badge. Set false
+ *   to keep the unlinked STYLING (dashed edges, reduced opacity) without the
+ *   editing affordance — used by the overlay video export.
  */
 export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     options = options || {};
@@ -1461,6 +1464,9 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
     const ulFrameIdx = options.frameIdx != null ? options.frameIdx : null;
     const selectedUnlinkedId = options.selectedUnlinkedId || null;
     const predictedRender = options.predictedRender || null;
+    // Defaults TRUE: the live app relies on this badge, so only a caller that
+    // explicitly opts out (the overlay video export) loses it.
+    const showUnlinkedBadge = options.showUnlinkedBadge !== false;
 
     const vw = options.videoWidth;
     const vh = options.videoHeight;
@@ -1620,12 +1626,15 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
             ctx.globalAlpha = alpha;
         }
 
-        // "?" badge near the first visible point
+        // "?" badge near the first visible point. Suppressible because it is an
+        // EDITING affordance — it flags "this needs assigning", which is noise in
+        // a rendered video where nobody can act on it. The dashed edges and the
+        // lower opacity still distinguish unlinked instances without it.
         let anchorCp = null;
         for (let i = 0; i < canvasPoints.length; i++) {
             if (canvasPoints[i]) { anchorCp = canvasPoints[i]; break; }
         }
-        if (anchorCp) {
+        if (anchorCp && showUnlinkedBadge) {
             const badgeSize = 10;
             ctx.globalAlpha = 0.9;
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
@@ -1935,6 +1944,9 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         assignmentSelectedIds: options.assignmentSelectedIds || [],
         assignmentColor: '#fbbf24',
         selectedUnlinkedId: options.selectedUnlinkedId || null,
+        // Spread into BOTH drawUnlinkedInstances passes below (user + predicted),
+        // so one flag covers every badge rather than only one type's.
+        showUnlinkedBadge: options.showUnlinkedBadge !== false,
     };
 
     // 2. Draw reprojected instances + error vectors (back layer)
