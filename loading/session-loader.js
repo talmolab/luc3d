@@ -70,6 +70,7 @@ import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/se
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2247,6 +2248,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         if (lucid.frameIdentityMap) session.ingestFrameIdentityEntries(lucid.frameIdentityMap);
         if (lucid.trustTracks != null) session.trustTracks = lucid.trustTracks;
+        // Session-scoped Visibility-panel state — the lazy-reopen mirror of the
+        // eager read in import-export/slp-import.js.
+        readVisibilityMetadata(session, lucid);
 
         session.lazyLoader = loader;
         session._lazyReopened = true;
