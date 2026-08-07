@@ -28,7 +28,7 @@ import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockv
 
 import { state, videoController, getActiveSession } from './app-state.js';
 import { Viewport3D } from './viewport3d.js';
-import { drawFrameOverlays, getTrackColor, getGroupColor } from './overlays.js';
+import { drawFrameOverlays, drawLegend, getTrackColor, getGroupColor } from './overlays.js';
 import { getVisibilitySettings } from './rendering.js';
 import {
     getInstanceGroupsForFrame,
@@ -42,12 +42,20 @@ import { setStatus } from '../import-export/save-load.js';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
-    fitRect, computeTileRects, outputSizeFor, outputSizeFrom, customAspect, clampOutDim,
+    fitRect, rotatedFit, rotatedBoxSize,
+    computeTileRects, outputSizeFor, outputSizeFrom, customAspect, clampOutDim,
     h264CodecFor, bitrateFor, bitrateIsClamped, estimatedBytes, shouldStreamToDisk,
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
 } from './overlay-export-layout.js';
 import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
+// The main window's per-camera display settings. `ui/video-filters.js` imports NO
+// project modules, so this adds no cycle — and going through the SAME
+// `buildVideoFilter` the live canvases use is what stops the export drifting from
+// what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
+import {
+    buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
+} from './video-filters.js';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -727,30 +735,157 @@ export function showOverlayExportModal() {
     }
 
     /**
-     * Draw one 2D tile: background (video frame or solid fill) into `videoCanvas`,
-     * overlays into `overlayCanvas`. Both are `w`×`h`; the video is letterboxed
-     * with the same fit `drawFrameOverlays` uses, so the two align exactly.
+     * The main window's per-camera display settings for one view.
+     *
+     * Brightness and contrast come from the SESSION, not the view: `state.views` is
+     * rebuilt on every session switch, and ui/video-filters.js names the session as
+     * the source of truth (these are the same reads `applyVideoFilters` makes).
+     *
+     * Rotation prefers `view.rotation` when it is set, because the hold-to-rotate
+     * chord in ui/ui-wiring.js advances `view.rotation` every frame and only
+     * commits to the session on KEYUP — so mid-gesture the view is the fresher
+     * value, and it is what the user is looking at. A view that was never docked in
+     * the main window has no `view.rotation` at all (`restoreViewRotation` never ran
+     * on it), hence the session fallback.
      */
-    function paintTile(tile, view, bitmap, frameGroup, ofg, groups, frameIdx, w, h) {
-        var vctx = tile.videoCanvas.getContext('2d');
-        vctx.clearRect(0, 0, w, h);
-        if (settings.background === 'video') {
-            vctx.fillStyle = '#000';
-            vctx.fillRect(0, 0, w, h);
-            if (bitmap) {
-                var fit = fitRect(view.videoWidth, view.videoHeight, w, h);
-                try { vctx.drawImage(bitmap, fit.x, fit.y, fit.width, fit.height); } catch (e) { /* ignore */ }
+    function displaySettingsFor(view) {
+        var rot = (view && isFinite(view.rotation))
+            ? view.rotation
+            : getSessionRotation(session, view.name);
+        return {
+            // Byte-for-byte the string the main window puts on
+            // `view.canvas.style.filter`.
+            filter: buildVideoFilter(getSessionBrightness(session, view.name),
+                                     getSessionContrast(session, view.name)),
+            rotation: rot || 0,
+            zoom: (view && view.zoom) ? view.zoom : null,
+        };
+    }
+
+    /**
+     * Draw one 2D tile — background + video into `vctx`, overlays into `octx` — WITH
+     * the main window's per-camera display settings burned in. Shared by the live
+     * preview and the export so the two cannot drift.
+     *
+     * The main window applies all of these as CSS on live elements: brightness and
+     * contrast as `view.canvas.style.filter` (`applyVideoFilters`), rotation and
+     * zoom/pan as the `.canvas-wrapper` transform (`applyZoom`, loading/video.js).
+     * NONE of that survives a `drawImage` of the decoded frame into another canvas —
+     * the same reason `applyVideoFilters` has to re-set the filter on duplicate
+     * panes' mirror canvases — so the tile has to re-apply them itself:
+     *   - brightness/contrast -> `ctx.filter`, which takes exactly the CSS
+     *     filter-function list `buildVideoFilter` already emits.
+     *   - rotation + zoom -> a context transform applied to the video AND the
+     *     overlays together, because the main window transforms ONE wrapper holding
+     *     both canvases. Transforming only the pixels would slide every skeleton off
+     *     the animal.
+     * The fit is therefore rotation-aware (`rotatedFit`): a 90-degree view is
+     * portrait and has to fit the tile as a portrait.
+     *
+     * ZOOM FIDELITY — magnification and pan centre match the main window; the
+     * visible CROP cannot. The main window's crop is produced by `.video-cell`'s
+     * `overflow:hidden` at the cell's aspect; an export tile has its own aspect, so a
+     * wider tile simply shows more video. At high zoom near a frame edge that means
+     * black past the edge, exactly as the main window would show if its cell were
+     * that shape. This is inherent to honouring zoom in a differently-shaped box.
+     *
+     * The transform mirrors `applyZoom`'s CSS list
+     * `translate(off) translate(c) rotate(r) translate(-c) scale(z)` under
+     * `transform-origin: 0 0`. Read right-to-left, a point p in the wrapper's base
+     * box maps to `off + c + Rot(z*p - c)`. Rewriting about the box centre gives the
+     * call order below; the `(z-1)*box/2` term is what reproduces CSS scaling about
+     * the TOP-LEFT rather than the centre, and the pan is converted from
+     * main-window CSS px to tile px by `box/base`.
+     *
+     * Two details are load-bearing:
+     *   - the overlay canvas is cleared under the IDENTITY transform FIRST.
+     *     `drawFrameOverlays`'s own `clearRect(0, 0, canvas.width, canvas.height)`
+     *     clears a ROTATED rect once a transform is set, which would leave the
+     *     previous frame's skeleton in the corners of the reused export canvas.
+     *   - the legend is drawn OUTSIDE the transform. `drawLegend` anchors itself to
+     *     `ctx.canvas.width` rather than the canvas size it is passed
+     *     (ui/overlays.js), so inside the transform it drifts by the letterbox
+     *     offset — a regression even at rotation 0 — and lands upside down at 180.
+     *
+     * `ctx.filter` is part of the 2D state, so `save()`/`restore()` puts it back. It
+     * is reset with `'none'`, never `''`: an empty string is an INVALID value that
+     * the setter silently ignores, which would leak the video's brightness onto the
+     * overlay composite. `buildVideoFilter` returns `''` when both are default,
+     * hence the `|| 'none'`.
+     */
+    function drawTileContent(vctx, octx, view, bitmap, frameGroup, ofg, groups, w, h) {
+        var disp = displaySettingsFor(view);
+        var fit = rotatedFit(view.videoWidth, view.videoHeight, w, h, disp.rotation);
+        var rad = disp.rotation * Math.PI / 180;
+        var z = disp.zoom;
+        var zs = (z && z.scale > 0) ? z.scale : 1;
+        // Pan is recorded in main-window CSS px against `baseW`/`baseH`, the wrapper
+        // size those offsets were computed for. Without a base there was never a
+        // layout to pan against, so there is no offset to honour.
+        var panX = (z && z.baseW > 0) ? z.offsetX * (fit.boxWidth / z.baseW) : 0;
+        var panY = (z && z.baseH > 0) ? z.offsetY * (fit.boxHeight / z.baseH) : 0;
+
+        // The shared video/overlay transform, mirroring `applyZoom`.
+        var applyViewTransform = function (ctx) {
+            ctx.translate(w / 2 + panX, h / 2 + panY);
+            if (rad) ctx.rotate(rad);
+            if (zs !== 1) {
+                ctx.translate((zs - 1) * fit.boxWidth / 2, (zs - 1) * fit.boxHeight / 2);
+                ctx.scale(zs, zs);
             }
-        } else {
-            vctx.fillStyle = BG_FILL[settings.background] || '#000';
-            vctx.fillRect(0, 0, w, h);
+        };
+
+        // ---- background + video ----
+        vctx.setTransform(1, 0, 0, 1, 0, 0);
+        vctx.filter = 'none';
+        vctx.clearRect(0, 0, w, h);
+        vctx.fillStyle = settings.background === 'video'
+            ? '#000'
+            : (BG_FILL[settings.background] || '#000');
+        vctx.fillRect(0, 0, w, h);
+        if (settings.background === 'video' && bitmap) {
+            vctx.save();
+            applyViewTransform(vctx);
+            vctx.filter = disp.filter || 'none';
+            try {
+                vctx.drawImage(bitmap, -fit.boxWidth / 2, -fit.boxHeight / 2,
+                    fit.boxWidth, fit.boxHeight);
+            } catch (e) { /* ignore */ }
+            vctx.restore();
         }
 
-        var octx = tile.overlayCanvas.getContext('2d');
-        var opts = overlayOptionsFrom(settings, view.videoWidth, view.videoHeight, w, h);
-        var unlinked = collectUnlinked(frameGroup, view.name);
-        opts.unlinkedInstances = unlinked;
+        // ---- overlays ----
+        octx.setTransform(1, 0, 0, 1, 0, 0);
+        octx.filter = 'none';
+        octx.clearRect(0, 0, w, h);
+        // Inside the transform the video occupies [0,boxWidth] x [0,boxHeight] with
+        // no letterbox, so `drawFrameOverlays` is handed the VIDEO BOX as its canvas
+        // size and `videoToCanvas` reproduces `fit.scale` exactly. At rotation 0,
+        // zoom 1 these numbers are identical to the old tile-sized call.
+        var opts = overlayOptionsFrom(settings, view.videoWidth, view.videoHeight,
+            fit.boxWidth, fit.boxHeight);
+        opts.unlinkedInstances = collectUnlinked(frameGroup, view.name);
+        var wantLegend = opts.showLegend;
+        opts.showLegend = false;              // drawn upright, below
+        octx.save();
+        applyViewTransform(octx);
+        octx.translate(-fit.boxWidth / 2, -fit.boxHeight / 2);
         drawFrameOverlays(octx, view.name, ofg, groups, session, opts);
+        octx.restore();
+        if (wantLegend) {
+            drawLegend(octx, {
+                showDetected: opts.showUser || opts.showPredicted,
+                showReprojected: opts.showReprojected,
+                showErrors: opts.showErrors,
+            });
+        }
+    }
+
+    /** Live-preview tile, at the tile's CSS box size. */
+    function paintTile(tile, view, bitmap, frameGroup, ofg, groups, frameIdx, w, h) {
+        drawTileContent(tile.videoCanvas.getContext('2d'),
+            tile.overlayCanvas.getContext('2d'),
+            view, bitmap, frameGroup, ofg, groups, w, h);
     }
 
     function collectUnlinked(frameGroup, viewName) {
@@ -982,6 +1117,15 @@ export function showOverlayExportModal() {
         outNote.id = 'ovOutNote';
         outNote.style.cssText = 'font-size:11px;color:var(--text-muted,#888);line-height:1.4;';
         gOut.body.appendChild(outNote);
+        // Say where the video's look comes from. This modal deliberately exposes no
+        // brightness/contrast/rotation/zoom controls of its own — those live in the
+        // main window, and duplicating them here would give two places to disagree.
+        var dispNote = document.createElement('div');
+        dispNote.id = 'ovDisplayNote';
+        dispNote.style.cssText = 'font-size:11px;color:var(--text-muted,#888);line-height:1.4;';
+        dispNote.textContent = 'Each view is rendered with the main window\'s ' +
+            'brightness, contrast, rotation and zoom for that camera. Change them there.';
+        gOut.body.appendChild(dispNote);
     }
 
     // ========================================================================
@@ -1259,7 +1403,14 @@ export function showOverlayExportModal() {
             aspect = entry.height > 0 ? entry.width / entry.height : 16 / 9;
         } else {
             var view = findView(entry.tile.viewName);
-            aspect = (view && view.videoHeight > 0) ? view.videoWidth / view.videoHeight : 16 / 9;
+            // The ROTATED aspect. A 90-degree camera rotation makes a 640x480 view
+            // portrait (see `drawTileContent`), and a file sized 4:3 for the
+            // unrotated frame would just pillarbox it inside black bars.
+            var rb = view
+                ? rotatedBoxSize(view.videoWidth, view.videoHeight,
+                    displaySettingsFor(view).rotation)
+                : null;
+            aspect = (rb && rb.height > 0) ? rb.width / rb.height : 16 / 9;
         }
         // A custom size wins over the tile's own aspect — the tile content is
         // letterboxed into it by `drawExportTile`'s `fitRect`, so asking for
@@ -1594,23 +1745,14 @@ export function showOverlayExportModal() {
 
     /** Export-time twin of `paintTile`, at the tile's OUTPUT pixel size. */
     function drawExportTile(job, view, bitmap, frameGroup, ofg, groups) {
-        var ctx = job.ctx;
-        ctx.clearRect(0, 0, job.w, job.h);
-        if (settings.background === 'video') {
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, job.w, job.h);
-            if (bitmap) {
-                var fit = fitRect(view.videoWidth, view.videoHeight, job.w, job.h);
-                try { ctx.drawImage(bitmap, fit.x, fit.y, fit.width, fit.height); } catch (e) { /* ignore */ }
-            }
-        } else {
-            ctx.fillStyle = BG_FILL[settings.background] || '#000';
-            ctx.fillRect(0, 0, job.w, job.h);
-        }
-        var opts = overlayOptionsFrom(settings, view.videoWidth, view.videoHeight, job.w, job.h);
-        opts.unlinkedInstances = collectUnlinked(frameGroup, view.name);
-        drawFrameOverlays(job.overlayCtx, view.name, ofg, groups, session, opts);
-        ctx.drawImage(job.overlay, 0, 0);
+        drawTileContent(job.ctx, job.overlayCtx, view, bitmap, frameGroup, ofg, groups,
+            job.w, job.h);
+        // The overlay lives on its own canvas so `drawFrameOverlays`'s clear can't
+        // erase the video; flatten it now. `drawTileContent` leaves the identity
+        // transform and `filter: 'none'`, so the skeleton composites 1:1 and does NOT
+        // pick up the video's brightness/contrast — the main window filters
+        // `view.canvas` only, never the overlay canvas.
+        job.ctx.drawImage(job.overlay, 0, 0);
     }
 
     function setControlsDisabled(on) {

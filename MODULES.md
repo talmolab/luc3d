@@ -2226,6 +2226,18 @@ the classic-script unit runner and exercised without a browser dock.
   video is drawn with this and the skeleton with that, so any divergence offsets
   every burned-in overlay from the animal. Pinned by
   `tests/test-overlay-export-layout.js`, which computes both and compares.
+- `rotatedBoxSize(srcW, srcH, rotationDeg)` / `rotatedFit(srcW, srcH, dstW, dstH,
+  rotationDeg)` — the rotation-aware half of the fit. The main window rotates the
+  whole `.canvas-wrapper` (`applyZoom`, loading/video.js), so a 90° camera rotation
+  SWAPS a view's effective width and height and anything asking "what aspect is
+  this view?" must ask the ROTATED box. Cardinal angles are special-cased so 90/270
+  come out **exactly** swapped — trig dust would make an output dimension odd and
+  H.264 rejects odd yuv420 dimensions. `rotatedFit` returns the scale plus the
+  UNROTATED box size (`boxWidth`/`boxHeight`), which is what a tile draw needs: it
+  paints video AND overlays into that box centred on the tile and rotates the box.
+  **At rotation 0 `rotatedFit` degenerates to `fitRect` exactly** (same
+  `Math.min(dstW/srcW, dstH/srcH)`) — pinned by a test, since that identity is the
+  whole no-regression guarantee for unrotated projects.
 - `computeTileRects(dock, tiles, outW, outH)` — maps dock-local tile rects into
   the output canvas (the dock is fitted first, so a mismatched output aspect
   letterboxes the whole composition rather than distorting it). Integer pixels,
@@ -2450,6 +2462,57 @@ the app, then persisted to `localStorage` — surviving session switches within 
 project and page reloads. The **layout** is deliberately NOT persisted; a
 reopened modal re-seeds from the main-window mirror.
 
+**Display settings are inherited from the main window, not re-exposed.** Every 2D
+tile is rendered with that camera's **brightness, contrast, rotation and zoom** as
+the main window has them, by one shared `drawTileContent(vctx, octx, …)` that both
+the preview (`paintTile`) and the export (`drawExportTile`) call — they used to be
+two near-identical bodies labelled "export-time twin", i.e. two things guaranteed
+to drift. The modal deliberately has **no** control for any of the four (only the
+unrelated `settings.reproj.brightness`, an overlay *marker* dimming factor), and
+says so in `#ovDisplayNote`.
+
+This is not free: the main window applies all four as **CSS on live elements** —
+`view.canvas.style.filter` for brightness/contrast (`applyVideoFilters`), a
+`.canvas-wrapper` transform for rotation and zoom (`applyZoom`) — and **none of it
+survives a `drawImage` of the decoded frame into another canvas**, the same reason
+`applyVideoFilters` must re-set the filter on duplicate panes' mirror canvases. So
+the tile re-applies them: brightness/contrast via **`ctx.filter`**, which takes
+exactly the CSS filter-function list `buildVideoFilter` already emits (so the modal
+and the live canvas cannot disagree); rotation and zoom via a context transform
+applied to **video and overlays together**, because the main window transforms one
+wrapper holding both canvases — transforming only the pixels would slide every
+skeleton off the animal. Three details are load-bearing:
+- the overlay canvas is cleared under the **identity** transform first, because
+  `drawFrameOverlays`'s own `clearRect(0,0,w,h)` clears a *rotated* rect once a
+  transform is set, leaving the previous frame's skeleton in the corners of the
+  reused export canvas;
+- the legend is drawn **outside** the transform — `drawLegend` anchors to
+  `ctx.canvas.width` rather than the size it is passed, so inside the transform it
+  drifts by the letterbox offset (a regression even at rotation 0) and lands upside
+  down at 180°;
+- `ctx.filter` is reset with `'none'`, never `''` — an empty string is an invalid
+  value the setter silently ignores, which would leak the video's brightness onto
+  the overlay composite. `buildVideoFilter` returns `''` when both are default.
+Rotation prefers `view.rotation` over the session value: the hold-to-rotate chord
+advances the view every frame and only commits on keyup, so mid-gesture the view is
+what the user is actually looking at; a view never docked in the main window has no
+`view.rotation`, hence the session fallback. `individualSizeFor` derives each
+per-tile file's aspect from the **rotated** box, so a 90°-rotated 640×480 view
+exports portrait (360×480 at the 480 tier) instead of a landscape file with the
+frame pillarboxed inside it.
+**Zoom fidelity is partial, by construction:** magnification and pan centre match
+the main window, the visible **crop cannot**. The main window's crop comes from
+`.video-cell`'s `overflow:hidden` at the *cell's* aspect; an export tile has its own
+aspect, so a wider tile simply shows more video, and at high zoom near a frame edge
+that means black past the edge. The transform mirrors `applyZoom`'s CSS list under
+`transform-origin: 0 0`, which is why there is a `(z-1)*box/2` term (CSS scales
+about the TOP-LEFT, not the centre) and why the pan is converted from main-window
+CSS px by `box/baseW`. Covered end to end by
+`tests/e2e/overlay-export-display-settings.mjs`, which needs its own file because
+the main modal e2e runs decoder-less — black pixels are invariant under
+brightness/contrast and symmetric under rotation, so that suite cannot detect
+whether any of this is applied.
+
 **Unlinked instances ARE drawn**, in the preview and in the encoded frames, by
 `collectUnlinked(frameGroup, viewName)` — which reads the RAW `FrameGroup` via
 `getUnlinkedInstances()` (NOT the `toOverlayFrameGroup` copy, which carries only
@@ -2468,6 +2531,10 @@ exported but the amber `?` editing prompt is not.
 - `./rendering.js` — `getVisibilitySettings` (the seed).
 - `./overlay-export-layout.js` — the pure helpers above.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable`.
+- `./video-filters.js` — `buildVideoFilter`, `getSessionBrightness`,
+  `getSessionContrast`, `getSessionRotation`. That module imports no project
+  modules, so this adds no cycle, and sharing `buildVideoFilter` with
+  `applyVideoFilters` is what keeps the export from drifting from the live view.
 - `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
   `ensureLazyFrameData`, `triangulateAndReproject`, `storeReprojectedInstances`,
   `sessionHasCalibration`.

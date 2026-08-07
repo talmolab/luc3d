@@ -190,6 +190,72 @@
             }
         });
 
+        it('rotatedBoxSize swaps width/height at the cardinal angles, exactly', () => {
+            const L = __OverlayExportLayout;
+            // 0 and 180 must return the input UNCHANGED — that is what keeps every
+            // unrotated caller bit-identical to before rotation existed.
+            [0, 180, 360, -360].forEach(r => {
+                const b = L.rotatedBoxSize(640, 480, r);
+                assertEqual(b.width, 640, 'width unchanged at ' + r);
+                assertEqual(b.height, 480, 'height unchanged at ' + r);
+            });
+            // 90/270 exactly swapped — special-cased so there is no trig dust, which
+            // would make an output dimension odd and fail H.264.
+            [90, 270, -90, 450].forEach(r => {
+                const b = L.rotatedBoxSize(640, 480, r);
+                assertEqual(b.width, 480, 'width swapped at ' + r);
+                assertEqual(b.height, 640, 'height swapped at ' + r);
+            });
+            // A square at 45 degrees grows by exactly sqrt(2).
+            const d = L.rotatedBoxSize(100, 100, 45);
+            assertTrue(Math.abs(d.width - 100 * Math.SQRT2) < 1e-9, '45 deg diagonal width');
+            // Junk is treated as no rotation rather than producing NaN dimensions.
+            [NaN, undefined, null, 'x'].forEach(r => {
+                const b = L.rotatedBoxSize(640, 480, r);
+                assertEqual(b.width, 640, 'junk rotation ' + r + ' → unrotated');
+            });
+        });
+
+        it('rotatedFit degenerates to fitRect at rotation 0', () => {
+            // The whole no-regression guarantee for the unrotated path rests on this.
+            const L = __OverlayExportLayout;
+            [[640, 480, 800, 600], [1920, 1080, 552, 480], [100, 300, 640, 360]].forEach(a => {
+                const f = L.fitRect(a[0], a[1], a[2], a[3]);
+                const r = L.rotatedFit(a[0], a[1], a[2], a[3], 0);
+                assertEqual(r.scale, f.scale, 'same scale for ' + a.join('x'));
+                assertEqual(r.boxWidth, f.width, 'same box width for ' + a.join('x'));
+                assertEqual(r.boxHeight, f.height, 'same box height for ' + a.join('x'));
+            });
+        });
+
+        it('rotatedFit fits the ROTATED box inside the destination', () => {
+            const L = __OverlayExportLayout;
+            // A 640x480 landscape view rotated 90 is portrait, so it must be scaled
+            // to fit 800x600 as a portrait — the unrotated fit would overflow.
+            const r = L.rotatedFit(640, 480, 800, 600, 90);
+            // The rotated footprint is boxHeight wide x boxWidth tall.
+            assertTrue(r.boxHeight <= 800 + 1e-9, 'rotated footprint width fits (' + r.boxHeight + ')');
+            assertTrue(r.boxWidth <= 600 + 1e-9, 'rotated footprint height fits (' + r.boxWidth + ')');
+            // …and touches one bound, i.e. it is a CONTAIN fit, not just any fit.
+            assertTrue(Math.abs(r.boxHeight - 800) < 1e-9 || Math.abs(r.boxWidth - 600) < 1e-9,
+                'one dimension touches the bound');
+            // The unrotated fit of the same view is strictly larger here, proving the
+            // rotation actually cost something rather than being ignored.
+            assertTrue(r.scale < L.fitRect(640, 480, 800, 600).scale, 'rotation reduces the scale');
+        });
+
+        it('a rotated view drives a rotated OUTPUT aspect', () => {
+            // What `individualSizeFor` now does: derive the per-tile file aspect from
+            // the rotated box, so a 90-degree 640x480 view exports portrait instead
+            // of a pillarboxed landscape.
+            const L = __OverlayExportLayout;
+            const rb = L.rotatedBoxSize(640, 480, 90);
+            const s = L.outputSizeFor(rb.width / rb.height, '1080');
+            assertEqual(s.height, 1080, 'tier height honoured');
+            assertEqual(s.width, 810, 'portrait width (1080 * 480/640)');
+            assertEqual(s.width % 2, 0, 'still even for H.264');
+        });
+
         it('picks an H.264 level that covers the resolution', () => {
             assertEqual(__OverlayExportLayout.h264CodecFor(1280, 720), 'avc1.42001F', '720p');
             assertEqual(__OverlayExportLayout.h264CodecFor(1920, 1080), 'avc1.420028', '1080p');

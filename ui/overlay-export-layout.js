@@ -61,6 +61,50 @@ export function fitRect(srcW, srcH, dstW, dstH) {
 }
 
 /**
+ * Size of the axis-aligned box a srcW x srcH image occupies once rotated by
+ * `rotationDeg` about its own centre.
+ *
+ * The main window rotates the whole `.canvas-wrapper` with a CSS transform
+ * (`applyZoom`, loading/video.js), so a 90-degree camera rotation SWAPS a view's
+ * effective width and height — a 640x480 camera reads as 480x640. Anything asking
+ * "what aspect is this view?" has to ask it of the ROTATED box, or a rotated frame
+ * ends up pillarboxed inside an output sized for the unrotated one.
+ *
+ * Cardinal angles are special-cased so 90/270 come out exactly swapped rather than
+ * swapped-plus-floating-point-dust; the general case is the standard
+ * |w cos| + |h sin| bound. 0 and 180 return srcW x srcH unchanged, which is what
+ * keeps every unrotated call site bit-identical.
+ */
+export function rotatedBoxSize(srcW, srcH, rotationDeg) {
+    var r = Number(rotationDeg);
+    if (!isFinite(r)) r = 0;
+    r = ((r % 360) + 360) % 360;
+    if (r === 0 || r === 180) return { width: srcW, height: srcH };
+    if (r === 90 || r === 270) return { width: srcH, height: srcW };
+    var a = r * Math.PI / 180;
+    var c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+    return { width: srcW * c + srcH * s, height: srcW * s + srcH * c };
+}
+
+/**
+ * Rotation-aware "contain" fit: the scale at which a srcW x srcH image, rotated by
+ * `rotationDeg`, still fits inside dstW x dstH — plus the size of the UNROTATED
+ * image box at that scale.
+ *
+ * `boxWidth`/`boxHeight` are what a tile draw needs: it paints the video (and the
+ * overlays) into a boxWidth x boxHeight rectangle centred on the tile and rotates
+ * that rectangle, exactly as the main window rotates the one wrapper holding both
+ * canvases. At rotation 0 this degenerates to `fitRect`: the scale expression is
+ * literally the same `Math.min(dstW / srcW, dstH / srcH)`.
+ */
+export function rotatedFit(srcW, srcH, dstW, dstH, rotationDeg) {
+    var box = rotatedBoxSize(srcW, srcH, rotationDeg);
+    var s = Math.min(dstW / box.width, dstH / box.height);
+    if (!isFinite(s) || s <= 0) s = 1;
+    return { scale: s, boxWidth: srcW * s, boxHeight: srcH * s };
+}
+
+/**
  * Map dock-local tile rects into an outW x outH output canvas.
  *
  * The dock is fitted into the output canvas first (so a mismatched output aspect
