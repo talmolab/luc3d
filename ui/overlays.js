@@ -500,6 +500,29 @@ export function drawNodeShape(ctx, x, y, shape, size, color) {
             ctx.fill();
             break;
         }
+        case 'diamond': {
+            var dr = size * 1.4;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(x, y - dr);
+            ctx.lineTo(x + dr, y);
+            ctx.lineTo(x, y + dr);
+            ctx.lineTo(x - dr, y);
+            ctx.closePath();
+            ctx.fill();
+            break;
+        }
+        case 'cross': {
+            // Plus-sign cross (distinct from 'x', which is the diagonal form).
+            var cr = size * 1.2;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = Math.max(2, size * 0.35);
+            ctx.beginPath();
+            ctx.moveTo(x - cr, y); ctx.lineTo(x + cr, y);
+            ctx.moveTo(x, y - cr); ctx.lineTo(x, y + cr);
+            ctx.stroke();
+            break;
+        }
         case 'circle':
         default: {
             ctx.fillStyle = color;
@@ -547,6 +570,10 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
     const nodeSize = baseNodeSize;
     const lineWidth = baseLineWidth;
     const nulledNodes = instance.nulledNodes || null;
+    // SLEAP-parity independent node/edge visibility (issue #190). Default true so
+    // every existing caller keeps drawing both.
+    const showNodes = options.showNodes !== false;
+    const showEdges = options.showEdges !== false;
 
     // Pre-compute canvas positions for each point. Read straight out of the
     // flat coords (luc3d #189 follow-up #1) — this is the per-frame draw path,
@@ -565,7 +592,7 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
     ctx.globalAlpha = alpha;
 
     // --- 1. Draw edges ---
-    if (skeleton.edges) {
+    if (skeleton.edges && showEdges) {
         ctx.lineCap = 'round';
         if (dashPattern.length) ctx.setLineDash(dashPattern);
         // Draw normal edges first, then grayed edges
@@ -609,14 +636,14 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
 
     // --- 2. Draw nodes ---
     // Normal nodes
-    for (let i = 0; i < canvasPoints.length; i++) {
+    if (showNodes) for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
         if (nulledNodes && nulledNodes.has(i)) continue;
         drawNodeShape(ctx, cp.x, cp.y, nodeShape, nodeSize, color);
     }
     // Grayed-out (nulled) nodes
-    if (nulledNodes && nulledNodes.size > 0) {
+    if (showNodes && nulledNodes && nulledNodes.size > 0) {
         ctx.globalAlpha = alpha * 0.55;
         for (const ni of nulledNodes) {
             const cp = canvasPoints[ni];
@@ -724,7 +751,8 @@ export function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, option
     ctx.lineCap = 'round';
 
     // --- 1. Draw edges as dashed lines (track-colored) ---
-    if (skeleton.edges) {
+    // `showEdges`/`showNodes` default true (issue #190 SLEAP-parity toggles).
+    if (skeleton.edges && options.showEdges !== false) {
         ctx.strokeStyle = edgeColor;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
@@ -746,7 +774,7 @@ export function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, option
     // default (reproj marker = 3D marker = circle, issue #95) is supplied by
     // getVisibilitySettings via options.nodeShape at the production call sites.
     const reprojShape = options.nodeShape || 'x';
-    for (let i = 0; i < canvasPoints.length; i++) {
+    if (options.showNodes !== false) for (let i = 0; i < canvasPoints.length; i++) {
         const cp = canvasPoints[i];
         if (!cp) continue;
         drawNodeShape(ctx, cp.x, cp.y, reprojShape, markerSize, color);

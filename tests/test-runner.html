@@ -283,6 +283,11 @@
          classes, both from the bridge below. -->
     <script src="test-custom-delete-ops.js"></script>
 
+    <!-- Export Instance Overlays: the composition geometry + encoder-parameter
+         arithmetic (issue #190). Needs window.__OverlayExportLayout plus
+         `videoToCanvas` from ui/overlays.js, both from the bridge below. -->
+    <script src="test-overlay-export-layout.js"></script>
+
     <!-- Pass 2 transitional bridge + test runner.
          Loads ESM-converted modules (pose/, ui/) and exposes their exports on
          window so the test files (loaded as classic scripts above) can find
@@ -329,6 +334,12 @@
         // `collectDeletionTargets`/`previewCascade` are too generic to be globals.
         import * as __CustomDeleteOps from '../ui/custom-delete-ops.js';
         window.__CustomDeleteOps = __CustomDeleteOps;
+        // Pure geometry/settings half of "Export Instance Overlays" — imports no
+        // project modules (and, deliberately, no dockview), so it bridges without
+        // dragging the modal's DOM/WebCodecs dependencies in. Own namespace: names
+        // like `fitRect`/`mergeSettings` are far too generic to be globals.
+        import * as __OverlayExportLayout from '../ui/overlay-export-layout.js';
+        window.__OverlayExportLayout = __OverlayExportLayout;
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,
