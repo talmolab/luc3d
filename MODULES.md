@@ -476,13 +476,33 @@ session graph that holds them.
   `_buildIdentitySegments` see the correct identity too, not just resident
   in-memory instances), and an `instanceToIdentity` per-instance-object
   fallback Map (built from `instanceGroups` before any remap runs) that
-  `remapInstance` (steps 3/3b) checks before falling back to the raw
-  per-camera `getIdentityIdForTrack` lookup. Regression test:
+  `remapInstance` (steps 3/3b) consults when the raw per-camera
+  `getIdentityIdForTrack` lookup has no usable answer. Regression test:
   `tests/e2e/first-frame-track-identity-collision.mjs` (builds a synthetic
   raw-trackIdx collision on frame 0 only, propagates, and asserts both
   Timeline display modes cover frame 0 identically to frame 1 — confirmed it
   fails pre-fix with `[null, null]` on the colliding camera's frame-0
   instances and passes post-fix).
+  **Precedence (duplicate-ID-after-single-view-switch regression):** those
+  group-derived repairs are FALLBACKS, not overrides — `remapInstance` and
+  step 2b's per-member claims (`rowClaim`/`rawClaim`/the `newFrameMap`
+  supplement) resolve each instance's identity from `frameIdentityMap` FIRST
+  and consult `group.identityId` only for entries the map cannot answer
+  (absent, or the `-1` collision sentinel). That matches every display
+  consumer (`getGroupColor` is map-first) and matters because a single-view
+  ID switch (`swapIdentitiesForwardInCamera`, luc3d #201) rewrites ONLY the
+  map, deliberately leaving the cross-view `group.identityId` alone — the
+  earlier group-first order resurrected the stale group identity on the
+  still-grouped animal while the switched instance followed the map, landing
+  the SAME ID/track on both animals on the switch frame (in memory and in the
+  columnar store). `remapInstance` is also explicitly once-per-instance now
+  (a `remapped` Set): an object shared by the step-3 `frameGroups` walk and
+  the step-3b `instanceGroups` walk must not be remapped twice, since the
+  second pass would look its already-rewritten `trackIdx` up in the old map
+  and undo the first. Regression tests: the `single-view ID switch
+  (duplicate-ID regression)` block in `tests/test-pose-data.js` (in-memory,
+  store-remap callback, and a pin that the `-1`-collision group fallback
+  still works).
   Separately, the auto-generated track-name fallback changed from `'id_' +
   ident.id` to the app's normal `'track_' + index` convention (a genuinely
   custom identity name like "Alice" is still preserved verbatim; only a
