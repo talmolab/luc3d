@@ -255,6 +255,11 @@
          the save/load payload. -->
     <script src="test-video-contrast.js"></script>
 
+    <!-- The rest of the session-scoped Visibility-panel state that persists into
+         the .slp: per-camera brightness + rotation, the timeline hidden sets,
+         and the import-export/visibility-metadata.js metadata.lucid mapping. -->
+    <script src="test-visibility-metadata.js"></script>
+
     <!-- Lazy project reopen (shared-store .slp): openProjectSlp split,
          lightweight reconstruct + on-scrub hydration, shared-store re-save,
          permuted native video-id remap. Keep LAST among the test files: it
@@ -339,6 +344,17 @@
         // to unit-test the #149 contrast math (its DOM caller,
         // ui/sessions-panes.js, transitively pulls app.js).
         import * as __VideoFilters from '../ui/video-filters.js';
+        // Per-session timeline hidden sets + their `.slp` serialization. Also
+        // imports no project modules. Namespaced rather than spread: names like
+        // `ensureHiddenSets`/`isCameraVisible` are too generic for globals (the
+        // module already self-mirrors onto window.TimelineVisibility).
+        import * as __TimelineVisibility from '../ui/timeline-visibility.js';
+        window.__TimelineVisibility = __TimelineVisibility;
+        // The metadata.lucid <-> Session mapping for the session-scoped
+        // Visibility-panel settings. Its only imports are the two leaf modules
+        // above, so it bridges without pulling app.js in.
+        import * as __VisibilityMetadata from '../import-export/visibility-metadata.js';
+        window.__VisibilityMetadata = __VisibilityMetadata;
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,

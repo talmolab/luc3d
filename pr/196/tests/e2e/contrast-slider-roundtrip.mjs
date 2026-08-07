@@ -137,10 +137,13 @@ try {
         out.negStore = JSON.parse(JSON.stringify(s1.videoContrast));
 
         // ---- composed with brightness ----
-        AS.state.views[0]._brightness = 150;
+        // Brightness is session-backed too (it used to sit on `view._brightness`,
+        // which reset on every session switch) — so it is set through the same
+        // per-session store contrast uses.
+        vf.setSessionBrightness(s1, 'camA', 150);
         sp.applyVideoFilters(AS.state.views[0]);
         out.composedFilter = AS.state.views[0].canvas.style.filter;
-        AS.state.views[0]._brightness = 100;
+        vf.setSessionBrightness(s1, 'camA', 100);
         sp.applyVideoFilters(AS.state.views[0]);
         out.uncomposedFilter = AS.state.views[0].canvas.style.filter;
 
