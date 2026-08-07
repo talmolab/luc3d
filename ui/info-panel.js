@@ -2017,25 +2017,33 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 newIdOptUl.value = '__new__';
                 newIdOptUl.textContent = '(+) New ID';
                 idSelectUl.appendChild(newIdOptUl);
-                // Pre-select based on the per-frame identity for this track.
-                var currentIdForTrack = state.session.getIdentityIdForTrack(cam.name, ul.instance.trackIdx, state.currentFrame);
+                // Pre-select from the canonical unlinked-identity resolver:
+                // the per-frame entry for a tracked instance, the retained
+                // instance-level identity for a trackless one (luc3d #201).
+                var currentIdForTrack = state.session.getIdentityIdForUnlinkedInstance(cam.name, ul.instance, state.currentFrame);
                 idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
                 (function (inst, sel, camNameForId) {
                     function applyIdentity(newIdVal) {
                         if (newIdVal >= 0) {
-                            // Forward-only, swap-aware (issue #155) AND
-                            // whole-timeline / all-views (luc3d #172): an ID
-                            // switch on an unlinked instance means the same
-                            // "these two animals are the other way round from
-                            // here on" as it does for a group.
+                            // Forward-only and swap-aware (issue #155),
+                            // whole-timeline (luc3d #172), but scoped to THIS
+                            // CAMERA (luc3d #201). This row is one view's
+                            // detached detection, and correcting a single view is
+                            // the reason to ungroup at all: ungroup, fix the view
+                            // that's wrong, regroup. A GROUP's switch stays
+                            // all-views — see `applyIdentitySwitch`.
                             markDirty();
                             var resUl = applyIdentitySwitch(state.session, state.currentFrame,
-                                [[camNameForId, inst.trackIdx]], null, newIdVal);
+                                [[camNameForId, inst.trackIdx]], null, newIdVal,
+                                camNameForId, inst);
                             var idObjUl = state.session.getIdentity(newIdVal);
                             setStatus(describeIdentitySwitch(state.session, resUl,
                                 idObjUl ? idObjUl.name : String(newIdVal)), 'success');
                         } else {
-                            state.session.clearTrackIdentity(inst.trackIdx, camNameForId);
+                            // "—": a trackless row's identity lives on the
+                            // instance (luc3d #201); a tracked row's in the map.
+                            if (inst.trackIdx == null) inst.identityId = null;
+                            else state.session.clearTrackIdentity(inst.trackIdx, camNameForId);
                             markDirty();
                         }
                         drawAllOverlays(state.currentFrame);

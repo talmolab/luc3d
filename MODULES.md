@@ -1,7 +1,7 @@
 # LUCID Module Reference
 
 In-depth reference for every ES module in the LUCID codebase. Use this to
-locate which module owns a given concern before editing.
+locate which module owns a given concern before editing. 
 
 The codebase is split across four directories plus two root files:
 
@@ -247,7 +247,10 @@ session graph that holds them.
   (ideal→distorted, OpenCV forward model — the inverse of `undistortPoint`,
   used to re-distort reprojections into native pixel space).
 - `Instance` — per-view 2D keypoints with `trackIdx`, `type`
-  (`user`/`predicted`/`reprojected`), `score`, `occluded[]`, `nulledNodes`.
+  (`user`/`predicted`/`reprojected`), `score`, `occluded[]`, `nulledNodes`,
+  and `identityId` (null unless this is a TRACKLESS UNLINKED instance whose
+  disbanded group's identity was retained on it by `unlinkGroup` — luc3d
+  #201; consumed/cleared when the instance joins a group; not persisted).
   Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`.
 - `UnlinkedInstance` — wrapper around an `Instance` not yet placed in an
   `InstanceGroup`. Auto-incrementing `id`.
@@ -327,7 +330,23 @@ session graph that holds them.
   correction history. No frame materialization, so nothing hydrates or evicts.
   Returns `{entries, groups, frames}`. Guarded by the `swapIdentitiesForward
   (#172)` block in `tests/test-identity.js` and end to end by
-  `tests/e2e/identity-switch-propagates-to-end.mjs`), group assignment
+  `tests/e2e/identity-switch-propagates-to-end.mjs`;
+  `swapIdentitiesForwardInCamera(startFrame, cameraName, identityA, identityB)` —
+  the **single-view** counterpart (luc3d #201). Same dense value swap, forward to
+  the end of the project, but restricted to ONE camera: this is how an ID is
+  corrected in one view (ungroup → switch the ID on that view's Ungrouped row →
+  regroup), where the per-camera tracker crossed two animals in one camera and the
+  other views are already right. Not `propagateIdentity`, even though that is
+  already per-camera — it follows one raw track and dies at the first fragment
+  boundary, which is exactly the #172 truncation. Differs from
+  `swapIdentitiesForward` in one substantive way: it deliberately does NOT rewrite
+  `instanceGroups[*].identityId`, since that is a single field shared by every
+  view and writing it would leak the correction into the other cameras (`groups`
+  in the result is therefore always 0, kept only so the shape matches for
+  `describeIdentitySwitch`). Both the frame and camera filters are arithmetic on
+  the packed key. Guarded by `tests/test-ungroup-retains-identity.mjs` (incl. a
+  fragmented-raw-track case) and end to end by
+  `tests/e2e/ungroup-retains-identity.mjs`), group assignment
   (`assignIdentityToGroup`), lookup (`getIdentityIdForTrack`/
   `getIdentityForTrack` — per-frame only, return null with no fallback;
   `isExplicitNoIdentity`; `isNoIdTrack(trackIdx)` — true for the dedicated
@@ -449,9 +468,53 @@ session graph that holds them.
   instead of restoring the original naming. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
   group editing (`createGroupFromUnlinked` — when no identity is passed it
-  derives one from the first member's track, but only if that member HAS a
-  track: grouping trackless instances yields a group with NO identity (-1), not
-  a fabricated "id_null"; `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
+  prefers an identity the members ALREADY read as (the first member with one,
+  via `getIdentityIdForUnlinkedInstance`, so a trackless member's retained
+  instance-level identity counts too), and only then derives one from the
+  first member's track, and only if that member HAS a
+  track: grouping identity-less trackless instances yields a group with NO
+  identity (-1), not
+  a fabricated "id_null". Preferring the held identity is what lets an
+  ungroup → re-assign one row → regroup round trip keep the animal's ID instead
+  of renaming it to `id_<rawTrackIdx>` (luc3d #201). Grouping CONSUMES the
+  members' instance-level retained identity (`Instance.identityId` reset to
+  null — the group owns it from there; `assignToGroup` does the same);
+  `unlinkGroup` — **retains identity** for each member before the group object
+  (and with it the `group.identityId` fallback every identity reader relies on)
+  is dropped (`_retainIdentityOnUnlink`): a TRACKED member gets the disbanding
+  group's `identityId` stamped into `frameIdentityMap`; a TRACKLESS member gets
+  it stamped on the instance itself (`Instance.identityId`) — the map is keyed
+  by raw trackIdx, so a null track keys one shared per-camera slot that cannot
+  name an individual, which is why the map-only retention silently skipped
+  trackless members and the bug RECURRED for untracked predictions / manual
+  annotations (the report against PR #202). Without retention, ungrouping
+  reset every Ungrouped row's ID to "—" and discarded the
+  assignment, making "swap the ID in one view" destructive (luc3d #201). The
+  map stamp only
+  fills in what the tracker path (`commitTrackedFrame`) already writes, and is
+  conservative: it never overwrites an existing positive entry (that entry is
+  what readers already prefer over `group.identityId`), and skips a raw-trackIdx
+  key still shared with another group in the frame (the ambiguous-`-1` collision
+  case — claiming it would mis-color the group still holding it). The instance
+  stamp OVERWRITES: while grouped, `group.identityId` is the freshest truth for
+  a trackless member (switches pin the group field and cannot write the map for
+  a null track), so an older instance-level value is stale by definition;
+  `getIdentityIdForUnlinkedInstance(cam, instance, frameIdx)` — THE resolver
+  for an UNLINKED instance's identity: the per-frame map entry when the
+  instance has a track (= `getIdentityIdForTrack`), the instance-level
+  retained identity when it does not. Used by the info panel's Ungrouped rows,
+  `getInstanceColor`, and the regroup derivation;
+  `assignIdentityToUnlinkedTrackless(frameIdx, camName, instance, identityId)`
+  — the one-view ID correction for a TRACKLESS unlinked row. Per-frame by
+  nature (no track = no linkage to carry the correction to other frames);
+  within the frame it hands the vacated identity to the trackless unlinked row
+  in the same camera that already held the target, keeping the view
+  duplicate-free (mirrors the tracked swap semantics). Routed to by
+  `applyIdentitySwitch` when the unlinked row's instance is trackless. All
+  trackless retention is guarded by `tests/test-ungroup-retains-identity.mjs`
+  and end to end (save → lazy reopen → ungroup → one-view switch → regroup) by
+  `tests/e2e/ungroup-trackless-reopen.mjs`;
+  `removeInstanceGroup`, `assignToGroup`), repair
   (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
   `_promoteIfMixed`), skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
@@ -1689,6 +1752,27 @@ triangulation, multi-frame assignment modal, track/identity helpers.
     / "none" picked), so it falls back to the per-camera, per-track forward stamp
     (`assignIdentityToGroup` + `Session.propagateIdentity`), the only continuity
     signal available in that state.
+  - **frame** — the unlinked row's instance is TRACKLESS (the optional
+    `unlinkedInstance` argument, passed by both unlinked call sites, has
+    `trackIdx == null`). `frameIdentityMap` cannot key a null track and no
+    linkage exists to carry the correction to other frames, so this routes to
+    `Session.assignIdentityToUnlinkedTrackless`: per-frame, instance-level,
+    with an in-frame swap against the same camera's trackless row already
+    holding the target identity. `describeIdentitySwitch` says "this frame"
+    honestly instead of implying propagation (luc3d #201 recurrence).
+
+  The optional `scopeCamera` argument restricts either map mode to ONE camera
+  (luc3d #201), via `Session.swapIdentitiesForwardInCamera` in swap mode. Passed
+  by the two UNGROUPED call sites — the unlinked-row dropdown in
+  `ui/info-panel.js` and the `selectedUnlinked` branch of
+  `assignIdentityToSelected` — and omitted by the group ones. Rationale: an
+  ungrouped instance is one 2D detection belonging to no cross-view bundle, so a
+  correction on it speaks for that camera only, and fixing a single view is the
+  reason to ungroup at all (ungroup → switch the wrong view → regroup). The
+  all-views argument holds for a GROUP, which by definition asserts one animal
+  across cameras. A scoped swap does not pin `group.identityId` (there is no group,
+  and that field is shared by all views). The result carries `camera` so
+  `describeIdentitySwitch` reports "cam2 only" instead of claiming "all views".
 
   This replaced a `for (cam of sel.instances) propagateIdentityForward(...)` loop
   that was scoped to **one raw track and only the cameras the group was visible in
@@ -1883,8 +1967,19 @@ on reload); see `ui/app-state.js`.
   `applyIdentitySwitch` subsumes it). Both identity `<select>`s (the
   Linked Instance Groups row and the unlinked row) drive their change through
   `applyIdentitySwitch`, so a manual ID switch exchanges the two identities to the
-  end of the timeline in every view (luc3d #172) and reports its real count via
-  `describeIdentitySwitch`.
+  end of the timeline (luc3d #172) and reports its real count via
+  `describeIdentitySwitch`. They differ in SCOPE: the grouped row switches every
+  view, while the **unlinked row passes its own camera as `scopeCamera`** so the
+  correction touches that view only (luc3d #201) — the ungroup → fix one view →
+  regroup workflow — and passes its instance so a TRACKLESS row takes the
+  per-frame instance-level path (`applyIdentitySwitch` mode **frame**; picking
+  "—" on a trackless row clears `Instance.identityId` directly, there being no
+  map entry to clear). The unlinked row's ID `<select>` pre-selects from
+  `getIdentityIdForUnlinkedInstance` (per-frame map entry for a tracked row,
+  instance-level retained identity for a trackless one), which is why
+  `Session.unlinkGroup` has to retain the
+  disbanded group's identity in the map / on the instance for the row to read as anything
+  but "—".
 - `./sessions-panes.js` — `populateSessionsPanel`, `populateViewStrip`,
   `populateSessionStrip`.
 
@@ -2085,7 +2180,11 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `useIdentity` and `session.isExplicitNoIdentity(...)` is true, and also —
   when coloring by track — for any instance/group on the "No ID" track
   (`session.isNoIdTrack(trackIdx)`), so the null track matches the ID
-  panel's gray on the skeleton. **When coloring by identity,
+  panel's gray on the skeleton. When coloring by identity,
+  `getInstanceColor` also honors a TRACKLESS unlinked instance's retained
+  `Instance.identityId` (luc3d #201 — stamped by `unlinkGroup`; the map
+  cannot key a null track) before falling back to `UNGROUPED_USER_COLOR`,
+  so an ungrouped animal keeps the color it had while grouped. **When coloring by identity,
   `getGroupColor` resolves the identity from the per-frame map keyed by the
   group's LIVE `trackIdx` (`getIdentityForTrack`) FIRST, using
   `group.identityId` only as a fallback for a group with no per-frame entry

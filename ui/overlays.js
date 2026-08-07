@@ -201,6 +201,14 @@ export function getInstanceColor(instance, session, cameraName, useIdentity, fra
         var identity = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
         if (identity && identity.color) return identity.color;
     }
+    // A TRACKLESS unlinked instance can still carry an identity — retained on
+    // the instance by unlinkGroup (luc3d #201; the map cannot key a null
+    // track). Same animal, same color as when it was grouped.
+    if (useIdentity && session && instance.trackIdx == null &&
+        instance.identityId != null && instance.identityId >= 0 && session.getIdentity) {
+        var retained = session.getIdentity(instance.identityId);
+        if (retained && retained.color) return retained.color;
+    }
     if (instance.trackIdx == null) return UNGROUPED_USER_COLOR;
     // The "No ID" track is the null track → same gray as the ID panel.
     if (session && session.isNoIdTrack && session.isNoIdTrack(instance.trackIdx)) return NULL_ID_COLOR;
