@@ -1388,15 +1388,71 @@ export class Session {
         //    (`group.identityId`, set once per group at creation, never
         //    shared across two colliding groups) — write it in directly,
         //    independent of the raw-key collision.
+        //
+        //    The same repair is owed to `oldKeyToNewTrackIdx` (luc3d #203). That
+        //    map is what step 4 remaps the COLUMNAR STORE through, and a key
+        //    missing from it means "no track" there — so an instance on a marked
+        //    frame kept the correct track in memory (step 3's `instanceToIdentity`
+        //    fallback) but went TRACKLESS in the store, permanently: it exports
+        //    trackless, the Tracks Timeline has a hole at the start, and
+        //    store-derived `trackOccupancy` disagrees with resident `frameGroups`
+        //    for exactly the first frames — which is what "extra tracks that
+        //    overlap the originals, in the first few frames" looks like. Measured
+        //    on the lazy fixture with one animal marked on frame 0 of one camera:
+        //    that camera's store track column came back `[0,-1,0,1,0,1]`.
+        //
+        //    Only an UNCONTESTED key is repaired. `remapTracksFromIdentity`'s
+        //    callback is keyed by (camera, frame, oldTrackIdx) and cannot see
+        //    which ROW it is remapping, so when two different identities really do
+        //    share one raw trackIdx on a frame there is no answer it could give
+        //    that is right for both — mapping would put two instances on ONE track
+        //    in that frame, which is invalid (SLEAP allows at most one instance per
+        //    track per frame). Those stay trackless, as before, and are counted and
+        //    reported rather than dropped silently.
+        //    Resolution is PER ROW, not per track. A group member carries
+        //    `_rawInstIndex` — its index within its camera-frame in the columnar
+        //    store, the same quantity `remapTracksFromIdentity` now hands its
+        //    callback as `offsetInFrame` — so each store row can be mapped to its
+        //    own group's identity even when two animals share one raw trackIdx on
+        //    that frame. That is what makes the genuine collision recoverable
+        //    rather than merely detected.
+        var rowClaim = new Map();       // (frame, cam, offsetInFrame) -> newTrackIdx
+        var rawClaim = new Map();       // (frame, cam, rawTrack) -> identityId, or -1 when contested
         for (var [frameIdxG, groupsG] of this.instanceGroups) {
             for (var giG = 0; giG < groupsG.length; giG++) {
                 var groupG = groupsG[giG];
                 if (groupG.identityId == null || groupG.identityId < 0 || !idToTrackIdx.has(groupG.identityId)) continue;
                 var newTrackIdxG = idToTrackIdx.get(groupG.identityId);
-                for (var [camNameG] of groupG.instances) {
+                for (var [camNameG, instG] of groupG.instances) {
                     newFrameMap.set(this._fimKey(frameIdxG, camNameG, newTrackIdxG), groupG.identityId);
+                    if (!instG) continue;
+                    // Per-row: exact, and immune to a raw-trackIdx collision.
+                    // `_fimKey` packs (frame, camIdx, smallInt) — the third slot
+                    // holds a row offset here rather than a track index, which is
+                    // why this is a SEPARATE map from the track-keyed ones.
+                    if (instG._rawInstIndex != null && instG._rawInstIndex >= 0) {
+                        rowClaim.set(this._fimKey(frameIdxG, camNameG, instG._rawInstIndex), newTrackIdxG);
+                    }
+                    // Per-track fallback for a member with no `_rawInstIndex`
+                    // (a non-lazy session, where the store path does not run
+                    // anyway). `instG.trackIdx` is still the RAW/store value here —
+                    // step 3, which overwrites it, runs after this block.
+                    var rawTrk = instG.trackIdx;
+                    if (rawTrk == null || rawTrk < 0) continue;
+                    var rawKeyG = this._fimKey(frameIdxG, camNameG, rawTrk);
+                    var priorClaim = rawClaim.get(rawKeyG);
+                    if (priorClaim === undefined) rawClaim.set(rawKeyG, groupG.identityId);
+                    else if (priorClaim !== groupG.identityId) rawClaim.set(rawKeyG, -1);
                 }
             }
+        }
+        var ambiguousRawKeys = 0;
+        for (var [rawKeyC, claimedId] of rawClaim) {
+            if (claimedId < 0) { ambiguousRawKeys++; continue; }
+            // Never override what step 2 already derived from frameIdentityMap —
+            // only fill the gaps it had to skip.
+            if (oldKeyToNewTrackIdx.has(rawKeyC)) continue;
+            oldKeyToNewTrackIdx.set(rawKeyC, idToTrackIdx.get(claimedId));
         }
 
         // 3. Mutate whatever IS resident right now, for instant GUI feedback
@@ -1494,7 +1550,15 @@ export class Session {
             // partway through.
             console.log('[propagateIdentitiesToTracks] frameIdentityMap.size=' + this.frameIdentityMap.size +
                 ', oldKeyToNewTrackIdx.size=' + oldKeyToNewTrackIdx.size + ', newTracks=' + newTracks.length);
-            var lazyResult = this.lazyLoader.remapTracksFromIdentity(newTracks, function (camName, frameIdx, oldTrackIdx) {
+            var lazyResult = this.lazyLoader.remapTracksFromIdentity(newTracks, function (camName, frameIdx, oldTrackIdx, offsetInFrame) {
+                // Per-row first (luc3d #203): this row's own group knows its
+                // identity unambiguously, so it is right even where the raw
+                // trackIdx is shared by two animals, and it does not depend on
+                // the row having a track to begin with.
+                if (offsetInFrame != null) {
+                    var byRow = rowClaim.get(self._fimKey(frameIdx, camName, offsetInFrame));
+                    if (byRow != null) return byRow;
+                }
                 if (oldTrackIdx == null || oldTrackIdx < 0) return -1;
                 var newTrackIdx = oldKeyToNewTrackIdx.get(self._fimKey(frameIdx, camName, oldTrackIdx));
                 return newTrackIdx != null ? newTrackIdx : -1;
@@ -1517,7 +1581,21 @@ export class Session {
         //    (step 2), not a residency-limited subset.
         this.tracks = newTracks;
         this.frameIdentityMap = newFrameMap;
-        return { tracks: newTracks.length, instances: changed + lazyChanged, lazyErrorRows: lazyErrorRows };
+        // `ambiguousRawKeys` counts (frame, camera, rawTrackIdx) keys that two
+        // different identities genuinely share, which the track-keyed columnar
+        // remap cannot resolve per row (luc3d #203) — those instances stay
+        // trackless in the store. Reported so the condition is visible instead of
+        // presenting as an unexplained gap in the first frames.
+        if (ambiguousRawKeys > 0) {
+            console.warn('[propagateIdentitiesToTracks] ' + ambiguousRawKeys + ' (frame,camera,trackIdx) key(s) ' +
+                'are claimed by two different identities — the raw per-camera tracker gave two animals the same ' +
+                'trackIdx on those frames. Their columnar store rows stay TRACKLESS because a track-keyed remap ' +
+                'cannot tell the two rows apart; the in-memory instances keep the correct track.');
+        }
+        return {
+            tracks: newTracks.length, instances: changed + lazyChanged,
+            lazyErrorRows: lazyErrorRows, ambiguousRawKeys: ambiguousRawKeys,
+        };
     }
 
     /**
