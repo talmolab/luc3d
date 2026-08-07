@@ -1,7 +1,7 @@
 # LUCID Module Reference
 
 In-depth reference for every ES module in the LUCID codebase. Use this to
-locate which module owns a given concern before editing.
+locate which module owns a given concern before editing. 
 
 The codebase is split across four directories plus two root files:
 
