@@ -1,5 +1,5 @@
 /**
- * overlay-export-modal.mjs — real-browser test for File ▸ "Export Instance
+ * overlay-export-modal.mjs — real-browser test for File ▸ "Export Video
  * Overlays" (issue #190).
  *
  * The geometry and settings arithmetic is unit tested
@@ -94,8 +94,8 @@ try {
         const next = el.nextElementSibling;
         return { label: el.textContent.trim(), nextId: next ? next.id : null };
     });
-    check(menu !== null, 'File menu has an "Export Instance Overlays" item');
-    check(menu && menu.label === 'Export Instance Overlays', `label is "Export Instance Overlays" (got "${menu && menu.label}")`);
+    check(menu !== null, 'File menu has an "Export Video Overlays" item');
+    check(menu && menu.label === 'Export Video Overlays', `label is "Export Video Overlays" (got "${menu && menu.label}")`);
     check(menu && menu.nextId === 'menuExportVideo3d', `sits directly above "Export 3D Video" (next is ${menu && menu.nextId})`);
 
     // ---- open it -----------------------------------------------------------

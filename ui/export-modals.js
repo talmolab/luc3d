@@ -39,6 +39,14 @@ import {
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from '../pose/initialization.js';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
+// The two video-export modals share ONE set of quality tiers, one bitrate
+// formula, one H.264 level table and one streaming threshold. They used to keep
+// private copies of all four and had silently drifted apart (a 2x bitrate floor
+// gap at the smallest tier, and two disagreeing level tables).
+import {
+    RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
+} from './overlay-export-layout.js';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -2695,10 +2703,20 @@ function _fmtDuration(totalSeconds) {
     return m + ':' + (rem < 10 ? '0' : '') + rem;
 }
 
-// Target H.264 bitrate (bits/sec) for the 3D-video encoder — must match the
-// encoder.configure() call so the size estimate and the real output agree.
+/**
+ * Target H.264 bitrate (bits/sec) for the 3D-video encoder — must match the
+ * `createMp4Writer` config so the size estimate and the real output agree.
+ *
+ * This is now just the shared `bitrateFor` at the **medium** tier: the 3D modal
+ * exposes no quality picker, and medium is the bpp its own private formula always
+ * used. Deferring keeps the two modals' bitrates identical for identical output,
+ * which the private copy did NOT: it clamped to [2, 24] Mbps against the shared
+ * [1, 48] Mbps, so it doubled the bitrate (and its own size estimate) at the
+ * smallest tier and would have silently capped the new 2160p tier at 24 Mbps
+ * instead of the 29.9 Mbps the formula asks for.
+ */
 function _v3dBitrate(W, H, fps) {
-    return Math.min(24000000, Math.max(2000000, Math.round(W * H * fps * 0.12)));
+    return bitrateFor(W, H, fps, 'medium');
 }
 
 function _fmtBytes(bytes) {
@@ -2718,7 +2736,8 @@ function _fmtBytes(bytes) {
  * picker (360p / 720p / 1080p / 2K — sets output dims and the matching H.264
  * level), and a live duration readout. On Export, the chosen frame range is
  * rendered into the modal viewport at the chosen resolution and encoded to an
- * .mp4 via WebCodecs VideoEncoder + mp4-muxer.
+ * .mp4 via ui/video-encode.js (mediabunny), streaming to disk when the browser
+ * offers a save-file picker.
  */
 export function showExport3DVideoModal() {
     var session = getActiveSession();
@@ -2739,14 +2758,26 @@ export function showExport3DVideoModal() {
     var V3D_NUMF = 'width:66px;text-align:center;margin-left:4px;' + V3D_FIELD;
     var V3D_HANDLE = 'position:absolute;top:5px;width:15px;height:15px;margin-left:-8px;border-radius:50%;background:var(--accent,#4a9eff);border:2px solid #fff;box-sizing:border-box;cursor:ew-resize;touch-action:none;z-index:2;';
 
-    // Standard output resolutions (16:9). The H.264 level in `codec` is bumped
-    // to match the resolution so the decoder advertises the right capability.
-    var V3D_RES = {
-        '360':  { w: 640,  h: 360,  codec: 'avc1.42001E', label: '360p (640×360)' },
-        '720':  { w: 1280, h: 720,  codec: 'avc1.42001F', label: '720p (1280×720)' },
-        '1080': { w: 1920, h: 1080, codec: 'avc1.420028', label: '1080p (1920×1080)' },
-        '2k':   { w: 2560, h: 1440, codec: 'avc1.420032', label: '2K (2560×1440)' },
-    };
+    // Standard output resolutions (16:9), DERIVED from the quality tiers shared
+    // with "Export Video Overlays" so the two modals always offer the same
+    // choices: 480p / 720p / 1080p / 2160p. This viewport is always rendered
+    // 16:9, so each tier's `refW` is the exact output width here (in the overlay
+    // modal the width follows the composition aspect instead).
+    //
+    // The H.264 level comes from the shared `h264CodecFor` rather than a
+    // hand-written string per tier — the two tables had already disagreed (this
+    // one claimed level 3.0 for 640x360 where the shared one says 3.1), and a
+    // wrong level is only discovered mid-export, at one resolution, when
+    // mediabunny rejects the codec string.
+    var V3D_RES = {};
+    var V3D_RES_KEYS = Object.keys(RES_PRESETS);
+    V3D_RES_KEYS.forEach(function (k) {
+        var p = RES_PRESETS[k];
+        V3D_RES[k] = {
+            w: p.refW, h: p.h, codec: h264CodecFor(p.refW, p.h), label: p.label,
+        };
+    });
+    var V3D_RES_DEFAULT = '1080';
 
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
@@ -2760,18 +2791,23 @@ export function showExport3DVideoModal() {
         '  <div style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:12px;">' +
         '    <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">Orbit and zoom the view to set the camera angle for the exported video.</div>' +
         '    <div style="display:flex;align-items:center;gap:8px;">' +
-        '      <label style="font-size:13px;width:34px;">FPS</label>' +
+        '      <label style="font-size:13px;width:52px;">FPS</label>' +
         '      <input type="number" id="v3dExportFps" min="1" max="240" step="1" style="width:74px;text-align:center;' + V3D_FIELD + '">' +
         '    </div>' +
         '    <div style="display:flex;align-items:center;gap:8px;">' +
-        '      <label style="font-size:13px;width:34px;">Res</label>' +
+        '      <label style="font-size:13px;width:52px;">Quality</label>' +
         '      <select id="v3dExportRes" style="width:190px;max-width:100%;box-sizing:border-box;' + V3D_FIELD + '">' +
-        '        <option value="360">' + V3D_RES['360'].label + '</option>' +
-        '        <option value="720" selected>' + V3D_RES['720'].label + '</option>' +
-        '        <option value="1080">' + V3D_RES['1080'].label + '</option>' +
-        '        <option value="2k">' + V3D_RES['2k'].label + '</option>' +
+        V3D_RES_KEYS.map(function (k) {
+            return '<option value="' + k + '"' +
+                (k === V3D_RES_DEFAULT ? ' selected' : '') + '>' +
+                V3D_RES[k].label + '</option>';
+        }).join('') +
         '      </select>' +
         '    </div>' +
+        // The chosen quality echoed back as the literal pixel size that will be
+        // encoded, so the tier number in the picker is never the only place the
+        // output resolution is stated.
+        '    <div style="font-size:12px;color:var(--text-secondary);">Output: <span id="v3dExportOutSize">—</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Duration: <span id="v3dExportDuration">0:00</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Exported Frames: <span id="v3dExportSelCount">' + frameCount + '</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Estimated File Size: <span id="v3dExportSize">—</span></div>' +
@@ -2859,6 +2895,7 @@ export function showExport3DVideoModal() {
     var endField = modal.querySelector('#v3dExportEnd');
     var selCountEl = modal.querySelector('#v3dExportSelCount');
     var sizeEl = modal.querySelector('#v3dExportSize');
+    var outSizeEl = modal.querySelector('#v3dExportOutSize');
     var previewValEl = modal.querySelector('#v3dExportScrubVal');
     var prevBtn = modal.querySelector('#v3dExportPrev');
     var playBtn = modal.querySelector('#v3dExportPlay');
@@ -2888,11 +2925,19 @@ export function showExport3DVideoModal() {
         refreshSize();
     }
     function refreshSize() {
-        var res = V3D_RES[resSelect.value] || V3D_RES['720'];
+        var res = V3D_RES[resSelect.value] || V3D_RES[V3D_RES_DEFAULT];
         var fps = currentFps();
-        // bytes = bitrate(bits/s) × duration(s) / 8 — same bitrate the encoder uses.
-        var bytes = _v3dBitrate(res.w, res.h, fps) * (selectedCount() / fps) / 8;
-        sizeEl.textContent = _fmtBytes(bytes);
+        // The shared estimator, NOT a local copy of `bitrate x duration / 8` —
+        // this number also decides whether the export streams to disk
+        // (`shouldStreamToDisk`), so the readout and that decision must be the
+        // same arithmetic. It was duplicated inline in both places before.
+        sizeEl.textContent = _fmtBytes(
+            estimatedBytes(res.w, res.h, fps, 'medium', selectedCount()));
+        // Echo the tier back as literal encoded pixels + the bitrate it implies.
+        if (outSizeEl) {
+            outSizeEl.textContent = res.w + '×' + res.h + ' · ' +
+                (_v3dBitrate(res.w, res.h, fps) / 1e6).toFixed(1) + ' Mbps';
+        }
     }
     function pctOf(f) { return lastIdx > 0 ? (f / lastIdx) * 100 : 0; }
 
@@ -3047,8 +3092,8 @@ export function showExport3DVideoModal() {
     exportBtn.addEventListener('click', async function () {
         if (exporting) return;
 
-        if (typeof VideoEncoder === 'undefined' || typeof window.Mp4Muxer === 'undefined') {
-            setStatus('3D video export needs a Chromium-based browser (WebCodecs)', 'error');
+        if (!videoEncodingAvailable()) {
+            setStatus('3D video export needs a browser with WebCodecs (Chrome, Edge or a recent Safari)', 'error');
             return;
         }
 
@@ -3074,7 +3119,7 @@ export function showExport3DVideoModal() {
         // Output at the chosen standard resolution. Render the viewport at that
         // size (pixelRatio 1 so the buffer is exactly W×H) and match the camera
         // aspect so the 3D content isn't distorted.
-        var res = V3D_RES[resSelect.value] || V3D_RES['720'];
+        var res = V3D_RES[resSelect.value] || V3D_RES[V3D_RES_DEFAULT];
         var W = res.w, H = res.h;
         try {
             vp.renderer.setPixelRatio(1);
@@ -3087,27 +3132,59 @@ export function showExport3DVideoModal() {
         cap.width = W; cap.height = H;
         var capCtx = cap.getContext('2d');
 
+        var fname = (session.name || 'session').replace(/[^\w.-]+/g, '_') +
+            '_3d_' + resSelect.value + '_f' + expStart + '-' + expEnd + '.mp4';
+
+        // A big clip streams to a real file instead of being buffered whole (see
+        // ui/video-encode.js); a small one just downloads, as it always has.
+        // This has to happen BEFORE the lazy-frame load below, because the File
+        // System Access API needs the transient user activation from the Export
+        // click and that does not survive a long await.
+        var estBytes = estimatedBytes(W, H, fps, 'medium', nFrames);
+        var fileHandle = null;
+        if (shouldStreamToDisk(estBytes)) {
+            if (typeof window.showSaveFilePicker === 'function') {
+                try {
+                    fileHandle = await window.showSaveFilePicker({
+                        suggestedName: fname,
+                        types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }],
+                    });
+                } catch (pickErr) {
+                    if (pickErr && pickErr.name === 'AbortError') {
+                        setStatus('3D video export cancelled — a clip this large (~' +
+                            _fmtBytes(estBytes) + ') needs a file to stream into', 'warning');
+                        exporting = false;
+                        cleanup();
+                        return;
+                    }
+                    console.warn('[3D video] destination pick failed:', pickErr);
+                    fileHandle = null;
+                }
+            }
+            if (!fileHandle && !window.confirm('This clip is about ' + _fmtBytes(estBytes) +
+                '. Without a save-file picker it must be built entirely in memory, which may ' +
+                'crash the tab.\n\nExport anyway?')) {
+                setStatus('3D video export cancelled', 'warning');
+                exporting = false;
+                cleanup();
+                return;
+            }
+        }
+
         // Lazy sessions: ensure all frames are available before sweeping.
         if (session.lazyLoader) {
             try { await loadAllLazyFrames(showLoading); hideLoading(); } catch (e) {}
         }
 
-        var muxer, encoder;
+        var writer;
         try {
-            muxer = new window.Mp4Muxer.Muxer({
-                target: new window.Mp4Muxer.ArrayBufferTarget(),
-                video: { codec: 'avc', width: W, height: H, frameRate: fps },
-                fastStart: 'in-memory',
-            });
-            encoder = new VideoEncoder({
-                output: function (chunk, meta) { muxer.addVideoChunk(chunk, meta); },
-                error: function (e) { console.error('[3D video] encoder error:', e); },
-            });
-            encoder.configure({
-                codec: res.codec,  // H.264 level matched to the chosen resolution
-                width: W, height: H,
+            writer = await createMp4Writer({
+                canvas: cap,
+                width: W, height: H, fps: fps,
                 bitrate: _v3dBitrate(W, H, fps),
-                framerate: fps,
+                fullCodecString: res.codec,   // H.264 level matched to the chosen resolution
+                frameCount: nFrames,
+                fileHandle: fileHandle,
             });
         } catch (err) {
             console.error('[3D video] setup failed:', err);
@@ -3117,7 +3194,6 @@ export function showExport3DVideoModal() {
             return;
         }
 
-        var frameDurUs = Math.round(1e6 / fps);
         var encodedOk = true;
         try {
             // Encode only the selected [expStart, expEnd] range; timestamps are
@@ -3131,38 +3207,32 @@ export function showExport3DVideoModal() {
                 vp.renderer.render(vp.scene, vp.threeCamera);
                 capCtx.drawImage(src, 0, 0, W, H);
 
-                var vframe = new VideoFrame(cap, {
-                    timestamp: Math.round(out * 1e6 / fps),
-                    duration: frameDurUs,
-                });
-                encoder.encode(vframe, { keyFrame: (out % 60 === 0) });
-                vframe.close();
+                // Awaiting the writer IS the backpressure: mediabunny settles
+                // once the encoder has room, and REJECTS if it died — the old
+                // `encodeQueueSize` spin could hang forever on a dead encoder.
+                await writer.addFrame(out);
 
-                // Update progress + relieve encoder backpressure periodically.
                 if (out % 5 === 0 || i === expEnd) {
                     var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
                     progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
-                while (encoder.encodeQueueSize > 12 && !cancelled) {
-                    await new Promise(function (r) { setTimeout(r, 0); });
-                }
             }
 
             if (!cancelled) {
                 progressLabel.textContent = 'Finalizing...';
-                await encoder.flush();
-                muxer.finalize();
-                var buffer = muxer.target.buffer;
-                var blob = new Blob([buffer], { type: 'video/mp4' });
-                var fname = (session.name || 'session').replace(/[^\w.-]+/g, '_') +
-                    '_3d_' + resSelect.value + '_f' + expStart + '-' + expEnd + '.mp4';
-                downloadBlob(blob, fname);
+                var result = await writer.finish();
+                if (!result.streamed) downloadBlob(result.blob, fname);
                 setStatus('3D video exported: ' + fname + ' (' + nFrames + ' frames @ ' + fps +
                     ' fps, ' + W + '×' + H + ')', 'success');
             } else {
-                setStatus('3D video export cancelled', 'warning');
+                // A cancelled STREAMED export still commits what was written,
+                // so the file on disk is a real but unplayable partial.
+                await writer.cancel();
+                setStatus(writer.streaming
+                    ? '3D video export cancelled — a partial file was written to the chosen destination'
+                    : '3D video export cancelled', 'warning');
             }
         } catch (err) {
             encodedOk = false;
@@ -3170,7 +3240,7 @@ export function showExport3DVideoModal() {
             setStatus('3D video export failed: ' + err.message, 'error');
         }
 
-        try { if (encoder.state !== 'closed') encoder.close(); } catch (e) {}
+        try { await writer.cancel(); } catch (e) {}
         exporting = false;
         cleanup();
     });

@@ -1,6 +1,6 @@
 /**
  * test-overlay-export-layout.js — unit tests for ui/overlay-export-layout.js,
- * the pure half of "Export Instance Overlays" (issue #190).
+ * the pure half of "Export Video Overlays" (issue #190).
  *
  * What actually goes wrong in a composited video export is geometry and
  * encoder-parameter arithmetic, and none of it needs a browser dock:
@@ -132,35 +132,52 @@
             assertEqual(s.width, 1920, 'derived width');
         });
 
-        it('offers 480p / 720p / 1080p / 2K, each keyed by its own height', () => {
+        it('offers 480 / 720 / 1080 / 2160, each keyed by its own height', () => {
             const P = __OverlayExportLayout.RES_PRESETS;
-            assertEqual(Object.keys(P).join(','), '480,720,1080,1440', 'the four presets, in order');
-            assertEqual(Object.keys(P).map(k => P[k].label).join(','), '480p,720p,1080p,2K', 'labels');
+            assertEqual(Object.keys(P).join(','), '480,720,1080,2160', 'the four tiers, in order');
+            // The tier NUMBER must appear in the label the user reads — the whole
+            // point of the tier set is that "2160" is stated, not implied.
+            assertEqual(Object.keys(P).map(k => P[k].label).join(','),
+                '480p (854×480),720p (1280×720),1080p (1920×1080),2160p (3840×2160)', 'labels');
+            for (const k of Object.keys(P)) {
+                assertTrue(P[k].label.indexOf(k) === 0, 'label for ' + k + ' leads with the tier number');
+            }
             // The key must BE the height — `outputSizeFor` reads `preset.h`, and a
             // key that disagreed would make the picker lie about the output.
             for (const k of Object.keys(P)) assertEqual(P[k].h, Number(k), 'key is the height for ' + k);
-            // 2K means 2560x1440 here, matching V3D_RES in ui/export-modals.js.
-            assertEqual(__OverlayExportLayout.outputSizeFor(16 / 9, '1440').width, 2560, '2K is 2560 wide at 16:9');
+            // `refW` is what the 3D modal encodes at verbatim and what the labels
+            // quote, so it must equal the width `outputSizeFor` derives at 16:9.
+            for (const k of Object.keys(P)) {
+                assertEqual(__OverlayExportLayout.outputSizeFor(16 / 9, k).width, P[k].refW,
+                    'refW is the 16:9 width for ' + k);
+            }
+            // 2160p at 16:9 must land exactly on MAX_OUT_DIM, not past it — one
+            // pixel more and every 4K export would silently clamp and lose height.
+            assertEqual(P['2160'].refW, __OverlayExportLayout.MAX_OUT_DIM, '2160p at 16:9 is exactly MAX_OUT_DIM');
         });
 
         it('falls back to the default preset for a res it no longer recognises', () => {
-            // '360' was a real preset on an earlier build of this branch, so a
-            // stored blob can still carry it. Left alone it would blank the
-            // <select> while outputSizeFor quietly used 1080 — two disagreeing UIs.
+            // '360' and '1440' were both real presets on earlier builds of this
+            // branch, so a stored blob can still carry either. Left alone it would
+            // blank the <select> while outputSizeFor quietly used 1080 — two
+            // disagreeing UIs. Note the fallback is DEFAULT_RES, deliberately NOT
+            // the nearest surviving tier: promoting '1440' to '2160' would silently
+            // ~2.25x the pixels, bitrate and file size of the next export.
             const D = __OverlayExportLayout.DEFAULT_RES;
-            for (const stale of ['360', '2160', '', 'garbage']) {
+            for (const stale of ['360', '1440', '2k', '', 'garbage']) {
                 const s = __OverlayExportLayout.sanitizeSettings({ res: stale });
                 assertEqual(s.res, D, 'stale res ' + JSON.stringify(stale) + ' falls back');
             }
             assertEqual(__OverlayExportLayout.sanitizeSettings({ res: '720' }).res, '720', 'a live preset is kept');
+            assertEqual(__OverlayExportLayout.sanitizeSettings({ res: '2160' }).res, '2160', 'the new top tier is kept');
             assertEqual(__OverlayExportLayout.sanitizeSettings({ res: 'custom' }).res, 'custom', 'custom is not a preset but is legal');
         });
 
         it('clamps an extreme aspect to MAX_OUT_DIM and keeps the aspect', () => {
-            // A 10-camera single row is ~10:1 — at 1440p that would be 14400px.
-            const s = __OverlayExportLayout.outputSizeFor(10, '1440');
+            // A 10-camera single row is ~10:1 — at 2160p that would be 21600px.
+            const s = __OverlayExportLayout.outputSizeFor(10, '2160');
             assertEqual(s.width, __OverlayExportLayout.MAX_OUT_DIM, 'width clamped');
-            assertTrue(s.height < 1440, 'height reduced to hold the aspect');
+            assertTrue(s.height < 2160, 'height reduced to hold the aspect');
             assertTrue(Math.abs(s.width / s.height - 10) < 0.05, 'aspect preserved');
             assertEqual(s.height % 2, 0, 'still even after the clamp');
         });
@@ -188,6 +205,44 @@
             assertTrue(__OverlayExportLayout.bitrateFor(64, 48, 1, 'low') >= 1000000, 'floor');
             assertTrue(__OverlayExportLayout.bitrateFor(3840, 2160, 240, 'high') <= 48000000, 'ceiling');
             assertEqual(__OverlayExportLayout.bitrateFor(1920, 1080, 30, 'nonsense'), mid, 'unknown quality → medium');
+        });
+
+        it('estimates output bytes from the bitrate actually used', () => {
+            // The modal's summary line and the streaming decision must be the
+            // SAME number — if they drift, the UI promises one size and the
+            // export sizes its destination for another.
+            const L = __OverlayExportLayout;
+            const W = 1920, H = 1080, fps = 30, q = 'medium', n = 300;
+            const expected = L.bitrateFor(W, H, fps, q) * (n / fps) / 8;
+            assertEqual(L.estimatedBytes(W, H, fps, q, n), expected, 'bytes = bitrate * seconds / 8');
+            // 10 s at 1080p30 medium: 1920*1080*30*0.12 = ~7.46 Mbps -> ~9.3 MB.
+            assertTrue(L.estimatedBytes(W, H, fps, q, 300) > 8e6, 'plausible magnitude (lower)');
+            assertTrue(L.estimatedBytes(W, H, fps, q, 300) < 11e6, 'plausible magnitude (upper)');
+            assertTrue(L.estimatedBytes(W, H, fps, q, 600) === 2 * L.estimatedBytes(W, H, fps, q, 300),
+                'linear in frame count');
+        });
+
+        it('returns zero estimated bytes for a degenerate range or fps', () => {
+            // Guards a divide-by-zero / NaN reaching `shouldStreamToDisk`, which
+            // would make an empty export prompt for a destination.
+            const L = __OverlayExportLayout;
+            for (const [fps, n] of [[0, 100], [30, 0], [30, -5], [NaN, 100], [30, NaN]]) {
+                assertEqual(L.estimatedBytes(1920, 1080, fps, 'medium', n), 0,
+                    'zero for fps=' + fps + ', n=' + n);
+            }
+        });
+
+        it('only streams to disk once the output is genuinely large', () => {
+            const L = __OverlayExportLayout;
+            assertTrue(!L.shouldStreamToDisk(0), 'nothing to write → no prompt');
+            assertTrue(!L.shouldStreamToDisk(L.STREAM_TO_DISK_BYTES), 'exactly at the threshold → no prompt');
+            assertTrue(L.shouldStreamToDisk(L.STREAM_TO_DISK_BYTES + 1), 'just over → stream');
+            // A short clip must stay on the frictionless download path, and a
+            // long one must not: this is the behaviour split users actually see.
+            const short = L.estimatedBytes(1280, 720, 30, 'medium', 90);      // 3 s
+            const long = L.estimatedBytes(1920, 1080, 30, 'high', 30 * 600);  // 10 min
+            assertTrue(!L.shouldStreamToDisk(short), '3 s of 720p just downloads');
+            assertTrue(L.shouldStreamToDisk(long), '10 min of 1080p high streams');
         });
     });
 
@@ -314,7 +369,7 @@
             const s = __OverlayExportLayout.defaultOverlayExportSettings();
             s.user.nodeSize = 4; s.user.lineWidth = 2; s.user.labelSize = 12;
             // 640x480 video into a 1280x960 tile → 2x. "Size 4" must mean 4
-            // VIDEO pixels at every output resolution, or a 480p and a 2K
+            // VIDEO pixels at every output resolution, or a 480p and a 2160p
             // export of the same layout would not look alike.
             const big = __OverlayExportLayout.overlayOptionsFrom(s, 640, 480, 1280, 960);
             assertEqual(big.userOpts.nodeSize, 8, 'marker doubled');

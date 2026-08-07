@@ -12,9 +12,11 @@ The codebase is split across four directories plus two root files:
 - root — `app.js` entry point, `demo-data.js` synthetic dataset.
 
 External script-tag globals (`three`, `mp4box`, `h5wasm`, `dockview-core` —
-**pinned to 6.6.1**, see CLAUDE.md Dependencies — and `Mp4Muxer` — local copy in
-`lib/mp4-muxer/`, used for 3D-video `.mp4` muxing) are not listed under
-"Imports from project modules".
+**pinned to 6.6.1**, see CLAUDE.md Dependencies) are not listed under
+"Imports from project modules". Neither are importmap bare specifiers
+(`mediabunny`, `h5wasm`, `pako`, `yaml`); `mediabunny` is vendored in
+`lib/mediabunny/` and is used for video DECODE (via sleap-io.js) and video
+ENCODE (via `ui/video-encode.js`).
 
 ---
 
@@ -1703,9 +1705,13 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   Export renders only the selected `[start, end]` range into the viewport at the
   chosen resolution (`renderer.setPixelRatio(1)` + `setSize(W,H)` + matching
   camera aspect), captures through an even-dimensioned 2D canvas, and encodes an
-  `.mp4` via WebCodecs `VideoEncoder` muxed with `mp4-muxer` (global `Mp4Muxer`,
-  local copy in `lib/mp4-muxer/`). Timestamps are relative to the range start.
-  Requires a Chromium-based browser (WebCodecs) — error status otherwise.
+  `.mp4` through **`ui/video-encode.js`** (mediabunny), passing the resolution's
+  H.264 level as `fullCodecString`. Timestamps are relative to the range start.
+  When the estimated output exceeds `shouldStreamToDisk`'s threshold it asks for
+  a save-file destination and **streams** to it (declining cancels the export,
+  since buffering was the thing being avoided); a short clip just downloads.
+  Requires WebCodecs — error status otherwise. Covered by
+  `tests/e2e/export-3d-video.mjs`.
 - `showTriangulateMultiFrameModal()` — frame-range triangulation modal.
 - `exportLabels()` — JSON labels export.
 - `exportPoints3dH5()` — points3d H5 export.
@@ -2183,7 +2189,7 @@ grid / 3D / info-panel / timeline.
 
 ### ui/overlay-export-layout.js
 
-**Purpose.** The pure half of "Export Instance Overlays" (issue #190):
+**Purpose.** The pure half of "Export Video Overlays" (issue #190):
 composition geometry, output sizing, encoder parameters, the persisted settings
 schema, and the seed-layout plan. Deliberately **dependency-free** — no project
 imports, no dockview, no DOM beyond `localStorage` — so it can be bridged into
@@ -2215,6 +2221,16 @@ the classic-script unit runner and exercised without a browser dock.
   for a preset, where dock and output agree already) — shaping it is what stops
   `computeTileRects` from burning letterbox bars into a custom-size export.
 - `h264CodecFor(W, H)`, `bitrateFor(W, H, fps, quality)`, `QUALITY_BPP`.
+- `estimatedBytes(W, H, fps, quality, nFrames)` — expected size of one output
+  file. The modal's summary line AND the streaming decision both read this, so
+  the size the UI promises cannot drift from the size the export plans for.
+  Returns 0 for a degenerate fps/range rather than `NaN`/`Infinity`.
+- `shouldStreamToDisk(totalBytes)` / `STREAM_TO_DISK_BYTES` (256 MB) — the
+  buffer-vs-stream split. Under the threshold an export buffers and downloads
+  exactly as it always has (no destination prompt); over it, the export asks for
+  a real file/folder and streams into it, because that much output buffered in
+  the pointer-compressed heap is the failure mode CLAUDE.md documents for
+  luc3d #185/#190/#191/#193. Used by BOTH video modals.
 - `defaultOverlayExportSettings()`, `mergeSettings(base, saved)`,
   `sanitizeSettings(s)`, `applyStoredSettings`, `saveOverlayExportSettings`,
   `SETTINGS_KEY` (`'overlayExportSettings.v1'`), `DEFAULT_RES` (`'1080'`).
@@ -2238,14 +2254,15 @@ the classic-script unit runner and exercised without a browser dock.
 
 **Imports from project modules.** None (by design).
 
-**Imported by.** `ui/overlay-export-modal.js`; bridged into
+**Imported by.** `ui/overlay-export-modal.js`; `ui/export-modals.js`
+(`shouldStreamToDisk`, so both video exports share one threshold); bridged into
 `tests/test-runner.html` as `window.__OverlayExportLayout`.
 
 ---
 
 ### ui/overlay-export-modal.js
 
-**Purpose.** The "Export Instance Overlays" modal (File menu, above "Export 3D
+**Purpose.** The "Export Video Overlays" modal (File menu, above "Export 3D
 Video") — issue #190. Renders the session's 2D camera videos **with pose
 overlays burned in**, plus the 3D viewport, either stitched into one composed
 video laid out exactly as the user arranged it, or as one file per tile. The
@@ -2337,9 +2354,21 @@ otherwise silently do nothing visible.
 the output tile box (CSS size untouched) with the container `ResizeObserver`
 **disconnected**, then restored afterwards.
 
-**Encoding.** WebCodecs `VideoEncoder` + `Mp4Muxer`, mirroring the 3D video
-export. Individual mode runs N encoders inside the SAME frame loop, so each
-frame is decoded once no matter how many files come out.
+**Encoding.** Delegated entirely to **`ui/video-encode.js`** (mediabunny), shared
+with the 3D video export — this module no longer touches `VideoEncoder` or a
+muxer. Individual mode runs N writers inside the SAME frame loop, so each frame
+is decoded once no matter how many files come out, and `await writer.addFrame()`
+is what applies backpressure. **Destination:** an export whose estimated total
+exceeds `shouldStreamToDisk` asks for a save-file (stitched) or a folder
+(individual, one `getFileHandle` per tile; the folder handle is deliberately NOT
+cached to `state.exportDirHandle`, which `showSlpExportAllModal` reuses without
+prompting) and streams into it; below the threshold it buffers and
+downloads exactly as before, so a short export is still one click. Declining the
+picker for a large export **cancels** it rather than silently falling back to the
+memory buffer that was being avoided; with no File System Access API at all the
+user gets the same `confirm()` warning `exportLabels()` uses. Cancelling a
+streamed export leaves a real partial `.mp4` on disk (mediabunny closes the
+writable), which the status message says outright.
 
 **Settings persistence.** Seeded from the live Visibility panel
 (`getVisibilitySettings()`) on first open so an export defaults to looking like
@@ -2353,6 +2382,7 @@ reopened modal re-seeds from the main-window mirror.
 - `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`.
 - `./rendering.js` — `getVisibilitySettings` (the seed).
 - `./overlay-export-layout.js` — the pure helpers above.
+- `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable`.
 - `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
   `ensureLazyFrameData`, `triangulateAndReproject`, `storeReprojectedInstances`,
   `sessionHasCalibration`.
@@ -2379,6 +2409,77 @@ range is *unchanged* by a track press. A scrub lands on the same frame under
 either implementation — the old nearest-endpoint code previewed the endpoint it
 had just dragged — so the playhead assertions alone would pass on the old code
 too. Both range assertions were confirmed to fail against it.
+
+---
+
+### ui/video-encode.js
+
+**Purpose.** The app's **only** video-encoding seam. Both video exports
+("Export Video Overlays", "Export 3D Video") go through it; neither constructs a
+`VideoEncoder` or a muxer any more.
+
+**Why it is not sleap-io.js.** sleap-io.js has **no browser video encoder** —
+verified across every ref, not just the vendored pin. Its only encoder,
+`renderVideo()` (`src/rendering/video.ts`), spawns a native `ffmpeg` and is
+exported solely from the Node entry, never from `src/index.browser.ts`; its own
+docs state "there is no encoder in the JS port". So this is the one part of the
+video pipeline LUCID must own — and it owns it thinly, on top of **mediabunny**,
+the library sleap-io.js itself uses for decode and which LUCID already vendors in
+full (`lib/mediabunny/`, importmap `mediabunny`). This replaced the vendored
+**mp4-muxer 5.2.1 (deleted)** and the duplicated hand-rolled WebCodecs pairing.
+
+**Key exports.**
+- `createMp4Writer({canvas, width, height, fps, bitrate, frameCount,
+  fullCodecString, keyFrameEveryFrames, fileHandle})` → `{addFrame(outIdx),
+  finish(), cancel(), streaming, codec, fastStart, framesAdded}`. The writer is
+  bound to ONE canvas, sampled at each `addFrame`.
+- `resolveH264Config(width, height, bitrate, preferredCodecString)` — probes with
+  `canEncodeVideo` and degrades to mediabunny's own level pick if the caller's
+  exact H.264 level string isn't encodable here. Returns `null` when H.264 is
+  unavailable at that size, which is what turns into the user-facing error.
+- `videoEncodingAvailable()`, `MP4_MIME`, `KEYFRAME_INTERVAL_FRAMES` (60).
+
+**What it buys over the old path.**
+- **Streaming.** Given a `fileHandle` it writes through a mediabunny
+  `StreamTarget` at bounded memory instead of buffering the whole `.mp4` in an
+  `ArrayBufferTarget` — the failure mode CLAUDE.md documents at length for
+  luc3d #185/#190/#191/#193 (V8's pointer-compressed cage, hard-capped near 4 GB
+  in a Chrome renderer).
+- **moov-at-front while streaming.** Callers know the frame count, so it passes
+  `fastStart: 'reserve'` (+ `maximumPacketCount` in the track metadata, which
+  that mode requires) to reserve the sample table, stream `mdat`, then seek back
+  and write `moov` ahead of it. **mediabunny defaults `fastStart` to `'in-memory'`
+  for a BufferTarget but to `false` (trailing moov) for a StreamTarget**, so it is
+  always passed explicitly; `tests/e2e/video-encode-streaming.mjs` asserts the
+  byte order so a regression to a non-seekable file can't pass silently.
+- **Real backpressure that can fail.** `await source.add(...)` settles when the
+  encoder has room and **rejects** when it died, replacing a
+  `while (encodeQueueSize > 12) await setTimeout(0)` spin that had no exit on a
+  dead encoder (the old `error:` callback only logged).
+
+**Contracts it depends on** (none compile-checked — re-verify on any mediabunny
+bump, see `lib/mediabunny/PROVENANCE.txt`): `keyFrameInterval` is in **seconds**,
+so the historical "keyframe every 60 frames" is `60/fps`, belt-and-braced with a
+per-frame `{keyFrame}` flag that mediabunny ORs with the interval; `finalize()`
+and `cancel()` both **close the target's WritableStream themselves**, so a
+cancelled streamed export commits a partial file.
+
+**Deliberately unchanged from the old encoder.** H.264 only, the callers' own
+bitrate maths, and the 60-frame keyframe cadence. VP9/AV1 fallback is a one-line
+change here but is a separate decision.
+
+**Imports from project modules.** None. Imports `mediabunny` (importmap).
+
+**Imported by.** `ui/overlay-export-modal.js`, `ui/export-modals.js`.
+
+**Tests.** `tests/e2e/video-encode-streaming.mjs` drives it directly with a
+stand-in file handle — necessary because headless Chromium rejects
+`showSaveFilePicker()` instantly with `AbortError`, so the streaming path is
+unreachable through either modal under automation. It pins position-based writes,
+moov-before-mdat on both paths, the frameCount overrun guard, the canvas/size
+mismatch guard, and the encoded dimensions. The modals' own end-to-end exports
+(`tests/e2e/overlay-export-modal.mjs`, `tests/e2e/export-3d-video.mjs`) cover the
+buffered path.
 
 ---
 
@@ -3299,7 +3400,7 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `data-value` + `drawAllOverlays` + `saveVisSettings`); they are added to
   `visStyleIds` for persistence/restore. The handler additionally rebuilds the
   3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
-- File ▸ "Export Instance Overlays" (`menuExportOverlayVideo`) is wired to
+- File ▸ "Export Video Overlays" (`menuExportOverlayVideo`) is wired to
   `showOverlayExportModal()` (overlay-export-modal.js); it sits directly above
   File ▸ "Export 3D Video" (`menuExportVideo3d`), which is wired to
   `showExport3DVideoModal()` (export-modals.js).

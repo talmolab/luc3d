@@ -1,4 +1,4 @@
-// ui/overlay-export-modal.js — "Export Instance Overlays" (issue #190)
+// ui/overlay-export-modal.js — "Export Video Overlays" (issue #190)
 //
 // Renders the session's 2D camera videos WITH pose overlays burned in, plus the
 // 3D viewport, either stitched into a single composed video (laid out exactly as
@@ -43,10 +43,11 @@ import { setStatus } from '../import-export/save-load.js';
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
     fitRect, computeTileRects, outputSizeFor, outputSizeFrom, customAspect, clampOutDim,
-    h264CodecFor, bitrateFor,
+    h264CodecFor, bitrateFor, estimatedBytes, shouldStreamToDisk,
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
 } from './overlay-export-layout.js';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -168,7 +169,7 @@ var FIELD = 'background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e
 var HANDLE = 'position:absolute;top:5px;width:15px;height:15px;margin-left:-8px;border-radius:50%;background:var(--accent,#4a9eff);border:2px solid #fff;box-sizing:border-box;cursor:ew-resize;touch-action:none;z-index:2;';
 
 /**
- * Open the "Export Instance Overlays" modal.
+ * Open the "Export Video Overlays" modal.
  *
  * Views strip (left) → drag/double-click to dock. Composition dock (middle) →
  * dockview, drag / drop / close / resize. Settings (right) → frame range,
@@ -208,7 +209,7 @@ export function showOverlayExportModal() {
         'width:1240px;max-width:97vw;height:820px;max-height:94vh;box-sizing:border-box;' +
         'display:flex;flex-direction:column;padding:18px;';
     modal.innerHTML =
-        '<h3 style="margin:0 0 10px 0;">Export Instance Overlays</h3>' +
+        '<h3 style="margin:0 0 10px 0;">Export Video Overlays</h3>' +
         '<div style="flex:1 1 auto;min-height:0;display:flex;gap:10px;">' +
         // --- views strip -------------------------------------------------
         '  <div style="flex:0 0 108px;display:flex;flex-direction:column;min-height:0;' +
@@ -1129,27 +1130,54 @@ export function showOverlayExportModal() {
             var aspect = layout.dock.height > 0 ? layout.dock.width / layout.dock.height : 16 / 9;
             var size = outputSizeFrom(settings, aspect);
             syncOutFields(size);
-            var bytes = bitrateFor(size.width, size.height, fps, settings.quality) * (nFrames / fps) / 8;
-            summaryEl.textContent = n + ' tile' + (n === 1 ? '' : 's') + ' · ' + size.width + '×' + size.height +
+            var bytes = estimatedBytes(size.width, size.height, fps, settings.quality, nFrames);
+            summaryEl.textContent = n + ' tile' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(size) +
+                ' · ' + size.width + '×' + size.height +
                 ' · ' + nFrames + ' frames · ~' + fmtBytes(bytes);
-            if (outNote) outNote.textContent = 'One .mp4 laid out exactly as the composition (' + size.width + '×' + size.height + ').';
+            if (outNote) {
+                outNote.textContent = 'One .mp4 laid out exactly as the composition (' +
+                    size.width + '×' + size.height + ' at ' + settings.quality + ' quality, ' +
+                    (bitrateFor(size.width, size.height, fps, settings.quality) / 1e6).toFixed(1) + ' Mbps).';
+            }
         } else {
             var total = 0;
             for (var i = 0; i < layout.tiles.length; i++) {
                 var s = individualSizeFor(layout.tiles[i]);
-                total += bitrateFor(s.width, s.height, fps, settings.quality) * (nFrames / fps) / 8;
+                total += estimatedBytes(s.width, s.height, fps, settings.quality, nFrames);
             }
             // With a preset every file is sized to its own aspect, so the fields
             // show the first one; a custom size applies to all of them.
             var firstSize = individualSizeFor(layout.tiles[0]);
             syncOutFields(firstSize);
-            summaryEl.textContent = n + ' file' + (n === 1 ? '' : 's') + ' · ' + nFrames + ' frames · ~' + fmtBytes(total);
+            summaryEl.textContent = n + ' file' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(null) +
+                ' · ' + nFrames + ' frames · ~' + fmtBytes(total);
             if (outNote) {
                 outNote.textContent = settings.res === RES_CUSTOM
                     ? 'One .mp4 per tile (' + n + '), each ' + firstSize.width + '×' + firstSize.height + ', same appearance settings.'
-                    : 'One .mp4 per tile (' + n + ' file' + (n === 1 ? '' : 's') + '), each at its own aspect, same appearance settings.';
+                    // Each file gets its own WIDTH (its tile's aspect) but the same
+                    // tier HEIGHT, so naming the height is accurate for all of them
+                    // where naming a single W×H would not be.
+                    : 'One .mp4 per tile (' + n + ' file' + (n === 1 ? '' : 's') + '), each ' +
+                      firstSize.height + 'px tall at its own aspect, same appearance settings.';
             }
         }
+    }
+
+    /**
+     * The chosen quality tier, named. Shown alongside the literal W×H because the
+     * two can legitimately disagree: a preset fixes only the HEIGHT, and a very
+     * wide composition clamps the derived width to `MAX_OUT_DIM` and then
+     * recomputes the height to keep the aspect — so "2160p" can encode at 3840×960.
+     * Stating the tier and the pixels side by side makes that visible instead of
+     * surprising.
+     */
+    function resTierLabel(size) {
+        if (settings.res === RES_CUSTOM) return 'custom';
+        var preset = RES_PRESETS[settings.res];
+        if (!preset) return 'custom';
+        return size && size.height !== preset.h
+            ? preset.h + 'p (width-capped)'
+            : preset.h + 'p';
     }
 
     /** Output size of one tile in "Individual files" mode. */
@@ -1171,28 +1199,26 @@ export function showOverlayExportModal() {
     // Export
     // ========================================================================
 
-    function makeEncoder(W, H, fps) {
-        var muxer = new window.Mp4Muxer.Muxer({
-            target: new window.Mp4Muxer.ArrayBufferTarget(),
-            video: { codec: 'avc', width: W, height: H, frameRate: fps },
-            fastStart: 'in-memory',
-        });
-        var encoder = new VideoEncoder({
-            output: function (chunk, meta) { muxer.addVideoChunk(chunk, meta); },
-            error: function (e) { console.error('[overlay export] encoder error:', e); },
-        });
-        encoder.configure({
-            codec: h264CodecFor(W, H),
-            width: W, height: H,
+    /**
+     * One mp4 writer per output file, bound to the canvas it encodes.
+     * `fileHandle` (when the browser gave us one) makes it stream to disk at a
+     * bounded memory cost instead of buffering the whole file — see
+     * ui/video-encode.js.
+     */
+    function makeWriter(canvas, W, H, fps, nFrames, fileHandle) {
+        return createMp4Writer({
+            canvas: canvas,
+            width: W, height: H, fps: fps,
             bitrate: bitrateFor(W, H, fps, settings.quality),
-            framerate: fps,
+            fullCodecString: h264CodecFor(W, H),
+            frameCount: nFrames,
+            fileHandle: fileHandle || null,
         });
-        return { muxer: muxer, encoder: encoder, width: W, height: H };
     }
 
     async function runExport() {
-        if (typeof VideoEncoder === 'undefined' || typeof window.Mp4Muxer === 'undefined') {
-            setStatus('Overlay video export needs a Chromium-based browser (WebCodecs)', 'error');
+        if (!videoEncodingAvailable()) {
+            setStatus('Overlay video export needs a browser with WebCodecs (Chrome, Edge or a recent Safari)', 'error');
             return;
         }
         var layout = captureLayout();
@@ -1263,22 +1289,122 @@ export function showOverlayExportModal() {
             } catch (e) { console.warn('[overlay export] 3D resize failed:', e); }
         }
 
+        // Undo that resize. Factored out because the destination picker below
+        // can bail out of the export before any frame is encoded.
+        function restore3dViewport() {
+            if (!vp3d || !vp3dRestore) return;
+            try {
+                vp3d.renderer.setPixelRatio(vp3dRestore.pr);
+                vp3d.threeCamera.aspect = vp3dRestore.aspect;
+                vp3d.threeCamera.updateProjectionMatrix();
+                if (vp3d._resizeObserver) vp3d._resizeObserver.observe(vp3d.container);
+                vp3d.resize();
+            } catch (e) { /* ignore */ }
+            vp3dRestore = null;
+        }
+
         var composite = null, compositeCtx = null;
         if (stitched) {
             composite = document.createElement('canvas');
             composite.width = outW; composite.height = outH;
             compositeCtx = composite.getContext('2d');
-            targets.push(makeEncoder(outW, outH, fps));
+        }
+
+        var base = safeName(session.name) + '_overlay_f' + (expStart + 1) + '-' + (expEnd + 1);
+
+        // One spec per output FILE: the canvas it encodes, its size, its name.
+        var specs = [];
+        if (stitched) {
+            specs.push({ canvas: composite, w: outW, h: outH, filename: base + '.mp4', job: null });
         } else {
             for (var t = 0; t < jobs.length; t++) {
-                jobs[t].target = makeEncoder(jobs[t].w, jobs[t].h, fps);
-                targets.push(jobs[t].target);
+                var tileName = jobs[t].entry.tile.is3d ? '3d' : safeName(jobs[t].entry.tile.viewName);
+                specs.push({
+                    canvas: jobs[t].canvas, w: jobs[t].w, h: jobs[t].h,
+                    filename: base + '_' + tileName + '.mp4', job: jobs[t],
+                });
             }
         }
 
-        var frameDurUs = Math.round(1e6 / fps);
+        // --- destination ------------------------------------------------------
+        // Small exports keep the old zero-friction behaviour: buffer, download,
+        // no questions. Only once the expected output is big enough that holding
+        // it in memory is a genuine risk do we ask for a real destination and
+        // stream to it (see `shouldStreamToDisk`). This has to be decided and
+        // the picker opened BEFORE any await, because the File System Access API
+        // needs the transient user activation from the Export click and every
+        // step above this point is synchronous.
+        var estTotal = 0;
+        for (var se = 0; se < specs.length; se++) {
+            estTotal += estimatedBytes(specs[se].w, specs[se].h, fps, settings.quality, nFrames);
+        }
+        var wantStream = shouldStreamToDisk(estTotal);
+        var streamToDisk = false;
+
+        function abortExport(msg) {
+            setStatus(msg, 'warning');
+            restore3dViewport();
+            exporting = false;
+            setControlsDisabled(false);
+        }
+
+        if (wantStream) {
+            var picker = stitched ? window.showSaveFilePicker : window.showDirectoryPicker;
+            if (typeof picker === 'function') {
+                try {
+                    if (stitched) {
+                        specs[0].fileHandle = await window.showSaveFilePicker({
+                            suggestedName: specs[0].filename,
+                            types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }],
+                        });
+                    } else {
+                        // Deliberately NOT cached to `state.exportDirHandle`:
+                        // showSlpExportAllModal REUSES that handle without
+                        // prompting, so stashing a video destination there would
+                        // silently redirect a later SLP export into it.
+                        var dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                        for (var sd = 0; sd < specs.length; sd++) {
+                            specs[sd].fileHandle = await dirHandle.getFileHandle(specs[sd].filename, { create: true });
+                        }
+                    }
+                    streamToDisk = true;
+                } catch (pickErr) {
+                    // Declining the destination for an export this size means
+                    // the export cannot safely proceed — buffering ~
+                    // fmtBytes(estTotal) in memory is what we were avoiding.
+                    // Say that rather than silently doing the risky thing.
+                    if (pickErr && pickErr.name === 'AbortError') {
+                        abortExport('Overlay video export cancelled — an export this large (~' +
+                            fmtBytes(estTotal) + ') needs a destination folder or file to stream into');
+                        return;
+                    }
+                    console.warn('[overlay export] destination pick failed:', pickErr);
+                    for (var sc2 = 0; sc2 < specs.length; sc2++) specs[sc2].fileHandle = null;
+                }
+            }
+            if (!streamToDisk) {
+                // No File System Access API (or it failed): the whole file has
+                // to be built in memory. Mirror the JSON exporter and let the
+                // user decide instead of risking the tab silently.
+                if (!window.confirm('This export is about ' + fmtBytes(estTotal) + '. Without a ' +
+                    'save-file picker it must be built entirely in memory, which may crash the ' +
+                    'tab.\n\nExport anyway?')) {
+                    abortExport('Overlay video export cancelled');
+                    return;
+                }
+            }
+        }
+
         var ok = true;
         try {
+            for (var sw = 0; sw < specs.length; sw++) {
+                var writer = await makeWriter(specs[sw].canvas, specs[sw].w, specs[sw].h,
+                    fps, nFrames, specs[sw].fileHandle);
+                specs[sw].writer = writer;
+                targets.push(writer);
+                if (specs[sw].job) specs[sw].job.target = writer;
+            }
+
             for (var f = expStart; f <= expEnd; f++) {
                 if (cancelled) break;
                 var out = f - expStart;
@@ -1330,11 +1456,14 @@ export function showOverlayExportModal() {
                         var jb = jobs[jc];
                         compositeCtx.drawImage(jb.canvas, jb.dstRect.x, jb.dstRect.y, jb.dstRect.width, jb.dstRect.height);
                     }
-                    encodeInto(targets[0], composite, out, fps, frameDurUs);
-                } else {
-                    for (var je = 0; je < jobs.length; je++) {
-                        encodeInto(jobs[je].target, jobs[je].canvas, out, fps, frameDurUs);
-                    }
+                }
+
+                // Awaiting each writer IS the backpressure — mediabunny settles
+                // the promise once the encoder has room, so the old
+                // `while (encodeQueueSize > 12)` spin is gone. It also rejects
+                // if the encoder died, which the spin could never notice.
+                for (var tq = 0; tq < targets.length; tq++) {
+                    await targets[tq].addFrame(out);
                 }
 
                 if (out % 5 === 0 || f === expEnd) {
@@ -1343,36 +1472,38 @@ export function showOverlayExportModal() {
                     progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
-                for (var tq = 0; tq < targets.length; tq++) {
-                    while (targets[tq].encoder.encodeQueueSize > 12 && !cancelled) {
-                        await new Promise(function (r) { setTimeout(r, 0); });
-                    }
-                }
             }
 
             if (!cancelled) {
                 progressLabel.textContent = 'Finalizing…';
-                var base = safeName(session.name) + '_overlay_f' + (expStart + 1) + '-' + (expEnd + 1);
-                if (stitched) {
-                    await targets[0].encoder.flush();
-                    targets[0].muxer.finalize();
-                    downloadBlob(new Blob([targets[0].muxer.target.buffer], { type: 'video/mp4' }), base + '.mp4');
-                    setStatus('Overlay video exported: ' + base + '.mp4 (' + nFrames + ' frames @ ' +
-                        fps + ' fps, ' + outW + '×' + outH + ')', 'success');
-                } else {
-                    for (var fj = 0; fj < jobs.length; fj++) {
-                        await jobs[fj].target.encoder.flush();
-                        jobs[fj].target.muxer.finalize();
-                        var tileName = jobs[fj].entry.tile.is3d ? '3d' : safeName(jobs[fj].entry.tile.viewName);
-                        downloadBlob(new Blob([jobs[fj].target.muxer.target.buffer], { type: 'video/mp4' }),
-                            base + '_' + tileName + '.mp4');
-                        await new Promise(function (r) { setTimeout(r, 250); });
+                for (var fj = 0; fj < specs.length; fj++) {
+                    var res = await specs[fj].writer.finish();
+                    if (!res.streamed) {
+                        downloadBlob(res.blob, specs[fj].filename);
+                        // Serial downloads need a beat between them or the
+                        // browser coalesces/drops the later ones.
+                        if (specs.length > 1) await new Promise(function (r) { setTimeout(r, 250); });
                     }
-                    setStatus('Overlay videos exported: ' + jobs.length + ' files (' + nFrames +
-                        ' frames @ ' + fps + ' fps)', 'success');
+                }
+                if (stitched) {
+                    setStatus('Overlay video exported: ' + specs[0].filename + ' (' + nFrames +
+                        ' frames @ ' + fps + ' fps, ' + outW + '×' + outH + ')', 'success');
+                } else {
+                    setStatus('Overlay videos exported: ' + specs.length + ' file' +
+                        (specs.length === 1 ? '' : 's') + ' (' + nFrames + ' frames @ ' +
+                        fps + ' fps)', 'success');
                 }
             } else {
-                setStatus('Overlay video export cancelled', 'warning');
+                // Cancelling a STREAMED export still commits whatever reached
+                // the file (mediabunny closes the writable), so the partial
+                // .mp4 on disk is real and unplayable — say so rather than
+                // letting the user find it later.
+                for (var cj = 0; cj < specs.length; cj++) {
+                    if (specs[cj].writer) await specs[cj].writer.cancel();
+                }
+                setStatus(streamToDisk
+                    ? 'Overlay video export cancelled — partial file(s) were written to the chosen destination'
+                    : 'Overlay video export cancelled', 'warning');
             }
         } catch (err) {
             ok = false;
@@ -1380,29 +1511,13 @@ export function showOverlayExportModal() {
             setStatus('Overlay video export failed: ' + err.message, 'error');
         }
 
+        // Tear down anything still open (a mid-export throw leaves writers live).
         for (var tc = 0; tc < targets.length; tc++) {
-            try { if (targets[tc].encoder.state !== 'closed') targets[tc].encoder.close(); } catch (e) { /* ignore */ }
+            try { await targets[tc].cancel(); } catch (e) { /* ignore */ }
         }
-        if (vp3d && vp3dRestore) {
-            try {
-                vp3d.renderer.setPixelRatio(vp3dRestore.pr);
-                vp3d.threeCamera.aspect = vp3dRestore.aspect;
-                vp3d.threeCamera.updateProjectionMatrix();
-                if (vp3d._resizeObserver) vp3d._resizeObserver.observe(vp3d.container);
-                vp3d.resize();
-            } catch (e) { /* ignore */ }
-        }
+        restore3dViewport();
         exporting = false;
         if (ok) cleanup(); else setControlsDisabled(false);
-    }
-
-    function encodeInto(target, sourceCanvas, outIdx, fps, frameDurUs) {
-        var vframe = new VideoFrame(sourceCanvas, {
-            timestamp: Math.round(outIdx * 1e6 / fps),
-            duration: frameDurUs,
-        });
-        target.encoder.encode(vframe, { keyFrame: (outIdx % 60 === 0) });
-        vframe.close();
     }
 
     /** Export-time twin of `paintTile`, at the tile's OUTPUT pixel size. */

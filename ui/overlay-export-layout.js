@@ -1,5 +1,5 @@
 // ui/overlay-export-layout.js — pure geometry / settings helpers behind the
-// "Export Instance Overlays" modal (issue #190).
+// "Export Video Overlays" modal (issue #190).
 //
 // Deliberately DEPENDENCY-FREE (no project imports, no dockview, no DOM beyond
 // `localStorage`) so it can be bridged into the classic-script unit runner and
@@ -12,17 +12,24 @@ export const TILE_3D = '__3d__';
 export const SETTINGS_KEY = 'overlayExportSettings.v1';
 
 /**
- * Output heights. Keys ARE the height; the width is derived from the composition
- * (or tile) aspect ratio, so the export carries no letterbox bars unless the
- * layout itself demands them — which is also why these labels can't state a
- * fixed W×H the way `V3D_RES` in ui/export-modals.js does. `1440` is labelled
- * **2K** to match that modal, where 2K already means 2560×1440.
+ * Output heights — the shared quality tiers, used by BOTH video export modals
+ * ("Export Video Overlays" here, "Export 3D Video" via `V3D_RES` in
+ * ui/export-modals.js, which is built from this table). Keep them in sync: two
+ * tier tables is how the modals drifted apart before.
+ *
+ * Keys ARE the height. Here the width is DERIVED from the composition (or tile)
+ * aspect ratio, so the export carries no letterbox bars unless the layout itself
+ * demands them — meaning the real output width is only known once a layout
+ * exists. `refW` is therefore just the 16:9 reference width used for the option
+ * labels (and it is the exact width the 3D modal uses, since that viewport is
+ * always rendered 16:9); the modal shows the ACTUAL W×H in its output readout,
+ * which is what to trust when the composition is not 16:9.
  */
 export const RES_PRESETS = {
-    '480':  { h: 480,  label: '480p'  },
-    '720':  { h: 720,  label: '720p'  },
-    '1080': { h: 1080, label: '1080p' },
-    '1440': { h: 1440, label: '2K'    },
+    '480':  { h: 480,  refW: 854,  label: '480p (854×480)'    },
+    '720':  { h: 720,  refW: 1280, label: '720p (1280×720)'   },
+    '1080': { h: 1080, refW: 1920, label: '1080p (1920×1080)' },
+    '2160': { h: 2160, refW: 3840, label: '2160p (3840×2160)' },
 };
 
 /** Fallback whenever a `res` value isn't a known preset. */
@@ -146,10 +153,35 @@ export function h264CodecFor(W, H) {
     return 'avc1.420034';                              // level 5.2
 }
 
-/** Target H.264 bitrate (bits/sec) — must match the encoder.configure() call. */
+/** Target H.264 bitrate (bits/sec) — must match the encoder config. */
 export function bitrateFor(W, H, fps, quality) {
     var bpp = QUALITY_BPP[quality] != null ? QUALITY_BPP[quality] : QUALITY_BPP.medium;
     return Math.min(48000000, Math.max(1000000, Math.round(W * H * fps * bpp)));
+}
+
+/**
+ * Expected size of one output file, in bytes. This is the number the modal's
+ * summary line shows, and the same number that decides whether the export needs
+ * a streaming destination — the two must not drift apart.
+ */
+export function estimatedBytes(W, H, fps, quality, nFrames) {
+    if (!(fps > 0) || !(nFrames > 0)) return 0;
+    return bitrateFor(W, H, fps, quality) * (nFrames / fps) / 8;
+}
+
+/**
+ * Above this much expected output, buffering the whole .mp4 in memory before
+ * handing it to a download is a real risk rather than a theoretical one: it
+ * lands in V8's pointer-compressed heap, which a Chrome renderer hard-caps near
+ * 4 GB (see CLAUDE.md on luc3d #185/#190/#191/#193). Past it the export asks
+ * for a real file and streams to disk instead. Below it, nothing is gained by
+ * making the user pick a destination, so it just downloads as it always has.
+ */
+export const STREAM_TO_DISK_BYTES = 256 * 1024 * 1024;
+
+/** True when `totalBytes` of expected output warrants streaming to disk. */
+export function shouldStreamToDisk(totalBytes) {
+    return totalBytes > STREAM_TO_DISK_BYTES;
 }
 
 // ============================================================================
@@ -210,11 +242,15 @@ export function mergeSettings(base, saved) {
  * Hold a persisted blob to the CURRENT option sets.
  *
  * `mergeSettings` only type-checks, so a `res` written by an older build (the
- * preset list has changed once already: `360` became `480`) survives as a string
- * nothing recognises. That splits the UI in two — `outputSizeFor` falls back to
- * the default height while the `<select>`, having no matching `<option>`, goes
- * blank — so the summary would quote a size the visible control doesn't name.
- * Fall back explicitly instead.
+ * preset list has changed twice now: `360` became `480`, then `1440`/2K was
+ * retired for `2160`) survives as a string nothing recognises. That splits the UI
+ * in two — `outputSizeFor` falls back to the default height while the `<select>`,
+ * having no matching `<option>`, goes blank — so the summary would quote a size
+ * the visible control doesn't name. Fall back explicitly instead.
+ *
+ * Retired tiers fall back to `DEFAULT_RES` rather than to the nearest surviving
+ * tier ON PURPOSE: promoting a stored `1440` to `2160` would silently ~2.25x the
+ * pixel count, the bitrate and the file size of the next export the user runs.
  */
 export function sanitizeSettings(s) {
     if (!s) return s;
