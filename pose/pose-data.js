@@ -1448,9 +1448,25 @@ export class Session {
             for (var giG = 0; giG < groupsG.length; giG++) {
                 var groupG = groupsG[giG];
                 if (groupG.identityId == null || groupG.identityId < 0 || !idToTrackIdx.has(groupG.identityId)) continue;
-                var newTrackIdxG = idToTrackIdx.get(groupG.identityId);
                 for (var [camNameG, instG] of groupG.instances) {
-                    newFrameMap.set(this._fimKey(frameIdxG, camNameG, newTrackIdxG), groupG.identityId);
+                    // Effective identity for THIS member, map-first — same
+                    // precedence as step 3's remapInstance and getGroupColor.
+                    // A single-view ID switch rewrites only frameIdentityMap
+                    // (luc3d #201), so where the map has a usable entry for
+                    // the member's raw track it outranks the group's shared
+                    // `identityId`; the group fills only the gaps the map had
+                    // to skip (absent / -1 collision sentinel). Claiming the
+                    // group identity unconditionally here re-imposed the
+                    // pre-switch identity on the still-grouped animal's store
+                    // row, duplicating one ID onto both animals on that frame.
+                    var effIdG = groupG.identityId;
+                    var rawTrk = instG ? instG.trackIdx : null;
+                    if (rawTrk != null && rawTrk >= 0) {
+                        var mapIdG = this.getIdentityIdForTrack(camNameG, rawTrk, frameIdxG);
+                        if (mapIdG != null && idToTrackIdx.has(mapIdG)) effIdG = mapIdG;
+                    }
+                    var newTrackIdxG = idToTrackIdx.get(effIdG);
+                    newFrameMap.set(this._fimKey(frameIdxG, camNameG, newTrackIdxG), effIdG);
                     if (!instG) continue;
                     // Per-row: exact, and immune to a raw-trackIdx collision.
                     // `_fimKey` packs (frame, camIdx, smallInt) — the third slot
@@ -1463,12 +1479,11 @@ export class Session {
                     // (a non-lazy session, where the store path does not run
                     // anyway). `instG.trackIdx` is still the RAW/store value here —
                     // step 3, which overwrites it, runs after this block.
-                    var rawTrk = instG.trackIdx;
                     if (rawTrk == null || rawTrk < 0) continue;
                     var rawKeyG = this._fimKey(frameIdxG, camNameG, rawTrk);
                     var priorClaim = rawClaim.get(rawKeyG);
-                    if (priorClaim === undefined) rawClaim.set(rawKeyG, groupG.identityId);
-                    else if (priorClaim !== groupG.identityId) rawClaim.set(rawKeyG, -1);
+                    if (priorClaim === undefined) rawClaim.set(rawKeyG, effIdG);
+                    else if (priorClaim !== effIdG) rawClaim.set(rawKeyG, -1);
                 }
             }
         }
@@ -1500,12 +1515,33 @@ export class Session {
                 }
             }
         }
+        // Once per instance: a shared object reached by BOTH the frameGroups
+        // walk (step 3) and the instanceGroups walk (3b) must not be remapped
+        // twice — the second pass would look its ALREADY-REWRITTEN trackIdx up
+        // in the old map and undo the first. (The old group-first lookup was
+        // accidentally idempotent because it keyed by object; the map-first
+        // lookup below keys by the mutable trackIdx, so idempotency has to be
+        // explicit.)
+        var remapped = new Set();
         function remapInstance(inst, camName, frameIdx) {
+            if (remapped.has(inst)) return;
+            remapped.add(inst);
             var ni = null;
             if (inst.trackIdx != null) {
-                var id = instanceToIdentity.has(inst)
-                    ? instanceToIdentity.get(inst)
-                    : self.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
+                // Per-frame map FIRST — it is the source of truth every display
+                // consumer resolves first (see getGroupColor), and the ONLY
+                // structure a single-view ID switch rewrites
+                // (`swapIdentitiesForwardInCamera` deliberately leaves the
+                // cross-view `group.identityId` alone, luc3d #201). The group
+                // fallback covers only entries the map cannot answer (absent,
+                // or the -1 collision sentinel — the #183 repair case).
+                // Consulting the group FIRST resurrected its stale identity on
+                // the frame of a single-view switch, duplicating one ID onto
+                // both animals there.
+                var id = self.getIdentityIdForTrack(camName, inst.trackIdx, frameIdx);
+                if (id == null && instanceToIdentity.has(inst)) {
+                    id = instanceToIdentity.get(inst);
+                }
                 if (id != null && id >= 0 && idToTrackIdx.has(id)) ni = idToTrackIdx.get(id);
                 // No identity (including explicit "no identity") → trackless
                 // (null). No dedicated "No ID" track is created.
