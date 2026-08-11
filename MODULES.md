@@ -2352,6 +2352,17 @@ the classic-script unit runner and exercised without a browser dock.
   nothing recognises would blank the `<select>` while `outputSizeFor` quietly fell
   back to `DEFAULT_RES`, leaving the summary quoting a size the visible control
   doesn't name.
+  `UNRESTORED_KEYS` (`res`, `outW`, `outH`) are **written to storage but never read
+  back**, so the modal always opens at `DEFAULT_RES` = **1080p**. The tier decides
+  pixel count, bitrate and therefore file size, and a value silently inherited from a
+  previous session is the kind of thing you only notice after sitting through a 4K
+  encode — so a departure from 1080 is always a choice made in front of the current
+  export's summary line. `outW`/`outH` come along because they are only consulted when
+  `res === RES_CUSTOM`, and a stale custom size behind a reset tier would let one click
+  on "Custom" resurrect dimensions from another day. Everything else — layers,
+  per-type styling, fps, quality, mode — IS still restored: those are how the user
+  likes overlays to look, not how big the file will be. Note it is the **read** that
+  resets, not the write; `tests/e2e/overlay-export-modal.mjs` asserts both halves.
 - `overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH)` — the
   settings → `drawFrameOverlays()` options translation. Explicitly nulls ALL
   interaction state (selection / hover / drag / assignment): an export has no

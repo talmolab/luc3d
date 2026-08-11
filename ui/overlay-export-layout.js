@@ -330,11 +330,37 @@ export function sanitizeSettings(s) {
     return s;
 }
 
+/**
+ * Settings that are deliberately NOT restored from storage, so every export starts
+ * from the same known place.
+ *
+ * `res` is here because it decides the pixel count, the bitrate and therefore the
+ * file size of whatever you export next, and a value silently inherited from a
+ * previous session is the kind of thing you only notice after waiting out a 4K
+ * encode. `DEFAULT_RES` (1080p) is the answer that is right most of the time, so
+ * the modal always opens there and a departure from it is always a choice made in
+ * front of the current export's summary line.
+ *
+ * `outW`/`outH` come along because they are only ever consulted when
+ * `res === RES_CUSTOM`; leaving a stale custom size behind a reset tier would let
+ * one click on "Custom" resurrect dimensions from another day.
+ *
+ * Everything else — layers, per-type styling, fps, quality, mode — IS remembered:
+ * those are how the user likes overlays to look, not how big the file will be.
+ */
+export var UNRESTORED_KEYS = ['res', 'outW', 'outH'];
+
 /** Merge the persisted blob (if any) over `base`. */
 export function applyStoredSettings(base) {
     try {
         var raw = localStorage.getItem(SETTINGS_KEY);
-        if (raw) return sanitizeSettings(mergeSettings(base, JSON.parse(raw)));
+        if (raw) {
+            var saved = JSON.parse(raw);
+            if (saved && typeof saved === 'object') {
+                for (var i = 0; i < UNRESTORED_KEYS.length; i++) delete saved[UNRESTORED_KEYS[i]];
+            }
+            return sanitizeSettings(mergeSettings(base, saved));
+        }
     } catch (e) { /* corrupt / unavailable storage — keep the seeded defaults */ }
     return base;
 }
