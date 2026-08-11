@@ -265,10 +265,47 @@
             const max = [9999, 9999, 9999, 9999];
             const vis = [true, true, true, true];
             const g = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
-            assertEqual(g.join(','), '220,340,220,220', 'the dragged-toward tile grows, the rest give up 30 each');
-            // Dragging the other way grows the tile on the OTHER side of the sash.
-            const g2 = L.distributeAxisSizes(base, min, max, vis, 1, -90, L.SASH_GROW_ONE);
-            assertEqual(g2.join(','), '220,220,340,220', 'a negative drag grows tile k+1');
+            assertEqual(g.join(','), '220,340,220,220', 'pushing tile 1s edge out grows it, the rest give up 30 each');
+        });
+
+        it('pulling a tile\'s edge IN shrinks it and grows the rest evenly', () => {
+            // The mirror direction, and the whole reason the sash is modelled as tile
+            // k's trailing edge. Before this, EVERY drag grew exactly one tile — a
+            // left drag on sash k grew tile k+1 — so "make this video smaller and
+            // give the room to the others" was not expressible by any gesture.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const s = L.distributeAxisSizes(base, min, max, vis, 1, -90, L.SASH_GROW_ONE);
+            assertEqual(s.join(','), '280,160,280,280', 'tile 1 shrinks by 90, the other three gain 30 each');
+            assertEqual(s.reduce((a, b) => a + b, 0), 1000, 'total preserved');
+            // Symmetric with the grow direction: same tile targeted, opposite sign.
+            const g = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
+            assertEqual(g[1] - base[1], 90, 'push out: +90 on tile 1');
+            assertEqual(s[1] - base[1], -90, 'pull in: -90 on the SAME tile');
+        });
+
+        it('every tile but the last has a handle that both grows and shrinks it', () => {
+            // The consistency property that makes the model learnable: sash k always
+            // targets tile k, whichever way you drag. The last tile has no trailing
+            // sash, so it is only ever adjusted as one of the evenly-shared others.
+            const L = __OverlayExportLayout;
+            const base = [200, 200, 200, 200, 200];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            for (let k = 0; k < base.length - 1; k++) {
+                const up = L.distributeAxisSizes(base, min, max, vis, k, 40, L.SASH_GROW_ONE);
+                const dn = L.distributeAxisSizes(base, min, max, vis, k, -40, L.SASH_GROW_ONE);
+                assertEqual(up[k] - base[k], 40, `sash ${k} pushed out grows tile ${k}`);
+                assertEqual(dn[k] - base[k], -40, `sash ${k} pulled in shrinks tile ${k}`);
+                // …and nobody else moved in the same direction as the target.
+                for (let j = 0; j < base.length; j++) {
+                    if (j === k) continue;
+                    assertTrue(up[j] < base[j], `tile ${j} gave room when ${k} grew`);
+                    assertTrue(dn[j] > base[j], `tile ${j} gained room when ${k} shrank`);
+                }
+            }
         });
 
         it('share-sides keeps the sash under the cursor', () => {

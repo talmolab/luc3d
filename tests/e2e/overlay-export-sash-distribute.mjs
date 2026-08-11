@@ -157,6 +157,34 @@ try {
     const spread = Math.max(...third.map(t => t.w)) - Math.min(...third.map(t => t.w));
     check(spread > 20, `tiles are genuinely unequal after two drags (spread ${spread}px)`);
 
+    // ---- drag 3: pulling an edge IN shrinks that tile, others grow evenly ----
+    // The mirror direction. Before it existed every drag GREW one tile (a left drag
+    // on sash k grew tile k+1), so "make this video smaller and share the room out"
+    // was not expressible by any gesture. Same handle, opposite sign.
+    const preShrink = await widths();
+    const sash0 = await page.evaluate(() => {
+        const r = document.querySelectorAll('#ovDock .dv-sash')[0].getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    });
+    const S = 45;
+    await page.mouse.move(sash0.x, sash0.y);
+    await page.mouse.down();
+    for (const f of [0.4, 0.8, 1.0]) await page.mouse.move(sash0.x - S * f, sash0.y);
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+
+    const postShrink = await widths();
+    const sDelta = postShrink.map((t, i) => t.w - preShrink[i].w);
+    check(Math.abs(sDelta[0] + S) <= 3,
+        `pulling tile 0's edge in SHRANK it by ${S}px (got ${sDelta[0]})`);
+    check(sDelta.slice(1).every(d => d > 5),
+        `and the other three GREW rather than one of them absorbing it all (got ${sDelta.slice(1).join(', ')})`);
+    const shrinkShare = S / (preShrink.length - 1);
+    check(sDelta.slice(1).every(d => Math.abs(d - shrinkShare) <= 3),
+        `each gained ~${shrinkShare.toFixed(0)}px, evenly (got ${sDelta.slice(1).join(', ')})`);
+    check(Math.abs(postShrink.reduce((a, t) => a + t.w, 0) - preShrink.reduce((a, t) => a + t.w, 0)) <= 3,
+        'the axis total still holds through a shrink');
+
     // ---- the export follows the new geometry --------------------------------
     // captureLayout() reads the live rects, so a stitched export must be sized from
     // the dock as it now stands. Proves the drag reached the output, not just CSS.

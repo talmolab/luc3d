@@ -509,15 +509,25 @@ export var SASH_SHARE_SIDES = 'share-sides';
  *
  * Two modes, because "evenly" has two defensible readings:
  *
- *   'grow-one'    the tile on the side you drag TOWARDS grows by the full delta
- *                 and EVERY other tile on the axis gives up delta/(n-1). This is
- *                 literally "the remaining videos scale evenly". Cost: tiles
- *                 BEFORE the sash shrink too, so the sash no longer sits under
- *                 the cursor — with 4 equal tiles, dragging sash 1 by 90 px moves
- *                 that sash only 60 px.
+ *   'grow-one'    **The sash at index `k` is tile `k`'s TRAILING EDGE.** Push it
+ *                 out (positive `d`) and tile `k` GROWS by the full delta while
+ *                 every other tile on the axis gives up `delta/(n-1)`; pull it in
+ *                 (negative `d`) and tile `k` SHRINKS by the full delta while every
+ *                 other tile GAINS `delta/(n-1)`. One consistent handle per tile,
+ *                 and both intentions — "make this one bigger" and "make this one
+ *                 smaller" — are expressible. The shrink half is the point: before
+ *                 it existed, EVERY drag grew exactly one tile (a left drag on sash
+ *                 `k` grew tile `k+1`), so there was no gesture at all for "make
+ *                 this video smaller and give the room to the others".
+ *                 Cost: tiles on both sides move, so the sash trails the cursor —
+ *                 with 4 equal tiles a 90 px drag moves the sash 60 px.
+ *                 Consequence worth knowing: the LAST tile has no trailing sash, so
+ *                 it cannot be targeted directly; it still changes as one of the
+ *                 evenly-adjusted others.
  *   'share-sides' the tiles at-or-before the sash share the gain and the tiles
  *                 after it share the loss. Also spreads the change across the
- *                 axis, and the sash tracks the cursor exactly.
+ *                 axis, and the sash tracks the cursor exactly, but it has no
+ *                 "shrink just this one" gesture.
  *
  * `base`/`min`/`max`/`vis` are per-view, in axis order. Invisible views never take
  * part. The result ALWAYS sums to `sum(base)` exactly, so the axis total — and
@@ -545,11 +555,14 @@ export function distributeAxisSizes(base, min, max, vis, k, d, mode) {
         }
         if (d < 0) { var swap = grow; grow = shrink; shrink = swap; }
     } else {
-        // The tile you are dragging towards is the one that grows.
-        var lead = d > 0 ? k : k + 1;
+        // The sash is tile k's trailing edge: pushing it out grows tile k, pulling
+        // it in shrinks tile k. Everyone else absorbs the change evenly either way.
+        var lead = k;
         if (!vis[lead]) return out;
-        grow.push(lead);
-        for (i = 0; i < base.length; i++) if (vis[i] && i !== lead) shrink.push(i);
+        var others = [];
+        for (i = 0; i < base.length; i++) if (vis[i] && i !== lead) others.push(i);
+        if (d > 0) { grow.push(lead); shrink = others; }
+        else { shrink.push(lead); grow = others; }
     }
     if (!grow.length || !shrink.length) return out;
 
