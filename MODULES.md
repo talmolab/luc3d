@@ -2246,26 +2246,35 @@ the classic-script unit runner and exercised without a browser dock.
   video is drawn with this and the skeleton with that, so any divergence offsets
   every burned-in overlay from the animal. Pinned by
   `tests/test-overlay-export-layout.js`, which computes both and compares.
-- `distributeAxisSizes(base, min, max, vis, k, d, mode)` + `SASH_GROW_ONE` /
-  `SASH_SHARE_SIDES` — sizes for one dock AXIS after dragging the sash at index `k`
-  by `d` px, so a resize is shared by **every** tile on the axis. dockview 6.6.1
-  hands the whole delta to the one adjacent tile and only spills when it clamps, and
-  nothing configures that (see the `ui/overlay-export-modal.js` entry). Two modes.
-  **`'grow-one'` (the default) treats the sash at index `k` as tile `k`'s TRAILING
-  EDGE**: push it out and tile `k` grows by the full delta while every other tile
-  gives up `delta/(n-1)`; pull it in and tile `k` **shrinks** by the full delta while
-  every other tile gains `delta/(n-1)`. One handle per tile, same target either way,
-  so both "make this one bigger" and "make this one smaller" are expressible — the
-  shrink half was missing at first, when a left drag on sash `k` grew tile `k+1`
-  instead, leaving no gesture at all for "shrink this video and share the room out".
-  Two costs, documented rather than worked around: the sash trails the cursor by
-  `d*k/n` (both sides move), and the LAST tile on an axis has no trailing sash, so it
-  can only change as one of the evenly-adjusted others.
-  `'share-sides'` (tiles before the sash share the gain, tiles after share the loss)
-  keeps the sash exactly under the cursor but has no shrink-one gesture.
+- `distributeAxisSizes(base, min, max, vis, k, d, mode)` + `SASH_SHARE_FAR` /
+  `SASH_GROW_ONE` / `SASH_SHARE_SIDES` — sizes for one dock AXIS after dragging the
+  sash at index `k` by `d` px, so a resize is shared by more than the one adjacent
+  tile. dockview 6.6.1 hands the whole delta to that neighbour and only spills when it
+  clamps, and nothing configures that (see the `ui/overlay-export-modal.js` entry).
+  **The governing constraint:** a sash sits at the running SUM of the sizes before it,
+  so *"the sash stays under the cursor"* is the same statement as *"the total before
+  the sash changed by exactly the drag"*. Combined with *"the dragged tile changes
+  1:1"* that forces the tiles before the sash to hold still — so wanting all three of
+  {sash tracks cursor, dragged tile 1:1, EVERY other tile shares} is **geometrically
+  impossible** for any sash but the first. One of them must be given up, which is why
+  there are three modes rather than one.
+  **`'share-far'` is what the modal uses**: the sash is tile `k`'s trailing edge and
+  only the tiles BEYOND it take part — push it out and tile `k` grows by exactly the
+  drag while each tile after it gives up an equal share; pull it in and tile `k`
+  shrinks by exactly the drag while each tile after it gains. Tiles before the sash
+  never move, so the handle tracks the cursor exactly and both "make this one bigger"
+  and "make this one smaller" stay expressible. **Accepted gap:** the LAST sash on an
+  axis has one tile beyond it, so that single drag is still neighbour-only — pinned by
+  a unit test so it reads as a decision, not a regression.
+  `'grow-one'` shares with every tile instead (`delta/(n-1)` each). **Shipped once and
+  reverted**: the sizes are right, but tiles on both sides move, so the sash trails the
+  cursor by an amount that depends on which sash you grabbed — measured in a real dock
+  at 80/53/26 px for an 80 px drag on a 4-tile axis's three sashes (100%/66%/33%), and
+  it reads as completely broken. `'share-sides'` (tiles before the sash share the gain,
+  after share the loss) tracks the cursor but has no shrink-one gesture.
   The result **always sums to `sum(base)`**, so the axis total — and therefore the
-  dock's box and every other axis — is untouched; swept over `k`, `d` and both modes
-  by a unit test, because a drifting total would move the exported frame.
+  dock's box and every other axis — is untouched; swept over `k`, `d` and all three
+  modes by a unit test, because a drifting total would move the exported frame.
   `fillEvenly` does even-share-**with-spill**: a tile pinned at its 100px minimum
   holds still and the tiles with room absorb its share. It deliberately does NOT veto
   the drag — an earlier version did, and a real seeded dock routinely has a tile at
@@ -2519,17 +2528,39 @@ priority lists, so it cannot reach a drag at all. Post-correcting in
 look native and then jump on release. Capture-phase `stopPropagation()` on an
 ancestor prevents dockview's own listener (bound to the sash **element**) from ever
 running, so there is exactly one handler and nothing to fight. An axis of two tiles
-is left to dockview on purpose — there, "evenly" IS the neighbour.
-This reaches **TypeScript-private dockview internals** — `gridview.root`,
+with nothing to keep aligned is left to dockview on purpose — there our arithmetic and
+dockview's agree exactly.
+
+**A row divider moves that boundary in EVERY column** (`axesForSash`). dockview nests a
+4+ camera grid **column-major**: the root axis's children are columns, and each column
+owns its own vertical axis of rows. So a row sash natively resizes only its own column,
+and the grid drifts ragged with no gesture anywhere able to straighten it (measured:
+dragging column 1's row divider left `c1` at 417 px and `c4` at 257 while the other
+columns stayed at 337). `axesForSash` therefore returns the dragged axis **plus every
+sibling axis that has a boundary at the same index `k`**, and the drag is applied to all
+of them with the same delta. A sibling with too few tiles to have boundary `k` — a
+camera spanning the full height, or the 3D tile — simply does not take part, which is
+what leaves full-height tiles alone instead of splitting them. The ROOT axis has no
+parent, hence no siblings, so a COLUMN drag still just resizes columns (both videos in
+a column together), and a row drag never changes a width.
+This reaches **TypeScript-private dockview internals** — `gridview.root`, node
+`children` / `element` (walked to find the branch owning the sash **and its parent**),
 `BranchNode.splitview`, `Splitview.viewItems` / `sashes` / `layoutViews()` /
 `distributeEmptySpace()` / `saveProportions()`, and `viewItem.enabled` — all verified
 to resolve at **runtime** against the live minified `/+esm` build, not just by grep.
 Every one is feature-detected: if any is missing the handler returns WITHOUT calling
 `stopPropagation()` and dockview's stock neighbour-only drag runs, so a version bump
-can regress the behaviour but cannot break resizing. `tests/e2e/overlay-export-sash-distribute.mjs`
-covers it, and was confirmed to FAIL on the pre-fix code (delta `-60, 0, 0`); it also
-drags twice and asserts the first drag's asymmetry survives, which is the guard
-against an "equalise everything" fix making the dock un-resizable.
+can regress the behaviour but cannot break resizing.
+Two e2e files cover this, and the split matters:
+`tests/e2e/overlay-export-sash-distribute.mjs` covers the sharing on a FLAT axis
+(confirmed to FAIL on the pre-fix code, delta `-60, 0, 0`) and drags twice to assert the
+first drag's asymmetry survives — the guard against an "equalise everything" fix making
+the dock un-resizable. But it only ever drags **sash 0**, where share-far and grow-one
+are the same arithmetic, and it asserts its axis is flat — so it is structurally blind
+to both cursor tracking and the grid. `tests/e2e/overlay-export-sash-tracking.mjs`
+covers exactly those: the handle tracking every sash (confirmed to fail on `grow-one`,
+naming the measured 53 px and 26 px) and the cross-column row boundary on a real 5-camera
+nested grid (confirmed to fail with the propagation disabled). **Run both.**
 
 **The tab band is overlaid on the tile, not stacked above it** (`styles.css`,
 `#ovDock`). dockview lays a group out as `[tabs][content]` in a column flexbox, so a

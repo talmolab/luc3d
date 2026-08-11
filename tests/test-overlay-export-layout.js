@@ -325,6 +325,62 @@
             assertEqual((g[0] + g[1]) - (base[0] + base[1]), 60, 'grow-one moves the sash only 60 of 90');
         });
 
+        it('share-far keeps the sash under the cursor for EVERY sash', () => {
+            // The property whose absence made the feature read as "completely broken":
+            // a sash sits at the running sum of the sizes before it, so if any of those
+            // change the handle slides out from under the pointer. grow-one moves tiles
+            // on both sides and was measured in a real dock at 100% / 66% / 33%
+            // tracking across a 4-tile axis's three sashes. share-far leaves everything
+            // before the sash alone, so tracking is exact everywhere.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const sashPos = (sizes, k) => sizes.slice(0, k + 1).reduce((a, b) => a + b, 0);
+            for (let k = 0; k < base.length - 1; k++) {
+                for (const d of [90, -90, 30, -30]) {
+                    const out = L.distributeAxisSizes(base, min, max, vis, k, d, L.SASH_SHARE_FAR);
+                    assertEqual(sashPos(out, k) - sashPos(base, k), d,
+                        `sash ${k} moves exactly ${d}px — stays under the cursor`);
+                    assertEqual(out[k] - base[k], d,
+                        `and tile ${k} itself changes 1:1 with the drag (${d})`);
+                }
+            }
+            // Contrast, so the two models cannot be confused by a future edit: for the
+            // INTERIOR sash grow-one lags and share-far does not.
+            const lag = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
+            assertEqual(sashPos(lag, 1) - sashPos(base, 1), 60, 'grow-one lags: 60 of 90');
+        });
+
+        it('share-far takes the room only from the tiles it pushes into', () => {
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_SHARE_FAR);
+            assertEqual(out.join(','), '250,340,205,205',
+                'tile 0 untouched, tile 1 +90, the two beyond it give up 45 each');
+            const back = L.distributeAxisSizes(base, min, max, vis, 1, -90, L.SASH_SHARE_FAR);
+            assertEqual(back.join(','), '250,160,295,295',
+                'pulled in: tile 1 -90, the two beyond it gain 45 each, tile 0 still untouched');
+            assertEqual(out.reduce((a, b) => a + b, 0), 1000, 'total preserved');
+            assertEqual(back.reduce((a, b) => a + b, 0), 1000, 'total preserved both ways');
+        });
+
+        it('share-far degenerates to the neighbour on the LAST sash — the accepted gap', () => {
+            // Pinned deliberately rather than left as a surprise: the last sash has
+            // exactly one tile beyond it, so there is nobody to share with. This is the
+            // price of exact cursor tracking (see the mode docs) and is expected, not a
+            // regression — if a future change makes more tiles move here, the sash will
+            // have stopped tracking the cursor and THAT is the bug.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 2, 80, L.SASH_SHARE_FAR);
+            assertEqual(out.join(','), '250,250,330,170', 'only the final pair moves');
+        });
+
         it('preserves the axis total exactly, for every drag and every sash', () => {
             // THE load-bearing property: the axis sum must never move, or the dock's
             // own box drifts and every other axis is disturbed. Swept, not spot-checked.
@@ -334,7 +390,7 @@
             const vis = base.map(() => true);
             const total = base.reduce((a, b) => a + b, 0);
             let checked = 0;
-            for (const mode of [L.SASH_GROW_ONE, L.SASH_SHARE_SIDES]) {
+            for (const mode of [L.SASH_SHARE_FAR, L.SASH_GROW_ONE, L.SASH_SHARE_SIDES]) {
                 for (let k = 0; k < base.length - 1; k++) {
                     for (let d = -140; d <= 140; d += 7) {
                         const out = L.distributeAxisSizes(base, min, max, vis, k, d, mode);

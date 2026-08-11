@@ -49,7 +49,7 @@ import {
     h264CodecFor, bitrateFor, bitrateIsClamped, estimatedBytes, shouldStreamToDisk,
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
-    distributeAxisSizes, SASH_GROW_ONE,
+    distributeAxisSizes, SASH_SHARE_FAR,
 } from './overlay-export-layout.js';
 import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
@@ -443,18 +443,18 @@ export function showOverlayExportModal() {
      * bump can regress the behaviour; it cannot break resizing.
      */
 
-    // SASH_GROW_ONE treats the sash at index k as tile k's TRAILING EDGE: push it out
-    // and tile k grows by the full delta while every other tile on the axis gives up
-    // delta/(n-1); pull it in and tile k shrinks while every other tile gains
-    // delta/(n-1). One handle per tile, same target either way. Two costs: the sash
-    // TRAILS the cursor (both sides move — 4 equal tiles, drag 90px => sash moves
-    // 60px), and the LAST tile on an axis has no trailing sash, so it only ever
-    // changes as one of the evenly-adjusted others.
-    // SASH_SHARE_SIDES instead splits the axis at the sash — tiles before share the
-    // gain, tiles after share the loss — which keeps the sash exactly under the
-    // cursor but has no "shrink just this one" gesture.
+    // SASH_SHARE_FAR: the sash is tile k's trailing edge. Push it out and tile k grows
+    // by exactly the drag while every tile BEYOND the sash gives up an equal share;
+    // pull it in and tile k shrinks by exactly the drag while every tile beyond it
+    // gains an equal share. Tiles before the sash are untouched, which is what keeps
+    // the sash under the cursor — a sash sits at the running sum of the sizes before
+    // it, so moving any of them moves the handle away from the pointer. SASH_GROW_ONE
+    // shares with EVERY tile instead and was measured at 100%/66%/33% cursor tracking
+    // across a 4-tile axis's three sashes; correct sizes, but the handle runs away and
+    // it reads as broken. See the mode docs in overlay-export-layout.js for why all
+    // three desirable properties cannot hold at once.
     // Swapping this constant is the whole change.
-    var SASH_DISTRIBUTION = SASH_GROW_ONE;
+    var SASH_DISTRIBUTION = SASH_SHARE_FAR;
 
     dockEl.addEventListener('pointerdown', onDockSashDown, true);   // CAPTURE
 
@@ -463,16 +463,8 @@ export function showOverlayExportModal() {
      * (unknown internals, or a sash belonging to dockview's shell splitviews
      * rather than the gridview tree). Null means "let dockview handle it".
      */
-    function splitviewForSash(sashEl) {
-        var branchEl = sashEl.closest ? sashEl.closest('.dv-branch-node') : null;
-        if (!branchEl) return null;
-        var found = null;
-        (function walk(node) {
-            if (!node || found || !node.children) return;    // no children => LeafNode
-            if (node.element === branchEl) { found = node; return; }
-            for (var i = 0; i < node.children.length; i++) walk(node.children[i]);
-        })(dockview.gridview && dockview.gridview.root);
-        var sv = found && found.splitview;
+    function usableSplitview(node) {
+        var sv = node && node.splitview;
         if (!sv || !sv.viewItems ||
             typeof sv.layoutViews !== 'function' ||
             typeof sv.distributeEmptySpace !== 'function' ||
@@ -480,17 +472,67 @@ export function showOverlayExportModal() {
         return sv;
     }
 
+    /**
+     * The gridview BranchNode owning `sashEl`, plus its parent, or null when we cannot
+     * identify it (unknown internals, or a sash belonging to dockview's shell
+     * splitviews rather than the gridview tree). Null means "let dockview handle it".
+     *
+     * The parent is what makes cross-column row alignment possible: dockview nests a
+     * multi-camera grid as one axis of COLUMNS whose children are each an axis of rows,
+     * so a row sash's siblings are the other columns' row axes.
+     */
+    function gridNodeForSash(sashEl) {
+        var branchEl = sashEl.closest ? sashEl.closest('.dv-branch-node') : null;
+        if (!branchEl) return null;
+        var found = null, foundParent = null;
+        (function walk(node, parent) {
+            if (!node || found || !node.children) return;    // no children => LeafNode
+            if (node.element === branchEl) { found = node; foundParent = parent; return; }
+            for (var i = 0; i < node.children.length; i++) walk(node.children[i], node);
+        })(dockview.gridview && dockview.gridview.root, null);
+        if (!found) return null;
+        return { node: found, parent: foundParent };
+    }
+
+    /**
+     * Every axis a drag on this sash should move: the axis the sash belongs to, plus —
+     * when that axis is nested inside another — the SAME boundary index on each sibling
+     * axis that has one.
+     *
+     * Without this, dragging a row divider resizes only the column it lives in and the
+     * grid drifts ragged, with no gesture anywhere able to straighten it: dockview's
+     * grid is column-major, so row heights are per-column and independent. A sibling
+     * with too few tiles to have boundary `k` (a camera spanning the full height, or
+     * the 3D tile) simply does not take part, which is what leaves full-height tiles
+     * alone instead of splitting them.
+     */
+    function axesForSash(sashEl, k) {
+        var hit = gridNodeForSash(sashEl);
+        if (!hit) return null;
+        var sv = usableSplitview(hit.node);
+        if (!sv) return null;
+        var axes = [sv];
+        if (hit.parent && hit.parent.children) {
+            for (var i = 0; i < hit.parent.children.length; i++) {
+                var sib = hit.parent.children[i];
+                if (sib === hit.node) continue;
+                var ssv = usableSplitview(sib);
+                // Needs a boundary at k at all, i.e. at least k+2 tiles.
+                if (ssv && ssv.viewItems.length > k + 1) axes.push(ssv);
+            }
+        }
+        return axes;
+    }
+
     function onDockSashDown(ev) {
         if (ev.button !== 0 || exporting) return;
         var sashEl = ev.target;
         if (!sashEl || !sashEl.classList || !sashEl.classList.contains('dv-sash')) return;
 
-        var sv = splitviewForSash(sashEl);
+        var hit = gridNodeForSash(sashEl);
+        var sv = hit && usableSplitview(hit.node);
         if (!sv) return;
         var items = sv.viewItems;
-        // With two tiles on an axis "evenly" IS the neighbour, so leave the stock
-        // handler alone rather than reimplementing it for no gain.
-        if (items.length < 3) return;
 
         // `sashes[i]` is always the sash between views i and i+1, and the sash
         // container's children are appended in the same order, so either lookup
@@ -504,6 +546,12 @@ export function showOverlayExportModal() {
         if (k < 0) k = Array.prototype.indexOf.call(sashEl.parentElement.children, sashEl);
         if (k < 0 || k >= items.length - 1) return;
 
+        var axes = axesForSash(sashEl, k);
+        if (!axes || !axes.length) return;
+        // Two tiles and nothing to keep aligned is exactly dockview's own behaviour,
+        // so leave the stock handler alone rather than reimplementing it for no gain.
+        if (items.length < 3 && axes.length < 2) return;
+
         // From here the gesture is OURS: keep dockview's own sash listener, which
         // sits further down the capture path on the sash itself, from running.
         ev.preventDefault();
@@ -512,34 +560,46 @@ export function showOverlayExportModal() {
         var svEl = sashEl.parentElement.parentElement;
         var horizontal = !svEl || !svEl.classList.contains('dv-vertical');
         var start = horizontal ? ev.clientX : ev.clientY;
-        var base = [], min = [], max = [], vis = [];
-        for (i = 0; i < items.length; i++) {
-            base.push(items[i].size);
-            min.push(items[i].minimumSize);
-            max.push(items[i].maximumSize);
-            vis.push(items[i].visible !== false);
-            items[i].enabled = false;   // as dockview does: a tile must not eat the drag
-        }
+
+        // One snapshot per axis: the dragged axis first, then any sibling axis that
+        // shares this boundary index so the row stays straight across the grid.
+        var tracks = axes.map(function (axis) {
+            var its = axis.viewItems;
+            var t = { sv: axis, items: its, base: [], min: [], max: [], vis: [] };
+            for (var j = 0; j < its.length; j++) {
+                t.base.push(its[j].size);
+                t.min.push(its[j].minimumSize);
+                t.max.push(its[j].maximumSize);
+                t.vis.push(its[j].visible !== false);
+                its[j].enabled = false;   // as dockview does: a tile must not eat the drag
+            }
+            return t;
+        });
 
         var onMove = function (e) {
             var d = (horizontal ? e.clientX : e.clientY) - start;
-            var next = distributeAxisSizes(base, min, max, vis, k, d, SASH_DISTRIBUTION);
-            for (var j = 0; j < items.length; j++) items[j].size = next[j];
-            // Mirrors dockview's own pointermove: absorb any pre-existing px of
-            // drift between the axis total and the container, then write the CSS
-            // and recurse layout into nested columns.
-            sv.distributeEmptySpace();
-            sv.layoutViews();
+            for (var a = 0; a < tracks.length; a++) {
+                var t = tracks[a];
+                var next = distributeAxisSizes(t.base, t.min, t.max, t.vis, k, d, SASH_DISTRIBUTION);
+                for (var j = 0; j < t.items.length; j++) t.items[j].size = next[j];
+                // Mirrors dockview's own pointermove: absorb any pre-existing px of
+                // drift between the axis total and the container, then write the CSS
+                // and recurse layout into nested columns.
+                t.sv.distributeEmptySpace();
+                t.sv.layoutViews();
+            }
         };
         var onEnd = function () {
             document.removeEventListener('pointermove', onMove);
             document.removeEventListener('pointerup', onEnd);
             document.removeEventListener('pointercancel', onEnd);
             document.removeEventListener('contextmenu', onEnd);
-            for (var j = 0; j < items.length; j++) items[j].enabled = true;
-            // dockview does this at the end of its own drag so a later CONTAINER
-            // resize keeps the ratios the user just set.
-            sv.saveProportions();
+            for (var a = 0; a < tracks.length; a++) {
+                for (var j = 0; j < tracks[a].items.length; j++) tracks[a].items[j].enabled = true;
+                // dockview does this at the end of its own drag so a later CONTAINER
+                // resize keeps the ratios the user just set.
+                tracks[a].sv.saveProportions();
+            }
             // We bypassed the sash handler, and `onDidLayoutChange` only fires from
             // dockview's own sash END, so repaint here.
             schedulePreview();
