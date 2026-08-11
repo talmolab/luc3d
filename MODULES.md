@@ -2230,11 +2230,19 @@ the classic-script unit runner and exercised without a browser dock.
   `SASH_SHARE_SIDES` — sizes for one dock AXIS after dragging the sash at index `k`
   by `d` px, so a resize is shared by **every** tile on the axis. dockview 6.6.1
   hands the whole delta to the one adjacent tile and only spills when it clamps, and
-  nothing configures that (see the `ui/overlay-export-modal.js` entry). Two modes:
-  `'grow-one'` (the default, and the literal reading — the tile dragged towards grows
-  by the full delta and every other tile gives up `delta/(n-1)`, at the cost of the
-  sash trailing the cursor by `d*k/n`) and `'share-sides'` (tiles before the sash
-  share the gain, tiles after share the loss; the sash tracks the cursor exactly).
+  nothing configures that (see the `ui/overlay-export-modal.js` entry). Two modes.
+  **`'grow-one'` (the default) treats the sash at index `k` as tile `k`'s TRAILING
+  EDGE**: push it out and tile `k` grows by the full delta while every other tile
+  gives up `delta/(n-1)`; pull it in and tile `k` **shrinks** by the full delta while
+  every other tile gains `delta/(n-1)`. One handle per tile, same target either way,
+  so both "make this one bigger" and "make this one smaller" are expressible — the
+  shrink half was missing at first, when a left drag on sash `k` grew tile `k+1`
+  instead, leaving no gesture at all for "shrink this video and share the room out".
+  Two costs, documented rather than worked around: the sash trails the cursor by
+  `d*k/n` (both sides move), and the LAST tile on an axis has no trailing sash, so it
+  can only change as one of the evenly-adjusted others.
+  `'share-sides'` (tiles before the sash share the gain, tiles after share the loss)
+  keeps the sash exactly under the cursor but has no shrink-one gesture.
   The result **always sums to `sum(base)`**, so the axis total — and therefore the
   dock's box and every other axis — is untouched; swept over `k`, `d` and both modes
   by a unit test, because a drifting total would move the exported frame.
@@ -2792,7 +2800,9 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
   `drawInstanceTypeIndicator`, `drawUnlinkedInstances`, `drawViewNameLabel`.
   **`drawViewNameLabel(ctx, text, options)`** draws a camera name **top-left**,
-  behind "Export Video Overlays" ▸ Layers ▸ **Render Video Names** (the first entry
+  behind "Export Video Overlays" ▸ Layers ▸ **Render Video Names** — `layers.videoNames`,
+  **default ON** (a multi-camera composition is close to unreadable unlabelled, so the
+  caption is the expected output rather than an opt-in), and the first entry
   in that group). The composed `.mp4` otherwise carries no labels at all — the
   dock's per-tile name chip is UI chrome and is never encoded — so a five-camera
   composition would ship as five anonymous rectangles. **Top**-left so it lands

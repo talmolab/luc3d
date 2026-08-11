@@ -602,6 +602,35 @@
             assertEqual(base.user.alpha, 1.0, 'string alpha rejected');
         });
 
+        it('lists Render Video Names first among the layers, defaulting ON', () => {
+            const L = __OverlayExportLayout;
+            const d = L.defaultOverlayExportSettings();
+            // Order is part of the contract: the modal builds the Layers group by
+            // iterating these in order, and this one has to be the top entry.
+            assertEqual(Object.keys(d.layers)[0], 'videoNames', 'videoNames is the first layer');
+            assertEqual(d.layers.videoNames, true, 'and defaults ON');
+            // …and it reaches the draw options under the name the tile draw reads.
+            assertEqual(L.overlayOptionsFrom(d, 640, 480, 640, 480).showViewName, true,
+                'mapped to showViewName');
+            d.layers.videoNames = false;
+            assertEqual(L.overlayOptionsFrom(d, 640, 480, 640, 480).showViewName, false,
+                'and follows the setting when turned off');
+        });
+
+        it('keeps videoNames a real boolean for a blob that predates it', () => {
+            // mergeSettings type-checks and skips absent keys, so a stored blob from
+            // before the layer existed must leave the DEFAULT in place rather than
+            // producing `undefined` — which would render the toggle off and never
+            // come back. This is the same class of bug that settingsFromVisibilityPanel
+            // had by replacing settings.layers wholesale.
+            const L = __OverlayExportLayout;
+            const base = L.defaultOverlayExportSettings();
+            L.mergeSettings(base, { layers: { user: false, predicted: true } });
+            assertEqual(base.layers.videoNames, true, 'default survives an older blob');
+            assertEqual(typeof base.layers.videoNames, 'boolean', 'and is a boolean');
+            assertEqual(base.layers.user, false, 'while the stored keys still apply');
+        });
+
         it('ignores keys the schema does not declare', () => {
             const base = __OverlayExportLayout.defaultOverlayExportSettings();
             __OverlayExportLayout.mergeSettings(base, { evil: true, user: { evil: 1 } });

@@ -249,12 +249,18 @@ export function shouldStreamToDisk(totalBytes) {
 
 export function defaultOverlayExportSettings() {
     return {
-        // `videoNames` burns each tile's CAMERA NAME into the frame. Default OFF,
-        // like `legend`: it changes the exported pixels, and an export that
-        // silently grew a caption would be a surprise. Listed FIRST because it is
-        // the one layer that labels the composition rather than the animal.
+        // `videoNames` burns each tile's CAMERA NAME into the frame. Default **ON**:
+        // a multi-camera composition is close to unreadable without labels, so the
+        // caption is the expected output rather than an opt-in extra. Listed FIRST
+        // because it is the one layer that labels the composition rather than the
+        // animal.
+        //
+        // Turning it OFF also changes the dock CHROME, not just the render: the
+        // tab's name is hidden and shown on hover instead (see
+        // `ui/overlay-export-modal.js`), so the composition never shows a camera
+        // name that the export will not carry.
         layers: {
-            videoNames: false, user: true, predicted: true, reproj: true,
+            videoNames: true, user: true, predicted: true, reproj: true,
             errors: false, legend: false,
         },
         trailLength: 0,

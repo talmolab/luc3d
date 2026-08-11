@@ -367,8 +367,14 @@ try {
         console.log('  – no Reset button found; skipping the reset-drops-layer check');
     } else {
         check(afterReset.present, 'the Render Video Names toggle survives Reset');
-        check(afterReset.value === false,
-            `…and stays a real false rather than undefined (got ${JSON.stringify(afterReset.value)})`);
+        // The value must be a real boolean, not `undefined` — that is the bug this
+        // guards. It tracks the DEFAULT (now on), so assert the type as well as the
+        // value: `undefined === true` would never pass, but a future default flip
+        // should not turn this into a silent no-op assertion.
+        check(afterReset.value === true,
+            `…and comes back at its default rather than undefined (got ${JSON.stringify(afterReset.value)})`);
+        check(typeof afterReset.value === 'boolean',
+            `…as a real boolean (got ${typeof afterReset.value})`);
     }
 
     // ---- selects are wide enough for their longest option -------------------
