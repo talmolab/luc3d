@@ -1,5 +1,5 @@
 /**
- * overlay-export-modal.mjs — real-browser test for File ▸ "Export Instance
+ * overlay-export-modal.mjs — real-browser test for File ▸ "Export Video
  * Overlays" (issue #190).
  *
  * The geometry and settings arithmetic is unit tested
@@ -94,8 +94,8 @@ try {
         const next = el.nextElementSibling;
         return { label: el.textContent.trim(), nextId: next ? next.id : null };
     });
-    check(menu !== null, 'File menu has an "Export Instance Overlays" item');
-    check(menu && menu.label === 'Export Instance Overlays', `label is "Export Instance Overlays" (got "${menu && menu.label}")`);
+    check(menu !== null, 'File menu has an "Export Video Overlays" item');
+    check(menu && menu.label === 'Export Video Overlays', `label is "Export Video Overlays" (got "${menu && menu.label}")`);
     check(menu && menu.nextId === 'menuExportVideo3d', `sits directly above "Export 3D Video" (next is ${menu && menu.nextId})`);
 
     // ---- open it -----------------------------------------------------------
@@ -121,6 +121,9 @@ try {
     check(strip.includes('cam1') && strip.includes('cam2') && strip.includes('cam3'),
         'strip has an icon per video in the session');
     check(strip.includes('__3d__'), 'strip has an icon for the 3D grid itself');
+    check(strip[0] === '__3d__', `the 3D entry LEADS the strip (got "${strip[0]}")`);
+    check(strip.slice(1).join(',') === 'cam1,cam2,cam3',
+        `the cameras follow it in session order (got ${strip.slice(1).join(',')})`);
 
     // ---- dock seeding ------------------------------------------------------
     const seeded = await page.evaluate(() =>
@@ -133,6 +136,44 @@ try {
         Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'))
             .filter(el => el.querySelector('.ov-strip-dot').style.display !== 'none').length);
     check(stripMarked === 4, `every seeded view is marked docked in the strip (got ${stripMarked})`);
+
+    // Reordering the STRIP must not have moved the TILE. Asserted on geometry, not
+    // DOM order — dockview's DOM order is nested-branch order and proves nothing.
+    const dockGeom = await page.evaluate(() => {
+        const rect = (n) => document.querySelector(`#ovDock [data-view-name="${n}"]`).getBoundingClientRect();
+        return { threeD: rect('__3d__').left, cams: ['cam1', 'cam2', 'cam3'].map(n => rect(n).left) };
+    });
+    check(dockGeom.cams.every(l => l < dockGeom.threeD),
+        `the 3D TILE is still seeded right of the whole video grid (3D at ${dockGeom.threeD}, cams at ${dockGeom.cams.join(', ')})`);
+
+    // The strip's HIGHLIGHTED set must equal the dock's tile set, after every route
+    // that can add or remove a tile. Compare SETS, not counts — a count passes even
+    // when the wrong entry is lit.
+    const stripVsDock = () => page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'));
+        const lit = items.filter(el => el.classList.contains('ov-strip-docked'))
+            .map(el => el.getAttribute('data-view-name')).sort();
+        const dot = items.filter(el => el.querySelector('.ov-strip-dot').style.display !== 'none')
+            .map(el => el.getAttribute('data-view-name')).sort();
+        const docked = Array.from(new Set(Array.from(document.querySelectorAll('#ovDock [data-view-name]'))
+            .map(el => el.getAttribute('data-view-name')))).sort();
+        return { lit, dot, docked, agree: lit.join(',') === docked.join(',') && dot.join(',') === docked.join(',') };
+    });
+    let hl = await stripVsDock();
+    check(hl.agree, `every seeded view is highlighted in the strip (lit ${hl.lit}, docked ${hl.docked})`);
+
+    // A docked entry must be HIGHLIGHTED, not dimmed. It used to be faded to
+    // opacity 0.55, which reads as disabled — the opposite of selected.
+    const look = await page.evaluate(() => {
+        const d = Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'))
+            .find(e => e.classList.contains('ov-strip-docked'));
+        const u = Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'))
+            .find(e => !e.classList.contains('ov-strip-docked'));
+        const cs = getComputedStyle(d);
+        return { opacity: cs.opacity, border: cs.borderTopColor, bg: cs.backgroundColor, hasUndocked: !!u };
+    });
+    check(look.opacity === '1', `a docked entry is NOT faded (opacity ${look.opacity})`);
+    check(look.border !== 'rgb(68, 68, 68)', `a docked entry takes the accent border (got ${look.border})`);
 
     // ---- 1-BASED frame range ----------------------------------------------
     const range = await page.evaluate(() => ({
@@ -235,6 +276,361 @@ try {
     check(afterClose.tiles === 3, `closing a tab removes it from the composition (got ${afterClose.tiles})`);
     check(afterClose.marked === 3, `the strip un-marks the removed view (got ${afterClose.marked})`);
     check(/3 files/.test(afterClose.summary), `summary follows the composition (got "${afterClose.summary}")`);
+    // The CLEARING direction of the highlight — the one most likely to regress,
+    // since a stale highlight looks fine until you compare it to the dock.
+    hl = await stripVsDock();
+    check(hl.agree, `closing a tile clears exactly that entry's highlight (lit ${hl.lit}, docked ${hl.docked})`);
+    check(hl.lit.length === 3, `three entries remain highlighted (got ${hl.lit.length})`);
+
+    // ---- the tab band is overlaid, not stacked above the tile ---------------
+    // dockview lays a group out as [tabs][content] in a column flexbox, so a 35px
+    // band costs 35px of video PER GRID ROW. The CSS pulls the content container
+    // back up over the band, so the tile gets the group's full height.
+    const band = await page.evaluate(() => {
+        const tile = document.querySelector('#ovDock [data-view-name]');
+        const group = tile.closest('.dv-groupview');
+        const content = group.querySelector('.dv-content-container');
+        const tabs = group.querySelector('.dv-tabs-and-actions-container');
+        const tab = group.querySelector('.dv-tab');
+        const r = (e) => e.getBoundingClientRect();
+        return {
+            tileH: Math.round(r(tile).height),
+            groupH: Math.round(r(group).height),
+            contentTop: Math.round(r(content).top - r(group).top),
+            tabsH: Math.round(r(tabs).height),
+            tabH: Math.round(r(tab).height),
+            tabDraggable: tab.draggable,
+            // What is actually on top at the tab's centre — the tile's canvases are
+            // absolutely positioned and would swallow the click without a z-index.
+            // Whatever is hit at the tab's centre must belong to the tab, not to the
+            // tile's absolutely-positioned canvases. Reported as an ancestor lookup
+            // rather than a className: with the title hidden the tab is only 49px, so
+            // its centre lands on the close X's SVG, whose `className` is an
+            // SVGAnimatedString and never matches a string test.
+            atTabCentre: (() => {
+                const b = r(tab);
+                const el = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+                if (!el) return null;
+                return {
+                    inTab: !!(el.closest && el.closest('.dv-tab')),
+                    tag: el.tagName,
+                };
+            })(),
+        };
+    });
+    check(band.contentTop === 0,
+        `the content container starts at the group's top edge, not below the band (got ${band.contentTop})`);
+    check(Math.abs(band.tileH - band.groupH) <= 1,
+        `the tile is as tall as its whole group — no row lost to chrome (tile ${band.tileH}, group ${band.groupH})`);
+    // The band must still EXIST and be draggable: .dv-tab is dockview's drag source,
+    // so hiding it would silently remove the only way to rearrange tiles.
+    check(band.tabsH > 0 && band.tabH > 0,
+        `the tab band is still rendered, not hidden (band ${band.tabsH}, tab ${band.tabH})`);
+    check(band.tabDraggable === true,
+        'the tab is still draggable, so tiles can still be rearranged');
+    check(!!(band.atTabCentre && band.atTabCentre.inTab),
+        `the tab is on top of the video canvases and hit-testable (got ${JSON.stringify(band.atTabCentre)})`);
+
+    // ---- the tab shows the X, never the name -------------------------------
+    // Layers ▸ Render Video Names burns the name onto the TILE in the same top-left
+    // 20px band the tab occupies, so a visible tab title drew it twice. What must
+    // survive the hiding is the drag gap and the close X.
+    const chrome = await page.evaluate(() => {
+        const g = document.querySelector('#ovDock .dv-groupview');
+        const tab = g.querySelector('.dv-tab');
+        const content = g.querySelector('.dv-default-tab-content');
+        const action = g.querySelector('.dv-default-tab-action');
+        const r = (e) => e.getBoundingClientRect();
+        return {
+            titleW: Math.round(r(content).width),
+            titleText: content.textContent,
+            tabW: Math.round(r(tab).width),
+            gapLeftOfX: Math.round(r(action).x - r(tab).x),
+            xBeforeTitle: r(action).x < r(content).x,
+        };
+    });
+    check(chrome.titleW === 0, `the tab renders no name text (got ${chrome.titleW}px)`);
+    check(chrome.titleText.length > 0, 'the name is still in the DOM, for the hover reveal');
+    check(chrome.gapLeftOfX >= 12, `a drag gap remains left of the X (got ${chrome.gapLeftOfX}px)`);
+    check(chrome.tabW >= 44, `the tab is still wide enough to grab (got ${chrome.tabW}px)`);
+    check(chrome.xBeforeTitle,
+        'the X is laid out BEFORE the title, so revealing the title cannot move it');
+
+    // A REAL mouse click on the X. Every other close route in this file uses
+    // `.click()`, which would still pass if the button had been display:none'd —
+    // exactly the regression hiding the tab text could introduce.
+    const realClose = await (async () => {
+        const b = await page.evaluate(() => {
+            const a = document.querySelector('#ovDock .dv-default-tab-action').getBoundingClientRect();
+            return {
+                cx: a.x + a.width / 2, cy: a.y + a.height / 2,
+                n: document.querySelectorAll('#ovDock [data-view-name]').length,
+            };
+        });
+        await page.mouse.click(b.cx, b.cy);
+        await page.waitForTimeout(500);
+        const after = await page.evaluate(() =>
+            document.querySelectorAll('#ovDock [data-view-name]').length);
+        return { before: b.n, after };
+    })();
+    check(realClose.after === realClose.before - 1,
+        `a real mouse click on the X closes a tile (${realClose.before} -> ${realClose.after})`);
+    // Put it back so the later dock/export assertions still see a full composition.
+    await page.evaluate(async () => {
+        const names = Array.from(document.querySelectorAll('#ovDock [data-view-name]'))
+            .map(e => e.getAttribute('data-view-name'));
+        const missing = Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'))
+            .find(e => names.indexOf(e.getAttribute('data-view-name')) < 0);
+        if (missing) missing.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 600));
+    });
+
+    // ---- layer OFF: the hovered tile, and only it, names itself ------------
+    const hoverName = await (async () => {
+        const at = await page.evaluate(async () => {
+            const b = document.querySelector('[data-ov="videoNames"]');
+            if (b.checked) b.click();                     // OFF -> hover mode
+            await new Promise(r => setTimeout(r, 400));
+            const t = document.querySelector('#ovDock [data-view-name]');
+            const r0 = t.getBoundingClientRect();
+            return { cx: r0.x + r0.width / 2, cy: r0.y + r0.height / 2 };
+        });
+        const read = () => page.evaluate(() =>
+            Array.from(document.querySelectorAll('#ovDock .dv-groupview')).map(g => ({
+                name: g.querySelector('[data-view-name]').getAttribute('data-view-name'),
+                w: Math.round(g.querySelector('.dv-default-tab-content').getBoundingClientRect().width),
+                x: Math.round(g.querySelector('.dv-default-tab-action').getBoundingClientRect().x),
+            })));
+        await page.mouse.move(5, 5); await page.waitForTimeout(200);
+        const away = await read();
+        await page.mouse.move(at.cx, at.cy); await page.waitForTimeout(200);
+        const over = await read();
+        const onLayer = await page.evaluate(async () => {
+            document.querySelector('[data-ov="videoNames"]').click();   // back ON
+            await new Promise(r => setTimeout(r, 400));
+            return Array.from(document.querySelectorAll('#ovDock .dv-groupview')).map(g =>
+                Math.round(g.querySelector('.dv-default-tab-content').getBoundingClientRect().width));
+        });
+        await page.mouse.move(5, 5); await page.waitForTimeout(200);
+        return { away, over, onLayer };
+    })();
+    const camRows = (rows) => rows.filter(r => r.name !== '__3d__');
+    check(camRows(hoverName.away).every(r => r.w === 0),
+        'with the layer off and no hover, no tab names itself');
+    check(camRows(hoverName.over).length > 0 && camRows(hoverName.over)[0].w > 0,
+        `hovering a tile reveals ITS name (got ${camRows(hoverName.over)[0] && camRows(hoverName.over)[0].w}px)`);
+    check(camRows(hoverName.over).slice(1).every(r => r.w === 0),
+        "and only that tile's — the reveal is per-tile, not global");
+    // A close button that shifts under the cursor is the bug this guards.
+    check(hoverName.over.every((r, i) => r.x === hoverName.away[i].x),
+        'the close X does not move when the name appears');
+    check(hoverName.onLayer.every((w, i) => hoverName.away[i].name === '__3d__' || w === 0),
+        'with the layer back ON, hover adds nothing — the caption owns that corner');
+
+    // ---- Layers: Render Video Names is the first entry -----------------------
+    const layers = await page.evaluate(() => {
+        const boxes = Array.from(document.querySelectorAll('[data-ov]'))
+            .filter(b => b.closest('details') &&
+                /Layers/.test(b.closest('details').querySelector('summary').textContent));
+        return boxes.map(b => ({
+            key: b.getAttribute('data-ov'),
+            label: b.closest('div').textContent.trim(),
+        }));
+    });
+    check(layers.length > 0 && layers[0].key === 'videoNames',
+        `Render Video Names is the TOP entry in Layers (got ${layers.map(l => l.key).join(', ')})`);
+    check(layers.length > 0 && layers[0].label === 'Render Video Names',
+        `…and is labelled exactly that (got ${JSON.stringify(layers[0] && layers[0].label)})`);
+
+    // Reset must not drop an export-only layer. settingsFromVisibilityPanel used to
+    // REPLACE settings.layers with a literal built from the Visibility panel, which
+    // has no twin for videoNames — so the key became undefined and the toggle went
+    // off for good. This is the only route that hits it.
+    const afterReset = await page.evaluate(async () => {
+        const btn = Array.from(document.querySelectorAll('button'))
+            .find(b => /^Reset/i.test(b.textContent.trim()));
+        if (!btn) return { skipped: true };
+        // Reset restores EVERY setting, so snapshot the output mode and put it back:
+        // the persistence block further down re-sets res/fps/colorBy/background/
+        // quality itself but inherits `mode` from this point, and leaving it reset
+        // would fail that check for a reason unrelated to what it tests.
+        const prevMode = document.getElementById('ovMode').value;
+        btn.click();
+        await new Promise(r => setTimeout(r, 500));
+        const stored = JSON.parse(localStorage.getItem('overlayExportSettings.v1') || '{}');
+        const out = {
+            present: !!document.querySelector('[data-ov="videoNames"]'),
+            value: stored.layers ? stored.layers.videoNames : 'no-layers',
+        };
+        const el = document.getElementById('ovMode');
+        el.value = prevMode;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 300));
+        return out;
+    });
+    if (afterReset.skipped) {
+        console.log('  – no Reset button found; skipping the reset-drops-layer check');
+    } else {
+        check(afterReset.present, 'the Render Video Names toggle survives Reset');
+        // The value must be a real boolean, not `undefined` — that is the bug this
+        // guards. It tracks the DEFAULT (now on), so assert the type as well as the
+        // value: `undefined === true` would never pass, but a future default flip
+        // should not turn this into a silent no-op assertion.
+        check(afterReset.value === true,
+            `…and comes back at its default rather than undefined (got ${JSON.stringify(afterReset.value)})`);
+        check(typeof afterReset.value === 'boolean',
+            `…as a real boolean (got ${typeof afterReset.value})`);
+    }
+
+    // ---- selects are wide enough for their longest option -------------------
+    // The Resolution tier labels state pixel dimensions ("2160p (3840×2160)") and
+    // were being clipped. Measured against the select's OWN computed font rather
+    // than a hard-coded pixel figure, so this keeps holding if the font changes.
+    const fit = await page.evaluate(() => {
+        const out = [];
+        for (const sel of document.querySelectorAll('.ov-settings select, #ovSettings select')) {
+            const cs = getComputedStyle(sel);
+            const c = document.createElement('canvas').getContext('2d');
+            c.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+            const widest = Array.from(sel.options)
+                .reduce((a, o) => Math.max(a, c.measureText(o.textContent).width), 0);
+            out.push({
+                id: sel.id || '(unnamed)',
+                box: sel.clientWidth,
+                // Horizontal padding plus room for the dropdown arrow.
+                avail: sel.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 16,
+                widest: Math.ceil(widest),
+                longest: Array.from(sel.options)
+                    .reduce((a, o) => c.measureText(o.textContent).width > c.measureText(a).width ? o.textContent : a, ''),
+            });
+        }
+        return out;
+    });
+    const clipped = fit.filter(f => f.widest > f.avail);
+    check(clipped.length === 0,
+        'every select fits its longest option' + (clipped.length
+            ? ': ' + clipped.map(f => `${f.id} needs ${f.widest}px, has ${Math.round(f.avail)}px for "${f.longest}"`).join('; ')
+            : ` (widest: ${fit.map(f => f.id + ' ' + f.widest + '/' + Math.round(f.avail)).join(', ')})`));
+
+    // ---- boolean settings use the app's toggle switch, not raw checkboxes ----
+    const toggles = await page.evaluate(() => {
+        const boxes = Array.from(document.querySelectorAll('.ov-settings input[type=checkbox], #ovSettings input[type=checkbox]'));
+        return {
+            total: boxes.length,
+            wrapped: boxes.filter(b => b.closest('.toggle-switch')).length,
+            // A .toggle-switch hides its input and styles the sibling .slider, so a
+            // missing .slider means an invisible control.
+            withSlider: boxes.filter(b => {
+                const sw = b.closest('.toggle-switch');
+                return sw && sw.querySelector('.slider');
+            }).length,
+            // Nested <label> would make one click toggle twice, so the row holding a
+            // switch must not itself be a label.
+            nestedLabel: boxes.filter(b => {
+                const sw = b.closest('.toggle-switch');
+                return sw && sw.parentElement && sw.parentElement.closest('label') !== null;
+            }).length,
+        };
+    });
+    check(toggles.total > 0, `the settings panel has boolean controls (got ${toggles.total})`);
+    check(toggles.wrapped === toggles.total,
+        `all ${toggles.total} are lucid-style toggles (got ${toggles.wrapped})`);
+    check(toggles.withSlider === toggles.total,
+        `each toggle has its .slider so it is visible (got ${toggles.withSlider})`);
+    check(toggles.nestedLabel === 0,
+        `no toggle is nested inside another label — that double-toggles on click (got ${toggles.nestedLabel})`);
+    // And the control still works: flip one and confirm the setting followed.
+    const flipped = await page.evaluate(async () => {
+        const box = document.querySelector('[data-ov="legend"]');
+        const before = box.checked;
+        box.click();
+        await new Promise(r => setTimeout(r, 200));
+        const stored = JSON.parse(localStorage.getItem('overlayExportSettings.v1') || '{}');
+        box.click();   // put it back
+        await new Promise(r => setTimeout(r, 200));
+        return { before, after: box.checked === before, stored: stored.layers && stored.layers.legend };
+    });
+    check(flipped.stored === !flipped.before,
+        `clicking a toggle writes through to settings exactly once (was ${flipped.before}, stored ${flipped.stored})`);
+
+    // ---- Quality gives live feedback in BOTH output modes -------------------
+    // Bitrate is the one output setting a still preview cannot show — it exists
+    // only after H.264 encoding — so this text IS the whole of the live feedback
+    // for the Quality picker. It used to be named only in the stitched branch, so
+    // in individual mode the picker looked completely inert.
+    // This phase drives ovMode/ovRes/ovFps/ovQuality, which later checks assert on,
+    // so snapshot them and put them back at the end — a test that leaves shared
+    // state mutated makes the NEXT test fail for reasons that have nothing to do
+    // with it.
+    const qEntry = await page.evaluate(() => ({
+        mode: document.getElementById('ovMode').value,
+        res: document.getElementById('ovRes').value,
+        fps: document.getElementById('ovFps').value,
+        quality: document.getElementById('ovQuality').value,
+    }));
+    for (const mode of ['stitched', 'individual']) {
+        const notes = await page.evaluate(async (m) => {
+            const set = (id, v) => {
+                const el = document.getElementById(id);
+                el.value = v;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            };
+            set('ovMode', m);
+            set('ovRes', '1080');   // a tier where all three sit inside the clamp
+            const out = {};
+            for (const q of ['low', 'medium', 'high']) {
+                set('ovQuality', q);
+                await new Promise(r => setTimeout(r, 120));
+                out[q] = {
+                    note: document.getElementById('ovOutNote').textContent,
+                    summary: document.getElementById('ovSummary').textContent,
+                };
+            }
+            return out;
+        }, mode);
+        const texts = ['low', 'medium', 'high'].map(q => notes[q].note);
+        check(new Set(texts).size === 3,
+            `${mode}: the output note changes for every Quality tier (${new Set(texts).size}/3 distinct)`);
+        ['low', 'medium', 'high'].forEach(q => {
+            check(notes[q].note.includes(q), `${mode}/${q}: the note names the tier`);
+            check(/\d+\.\d+ Mbps/.test(notes[q].note), `${mode}/${q}: the note states a Mbps figure`);
+        });
+        const sizes = ['low', 'medium', 'high'].map(q => notes[q].summary);
+        check(new Set(sizes).size === 3,
+            `${mode}: the estimated size also changes per tier (${new Set(sizes).size}/3 distinct)`);
+        check(!texts.some(t => /capped/.test(t)),
+            `${mode}: no spurious "capped" warning at 1080p, where no tier is clamped`);
+    }
+    // …and the clamp warning DOES appear where tiers really do collide.
+    const cappedNote = await page.evaluate(async () => {
+        const set = (id, v) => {
+            const el = document.getElementById(id);
+            el.value = v;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        set('ovMode', 'stitched');
+        set('ovRes', '2160');
+        set('ovFps', '60');
+        set('ovQuality', 'high');
+        await new Promise(r => setTimeout(r, 150));
+        return document.getElementById('ovOutNote').textContent;
+    });
+    check(/capped/.test(cappedNote),
+        `at 2160p60 the note warns that the tier is capped (got "${cappedNote}")`);
+
+    // Restore what this phase perturbed, in the order the controls depend on.
+    await page.evaluate(async (e) => {
+        const set = (id, v) => {
+            const el = document.getElementById(id);
+            el.value = v;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        set('ovFps', e.fps);
+        set('ovRes', e.res);
+        set('ovQuality', e.quality);
+        set('ovMode', e.mode);
+        await new Promise(r => setTimeout(r, 200));
+    }, qEntry);
 
     // ---- settings persist across a close/reopen ---------------------------
     await page.evaluate(() => {

@@ -53,6 +53,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+import { readVisibilityMetadata } from './visibility-metadata.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -984,6 +985,11 @@ export async function handleLoadSlpFile(slpFile) {
         // session's track index by NAME (see remapGlobalTrackToSession). For
         // non-lucid SLPs sessTracks IS the global list, so no remap is needed.
         var hasPerSessionTracks = false;
+        // Session-scoped Visibility-panel state. Declared per iteration (`var`
+        // is function-scoped and this is a session loop — without the explicit
+        // reset a session lacking the keys would inherit the previous session's
+        // values). Ingested right after the Session is constructed below.
+        var earlyVisibility = null;
 
         if (slpData.sessions && slpData.sessions[slpSessIdx]) {
             var earlyMeta = slpData.sessions[slpSessIdx].metadata;
@@ -997,6 +1003,7 @@ export async function handleLoadSlpFile(slpFile) {
                     sessTracks = earlyMeta.lucid.tracks.slice();
                     hasPerSessionTracks = true;
                 }
+                earlyVisibility = earlyMeta.lucid;
             }
         }
 
@@ -1026,6 +1033,7 @@ export async function handleLoadSlpFile(slpFile) {
 
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
+        readVisibilityMetadata(session, earlyVisibility);
 
         // Populate FrameGroups from worker's frames array (yield every 20K for UI)
         var BATCH = 20000;

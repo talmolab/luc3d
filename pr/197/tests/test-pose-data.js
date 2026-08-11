@@ -749,6 +749,132 @@
         });
     });
 
+    describe('Session.propagateIdentitiesToTracks — single-view ID switch (duplicate-ID regression)', function () {
+        // A single-view ID switch (luc3d #201: ungroup, switch the ID on that
+        // view's Ungrouped row) swaps identity VALUES in frameIdentityMap for
+        // that camera only, and deliberately leaves InstanceGroup.identityId
+        // alone — it is one field shared by every view. So after the switch the
+        // map and the group field DISAGREE in that camera, by design, and every
+        // display consumer resolves map-first with the group as fallback
+        // (getGroupColor). Propagate IDs -> Tracks must use the same precedence:
+        // its group-first repairs for the raw-track-collision case (#183's
+        // instanceToIdentity, #204's rowClaim) resurrected the stale group
+        // identity on the still-grouped animal while the switched instance
+        // correctly followed the map — the SAME ID/track landing on both
+        // animals on the switch frame, in memory and in the columnar store.
+        function buildSwitchedSession() {
+            const sk = new Skeleton('test', ['a'], []);
+            const cam0 = new Camera('cam0', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const cam1 = new Camera('cam1', [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [10, 10]);
+            const session = new Session([cam0, cam1], sk, ['t0', 't1'], 'S');
+            const idA = session.addIdentity('Alice');
+            const idB = session.addIdentity('Bob');
+            const fg = new FrameGroup(50);
+            session.frameGroups.set(50, fg);
+            // Animal 1: the row being corrected — ungrouped on cam0, raw track 0.
+            const inst1 = new Instance([[0, 0]], 0, 'user', 0);
+            session.addUnlinkedInstance(50, 'cam0', inst1);
+            // Animal 2: still grouped cross-view (identity Bob), raw track 1 on cam0.
+            const inst2 = new Instance([[1, 1]], 1, 'user', 0);
+            inst2._rawInstIndex = 1;   // its row offset in the columnar store
+            const inst2cam1 = new Instance([[2, 2]], 0, 'user', 0);
+            const gB = new InstanceGroup(1, idB.id);
+            gB.addInstance('cam0', inst2);
+            gB.addInstance('cam1', inst2cam1);
+            fg.addInstance('cam0', inst2);
+            fg.addInstance('cam1', inst2cam1);
+            session.instanceGroups.set(50, [gB]);
+            // Pre-switch identity state: cam0 t0 -> Alice, t1 -> Bob.
+            session.setFrameIdentity(50, 'cam0', 0, idA.id);
+            session.setFrameIdentity(50, 'cam0', 1, idB.id);
+            session.setFrameIdentity(50, 'cam1', 0, idB.id);
+            // The correction: on cam0 only, animal 1 is really Bob. Map now
+            // reads t0 -> Bob, t1 -> Alice; gB.identityId stays Bob (correct —
+            // the switch must not leak into cam1).
+            session.swapIdentitiesForwardInCamera(50, 'cam0', idA.id, idB.id);
+            return { session, idA, idB, inst1, inst2, inst2cam1, gB };
+        }
+
+        it('the switch frame\'s two animals get DIFFERENT tracks, each following the map (in-memory)', function () {
+            const { session, idA, idB, inst1, inst2, inst2cam1 } = buildSwitchedSession();
+            assertEqual(session.getIdentityIdForTrack('cam0', 0, 50), idB.id, 'precondition: t0 reads Bob after the switch');
+            assertEqual(session.getIdentityIdForTrack('cam0', 1, 50), idA.id, 'precondition: t1 reads Alice after the switch');
+
+            session.propagateIdentitiesToTracks();
+
+            const aliceTrack = session.tracks.indexOf('Alice');
+            const bobTrack = session.tracks.indexOf('Bob');
+            assertTrue(aliceTrack >= 0 && bobTrack >= 0, 'both identities became tracks');
+            assertEqual(inst1.trackIdx, bobTrack, 'the switched (ungrouped) instance follows the map -> Bob');
+            assertEqual(inst2.trackIdx, aliceTrack,
+                'the still-grouped instance follows the map (Alice), not its stale group.identityId (Bob)');
+            assertTrue(inst1.trackIdx !== inst2.trackIdx,
+                'one ID must not be duplicated onto both animals on the switch frame');
+            assertEqual(inst2cam1.trackIdx, bobTrack, 'the un-switched camera still reads Bob');
+        });
+
+        it('the columnar-store remap agrees: rowClaim must not resurrect the pre-switch identity', function () {
+            const { session, idA } = buildSwitchedSession();
+            let capturedRemapFn = null, capturedTracks = null;
+            session.lazyLoader = {
+                remapTracksFromIdentity: function (newTrackNames, remapFn) {
+                    capturedTracks = newTrackNames.slice();
+                    capturedRemapFn = remapFn;
+                    return { changed: 0, errorRows: 0, firstError: null };
+                },
+            };
+
+            session.propagateIdentitiesToTracks();
+
+            const aliceTrack = capturedTracks.indexOf('Alice');
+            const bobTrack = capturedTracks.indexOf('Bob');
+            // Row 0 = the switched instance (old track 0), row 1 = the grouped
+            // one (old track 1, _rawInstIndex 1).
+            assertEqual(capturedRemapFn('cam0', 50, 0, 0), bobTrack,
+                'store row of the switched instance follows the map -> Bob');
+            assertEqual(capturedRemapFn('cam0', 50, 1, 1), aliceTrack,
+                'store row of the still-grouped instance follows the map (Alice) — rowClaim must not override it with the stale group identity');
+            // Sanity for the identical duplicate the store used to get.
+            assertTrue(capturedRemapFn('cam0', 50, 0, 0) !== capturedRemapFn('cam0', 50, 1, 1),
+                'the two store rows must not land on one track');
+        });
+
+        it('the #183/#204 collision repair still works: an absent/-1 map entry falls back to the group', function () {
+            const { session, idA } = buildSwitchedSession();
+            // Frame 60: a raw-tracker collision frame — the map entry for this
+            // (frame, cam, track) was marked -1/ambiguous by commitTrackedFrame's
+            // writtenThisFrame guard, so the GROUP is the only usable source.
+            const inst3 = new Instance([[3, 3]], 0, 'user', 0);
+            inst3._rawInstIndex = 0;
+            const gC = new InstanceGroup(2, idA.id);
+            gC.addInstance('cam0', inst3);
+            const fg60 = new FrameGroup(60);
+            fg60.addInstance('cam0', inst3);
+            session.frameGroups.set(60, fg60);
+            session.instanceGroups.set(60, [gC]);
+            session.setFrameIdentity(60, 'cam0', 0, -1);
+
+            let capturedRemapFn = null, capturedTracks = null;
+            session.lazyLoader = {
+                remapTracksFromIdentity: function (newTrackNames, remapFn) {
+                    capturedTracks = newTrackNames.slice();
+                    capturedRemapFn = remapFn;
+                    return { changed: 0, errorRows: 0, firstError: null };
+                },
+            };
+
+            session.propagateIdentitiesToTracks();
+
+            const aliceTrack = session.tracks.indexOf('Alice');
+            assertEqual(inst3.trackIdx, aliceTrack,
+                'in-memory: the -1-marked instance resolves via its group identity');
+            assertEqual(capturedRemapFn('cam0', 60, 0, 0), capturedTracks.indexOf('Alice'),
+                'store: the -1-marked row resolves via rowClaim from its group identity');
+        });
+    });
+
     describe('Session.propagateTracksToIdentities — lazy sessions', function () {
         it('sweeps a lazy loader for instances outside frameGroups', function () {
             const sk = new Skeleton('test', ['a'], []);

@@ -1,4 +1,4 @@
-// ui/overlay-export-modal.js — "Export Instance Overlays" (issue #190)
+// ui/overlay-export-modal.js — "Export Video Overlays" (issue #190)
 //
 // Renders the session's 2D camera videos WITH pose overlays burned in, plus the
 // 3D viewport, either stitched into a single composed video (laid out exactly as
@@ -28,7 +28,9 @@ import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockv
 
 import { state, videoController, getActiveSession } from './app-state.js';
 import { Viewport3D } from './viewport3d.js';
-import { drawFrameOverlays, getTrackColor, getGroupColor } from './overlays.js';
+import {
+    drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
+} from './overlays.js';
 import { getVisibilitySettings } from './rendering.js';
 import {
     getInstanceGroupsForFrame,
@@ -42,11 +44,21 @@ import { setStatus } from '../import-export/save-load.js';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
-    fitRect, computeTileRects, outputSizeFor, outputSizeFrom, customAspect, clampOutDim,
-    h264CodecFor, bitrateFor,
+    fitRect, rotatedFit, rotatedBoxSize,
+    computeTileRects, outputSizeFor, outputSizeFrom, customAspect, clampOutDim,
+    h264CodecFor, bitrateFor, bitrateIsClamped, estimatedBytes, shouldStreamToDisk,
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
+    distributeAxisSizes, SASH_GROW_ONE,
 } from './overlay-export-layout.js';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
+// The main window's per-camera display settings. `ui/video-filters.js` imports NO
+// project modules, so this adds no cycle — and going through the SAME
+// `buildVideoFilter` the live canvases use is what stops the export drifting from
+// what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
+import {
+    buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
+} from './video-filters.js';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -96,13 +108,15 @@ export function settingsFromVisibilityPanel() {
     var vis;
     try { vis = getVisibilitySettings(); } catch (e) { return s; }
     if (!vis) return s;
-    s.layers = {
-        user: !!vis.showUser,
-        predicted: !!vis.showPredicted,
-        reproj: !!vis.showReprojected,
-        errors: !!vis.showErrors,
-        legend: !!vis.showLegend,
-    };
+    // MUTATE the defaults rather than REPLACE them. The Visibility panel has no twin
+    // for every export layer (`videoNames` is export-only), and a whole-object
+    // assignment silently drops any such key to `undefined` the moment the user
+    // presses Reset — the toggle would render off and never come back.
+    s.layers.user = !!vis.showUser;
+    s.layers.predicted = !!vis.showPredicted;
+    s.layers.reproj = !!vis.showReprojected;
+    s.layers.errors = !!vis.showErrors;
+    s.layers.legend = !!vis.showLegend;
     s.trailLength = state.trailLength || 0;
     s.colorBy = state.colorByIdentity ? 'identity' : 'track';
     function copy(dst, src, keys) {
@@ -168,7 +182,7 @@ var FIELD = 'background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e
 var HANDLE = 'position:absolute;top:5px;width:15px;height:15px;margin-left:-8px;border-radius:50%;background:var(--accent,#4a9eff);border:2px solid #fff;box-sizing:border-box;cursor:ew-resize;touch-action:none;z-index:2;';
 
 /**
- * Open the "Export Instance Overlays" modal.
+ * Open the "Export Video Overlays" modal.
  *
  * Views strip (left) → drag/double-click to dock. Composition dock (middle) →
  * dockview, drag / drop / close / resize. Settings (right) → frame range,
@@ -208,7 +222,7 @@ export function showOverlayExportModal() {
         'width:1240px;max-width:97vw;height:820px;max-height:94vh;box-sizing:border-box;' +
         'display:flex;flex-direction:column;padding:18px;';
     modal.innerHTML =
-        '<h3 style="margin:0 0 10px 0;">Export Instance Overlays</h3>' +
+        '<h3 style="margin:0 0 10px 0;">Export Video Overlays</h3>' +
         '<div style="flex:1 1 auto;min-height:0;display:flex;gap:10px;">' +
         // --- views strip -------------------------------------------------
         '  <div style="flex:0 0 108px;display:flex;flex-direction:column;min-height:0;' +
@@ -337,7 +351,7 @@ export function showOverlayExportModal() {
         // preview. `onDidLayoutChange` alone is not enough: it fires before the
         // new sizes have settled.
         if (tileResizeObserver) { try { tileResizeObserver.observe(this.element); } catch (e) { /* ignore */ } }
-        markStripDocked();
+        refreshStripHighlights();
     };
     TilePane.prototype.dispose = function () { /* removal handled via onDidRemovePanel */ };
 
@@ -366,10 +380,176 @@ export function showOverlayExportModal() {
         var tile = tiles.get(event.id);
         if (tile && tile.is3d) dispose3D();
         tiles.delete(event.id);
-        markStripDocked();
+        refreshStripHighlights();
         refreshSummary();
     });
     dockApi.onDidLayoutChange(function () { schedulePreview(); });
+
+    /**
+     * The tab-chrome half of `Layers ▸ Render Video Names`.
+     *
+     * The tab NEVER renders its own title (styles.css, `#ovDock`): with the layer ON
+     * the burned-in caption already owns that corner, and the two together printed
+     * the name twice a few pixels apart. So this class only decides where the name
+     * comes from when the layer is OFF — from HOVER, per tile.
+     *
+     * A class plus pure CSS, deliberately: the reveal costs no listener and no
+     * repaint. Drawing the name onto the overlay canvas on hover instead would mean
+     * a `schedulePreview()` per pointer move, and `renderPreview` re-decodes EVERY
+     * docked view — and `drawTileContent` is shared with the export, so a hover flag
+     * could end up burned into the `.mp4`.
+     */
+    function applyTabNameMode() {
+        dockEl.classList.toggle('ov-hover-tab-names', !settings.layers.videoNames);
+    }
+
+    // ========================================================================
+    // Even-axis sash resizing
+    // ========================================================================
+    /**
+     * Dragging a sash shares the change with EVERY tile on that axis, not just
+     * the one next to it.
+     *
+     * dockview 6.6.1 gives the whole delta to the immediate neighbour and only
+     * spills further when that neighbour clamps (`Splitview.resize`, dockview-core
+     * 6.6.1 dist/cjs/splitview/splitview.js, driven from the sash's own
+     * pointermove). NOTHING configures that:
+     *   - `proportionalLayout` is read only by `saveProportions()` and consumed
+     *     only by `Splitview.layout()` — it governs CONTAINER resize, not sash
+     *     drags. `DockviewComponent` hardcodes it `true`, does not expose it as an
+     *     option, and `updateOptions` says "not supported" outright.
+     *   - `distributeViewSizes()` forces every view to the SAME size, throwing the
+     *     composition away, and is not on any public API.
+     *   - `LayoutPriority` only re-orders that same spill list, and the sash
+     *     handler passes `undefined` for both priority lists, so it cannot reach a
+     *     sash drag at all.
+     *
+     * So the gesture is taken over here. dockview's listener lives on the sash
+     * ELEMENT, so a CAPTURE-phase listener on the dock stops the event before it
+     * ever arrives — there is then exactly one handler and nothing to fight.
+     * Post-correcting in `onDidLayoutChange` was rejected: that fires ONCE at drag
+     * END, so the drag would look native and then jump on release.
+     *
+     * Snapping and margins need no reimplementation in this dock: dockview groups
+     * never set `snap`, and `themeDark` has no `gap` so `margin` is 0.
+     *
+     * This reaches into the pinned bundle's `Splitview`. `viewItems`, `sashes`,
+     * `layoutViews()`, `distributeEmptySpace()` and `saveProportions()` are
+     * TypeScript-private but real, UNMANGLED properties of the 6.6.1 `/+esm` build
+     * — verified at runtime against the live CDN module, not just by grep — and
+     * 6.6.1 is PINNED so the shape cannot drift underneath us. Every piece is
+     * feature-detected regardless: if anything is missing we return WITHOUT
+     * stopping propagation and dockview's stock neighbour-only drag runs. A future
+     * bump can regress the behaviour; it cannot break resizing.
+     */
+
+    // SASH_GROW_ONE treats the sash at index k as tile k's TRAILING EDGE: push it out
+    // and tile k grows by the full delta while every other tile on the axis gives up
+    // delta/(n-1); pull it in and tile k shrinks while every other tile gains
+    // delta/(n-1). One handle per tile, same target either way. Two costs: the sash
+    // TRAILS the cursor (both sides move — 4 equal tiles, drag 90px => sash moves
+    // 60px), and the LAST tile on an axis has no trailing sash, so it only ever
+    // changes as one of the evenly-adjusted others.
+    // SASH_SHARE_SIDES instead splits the axis at the sash — tiles before share the
+    // gain, tiles after share the loss — which keeps the sash exactly under the
+    // cursor but has no "shrink just this one" gesture.
+    // Swapping this constant is the whole change.
+    var SASH_DISTRIBUTION = SASH_GROW_ONE;
+
+    dockEl.addEventListener('pointerdown', onDockSashDown, true);   // CAPTURE
+
+    /**
+     * The 6.6.1 `Splitview` owning `sashEl`, or null when we cannot identify it
+     * (unknown internals, or a sash belonging to dockview's shell splitviews
+     * rather than the gridview tree). Null means "let dockview handle it".
+     */
+    function splitviewForSash(sashEl) {
+        var branchEl = sashEl.closest ? sashEl.closest('.dv-branch-node') : null;
+        if (!branchEl) return null;
+        var found = null;
+        (function walk(node) {
+            if (!node || found || !node.children) return;    // no children => LeafNode
+            if (node.element === branchEl) { found = node; return; }
+            for (var i = 0; i < node.children.length; i++) walk(node.children[i]);
+        })(dockview.gridview && dockview.gridview.root);
+        var sv = found && found.splitview;
+        if (!sv || !sv.viewItems ||
+            typeof sv.layoutViews !== 'function' ||
+            typeof sv.distributeEmptySpace !== 'function' ||
+            typeof sv.saveProportions !== 'function') return null;
+        return sv;
+    }
+
+    function onDockSashDown(ev) {
+        if (ev.button !== 0 || exporting) return;
+        var sashEl = ev.target;
+        if (!sashEl || !sashEl.classList || !sashEl.classList.contains('dv-sash')) return;
+
+        var sv = splitviewForSash(sashEl);
+        if (!sv) return;
+        var items = sv.viewItems;
+        // With two tiles on an axis "evenly" IS the neighbour, so leave the stock
+        // handler alone rather than reimplementing it for no gain.
+        if (items.length < 3) return;
+
+        // `sashes[i]` is always the sash between views i and i+1, and the sash
+        // container's children are appended in the same order, so either lookup
+        // gives the boundary index.
+        var k = -1, i;
+        if (sv.sashes) {
+            for (i = 0; i < sv.sashes.length; i++) {
+                if (sv.sashes[i].container === sashEl) { k = i; break; }
+            }
+        }
+        if (k < 0) k = Array.prototype.indexOf.call(sashEl.parentElement.children, sashEl);
+        if (k < 0 || k >= items.length - 1) return;
+
+        // From here the gesture is OURS: keep dockview's own sash listener, which
+        // sits further down the capture path on the sash itself, from running.
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        var svEl = sashEl.parentElement.parentElement;
+        var horizontal = !svEl || !svEl.classList.contains('dv-vertical');
+        var start = horizontal ? ev.clientX : ev.clientY;
+        var base = [], min = [], max = [], vis = [];
+        for (i = 0; i < items.length; i++) {
+            base.push(items[i].size);
+            min.push(items[i].minimumSize);
+            max.push(items[i].maximumSize);
+            vis.push(items[i].visible !== false);
+            items[i].enabled = false;   // as dockview does: a tile must not eat the drag
+        }
+
+        var onMove = function (e) {
+            var d = (horizontal ? e.clientX : e.clientY) - start;
+            var next = distributeAxisSizes(base, min, max, vis, k, d, SASH_DISTRIBUTION);
+            for (var j = 0; j < items.length; j++) items[j].size = next[j];
+            // Mirrors dockview's own pointermove: absorb any pre-existing px of
+            // drift between the axis total and the container, then write the CSS
+            // and recurse layout into nested columns.
+            sv.distributeEmptySpace();
+            sv.layoutViews();
+        };
+        var onEnd = function () {
+            document.removeEventListener('pointermove', onMove);
+            document.removeEventListener('pointerup', onEnd);
+            document.removeEventListener('pointercancel', onEnd);
+            document.removeEventListener('contextmenu', onEnd);
+            for (var j = 0; j < items.length; j++) items[j].enabled = true;
+            // dockview does this at the end of its own drag so a later CONTAINER
+            // resize keeps the ratios the user just set.
+            sv.saveProportions();
+            // We bypassed the sash handler, and `onDidLayoutChange` only fires from
+            // dockview's own sash END, so repaint here.
+            schedulePreview();
+            refreshSummary();
+        };
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onEnd);
+        document.addEventListener('pointercancel', onEnd);
+        document.addEventListener('contextmenu', onEnd);
+    }
 
     /**
      * Shape the dock to the output frame so the composition stays WYSIWYG.
@@ -519,8 +699,16 @@ export function showOverlayExportModal() {
 
     function stripEntries() {
         var out = [];
-        for (var i = 0; i < state.views.length; i++) out.push({ name: state.views[i].name, is3d: false });
+        // The 3D viewer leads the strip: it is the one entry that is not a camera,
+        // so putting it first keeps the camera list below it unbroken.
+        //
+        // STRIP ORDER ONLY. The dock's seed order is decided independently by
+        // `seedLayoutPlan(state.views.map(...), has3D)` in `seedLayout()`, which
+        // still docks the 3D tile LAST — a full-height column to the right of the
+        // whole video grid. Reordering the strip must not move the tile, or every
+        // existing user's exported frame layout would change under them.
         if (has3D) out.push({ name: TILE_3D, is3d: true, label: '3D View' });
+        for (var i = 0; i < state.views.length; i++) out.push({ name: state.views[i].name, is3d: false });
         return out;
     }
 
@@ -562,16 +750,52 @@ export function showOverlayExportModal() {
 
             if (entry.is3d) draw3DGlyph(thumb);
         });
-        markStripDocked();
+        refreshStripHighlights();
     }
 
-    function markStripDocked() {
+    /**
+     * Paint each strip entry's docked / not-docked state.
+     *
+     * A view that IS in the composition is HIGHLIGHTED — accent border plus an
+     * accent-dim wash, the same treatment `.session-strip-item.active` gives an
+     * active strip thumbnail in the main window (styles.css:360) — and a view that
+     * is not in the composition falls back to the plain resting border. This used
+     * to be the other way round: a docked entry was faded to `opacity: 0.55`,
+     * which reads as "disabled", i.e. the exact OPPOSITE of selected. The dot
+     * stays: it mirrors `.view-strip-item .strip-status.in-dock`, the main window's
+     * own docked marker.
+     *
+     * `border-COLOR`, never border-width, and no outline: the entries sit in a
+     * narrow column, and growing the box would reflow the strip as tiles come and go.
+     *
+     * BOTH branches write BOTH properties. Letting the not-docked branch fall back
+     * to whatever `cssText` baked in at build time is precisely how this kind of
+     * state goes stale after one close-and-re-add cycle.
+     *
+     * Call sites — all three, and they are exhaustive because `tiles` (the source
+     * of truth behind `isDocked`) is mutated in exactly three places:
+     *   1. `buildStrip()`             — initial paint
+     *   2. `TilePane.prototype.init`  — the sole choke point for every add (seed,
+     *      double-click, drag-to-dock: dockview always calls `init` from
+     *      `addPanel`, even for a panel added as an inactive stacked tab)
+     *   3. `dockApi.onDidRemovePanel` — every remove (tab X, whole-group close,
+     *      close-everything)
+     * A panel MOVE deliberately gets no hook: dockview wraps every move in
+     * `movingLock`, so neither add nor remove fires — and it must not, since a
+     * moved panel keeps its id and the docked SET is unchanged by definition.
+     */
+    function refreshStripHighlights() {
         var items = stripEl.querySelectorAll('.ov-strip-item');
         for (var i = 0; i < items.length; i++) {
-            var name = items[i].getAttribute('data-view-name');
+            var docked = isDocked(items[i].getAttribute('data-view-name'));
             var dot = items[i].querySelector('.ov-strip-dot');
-            if (dot) dot.style.display = isDocked(name) ? '' : 'none';
-            items[i].style.opacity = isDocked(name) ? '0.55' : '1';
+            if (dot) dot.style.display = docked ? '' : 'none';
+            // A class as well as inline style: it names WHAT the state is rather
+            // than what it happens to look like, which is what the e2e asserts on.
+            if (docked) items[i].classList.add('ov-strip-docked');
+            else items[i].classList.remove('ov-strip-docked');
+            items[i].style.borderColor = docked ? 'var(--accent,#4a9eff)' : 'var(--border-color,#444)';
+            items[i].style.background = docked ? 'var(--accent-dim,rgba(102,126,234,0.25))' : '#1b1b1b';
         }
     }
 
@@ -682,30 +906,166 @@ export function showOverlayExportModal() {
     }
 
     /**
-     * Draw one 2D tile: background (video frame or solid fill) into `videoCanvas`,
-     * overlays into `overlayCanvas`. Both are `w`×`h`; the video is letterboxed
-     * with the same fit `drawFrameOverlays` uses, so the two align exactly.
+     * The main window's per-camera display settings for one view.
+     *
+     * Brightness and contrast come from the SESSION, not the view: `state.views` is
+     * rebuilt on every session switch, and ui/video-filters.js names the session as
+     * the source of truth (these are the same reads `applyVideoFilters` makes).
+     *
+     * Rotation prefers `view.rotation` when it is set, because the hold-to-rotate
+     * chord in ui/ui-wiring.js advances `view.rotation` every frame and only
+     * commits to the session on KEYUP — so mid-gesture the view is the fresher
+     * value, and it is what the user is looking at. A view that was never docked in
+     * the main window has no `view.rotation` at all (`restoreViewRotation` never ran
+     * on it), hence the session fallback.
      */
-    function paintTile(tile, view, bitmap, frameGroup, ofg, groups, frameIdx, w, h) {
-        var vctx = tile.videoCanvas.getContext('2d');
-        vctx.clearRect(0, 0, w, h);
-        if (settings.background === 'video') {
-            vctx.fillStyle = '#000';
-            vctx.fillRect(0, 0, w, h);
-            if (bitmap) {
-                var fit = fitRect(view.videoWidth, view.videoHeight, w, h);
-                try { vctx.drawImage(bitmap, fit.x, fit.y, fit.width, fit.height); } catch (e) { /* ignore */ }
+    function displaySettingsFor(view) {
+        var rot = (view && isFinite(view.rotation))
+            ? view.rotation
+            : getSessionRotation(session, view.name);
+        return {
+            // Byte-for-byte the string the main window puts on
+            // `view.canvas.style.filter`.
+            filter: buildVideoFilter(getSessionBrightness(session, view.name),
+                                     getSessionContrast(session, view.name)),
+            rotation: rot || 0,
+            zoom: (view && view.zoom) ? view.zoom : null,
+        };
+    }
+
+    /**
+     * Draw one 2D tile — background + video into `vctx`, overlays into `octx` — WITH
+     * the main window's per-camera display settings burned in. Shared by the live
+     * preview and the export so the two cannot drift.
+     *
+     * The main window applies all of these as CSS on live elements: brightness and
+     * contrast as `view.canvas.style.filter` (`applyVideoFilters`), rotation and
+     * zoom/pan as the `.canvas-wrapper` transform (`applyZoom`, loading/video.js).
+     * NONE of that survives a `drawImage` of the decoded frame into another canvas —
+     * the same reason `applyVideoFilters` has to re-set the filter on duplicate
+     * panes' mirror canvases — so the tile has to re-apply them itself:
+     *   - brightness/contrast -> `ctx.filter`, which takes exactly the CSS
+     *     filter-function list `buildVideoFilter` already emits.
+     *   - rotation + zoom -> a context transform applied to the video AND the
+     *     overlays together, because the main window transforms ONE wrapper holding
+     *     both canvases. Transforming only the pixels would slide every skeleton off
+     *     the animal.
+     * The fit is therefore rotation-aware (`rotatedFit`): a 90-degree view is
+     * portrait and has to fit the tile as a portrait.
+     *
+     * ZOOM FIDELITY — magnification and pan centre match the main window; the
+     * visible CROP cannot. The main window's crop is produced by `.video-cell`'s
+     * `overflow:hidden` at the cell's aspect; an export tile has its own aspect, so a
+     * wider tile simply shows more video. At high zoom near a frame edge that means
+     * black past the edge, exactly as the main window would show if its cell were
+     * that shape. This is inherent to honouring zoom in a differently-shaped box.
+     *
+     * The transform mirrors `applyZoom`'s CSS list
+     * `translate(off) translate(c) rotate(r) translate(-c) scale(z)` under
+     * `transform-origin: 0 0`. Read right-to-left, a point p in the wrapper's base
+     * box maps to `off + c + Rot(z*p - c)`. Rewriting about the box centre gives the
+     * call order below; the `(z-1)*box/2` term is what reproduces CSS scaling about
+     * the TOP-LEFT rather than the centre, and the pan is converted from
+     * main-window CSS px to tile px by `box/base`.
+     *
+     * Two details are load-bearing:
+     *   - the overlay canvas is cleared under the IDENTITY transform FIRST.
+     *     `drawFrameOverlays`'s own `clearRect(0, 0, canvas.width, canvas.height)`
+     *     clears a ROTATED rect once a transform is set, which would leave the
+     *     previous frame's skeleton in the corners of the reused export canvas.
+     *   - the legend is drawn OUTSIDE the transform. `drawLegend` anchors itself to
+     *     `ctx.canvas.width` rather than the canvas size it is passed
+     *     (ui/overlays.js), so inside the transform it drifts by the letterbox
+     *     offset — a regression even at rotation 0 — and lands upside down at 180.
+     *
+     * `ctx.filter` is part of the 2D state, so `save()`/`restore()` puts it back. It
+     * is reset with `'none'`, never `''`: an empty string is an INVALID value that
+     * the setter silently ignores, which would leak the video's brightness onto the
+     * overlay composite. `buildVideoFilter` returns `''` when both are default,
+     * hence the `|| 'none'`.
+     */
+    function drawTileContent(vctx, octx, view, bitmap, frameGroup, ofg, groups, w, h) {
+        var disp = displaySettingsFor(view);
+        var fit = rotatedFit(view.videoWidth, view.videoHeight, w, h, disp.rotation);
+        var rad = disp.rotation * Math.PI / 180;
+        var z = disp.zoom;
+        var zs = (z && z.scale > 0) ? z.scale : 1;
+        // Pan is recorded in main-window CSS px against `baseW`/`baseH`, the wrapper
+        // size those offsets were computed for. Without a base there was never a
+        // layout to pan against, so there is no offset to honour.
+        var panX = (z && z.baseW > 0) ? z.offsetX * (fit.boxWidth / z.baseW) : 0;
+        var panY = (z && z.baseH > 0) ? z.offsetY * (fit.boxHeight / z.baseH) : 0;
+
+        // The shared video/overlay transform, mirroring `applyZoom`.
+        var applyViewTransform = function (ctx) {
+            ctx.translate(w / 2 + panX, h / 2 + panY);
+            if (rad) ctx.rotate(rad);
+            if (zs !== 1) {
+                ctx.translate((zs - 1) * fit.boxWidth / 2, (zs - 1) * fit.boxHeight / 2);
+                ctx.scale(zs, zs);
             }
-        } else {
-            vctx.fillStyle = BG_FILL[settings.background] || '#000';
-            vctx.fillRect(0, 0, w, h);
+        };
+
+        // ---- background + video ----
+        vctx.setTransform(1, 0, 0, 1, 0, 0);
+        vctx.filter = 'none';
+        vctx.clearRect(0, 0, w, h);
+        vctx.fillStyle = settings.background === 'video'
+            ? '#000'
+            : (BG_FILL[settings.background] || '#000');
+        vctx.fillRect(0, 0, w, h);
+        if (settings.background === 'video' && bitmap) {
+            vctx.save();
+            applyViewTransform(vctx);
+            vctx.filter = disp.filter || 'none';
+            try {
+                vctx.drawImage(bitmap, -fit.boxWidth / 2, -fit.boxHeight / 2,
+                    fit.boxWidth, fit.boxHeight);
+            } catch (e) { /* ignore */ }
+            vctx.restore();
         }
 
-        var octx = tile.overlayCanvas.getContext('2d');
-        var opts = overlayOptionsFrom(settings, view.videoWidth, view.videoHeight, w, h);
-        var unlinked = collectUnlinked(frameGroup, view.name);
-        opts.unlinkedInstances = unlinked;
+        // ---- overlays ----
+        octx.setTransform(1, 0, 0, 1, 0, 0);
+        octx.filter = 'none';
+        octx.clearRect(0, 0, w, h);
+        // Inside the transform the video occupies [0,boxWidth] x [0,boxHeight] with
+        // no letterbox, so `drawFrameOverlays` is handed the VIDEO BOX as its canvas
+        // size and `videoToCanvas` reproduces `fit.scale` exactly. At rotation 0,
+        // zoom 1 these numbers are identical to the old tile-sized call.
+        var opts = overlayOptionsFrom(settings, view.videoWidth, view.videoHeight,
+            fit.boxWidth, fit.boxHeight);
+        opts.unlinkedInstances = collectUnlinked(frameGroup, view.name);
+        var wantLegend = opts.showLegend;
+        opts.showLegend = false;              // drawn upright, below
+        octx.save();
+        applyViewTransform(octx);
+        octx.translate(-fit.boxWidth / 2, -fit.boxHeight / 2);
         drawFrameOverlays(octx, view.name, ofg, groups, session, opts);
+        octx.restore();
+        if (wantLegend) {
+            drawLegend(octx, {
+                showDetected: opts.showUser || opts.showPredicted,
+                showReprojected: opts.showReprojected,
+                showErrors: opts.showErrors,
+            });
+        }
+        // The camera name, burned in — same place as the legend and for the same
+        // reason: OUTSIDE `applyViewTransform`. A caption must stay upright for a
+        // rotated camera (at rotation 180 an in-transform label prints upside down)
+        // and must be anchored to the TILE, not to the rotated video box.
+        //
+        // Never runs for the 3D tile, structurally rather than by a guard here: the
+        // preview skips it before `paintTile` and the export handles it in its own
+        // branch, so `drawTileContent` is only ever called for a camera.
+        if (opts.showViewName) drawViewNameLabel(octx, view.name);
+    }
+
+    /** Live-preview tile, at the tile's CSS box size. */
+    function paintTile(tile, view, bitmap, frameGroup, ofg, groups, frameIdx, w, h) {
+        drawTileContent(tile.videoCanvas.getContext('2d'),
+            tile.overlayCanvas.getContext('2d'),
+            view, bitmap, frameGroup, ofg, groups, w, h);
     }
 
     function collectUnlinked(frameGroup, viewName) {
@@ -740,8 +1100,14 @@ export function showOverlayExportModal() {
         return d;
     }
 
-    function row(parent, labelText) {
-        var r = document.createElement('label');
+    /**
+     * One settings row. `asDiv` makes it a `<div>` instead of a `<label>`, which
+     * `addCheck` needs: its toggle is itself a `<label class="toggle-switch">`, and
+     * a label nested inside a label makes one click activate BOTH — the control
+     * toggles twice and appears not to respond at all.
+     */
+    function row(parent, labelText, asDiv) {
+        var r = document.createElement(asDiv ? 'div' : 'label');
         r.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--text-secondary);';
         var l = document.createElement('span');
         l.textContent = labelText;
@@ -752,26 +1118,49 @@ export function showOverlayExportModal() {
 
     function onChange() {
         saveOverlayExportSettings(settings);
+        applyTabNameMode();    // the layer also decides how the tab shows its name
         applyDockAspect();     // a size/resolution change re-shapes the composition
         refreshSummary();
         schedulePreview();
     }
 
+    /**
+     * A boolean setting, rendered as the app's own toggle switch
+     * (`.toggle-switch` + `.slider`, styles.css) rather than a raw checkbox — the
+     * same control the Visibility panel uses, so the modal doesn't look like a
+     * different application. The `<input type="checkbox">` is still the real
+     * control (the CSS hides it and styles the sibling `.slider` off `:checked`),
+     * so `.checked`, keyboard focus and `change` events all behave normally and
+     * the `data-ov` hook is unchanged.
+     */
     function addCheck(parent, labelText, obj, key) {
-        var r = row(parent, labelText);
+        var r = row(parent, labelText, true);
+        var sw = document.createElement('label');
+        // `-sm` is the compact variant (styles.css): the panel's rows are 11px and
+        // dense, and it resizes the knob along with the track — scaling only the box
+        // would leave the stock 16px knob overflowing a 17px track.
+        sw.className = 'toggle-switch toggle-switch-sm';
         var input = document.createElement('input');
         input.type = 'checkbox';
         input.checked = !!obj[key];
         input.setAttribute('data-ov', key);
         input.addEventListener('change', function () { obj[key] = input.checked; onChange(); });
-        r.appendChild(input);
+        var slider = document.createElement('span');
+        slider.className = 'slider';
+        sw.appendChild(input);
+        sw.appendChild(slider);
+        r.appendChild(sw);
         return input;
     }
 
     function addSelect(parent, labelText, obj, key, options, id) {
         var r = row(parent, labelText);
         var sel = document.createElement('select');
-        sel.style.cssText = FIELD + 'width:118px;';
+        // Wide enough for the longest option text the modal actually offers —
+        // `2160p (3840×2160)`, the resolution tier — which was being clipped at the
+        // old 118px. `max-width:100%` keeps it inside the panel on a narrow window,
+        // and `min-width:0` lets flex shrink it rather than overflowing the row.
+        sel.style.cssText = FIELD + 'width:160px;max-width:100%;min-width:0;';
         if (id) sel.id = id;
         options.forEach(function (o) {
             var opt = document.createElement('option');
@@ -878,6 +1267,10 @@ export function showOverlayExportModal() {
 
         // --- Layers ---
         var gLayers = group('Layers');
+        // FIRST in the group: unlike every other layer this one labels the TILE
+        // rather than the animal, and it is the only thing that names a camera in the
+        // exported file — the dock's own tab chip is UI chrome and is never encoded.
+        addCheck(gLayers.body, 'Render Video Names', settings.layers, 'videoNames');
         addCheck(gLayers.body, 'User instances', settings.layers, 'user');
         addCheck(gLayers.body, 'Predicted instances', settings.layers, 'predicted');
         addCheck(gLayers.body, 'Reprojections', settings.layers, 'reproj');
@@ -937,6 +1330,20 @@ export function showOverlayExportModal() {
         outNote.id = 'ovOutNote';
         outNote.style.cssText = 'font-size:11px;color:var(--text-muted,#888);line-height:1.4;';
         gOut.body.appendChild(outNote);
+        // Say where the video's look comes from. This modal deliberately exposes no
+        // brightness/contrast/rotation/zoom controls of its own — those live in the
+        // main window, and duplicating them here would give two places to disagree.
+        var dispNote = document.createElement('div');
+        dispNote.id = 'ovDisplayNote';
+        dispNote.style.cssText = 'font-size:11px;color:var(--text-muted,#888);line-height:1.4;';
+        dispNote.textContent = 'Each view is rendered with the main window\'s ' +
+            'brightness, contrast, rotation and zoom for that camera. Change them there.';
+        gOut.body.appendChild(dispNote);
+
+        // Not only in `onChange`: Reset replaces `settings` wholesale and calls this
+        // (not `onChange`), and this is also the initial build — so the dock chrome is
+        // seeded here and can never disagree with the toggle it was built from.
+        applyTabNameMode();
     }
 
     // ========================================================================
@@ -1129,27 +1536,82 @@ export function showOverlayExportModal() {
             var aspect = layout.dock.height > 0 ? layout.dock.width / layout.dock.height : 16 / 9;
             var size = outputSizeFrom(settings, aspect);
             syncOutFields(size);
-            var bytes = bitrateFor(size.width, size.height, fps, settings.quality) * (nFrames / fps) / 8;
-            summaryEl.textContent = n + ' tile' + (n === 1 ? '' : 's') + ' · ' + size.width + '×' + size.height +
+            var bytes = estimatedBytes(size.width, size.height, fps, settings.quality, nFrames);
+            summaryEl.textContent = n + ' tile' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(size) +
+                ' · ' + size.width + '×' + size.height +
                 ' · ' + nFrames + ' frames · ~' + fmtBytes(bytes);
-            if (outNote) outNote.textContent = 'One .mp4 laid out exactly as the composition (' + size.width + '×' + size.height + ').';
+            if (outNote) {
+                outNote.textContent = 'One .mp4 laid out exactly as the composition (' +
+                    size.width + '×' + size.height + ' at ' +
+                    qualityPhrase(size.width, size.height, fps, false) + ').';
+            }
         } else {
             var total = 0;
             for (var i = 0; i < layout.tiles.length; i++) {
                 var s = individualSizeFor(layout.tiles[i]);
-                total += bitrateFor(s.width, s.height, fps, settings.quality) * (nFrames / fps) / 8;
+                total += estimatedBytes(s.width, s.height, fps, settings.quality, nFrames);
             }
             // With a preset every file is sized to its own aspect, so the fields
             // show the first one; a custom size applies to all of them.
             var firstSize = individualSizeFor(layout.tiles[0]);
             syncOutFields(firstSize);
-            summaryEl.textContent = n + ' file' + (n === 1 ? '' : 's') + ' · ' + nFrames + ' frames · ~' + fmtBytes(total);
+            summaryEl.textContent = n + ' file' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(null) +
+                ' · ' + nFrames + ' frames · ~' + fmtBytes(total);
             if (outNote) {
+                // Quality is named here TOO. It used to appear only in the stitched
+                // branch, so in this mode the ONLY visible effect of changing
+                // Quality was the summary's ~size estimate — easy to miss, and a
+                // large part of why the picker was reported as doing nothing.
                 outNote.textContent = settings.res === RES_CUSTOM
-                    ? 'One .mp4 per tile (' + n + '), each ' + firstSize.width + '×' + firstSize.height + ', same appearance settings.'
-                    : 'One .mp4 per tile (' + n + ' file' + (n === 1 ? '' : 's') + '), each at its own aspect, same appearance settings.';
+                    ? 'One .mp4 per tile (' + n + '), each ' + firstSize.width + '×' + firstSize.height +
+                      ' at ' + qualityPhrase(firstSize.width, firstSize.height, fps, false) +
+                      ', same appearance settings.'
+                    // Each file gets its own WIDTH (its tile's aspect) but the same
+                    // tier HEIGHT, so naming the height is accurate for all of them
+                    // where naming a single W×H would not be — and the bitrate
+                    // scales with that width, hence the `~`.
+                    : 'One .mp4 per tile (' + n + ' file' + (n === 1 ? '' : 's') + '), each ' +
+                      firstSize.height + 'px tall at its own aspect, ' +
+                      qualityPhrase(firstSize.width, firstSize.height, fps, true) +
+                      ', same appearance settings.';
             }
         }
+    }
+
+    /**
+     * The Quality tier phrased for the output note: the tier name, the bitrate it
+     * actually encodes at, and — when `bitrateFor`'s [1, 48] Mbps clamp bit — the
+     * fact that the tier could not be honoured. `approx` prefixes a `~` for the
+     * individual-files-with-a-preset case, where every file shares the tier HEIGHT
+     * but carries its own width, so the bitrate varies file to file.
+     *
+     * Bitrate is the one output setting a still preview CANNOT show — it exists
+     * only after H.264 encoding — so this readout is the whole of the live feedback
+     * for the Quality picker. Naming the tier in only one of the two output modes
+     * is what made a correctly-wired picker read as inert.
+     */
+    function qualityPhrase(W, H, fps, approx) {
+        return settings.quality + ' quality, ' + (approx ? '~' : '') +
+            (bitrateFor(W, H, fps, settings.quality) / 1e6).toFixed(1) + ' Mbps' +
+            (bitrateIsClamped(W, H, fps, settings.quality)
+                ? ' (capped — a neighbouring tier can encode identically)' : '');
+    }
+
+    /**
+     * The chosen quality tier, named. Shown alongside the literal W×H because the
+     * two can legitimately disagree: a preset fixes only the HEIGHT, and a very
+     * wide composition clamps the derived width to `MAX_OUT_DIM` and then
+     * recomputes the height to keep the aspect — so "2160p" can encode at 3840×960.
+     * Stating the tier and the pixels side by side makes that visible instead of
+     * surprising.
+     */
+    function resTierLabel(size) {
+        if (settings.res === RES_CUSTOM) return 'custom';
+        var preset = RES_PRESETS[settings.res];
+        if (!preset) return 'custom';
+        return size && size.height !== preset.h
+            ? preset.h + 'p (width-capped)'
+            : preset.h + 'p';
     }
 
     /** Output size of one tile in "Individual files" mode. */
@@ -1159,7 +1621,14 @@ export function showOverlayExportModal() {
             aspect = entry.height > 0 ? entry.width / entry.height : 16 / 9;
         } else {
             var view = findView(entry.tile.viewName);
-            aspect = (view && view.videoHeight > 0) ? view.videoWidth / view.videoHeight : 16 / 9;
+            // The ROTATED aspect. A 90-degree camera rotation makes a 640x480 view
+            // portrait (see `drawTileContent`), and a file sized 4:3 for the
+            // unrotated frame would just pillarbox it inside black bars.
+            var rb = view
+                ? rotatedBoxSize(view.videoWidth, view.videoHeight,
+                    displaySettingsFor(view).rotation)
+                : null;
+            aspect = (rb && rb.height > 0) ? rb.width / rb.height : 16 / 9;
         }
         // A custom size wins over the tile's own aspect — the tile content is
         // letterboxed into it by `drawExportTile`'s `fitRect`, so asking for
@@ -1171,28 +1640,26 @@ export function showOverlayExportModal() {
     // Export
     // ========================================================================
 
-    function makeEncoder(W, H, fps) {
-        var muxer = new window.Mp4Muxer.Muxer({
-            target: new window.Mp4Muxer.ArrayBufferTarget(),
-            video: { codec: 'avc', width: W, height: H, frameRate: fps },
-            fastStart: 'in-memory',
-        });
-        var encoder = new VideoEncoder({
-            output: function (chunk, meta) { muxer.addVideoChunk(chunk, meta); },
-            error: function (e) { console.error('[overlay export] encoder error:', e); },
-        });
-        encoder.configure({
-            codec: h264CodecFor(W, H),
-            width: W, height: H,
+    /**
+     * One mp4 writer per output file, bound to the canvas it encodes.
+     * `fileHandle` (when the browser gave us one) makes it stream to disk at a
+     * bounded memory cost instead of buffering the whole file — see
+     * ui/video-encode.js.
+     */
+    function makeWriter(canvas, W, H, fps, nFrames, fileHandle) {
+        return createMp4Writer({
+            canvas: canvas,
+            width: W, height: H, fps: fps,
             bitrate: bitrateFor(W, H, fps, settings.quality),
-            framerate: fps,
+            fullCodecString: h264CodecFor(W, H),
+            frameCount: nFrames,
+            fileHandle: fileHandle || null,
         });
-        return { muxer: muxer, encoder: encoder, width: W, height: H };
     }
 
     async function runExport() {
-        if (typeof VideoEncoder === 'undefined' || typeof window.Mp4Muxer === 'undefined') {
-            setStatus('Overlay video export needs a Chromium-based browser (WebCodecs)', 'error');
+        if (!videoEncodingAvailable()) {
+            setStatus('Overlay video export needs a browser with WebCodecs (Chrome, Edge or a recent Safari)', 'error');
             return;
         }
         var layout = captureLayout();
@@ -1263,22 +1730,122 @@ export function showOverlayExportModal() {
             } catch (e) { console.warn('[overlay export] 3D resize failed:', e); }
         }
 
+        // Undo that resize. Factored out because the destination picker below
+        // can bail out of the export before any frame is encoded.
+        function restore3dViewport() {
+            if (!vp3d || !vp3dRestore) return;
+            try {
+                vp3d.renderer.setPixelRatio(vp3dRestore.pr);
+                vp3d.threeCamera.aspect = vp3dRestore.aspect;
+                vp3d.threeCamera.updateProjectionMatrix();
+                if (vp3d._resizeObserver) vp3d._resizeObserver.observe(vp3d.container);
+                vp3d.resize();
+            } catch (e) { /* ignore */ }
+            vp3dRestore = null;
+        }
+
         var composite = null, compositeCtx = null;
         if (stitched) {
             composite = document.createElement('canvas');
             composite.width = outW; composite.height = outH;
             compositeCtx = composite.getContext('2d');
-            targets.push(makeEncoder(outW, outH, fps));
+        }
+
+        var base = safeName(session.name) + '_overlay_f' + (expStart + 1) + '-' + (expEnd + 1);
+
+        // One spec per output FILE: the canvas it encodes, its size, its name.
+        var specs = [];
+        if (stitched) {
+            specs.push({ canvas: composite, w: outW, h: outH, filename: base + '.mp4', job: null });
         } else {
             for (var t = 0; t < jobs.length; t++) {
-                jobs[t].target = makeEncoder(jobs[t].w, jobs[t].h, fps);
-                targets.push(jobs[t].target);
+                var tileName = jobs[t].entry.tile.is3d ? '3d' : safeName(jobs[t].entry.tile.viewName);
+                specs.push({
+                    canvas: jobs[t].canvas, w: jobs[t].w, h: jobs[t].h,
+                    filename: base + '_' + tileName + '.mp4', job: jobs[t],
+                });
             }
         }
 
-        var frameDurUs = Math.round(1e6 / fps);
+        // --- destination ------------------------------------------------------
+        // Small exports keep the old zero-friction behaviour: buffer, download,
+        // no questions. Only once the expected output is big enough that holding
+        // it in memory is a genuine risk do we ask for a real destination and
+        // stream to it (see `shouldStreamToDisk`). This has to be decided and
+        // the picker opened BEFORE any await, because the File System Access API
+        // needs the transient user activation from the Export click and every
+        // step above this point is synchronous.
+        var estTotal = 0;
+        for (var se = 0; se < specs.length; se++) {
+            estTotal += estimatedBytes(specs[se].w, specs[se].h, fps, settings.quality, nFrames);
+        }
+        var wantStream = shouldStreamToDisk(estTotal);
+        var streamToDisk = false;
+
+        function abortExport(msg) {
+            setStatus(msg, 'warning');
+            restore3dViewport();
+            exporting = false;
+            setControlsDisabled(false);
+        }
+
+        if (wantStream) {
+            var picker = stitched ? window.showSaveFilePicker : window.showDirectoryPicker;
+            if (typeof picker === 'function') {
+                try {
+                    if (stitched) {
+                        specs[0].fileHandle = await window.showSaveFilePicker({
+                            suggestedName: specs[0].filename,
+                            types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }],
+                        });
+                    } else {
+                        // Deliberately NOT cached to `state.exportDirHandle`:
+                        // showSlpExportAllModal REUSES that handle without
+                        // prompting, so stashing a video destination there would
+                        // silently redirect a later SLP export into it.
+                        var dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                        for (var sd = 0; sd < specs.length; sd++) {
+                            specs[sd].fileHandle = await dirHandle.getFileHandle(specs[sd].filename, { create: true });
+                        }
+                    }
+                    streamToDisk = true;
+                } catch (pickErr) {
+                    // Declining the destination for an export this size means
+                    // the export cannot safely proceed — buffering ~
+                    // fmtBytes(estTotal) in memory is what we were avoiding.
+                    // Say that rather than silently doing the risky thing.
+                    if (pickErr && pickErr.name === 'AbortError') {
+                        abortExport('Overlay video export cancelled — an export this large (~' +
+                            fmtBytes(estTotal) + ') needs a destination folder or file to stream into');
+                        return;
+                    }
+                    console.warn('[overlay export] destination pick failed:', pickErr);
+                    for (var sc2 = 0; sc2 < specs.length; sc2++) specs[sc2].fileHandle = null;
+                }
+            }
+            if (!streamToDisk) {
+                // No File System Access API (or it failed): the whole file has
+                // to be built in memory. Mirror the JSON exporter and let the
+                // user decide instead of risking the tab silently.
+                if (!window.confirm('This export is about ' + fmtBytes(estTotal) + '. Without a ' +
+                    'save-file picker it must be built entirely in memory, which may crash the ' +
+                    'tab.\n\nExport anyway?')) {
+                    abortExport('Overlay video export cancelled');
+                    return;
+                }
+            }
+        }
+
         var ok = true;
         try {
+            for (var sw = 0; sw < specs.length; sw++) {
+                var writer = await makeWriter(specs[sw].canvas, specs[sw].w, specs[sw].h,
+                    fps, nFrames, specs[sw].fileHandle);
+                specs[sw].writer = writer;
+                targets.push(writer);
+                if (specs[sw].job) specs[sw].job.target = writer;
+            }
+
             for (var f = expStart; f <= expEnd; f++) {
                 if (cancelled) break;
                 var out = f - expStart;
@@ -1330,11 +1897,14 @@ export function showOverlayExportModal() {
                         var jb = jobs[jc];
                         compositeCtx.drawImage(jb.canvas, jb.dstRect.x, jb.dstRect.y, jb.dstRect.width, jb.dstRect.height);
                     }
-                    encodeInto(targets[0], composite, out, fps, frameDurUs);
-                } else {
-                    for (var je = 0; je < jobs.length; je++) {
-                        encodeInto(jobs[je].target, jobs[je].canvas, out, fps, frameDurUs);
-                    }
+                }
+
+                // Awaiting each writer IS the backpressure — mediabunny settles
+                // the promise once the encoder has room, so the old
+                // `while (encodeQueueSize > 12)` spin is gone. It also rejects
+                // if the encoder died, which the spin could never notice.
+                for (var tq = 0; tq < targets.length; tq++) {
+                    await targets[tq].addFrame(out);
                 }
 
                 if (out % 5 === 0 || f === expEnd) {
@@ -1343,36 +1913,38 @@ export function showOverlayExportModal() {
                     progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
-                for (var tq = 0; tq < targets.length; tq++) {
-                    while (targets[tq].encoder.encodeQueueSize > 12 && !cancelled) {
-                        await new Promise(function (r) { setTimeout(r, 0); });
-                    }
-                }
             }
 
             if (!cancelled) {
                 progressLabel.textContent = 'Finalizing…';
-                var base = safeName(session.name) + '_overlay_f' + (expStart + 1) + '-' + (expEnd + 1);
-                if (stitched) {
-                    await targets[0].encoder.flush();
-                    targets[0].muxer.finalize();
-                    downloadBlob(new Blob([targets[0].muxer.target.buffer], { type: 'video/mp4' }), base + '.mp4');
-                    setStatus('Overlay video exported: ' + base + '.mp4 (' + nFrames + ' frames @ ' +
-                        fps + ' fps, ' + outW + '×' + outH + ')', 'success');
-                } else {
-                    for (var fj = 0; fj < jobs.length; fj++) {
-                        await jobs[fj].target.encoder.flush();
-                        jobs[fj].target.muxer.finalize();
-                        var tileName = jobs[fj].entry.tile.is3d ? '3d' : safeName(jobs[fj].entry.tile.viewName);
-                        downloadBlob(new Blob([jobs[fj].target.muxer.target.buffer], { type: 'video/mp4' }),
-                            base + '_' + tileName + '.mp4');
-                        await new Promise(function (r) { setTimeout(r, 250); });
+                for (var fj = 0; fj < specs.length; fj++) {
+                    var res = await specs[fj].writer.finish();
+                    if (!res.streamed) {
+                        downloadBlob(res.blob, specs[fj].filename);
+                        // Serial downloads need a beat between them or the
+                        // browser coalesces/drops the later ones.
+                        if (specs.length > 1) await new Promise(function (r) { setTimeout(r, 250); });
                     }
-                    setStatus('Overlay videos exported: ' + jobs.length + ' files (' + nFrames +
-                        ' frames @ ' + fps + ' fps)', 'success');
+                }
+                if (stitched) {
+                    setStatus('Overlay video exported: ' + specs[0].filename + ' (' + nFrames +
+                        ' frames @ ' + fps + ' fps, ' + outW + '×' + outH + ')', 'success');
+                } else {
+                    setStatus('Overlay videos exported: ' + specs.length + ' file' +
+                        (specs.length === 1 ? '' : 's') + ' (' + nFrames + ' frames @ ' +
+                        fps + ' fps)', 'success');
                 }
             } else {
-                setStatus('Overlay video export cancelled', 'warning');
+                // Cancelling a STREAMED export still commits whatever reached
+                // the file (mediabunny closes the writable), so the partial
+                // .mp4 on disk is real and unplayable — say so rather than
+                // letting the user find it later.
+                for (var cj = 0; cj < specs.length; cj++) {
+                    if (specs[cj].writer) await specs[cj].writer.cancel();
+                }
+                setStatus(streamToDisk
+                    ? 'Overlay video export cancelled — partial file(s) were written to the chosen destination'
+                    : 'Overlay video export cancelled', 'warning');
             }
         } catch (err) {
             ok = false;
@@ -1380,50 +1952,25 @@ export function showOverlayExportModal() {
             setStatus('Overlay video export failed: ' + err.message, 'error');
         }
 
+        // Tear down anything still open (a mid-export throw leaves writers live).
         for (var tc = 0; tc < targets.length; tc++) {
-            try { if (targets[tc].encoder.state !== 'closed') targets[tc].encoder.close(); } catch (e) { /* ignore */ }
+            try { await targets[tc].cancel(); } catch (e) { /* ignore */ }
         }
-        if (vp3d && vp3dRestore) {
-            try {
-                vp3d.renderer.setPixelRatio(vp3dRestore.pr);
-                vp3d.threeCamera.aspect = vp3dRestore.aspect;
-                vp3d.threeCamera.updateProjectionMatrix();
-                if (vp3d._resizeObserver) vp3d._resizeObserver.observe(vp3d.container);
-                vp3d.resize();
-            } catch (e) { /* ignore */ }
-        }
+        restore3dViewport();
         exporting = false;
         if (ok) cleanup(); else setControlsDisabled(false);
     }
 
-    function encodeInto(target, sourceCanvas, outIdx, fps, frameDurUs) {
-        var vframe = new VideoFrame(sourceCanvas, {
-            timestamp: Math.round(outIdx * 1e6 / fps),
-            duration: frameDurUs,
-        });
-        target.encoder.encode(vframe, { keyFrame: (outIdx % 60 === 0) });
-        vframe.close();
-    }
-
     /** Export-time twin of `paintTile`, at the tile's OUTPUT pixel size. */
     function drawExportTile(job, view, bitmap, frameGroup, ofg, groups) {
-        var ctx = job.ctx;
-        ctx.clearRect(0, 0, job.w, job.h);
-        if (settings.background === 'video') {
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, job.w, job.h);
-            if (bitmap) {
-                var fit = fitRect(view.videoWidth, view.videoHeight, job.w, job.h);
-                try { ctx.drawImage(bitmap, fit.x, fit.y, fit.width, fit.height); } catch (e) { /* ignore */ }
-            }
-        } else {
-            ctx.fillStyle = BG_FILL[settings.background] || '#000';
-            ctx.fillRect(0, 0, job.w, job.h);
-        }
-        var opts = overlayOptionsFrom(settings, view.videoWidth, view.videoHeight, job.w, job.h);
-        opts.unlinkedInstances = collectUnlinked(frameGroup, view.name);
-        drawFrameOverlays(job.overlayCtx, view.name, ofg, groups, session, opts);
-        ctx.drawImage(job.overlay, 0, 0);
+        drawTileContent(job.ctx, job.overlayCtx, view, bitmap, frameGroup, ofg, groups,
+            job.w, job.h);
+        // The overlay lives on its own canvas so `drawFrameOverlays`'s clear can't
+        // erase the video; flatten it now. `drawTileContent` leaves the identity
+        // transform and `filter: 'none'`, so the skeleton composites 1:1 and does NOT
+        // pick up the video's brightness/contrast — the main window filters
+        // `view.canvas` only, never the overlay canvas.
+        job.ctx.drawImage(job.overlay, 0, 0);
     }
 
     function setControlsDisabled(on) {
@@ -1474,6 +2021,7 @@ export function showOverlayExportModal() {
     function cleanup() {
         document.removeEventListener('keydown', onKey, true);
         window.removeEventListener('resize', onWinResize);
+        dockEl.removeEventListener('pointerdown', onDockSashDown, true);
         if (tileResizeObserver) { try { tileResizeObserver.disconnect(); } catch (e) { /* ignore */ } }
         if (dockFrameObserver) { try { dockFrameObserver.disconnect(); } catch (e) { /* ignore */ } }
         dispose3D();

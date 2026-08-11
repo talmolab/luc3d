@@ -625,9 +625,20 @@ export class SioLazyLoader {
      *
      * @param {string[]} newTrackNames - the new project-wide track name list
      *   (mirrors `session.tracks` after propagate).
-     * @param {(camName: string, frameIdx: number, oldTrackIdx: number) => number} remapFn
+     * @param {(camName: string, frameIdx: number, oldTrackIdx: number, offsetInFrame: number) => number} remapFn
      *   Returns the new track index (into `newTrackNames`), or a negative
      *   number for "no track."
+     *
+     *   `offsetInFrame` is the row's index WITHIN its camera-frame (the same
+     *   quantity `forEachInstanceRow` reports under that name), and it is what
+     *   makes a *per-row* decision possible. Without it a caller can only key on
+     *   `oldTrackIdx`, so when one camera's raw tracker gives two different
+     *   animals the SAME trackIdx on a frame there is no answer that is right for
+     *   both rows and both had to be abandoned as trackless — luc3d #203, whose
+     *   symptom is a gap in the first frames of a project (where
+     *   `commitTrackedFrame` writes its ambiguity markers). It matches
+     *   `InstanceGroup` members' `_rawInstIndex`, so a caller holding the
+     *   grouping can resolve each row exactly.
      * @returns {{changed: number, errorRows: number, firstError: Error|null}}
      *   `changed` is instance rows whose track id actually changed;
      *   `errorRows`/`firstError` surface any per-row failures (see the
@@ -690,7 +701,7 @@ export class SioLazyLoader {
                     try {
                         var oldTrk = Number(idn.track[j]);
                         if (!Number.isFinite(oldTrk)) oldTrk = -1;
-                        var newTrk = remapFn(camName, frameIdx, oldTrk);
+                        var newTrk = remapFn(camName, frameIdx, oldTrk, j - iStart);
                         newTrk = (newTrk == null || newTrk < 0) ? -1 : newTrk;
                         if (idn.track[j] !== newTrk) { idn.track[j] = newTrk; changed++; camRowsChanged++; }
                     } catch (rowErr) {

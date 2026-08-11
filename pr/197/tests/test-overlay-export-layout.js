@@ -1,6 +1,6 @@
 /**
  * test-overlay-export-layout.js — unit tests for ui/overlay-export-layout.js,
- * the pure half of "Export Instance Overlays" (issue #190).
+ * the pure half of "Export Video Overlays" (issue #190).
  *
  * What actually goes wrong in a composited video export is geometry and
  * encoder-parameter arithmetic, and none of it needs a browser dock:
@@ -132,35 +132,52 @@
             assertEqual(s.width, 1920, 'derived width');
         });
 
-        it('offers 480p / 720p / 1080p / 2K, each keyed by its own height', () => {
+        it('offers 480 / 720 / 1080 / 2160, each keyed by its own height', () => {
             const P = __OverlayExportLayout.RES_PRESETS;
-            assertEqual(Object.keys(P).join(','), '480,720,1080,1440', 'the four presets, in order');
-            assertEqual(Object.keys(P).map(k => P[k].label).join(','), '480p,720p,1080p,2K', 'labels');
+            assertEqual(Object.keys(P).join(','), '480,720,1080,2160', 'the four tiers, in order');
+            // The tier NUMBER must appear in the label the user reads — the whole
+            // point of the tier set is that "2160" is stated, not implied.
+            assertEqual(Object.keys(P).map(k => P[k].label).join(','),
+                '480p (854×480),720p (1280×720),1080p (1920×1080),2160p (3840×2160)', 'labels');
+            for (const k of Object.keys(P)) {
+                assertTrue(P[k].label.indexOf(k) === 0, 'label for ' + k + ' leads with the tier number');
+            }
             // The key must BE the height — `outputSizeFor` reads `preset.h`, and a
             // key that disagreed would make the picker lie about the output.
             for (const k of Object.keys(P)) assertEqual(P[k].h, Number(k), 'key is the height for ' + k);
-            // 2K means 2560x1440 here, matching V3D_RES in ui/export-modals.js.
-            assertEqual(__OverlayExportLayout.outputSizeFor(16 / 9, '1440').width, 2560, '2K is 2560 wide at 16:9');
+            // `refW` is what the 3D modal encodes at verbatim and what the labels
+            // quote, so it must equal the width `outputSizeFor` derives at 16:9.
+            for (const k of Object.keys(P)) {
+                assertEqual(__OverlayExportLayout.outputSizeFor(16 / 9, k).width, P[k].refW,
+                    'refW is the 16:9 width for ' + k);
+            }
+            // 2160p at 16:9 must land exactly on MAX_OUT_DIM, not past it — one
+            // pixel more and every 4K export would silently clamp and lose height.
+            assertEqual(P['2160'].refW, __OverlayExportLayout.MAX_OUT_DIM, '2160p at 16:9 is exactly MAX_OUT_DIM');
         });
 
         it('falls back to the default preset for a res it no longer recognises', () => {
-            // '360' was a real preset on an earlier build of this branch, so a
-            // stored blob can still carry it. Left alone it would blank the
-            // <select> while outputSizeFor quietly used 1080 — two disagreeing UIs.
+            // '360' and '1440' were both real presets on earlier builds of this
+            // branch, so a stored blob can still carry either. Left alone it would
+            // blank the <select> while outputSizeFor quietly used 1080 — two
+            // disagreeing UIs. Note the fallback is DEFAULT_RES, deliberately NOT
+            // the nearest surviving tier: promoting '1440' to '2160' would silently
+            // ~2.25x the pixels, bitrate and file size of the next export.
             const D = __OverlayExportLayout.DEFAULT_RES;
-            for (const stale of ['360', '2160', '', 'garbage']) {
+            for (const stale of ['360', '1440', '2k', '', 'garbage']) {
                 const s = __OverlayExportLayout.sanitizeSettings({ res: stale });
                 assertEqual(s.res, D, 'stale res ' + JSON.stringify(stale) + ' falls back');
             }
             assertEqual(__OverlayExportLayout.sanitizeSettings({ res: '720' }).res, '720', 'a live preset is kept');
+            assertEqual(__OverlayExportLayout.sanitizeSettings({ res: '2160' }).res, '2160', 'the new top tier is kept');
             assertEqual(__OverlayExportLayout.sanitizeSettings({ res: 'custom' }).res, 'custom', 'custom is not a preset but is legal');
         });
 
         it('clamps an extreme aspect to MAX_OUT_DIM and keeps the aspect', () => {
-            // A 10-camera single row is ~10:1 — at 1440p that would be 14400px.
-            const s = __OverlayExportLayout.outputSizeFor(10, '1440');
+            // A 10-camera single row is ~10:1 — at 2160p that would be 21600px.
+            const s = __OverlayExportLayout.outputSizeFor(10, '2160');
             assertEqual(s.width, __OverlayExportLayout.MAX_OUT_DIM, 'width clamped');
-            assertTrue(s.height < 1440, 'height reduced to hold the aspect');
+            assertTrue(s.height < 2160, 'height reduced to hold the aspect');
             assertTrue(Math.abs(s.width / s.height - 10) < 0.05, 'aspect preserved');
             assertEqual(s.height % 2, 0, 'still even after the clamp');
         });
@@ -171,6 +188,240 @@
                 assertEqual(s.width, 1280, 'width for aspect ' + bad);
                 assertEqual(s.height, 720, 'height for aspect ' + bad);
             }
+        });
+
+        it('rotatedBoxSize swaps width/height at the cardinal angles, exactly', () => {
+            const L = __OverlayExportLayout;
+            // 0 and 180 must return the input UNCHANGED — that is what keeps every
+            // unrotated caller bit-identical to before rotation existed.
+            [0, 180, 360, -360].forEach(r => {
+                const b = L.rotatedBoxSize(640, 480, r);
+                assertEqual(b.width, 640, 'width unchanged at ' + r);
+                assertEqual(b.height, 480, 'height unchanged at ' + r);
+            });
+            // 90/270 exactly swapped — special-cased so there is no trig dust, which
+            // would make an output dimension odd and fail H.264.
+            [90, 270, -90, 450].forEach(r => {
+                const b = L.rotatedBoxSize(640, 480, r);
+                assertEqual(b.width, 480, 'width swapped at ' + r);
+                assertEqual(b.height, 640, 'height swapped at ' + r);
+            });
+            // A square at 45 degrees grows by exactly sqrt(2).
+            const d = L.rotatedBoxSize(100, 100, 45);
+            assertTrue(Math.abs(d.width - 100 * Math.SQRT2) < 1e-9, '45 deg diagonal width');
+            // Junk is treated as no rotation rather than producing NaN dimensions.
+            [NaN, undefined, null, 'x'].forEach(r => {
+                const b = L.rotatedBoxSize(640, 480, r);
+                assertEqual(b.width, 640, 'junk rotation ' + r + ' → unrotated');
+            });
+        });
+
+        it('rotatedFit degenerates to fitRect at rotation 0', () => {
+            // The whole no-regression guarantee for the unrotated path rests on this.
+            const L = __OverlayExportLayout;
+            [[640, 480, 800, 600], [1920, 1080, 552, 480], [100, 300, 640, 360]].forEach(a => {
+                const f = L.fitRect(a[0], a[1], a[2], a[3]);
+                const r = L.rotatedFit(a[0], a[1], a[2], a[3], 0);
+                assertEqual(r.scale, f.scale, 'same scale for ' + a.join('x'));
+                assertEqual(r.boxWidth, f.width, 'same box width for ' + a.join('x'));
+                assertEqual(r.boxHeight, f.height, 'same box height for ' + a.join('x'));
+            });
+        });
+
+        it('rotatedFit fits the ROTATED box inside the destination', () => {
+            const L = __OverlayExportLayout;
+            // A 640x480 landscape view rotated 90 is portrait, so it must be scaled
+            // to fit 800x600 as a portrait — the unrotated fit would overflow.
+            const r = L.rotatedFit(640, 480, 800, 600, 90);
+            // The rotated footprint is boxHeight wide x boxWidth tall.
+            assertTrue(r.boxHeight <= 800 + 1e-9, 'rotated footprint width fits (' + r.boxHeight + ')');
+            assertTrue(r.boxWidth <= 600 + 1e-9, 'rotated footprint height fits (' + r.boxWidth + ')');
+            // …and touches one bound, i.e. it is a CONTAIN fit, not just any fit.
+            assertTrue(Math.abs(r.boxHeight - 800) < 1e-9 || Math.abs(r.boxWidth - 600) < 1e-9,
+                'one dimension touches the bound');
+            // The unrotated fit of the same view is strictly larger here, proving the
+            // rotation actually cost something rather than being ignored.
+            assertTrue(r.scale < L.fitRect(640, 480, 800, 600).scale, 'rotation reduces the scale');
+        });
+
+        it('a rotated view drives a rotated OUTPUT aspect', () => {
+            // What `individualSizeFor` now does: derive the per-tile file aspect from
+            // the rotated box, so a 90-degree 640x480 view exports portrait instead
+            // of a pillarboxed landscape.
+            const L = __OverlayExportLayout;
+            const rb = L.rotatedBoxSize(640, 480, 90);
+            const s = L.outputSizeFor(rb.width / rb.height, '1080');
+            assertEqual(s.height, 1080, 'tier height honoured');
+            assertEqual(s.width, 810, 'portrait width (1080 * 480/640)');
+            assertEqual(s.width % 2, 0, 'still even for H.264');
+        });
+
+        it('spreads a sash drag across the whole axis, not just the neighbour', () => {
+            // dockview 6.6.1 gives the delta to the ONE adjacent tile and only
+            // spills when it clamps, so with 4 tiles the far two never move.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = [100, 100, 100, 100];
+            const max = [9999, 9999, 9999, 9999];
+            const vis = [true, true, true, true];
+            const g = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
+            assertEqual(g.join(','), '220,340,220,220', 'pushing tile 1s edge out grows it, the rest give up 30 each');
+        });
+
+        it('pulling a tile\'s edge IN shrinks it and grows the rest evenly', () => {
+            // The mirror direction, and the whole reason the sash is modelled as tile
+            // k's trailing edge. Before this, EVERY drag grew exactly one tile — a
+            // left drag on sash k grew tile k+1 — so "make this video smaller and
+            // give the room to the others" was not expressible by any gesture.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const s = L.distributeAxisSizes(base, min, max, vis, 1, -90, L.SASH_GROW_ONE);
+            assertEqual(s.join(','), '280,160,280,280', 'tile 1 shrinks by 90, the other three gain 30 each');
+            assertEqual(s.reduce((a, b) => a + b, 0), 1000, 'total preserved');
+            // Symmetric with the grow direction: same tile targeted, opposite sign.
+            const g = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
+            assertEqual(g[1] - base[1], 90, 'push out: +90 on tile 1');
+            assertEqual(s[1] - base[1], -90, 'pull in: -90 on the SAME tile');
+        });
+
+        it('every tile but the last has a handle that both grows and shrinks it', () => {
+            // The consistency property that makes the model learnable: sash k always
+            // targets tile k, whichever way you drag. The last tile has no trailing
+            // sash, so it is only ever adjusted as one of the evenly-shared others.
+            const L = __OverlayExportLayout;
+            const base = [200, 200, 200, 200, 200];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            for (let k = 0; k < base.length - 1; k++) {
+                const up = L.distributeAxisSizes(base, min, max, vis, k, 40, L.SASH_GROW_ONE);
+                const dn = L.distributeAxisSizes(base, min, max, vis, k, -40, L.SASH_GROW_ONE);
+                assertEqual(up[k] - base[k], 40, `sash ${k} pushed out grows tile ${k}`);
+                assertEqual(dn[k] - base[k], -40, `sash ${k} pulled in shrinks tile ${k}`);
+                // …and nobody else moved in the same direction as the target.
+                for (let j = 0; j < base.length; j++) {
+                    if (j === k) continue;
+                    assertTrue(up[j] < base[j], `tile ${j} gave room when ${k} grew`);
+                    assertTrue(dn[j] > base[j], `tile ${j} gained room when ${k} shrank`);
+                }
+            }
+        });
+
+        it('share-sides keeps the sash under the cursor', () => {
+            // The tradeoff against grow-one: grow-one moves the sash by only
+            // d*(n-k-1)/n, so the boundary trails the pointer. share-sides moves it
+            // by exactly d while still spreading the change across the axis.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = [100, 100, 100, 100], max = [9999, 9999, 9999, 9999];
+            const vis = [true, true, true, true];
+            const s = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_SHARE_SIDES);
+            assertEqual(s.join(','), '295,295,205,205', 'both sides share the change');
+            const sashMoved = (s[0] + s[1]) - (base[0] + base[1]);
+            assertEqual(sashMoved, 90, 'the sash moves exactly the drag distance');
+            // …whereas grow-one lags, which is the documented cost.
+            const g = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
+            assertEqual((g[0] + g[1]) - (base[0] + base[1]), 60, 'grow-one moves the sash only 60 of 90');
+        });
+
+        it('preserves the axis total exactly, for every drag and every sash', () => {
+            // THE load-bearing property: the axis sum must never move, or the dock's
+            // own box drifts and every other axis is disturbed. Swept, not spot-checked.
+            const L = __OverlayExportLayout;
+            const base = [180, 300, 220, 260, 240];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const total = base.reduce((a, b) => a + b, 0);
+            let checked = 0;
+            for (const mode of [L.SASH_GROW_ONE, L.SASH_SHARE_SIDES]) {
+                for (let k = 0; k < base.length - 1; k++) {
+                    for (let d = -140; d <= 140; d += 7) {
+                        const out = L.distributeAxisSizes(base, min, max, vis, k, d, mode);
+                        assertEqual(out.reduce((a, b) => a + b, 0), total,
+                            `sum preserved for mode=${mode} k=${k} d=${d}`);
+                        assertTrue(out.every(v => v >= 100), `nobody below min for k=${k} d=${d}`);
+                        checked++;
+                    }
+                }
+            }
+            assertTrue(checked > 300, `swept a meaningful space (${checked} cases)`);
+        });
+
+        it('splits an indivisible delta without leaving a residue', () => {
+            // A per-view Math.round(total/n) leaves a remainder that dockview's
+            // distributeEmptySpace() then dumps on one arbitrary tile, so repeated
+            // drags creep. Cumulative rounding must land on the total exactly.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 1, 100, L.SASH_GROW_ONE);
+            assertEqual(out[1] - 250, 100, 'the lead tile got the whole delta');
+            const given = [0, 2, 3].reduce((a, i) => a + (250 - out[i]), 0);
+            assertEqual(given, 100, '100 split over 3 tiles sums back to 100 exactly');
+        });
+
+        it('routes around a tile pinned at its minimum instead of vetoing the drag', () => {
+            // A single tile on its 100px minimum must NOT block the whole gesture.
+            // A real seeded dock routinely has one (observed live), and refusing the
+            // drag outright makes the sash feel dead. The pinned tiles hold still and
+            // the ones with room absorb the whole change.
+            const L = __OverlayExportLayout;
+            const base = [100, 400, 400, 100];   // two tiles already at the min
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 1, 60, L.SASH_GROW_ONE);
+            assertEqual(out[0], 100, 'a tile at its minimum does not shrink further');
+            assertEqual(out[3], 100, 'nor does the other one');
+            assertEqual(out[1], 460, 'the dragged tile still grows by the full delta');
+            assertEqual(out[2], 340, 'and the one tile with room absorbs all of it');
+            assertEqual(out.reduce((a, b) => a + b, 0), 1000, 'total still preserved');
+        });
+
+        it('stops at the point where no tile has room left', () => {
+            // Bounded by what the shrinking side can actually give, so the axis total
+            // holds and nobody is pushed below its minimum.
+            const L = __OverlayExportLayout;
+            const base = [100, 400, 100, 100];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 0, 500, L.SASH_GROW_ONE);
+            assertEqual(out[0], 400, 'grew only by the 300px the others could give');
+            assertEqual(out.join(','), '400,100,100,100', 'everyone else is at the floor');
+            assertEqual(out.reduce((a, b) => a + b, 0), 700, 'total preserved');
+        });
+
+        it('respects a maximum on the growing side', () => {
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = base.map(() => 100);
+            const max = [9999, 300, 9999, 9999];   // tile 1 can only reach 300
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
+            assertEqual(out[1], 300, 'capped at its maximum');
+            assertEqual(out.reduce((a, b) => a + b, 0), 1000, 'total preserved despite the cap');
+        });
+
+        it('leaves invisible views out of the distribution', () => {
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 0, 250];
+            const min = [100, 100, 0, 100], max = base.map(() => 9999);
+            const vis = [true, true, false, true];
+            const out = L.distributeAxisSizes(base, min, max, vis, 0, 60, L.SASH_GROW_ONE);
+            assertEqual(out[2], 0, 'a hidden view keeps its zero size');
+            assertEqual(out.reduce((a, b) => a + b, 0), 750, 'and the total still holds');
+        });
+
+        it('is a no-op for a degenerate sash index or a zero drag', () => {
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            [[0, 0], [-1, 50], [2, 50], [99, 50]].forEach(([k, d]) => {
+                assertEqual(L.distributeAxisSizes(base, min, max, vis, k, d, L.SASH_GROW_ONE).join(','),
+                    base.join(','), `no-op for k=${k} d=${d}`);
+            });
         });
 
         it('picks an H.264 level that covers the resolution', () => {
@@ -188,6 +439,71 @@
             assertTrue(__OverlayExportLayout.bitrateFor(64, 48, 1, 'low') >= 1000000, 'floor');
             assertTrue(__OverlayExportLayout.bitrateFor(3840, 2160, 240, 'high') <= 48000000, 'ceiling');
             assertEqual(__OverlayExportLayout.bitrateFor(1920, 1080, 30, 'nonsense'), mid, 'unknown quality → medium');
+        });
+
+        it('reports when the bitrate clamp makes two Quality tiers identical', () => {
+            // The [1, 48] Mbps clamp can collapse adjacent tiers, and then picking
+            // a different Quality changes NOTHING — not the estimate, not the
+            // encoded file. `bitrateIsClamped` exists so the modal can say so
+            // instead of looking broken.
+            const L = __OverlayExportLayout;
+            // Defaults (1080p30): every tier is inside the band and they differ.
+            ['low', 'medium', 'high'].forEach(q => {
+                assertTrue(!L.bitrateIsClamped(1920, 1080, 30, q), q + ' unclamped at 1080p30');
+            });
+            // 2160p60 pins medium AND high to the 48 Mbps ceiling — the collision
+            // the note warns about, asserted as an actual equality so this test
+            // fails if the band or the bpp table moves.
+            assertTrue(L.bitrateIsClamped(3840, 2160, 60, 'medium'), 'medium clamped at 2160p60');
+            assertTrue(L.bitrateIsClamped(3840, 2160, 60, 'high'), 'high clamped at 2160p60');
+            assertEqual(L.bitrateFor(3840, 2160, 60, 'medium'), L.bitrateFor(3840, 2160, 60, 'high'),
+                'medium and high really do encode identically there');
+            // …and the floor collides at the small end.
+            assertTrue(L.bitrateIsClamped(640, 360, 30, 'low'), 'low clamped at 640x360@30');
+            assertEqual(L.bitrateFor(640, 360, 30, 'low'), L.bitrateFor(640, 360, 30, 'medium'),
+                'low and medium collide at the floor');
+            // An unknown tier resolves to medium in BOTH functions, or the note
+            // would disagree with the bitrate it is describing.
+            assertEqual(L.bitrateIsClamped(640, 360, 30, 'nonsense'),
+                L.bitrateIsClamped(640, 360, 30, 'medium'), 'unknown quality → medium here too');
+        });
+
+        it('estimates output bytes from the bitrate actually used', () => {
+            // The modal's summary line and the streaming decision must be the
+            // SAME number — if they drift, the UI promises one size and the
+            // export sizes its destination for another.
+            const L = __OverlayExportLayout;
+            const W = 1920, H = 1080, fps = 30, q = 'medium', n = 300;
+            const expected = L.bitrateFor(W, H, fps, q) * (n / fps) / 8;
+            assertEqual(L.estimatedBytes(W, H, fps, q, n), expected, 'bytes = bitrate * seconds / 8');
+            // 10 s at 1080p30 medium: 1920*1080*30*0.12 = ~7.46 Mbps -> ~9.3 MB.
+            assertTrue(L.estimatedBytes(W, H, fps, q, 300) > 8e6, 'plausible magnitude (lower)');
+            assertTrue(L.estimatedBytes(W, H, fps, q, 300) < 11e6, 'plausible magnitude (upper)');
+            assertTrue(L.estimatedBytes(W, H, fps, q, 600) === 2 * L.estimatedBytes(W, H, fps, q, 300),
+                'linear in frame count');
+        });
+
+        it('returns zero estimated bytes for a degenerate range or fps', () => {
+            // Guards a divide-by-zero / NaN reaching `shouldStreamToDisk`, which
+            // would make an empty export prompt for a destination.
+            const L = __OverlayExportLayout;
+            for (const [fps, n] of [[0, 100], [30, 0], [30, -5], [NaN, 100], [30, NaN]]) {
+                assertEqual(L.estimatedBytes(1920, 1080, fps, 'medium', n), 0,
+                    'zero for fps=' + fps + ', n=' + n);
+            }
+        });
+
+        it('only streams to disk once the output is genuinely large', () => {
+            const L = __OverlayExportLayout;
+            assertTrue(!L.shouldStreamToDisk(0), 'nothing to write → no prompt');
+            assertTrue(!L.shouldStreamToDisk(L.STREAM_TO_DISK_BYTES), 'exactly at the threshold → no prompt');
+            assertTrue(L.shouldStreamToDisk(L.STREAM_TO_DISK_BYTES + 1), 'just over → stream');
+            // A short clip must stay on the frictionless download path, and a
+            // long one must not: this is the behaviour split users actually see.
+            const short = L.estimatedBytes(1280, 720, 30, 'medium', 90);      // 3 s
+            const long = L.estimatedBytes(1920, 1080, 30, 'high', 30 * 600);  // 10 min
+            assertTrue(!L.shouldStreamToDisk(short), '3 s of 720p just downloads');
+            assertTrue(L.shouldStreamToDisk(long), '10 min of 1080p high streams');
         });
     });
 
@@ -286,6 +602,35 @@
             assertEqual(base.user.alpha, 1.0, 'string alpha rejected');
         });
 
+        it('lists Render Video Names first among the layers, defaulting ON', () => {
+            const L = __OverlayExportLayout;
+            const d = L.defaultOverlayExportSettings();
+            // Order is part of the contract: the modal builds the Layers group by
+            // iterating these in order, and this one has to be the top entry.
+            assertEqual(Object.keys(d.layers)[0], 'videoNames', 'videoNames is the first layer');
+            assertEqual(d.layers.videoNames, true, 'and defaults ON');
+            // …and it reaches the draw options under the name the tile draw reads.
+            assertEqual(L.overlayOptionsFrom(d, 640, 480, 640, 480).showViewName, true,
+                'mapped to showViewName');
+            d.layers.videoNames = false;
+            assertEqual(L.overlayOptionsFrom(d, 640, 480, 640, 480).showViewName, false,
+                'and follows the setting when turned off');
+        });
+
+        it('keeps videoNames a real boolean for a blob that predates it', () => {
+            // mergeSettings type-checks and skips absent keys, so a stored blob from
+            // before the layer existed must leave the DEFAULT in place rather than
+            // producing `undefined` — which would render the toggle off and never
+            // come back. This is the same class of bug that settingsFromVisibilityPanel
+            // had by replacing settings.layers wholesale.
+            const L = __OverlayExportLayout;
+            const base = L.defaultOverlayExportSettings();
+            L.mergeSettings(base, { layers: { user: false, predicted: true } });
+            assertEqual(base.layers.videoNames, true, 'default survives an older blob');
+            assertEqual(typeof base.layers.videoNames, 'boolean', 'and is a boolean');
+            assertEqual(base.layers.user, false, 'while the stored keys still apply');
+        });
+
         it('ignores keys the schema does not declare', () => {
             const base = __OverlayExportLayout.defaultOverlayExportSettings();
             __OverlayExportLayout.mergeSettings(base, { evil: true, user: { evil: 1 } });
@@ -314,7 +659,7 @@
             const s = __OverlayExportLayout.defaultOverlayExportSettings();
             s.user.nodeSize = 4; s.user.lineWidth = 2; s.user.labelSize = 12;
             // 640x480 video into a 1280x960 tile → 2x. "Size 4" must mean 4
-            // VIDEO pixels at every output resolution, or a 480p and a 2K
+            // VIDEO pixels at every output resolution, or a 480p and a 2160p
             // export of the same layout would not look alike.
             const big = __OverlayExportLayout.overlayOptionsFrom(s, 640, 480, 1280, 960);
             assertEqual(big.userOpts.nodeSize, 8, 'marker doubled');

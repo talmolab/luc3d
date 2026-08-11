@@ -1,5 +1,5 @@
 // ui/overlay-export-layout.js — pure geometry / settings helpers behind the
-// "Export Instance Overlays" modal (issue #190).
+// "Export Video Overlays" modal (issue #190).
 //
 // Deliberately DEPENDENCY-FREE (no project imports, no dockview, no DOM beyond
 // `localStorage`) so it can be bridged into the classic-script unit runner and
@@ -12,17 +12,24 @@ export const TILE_3D = '__3d__';
 export const SETTINGS_KEY = 'overlayExportSettings.v1';
 
 /**
- * Output heights. Keys ARE the height; the width is derived from the composition
- * (or tile) aspect ratio, so the export carries no letterbox bars unless the
- * layout itself demands them — which is also why these labels can't state a
- * fixed W×H the way `V3D_RES` in ui/export-modals.js does. `1440` is labelled
- * **2K** to match that modal, where 2K already means 2560×1440.
+ * Output heights — the shared quality tiers, used by BOTH video export modals
+ * ("Export Video Overlays" here, "Export 3D Video" via `V3D_RES` in
+ * ui/export-modals.js, which is built from this table). Keep them in sync: two
+ * tier tables is how the modals drifted apart before.
+ *
+ * Keys ARE the height. Here the width is DERIVED from the composition (or tile)
+ * aspect ratio, so the export carries no letterbox bars unless the layout itself
+ * demands them — meaning the real output width is only known once a layout
+ * exists. `refW` is therefore just the 16:9 reference width used for the option
+ * labels (and it is the exact width the 3D modal uses, since that viewport is
+ * always rendered 16:9); the modal shows the ACTUAL W×H in its output readout,
+ * which is what to trust when the composition is not 16:9.
  */
 export const RES_PRESETS = {
-    '480':  { h: 480,  label: '480p'  },
-    '720':  { h: 720,  label: '720p'  },
-    '1080': { h: 1080, label: '1080p' },
-    '1440': { h: 1440, label: '2K'    },
+    '480':  { h: 480,  refW: 854,  label: '480p (854×480)'    },
+    '720':  { h: 720,  refW: 1280, label: '720p (1280×720)'   },
+    '1080': { h: 1080, refW: 1920, label: '1080p (1920×1080)' },
+    '2160': { h: 2160, refW: 3840, label: '2160p (3840×2160)' },
 };
 
 /** Fallback whenever a `res` value isn't a known preset. */
@@ -51,6 +58,50 @@ export function fitRect(srcW, srcH, dstW, dstH) {
     var s = Math.min(dstW / srcW, dstH / srcH);
     var w = srcW * s, h = srcH * s;
     return { scale: s, x: (dstW - w) / 2, y: (dstH - h) / 2, width: w, height: h };
+}
+
+/**
+ * Size of the axis-aligned box a srcW x srcH image occupies once rotated by
+ * `rotationDeg` about its own centre.
+ *
+ * The main window rotates the whole `.canvas-wrapper` with a CSS transform
+ * (`applyZoom`, loading/video.js), so a 90-degree camera rotation SWAPS a view's
+ * effective width and height — a 640x480 camera reads as 480x640. Anything asking
+ * "what aspect is this view?" has to ask it of the ROTATED box, or a rotated frame
+ * ends up pillarboxed inside an output sized for the unrotated one.
+ *
+ * Cardinal angles are special-cased so 90/270 come out exactly swapped rather than
+ * swapped-plus-floating-point-dust; the general case is the standard
+ * |w cos| + |h sin| bound. 0 and 180 return srcW x srcH unchanged, which is what
+ * keeps every unrotated call site bit-identical.
+ */
+export function rotatedBoxSize(srcW, srcH, rotationDeg) {
+    var r = Number(rotationDeg);
+    if (!isFinite(r)) r = 0;
+    r = ((r % 360) + 360) % 360;
+    if (r === 0 || r === 180) return { width: srcW, height: srcH };
+    if (r === 90 || r === 270) return { width: srcH, height: srcW };
+    var a = r * Math.PI / 180;
+    var c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+    return { width: srcW * c + srcH * s, height: srcW * s + srcH * c };
+}
+
+/**
+ * Rotation-aware "contain" fit: the scale at which a srcW x srcH image, rotated by
+ * `rotationDeg`, still fits inside dstW x dstH — plus the size of the UNROTATED
+ * image box at that scale.
+ *
+ * `boxWidth`/`boxHeight` are what a tile draw needs: it paints the video (and the
+ * overlays) into a boxWidth x boxHeight rectangle centred on the tile and rotates
+ * that rectangle, exactly as the main window rotates the one wrapper holding both
+ * canvases. At rotation 0 this degenerates to `fitRect`: the scale expression is
+ * literally the same `Math.min(dstW / srcW, dstH / srcH)`.
+ */
+export function rotatedFit(srcW, srcH, dstW, dstH, rotationDeg) {
+    var box = rotatedBoxSize(srcW, srcH, rotationDeg);
+    var s = Math.min(dstW / box.width, dstH / box.height);
+    if (!isFinite(s) || s <= 0) s = 1;
+    return { scale: s, boxWidth: srcW * s, boxHeight: srcH * s };
 }
 
 /**
@@ -146,10 +197,50 @@ export function h264CodecFor(W, H) {
     return 'avc1.420034';                              // level 5.2
 }
 
-/** Target H.264 bitrate (bits/sec) — must match the encoder.configure() call. */
+/** Target H.264 bitrate (bits/sec) — must match the encoder config. */
 export function bitrateFor(W, H, fps, quality) {
     var bpp = QUALITY_BPP[quality] != null ? QUALITY_BPP[quality] : QUALITY_BPP.medium;
     return Math.min(48000000, Math.max(1000000, Math.round(W * H * fps * bpp)));
+}
+
+/**
+ * True when `bitrateFor`'s [1, 48] Mbps clamp actually bit — i.e. the requested
+ * bits-per-pixel could not be honoured at this size and fps.
+ *
+ * The modal needs this because the clamp makes adjacent Quality tiers COLLIDE: at
+ * 3840x2160 @ 60 fps `medium` and `high` are BOTH 48 Mbps, and at or below about
+ * 640x360 @ 30 `low` and `medium` are BOTH 1 Mbps. In those configurations picking
+ * a different tier changes neither the size estimate nor the encoded file — and
+ * with nothing in the UI saying so, a correctly-wired picker just looks broken.
+ */
+export function bitrateIsClamped(W, H, fps, quality) {
+    var bpp = QUALITY_BPP[quality] != null ? QUALITY_BPP[quality] : QUALITY_BPP.medium;
+    return Math.round(W * H * fps * bpp) !== bitrateFor(W, H, fps, quality);
+}
+
+/**
+ * Expected size of one output file, in bytes. This is the number the modal's
+ * summary line shows, and the same number that decides whether the export needs
+ * a streaming destination — the two must not drift apart.
+ */
+export function estimatedBytes(W, H, fps, quality, nFrames) {
+    if (!(fps > 0) || !(nFrames > 0)) return 0;
+    return bitrateFor(W, H, fps, quality) * (nFrames / fps) / 8;
+}
+
+/**
+ * Above this much expected output, buffering the whole .mp4 in memory before
+ * handing it to a download is a real risk rather than a theoretical one: it
+ * lands in V8's pointer-compressed heap, which a Chrome renderer hard-caps near
+ * 4 GB (see CLAUDE.md on luc3d #185/#190/#191/#193). Past it the export asks
+ * for a real file and streams to disk instead. Below it, nothing is gained by
+ * making the user pick a destination, so it just downloads as it always has.
+ */
+export const STREAM_TO_DISK_BYTES = 256 * 1024 * 1024;
+
+/** True when `totalBytes` of expected output warrants streaming to disk. */
+export function shouldStreamToDisk(totalBytes) {
+    return totalBytes > STREAM_TO_DISK_BYTES;
 }
 
 // ============================================================================
@@ -158,7 +249,20 @@ export function bitrateFor(W, H, fps, quality) {
 
 export function defaultOverlayExportSettings() {
     return {
-        layers: { user: true, predicted: true, reproj: true, errors: false, legend: false },
+        // `videoNames` burns each tile's CAMERA NAME into the frame. Default **ON**:
+        // a multi-camera composition is close to unreadable without labels, so the
+        // caption is the expected output rather than an opt-in extra. Listed FIRST
+        // because it is the one layer that labels the composition rather than the
+        // animal.
+        //
+        // Turning it OFF also changes the dock CHROME, not just the render: the
+        // tab's name is hidden and shown on hover instead (see
+        // `ui/overlay-export-modal.js`), so the composition never shows a camera
+        // name that the export will not carry.
+        layers: {
+            videoNames: true, user: true, predicted: true, reproj: true,
+            errors: false, legend: false,
+        },
         trailLength: 0,
         colorBy: 'track',
         background: 'video',
@@ -210,11 +314,15 @@ export function mergeSettings(base, saved) {
  * Hold a persisted blob to the CURRENT option sets.
  *
  * `mergeSettings` only type-checks, so a `res` written by an older build (the
- * preset list has changed once already: `360` became `480`) survives as a string
- * nothing recognises. That splits the UI in two — `outputSizeFor` falls back to
- * the default height while the `<select>`, having no matching `<option>`, goes
- * blank — so the summary would quote a size the visible control doesn't name.
- * Fall back explicitly instead.
+ * preset list has changed twice now: `360` became `480`, then `1440`/2K was
+ * retired for `2160`) survives as a string nothing recognises. That splits the UI
+ * in two — `outputSizeFor` falls back to the default height while the `<select>`,
+ * having no matching `<option>`, goes blank — so the summary would quote a size
+ * the visible control doesn't name. Fall back explicitly instead.
+ *
+ * Retired tiers fall back to `DEFAULT_RES` rather than to the nearest surviving
+ * tier ON PURPOSE: promoting a stored `1440` to `2160` would silently ~2.25x the
+ * pixel count, the bitrate and the file size of the next export the user runs.
  */
 export function sanitizeSettings(s) {
     if (!s) return s;
@@ -247,7 +355,7 @@ export function saveOverlayExportSettings(s) {
  * the video's own resolution — so "marker size 4" means 4 video pixels there.
  * Here the canvas is a composition tile whose size has nothing to do with the
  * video's, so the same 4 would render at a wildly different apparent size, and
- * would CHANGE with the resolution preset: a 360p export and a 1440p export of
+ * would CHANGE with the resolution preset: a 480p export and a 2160p export of
  * the same layout would not look alike. Pre-multiplying by the fit scale pins
  * one meaning of "size 4" across the app, the preview and every output
  * resolution. (Sub-pixel results are fine — canvas strokes/arcs are not
@@ -256,6 +364,8 @@ export function saveOverlayExportSettings(s) {
  *
  * All interaction state (selection / hover / drag / assignment) is explicitly
  * nulled: an export has no cursor, and a stray highlight would be burned in.
+ * `showUnlinkedBadge: false` belongs to that same family — the "?" on an unlinked
+ * instance is an editing prompt, and nobody watching an .mp4 can act on it.
  */
 export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
     var u = settings.user, p = settings.pred, r = settings.reproj;
@@ -270,6 +380,10 @@ export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
         colorByIdentity: settings.colorBy === 'identity',
         trailLength: settings.trailLength || 0,
         showLegend: !!settings.layers.legend,
+        // Read by `drawTileContent`, not by `drawFrameOverlays` — a burned-in camera
+        // name is a caption on the TILE, drawn upright outside the view transform,
+        // exactly like the legend.
+        showViewName: !!settings.layers.videoNames,
         showUser: !!settings.layers.user,
         showPredicted: !!settings.layers.predicted,
         showReprojected: !!settings.layers.reproj,
@@ -307,6 +421,9 @@ export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
         assignmentMode: false,
         selectedUnlinkedId: null,
         editGroupTarget: null,
+        // No "?" badges on unlinked instances. Their dashed edges and reduced
+        // opacity still mark them as unlinked; only the editing prompt is dropped.
+        showUnlinkedBadge: false,
     };
 }
 
@@ -370,4 +487,148 @@ export function seedLayoutPlan(viewNames, include3D) {
     // column to the right of the whole grid.
     if (include3D) plan.push({ viewName: TILE_3D, position: { direction: 'right' } });
     return plan;
+}
+
+// ============================================================================
+// Even-axis sash resizing
+// ============================================================================
+
+/**
+ * How a sash drag's delta is shared out. See `distributeAxisSizes`.
+ *
+ * `'grow-one'` is the literal reading of "scale the remaining videos in the axis
+ * evenly", and is the default. `'share-sides'` is the alternative that keeps the
+ * sash under the cursor — swapping the constant in ui/overlay-export-modal.js is
+ * the whole change.
+ */
+export var SASH_GROW_ONE = 'grow-one';
+export var SASH_SHARE_SIDES = 'share-sides';
+
+/**
+ * Sizes for one dock AXIS after dragging the sash at index `k` by `d` px.
+ *
+ * dockview 6.6.1 hands a sash drag's WHOLE delta to the one tile on the other
+ * side of the sash, and only spills to tiles beyond it when that neighbour hits a
+ * limit (`Splitview.resize`, dockview-core 6.6.1 `dist/cjs/splitview/splitview.js`,
+ * driven from the sash's own `pointermove`). With three or more tiles on an axis
+ * the far tiles never move at all. This spreads the change instead.
+ *
+ * Two modes, because "evenly" has two defensible readings:
+ *
+ *   'grow-one'    **The sash at index `k` is tile `k`'s TRAILING EDGE.** Push it
+ *                 out (positive `d`) and tile `k` GROWS by the full delta while
+ *                 every other tile on the axis gives up `delta/(n-1)`; pull it in
+ *                 (negative `d`) and tile `k` SHRINKS by the full delta while every
+ *                 other tile GAINS `delta/(n-1)`. One consistent handle per tile,
+ *                 and both intentions — "make this one bigger" and "make this one
+ *                 smaller" — are expressible. The shrink half is the point: before
+ *                 it existed, EVERY drag grew exactly one tile (a left drag on sash
+ *                 `k` grew tile `k+1`), so there was no gesture at all for "make
+ *                 this video smaller and give the room to the others".
+ *                 Cost: tiles on both sides move, so the sash trails the cursor —
+ *                 with 4 equal tiles a 90 px drag moves the sash 60 px.
+ *                 Consequence worth knowing: the LAST tile has no trailing sash, so
+ *                 it cannot be targeted directly; it still changes as one of the
+ *                 evenly-adjusted others.
+ *   'share-sides' the tiles at-or-before the sash share the gain and the tiles
+ *                 after it share the loss. Also spreads the change across the
+ *                 axis, and the sash tracks the cursor exactly, but it has no
+ *                 "shrink just this one" gesture.
+ *
+ * `base`/`min`/`max`/`vis` are per-view, in axis order. Invisible views never take
+ * part. The result ALWAYS sums to `sum(base)` exactly, so the axis total — and
+ * therefore every other axis in the dock, and the dock's own box — is untouched.
+ *
+ * @param {number[]} base   current sizes, px
+ * @param {number[]} min    per-view minimum size
+ * @param {number[]} max    per-view maximum size
+ * @param {boolean[]} vis   per-view visibility
+ * @param {number} k        sash index: the boundary between view k and k+1
+ * @param {number} d        signed drag distance along the axis, px
+ * @param {string} mode     SASH_GROW_ONE | SASH_SHARE_SIDES
+ * @returns {number[]} new sizes
+ */
+export function distributeAxisSizes(base, min, max, vis, k, d, mode) {
+    var out = base.slice();
+    d = Math.round(d);
+    if (!d || k < 0 || k >= base.length - 1) return out;
+
+    var grow = [], shrink = [], i;
+    if (mode === SASH_SHARE_SIDES) {
+        for (i = 0; i < base.length; i++) {
+            if (!vis[i]) continue;
+            (i <= k ? grow : shrink).push(i);
+        }
+        if (d < 0) { var swap = grow; grow = shrink; shrink = swap; }
+    } else {
+        // The sash is tile k's trailing edge: pushing it out grows tile k, pulling
+        // it in shrinks tile k. Everyone else absorbs the change evenly either way.
+        var lead = k;
+        if (!vis[lead]) return out;
+        var others = [];
+        for (i = 0; i < base.length; i++) if (vis[i] && i !== lead) others.push(i);
+        if (d > 0) { grow.push(lead); shrink = others; }
+        else { shrink.push(lead); grow = others; }
+    }
+    if (!grow.length || !shrink.length) return out;
+
+    // Per-view capacity, then bound the whole move by what BOTH sides can absorb.
+    // Note the caps are summed, not min'd: a single view sitting on its 100px
+    // minimum must not veto the entire drag. Doing that made the sash feel dead in
+    // a real dock, where a squeezed tile at the minimum is common — the drag now
+    // proceeds and simply routes around it.
+    var growCaps = [], shrinkCaps = [], growTotal = 0, shrinkTotal = 0;
+    for (i = 0; i < grow.length; i++) {
+        var hc = Math.max(0, max[grow[i]] - base[grow[i]]);
+        growCaps.push(hc); growTotal += hc;
+    }
+    for (i = 0; i < shrink.length; i++) {
+        var rc = Math.max(0, base[shrink[i]] - min[shrink[i]]);
+        shrinkCaps.push(rc); shrinkTotal += rc;
+    }
+    var amount = Math.min(Math.abs(d), growTotal, shrinkTotal);
+    if (!(amount > 0)) return out;
+
+    var gives = fillEvenly(growCaps, amount);
+    var takes = fillEvenly(shrinkCaps, amount);
+    for (i = 0; i < grow.length; i++) out[grow[i]] += gives[i];
+    for (i = 0; i < shrink.length; i++) out[shrink[i]] -= takes[i];
+    return out;
+}
+
+/**
+ * Split `amount` px as evenly as possible across slots whose individual capacities
+ * are `caps`, giving every slot an equal share and re-spreading whatever a
+ * capped-out slot cannot take across the ones that still have room.
+ *
+ * Integer, and the result sums to EXACTLY `min(amount, sum(caps))`. That exactness
+ * matters twice over: a residue would be dumped on one arbitrary tile by dockview's
+ * `distributeEmptySpace()` (so repeated drags would creep), and the caller relies on
+ * the two sides of the drag matching so the axis total never moves.
+ *
+ * Even-share-with-spill rather than proportional-to-capacity on purpose: the point
+ * of the feature is that tiles change by the SAME amount, so a big tile and a small
+ * one give up the same pixels until the small one runs out.
+ */
+function fillEvenly(caps, amount) {
+    var out = [], i;
+    for (i = 0; i < caps.length; i++) out.push(0);
+    var left = Math.min(amount, caps.reduce(function (a, b) { return a + b; }, 0));
+    while (left > 0) {
+        var active = [];
+        for (i = 0; i < caps.length; i++) if (out[i] < caps[i]) active.push(i);
+        if (!active.length) break;
+        var share = Math.floor(left / active.length);
+        if (share < 1) {
+            // Fewer pixels left than slots: hand out the last few one at a time.
+            for (i = 0; i < active.length && left > 0; i++) { out[active[i]]++; left--; }
+            break;
+        }
+        for (i = 0; i < active.length; i++) {
+            var give = Math.min(share, caps[active[i]] - out[active[i]]);
+            out[active[i]] += give;
+            left -= give;
+        }
+    }
+    return out;
 }

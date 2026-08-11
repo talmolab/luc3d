@@ -201,6 +201,14 @@ export function getInstanceColor(instance, session, cameraName, useIdentity, fra
         var identity = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
         if (identity && identity.color) return identity.color;
     }
+    // A TRACKLESS unlinked instance can still carry an identity — retained on
+    // the instance by unlinkGroup (luc3d #201; the map cannot key a null
+    // track). Same animal, same color as when it was grouped.
+    if (useIdentity && session && instance.trackIdx == null &&
+        instance.identityId != null && instance.identityId >= 0 && session.getIdentity) {
+        var retained = session.getIdentity(instance.identityId);
+        if (retained && retained.color) return retained.color;
+    }
     if (instance.trackIdx == null) return UNGROUPED_USER_COLOR;
     // The "No ID" track is the null track → same gray as the ID panel.
     if (session && session.isNoIdTrack && session.isNoIdTrack(instance.trackIdx)) return NULL_ID_COLOR;
@@ -1437,6 +1445,9 @@ export function drawInstanceTypeIndicator(ctx, points, type, options) {
  * @param {number[]} [options.assignmentSelectedIds] - IDs of unlinked instances selected for assignment
  * @param {string}   [options.assignmentColor] - Color for assignment selection highlight
  * @param {string}   [options.typeFilter] - If set, only draw instances matching this type ('user' or 'predicted')
+ * @param {boolean}  [options.showUnlinkedBadge=true] - Draw the "?" badge. Set false
+ *   to keep the unlinked STYLING (dashed edges, reduced opacity) without the
+ *   editing affordance — used by the overlay video export.
  */
 export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options) {
     options = options || {};
@@ -1453,6 +1464,9 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
     const ulFrameIdx = options.frameIdx != null ? options.frameIdx : null;
     const selectedUnlinkedId = options.selectedUnlinkedId || null;
     const predictedRender = options.predictedRender || null;
+    // Defaults TRUE: the live app relies on this badge, so only a caller that
+    // explicitly opts out (the overlay video export) loses it.
+    const showUnlinkedBadge = options.showUnlinkedBadge !== false;
 
     const vw = options.videoWidth;
     const vh = options.videoHeight;
@@ -1612,12 +1626,15 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
             ctx.globalAlpha = alpha;
         }
 
-        // "?" badge near the first visible point
+        // "?" badge near the first visible point. Suppressible because it is an
+        // EDITING affordance — it flags "this needs assigning", which is noise in
+        // a rendered video where nobody can act on it. The dashed edges and the
+        // lower opacity still distinguish unlinked instances without it.
         let anchorCp = null;
         for (let i = 0; i < canvasPoints.length; i++) {
             if (canvasPoints[i]) { anchorCp = canvasPoints[i]; break; }
         }
-        if (anchorCp) {
+        if (anchorCp && showUnlinkedBadge) {
             const badgeSize = 10;
             ctx.globalAlpha = 0.9;
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
@@ -1927,6 +1944,9 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         assignmentSelectedIds: options.assignmentSelectedIds || [],
         assignmentColor: '#fbbf24',
         selectedUnlinkedId: options.selectedUnlinkedId || null,
+        // Spread into BOTH drawUnlinkedInstances passes below (user + predicted),
+        // so one flag covers every badge rather than only one type's.
+        showUnlinkedBadge: options.showUnlinkedBadge !== false,
     };
 
     // 2. Draw reprojected instances + error vectors (back layer)
@@ -2302,6 +2322,91 @@ export function drawLegend(ctx, options) {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(offCanvas, destX, destY, boxWidth, boxHeight);
+    ctx.restore();
+}
+
+/**
+ * Draw a view / camera name in the TOP-LEFT corner of an overlay canvas.
+ *
+ * Behind "Export Video Overlays" ▸ Layers ▸ Render Video Names. The composed
+ * `.mp4` otherwise carries no labels at all: the dock's per-tile name chip is UI
+ * chrome (styles.css › #ovDock) and is never encoded, so without this a
+ * five-camera composition ships as five anonymous rectangles.
+ *
+ * TOP-left, to sit exactly where the dock's own tab chip sits — the rendered
+ * output then carries the same tag the composition shows, just without the close
+ * X. (It was bottom-left first, on the reasoning that the corner was free; that
+ * put a SECOND label on screen in the preview, one top-left as chrome and one
+ * bottom-left burned in, which is not what a tag should look like.) No collision
+ * with `drawLegend`, which owns the top-RIGHT.
+ *
+ * Anchored to the CANVAS box (like `drawLegend`), which in a stitched export is
+ * exactly the tile's rect — so on a letterboxed tile the name lands in the black
+ * bar rather than over the animal.
+ *
+ * Sized off the canvas, NOT fixed. The same tile is drawn twice — once at the
+ * small preview size, once at the output pixel size — and a fixed font would be
+ * unreadable in one and hairline in the other. (`drawLegend`'s fixed 28px does
+ * drift this way; not copied on purpose.)
+ *
+ * Readable over BOTH bright and dark video: a translucent plate under the text AND
+ * a shadow on the glyphs, so white text survives a white frame even with the plate
+ * disabled.
+ *
+ * Call it OUTSIDE any view transform. It resets to the identity transform itself,
+ * but a caption must stay upright for a rotated camera — at rotation 180 an
+ * in-transform label prints upside down (see `drawTileContent` in
+ * ui/overlay-export-modal.js, which hoists this out for the same reason as the
+ * legend).
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} text                   - the view / camera name
+ * @param {Object}  [options]
+ * @param {number}  [options.fontSize]    - px; default scales with the canvas
+ * @param {string}  [options.color]       - text colour, default '#ffffff'
+ * @param {boolean} [options.plate]       - translucent backing plate, default true
+ * @param {string}  [options.corner]      - 'top-left' (default) or 'bottom-left'
+ */
+export function drawViewNameLabel(ctx, text, options) {
+    const label = String(text == null ? '' : text);
+    if (!label) return;
+    options = options || {};
+    const w = ctx.canvas.width;
+    const h = ctx.canvas.height;
+    // Kept as an option rather than hard-coded: `drawLegend` owns the top-right, so
+    // a caller that wants the caption out of the way of a busy top-left frame has
+    // somewhere to put it.
+    const bottom = options.corner === 'bottom-left';
+    // ~4.5% of the tile's SHORT side. Floored so a thumbnail-sized preview tile is
+    // still legible, capped so a 2160p tile doesn't shout.
+    const fontSize = options.fontSize > 0
+        ? options.fontSize
+        : Math.max(9, Math.min(48, Math.round(Math.min(w, h) * 0.045)));
+    const pad = Math.max(2, Math.round(fontSize * 0.4));
+    const boxH = Math.round(fontSize * 1.35);
+    ctx.save();
+    // Identity transform + no filter: this is a caption on the finished tile and
+    // must inherit neither the video's brightness/contrast nor its rotation.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.filter = 'none';
+    ctx.globalAlpha = 1;
+    ctx.font = '600 ' + fontSize + 'px sans-serif';
+    ctx.textBaseline = 'alphabetic';
+    const textW = ctx.measureText(label).width;
+    const bx = pad;
+    const by = bottom ? h - pad - boxH : pad;
+    if (options.plate !== false) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(bx, by, textW + pad * 2, boxH, 3);
+        else ctx.rect(bx, by, textW + pad * 2, boxH);
+        ctx.fill();
+    }
+    ctx.fillStyle = options.color || '#ffffff';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetY = 1;
+    ctx.fillText(label, bx + pad, by + fontSize);
     ctx.restore();
 }
 
