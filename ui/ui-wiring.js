@@ -36,6 +36,8 @@ import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
+// View ▸ Define Planes — "Defining Plane Mode".
+import { togglePlaneMode } from './plane-definition.js';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
@@ -1143,6 +1145,11 @@ export function setupMenus() {
     document.getElementById('menuFitScene').addEventListener('click', function () {
         closeMenus();
         if (viewport3d) viewport3d.fitToScene();
+    });
+
+    document.getElementById('menuDefinePlanes').addEventListener('click', function () {
+        closeMenus();
+        togglePlaneMode();
     });
 
     document.getElementById('menuNewProject').addEventListener('click', function () {

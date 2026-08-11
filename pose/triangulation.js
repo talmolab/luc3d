@@ -1436,6 +1436,110 @@ export function hungarianAlgorithm(costMatrix) {
 
 
 // ============================================
+// Plane fitting (View ▸ Define Planes)
+// ============================================
+
+/**
+ * Least-squares plane of best fit through a flat `points3d` set.
+ *
+ * Total-least-squares via PCA: the plane through the centroid whose normal is
+ * the eigenvector of the SMALLEST eigenvalue of the points' 3x3 covariance.
+ * That minimizes the sum of squared PERPENDICULAR distances, which is the
+ * right objective here — the corners carry error in all three axes (they come
+ * out of triangulation), so an ordinary least-squares fit of z on (x, y) would
+ * both privilege an arbitrary axis and blow up for a plane seen edge-on.
+ *
+ * Rejects degenerate input. Three or more points always admit *a* plane, but
+ * COLLINEAR points admit infinitely many — the normal is then arbitrary within
+ * a pencil, and "fitting" to it would silently rotate the annotation to
+ * nonsense. The middle eigenvalue is the spread along the plane's minor
+ * in-plane axis, so comparing it against the largest detects exactly that case.
+ *
+ * @param {Float64Array} points3d - Flat [X,Y,Z] per node; all-NaN = missing.
+ * @returns {{centroid:number[], normal:number[], rms:number, nPoints:number}|null}
+ *   null when fewer than 3 nodes are present, all coincide, or they are collinear.
+ */
+export function fitPlaneToPoints3d(points3d) {
+    const n = points3dNodeCount(points3d);
+    const p = [0, 0, 0];
+
+    let cx = 0, cy = 0, cz = 0, count = 0;
+    for (let k = 0; k < n; k++) {
+        if (!readPoint3d(points3d, k, p)) continue;
+        cx += p[0]; cy += p[1]; cz += p[2];
+        count++;
+    }
+    if (count < 3) return null;
+    cx /= count; cy /= count; cz /= count;
+
+    // Covariance of the centered points (symmetric — only 6 unique terms).
+    let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+    for (let k = 0; k < n; k++) {
+        if (!readPoint3d(points3d, k, p)) continue;
+        const dx = p[0] - cx, dy = p[1] - cy, dz = p[2] - cz;
+        xx += dx * dx; xy += dx * dy; xz += dx * dz;
+        yy += dy * dy; yz += dy * dz; zz += dz * dz;
+    }
+
+    // jacobiEigen returns eigenvectors as ROWS already paired with
+    // `eigenvalues[i]`, and does NOT sort them — find the extremes ourselves.
+    const eig = jacobiEigen([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]]);
+    let minIdx = 0, maxIdx = 0;
+    for (let i = 1; i < 3; i++) {
+        if (Math.abs(eig.eigenvalues[i]) < Math.abs(eig.eigenvalues[minIdx])) minIdx = i;
+        if (Math.abs(eig.eigenvalues[i]) > Math.abs(eig.eigenvalues[maxIdx])) maxIdx = i;
+    }
+    if (minIdx === maxIdx) return null;          // all eigenvalues equal — no structure
+    const midIdx = 3 - minIdx - maxIdx;
+
+    const largest = Math.abs(eig.eigenvalues[maxIdx]);
+    if (!(largest > 0)) return null;                                      // coincident
+    if (Math.abs(eig.eigenvalues[midIdx]) / largest < 1e-10) return null; // collinear
+
+    const v = eig.eigenvectors[minIdx];
+    const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (!(len > 1e-12)) return null;
+    const normal = [v[0] / len, v[1] / len, v[2] / len];
+
+    // RMS perpendicular distance — how planar the annotation already was.
+    let sq = 0;
+    for (let k = 0; k < n; k++) {
+        if (!readPoint3d(points3d, k, p)) continue;
+        const d = (p[0] - cx) * normal[0] + (p[1] - cy) * normal[1] + (p[2] - cz) * normal[2];
+        sq += d * d;
+    }
+
+    return {
+        centroid: [cx, cy, cz],
+        normal: normal,
+        rms: Math.sqrt(sq / count),
+        nPoints: count,
+    };
+}
+
+/**
+ * Orthogonally project every present point onto `plane`, returning a NEW flat
+ * `points3d` (the input is left intact, so a caller can keep the raw
+ * triangulation alongside the flattened version). Missing nodes stay missing.
+ *
+ * @param {Float64Array} points3d
+ * @param {{centroid:number[], normal:number[]}} plane
+ * @returns {Float64Array}
+ */
+export function projectPoints3dOntoPlane(points3d, plane) {
+    const n = points3dNodeCount(points3d);
+    const out = makePoints3d(n);
+    const p = [0, 0, 0];
+    const c = plane.centroid, nv = plane.normal;
+    for (let k = 0; k < n; k++) {
+        if (!readPoint3d(points3d, k, p)) continue;
+        const d = (p[0] - c[0]) * nv[0] + (p[1] - c[1]) * nv[1] + (p[2] - c[2]) * nv[2];
+        setPoint3d(out, k, [p[0] - d * nv[0], p[1] - d * nv[1], p[2] - d * nv[2]]);
+    }
+    return out;
+}
+
+// ============================================
 // Back-projection and ray geometry
 // ============================================
 

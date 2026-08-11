@@ -148,6 +148,8 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuDefinePlanes">Define Planes</div>
                 </div>
             </div>
             <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hot Keys</div>
@@ -209,6 +211,24 @@
             <button class="toolbar-btn" id="infoPanelToggleBtn" style="margin-left:auto;" title="Toggle info panel (I)">Hide Panel</button>
         </div>
 
+        <!-- Defining Plane Mode banner (View ▸ Define Planes). Hidden unless the
+             mode is active; see ui/plane-definition.js. -->
+        <div class="plane-mode-bar" id="planeModeBar" style="display:none;">
+            <span class="plane-mode-dot"></span>
+            <span class="plane-mode-label">Defining Plane Mode</span>
+            <span class="plane-mode-hint" id="planeModeHint">Drag a plane skeleton from the panel onto a video view</span>
+            <button class="toolbar-btn plane-mode-exit" id="planeModeExit" title="Leave Defining Plane Mode">Exit</button>
+        </div>
+
+        <!-- Set Origin Mode. Replaces the plane bar while active (both at once
+             would advertise two modes). Exit and Esc are the only ways out. -->
+        <div class="plane-mode-bar origin-mode-bar" id="originModeBar" style="display:none;">
+            <span class="plane-mode-dot"></span>
+            <span class="plane-mode-label">Set Origin Mode</span>
+            <span class="plane-mode-hint" id="originModeHint"></span>
+            <button class="toolbar-btn plane-mode-exit" id="originModeExit" title="Leave Set Origin Mode (Esc)">Exit</button>
+        </div>
+
         <!-- Main content: video grid + 3D viewport + info panel -->
         <div class="main-content">
             <!-- Video Grid Section (left/center) -->
@@ -251,6 +271,23 @@
                 <button class="viewport3d-show-cam-btn" id="btnShowInitialView" title="Reset to initial view" style="display:none; top:36px;">Show Initial View</button>
                 <button class="viewport3d-show-cam-btn" id="btnSetEnv" title="Freeze current frame's 3D groups as persistent environment reference" style="bottom:6px; top:auto;">Set Env</button>
                 <button class="viewport3d-show-cam-btn" id="btnClearEnv" title="Remove environment overlay" style="bottom:6px; top:auto; left:70px; display:none;">Clear Env</button>
+                <!-- Set Origin Mode wizard: instructions live over the 3D view
+                     because that is where the clicking happens. -->
+                <div class="origin-instruction" id="originInstruction" style="display:none;">
+                    <!-- The box floats over the very geometry the user has to
+                         click, so it can be dragged out of the way. Only the
+                         grip takes pointer events (see styles.css). -->
+                    <div class="origin-drag-handle" id="originDragHandle" title="Drag to move">&#8942;&#8942;&#8942;</div>
+                    <div class="origin-step" id="originStepText"></div>
+                    <div class="origin-legend" id="originLegend" style="display:none;">
+                        <span class="origin-swatch origin-swatch-pos"></span><span>Red arrow = +Z</span>
+                        <span class="origin-swatch origin-swatch-neg"></span><span>Blue arrow = +Z</span>
+                    </div>
+                    <div class="origin-confirm-row" id="originConfirmRow" style="display:none;">
+                        <button class="panel-btn" id="btnOriginCancel">Cancel</button>
+                        <button class="panel-btn origin-continue" id="btnOriginContinue">Continue</button>
+                    </div>
+                </div>
             </div>
 
             <!-- Split handle: 3D viewport | info panel -->
@@ -769,6 +806,132 @@
                             <div>Drag empty: Box zoom / Pan</div>
                             <div>Double-click: Reset zoom / Convert</div>
                             <div>Right-click: Toggle node visibility</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ==================== Define Plane Panel ====================
+                     Shown INSTEAD of the tab bar + tab contents while Defining
+                     Plane Mode is active (View ▸ Define Planes). Populated by
+                     ui/plane-definition.js. -->
+                <div class="plane-panel" id="planePanel" style="display:none;">
+                    <div class="info-section">
+                        <details class="plane-details" id="planeEditorDetails" open>
+                            <summary>Define Plane Skeleton</summary>
+                            <div class="plane-details-body">
+                                <div class="plane-name-row">
+                                    <span>Name</span>
+                                    <input type="text" id="planeSkeletonName" placeholder="plane_1" />
+                                </div>
+
+                                <details class="plane-details plane-subdetails" id="planeNodesDetails" open>
+                                    <summary>Nodes</summary>
+                                    <div class="plane-details-body">
+                                        <table class="data-table" id="planeNodesTable">
+                                            <thead>
+                                                <tr>
+                                                    <th>#</th>
+                                                    <th>Name</th>
+                                                    <th style="width:34px">Color</th>
+                                                    <th style="width:30px"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody></tbody>
+                                        </table>
+                                        <div class="table-empty" id="planeNodesEmpty">No nodes</div>
+                                        <div class="panel-button-row" style="margin-top:6px">
+                                            <input type="text" id="planeNodeNameInput" class="plane-text-input" placeholder="Node name" />
+                                            <button class="panel-btn" id="btnAddPlaneNode" title="Add plane node">+ Node</button>
+                                        </div>
+                                    </div>
+                                </details>
+
+                                <details class="plane-details plane-subdetails" id="planeEdgesDetails" open>
+                                    <summary>Node Connections</summary>
+                                    <div class="plane-details-body">
+                                        <table class="data-table" id="planeEdgesTable">
+                                            <thead>
+                                                <tr>
+                                                    <th>Source</th>
+                                                    <th>Destination</th>
+                                                    <th style="width:30px"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody></tbody>
+                                        </table>
+                                        <div class="table-empty" id="planeEdgesEmpty">No connections</div>
+                                        <div class="panel-button-row" style="margin-top:6px">
+                                            <select id="planeEdgeSrcSelect" class="plane-select"></select>
+                                            <select id="planeEdgeDstSelect" class="plane-select"></select>
+                                            <button class="panel-btn" id="btnAddPlaneEdge" title="Connect two plane nodes">+ Link</button>
+                                        </div>
+                                    </div>
+                                </details>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="info-section">
+                        <h3>Plane Skeletons</h3>
+                        <table class="data-table" id="planeSkeletonsTable">
+                            <thead>
+                                <tr>
+                                    <th style="width:34px"></th>
+                                    <th>Name</th>
+                                    <th>Nodes</th>
+                                    <th style="width:78px"></th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="table-empty" id="planeSkeletonsEmpty">No plane skeletons yet</div>
+                        <div class="panel-button-row" style="margin-top:6px">
+                            <button class="panel-btn" id="btnNewPlaneSkeleton" title="Create a new plane skeleton">+ New Plane Skeleton</button>
+                        </div>
+                        <!-- Act on the SELECTED plane skeleton; disabled when none is
+                             selected. Populated with icons by ui/plane-definition.js. -->
+                        <div class="panel-button-row plane-action-row" style="margin-top:6px">
+                            <button class="panel-btn" id="btnPlaneTriangulate" disabled>Triangulate</button>
+                            <button class="panel-btn" id="btnPlaneFill" disabled>Fill</button>
+                            <button class="panel-btn" id="btnPlaneFit" disabled>Fit</button>
+                        </div>
+                        <div class="panel-button-row" style="margin-top:6px">
+                            <button class="panel-btn" id="btnSetOrigin" disabled>Set Origin</button>
+                        </div>
+                        <div class="plane-hint">Drag a row onto a video view to place that plane on it. Expand a row to see where it is placed.</div>
+                    </div>
+
+                    <!-- Shared across every plane, by design: one node size and one
+                         edge weight for all of them (see ui/plane-definition.js). -->
+                    <div class="info-section">
+                        <h3>Plane Appearance</h3>
+                        <div class="vis-slider-row">
+                            <span>2D Node Size</span>
+                            <input type="range" id="planeNodeSize" min="1" max="20" value="13" step="1">
+                            <span class="vis-val" id="planeNodeSizeVal">13</span>
+                        </div>
+                        <div class="vis-slider-row">
+                            <span>Edge Weight</span>
+                            <input type="range" id="planeEdgeWeight" min="1" max="12" value="3" step="1">
+                            <span class="vis-val" id="planeEdgeWeightVal">3</span>
+                        </div>
+                        <!-- Sizes plane corners in the 3D scene ONLY. Pose skeleton
+                             nodes keep their own size (`skeletonNodeSize`). -->
+                        <div class="vis-slider-row">
+                            <span>3D Node Size</span>
+                            <input type="range" id="planeNodeSize3d" min="1" max="20" value="4" step="1">
+                            <span class="vis-val" id="planeNodeSize3dVal">4</span>
+                        </div>
+                    </div>
+
+                    <!-- The output of the whole feature: the transform from the
+                         calibration's world frame to the user's. Populated by
+                         ui/origin-definition.js; hidden until an origin is set. -->
+                    <div class="info-section" id="originResultSection" style="display:none;">
+                        <h3>Defined Origin</h3>
+                        <div class="origin-result" id="originResult"></div>
+                        <div class="panel-button-row" style="margin-top:6px">
+                            <button class="panel-btn" id="btnClearOrigin">Reset to Calibration Origin</button>
                         </div>
                     </div>
                 </div>

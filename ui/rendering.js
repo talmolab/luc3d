@@ -13,6 +13,10 @@ import {
 } from '../pose/triangulation.js';
 import { drawFrameOverlays } from './overlays.js';
 import { isCameraTracked } from './settings.js';
+// Plane placements draw on the same overlay canvas, so they must run AFTER
+// drawFrameOverlays (which opens with a clearRect). Circular import — safe
+// because the call site is inside drawAllOverlays' body.
+import { drawPlaneOverlays } from './plane-definition.js';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
 import { editGroupState, finishEditGroup } from './identity-assignment.js';
@@ -276,6 +280,10 @@ export function drawAllOverlays(frameIdx) {
             editGroupTarget: editGroupTarget,
             trackingExcluded: !isCameraTracked(view.name),
         });
+
+        // Annotated planes (View ▸ Define Planes). Frame-independent, so they
+        // are drawn on every frame regardless of the current FrameGroup.
+        drawPlaneOverlays(view);
     }
 
     // Update info panel with current frame stats + the timeline playhead.
