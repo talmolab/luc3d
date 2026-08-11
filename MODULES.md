@@ -2226,6 +2226,22 @@ the classic-script unit runner and exercised without a browser dock.
   video is drawn with this and the skeleton with that, so any divergence offsets
   every burned-in overlay from the animal. Pinned by
   `tests/test-overlay-export-layout.js`, which computes both and compares.
+- `distributeAxisSizes(base, min, max, vis, k, d, mode)` + `SASH_GROW_ONE` /
+  `SASH_SHARE_SIDES` — sizes for one dock AXIS after dragging the sash at index `k`
+  by `d` px, so a resize is shared by **every** tile on the axis. dockview 6.6.1
+  hands the whole delta to the one adjacent tile and only spills when it clamps, and
+  nothing configures that (see the `ui/overlay-export-modal.js` entry). Two modes:
+  `'grow-one'` (the default, and the literal reading — the tile dragged towards grows
+  by the full delta and every other tile gives up `delta/(n-1)`, at the cost of the
+  sash trailing the cursor by `d*k/n`) and `'share-sides'` (tiles before the sash
+  share the gain, tiles after share the loss; the sash tracks the cursor exactly).
+  The result **always sums to `sum(base)`**, so the axis total — and therefore the
+  dock's box and every other axis — is untouched; swept over `k`, `d` and both modes
+  by a unit test, because a drifting total would move the exported frame.
+  `fillEvenly` does even-share-**with-spill**: a tile pinned at its 100px minimum
+  holds still and the tiles with room absorb its share. It deliberately does NOT veto
+  the drag — an earlier version did, and a real seeded dock routinely has a tile at
+  the minimum, which made the sash feel dead.
 - `rotatedBoxSize(srcW, srcH, rotationDeg)` / `rotatedFit(srcW, srcH, dstW, dstH,
   rotationDeg)` — the rotation-aware half of the fit. The main window rotates the
   whole `.canvas-wrapper` (`applyZoom`, loading/video.js), so a 90° camera rotation
@@ -2461,6 +2477,47 @@ writable), which the status message says outright.
 the app, then persisted to `localStorage` — surviving session switches within a
 project and page reloads. The **layout** is deliberately NOT persisted; a
 reopened modal re-seeds from the main-window mirror.
+
+**Sash drags are taken over from dockview.** A capture-phase `pointerdown` on
+`#ovDock` intercepts sash drags and re-implements them via `distributeAxisSizes`, so
+the change is shared across the whole axis instead of dumped on one neighbour.
+dockview 6.6.1 offers no option for this: `proportionalLayout` governs CONTAINER
+resize, is hardcoded `true`, is not in `DockviewComponentOptions`, and
+`updateOptions` says "not supported" outright; `distributeViewSizes()` equalises
+every view (throwing the composition away) and is on no public API; `LayoutPriority`
+only reorders the same spill list and the sash handler passes `undefined` for both
+priority lists, so it cannot reach a drag at all. Post-correcting in
+`onDidLayoutChange` was rejected — that fires **once at drag end**, so the drag would
+look native and then jump on release. Capture-phase `stopPropagation()` on an
+ancestor prevents dockview's own listener (bound to the sash **element**) from ever
+running, so there is exactly one handler and nothing to fight. An axis of two tiles
+is left to dockview on purpose — there, "evenly" IS the neighbour.
+This reaches **TypeScript-private dockview internals** — `gridview.root`,
+`BranchNode.splitview`, `Splitview.viewItems` / `sashes` / `layoutViews()` /
+`distributeEmptySpace()` / `saveProportions()`, and `viewItem.enabled` — all verified
+to resolve at **runtime** against the live minified `/+esm` build, not just by grep.
+Every one is feature-detected: if any is missing the handler returns WITHOUT calling
+`stopPropagation()` and dockview's stock neighbour-only drag runs, so a version bump
+can regress the behaviour but cannot break resizing. `tests/e2e/overlay-export-sash-distribute.mjs`
+covers it, and was confirmed to FAIL on the pre-fix code (delta `-60, 0, 0`); it also
+drags twice and asserts the first drag's asymmetry survives, which is the guard
+against an "equalise everything" fix making the dock un-resizable.
+
+**The tab band is overlaid on the tile, not stacked above it** (`styles.css`,
+`#ovDock`). dockview lays a group out as `[tabs][content]` in a column flexbox, so a
+35px band cost 35px of video **per grid row** — ~8% of a two-row dock spent on
+chrome, with the tiles letterboxed to pay for it. Shortening the band to 20px and
+pulling `.dv-content-container` back up by exactly that height gives the tile (and
+its canvas backing store) the group's full height; measured 639 -> 674 px, and tile
+area 91.7% -> 99.45% on a six-tile composition. The real dockview tab is KEPT, not
+hidden: `.dv-tab` is dockview's **drag source**, so `header.hidden` would remove the
+only way to rearrange tiles — and `captureLayout()` reads that arrangement off the
+DOM, where it IS the exported frame. `position: relative` + `z-index: 2` on the band
+is load-bearing: the tile's canvases are absolutely positioned and would otherwise
+paint over it and swallow every tab click. Scoped to `#ovDock` because
+`.dockview-theme-abyss` is shared with the main window's dock, and declared on
+`.dv-groupview` rather than `#ovDock` because dockview puts the theme class on its own
+`.dv-shell` **inside** the container, which would otherwise re-declare the height.
 
 **Display settings are inherited from the main window, not re-exposed.** Every 2D
 tile is rendered with that camera's **brightness, contrast, rotation and zoom** as
@@ -2733,7 +2790,19 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
-  `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
+  `drawInstanceTypeIndicator`, `drawUnlinkedInstances`, `drawViewNameLabel`.
+  **`drawViewNameLabel(ctx, text, options)`** draws a camera name bottom-left,
+  behind "Export Video Overlays" ▸ Layers ▸ **Render Video Names** (the first entry
+  in that group). The composed `.mp4` otherwise carries no labels at all — the
+  dock's per-tile name chip is UI chrome and is never encoded — so a five-camera
+  composition would ship as five anonymous rectangles. **Bottom**-left because
+  `drawLegend` owns the top-right and the export dock floats its tab chip over the
+  top-left. The font scales off `ctx.canvas` rather than being fixed: the same tile
+  is drawn at preview size and again at output size, and a fixed size is unreadable
+  in one or hairline in the other (`drawLegend`'s fixed 28px does drift this way —
+  deliberately not copied). It resets to the identity transform and `filter:'none'`
+  itself, and callers must invoke it OUTSIDE any view transform so a caption stays
+  upright on a rotated camera.
   **`drawUnlinkedInstances` "?" badge is suppressible:** the amber `?` on an
   unlinked instance is an **editing affordance** ("assign me"), so
   `options.showUnlinkedBadge` (**default `true`** — a missing option must never

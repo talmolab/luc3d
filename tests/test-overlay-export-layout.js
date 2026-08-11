@@ -256,6 +256,137 @@
             assertEqual(s.width % 2, 0, 'still even for H.264');
         });
 
+        it('spreads a sash drag across the whole axis, not just the neighbour', () => {
+            // dockview 6.6.1 gives the delta to the ONE adjacent tile and only
+            // spills when it clamps, so with 4 tiles the far two never move.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = [100, 100, 100, 100];
+            const max = [9999, 9999, 9999, 9999];
+            const vis = [true, true, true, true];
+            const g = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
+            assertEqual(g.join(','), '220,340,220,220', 'the dragged-toward tile grows, the rest give up 30 each');
+            // Dragging the other way grows the tile on the OTHER side of the sash.
+            const g2 = L.distributeAxisSizes(base, min, max, vis, 1, -90, L.SASH_GROW_ONE);
+            assertEqual(g2.join(','), '220,220,340,220', 'a negative drag grows tile k+1');
+        });
+
+        it('share-sides keeps the sash under the cursor', () => {
+            // The tradeoff against grow-one: grow-one moves the sash by only
+            // d*(n-k-1)/n, so the boundary trails the pointer. share-sides moves it
+            // by exactly d while still spreading the change across the axis.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = [100, 100, 100, 100], max = [9999, 9999, 9999, 9999];
+            const vis = [true, true, true, true];
+            const s = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_SHARE_SIDES);
+            assertEqual(s.join(','), '295,295,205,205', 'both sides share the change');
+            const sashMoved = (s[0] + s[1]) - (base[0] + base[1]);
+            assertEqual(sashMoved, 90, 'the sash moves exactly the drag distance');
+            // …whereas grow-one lags, which is the documented cost.
+            const g = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
+            assertEqual((g[0] + g[1]) - (base[0] + base[1]), 60, 'grow-one moves the sash only 60 of 90');
+        });
+
+        it('preserves the axis total exactly, for every drag and every sash', () => {
+            // THE load-bearing property: the axis sum must never move, or the dock's
+            // own box drifts and every other axis is disturbed. Swept, not spot-checked.
+            const L = __OverlayExportLayout;
+            const base = [180, 300, 220, 260, 240];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const total = base.reduce((a, b) => a + b, 0);
+            let checked = 0;
+            for (const mode of [L.SASH_GROW_ONE, L.SASH_SHARE_SIDES]) {
+                for (let k = 0; k < base.length - 1; k++) {
+                    for (let d = -140; d <= 140; d += 7) {
+                        const out = L.distributeAxisSizes(base, min, max, vis, k, d, mode);
+                        assertEqual(out.reduce((a, b) => a + b, 0), total,
+                            `sum preserved for mode=${mode} k=${k} d=${d}`);
+                        assertTrue(out.every(v => v >= 100), `nobody below min for k=${k} d=${d}`);
+                        checked++;
+                    }
+                }
+            }
+            assertTrue(checked > 300, `swept a meaningful space (${checked} cases)`);
+        });
+
+        it('splits an indivisible delta without leaving a residue', () => {
+            // A per-view Math.round(total/n) leaves a remainder that dockview's
+            // distributeEmptySpace() then dumps on one arbitrary tile, so repeated
+            // drags creep. Cumulative rounding must land on the total exactly.
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 1, 100, L.SASH_GROW_ONE);
+            assertEqual(out[1] - 250, 100, 'the lead tile got the whole delta');
+            const given = [0, 2, 3].reduce((a, i) => a + (250 - out[i]), 0);
+            assertEqual(given, 100, '100 split over 3 tiles sums back to 100 exactly');
+        });
+
+        it('routes around a tile pinned at its minimum instead of vetoing the drag', () => {
+            // A single tile on its 100px minimum must NOT block the whole gesture.
+            // A real seeded dock routinely has one (observed live), and refusing the
+            // drag outright makes the sash feel dead. The pinned tiles hold still and
+            // the ones with room absorb the whole change.
+            const L = __OverlayExportLayout;
+            const base = [100, 400, 400, 100];   // two tiles already at the min
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 1, 60, L.SASH_GROW_ONE);
+            assertEqual(out[0], 100, 'a tile at its minimum does not shrink further');
+            assertEqual(out[3], 100, 'nor does the other one');
+            assertEqual(out[1], 460, 'the dragged tile still grows by the full delta');
+            assertEqual(out[2], 340, 'and the one tile with room absorbs all of it');
+            assertEqual(out.reduce((a, b) => a + b, 0), 1000, 'total still preserved');
+        });
+
+        it('stops at the point where no tile has room left', () => {
+            // Bounded by what the shrinking side can actually give, so the axis total
+            // holds and nobody is pushed below its minimum.
+            const L = __OverlayExportLayout;
+            const base = [100, 400, 100, 100];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 0, 500, L.SASH_GROW_ONE);
+            assertEqual(out[0], 400, 'grew only by the 300px the others could give');
+            assertEqual(out.join(','), '400,100,100,100', 'everyone else is at the floor');
+            assertEqual(out.reduce((a, b) => a + b, 0), 700, 'total preserved');
+        });
+
+        it('respects a maximum on the growing side', () => {
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250, 250];
+            const min = base.map(() => 100);
+            const max = [9999, 300, 9999, 9999];   // tile 1 can only reach 300
+            const vis = base.map(() => true);
+            const out = L.distributeAxisSizes(base, min, max, vis, 1, 90, L.SASH_GROW_ONE);
+            assertEqual(out[1], 300, 'capped at its maximum');
+            assertEqual(out.reduce((a, b) => a + b, 0), 1000, 'total preserved despite the cap');
+        });
+
+        it('leaves invisible views out of the distribution', () => {
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 0, 250];
+            const min = [100, 100, 0, 100], max = base.map(() => 9999);
+            const vis = [true, true, false, true];
+            const out = L.distributeAxisSizes(base, min, max, vis, 0, 60, L.SASH_GROW_ONE);
+            assertEqual(out[2], 0, 'a hidden view keeps its zero size');
+            assertEqual(out.reduce((a, b) => a + b, 0), 750, 'and the total still holds');
+        });
+
+        it('is a no-op for a degenerate sash index or a zero drag', () => {
+            const L = __OverlayExportLayout;
+            const base = [250, 250, 250];
+            const min = base.map(() => 100), max = base.map(() => 9999);
+            const vis = base.map(() => true);
+            [[0, 0], [-1, 50], [2, 50], [99, 50]].forEach(([k, d]) => {
+                assertEqual(L.distributeAxisSizes(base, min, max, vis, k, d, L.SASH_GROW_ONE).join(','),
+                    base.join(','), `no-op for k=${k} d=${d}`);
+            });
+        });
+
         it('picks an H.264 level that covers the resolution', () => {
             assertEqual(__OverlayExportLayout.h264CodecFor(1280, 720), 'avc1.42001F', '720p');
             assertEqual(__OverlayExportLayout.h264CodecFor(1920, 1080), 'avc1.420028', '1080p');

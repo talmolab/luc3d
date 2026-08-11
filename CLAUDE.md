@@ -29,6 +29,16 @@ python3 -m http.server 8080
   → `onUnhandledDragOver`, so an unpinned `/+esm` import silently breaks pane
   docking whenever the CDN cache refreshes. Audit the dockview API usage in
   `ui/sessions-panes.js` and `ui/overlay-export-modal.js` before bumping past 6.x.
+  **`ui/overlay-export-modal.js` additionally depends on dockview INTERNALS** for
+  its even-axis sash resizing: `Gridview.root`, `BranchNode.splitview`,
+  `Splitview.viewItems`/`sashes`/`layoutViews()`/`distributeEmptySpace()`/
+  `saveProportions()`, and `viewItem.enabled`. These are TypeScript-private but real
+  and unmangled in the 6.6.1 `/+esm` build. They are all feature-detected, so a bump
+  degrades to dockview's stock neighbour-only drag rather than breaking resizing —
+  but `tests/e2e/overlay-export-sash-distribute.mjs` will go red, which is the
+  intended signal. `styles.css`'s `#ovDock` block also depends on dockview's group
+  DOM (`.dv-groupview` > `[.dv-tabs-and-actions-container][.dv-content-container]`)
+  and on `--dv-tabs-and-actions-container-height`.
 - mp4box.js
 - **Video export = mediabunny, via `ui/video-encode.js` — the app's one encoding
   seam.** sleap-io.js has NO browser encoder (its `renderVideo()` shells out to a
@@ -356,7 +366,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1387 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1396 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```

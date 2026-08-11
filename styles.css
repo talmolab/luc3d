@@ -661,6 +661,69 @@ body {
 }
 
 /* --------------------------------------------------------------------------
+   "Export Video Overlays" composition dock (#ovDock)
+   --------------------------------------------------------------------------
+   The tab band is OVERLAID on the tile instead of occupying its own row above
+   it. dockview lays a group out as `[tabs][content]` in a column flexbox
+   (`.dv-groupview`), so a 35px band cost 35px of VIDEO per grid ROW — on a
+   two-row composition that is ~8% of the dock spent on chrome, and the tiles
+   were letterboxed to pay for it. Shortening the band and pulling the content
+   container back up over it by exactly the band's height gives the content the
+   group's FULL height, so the tile — and its canvas backing store, resized by
+   `tileResizeObserver` — gets every pixel; the name + close X then float over
+   the top-left corner of the video.
+
+   Why this and NOT `group.model.header.hidden = true`: `.dv-tab` IS dockview's
+   drag source (`Tab` sets `draggable` on that element), so hiding the band
+   removes the only way to rearrange tiles by dragging, and takes the close X
+   with it. Rearranging is the whole point of this dock — `captureLayout()`
+   reads the arrangement off the DOM and it IS the exported frame. The band
+   stays real, just repositioned.
+
+   `position: relative` + `z-index` is load-bearing, not decoration: the tile's
+   video/overlay canvases are `position: absolute`, so without it they paint
+   OVER the band and swallow every click on the tab.
+
+   Scoped to `#ovDock`. The `.dockview-theme-abyss` block above is shared with
+   the MAIN WINDOW's video dock (ui/sessions-panes.js), which wants its normal
+   35px tabs. The id also supplies the specificity: styles.css is loaded BEFORE
+   the pinned dockview stylesheet (index.html), so a class-only override loses.
+
+   The custom properties are declared on `.dv-groupview`, NOT on `#ovDock`:
+   dockview puts the theme class on its own `.dv-shell` INSIDE the container, so
+   a value set on `#ovDock` is overridden by the theme's declaration on that
+   descendant. Declaring at or below the shell wins.
+   -------------------------------------------------------------------------- */
+
+#ovDock .dv-groupview {
+  --dv-tabs-and-actions-container-height: 20px;
+  --dv-tabs-and-actions-container-font-size: 10px;
+  /* Nothing behind the tabs — the video shows through the band. */
+  --dv-tabs-and-actions-container-background-color: transparent;
+  /* The tab itself becomes a translucent chip so the name stays readable over
+     both bright and dark video. Set through the theme's own variables so no
+     `!important` is needed to beat the dockview stylesheet. */
+  --dv-activegroup-visiblepanel-tab-background-color: rgba(0, 0, 0, 0.55);
+  --dv-inactivegroup-visiblepanel-tab-background-color: rgba(0, 0, 0, 0.45);
+  --dv-activegroup-visiblepanel-tab-color: #ffffff;
+  --dv-inactivegroup-visiblepanel-tab-color: #e0e0e0;
+}
+
+#ovDock .dv-tabs-and-actions-container {
+  position: relative;
+  z-index: 2;
+}
+
+#ovDock .dv-groupview > .dv-content-container {
+  margin-top: calc(-1 * var(--dv-tabs-and-actions-container-height));
+}
+
+/* Legibility for the case where the chip sits over a bright frame. */
+#ovDock .dv-tab {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+/* --------------------------------------------------------------------------
    Video Cell
    -------------------------------------------------------------------------- */
 

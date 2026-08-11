@@ -282,6 +282,95 @@ try {
     check(hl.agree, `closing a tile clears exactly that entry's highlight (lit ${hl.lit}, docked ${hl.docked})`);
     check(hl.lit.length === 3, `three entries remain highlighted (got ${hl.lit.length})`);
 
+    // ---- the tab band is overlaid, not stacked above the tile ---------------
+    // dockview lays a group out as [tabs][content] in a column flexbox, so a 35px
+    // band costs 35px of video PER GRID ROW. The CSS pulls the content container
+    // back up over the band, so the tile gets the group's full height.
+    const band = await page.evaluate(() => {
+        const tile = document.querySelector('#ovDock [data-view-name]');
+        const group = tile.closest('.dv-groupview');
+        const content = group.querySelector('.dv-content-container');
+        const tabs = group.querySelector('.dv-tabs-and-actions-container');
+        const tab = group.querySelector('.dv-tab');
+        const r = (e) => e.getBoundingClientRect();
+        return {
+            tileH: Math.round(r(tile).height),
+            groupH: Math.round(r(group).height),
+            contentTop: Math.round(r(content).top - r(group).top),
+            tabsH: Math.round(r(tabs).height),
+            tabH: Math.round(r(tab).height),
+            tabDraggable: tab.draggable,
+            // What is actually on top at the tab's centre — the tile's canvases are
+            // absolutely positioned and would swallow the click without a z-index.
+            atTabCentre: (() => {
+                const b = r(tab);
+                const el = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+                return el ? el.className : null;
+            })(),
+        };
+    });
+    check(band.contentTop === 0,
+        `the content container starts at the group's top edge, not below the band (got ${band.contentTop})`);
+    check(Math.abs(band.tileH - band.groupH) <= 1,
+        `the tile is as tall as its whole group — no row lost to chrome (tile ${band.tileH}, group ${band.groupH})`);
+    // The band must still EXIST and be draggable: .dv-tab is dockview's drag source,
+    // so hiding it would silently remove the only way to rearrange tiles.
+    check(band.tabsH > 0 && band.tabH > 0,
+        `the tab band is still rendered, not hidden (band ${band.tabsH}, tab ${band.tabH})`);
+    check(band.tabDraggable === true,
+        'the tab is still draggable, so tiles can still be rearranged');
+    check(/dv-/.test(band.atTabCentre || ''),
+        `the tab is on top of the video canvases and hit-testable (got ${JSON.stringify(band.atTabCentre)})`);
+
+    // ---- Layers: Render Video Names is the first entry -----------------------
+    const layers = await page.evaluate(() => {
+        const boxes = Array.from(document.querySelectorAll('[data-ov]'))
+            .filter(b => b.closest('details') &&
+                /Layers/.test(b.closest('details').querySelector('summary').textContent));
+        return boxes.map(b => ({
+            key: b.getAttribute('data-ov'),
+            label: b.closest('div').textContent.trim(),
+        }));
+    });
+    check(layers.length > 0 && layers[0].key === 'videoNames',
+        `Render Video Names is the TOP entry in Layers (got ${layers.map(l => l.key).join(', ')})`);
+    check(layers.length > 0 && layers[0].label === 'Render Video Names',
+        `…and is labelled exactly that (got ${JSON.stringify(layers[0] && layers[0].label)})`);
+
+    // Reset must not drop an export-only layer. settingsFromVisibilityPanel used to
+    // REPLACE settings.layers with a literal built from the Visibility panel, which
+    // has no twin for videoNames — so the key became undefined and the toggle went
+    // off for good. This is the only route that hits it.
+    const afterReset = await page.evaluate(async () => {
+        const btn = Array.from(document.querySelectorAll('button'))
+            .find(b => /^Reset/i.test(b.textContent.trim()));
+        if (!btn) return { skipped: true };
+        // Reset restores EVERY setting, so snapshot the output mode and put it back:
+        // the persistence block further down re-sets res/fps/colorBy/background/
+        // quality itself but inherits `mode` from this point, and leaving it reset
+        // would fail that check for a reason unrelated to what it tests.
+        const prevMode = document.getElementById('ovMode').value;
+        btn.click();
+        await new Promise(r => setTimeout(r, 500));
+        const stored = JSON.parse(localStorage.getItem('overlayExportSettings.v1') || '{}');
+        const out = {
+            present: !!document.querySelector('[data-ov="videoNames"]'),
+            value: stored.layers ? stored.layers.videoNames : 'no-layers',
+        };
+        const el = document.getElementById('ovMode');
+        el.value = prevMode;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 300));
+        return out;
+    });
+    if (afterReset.skipped) {
+        console.log('  – no Reset button found; skipping the reset-drops-layer check');
+    } else {
+        check(afterReset.present, 'the Render Video Names toggle survives Reset');
+        check(afterReset.value === false,
+            `…and stays a real false rather than undefined (got ${JSON.stringify(afterReset.value)})`);
+    }
+
     // ---- selects are wide enough for their longest option -------------------
     // The Resolution tier labels state pixel dimensions ("2160p (3840×2160)") and
     // were being clipped. Measured against the select's OWN computed font rather

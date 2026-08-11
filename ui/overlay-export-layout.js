@@ -249,7 +249,14 @@ export function shouldStreamToDisk(totalBytes) {
 
 export function defaultOverlayExportSettings() {
     return {
-        layers: { user: true, predicted: true, reproj: true, errors: false, legend: false },
+        // `videoNames` burns each tile's CAMERA NAME into the frame. Default OFF,
+        // like `legend`: it changes the exported pixels, and an export that
+        // silently grew a caption would be a surprise. Listed FIRST because it is
+        // the one layer that labels the composition rather than the animal.
+        layers: {
+            videoNames: false, user: true, predicted: true, reproj: true,
+            errors: false, legend: false,
+        },
         trailLength: 0,
         colorBy: 'track',
         background: 'video',
@@ -367,6 +374,10 @@ export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
         colorByIdentity: settings.colorBy === 'identity',
         trailLength: settings.trailLength || 0,
         showLegend: !!settings.layers.legend,
+        // Read by `drawTileContent`, not by `drawFrameOverlays` — a burned-in camera
+        // name is a caption on the TILE, drawn upright outside the view transform,
+        // exactly like the legend.
+        showViewName: !!settings.layers.videoNames,
         showUser: !!settings.layers.user,
         showPredicted: !!settings.layers.predicted,
         showReprojected: !!settings.layers.reproj,
@@ -470,4 +481,135 @@ export function seedLayoutPlan(viewNames, include3D) {
     // column to the right of the whole grid.
     if (include3D) plan.push({ viewName: TILE_3D, position: { direction: 'right' } });
     return plan;
+}
+
+// ============================================================================
+// Even-axis sash resizing
+// ============================================================================
+
+/**
+ * How a sash drag's delta is shared out. See `distributeAxisSizes`.
+ *
+ * `'grow-one'` is the literal reading of "scale the remaining videos in the axis
+ * evenly", and is the default. `'share-sides'` is the alternative that keeps the
+ * sash under the cursor — swapping the constant in ui/overlay-export-modal.js is
+ * the whole change.
+ */
+export var SASH_GROW_ONE = 'grow-one';
+export var SASH_SHARE_SIDES = 'share-sides';
+
+/**
+ * Sizes for one dock AXIS after dragging the sash at index `k` by `d` px.
+ *
+ * dockview 6.6.1 hands a sash drag's WHOLE delta to the one tile on the other
+ * side of the sash, and only spills to tiles beyond it when that neighbour hits a
+ * limit (`Splitview.resize`, dockview-core 6.6.1 `dist/cjs/splitview/splitview.js`,
+ * driven from the sash's own `pointermove`). With three or more tiles on an axis
+ * the far tiles never move at all. This spreads the change instead.
+ *
+ * Two modes, because "evenly" has two defensible readings:
+ *
+ *   'grow-one'    the tile on the side you drag TOWARDS grows by the full delta
+ *                 and EVERY other tile on the axis gives up delta/(n-1). This is
+ *                 literally "the remaining videos scale evenly". Cost: tiles
+ *                 BEFORE the sash shrink too, so the sash no longer sits under
+ *                 the cursor — with 4 equal tiles, dragging sash 1 by 90 px moves
+ *                 that sash only 60 px.
+ *   'share-sides' the tiles at-or-before the sash share the gain and the tiles
+ *                 after it share the loss. Also spreads the change across the
+ *                 axis, and the sash tracks the cursor exactly.
+ *
+ * `base`/`min`/`max`/`vis` are per-view, in axis order. Invisible views never take
+ * part. The result ALWAYS sums to `sum(base)` exactly, so the axis total — and
+ * therefore every other axis in the dock, and the dock's own box — is untouched.
+ *
+ * @param {number[]} base   current sizes, px
+ * @param {number[]} min    per-view minimum size
+ * @param {number[]} max    per-view maximum size
+ * @param {boolean[]} vis   per-view visibility
+ * @param {number} k        sash index: the boundary between view k and k+1
+ * @param {number} d        signed drag distance along the axis, px
+ * @param {string} mode     SASH_GROW_ONE | SASH_SHARE_SIDES
+ * @returns {number[]} new sizes
+ */
+export function distributeAxisSizes(base, min, max, vis, k, d, mode) {
+    var out = base.slice();
+    d = Math.round(d);
+    if (!d || k < 0 || k >= base.length - 1) return out;
+
+    var grow = [], shrink = [], i;
+    if (mode === SASH_SHARE_SIDES) {
+        for (i = 0; i < base.length; i++) {
+            if (!vis[i]) continue;
+            (i <= k ? grow : shrink).push(i);
+        }
+        if (d < 0) { var swap = grow; grow = shrink; shrink = swap; }
+    } else {
+        // The tile you are dragging towards is the one that grows.
+        var lead = d > 0 ? k : k + 1;
+        if (!vis[lead]) return out;
+        grow.push(lead);
+        for (i = 0; i < base.length; i++) if (vis[i] && i !== lead) shrink.push(i);
+    }
+    if (!grow.length || !shrink.length) return out;
+
+    // Per-view capacity, then bound the whole move by what BOTH sides can absorb.
+    // Note the caps are summed, not min'd: a single view sitting on its 100px
+    // minimum must not veto the entire drag. Doing that made the sash feel dead in
+    // a real dock, where a squeezed tile at the minimum is common — the drag now
+    // proceeds and simply routes around it.
+    var growCaps = [], shrinkCaps = [], growTotal = 0, shrinkTotal = 0;
+    for (i = 0; i < grow.length; i++) {
+        var hc = Math.max(0, max[grow[i]] - base[grow[i]]);
+        growCaps.push(hc); growTotal += hc;
+    }
+    for (i = 0; i < shrink.length; i++) {
+        var rc = Math.max(0, base[shrink[i]] - min[shrink[i]]);
+        shrinkCaps.push(rc); shrinkTotal += rc;
+    }
+    var amount = Math.min(Math.abs(d), growTotal, shrinkTotal);
+    if (!(amount > 0)) return out;
+
+    var gives = fillEvenly(growCaps, amount);
+    var takes = fillEvenly(shrinkCaps, amount);
+    for (i = 0; i < grow.length; i++) out[grow[i]] += gives[i];
+    for (i = 0; i < shrink.length; i++) out[shrink[i]] -= takes[i];
+    return out;
+}
+
+/**
+ * Split `amount` px as evenly as possible across slots whose individual capacities
+ * are `caps`, giving every slot an equal share and re-spreading whatever a
+ * capped-out slot cannot take across the ones that still have room.
+ *
+ * Integer, and the result sums to EXACTLY `min(amount, sum(caps))`. That exactness
+ * matters twice over: a residue would be dumped on one arbitrary tile by dockview's
+ * `distributeEmptySpace()` (so repeated drags would creep), and the caller relies on
+ * the two sides of the drag matching so the axis total never moves.
+ *
+ * Even-share-with-spill rather than proportional-to-capacity on purpose: the point
+ * of the feature is that tiles change by the SAME amount, so a big tile and a small
+ * one give up the same pixels until the small one runs out.
+ */
+function fillEvenly(caps, amount) {
+    var out = [], i;
+    for (i = 0; i < caps.length; i++) out.push(0);
+    var left = Math.min(amount, caps.reduce(function (a, b) { return a + b; }, 0));
+    while (left > 0) {
+        var active = [];
+        for (i = 0; i < caps.length; i++) if (out[i] < caps[i]) active.push(i);
+        if (!active.length) break;
+        var share = Math.floor(left / active.length);
+        if (share < 1) {
+            // Fewer pixels left than slots: hand out the last few one at a time.
+            for (i = 0; i < active.length && left > 0; i++) { out[active[i]]++; left--; }
+            break;
+        }
+        for (i = 0; i < active.length; i++) {
+            var give = Math.min(share, caps[active[i]] - out[active[i]]);
+            out[active[i]] += give;
+            left -= give;
+        }
+    }
+    return out;
 }

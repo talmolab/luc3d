@@ -28,7 +28,9 @@ import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockv
 
 import { state, videoController, getActiveSession } from './app-state.js';
 import { Viewport3D } from './viewport3d.js';
-import { drawFrameOverlays, drawLegend, getTrackColor, getGroupColor } from './overlays.js';
+import {
+    drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
+} from './overlays.js';
 import { getVisibilitySettings } from './rendering.js';
 import {
     getInstanceGroupsForFrame,
@@ -47,6 +49,7 @@ import {
     h264CodecFor, bitrateFor, bitrateIsClamped, estimatedBytes, shouldStreamToDisk,
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
+    distributeAxisSizes, SASH_GROW_ONE,
 } from './overlay-export-layout.js';
 import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
@@ -105,13 +108,15 @@ export function settingsFromVisibilityPanel() {
     var vis;
     try { vis = getVisibilitySettings(); } catch (e) { return s; }
     if (!vis) return s;
-    s.layers = {
-        user: !!vis.showUser,
-        predicted: !!vis.showPredicted,
-        reproj: !!vis.showReprojected,
-        errors: !!vis.showErrors,
-        legend: !!vis.showLegend,
-    };
+    // MUTATE the defaults rather than REPLACE them. The Visibility panel has no twin
+    // for every export layer (`videoNames` is export-only), and a whole-object
+    // assignment silently drops any such key to `undefined` the moment the user
+    // presses Reset — the toggle would render off and never come back.
+    s.layers.user = !!vis.showUser;
+    s.layers.predicted = !!vis.showPredicted;
+    s.layers.reproj = !!vis.showReprojected;
+    s.layers.errors = !!vis.showErrors;
+    s.layers.legend = !!vis.showLegend;
     s.trailLength = state.trailLength || 0;
     s.colorBy = state.colorByIdentity ? 'identity' : 'track';
     function copy(dst, src, keys) {
@@ -379,6 +384,148 @@ export function showOverlayExportModal() {
         refreshSummary();
     });
     dockApi.onDidLayoutChange(function () { schedulePreview(); });
+
+    // ========================================================================
+    // Even-axis sash resizing
+    // ========================================================================
+    /**
+     * Dragging a sash shares the change with EVERY tile on that axis, not just
+     * the one next to it.
+     *
+     * dockview 6.6.1 gives the whole delta to the immediate neighbour and only
+     * spills further when that neighbour clamps (`Splitview.resize`, dockview-core
+     * 6.6.1 dist/cjs/splitview/splitview.js, driven from the sash's own
+     * pointermove). NOTHING configures that:
+     *   - `proportionalLayout` is read only by `saveProportions()` and consumed
+     *     only by `Splitview.layout()` — it governs CONTAINER resize, not sash
+     *     drags. `DockviewComponent` hardcodes it `true`, does not expose it as an
+     *     option, and `updateOptions` says "not supported" outright.
+     *   - `distributeViewSizes()` forces every view to the SAME size, throwing the
+     *     composition away, and is not on any public API.
+     *   - `LayoutPriority` only re-orders that same spill list, and the sash
+     *     handler passes `undefined` for both priority lists, so it cannot reach a
+     *     sash drag at all.
+     *
+     * So the gesture is taken over here. dockview's listener lives on the sash
+     * ELEMENT, so a CAPTURE-phase listener on the dock stops the event before it
+     * ever arrives — there is then exactly one handler and nothing to fight.
+     * Post-correcting in `onDidLayoutChange` was rejected: that fires ONCE at drag
+     * END, so the drag would look native and then jump on release.
+     *
+     * Snapping and margins need no reimplementation in this dock: dockview groups
+     * never set `snap`, and `themeDark` has no `gap` so `margin` is 0.
+     *
+     * This reaches into the pinned bundle's `Splitview`. `viewItems`, `sashes`,
+     * `layoutViews()`, `distributeEmptySpace()` and `saveProportions()` are
+     * TypeScript-private but real, UNMANGLED properties of the 6.6.1 `/+esm` build
+     * — verified at runtime against the live CDN module, not just by grep — and
+     * 6.6.1 is PINNED so the shape cannot drift underneath us. Every piece is
+     * feature-detected regardless: if anything is missing we return WITHOUT
+     * stopping propagation and dockview's stock neighbour-only drag runs. A future
+     * bump can regress the behaviour; it cannot break resizing.
+     */
+
+    // SASH_GROW_ONE: the tile you drag towards grows by the full delta and every
+    // other tile on the axis gives up delta/(n-1) — but the sash then TRAILS the
+    // cursor (4 equal tiles, drag 90px => sash moves 60px). SASH_SHARE_SIDES:
+    // tiles before the sash share the gain, tiles after share the loss, and the
+    // sash stays under the cursor. Swapping this constant is the whole change.
+    var SASH_DISTRIBUTION = SASH_GROW_ONE;
+
+    dockEl.addEventListener('pointerdown', onDockSashDown, true);   // CAPTURE
+
+    /**
+     * The 6.6.1 `Splitview` owning `sashEl`, or null when we cannot identify it
+     * (unknown internals, or a sash belonging to dockview's shell splitviews
+     * rather than the gridview tree). Null means "let dockview handle it".
+     */
+    function splitviewForSash(sashEl) {
+        var branchEl = sashEl.closest ? sashEl.closest('.dv-branch-node') : null;
+        if (!branchEl) return null;
+        var found = null;
+        (function walk(node) {
+            if (!node || found || !node.children) return;    // no children => LeafNode
+            if (node.element === branchEl) { found = node; return; }
+            for (var i = 0; i < node.children.length; i++) walk(node.children[i]);
+        })(dockview.gridview && dockview.gridview.root);
+        var sv = found && found.splitview;
+        if (!sv || !sv.viewItems ||
+            typeof sv.layoutViews !== 'function' ||
+            typeof sv.distributeEmptySpace !== 'function' ||
+            typeof sv.saveProportions !== 'function') return null;
+        return sv;
+    }
+
+    function onDockSashDown(ev) {
+        if (ev.button !== 0 || exporting) return;
+        var sashEl = ev.target;
+        if (!sashEl || !sashEl.classList || !sashEl.classList.contains('dv-sash')) return;
+
+        var sv = splitviewForSash(sashEl);
+        if (!sv) return;
+        var items = sv.viewItems;
+        // With two tiles on an axis "evenly" IS the neighbour, so leave the stock
+        // handler alone rather than reimplementing it for no gain.
+        if (items.length < 3) return;
+
+        // `sashes[i]` is always the sash between views i and i+1, and the sash
+        // container's children are appended in the same order, so either lookup
+        // gives the boundary index.
+        var k = -1, i;
+        if (sv.sashes) {
+            for (i = 0; i < sv.sashes.length; i++) {
+                if (sv.sashes[i].container === sashEl) { k = i; break; }
+            }
+        }
+        if (k < 0) k = Array.prototype.indexOf.call(sashEl.parentElement.children, sashEl);
+        if (k < 0 || k >= items.length - 1) return;
+
+        // From here the gesture is OURS: keep dockview's own sash listener, which
+        // sits further down the capture path on the sash itself, from running.
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        var svEl = sashEl.parentElement.parentElement;
+        var horizontal = !svEl || !svEl.classList.contains('dv-vertical');
+        var start = horizontal ? ev.clientX : ev.clientY;
+        var base = [], min = [], max = [], vis = [];
+        for (i = 0; i < items.length; i++) {
+            base.push(items[i].size);
+            min.push(items[i].minimumSize);
+            max.push(items[i].maximumSize);
+            vis.push(items[i].visible !== false);
+            items[i].enabled = false;   // as dockview does: a tile must not eat the drag
+        }
+
+        var onMove = function (e) {
+            var d = (horizontal ? e.clientX : e.clientY) - start;
+            var next = distributeAxisSizes(base, min, max, vis, k, d, SASH_DISTRIBUTION);
+            for (var j = 0; j < items.length; j++) items[j].size = next[j];
+            // Mirrors dockview's own pointermove: absorb any pre-existing px of
+            // drift between the axis total and the container, then write the CSS
+            // and recurse layout into nested columns.
+            sv.distributeEmptySpace();
+            sv.layoutViews();
+        };
+        var onEnd = function () {
+            document.removeEventListener('pointermove', onMove);
+            document.removeEventListener('pointerup', onEnd);
+            document.removeEventListener('pointercancel', onEnd);
+            document.removeEventListener('contextmenu', onEnd);
+            for (var j = 0; j < items.length; j++) items[j].enabled = true;
+            // dockview does this at the end of its own drag so a later CONTAINER
+            // resize keeps the ratios the user just set.
+            sv.saveProportions();
+            // We bypassed the sash handler, and `onDidLayoutChange` only fires from
+            // dockview's own sash END, so repaint here.
+            schedulePreview();
+            refreshSummary();
+        };
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onEnd);
+        document.addEventListener('pointercancel', onEnd);
+        document.addEventListener('contextmenu', onEnd);
+    }
 
     /**
      * Shape the dock to the output frame so the composition stays WYSIWYG.
@@ -879,6 +1026,15 @@ export function showOverlayExportModal() {
                 showErrors: opts.showErrors,
             });
         }
+        // The camera name, burned in — same place as the legend and for the same
+        // reason: OUTSIDE `applyViewTransform`. A caption must stay upright for a
+        // rotated camera (at rotation 180 an in-transform label prints upside down)
+        // and must be anchored to the TILE, not to the rotated video box.
+        //
+        // Never runs for the 3D tile, structurally rather than by a guard here: the
+        // preview skips it before `paintTile` and the export handles it in its own
+        // branch, so `drawTileContent` is only ever called for a camera.
+        if (opts.showViewName) drawViewNameLabel(octx, view.name);
     }
 
     /** Live-preview tile, at the tile's CSS box size. */
@@ -1086,6 +1242,10 @@ export function showOverlayExportModal() {
 
         // --- Layers ---
         var gLayers = group('Layers');
+        // FIRST in the group: unlike every other layer this one labels the TILE
+        // rather than the animal, and it is the only thing that names a camera in the
+        // exported file — the dock's own tab chip is UI chrome and is never encoded.
+        addCheck(gLayers.body, 'Render Video Names', settings.layers, 'videoNames');
         addCheck(gLayers.body, 'User instances', settings.layers, 'user');
         addCheck(gLayers.body, 'Predicted instances', settings.layers, 'predicted');
         addCheck(gLayers.body, 'Reprojections', settings.layers, 'reproj');
@@ -1831,6 +1991,7 @@ export function showOverlayExportModal() {
     function cleanup() {
         document.removeEventListener('keydown', onKey, true);
         window.removeEventListener('resize', onWinResize);
+        dockEl.removeEventListener('pointerdown', onDockSashDown, true);
         if (tileResizeObserver) { try { tileResizeObserver.disconnect(); } catch (e) { /* ignore */ } }
         if (dockFrameObserver) { try { dockFrameObserver.disconnect(); } catch (e) { /* ignore */ } }
         dispose3D();

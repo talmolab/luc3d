@@ -2325,6 +2325,82 @@ export function drawLegend(ctx, options) {
     ctx.restore();
 }
 
+/**
+ * Draw a view / camera name in the BOTTOM-LEFT corner of an overlay canvas.
+ *
+ * Behind "Export Video Overlays" ▸ Layers ▸ Render Video Names. The composed
+ * `.mp4` otherwise carries no labels at all: the dock's per-tile name chip is UI
+ * chrome (styles.css › #ovDock) and is never encoded, so without this a
+ * five-camera composition ships as five anonymous rectangles.
+ *
+ * BOTTOM-left, deliberately. `drawLegend` owns the top-RIGHT, and the export
+ * modal's dock floats its tab chip over the top-LEFT — so bottom-left is the one
+ * corner where a burned-in label is visible in the live preview and cannot collide
+ * with either. It is anchored to the CANVAS box (like `drawLegend`), which in a
+ * stitched export is exactly the tile's rect, so on a letterboxed tile the name
+ * lands in the black bar rather than over the animal.
+ *
+ * Sized off the canvas, NOT fixed. The same tile is drawn twice — once at the
+ * small preview size, once at the output pixel size — and a fixed font would be
+ * unreadable in one and hairline in the other. (`drawLegend`'s fixed 28px does
+ * drift this way; not copied on purpose.)
+ *
+ * Readable over BOTH bright and dark video: a translucent plate under the text AND
+ * a shadow on the glyphs, so white text survives a white frame even with the plate
+ * disabled.
+ *
+ * Call it OUTSIDE any view transform. It resets to the identity transform itself,
+ * but a caption must stay upright for a rotated camera — at rotation 180 an
+ * in-transform label prints upside down (see `drawTileContent` in
+ * ui/overlay-export-modal.js, which hoists this out for the same reason as the
+ * legend).
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} text                   - the view / camera name
+ * @param {Object}  [options]
+ * @param {number}  [options.fontSize]    - px; default scales with the canvas
+ * @param {string}  [options.color]       - text colour, default '#ffffff'
+ * @param {boolean} [options.plate]       - translucent backing plate, default true
+ */
+export function drawViewNameLabel(ctx, text, options) {
+    const label = String(text == null ? '' : text);
+    if (!label) return;
+    options = options || {};
+    const w = ctx.canvas.width;
+    const h = ctx.canvas.height;
+    // ~4.5% of the tile's SHORT side. Floored so a thumbnail-sized preview tile is
+    // still legible, capped so a 2160p tile doesn't shout.
+    const fontSize = options.fontSize > 0
+        ? options.fontSize
+        : Math.max(9, Math.min(48, Math.round(Math.min(w, h) * 0.045)));
+    const pad = Math.max(2, Math.round(fontSize * 0.4));
+    const boxH = Math.round(fontSize * 1.35);
+    ctx.save();
+    // Identity transform + no filter: this is a caption on the finished tile and
+    // must inherit neither the video's brightness/contrast nor its rotation.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.filter = 'none';
+    ctx.globalAlpha = 1;
+    ctx.font = '600 ' + fontSize + 'px sans-serif';
+    ctx.textBaseline = 'alphabetic';
+    const textW = ctx.measureText(label).width;
+    const bx = pad;
+    const by = h - pad - boxH;
+    if (options.plate !== false) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(bx, by, textW + pad * 2, boxH, 3);
+        else ctx.rect(bx, by, textW + pad * 2, boxH);
+        ctx.fill();
+    }
+    ctx.fillStyle = options.color || '#ffffff';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetY = 1;
+    ctx.fillText(label, bx + pad, by + fontSize);
+    ctx.restore();
+}
+
 // ============================================
 // Info panel helpers
 // ============================================
