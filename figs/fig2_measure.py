@@ -68,12 +68,15 @@ import cv2
 import h5py
 import numpy as np
 
-BENCH = "/root/vast/eric/luc3d-bench/scripts/bartul"
+#: Overridable so this can run off-box; see figs/HANDOFF-FIG2.md. The launcher
+#: reads the same variables, so enumeration and measurement cannot disagree.
+BENCH = os.environ.get("LUC3D_BENCH_SCRIPTS",
+                       "/root/vast/eric/luc3d-bench/scripts/bartul")
 sys.path.insert(0, BENCH)
 from build_gt_reproj import (load_calibration, load_sleap_2d, undistort,  # noqa: E402
                             procrustes_scale, ransac_align, SERIALS)
 
-ROOT = "/root/vast/eric/BMimica"
+ROOT = os.environ.get("BMIMICA_ROOT", "/root/vast/eric/BMimica")
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out", "fig2.json")
 

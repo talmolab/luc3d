@@ -1,0 +1,2 @@
+/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig2_measure.py:218: RuntimeWarning: Mean of empty slice
+  for tt in range(T):

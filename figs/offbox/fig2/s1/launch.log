@@ -1,0 +1,13 @@
+[launch] 56 sessions, 31 to run, stride=1, nproc=12
+[start       0s] 20250904_160014  (1 running, 30 queued, 485 GB avail)
+[start       5s] 20250904_165017  (2 running, 29 queued, 485 GB avail)
+[start      10s] 20250904_174232  (3 running, 28 queued, 482 GB avail)
+[start      15s] 20250904_181215  (4 running, 27 queued, 481 GB avail)
+[start      20s] 20250904_183921  (5 running, 26 queued, 476 GB avail)
+[start      25s] 20250905_165151  (6 running, 25 queued, 475 GB avail)
+[start      30s] 20250905_171829  (7 running, 24 queued, 472 GB avail)
+[start      35s] 20250905_174513  (8 running, 23 queued, 471 GB avail)
+[start      40s] 20250905_181402  (9 running, 22 queued, 466 GB avail)
+[start      45s] 20250905_191445  (10 running, 21 queued, 462 GB avail)
+[start      50s] 20250905_194049  (11 running, 20 queued, 455 GB avail)
+[start      55s] 20250905_200953  (12 running, 19 queued, 449 GB avail)
