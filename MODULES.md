@@ -2791,13 +2791,18 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
   `drawInstanceTypeIndicator`, `drawUnlinkedInstances`, `drawViewNameLabel`.
-  **`drawViewNameLabel(ctx, text, options)`** draws a camera name bottom-left,
+  **`drawViewNameLabel(ctx, text, options)`** draws a camera name **top-left**,
   behind "Export Video Overlays" ▸ Layers ▸ **Render Video Names** (the first entry
   in that group). The composed `.mp4` otherwise carries no labels at all — the
   dock's per-tile name chip is UI chrome and is never encoded — so a five-camera
-  composition would ship as five anonymous rectangles. **Bottom**-left because
-  `drawLegend` owns the top-right and the export dock floats its tab chip over the
-  top-left. The font scales off `ctx.canvas` rather than being fixed: the same tile
+  composition would ship as five anonymous rectangles. **Top**-left so it lands
+  exactly where that chip sits: the render then carries the same tag the
+  composition shows, just without the close X, and in the preview the two coincide
+  instead of reading as two labels. (It was bottom-left first, on the reasoning that
+  the corner was free — which put a *second* visible label on each tile.) No
+  collision with `drawLegend`, which owns the top-**right**. `options.corner:
+  'bottom-left'` is retained for a caller that wants it out of the way.
+  The font scales off `ctx.canvas` rather than being fixed: the same tile
   is drawn at preview size and again at output size, and a fixed size is unreadable
   in one or hairline in the other (`drawLegend`'s fixed 28px does drift this way —
   deliberately not copied). It resets to the identity transform and `filter:'none'`

@@ -238,6 +238,10 @@ try {
     // that every assertion above reads — the name is a caption drawn on the overlay
     // pass, so a check against canvas[0] would always see nothing. Do not "fix" it
     // by switching indices.
+    //
+    // TOP-left quadrant: the caption sits where the dock's own tab chip sits, so the
+    // render carries the same tag the composition shows, minus the close X. It was
+    // bottom-left first, which put a second label on screen.
     const nameInk = (on) => page.evaluate(async (enable) => {
         const box = document.querySelector('[data-ov="videoNames"]');
         if (box.checked !== enable) {
@@ -251,32 +255,45 @@ try {
             if (cs.length < 2) { out[name] = null; continue; }   // 3D tile: no overlay canvas
             const c = cs[1];
             const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-            // Ink bounding box in the BOTTOM-LEFT quadrant, where the caption lives.
-            let x0 = c.width, y0 = c.height, x1 = -1, y1 = -1, n = 0;
-            for (let y = Math.floor(c.height / 2); y < c.height; y++) {
-                for (let x = 0; x < Math.floor(c.width / 2); x++) {
-                    if (d[(y * c.width + x) * 4 + 3] > 8) {
-                        n++;
-                        if (x < x0) x0 = x; if (x > x1) x1 = x;
-                        if (y < y0) y0 = y; if (y > y1) y1 = y;
+            const scan = (yFrom, yTo) => {
+                let x0 = c.width, y0 = c.height, x1 = -1, y1 = -1, n = 0;
+                for (let y = yFrom; y < yTo; y++) {
+                    for (let x = 0; x < Math.floor(c.width / 2); x++) {
+                        if (d[(y * c.width + x) * 4 + 3] > 8) {
+                            n++;
+                            if (x < x0) x0 = x; if (x > x1) x1 = x;
+                            if (y < y0) y0 = y; if (y > y1) y1 = y;
+                        }
                     }
                 }
-            }
-            out[name] = n ? { n, w: x1 - x0, h: y1 - y0 } : { n: 0, w: 0, h: 0 };
+                return { n, w: x1 - x0, h: y1 - y0, y0, y1 };
+            };
+            out[name] = {
+                top: scan(0, Math.floor(c.height / 2)),
+                bottom: scan(Math.floor(c.height / 2), c.height),
+            };
         }
         return out;
     }, on);
 
     const inkOff = await nameInk(false);
     const inkOn = await nameInk(true);
-    check(inkOff.plain && inkOff.plain.n === 0,
-        `with the layer OFF nothing is drawn bottom-left (got ${inkOff.plain && inkOff.plain.n} px)`);
-    check(inkOn.plain && inkOn.plain.n > 30,
-        `with the layer ON the camera name is burned in (got ${inkOn.plain && inkOn.plain.n} px)`);
+    check(inkOff.plain && inkOff.plain.top.n === 0,
+        `with the layer OFF nothing is drawn top-left (got ${inkOff.plain && inkOff.plain.top.n} px)`);
+    check(inkOn.plain && inkOn.plain.top.n > 30,
+        `with the layer ON the camera name is burned in TOP-left, where the tag is ` +
+        `(got ${inkOn.plain && inkOn.plain.top.n} px)`);
+    // And exactly one label — a caption at the bottom too would be the duplicate
+    // that moving it here was meant to remove.
+    check(inkOn.plain && inkOn.plain.bottom.n === 0,
+        `…and nothing is left at the bottom-left (got ${inkOn.plain && inkOn.plain.bottom.n} px)`);
+    check(inkOn.plain && inkOn.plain.top.y0 < 40,
+        `the caption is hard against the top edge, like the tab chip (y0 ${inkOn.plain && inkOn.plain.top.y0})`);
     // A caption must stay UPRIGHT on a rotated camera: it is drawn outside the view
     // transform, like the legend. Rotated text would come out taller than wide.
-    check(inkOn.turned && inkOn.turned.w > inkOn.turned.h,
-        `the name stays upright on the 90-degree camera (ink ${inkOn.turned && inkOn.turned.w}x${inkOn.turned && inkOn.turned.h})`);
+    check(inkOn.turned && inkOn.turned.top.w > inkOn.turned.top.h,
+        `the name stays upright on the 90-degree camera ` +
+        `(ink ${inkOn.turned && inkOn.turned.top.w}x${inkOn.turned && inkOn.turned.top.h})`);
     // The 3D tile has no overlay canvas at all, so it structurally cannot get one.
     check(inkOn.__3d__ === null || inkOn.__3d__ === undefined,
         `the 3D tile gets no camera name (got ${JSON.stringify(inkOn.__3d__)})`);

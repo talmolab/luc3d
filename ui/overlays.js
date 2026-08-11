@@ -2326,19 +2326,23 @@ export function drawLegend(ctx, options) {
 }
 
 /**
- * Draw a view / camera name in the BOTTOM-LEFT corner of an overlay canvas.
+ * Draw a view / camera name in the TOP-LEFT corner of an overlay canvas.
  *
  * Behind "Export Video Overlays" ▸ Layers ▸ Render Video Names. The composed
  * `.mp4` otherwise carries no labels at all: the dock's per-tile name chip is UI
  * chrome (styles.css › #ovDock) and is never encoded, so without this a
  * five-camera composition ships as five anonymous rectangles.
  *
- * BOTTOM-left, deliberately. `drawLegend` owns the top-RIGHT, and the export
- * modal's dock floats its tab chip over the top-LEFT — so bottom-left is the one
- * corner where a burned-in label is visible in the live preview and cannot collide
- * with either. It is anchored to the CANVAS box (like `drawLegend`), which in a
- * stitched export is exactly the tile's rect, so on a letterboxed tile the name
- * lands in the black bar rather than over the animal.
+ * TOP-left, to sit exactly where the dock's own tab chip sits — the rendered
+ * output then carries the same tag the composition shows, just without the close
+ * X. (It was bottom-left first, on the reasoning that the corner was free; that
+ * put a SECOND label on screen in the preview, one top-left as chrome and one
+ * bottom-left burned in, which is not what a tag should look like.) No collision
+ * with `drawLegend`, which owns the top-RIGHT.
+ *
+ * Anchored to the CANVAS box (like `drawLegend`), which in a stitched export is
+ * exactly the tile's rect — so on a letterboxed tile the name lands in the black
+ * bar rather than over the animal.
  *
  * Sized off the canvas, NOT fixed. The same tile is drawn twice — once at the
  * small preview size, once at the output pixel size — and a fixed font would be
@@ -2361,6 +2365,7 @@ export function drawLegend(ctx, options) {
  * @param {number}  [options.fontSize]    - px; default scales with the canvas
  * @param {string}  [options.color]       - text colour, default '#ffffff'
  * @param {boolean} [options.plate]       - translucent backing plate, default true
+ * @param {string}  [options.corner]      - 'top-left' (default) or 'bottom-left'
  */
 export function drawViewNameLabel(ctx, text, options) {
     const label = String(text == null ? '' : text);
@@ -2368,6 +2373,10 @@ export function drawViewNameLabel(ctx, text, options) {
     options = options || {};
     const w = ctx.canvas.width;
     const h = ctx.canvas.height;
+    // Kept as an option rather than hard-coded: `drawLegend` owns the top-right, so
+    // a caller that wants the caption out of the way of a busy top-left frame has
+    // somewhere to put it.
+    const bottom = options.corner === 'bottom-left';
     // ~4.5% of the tile's SHORT side. Floored so a thumbnail-sized preview tile is
     // still legible, capped so a 2160p tile doesn't shout.
     const fontSize = options.fontSize > 0
@@ -2385,7 +2394,7 @@ export function drawViewNameLabel(ctx, text, options) {
     ctx.textBaseline = 'alphabetic';
     const textW = ctx.measureText(label).width;
     const bx = pad;
-    const by = h - pad - boxH;
+    const by = bottom ? h - pad - boxH : pad;
     if (options.plate !== false) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
         ctx.beginPath();
