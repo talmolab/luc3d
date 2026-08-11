@@ -2591,6 +2591,32 @@ body {
   background: #ffffff;
 }
 
+/*
+ * Compact variant, for the "Export Video Overlays" settings panel — its rows are
+ * 11px and dense, and the stock 40x22 switch dominates them. The knob has to be
+ * resized with the box: `.slider::before` is a fixed 16px with a 18px travel, so
+ * inheriting it into a 17px-tall box would overflow the track and never line up.
+ */
+.toggle-switch.toggle-switch-sm {
+  width: 30px;
+  height: 17px;
+}
+
+.toggle-switch.toggle-switch-sm .slider {
+  border-radius: 17px;
+}
+
+.toggle-switch.toggle-switch-sm .slider::before {
+  width: 12px;
+  height: 12px;
+  left: 2px;
+  bottom: 2px;
+}
+
+.toggle-switch.toggle-switch-sm input:checked + .slider::before {
+  transform: translateX(14px);
+}
+
 .toggle-switch input:focus-visible + .slider {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

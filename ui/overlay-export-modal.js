@@ -920,8 +920,14 @@ export function showOverlayExportModal() {
         return d;
     }
 
-    function row(parent, labelText) {
-        var r = document.createElement('label');
+    /**
+     * One settings row. `asDiv` makes it a `<div>` instead of a `<label>`, which
+     * `addCheck` needs: its toggle is itself a `<label class="toggle-switch">`, and
+     * a label nested inside a label makes one click activate BOTH — the control
+     * toggles twice and appears not to respond at all.
+     */
+    function row(parent, labelText, asDiv) {
+        var r = document.createElement(asDiv ? 'div' : 'label');
         r.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--text-secondary);';
         var l = document.createElement('span');
         l.textContent = labelText;
@@ -937,21 +943,43 @@ export function showOverlayExportModal() {
         schedulePreview();
     }
 
+    /**
+     * A boolean setting, rendered as the app's own toggle switch
+     * (`.toggle-switch` + `.slider`, styles.css) rather than a raw checkbox — the
+     * same control the Visibility panel uses, so the modal doesn't look like a
+     * different application. The `<input type="checkbox">` is still the real
+     * control (the CSS hides it and styles the sibling `.slider` off `:checked`),
+     * so `.checked`, keyboard focus and `change` events all behave normally and
+     * the `data-ov` hook is unchanged.
+     */
     function addCheck(parent, labelText, obj, key) {
-        var r = row(parent, labelText);
+        var r = row(parent, labelText, true);
+        var sw = document.createElement('label');
+        // `-sm` is the compact variant (styles.css): the panel's rows are 11px and
+        // dense, and it resizes the knob along with the track — scaling only the box
+        // would leave the stock 16px knob overflowing a 17px track.
+        sw.className = 'toggle-switch toggle-switch-sm';
         var input = document.createElement('input');
         input.type = 'checkbox';
         input.checked = !!obj[key];
         input.setAttribute('data-ov', key);
         input.addEventListener('change', function () { obj[key] = input.checked; onChange(); });
-        r.appendChild(input);
+        var slider = document.createElement('span');
+        slider.className = 'slider';
+        sw.appendChild(input);
+        sw.appendChild(slider);
+        r.appendChild(sw);
         return input;
     }
 
     function addSelect(parent, labelText, obj, key, options, id) {
         var r = row(parent, labelText);
         var sel = document.createElement('select');
-        sel.style.cssText = FIELD + 'width:118px;';
+        // Wide enough for the longest option text the modal actually offers —
+        // `2160p (3840×2160)`, the resolution tier — which was being clipped at the
+        // old 118px. `max-width:100%` keeps it inside the panel on a narrow window,
+        // and `min-width:0` lets flex shrink it rather than overflowing the row.
+        sel.style.cssText = FIELD + 'width:160px;max-width:100%;min-width:0;';
         if (id) sel.id = id;
         options.forEach(function (o) {
             var opt = document.createElement('option');

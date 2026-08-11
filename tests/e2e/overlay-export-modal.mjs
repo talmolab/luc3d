@@ -282,6 +282,77 @@ try {
     check(hl.agree, `closing a tile clears exactly that entry's highlight (lit ${hl.lit}, docked ${hl.docked})`);
     check(hl.lit.length === 3, `three entries remain highlighted (got ${hl.lit.length})`);
 
+    // ---- selects are wide enough for their longest option -------------------
+    // The Resolution tier labels state pixel dimensions ("2160p (3840×2160)") and
+    // were being clipped. Measured against the select's OWN computed font rather
+    // than a hard-coded pixel figure, so this keeps holding if the font changes.
+    const fit = await page.evaluate(() => {
+        const out = [];
+        for (const sel of document.querySelectorAll('.ov-settings select, #ovSettings select')) {
+            const cs = getComputedStyle(sel);
+            const c = document.createElement('canvas').getContext('2d');
+            c.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+            const widest = Array.from(sel.options)
+                .reduce((a, o) => Math.max(a, c.measureText(o.textContent).width), 0);
+            out.push({
+                id: sel.id || '(unnamed)',
+                box: sel.clientWidth,
+                // Horizontal padding plus room for the dropdown arrow.
+                avail: sel.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 16,
+                widest: Math.ceil(widest),
+                longest: Array.from(sel.options)
+                    .reduce((a, o) => c.measureText(o.textContent).width > c.measureText(a).width ? o.textContent : a, ''),
+            });
+        }
+        return out;
+    });
+    const clipped = fit.filter(f => f.widest > f.avail);
+    check(clipped.length === 0,
+        'every select fits its longest option' + (clipped.length
+            ? ': ' + clipped.map(f => `${f.id} needs ${f.widest}px, has ${Math.round(f.avail)}px for "${f.longest}"`).join('; ')
+            : ` (widest: ${fit.map(f => f.id + ' ' + f.widest + '/' + Math.round(f.avail)).join(', ')})`));
+
+    // ---- boolean settings use the app's toggle switch, not raw checkboxes ----
+    const toggles = await page.evaluate(() => {
+        const boxes = Array.from(document.querySelectorAll('.ov-settings input[type=checkbox], #ovSettings input[type=checkbox]'));
+        return {
+            total: boxes.length,
+            wrapped: boxes.filter(b => b.closest('.toggle-switch')).length,
+            // A .toggle-switch hides its input and styles the sibling .slider, so a
+            // missing .slider means an invisible control.
+            withSlider: boxes.filter(b => {
+                const sw = b.closest('.toggle-switch');
+                return sw && sw.querySelector('.slider');
+            }).length,
+            // Nested <label> would make one click toggle twice, so the row holding a
+            // switch must not itself be a label.
+            nestedLabel: boxes.filter(b => {
+                const sw = b.closest('.toggle-switch');
+                return sw && sw.parentElement && sw.parentElement.closest('label') !== null;
+            }).length,
+        };
+    });
+    check(toggles.total > 0, `the settings panel has boolean controls (got ${toggles.total})`);
+    check(toggles.wrapped === toggles.total,
+        `all ${toggles.total} are lucid-style toggles (got ${toggles.wrapped})`);
+    check(toggles.withSlider === toggles.total,
+        `each toggle has its .slider so it is visible (got ${toggles.withSlider})`);
+    check(toggles.nestedLabel === 0,
+        `no toggle is nested inside another label — that double-toggles on click (got ${toggles.nestedLabel})`);
+    // And the control still works: flip one and confirm the setting followed.
+    const flipped = await page.evaluate(async () => {
+        const box = document.querySelector('[data-ov="legend"]');
+        const before = box.checked;
+        box.click();
+        await new Promise(r => setTimeout(r, 200));
+        const stored = JSON.parse(localStorage.getItem('overlayExportSettings.v1') || '{}');
+        box.click();   // put it back
+        await new Promise(r => setTimeout(r, 200));
+        return { before, after: box.checked === before, stored: stored.layers && stored.layers.legend };
+    });
+    check(flipped.stored === !flipped.before,
+        `clicking a toggle writes through to settings exactly once (was ${flipped.before}, stored ${flipped.stored})`);
+
     // ---- Quality gives live feedback in BOTH output modes -------------------
     // Bitrate is the one output setting a still preview cannot show — it exists
     // only after H.264 encoding — so this text IS the whole of the live feedback
