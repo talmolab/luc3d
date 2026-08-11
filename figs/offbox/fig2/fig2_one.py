@@ -12,7 +12,11 @@ import os
 import sys
 import time
 
-HERE = "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs"
+# The figs/ directory, which holds fig2_measure.py. Overridable because this
+# script is meant to run on another machine, where the repo may not be at the
+# same path: FIGS_DIR=/path/to/repo/figs
+HERE = os.environ.get("FIGS_DIR",
+                      "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs")
 sys.path.insert(0, HERE)
 
 import fig2_measure as fm  # noqa: E402

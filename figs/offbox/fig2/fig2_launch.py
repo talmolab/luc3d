@@ -12,14 +12,21 @@ import sys
 import time
 
 SP = os.path.dirname(os.path.abspath(__file__))
-PY = "/root/vast/eric/luc3d-bench/liezl_env/bin/python"
+#: Interpreter with OpenCV, h5py and numpy. The figs venv does NOT have cv2.
+PY = os.environ.get("FIG2_PY",
+                    "/root/vast/eric/luc3d-bench/liezl_env/bin/python")
 ONE = os.path.join(SP, "fig2_one.py")
-ROOT = "/root/vast/eric/BMimica"
+ROOT = os.environ.get("BMIMICA_ROOT", "/root/vast/eric/BMimica")
 
 STRIDE = int(os.environ.get("STRIDE", "1"))
 NPROC = int(os.environ.get("NPROC", "12"))
 MIN_AVAIL_GB = float(os.environ.get("MIN_AVAIL_GB", "80"))
-OUTDIR = os.path.join(SP, f"s{STRIDE}")
+#: One JSON per session lands here, and a session that already has one is
+#: skipped, which is what makes the run resumable across machines.
+OUTDIR = os.environ.get("OUTDIR", os.path.join(SP, f"s{STRIDE}"))
+#: DRY_RUN=1 lists what would run and exits, so a new machine can be checked
+#: before it is committed to hours of work.
+DRY_RUN = os.environ.get("DRY_RUN", "") not in ("", "0")
 
 
 def avail_gb():
@@ -38,6 +45,19 @@ def main():
                MKL_NUM_THREADS="1", NUMEXPR_NUM_THREADS="1")
     pending = [s for s in sids
                if not os.path.exists(os.path.join(OUTDIR, s + ".json"))]
+    if DRY_RUN:
+        print(f"FIGS_DIR   {os.environ.get('FIGS_DIR', '(default)')}")
+        print(f"PY         {PY}  exists={os.path.exists(PY)}")
+        print(f"BMIMICA    {ROOT}  exists={os.path.isdir(ROOT)}")
+        print(f"OUTDIR     {OUTDIR}")
+        print(f"stride {STRIDE}, {NPROC} procs, min avail {MIN_AVAIL_GB} GB")
+        print(f"{len(sids)} sessions found, {len(sids) - len(pending)} already done, "
+              f"{len(pending)} pending")
+        for s in pending[:5]:
+            print("  would run", s)
+        if len(pending) > 5:
+            print(f"  ... and {len(pending) - 5} more")
+        return
     print(f"[launch] {len(sids)} sessions, {len(pending)} to run, stride={STRIDE}, "
           f"nproc={NPROC}", flush=True)
     running, t0 = {}, time.time()

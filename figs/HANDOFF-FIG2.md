@@ -72,17 +72,41 @@ rather than the stride.
 
 ## Run
 
-```bash
-cd <repo>/figs
-mkdir -p /scratch/fig2/s1
-cp offbox/fig2/shards/*.json /scratch/fig2/s1/        # resume: 25 already done
+Every path the scripts need is overridable by an environment variable, so nothing has to
+be edited. The defaults are this box's paths; if vastlrn mounts the same VAST share at
+the same locations, the defaults already work and you can set none of them.
 
-NPROC=12 MIN_AVAIL_GB=80 STRIDE=1 \
-  /path/to/python offbox/fig2/fig2_launch.py
+| variable | what it is | default |
+|---|---|---|
+| `FIGS_DIR` | the repo's `figs/` directory, which holds `fig2_measure.py` | this box's path |
+| `FIG2_PY` | interpreter with OpenCV, h5py, numpy | `luc3d-bench/liezl_env/bin/python` |
+| `BMIMICA_ROOT` | the corpus | `/root/vast/eric/BMimica` |
+| `OUTDIR` | where per-session shards land, and what makes it resumable | `<script dir>/s1` |
+| `NPROC` | concurrent sessions | 12 |
+| `MIN_AVAIL_GB` | refuses to launch below this much free memory | 80 |
+
+**Check the machine first.** `DRY_RUN=1` prints the resolved paths, says whether each
+exists, and lists what it would run, then exits without launching anything:
+
+```bash
+cd <repo>/figs/offbox/fig2
+mkdir -p s1 && cp shards/*.json s1/          # resume: 25 already done
+
+DRY_RUN=1 OUTDIR=$PWD/s1 python fig2_launch.py
 ```
 
-The launcher writes one JSON per session into its output directory and logs beside it.
-It is safe to stop and restart at any point.
+Expect it to report `56 sessions found, 25 already done, 31 pending`. If it says 56
+pending, the shards were not copied into `OUTDIR` and you are about to redo three hours
+of finished work. If it says 0 sessions found, `BMIMICA_ROOT` is wrong.
+
+Then run it for real by dropping `DRY_RUN`:
+
+```bash
+OUTDIR=$PWD/s1 NPROC=12 MIN_AVAIL_GB=80 python fig2_launch.py
+```
+
+The launcher writes one JSON per session into `OUTDIR` with a log beside it, and is safe
+to stop and restart at any point.
 
 When all 56 shards exist, merge them into the deposit the panels read:
 
