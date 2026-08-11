@@ -496,11 +496,21 @@ export function seedLayoutPlan(viewNames, include3D) {
 /**
  * How a sash drag's delta is shared out. See `distributeAxisSizes`.
  *
- * `'grow-one'` is the literal reading of "scale the remaining videos in the axis
- * evenly", and is the default. `'share-sides'` is the alternative that keeps the
- * sash under the cursor — swapping the constant in ui/overlay-export-modal.js is
- * the whole change.
+ * `'share-far'` is what the modal uses. The other two are kept because each is a
+ * defensible reading of "share the change across the axis" and the choice is a
+ * one-constant swap in ui/overlay-export-modal.js — but they were both MEASURED
+ * against a real dock and rejected, so read the note on each before reaching for
+ * one.
+ *
+ * The constraint that decides this: a sash sits at the running SUM of the sizes
+ * before it, so "the sash stays under the cursor" is the same statement as "the
+ * total size before the sash changed by exactly the drag". Combine that with "the
+ * dragged tile changes by exactly the drag" and the tiles before the sash cannot
+ * move at all — which is `'share-far'`. Wanting all three of {sash tracks cursor,
+ * dragged tile changes 1:1, EVERY other tile shares} is geometrically impossible
+ * for any sash but the first, so one of them has to be given up.
  */
+export var SASH_SHARE_FAR = 'share-far';
 export var SASH_GROW_ONE = 'grow-one';
 export var SASH_SHARE_SIDES = 'share-sides';
 
@@ -513,7 +523,18 @@ export var SASH_SHARE_SIDES = 'share-sides';
  * driven from the sash's own `pointermove`). With three or more tiles on an axis
  * the far tiles never move at all. This spreads the change instead.
  *
- * Two modes, because "evenly" has two defensible readings:
+ * Three modes, because "evenly" has more than one defensible reading:
+ *
+ *   'share-far'   **LIVE.** The sash is tile `k`'s trailing edge, and only the tiles
+ *                 BEYOND it take part. Push it out and tile `k` grows by exactly the
+ *                 drag while every tile after it gives up `delta/(far count)`; pull it
+ *                 in and tile `k` shrinks by exactly the drag while every tile after
+ *                 it gains an equal share. Tiles before the sash never move, which is
+ *                 precisely what keeps the sash UNDER THE CURSOR (see the note on the
+ *                 constants above) while the dragged tile still changes 1:1.
+ *                 Known gap, accepted deliberately: the LAST sash on an axis has only
+ *                 one tile beyond it, so that one drag is still neighbour-only. Every
+ *                 other sash shares across all the tiles it pushes into.
  *
  *   'grow-one'    **The sash at index `k` is tile `k`'s TRAILING EDGE.** Push it
  *                 out (positive `d`) and tile `k` GROWS by the full delta while
@@ -525,11 +546,14 @@ export var SASH_SHARE_SIDES = 'share-sides';
  *                 it existed, EVERY drag grew exactly one tile (a left drag on sash
  *                 `k` grew tile `k+1`), so there was no gesture at all for "make
  *                 this video smaller and give the room to the others".
- *                 Cost: tiles on both sides move, so the sash trails the cursor —
- *                 with 4 equal tiles a 90 px drag moves the sash 60 px.
- *                 Consequence worth knowing: the LAST tile has no trailing sash, so
- *                 it cannot be targeted directly; it still changes as one of the
- *                 evenly-adjusted others.
+ *                 REJECTED after measuring it in a real dock: tiles on BOTH sides
+ *                 move, so the sash trails the cursor badly and by an amount that
+ *                 depends on which sash you grabbed. Measured on a 4-tile axis with an
+ *                 80 px drag, the sash moved 80 / 53 / 26 px for sash 0 / 1 / 2 —
+ *                 i.e. 100% / 66% / 33% tracking. The sizes are exactly right and it
+ *                 still reads as broken, because the handle slides out from under the
+ *                 pointer. Also: the LAST tile has no trailing sash, so it cannot be
+ *                 targeted directly.
  *   'share-sides' the tiles at-or-before the sash share the gain and the tiles
  *                 after it share the loss. Also spreads the change across the
  *                 axis, and the sash tracks the cursor exactly, but it has no
@@ -545,7 +569,7 @@ export var SASH_SHARE_SIDES = 'share-sides';
  * @param {boolean[]} vis   per-view visibility
  * @param {number} k        sash index: the boundary between view k and k+1
  * @param {number} d        signed drag distance along the axis, px
- * @param {string} mode     SASH_GROW_ONE | SASH_SHARE_SIDES
+ * @param {string} mode     SASH_SHARE_FAR | SASH_GROW_ONE | SASH_SHARE_SIDES
  * @returns {number[]} new sizes
  */
 export function distributeAxisSizes(base, min, max, vis, k, d, mode) {
@@ -561,12 +585,18 @@ export function distributeAxisSizes(base, min, max, vis, k, d, mode) {
         }
         if (d < 0) { var swap = grow; grow = shrink; shrink = swap; }
     } else {
-        // The sash is tile k's trailing edge: pushing it out grows tile k, pulling
-        // it in shrinks tile k. Everyone else absorbs the change evenly either way.
+        // Both remaining modes treat the sash as tile k's trailing edge: pushing it
+        // out grows tile k, pulling it in shrinks tile k, by exactly the drag.
         var lead = k;
         if (!vis[lead]) return out;
         var others = [];
-        for (i = 0; i < base.length; i++) if (vis[i] && i !== lead) others.push(i);
+        if (mode === SASH_SHARE_FAR) {
+            // Only the tiles the edge is pushed INTO absorb it. Everything before the
+            // sash is left alone, which is what pins the sash to the cursor.
+            for (i = k + 1; i < base.length; i++) if (vis[i]) others.push(i);
+        } else {
+            for (i = 0; i < base.length; i++) if (vis[i] && i !== lead) others.push(i);
+        }
         if (d > 0) { grow.push(lead); shrink = others; }
         else { shrink.push(lead); grow = others; }
     }

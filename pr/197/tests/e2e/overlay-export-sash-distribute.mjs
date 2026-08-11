@@ -20,6 +20,16 @@
  *
  * The dock geometry IS the exported frame (`captureLayout` reads the tile rects),
  * so this is a correctness test, not a cosmetic one.
+ *
+ * TWO THINGS THIS FILE CANNOT SEE — see `overlay-export-sash-tracking.mjs`:
+ *   - It drags **sash 0**, where "share with the tiles beyond the sash" and "share
+ *     with every tile on the axis" are the same arithmetic (everything is beyond
+ *     sash 0). So it stayed green through a shipped mode whose handle did not follow
+ *     the cursor on any OTHER sash (measured 66% and 33% tracking).
+ *   - It asserts its axis is FLAT (3 cameras on purpose), so it never reaches the
+ *     nested column grid a 4+ camera seed builds, where row dividers used to move a
+ *     single column and leave the grid ragged.
+ * Both files are needed; neither subsumes the other.
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
