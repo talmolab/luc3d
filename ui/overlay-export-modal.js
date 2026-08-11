@@ -385,6 +385,24 @@ export function showOverlayExportModal() {
     });
     dockApi.onDidLayoutChange(function () { schedulePreview(); });
 
+    /**
+     * The tab-chrome half of `Layers ▸ Render Video Names`.
+     *
+     * The tab NEVER renders its own title (styles.css, `#ovDock`): with the layer ON
+     * the burned-in caption already owns that corner, and the two together printed
+     * the name twice a few pixels apart. So this class only decides where the name
+     * comes from when the layer is OFF — from HOVER, per tile.
+     *
+     * A class plus pure CSS, deliberately: the reveal costs no listener and no
+     * repaint. Drawing the name onto the overlay canvas on hover instead would mean
+     * a `schedulePreview()` per pointer move, and `renderPreview` re-decodes EVERY
+     * docked view — and `drawTileContent` is shared with the export, so a hover flag
+     * could end up burned into the `.mp4`.
+     */
+    function applyTabNameMode() {
+        dockEl.classList.toggle('ov-hover-tab-names', !settings.layers.videoNames);
+    }
+
     // ========================================================================
     // Even-axis sash resizing
     // ========================================================================
@@ -1094,6 +1112,7 @@ export function showOverlayExportModal() {
 
     function onChange() {
         saveOverlayExportSettings(settings);
+        applyTabNameMode();    // the layer also decides how the tab shows its name
         applyDockAspect();     // a size/resolution change re-shapes the composition
         refreshSummary();
         schedulePreview();
@@ -1314,6 +1333,11 @@ export function showOverlayExportModal() {
         dispNote.textContent = 'Each view is rendered with the main window\'s ' +
             'brightness, contrast, rotation and zoom for that camera. Change them there.';
         gOut.body.appendChild(dispNote);
+
+        // Not only in `onChange`: Reset replaces `settings` wholesale and calls this
+        // (not `onChange`), and this is also the initial build — so the dock chrome is
+        // seeded here and can never disagree with the toggle it was built from.
+        applyTabNameMode();
     }
 
     // ========================================================================

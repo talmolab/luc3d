@@ -289,6 +289,15 @@ try {
         `…and nothing is left at the bottom-left (got ${inkOn.plain && inkOn.plain.bottom.n} px)`);
     check(inkOn.plain && inkOn.plain.top.y0 < 40,
         `the caption is hard against the top edge, like the tab chip (y0 ${inkOn.plain && inkOn.plain.top.y0})`);
+    // Exactly ONE copy of the name. The pixel scan above cannot see DOM text, and the
+    // dock's own tab used to print a second copy a few pixels away in the same band —
+    // a visible ghost, worse the longer the name.
+    const tabTitleW = await page.evaluate(() => Math.max(0, ...Array.from(
+        document.querySelectorAll('#ovDock .dv-groupview'))
+        .filter(g => g.querySelector('[data-view-name]').getAttribute('data-view-name') !== '__3d__')
+        .map(g => g.querySelector('.dv-default-tab-content').getBoundingClientRect().width)));
+    check(tabTitleW === 0,
+        `with the layer ON the tab adds no second copy of the name (widest tab title ${tabTitleW}px)`);
     // A caption must stay UPRIGHT on a rotated camera: it is drawn outside the view
     // transform, like the legend. Rotated text would come out taller than wide.
     check(inkOn.turned && inkOn.turned.top.w > inkOn.turned.top.h,

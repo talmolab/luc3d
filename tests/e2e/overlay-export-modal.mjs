@@ -302,10 +302,19 @@ try {
             tabDraggable: tab.draggable,
             // What is actually on top at the tab's centre — the tile's canvases are
             // absolutely positioned and would swallow the click without a z-index.
+            // Whatever is hit at the tab's centre must belong to the tab, not to the
+            // tile's absolutely-positioned canvases. Reported as an ancestor lookup
+            // rather than a className: with the title hidden the tab is only 49px, so
+            // its centre lands on the close X's SVG, whose `className` is an
+            // SVGAnimatedString and never matches a string test.
             atTabCentre: (() => {
                 const b = r(tab);
                 const el = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
-                return el ? el.className : null;
+                if (!el) return null;
+                return {
+                    inTab: !!(el.closest && el.closest('.dv-tab')),
+                    tag: el.tagName,
+                };
             })(),
         };
     });
@@ -319,8 +328,104 @@ try {
         `the tab band is still rendered, not hidden (band ${band.tabsH}, tab ${band.tabH})`);
     check(band.tabDraggable === true,
         'the tab is still draggable, so tiles can still be rearranged');
-    check(/dv-/.test(band.atTabCentre || ''),
+    check(!!(band.atTabCentre && band.atTabCentre.inTab),
         `the tab is on top of the video canvases and hit-testable (got ${JSON.stringify(band.atTabCentre)})`);
+
+    // ---- the tab shows the X, never the name -------------------------------
+    // Layers ▸ Render Video Names burns the name onto the TILE in the same top-left
+    // 20px band the tab occupies, so a visible tab title drew it twice. What must
+    // survive the hiding is the drag gap and the close X.
+    const chrome = await page.evaluate(() => {
+        const g = document.querySelector('#ovDock .dv-groupview');
+        const tab = g.querySelector('.dv-tab');
+        const content = g.querySelector('.dv-default-tab-content');
+        const action = g.querySelector('.dv-default-tab-action');
+        const r = (e) => e.getBoundingClientRect();
+        return {
+            titleW: Math.round(r(content).width),
+            titleText: content.textContent,
+            tabW: Math.round(r(tab).width),
+            gapLeftOfX: Math.round(r(action).x - r(tab).x),
+            xBeforeTitle: r(action).x < r(content).x,
+        };
+    });
+    check(chrome.titleW === 0, `the tab renders no name text (got ${chrome.titleW}px)`);
+    check(chrome.titleText.length > 0, 'the name is still in the DOM, for the hover reveal');
+    check(chrome.gapLeftOfX >= 12, `a drag gap remains left of the X (got ${chrome.gapLeftOfX}px)`);
+    check(chrome.tabW >= 44, `the tab is still wide enough to grab (got ${chrome.tabW}px)`);
+    check(chrome.xBeforeTitle,
+        'the X is laid out BEFORE the title, so revealing the title cannot move it');
+
+    // A REAL mouse click on the X. Every other close route in this file uses
+    // `.click()`, which would still pass if the button had been display:none'd —
+    // exactly the regression hiding the tab text could introduce.
+    const realClose = await (async () => {
+        const b = await page.evaluate(() => {
+            const a = document.querySelector('#ovDock .dv-default-tab-action').getBoundingClientRect();
+            return {
+                cx: a.x + a.width / 2, cy: a.y + a.height / 2,
+                n: document.querySelectorAll('#ovDock [data-view-name]').length,
+            };
+        });
+        await page.mouse.click(b.cx, b.cy);
+        await page.waitForTimeout(500);
+        const after = await page.evaluate(() =>
+            document.querySelectorAll('#ovDock [data-view-name]').length);
+        return { before: b.n, after };
+    })();
+    check(realClose.after === realClose.before - 1,
+        `a real mouse click on the X closes a tile (${realClose.before} -> ${realClose.after})`);
+    // Put it back so the later dock/export assertions still see a full composition.
+    await page.evaluate(async () => {
+        const names = Array.from(document.querySelectorAll('#ovDock [data-view-name]'))
+            .map(e => e.getAttribute('data-view-name'));
+        const missing = Array.from(document.querySelectorAll('#ovStrip .ov-strip-item'))
+            .find(e => names.indexOf(e.getAttribute('data-view-name')) < 0);
+        if (missing) missing.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 600));
+    });
+
+    // ---- layer OFF: the hovered tile, and only it, names itself ------------
+    const hoverName = await (async () => {
+        const at = await page.evaluate(async () => {
+            const b = document.querySelector('[data-ov="videoNames"]');
+            if (b.checked) b.click();                     // OFF -> hover mode
+            await new Promise(r => setTimeout(r, 400));
+            const t = document.querySelector('#ovDock [data-view-name]');
+            const r0 = t.getBoundingClientRect();
+            return { cx: r0.x + r0.width / 2, cy: r0.y + r0.height / 2 };
+        });
+        const read = () => page.evaluate(() =>
+            Array.from(document.querySelectorAll('#ovDock .dv-groupview')).map(g => ({
+                name: g.querySelector('[data-view-name]').getAttribute('data-view-name'),
+                w: Math.round(g.querySelector('.dv-default-tab-content').getBoundingClientRect().width),
+                x: Math.round(g.querySelector('.dv-default-tab-action').getBoundingClientRect().x),
+            })));
+        await page.mouse.move(5, 5); await page.waitForTimeout(200);
+        const away = await read();
+        await page.mouse.move(at.cx, at.cy); await page.waitForTimeout(200);
+        const over = await read();
+        const onLayer = await page.evaluate(async () => {
+            document.querySelector('[data-ov="videoNames"]').click();   // back ON
+            await new Promise(r => setTimeout(r, 400));
+            return Array.from(document.querySelectorAll('#ovDock .dv-groupview')).map(g =>
+                Math.round(g.querySelector('.dv-default-tab-content').getBoundingClientRect().width));
+        });
+        await page.mouse.move(5, 5); await page.waitForTimeout(200);
+        return { away, over, onLayer };
+    })();
+    const camRows = (rows) => rows.filter(r => r.name !== '__3d__');
+    check(camRows(hoverName.away).every(r => r.w === 0),
+        'with the layer off and no hover, no tab names itself');
+    check(camRows(hoverName.over).length > 0 && camRows(hoverName.over)[0].w > 0,
+        `hovering a tile reveals ITS name (got ${camRows(hoverName.over)[0] && camRows(hoverName.over)[0].w}px)`);
+    check(camRows(hoverName.over).slice(1).every(r => r.w === 0),
+        "and only that tile's — the reveal is per-tile, not global");
+    // A close button that shifts under the cursor is the bug this guards.
+    check(hoverName.over.every((r, i) => r.x === hoverName.away[i].x),
+        'the close X does not move when the name appears');
+    check(hoverName.onLayer.every((w, i) => hoverName.away[i].name === '__3d__' || w === 0),
+        'with the layer back ON, hover adds nothing — the caption owns that corner');
 
     // ---- Layers: Render Video Names is the first entry -----------------------
     const layers = await page.evaluate(() => {

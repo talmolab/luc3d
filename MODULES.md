@@ -2527,6 +2527,33 @@ paint over it and swallow every tab click. Scoped to `#ovDock` because
 `.dv-groupview` rather than `#ovDock` because dockview puts the theme class on its own
 `.dv-shell` **inside** the container, which would otherwise re-declare the height.
 
+**The tab shows the ✕, never the name.** `Render Video Names` burns the caption into
+the same top-left band the chip occupies, so a visible tab title drew the name twice a
+few pixels apart in a different font — a ghost, worse the longer the name. So
+`.dv-default-tab-content` is `width: 0` unconditionally: with the layer ON the name
+comes from the burned-in caption (the copy that actually reaches the `.mp4`), and with
+it OFF from **hover**. `order: 2` puts the zero-width title AFTER the ✕ so the hover
+reveal grows the chip rightward and the ✕ never moves — a control that jumps out from
+under the cursor is a bug, and the e2e pins the ✕'s x in all four (layer × hover)
+states. A 12px `padding-left` leaves 19px of bare `.dv-tab` — the drag source — to the
+left of the ✕, so tiles can still be picked up; `min-width: 44px` is a non-binding
+floor in case a dockview bump drops the tab's own padding.
+`applyTabNameMode()` toggles `#ovDock.ov-hover-tab-names` from `onChange` AND from
+`buildSettings` (Reset replaces `settings` and calls the latter, not the former).
+The hover reveal is keyed on **`.dv-groupview:hover`, NOT the tile element**: the tab
+band is a *sibling* of `.dv-content-container`, so `[data-view-name]:hover` goes false
+the moment the pointer reaches the ✕ and the label would flicker off exactly as the
+user goes to click it (measured, not assumed). It survives the
+`.dv-content-container { pointer-events: none }` bypass because that only stops the
+container being a hit *target* — `:hover` still applies to ancestors of whatever is hit.
+With the layer ON the whole band is `translateY`'d one band-height so the ✕ sits
+**below** the caption rather than on it: the caption's width follows the name while the
+✕ is pinned at 19px, so a fixed padding cannot clear it ("topL" had its L behind the
+glyph). `transform` specifically — it does not affect layout, so the tile keeps the full
+height the overlaid band bought. The 3D tile keeps its name in every state (no overlay
+canvas ⇒ never captioned), via a `:has()` rule kept SEPARATE so an engine without
+`:has()` cannot drop the hover reveal along with it.
+
 **Display settings are inherited from the main window, not re-exposed.** Every 2D
 tile is rendered with that camera's **brightness, contrast, rotation and zoom** as
 the main window has them, by one shared `drawTileContent(vctx, octx, …)` that both
