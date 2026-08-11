@@ -10,12 +10,15 @@ docstring cited the wrong panel.)
 Everything here is read from the files themselves by `fig6_measure.py`, not from a lab
 notebook: 130 sessions with 3D, 12,039,174 frames, 29.5 hours.
 
-THE LAST ROW IS THE POINT OF THE TABLE. c, d and f are **SLAP-2M only**. BMimica
-carries 84 % of the corpus frame count and contributes NOTHING to the finding, so this
-is the only place the 130-session / 12.0 M-frame figure appears -- and it must appear
-as a composition statement with an explicit "measured here" marker, or the 130 reads as
-the n behind panels c, d and f. Legacy had that column; the restyle dropped it, which
-left the biggest number on the figure unqualified.
+WHICH CORPUS EACH PANEL MEASURES IS IN THE LEGEND, NOT IN THIS TABLE. c, d and f are
+SLAP-2M only, and BMimica carries 84 % of the corpus frame count while contributing
+nothing to those panels, so the 130-session / 12.0 M-frame total here is a COMPOSITION
+statement and must not be read as the n behind c, d and f. That qualification used to
+be a "Measured in c, d, f" row on the table itself, which was a build-time note rather
+than an attribute of a corpus -- two of its three cells read "no", so a seventh of the
+table told the reader which columns to ignore. The legend now carries it, and this
+table describes the corpora and nothing else. If the legend ever loses that sentence,
+the biggest number on the figure goes back to being unqualified.
 
 `8 (6 proofread)` IS ALSO A DISCLOSURE, NOT A TYPO. `fig6.json corpora[1]` records 8
 cameras for SLAP-2M, but every SLAP-2M measurement in this paper uses 6: panel b shows
@@ -30,9 +33,17 @@ substitute this repo falls back to) has no U+2713, and matplotlib resolves ONE f
 text object, so a tick mark renders as a missing-glyph box and warns on every save.
 
 TWO NUMBERS PER CORPUS THAT MUST NOT BE CONFLATED: sessions TOTAL and sessions WITH
-3D. SLAP-2M has 84 sessions of which 74 carry 3D; BMimica 56 of 56. Quoting 84
-alongside BMimica's 56 would overstate the usable corpus by ten sessions, so the cell
-carries both and the total row says `130 of 140`.
+3D. The cell carries both, and on the current data they are equal everywhere --
+SLAP-2M `74 of 74`, BMimica `56 of 56`, total `130 of 130`.
+
+IT USED TO READ `74 of 84`, AND THAT WAS A BUG IN THE MEASUREMENT, NOT A DISCLOSURE.
+`fig6_measure.py` enumerated SLAP-2M by walking `{SLAP_ROOT}/20*/<session>/`, which
+holds 84 session directories; ten of them are recordings that never entered the
+corpus. SLAP-2M is defined by `master_sheet.xlsx`, which has exactly 74 rows, and
+every measured SLAP-2M panel in this figure already reported 74. So the table was
+announcing ten sessions of unfinished proofreading that do not exist. `scan_slap` now
+joins on the master sheet (see its docstring); if this cell ever shows a mismatch
+again, check the sheet before assuming the corpus grew.
 
 TRANSPOSED -- attributes down, corpora across. Untransposed this is eight columns in
 88 mm, i.e. 11 mm a column, and `8 (6 proofread)` alone sets ~18 mm at 7 pt; legacy
@@ -99,9 +110,15 @@ RULE_MM = {"top": 2.63, "bottom": 2.23}
 #: is exactly one unit from the next -- `row_y(-1)` is 7.9, not 8.1 (len(ROWS) is 7),
 #: which is worth stating because assuming a 1.2-unit header gap puts the rule 0.7 pt
 #: INSIDE the first body row and lint reports it as ink under "Cameras".
-RULE_U = {"header": 0.5, "body": 0.5}
-ROWS = ["Cameras", "Animals", "Sessions with 3D", "Frames", "Hours", "Nodes",
-        "Measured in c, d, f"]
+RULE_U = {"header": 0.5}
+
+#: Outer pad, in mm, reserved OUTSIDE the row grid (see the figsize below).
+PAD_MM = 1.0
+#: NO "Measured in c, d, f" ROW. It was a build-time note, not an attribute of a
+#: corpus: two of its three cells read "no", so a third of the table's ink said which
+#: columns the reader should ignore. Which corpus each panel measures belongs in the
+#: legend, where it now is, and the table is left describing the corpora themselves.
+ROWS = ["Cameras", "Animals", "Sessions with 3D", "Frames", "Hours", "Nodes"]
 
 
 def _rng(v):
@@ -150,7 +167,6 @@ def main():
             "Frames": f"{c['frames_total']:,}",
             "Hours": f"{c['hours']:.1f} @{round(c['fps'])} fps",
             "Nodes": nodes,
-            "Measured in c, d, f": "yes" if measured else "no",
         }
     used = [corpora[n] for n in cols]
     cells["Total"] = {
@@ -162,7 +178,6 @@ def main():
         "Frames": f"{sum(c['frames_total'] for c in used):,}",
         "Hours": f"{sum(c['hours'] for c in used):.1f}",
         "Nodes": nodes,
-        "Measured in c, d, f": "no",
     }
     cols.append("Total")
 
@@ -173,8 +188,18 @@ def main():
     widths = [0.31, 0.25, 0.25, 0.19]
     x0 = [sum(widths[:i]) for i in range(len(widths) + 1)]
 
-    fig, ax = plt.subplots(figsize=(mm(SPAN["half"]), mm(LINE * (nline + 1.0))),
-                           layout="constrained")
+    # THE PAD IS ADDED TO THE FIGURE HEIGHT, NOT TAKEN OUT OF THE ROWS. Sizing the
+    # figure at LINE * lines and letting constrained_layout take its pad out of that
+    # makes one row unit slightly less than LINE mm, by an amount that depends on the
+    # ROW COUNT -- the pad is absolute, so a shorter table is compressed harder. The
+    # type is a fixed 7 pt either way, so the interline gap closes while the glyphs do
+    # not, and dropping a single row was enough to bring the header rule down onto the
+    # first row (lint: ON DATA on "Cameras" and its cells). Reserving the pad outside
+    # the grid keeps one unit at exactly LINE mm for any number of rows.
+    fig, ax = plt.subplots(
+        figsize=(mm(SPAN["half"]), mm(LINE * (nline + 1.0) + 2 * PAD_MM)),
+        layout="constrained")
+    fig.get_layout_engine().set(h_pad=PAD_MM / 25.4, w_pad=PAD_MM / 25.4)
     ax.set_axis_off()
     ax.set_xlim(0, 1)
     ax.set_ylim(0, nline + 1.0)
@@ -185,20 +210,24 @@ def main():
     for j, c in enumerate(cols):
         ax.text(x0[j + 1], row_y(-1), c, fontweight="bold", va="center", color=INK,
                 fontsize=7)
+    # EVERY ROW IS SET THE SAME. The last row used to be bold, because it was the
+    # "measured in c, d, f" disclosure and carried the qualification the table existed
+    # for. With that row gone the bolding had moved onto "Nodes", emphasising the one
+    # attribute that is identical in every column.
     for i, r in enumerate(ROWS):
-        last = r == ROWS[-1]                  # the "measured here" disclosure row
-        ax.text(x0[0], row_y(i), r, va="center", fontsize=7, color=INK,
-                fontweight="bold" if last else "normal")
+        ax.text(x0[0], row_y(i), r, va="center", fontsize=7, color=INK)
         for j, c in enumerate(cols):
             ax.text(x0[j + 1], row_y(i), cells[c][r], va="center", fontsize=7,
-                    color=INK, fontweight="bold" if last else "normal")
+                    color=INK)
 
     # The two outer rules convert from mm to row units here; the two interior rules are
     # already in row units because they have to stay on the midpoint (see RULE_MM /
     # RULE_U).
+    # THREE RULES, NOT FOUR. The fourth sat above the last row, separating the
+    # "Measured in c, d, f" disclosure from the body. With that row gone it became a
+    # rule between "Hours" and "Nodes", dividing the table where nothing divides.
     for y, lw in ((row_y(-1) + RULE_MM["top"] / LINE, 0.9),
                   (row_y(-1) - RULE_U["header"], 0.6),
-                  (row_y(len(ROWS) - 2) - RULE_U["body"], 0.6),
                   (row_y(len(ROWS) - 1) - RULE_MM["bottom"] / LINE, 0.9)):
         ax.plot([0, 1], [y, y], color=INK, lw=lw, clip_on=False)
 

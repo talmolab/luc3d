@@ -209,7 +209,7 @@ def main():
     # off all three of them. At 35 mm the band is 31.9 mm and the row of tiles is
     # 164 of the 180 mm; at 38 mm it was 34.7 mm and 176 mm. Fig 1 has to clear
     # assemble.py's 200 mm ceiling, so this is where the trade lands.
-    fig.get_layout_engine().set(rect=(0, 0.088, 1, 0.912), wspace=0.01,
+    fig.get_layout_engine().set(rect=(0, 0.0, 1, 1.0), wspace=0.01,
                                 w_pad=0.004, h_pad=0.004)
     for ax, (name_tpl, badge, crop, aspect) in zip(axes, TILES):
         name = name_tpl.format(frame=j["frame"])
@@ -227,11 +227,12 @@ def main():
         ax.set_xlim(x0, x1)
         ax.set_ylim(y1, y0)           # imshow's y axis runs downwards
 
-    fig.text(0.5, 0.046,
-             f"{j['stats']['groupsThisFrame']} animals triangulated from "
-             f"{j['stats']['nCameras']} cameras · "
-             f"{j['stats']['nodes3dFilled']}/{j['stats']['nodes3d']} 3D nodes filled",
-             ha="center", va="center", color=INK, fontsize=7)
+    # The stat line ("3 animals triangulated from 8 cameras - 45/45 3D nodes
+    # filled") is caption text and now lives in figs/FIGURE-LEGENDS.md; the strip it
+    # occupied goes back to the tiles, which are height-limited.
+    print(f"  {j['stats']['groupsThisFrame']} animals from "
+          f"{j['stats']['nCameras']} cameras, "
+          f"{j['stats']['nodes3dFilled']}/{j['stats']['nodes3d']} 3D nodes filled")
     save(fig, 1, "c", "reconstruction")
 
 

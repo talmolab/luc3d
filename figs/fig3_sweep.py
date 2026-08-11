@@ -16,6 +16,20 @@ the same fixed leading window of frames per session. All cells and all
 sessions use IDENTICAL frame windows and detections, so the comparison across
 cells is apples-to-apples even though it is not full-session.
 
+`switches` is a SUM of per-camera within-view ID switches over every camera and
+every session in a cell, so it is meaningless without the exposure it accumulated
+over. `camera_frames()` measures that denominator — the same
+`min(len(gt), len(det))` per camera that `fig3_score.score_session()` scores over,
+read from the HDF5 shapes alone (no decoding, no scoring) — and it is deposited as
+`total_camera_frames` / `camera_frames_by_session`. Fig 3e plots switches per 1,000
+camera-frames off it and REFUSES a deposit without it, so the rate can never be
+computed against an assumed denominator.
+
+    python3 figs/fig3_sweep.py                  # full pass (tracker + scoring)
+    python3 figs/fig3_sweep.py --denominators   # ONLY re-measure the frame counts
+                                                # and merge them into the existing
+                                                # out/fig3_sweep.json (seconds)
+
 Output: figs/out/fig3_sweep.json (schema per the handoff).
 """
 import json
@@ -26,6 +40,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from glob import glob
 from pathlib import Path
+
+import h5py
 
 REPO = Path(__file__).resolve().parent.parent
 BENCH = Path("/root/vast/eric/luc3d-bench")
@@ -62,10 +78,69 @@ CORR2D_GRID = [0.5, 1, 2]
 
 WORKERS = int(os.environ.get("FIG3_WORKERS", "16"))
 
+#: Recorded beside the counts so a reader of the JSON alone knows what the rate is
+#: over. Emitted by both the full pass and `--denominators`.
+CF_CAVEAT = ("total_camera_frames is the exposure `switches` accumulated over: the sum "
+             "over every camera of every session of min(gt_frames, det_frames), i.e. "
+             "exactly the frames fig3_score.score_session() scores. Rates are switches "
+             "per camera-frame; the raw sums are retained.")
+
 
 def calib_for(session):
     hits = glob(str(BMROOT / session / "calibration" / "*_calibration.toml"))
     return hits[0] if hits else None
+
+
+def camera_frames():
+    """Measure the sweep's exposure: camera-frames scored, per session and in total.
+
+    This is the DENOMINATOR for `switches`, which is a raw sum over every camera of
+    every session. It is measured, not assumed: `fig3_score.score_session()` scores
+    camera `cam` of session `s` over `nf = min(gt_frames, det_frames)` frames (then
+    capped by `max_frames`), and this reproduces exactly that expression — but from
+    the HDF5 *shapes* only, so it costs a few file opens rather than a re-score.
+    The GT layout is (n_tracks, 2, n_nodes, n_frames) and the detection layout is
+    (n_sessions, n_frames, n_animals, n_nodes, 2); both are read via `.shape`, so no
+    array is materialised.
+
+    Returns (total, {session: {camera: frames}}).
+    """
+    by_session = {}
+    total = 0
+    for s in SESSIONS:
+        per_cam = {}
+        for cam in CAMERAS:
+            with h5py.File(DET / s / f"{cam}_predictions.h5", "r") as f:
+                det_n = int(f["tracks"].shape[1])
+            with h5py.File(GT / s / cam / "proofread.analysis.h5", "r") as f:
+                gt_n = int(f["tracks"].shape[3])
+            nf = min(det_n, gt_n)
+            if FRAMES_PER_SESSION:
+                nf = min(nf, FRAMES_PER_SESSION)
+            per_cam[cam] = nf
+            total += nf
+        by_session[s] = per_cam
+    return total, by_session
+
+
+def deposit_denominators():
+    """Merge freshly measured camera-frame counts into the existing deposit.
+
+    The expensive halves of this script (tracking, then motmetrics scoring of 24
+    cells x 8 full ~180k-frame sessions) do not need to run again to add a
+    denominator that was simply never recorded. This re-measures only the frame
+    counts and rewrites the two keys, leaving `cells` untouched.
+    """
+    path = OUT_DIR / "fig3_sweep.json"
+    out = json.loads(path.read_text())
+    total, by_session = camera_frames()
+    out["total_camera_frames"] = total
+    out["camera_frames_by_session"] = by_session
+    if CF_CAVEAT not in out.get("caveats", []):
+        out.setdefault("caveats", []).append(CF_CAVEAT)
+    path.write_text(json.dumps(out, indent=2))
+    print(f"[sweep] total_camera_frames = {total:,} "
+          f"({len(SESSIONS)} sessions x {len(CAMERAS)} cameras) -> {path}")
 
 
 def run_one(corr2d, corr3d, session):
@@ -182,6 +257,7 @@ def main():
         "idf1_cross is IDF1 under one global identity per animal pooled over all cameras; switches is the "
         "SUM of per-camera within-view ('2D') ID switches across all cameras and sessions in the "
         "cell. The corr3d=0 cell is the 'no 3D term at all' control requested by the handoff.",
+        CF_CAVEAT,
     ]
     blocked = []
     for (c2, c3) in cells_grid:
@@ -216,6 +292,11 @@ def main():
               f"n={cell['n_sessions']} within={cell.get('idf1_within')} cross={cell.get('idf1_cross')} "
               f"switches={cell.get('switches')}", flush=True)
 
+    # The denominator for `switches`. Cheap (HDF5 shapes only) and deposited beside
+    # the counts so no downstream panel has to assume an exposure.
+    total_cf, cf_by_session = camera_frames()
+    print(f"[sweep] total_camera_frames = {total_cf:,}", flush=True)
+
     out = {
         "generated_by": "figs/fig3_sweep.py",
         "dataset": "BMimica",
@@ -224,6 +305,8 @@ def main():
         "metric": "IDF1 (motmetrics) + ID-switches",
         "caveats": caveats,
         "blocked": blocked,
+        "total_camera_frames": total_cf,
+        "camera_frames_by_session": cf_by_session,
         "cells": cells_out,
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -232,4 +315,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--denominators" in sys.argv:
+        deposit_denominators()
+    else:
+        main()

@@ -5,9 +5,15 @@ Fig 6c -- detection quality across the corpus's own difficulty rating.
 THREE SUB-PLOTS BECAUSE THE THREE QUANTITIES DISAGREE, and that disagreement is the
 finding. Across difficulty 1 -> 7:
 
-  * keypoints MISSING rises steeply (10.90x);
-  * error WHEN PRESENT barely moves (1.29x on the mean);
-  * the fraction beyond a 20 px tolerance rises (5.34x).
+  * keypoints MISSING rises steeply (10.81x);
+  * error WHEN PRESENT barely moves (1.30x on the mean);
+  * the fraction beyond a 20 px tolerance rises (5.72x).
+
+(Those three were 10.90x / 1.29x / 5.34x while `fig6_detections.py` ran at stride 120.
+It now runs at stride 1 -- EVERY frame, 187,134,382 keypoint comparisons instead of
+1,561,915 -- and the three fold changes moved by 0.8 %, 0.8 % and 7 %. The subsample
+was unbiased for the first two; the >20 px fraction is a tail statistic and moved
+most, which is what a tail statistic does under a 120x smaller sample.)
 
 So a hard session does not make the detector imprecise -- it makes the detector
 MISS. A single "error" axis would have shown a nearly flat line and concluded
@@ -18,7 +24,8 @@ THE MIDDLE PANEL PLOTS THE MEAN, AND WHICH SUMMARY IT IS MATTERS ENOUGH TO PRINT
 An earlier version of this panel plotted `err_p50` and printed `1.11x`, while
 `CAPTIONS.md` and `captions/fig6.md` quote the paper's headline as "rises 1.29-fold
 (3.67 -> 4.72 px)" -- the MEAN ratio. Both numbers are arithmetically right for their
-own statistic (p50 3.1929/2.8893 = 1.105; mean 4.7248/3.6660 = 1.289), so this was
+own statistic (at stride 120: p50 3.1929/2.8893 = 1.105; mean 4.7248/3.6660 = 1.289;
+at stride 1: p50 3.1985/2.8832 = 1.109, mean 4.7412/3.6490 = 1.299), so this was
 not a stale value but a silent change of estimator, and the artwork and the caption
 disagreed by 16 %. Resolved in favour of the MEAN, for three reasons:
 

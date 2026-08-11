@@ -107,6 +107,9 @@ MUTED = "#6E6E6E"
 #               figures and therefore earns its own hue rather than sharing the
 #               generic comparator colour
 #   PINK        3D-MuPPET
+#   GREEN       Anipose specifically -- same reasoning as SLEAP: a named third
+#               party, and in Fig 4d it stands BESIDE salmon (our DLT) in one
+#               panel, so it cannot share the generic comparator hue
 #   GREY        a BOUND, not a method: the oracle ceiling, the 1/C ceiling, random
 #
 # SALMON deliberately covers three different comparators. They never co-occur in
@@ -127,6 +130,7 @@ ENTITY = {
     "bytetrack": SALMON,
     "exhaustive": SALMON,
     "dlt": SALMON,
+    "anipose": GREEN,
     "3d-muppet": PINK,
     "oracle": GREY,
     "random": GREY,
@@ -472,18 +476,24 @@ def tile(ax, path, bbox=None, *, badge=None, badge_color="white", label=None,
 
 
 def footnote(ax, text, *, size=6.5, color=None):
-    """A small note under the x axis, appended to the axis label.
+    """NO LONGER DRAWN. Reports the note to the build log and returns.
 
-    Hand-placed `ax.text(0.5, -0.2, ...)` notes were the second-biggest source of
-    clipped and overlapping text once panels started saving at an exact size: they
-    sit outside the axes, so they either fell off the page or landed on the x label.
-    Folding the note INTO the label guarantees constrained_layout accounts for it.
+    These notes -- "one point per session, n = 74", "solid = black bedding", "hollow
+    marker: n = 1 session" -- are legend sentences that were being typeset inside the
+    panel. A submitted figure should not set its own caption: the journal sets it, in
+    the journal's type, in the legend. Every one of them now appears in
+    `figs/FIGURE-LEGENDS.md`, which is the file that goes into the manuscript.
+
+    The call sites are deliberately left in place rather than deleted from nineteen
+    panels. They still compute the numbers -- most are f-strings over the deposit --
+    so the note is printed when the panel builds and a value that goes wrong is still
+    visible to whoever runs the build; and putting the strip back is one edit here
+    rather than nineteen. `constrained_layout` gives the space straight back to the
+    axes, so the panels keep their declared size and gain plot area.
     """
-    lab = ax.get_xlabel()
-    ax.set_xlabel(f"{lab}\n{text}" if lab else text)
-    # Two sizes in one label is not possible, so the whole label steps down a little
-    # and the note carries the smaller weight through colour instead.
-    ax.xaxis.label.set_fontsize(min(mpl.rcParams["font.size"], size + 1.0))
+    for line in str(text).splitlines():
+        if line.strip():
+            print(f"  [note, not drawn] {line.strip()}")
     return ax
 
 

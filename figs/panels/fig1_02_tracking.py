@@ -296,7 +296,7 @@ def main():
     # them is a millimetre off the height of all four tiles, and the tiles are
     # height-limited. The panel height is unchanged on purpose: Fig 1 assembles to
     # 199 mm and assemble.py warns past 200.
-    fig.get_layout_engine().set(rect=(0, 0.080, 1, 0.825), wspace=0.01,
+    fig.get_layout_engine().set(rect=(0, 0.0, 1, 0.905), wspace=0.01,
                                 w_pad=0.004, h_pad=0.004)
     crops = []
     for ax, (p, bbox, cam) in zip(axes, tiles):
@@ -396,27 +396,20 @@ def main():
     fig.text(0.994, 0.912, f"2 of {j['stats']['nCameras']} views", ha="right",
              va="bottom", color=MUTED, fontsize=7)
 
-    # THE LEDGER LINE. Each quantity is named for what it counts -- see the module
-    # docstring for why 26 is a DETECTION count and 22 a LABEL-STRING count, and why
-    # the 2 left over are EXTRA detections rather than a missing animal.
-    #
-    # "one per animal in every view" is CHECKED here, not asserted: it is the
-    # strongest claim on the line, and the deposit already carries what settles it.
-    # If a future run leaves a view short, the clause has to disappear rather than
-    # print a falsehood.
+    # THE LEDGER LINE IS GONE from the artwork ("24 detections in 8 views carry 20
+    # distinct track names ... -> 3 identities"). It was a caption sentence set in
+    # the figure, which is where a technical-report caption belongs instead; the
+    # same counts, and the check that every view really does carry one detection per
+    # identity, are in figs/FIGURE-LEGENDS.md. The check itself still runs, because
+    # it is the strongest claim the panel makes and it must not silently lapse.
     ncam = j["stats"]["nCameras"]
     total = led["identities"] * ncam
     every_view = not led["viewsMissingAnIdentity"] and led["assigned"] == total
-    extra = len(led["unassigned"])
-    line = (f"{led['detections']} detections in {ncam} views carry "
-            f"{led['distinctNames']} distinct track names "
-            f"({len(led['collidingNames'])} reused across cameras) → "
-            f"{led['identities']} identities")
-    line += (", one per animal in every view" if every_view
-             else f", {led['assigned']} of {led['detections']} detections assigned")
-    if extra:
-        line += f"; {extra} extra detection{'s' if extra != 1 else ''} unassigned"
-    fig.text(0.5, 0.043, line, ha="center", va="center", color=MUTED, fontsize=7)
+    print(f"  ledger: {led['detections']} detections / {ncam} views / "
+          f"{led['distinctNames']} track names -> {led['identities']} identities"
+          + ("; one per animal in every view" if every_view
+             else f"; ONLY {led['assigned']}/{total} assigned"))
+
     save(fig, 1, "b", "tracking")
 
 

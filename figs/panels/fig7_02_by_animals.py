@@ -15,6 +15,17 @@ WHAT IT SHOWS, INCLUDING WHERE LUC3D LOSES. LUC3D is ahead at 1 animal (+0.141,
 win count over n ("0/4") under every tick so the reader can weigh them, and the
 negative cells are NOT hidden.
 
+EVERY SESSION IS NOW A DOT (review 2026-08). The 3- and 4-animal cells carry 4 and
+3 sessions, and a mean with a bootstrap CI over so few values is doing a lot of
+implying — review asked for the sessions themselves. Each cell's deposited
+per-session differences are drawn as small dots behind the interval (deterministic
+golden-ratio jitter; the deposit stores each cell sorted, which does not matter
+here because nothing pairs dot to dot). At 3-4 animals the reader now sees the
+whole stratum: seven sessions, all below zero, none catastrophic (worst -0.103).
+The y limits are set by the DOTS, not the CIs — the widest session (+0.364, one
+animal) previously sat outside the axes — and the annotation band hangs below the
+lowest mark instead of at a fixed fraction.
+
 THE POOLED +0.075 IS NOT A MULTI-ANIMAL RESULT, and the panel now says so on the
 artwork rather than leaving the reader to notice. 32 of the 74 sessions -- 43% of the
 corpus -- contain ONE animal, and with one animal there is nothing to associate
@@ -111,6 +122,13 @@ def main():
     ax.axhline(0, color=INK, lw=0.8, zorder=1)
     for i, r in df.iterrows():
         color = LUC3D if r["mean"] > 0 else SLEAP
+        # The sessions themselves, behind the interval: sign-coloured like the
+        # mean, faint, with value-decorrelated golden-ratio jitter.
+        vals = np.asarray(pv[str(int(r.animals))]["per_session"], float)
+        jit = ((np.arange(len(vals)) * 0.6180339887) % 1.0 - 0.5) * 0.30
+        for xv, yv in zip(i + jit, vals):
+            ax.plot([xv], [yv], "o", color=LUC3D if yv > 0 else SLEAP, ms=2.2,
+                    alpha=0.45, mec="none", zorder=2)
         ax.plot([i, i], [r.ci95_lo, r.ci95_hi], color=color, lw=1.2, zorder=3)
         ax.plot([i], [r["mean"]], "o", color=color, ms=6, mec="white", mew=1.0,
                 zorder=4)
@@ -136,8 +154,11 @@ def main():
     # which an 88 mm panel has plenty.
     ax.set_ylabel("Δ IDF1\nLUC3D − SLEAP")
     ax.set_xlim(-0.6, len(df) - 0.2)
-    lim = max(df.ci95_hi.max(), -df.ci95_lo.min()) * 1.9
-    ax.set_ylim(-lim, lim)
+    # Limits from the DOTS as well as the CIs: the widest session is +0.364, well
+    # past the CI-derived band the earlier version used.
+    all_vals = np.asarray([v for a in counts for v in pv[str(a)]["per_session"]])
+    lim = max(df.ci95_hi.max(), -df.ci95_lo.min(), all_vals.max(),
+              -all_vals.min()) * 1.15
     ax.text(0.98, 0.96, "LUC3D ahead", transform=ax.transAxes, ha="right",
             va="top", color=LUC3D, fontsize=6.5, fontweight="bold")
     ax.text(0.98, 0.04, "SLEAP ahead", transform=ax.transAxes, ha="right",
@@ -147,13 +168,16 @@ def main():
     # 1-animal cell saying why its +0.141 cannot be a cross-view result, one over the
     # 2/3/4 cells carrying their pooled statistic. Both notes live BELOW the data
     # rather than beside it -- placed at the top of the axes the 1-animal note landed
-    # on that cell's own "+0.141" label (23% overlap). `by` is well below the
-    # 3-animal CI's -0.079, so neither rule crosses a mark. `by` is a fraction of
-    # `lim`, i.e. pinned in DATA units, so shortening the panel moves the bracket and
-    # the '-0.030' label it sits under by the same amount; at 47 mm they met (5% of
-    # the label's box inked) and 48 mm is the measured floor where they do not.
-    by = -lim * 0.37
-    ty = by - lim * 0.07
+    # on that cell's own "+0.141" label (23% overlap). `by` hangs a fixed margin
+    # under the LOWEST MARK (dot or CI end) now that session dots are drawn -- the
+    # old fixed -0.37*lim ran through the 2-animal cell's -0.177 session.
+    by = min(all_vals.min(), df.ci95_lo.min()) - lim * 0.16
+    ty = by - lim * 0.10
+    # The floor is set by the notes' two 6 pt lines under `ty`, not symmetrically:
+    # a mirrored -lim left a quarter of the axes empty below them. 0.52, measured:
+    # at 0.32-0.36 the BOTTOM SPINE crossed the last text line's bbox and lint
+    # flagged both notes ON DATA (a 0.8 pt rule is ~15% of a 6 pt line's box).
+    ax.set_ylim(ty - lim * 0.52, lim)
     for lo, hi in ((-0.28, 0.28), (0.72, 3.28)):
         ax.plot([lo, hi], [by, by], color=GREY, lw=0.8, zorder=1)
         for xe in (lo, hi):

@@ -46,8 +46,8 @@ INK = (0.30, 0.30, 0.30)  # matches src.style.INK (#4C4D4C)
 MARGIN = 3.0              # mm, top/bottom page margin
 PAGE_W = 180.0            # mm, Nature double column (matches src.style.PAGE_W)
 GUTTER = 4.0              # mm between panels in a row (matches src.style.GUTTER)
-ROW_GAP = 7.0             # mm between rows (also clears the panel letter)
-LETTER_LEAD = 4.5         # mm of headroom reserved above each row for its letters
+ROW_GAP = 3.5             # mm between rows (also clears the panel letter)
+LETTER_LEAD = 4.0         # mm of headroom reserved above each row for its letters
 MAX_H = 200.0             # mm, soft ceiling -- warn past this
 PREVIEW_DPI = 300         # the composite .png proof; the .pdf is the artefact
 FOOTER_PT = 6.5           # figure-level provenance footer
@@ -57,51 +57,17 @@ FOOTER_LEAD = 3.4         # mm per footer line
 #: naming corpus, n and the caveats; the restyle dropped them all and Fig 4 ended up
 #: with NO provenance on the artwork at all. Panel letters are not provenance.
 #: Keep each line under ~150 characters so it fits 180 mm at 6.5 pt.
-FOOTERS = {
-    1: ["a: schematic. b, c: one frame of an 8-camera HardFight recording, driven "
-        "through LUC3D itself (load, Track All, Triangulate All).",
-        "d: third-party capabilities from published documentation, checked "
-        "2026-08-04; qualifications in the caption."],
-    2: ["a: the app on an 8-camera recording (a different rig from b-d). "
-        "b, c, d: all 50 proofread BMimica sessions, 5 cameras, 2 mice, 15 nodes, "
-        "1,277,424 keypoints.",
-        "Every session enters every panel: 38,322,720 held-out view measurements in "
-        "c; 12,774,240 two-anchor solves in d. See caption."],
-    # NOTE: these letters shifted when the cost-terms schematic was restored as b.
-    # A footer that names the wrong panels is worse than none, so it moves with the
-    # layout above -- check both together.
-    3: ["b: the cost function as implemented. c: exact arithmetic. "
-        "d: measured by scripts/bench/bench_crossview.mjs.",
-        "e: 8 BMimica sessions, a fixed 6,000-frame leading window per cell, "
-        "identical across all 24 cells.",
-        "f: exhaustive is our reimplementation of the published per-frame procedure. "
-        "IDF1 and switches via motmetrics on a shared identity-stripped pool."],
-    # "All panels" was doing too much work: b is not from the run c-f are from, and
-    # the only place that was said was the stride. The second line now attributes it,
-    # names the alignment its floor is bounded by, and says the floor is a comparison
-    # floor -- the panel itself carries the short form ("DLT only, stride 200, as
-    # Fig 2" and "band: across-session p25-p75"), which is all a 57 mm panel will take.
-    4: ["All panels: the same 50 BMimica sessions, 5 cameras, 3 calibrations. "
-        "c-f 4,253,636 keypoints at stride 60; b 1,277,424 at stride 200.",
-        "b is the Fig 2 measurement: DLT only, brought into this pipeline's frame by "
-        "RANSAC-Procrustes, so its floor is a comparison floor, not accuracy.",
-        "Median lens-distortion displacement 8.42 px (p95 23.36). See caption for "
-        "what is enforced rather than observed."],
-    5: ["a: one frame of an 8-camera recording in LUC3D, 3D solved from all 8 views "
-        "(the app's normal state, not a held-out or anchored solve).",
-        "c, d: 74 SLAP-2M sessions, 1,561,915 keypoints. The ranking in c and d is "
-        "measured offline: LUC3D reports the residual for the frame you are on and "
-        "has no ranked worklist."],
-    6: ["a, b: one SLAP-2M session. c, d, f: 74 SLAP-2M sessions, 1,561,915 "
-        "keypoints, raw detections from the benchmark's shared identity-stripped "
-        "pool,",
-        "matched per frame against the proofread 3D reprojected into each camera. "
-        "e: both corpora, read from the files."],
-    7: ["Identical identity-stripped detections for every tracker shown. "
-        "Session-level statistics throughout; SHIPPED LUC3D configuration.",
-        "a: 50 BMimica sessions, 5 cameras, 2 mice. b-g: 74 SLAP-2M sessions. "
-        "See caption for n and method."],
-}
+#: FIGURE-LEVEL FOOTERS ARE NO LONGER DRAWN. Every figure used to carry two to five
+#: lines of grey provenance under the artwork -- corpus, n, method caveats. That is
+#: caption text, and a submitted figure should not set its own caption: the journal
+#: sets it, in the legend, in the journal's type. All of it now lives in
+#: `figs/FIGURE-LEGENDS.md` (the legends as they should be pasted into the
+#: manuscript), `figs/METHODS.md` (how each number was produced) and
+#: `figs/PANEL-SOURCES.md` (which script made which panel).
+#:
+#: The mechanism is kept, not deleted: an entry here is still drawn, so a working
+#: draft can put provenance back on the artwork while a figure is being audited.
+FOOTERS: dict[int, list[str]] = {}
 
 #: (figure, letter) -> panel title, drawn beside the letter at assembly.
 #:
@@ -127,19 +93,21 @@ TITLES = {
     (3, "a"): "Grouping strategies",
     (3, "b"): "Association cost",
     (3, "c"): "Hypotheses per frame",
-    (3, "d"): "Association runtime",
+    (3, "d"): "Grouping accuracy, head to head",
     (3, "e"): "3D-term ablation",
     (3, "f"): "Time per frame",
     (4, "a"): "Triangulation solvers",
     (4, "b"): "Accuracy vs cameras used",
     (4, "c"): "Dropping the worst camera",
-    (4, "d"): "Error in an unused camera",
-    (4, "e"): "Per session, both solvers",
-    (4, "f"): "Time per keypoint",
-    (5, "a"): "Per-view reprojection error",
-    (5, "b"): "Proofreading loop",
-    (5, "c"): "Correction found per review budget",
-    (5, "d"): "Per session, 10% budget",
+    (4, "d"): "Per session, vs Anipose",
+    (4, "e"): "Time per keypoint",
+    (5, "a"): "One display, five views",
+    (5, "b"): "Both rise, noses converge",
+    (5, "c"): "One animal is up first",
+    (5, "d"): "Close, hold, withdraw",
+    (5, "e"): "Brief and still",
+    (5, "f"): "Each session has a leader",
+    (5, "g"): "One rear invites another — up close",
     (6, "a"): "Rig and 3D",
     (6, "b"): "One frame, six cameras",
     (6, "c"): "Detection quality",
@@ -171,14 +139,31 @@ LAYOUTS = {
          ("d", "baseline_angle")]],
     3: [[("a", "association")],
         [("b", "cost_terms"), ("c", "cost_model")],
-        [("d", "runtime_scaling"), ("e", "sweep"), ("f", "head_to_head")]],
+        [("d", "quality"), ("e", "sweep"), ("f", "head_to_head")]],
     4: [[("a", "solvers")],
-        [("b", "accuracy_vs_cameras"), ("c", "worst_camera"),
-         ("d", "heldout_by_views")],
-        [("e", "per_session"), ("f", "time_per_keypoint")]],
-    5: [[("a", "per_view_error")],
-        [("b", "loop")],
-        [("c", "capture"), ("d", "per_session")]],
+        [("b", "accuracy_vs_cameras"), ("c", "worst_camera")],
+        [("d", "per_session"), ("e", "time_per_keypoint")]],
+    # ROW 3 REPLACED (2026-08): the review cut "Correction found per review budget"
+    # and "Six timelines vs one identity" -- the first was a triage curve whose
+    # ranking signal and payload were correlated (rho 0.69), the second plotted a
+    # count LUC3D loses on to argue something the dots did not measure. In their
+    # place, a downstream 3D behaviour: the mutual upright display. Its panel scripts
+    # are fig5_05/06/07; fig5_03_capture.py and fig5_04_proofread.py are still in the
+    # tree and still deposit their CSVs, but are no longer placed on the artwork.
+    # FIG 5 IS NOW ENTIRELY THE MUTUAL UPRIGHT DISPLAY (2026-08). The per-view
+    # reprojection panel and the proofreading-loop schematic were cut on request; the
+    # figure makes one argument -- what 3D tracking buys you for a two-animal social
+    # interaction -- rather than three unrelated ones. Panel scripts are
+    # fig5_05/06/08/09/07 in that letter order; fig5_02/03/04 remain in the tree,
+    # still deposit their CSVs, and are no longer placed.
+    # ROW 3 ADDED (2026-08): the two insets on 5c and 5e became panels. Both were
+    # colliding with their host panel's own annotation, and both were carrying a
+    # result that could not be defended at inset size -- 5c's needed the unit of
+    # replication changed from the session to the ANIMAL, and 5e's needed a null.
+    5: [[("a", "upright_views"), ("b", "upright_dynamics")],
+        [("c", "upright_initiator"), ("d", "upright_velocity"),
+         ("e", "upright_stats")],
+        [("f", "leader"), ("g", "rear_coupling")]],
     6: [[("a", "rig"), ("b", "cameras")],
         [("c", "detection_quality")],
         [("d", "animal_count"), ("e", "corpora")],

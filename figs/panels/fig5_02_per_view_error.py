@@ -8,6 +8,20 @@ per animal, the reprojection error in each camera. The panel shows why that is
 usable as a triage signal -- one animal in this frame sits at ~12 px mean while the
 other two sit near 3 px, and the outlier is visible in EVERY view rather than in one.
 
+THE 12 PX ANIMAL IS A REFLECTION LOCK-ON, AND THE PANEL NOW SAYS SO ON THE ARTWORK
+(review 2026-08). Animal 2 sits against the glass partition and the detector places
+part of its skeleton -- most visibly the tail -- on the animal's REFLECTION in the
+glass, so the triangulated 3D is pulled off-body and every view's residual rises.
+Review read that as an unacknowledged failure ("an animal's tail reflected onto the
+wall and misidentified"). It cannot be staged away: `figs/_probe_fig5a_frames.mjs`
+swept all 300 frames of the trimmed session and animal 2's all-views mean never
+drops below 6.5 px (the other two animals sit at 2.3-3.8 px in every frame) -- the
+animal never leaves the glass in this clip. So the panel OWNS it instead: a
+reflection lock-on is precisely the detector failure a single view cannot reveal
+(the 2D skeleton looks plausible in each camera alone) and the cross-view residual
+exposes in all eight -- which is the panel's argument, demonstrated on a real
+failure rather than a cosmetic one. The footnote states it; the caption must too.
+
 THE TWO TILES ARE THE EVIDENCE, and they were briefly deleted from this panel. Fig 5
 claims a human reads a number off the screen; without the screen the panel is a plot
 of three numbers and nothing shows what the number MEANS. So:
@@ -182,7 +196,9 @@ def main():
     ax.set_ylabel("reprojection error (px)")
     ax.set_ylim(0, ymax)
     ax.set_yticks(np.arange(0, ymax + 1, 5))
-    footnote(ax, f"one frame ({j['frame']}), {len(cams)} cameras, all-views solve")
+    footnote(ax, f"one frame ({j['frame']}), {len(cams)} cameras, all-views solve\n"
+                 "animal 2: the detector locks onto its reflection in the glass —\n"
+                 "the residual flags it in every view")
     save(fig, 5, "a", "per_view_error")
 
 

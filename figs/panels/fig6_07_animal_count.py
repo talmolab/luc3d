@@ -30,7 +30,7 @@ half of this file's history. That version was wrong in three separate ways:
 
 WHICH DEPOSIT, AND WHY -- `fig6_detections.json`, not `fig6_difficulty.json`.
 Both files deposit a `by_animals` table and they disagree on the 2-animal miss rate
-by half (21.95 % vs 33.19 %). That is NOT two computations of one quantity
+by half (21.95 % vs 33.16 %). That is NOT two computations of one quantity
 disagreeing; they are different measurements over different populations, and only one
 of them belongs on this figure:
 
@@ -40,7 +40,8 @@ of them belongs on this figure:
                          reconstruction's own 2D-to-3D residual and per-camera label
                          coverage. Legacy called it a "circular comparison" and kept
                          it strictly as a fallback (`legacy/fig6.py:35-42`).
-  fig6_detections.json   74 sessions, `detections_only_master_sheet.tsv`, stride 120,
+  fig6_detections.json   74 sessions, `detections_only_master_sheet.tsv`, stride 1
+                         (EVERY frame; it was stride 120 until the full-data re-run),
                          detection pool `outputs/keeptrack_h5s` -- the benchmark's
                          shared identity-stripped RAW detections. This is the
                          measurement panels c and f already plot.

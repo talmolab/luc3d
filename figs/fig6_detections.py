@@ -46,7 +46,13 @@ B. IS REPROJECTION ERROR A USEFUL TRIAGE SIGNAL? (the non-tautological Fig 5 cla
    stated in the output caveats.
 
 Run with the bench env:
-    /root/vast/eric/luc3d-bench/lp3d_env/bin/python figs/fig6_detections.py
+    /root/vast/eric/luc3d-bench/lp3d_env/bin/python figs/fig6_detections.py --jobs 12
+
+EVERY FRAME. `--stride` defaults to 1; it was 120 (0.8% of frames, 1,561,915 keypoint
+comparisons) until the full-data re-run, and is now 187,134,382 comparisons over the
+same 74 sessions. Full density costs 79 s wall on 12 processes and ~2.5 GB in the
+largest session, so subsampling bought nothing. Sessions are independent, which is all
+`--jobs` exploits; the parallel and serial paths were checked to produce identical JSON.
 
 Writes figs/out/fig6_detections.json.
 """
@@ -284,26 +290,53 @@ def _spearman(a, b):
     return float((ra * rb).sum() / d) if d else float("nan")
 
 
+def _one(job):
+    """(sidx, row, stride) -> (sidx, session name, result | None, error | None).
+
+    Module-level and picklable so `--jobs` can hand it to a process pool. Sessions
+    are independent -- separate files, separate h5 handles, no shared state -- so
+    the only thing the pool changes is which order the progress lines print in,
+    which is why results are re-sorted by session index before aggregation.
+    """
+    sidx, row, stride = job
+    try:
+        return sidx, row["session"], measure_session(row, sidx, stride), None
+    except Exception as e:                                            # noqa: BLE001
+        return sidx, row["session"], None, f"{type(e).__name__}: {e}"
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stride", type=int, default=120)
+    #: FRAME STRIDE. 1 = every frame. The default was 120 (0.8% of frames) when this
+    #: was written; at stride 1 a median 18k-frame session costs ~5 s and ~0.5 GB, so
+    #: the whole 74-session corpus runs in minutes and there is no reason to subsample.
+    ap.add_argument("--stride", type=int, default=1)
     ap.add_argument("--max-sessions", type=int, default=0)
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="processes to spread sessions over (1 = serial)")
     ap.add_argument("--out", default=OUT)
     args = ap.parse_args()
 
     rows = list(csv.DictReader(open(MASTER), delimiter="\t"))
     print(f"master: {len(rows)} sessions (pool session axis = row index)")
+    if args.max_sessions:
+        rows = rows[:args.max_sessions]
+    jobs = [(sidx, row, args.stride) for sidx, row in enumerate(rows)]
+
+    if args.jobs > 1:
+        import concurrent.futures as cf
+        with cf.ProcessPoolExecutor(max_workers=args.jobs) as ex:
+            results = list(ex.map(_one, jobs))
+    else:
+        results = [_one(j) for j in jobs]
+
     done = []
-    for sidx, row in enumerate(rows):
-        if args.max_sessions and len(done) >= args.max_sessions:
-            break
-        try:
-            r = measure_session(row, sidx, args.stride)
-        except Exception as e:                                        # noqa: BLE001
-            print(f"  [{sidx}] {row['session']}: FAIL {type(e).__name__}: {e}")
+    for sidx, name, r, err in sorted(results, key=lambda t: t[0]):
+        if err is not None:
+            print(f"  [{sidx}] {name}: FAIL {err}")
             continue
         if r is None:
-            print(f"  [{sidx}] {row['session']}: skip (missing inputs)")
+            print(f"  [{sidx}] {name}: skip (missing inputs)")
             continue
         done.append(r)
         print(f"  [{sidx}] {r['session']}: diff {r['difficulty']} "

@@ -32,12 +32,18 @@ from src.style import MUTED, grid, GREY, INK, SALMON, TEAL, save, use  # noqa: E
 #: SIX stages, matching the legacy figure. Export is not decoration: emitting SLP
 #: 2.8 with the columnar /session_data is what makes the 3D readable by SLEAP, and
 #: dropping it made the pipeline look like a dead end.
+#: Icons are the pipeline's own objects (review 2026-08), not generic marks:
+#: "2D pose" is two animals' poses in ONE colour (identity does not exist yet),
+#: "triangulate" is one animal's 3D pose over a ground plane, and "proofread 3D"
+#: is the two re-identified instances in the identity palette -- the same mini
+#: pose at three stages, so the row reads as one object moving through the
+#: pipeline. The glyphs live in src/diagram.py `icon()`.
 STAGES = [
     ("videos +\ncalibration", "N cameras, .toml", False, "cameras"),
-    ("2D pose", "SLEAP or similar", False, "skeleton"),
+    ("2D pose", "SLEAP or similar", False, "pose2d"),
     ("cross-view\nre-ID", "1 identity / animal", True, "ids"),
-    ("triangulate", "DLT, N ≥ 2 views", True, "triangulate"),
-    ("proofread 3D", "3D + reproj.", True, "check"),
+    ("triangulate", "DLT, N ≥ 2 views", True, "pose3d"),
+    ("proofread 3D", "3D + reproj.", True, "instances3d"),
     ("export", ".slp 2.8 / H5", False, "file"),
 ]
 

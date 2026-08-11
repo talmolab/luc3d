@@ -49,6 +49,10 @@
  * that cage. Percentile semantics are unchanged (filter non-finite, sort, index).
  *
  * Env: POSE_DIR=  LIMIT=<n keypoints>  OUT_JSON=<path>
+ *      HOV_SUB=<n>  keypoint stride for the held-out-by-view-count arm (default:
+ *                   whatever gives ~1.2 M keypoints; 1 = every keypoint)
+ *      DSTEP=<n>    keypoint stride for the lens-distortion fixture (default:
+ *                   ~200 k keypoints; 1 = every keypoint)
  *
  * Usage:
  *   /root/.../lp3d_env/bin/python figs/fig4_export.py     # -> figs/out/fig4_input.json
@@ -204,7 +208,11 @@ const MS = { dlt: 0, ba: 0, ba_legacy: 0 };
 // against the raw detection in a view no solve ever saw -- so it cannot inherit the
 // proofread reference's own bias. Run on a subsample because each keypoint costs
 // (kmax-1) extra refinements.
-const SUB = Math.max(1, Math.floor(NK / 1.2e6));
+// HOV_SUB=1 runs it on EVERY keypoint (the reviewer's "no secondary subsample"
+// setting, ~+35% wall clock); unset keeps the old 1.2 M-keypoint target.
+const SUB = process.env.HOV_SUB
+    ? Math.max(1, +process.env.HOV_SUB)
+    : Math.max(1, Math.floor(NK / 1.2e6));
 const NSUB = Math.ceil(NK / SUB);
 const KMAX = C - 1;
 const HOV = {};
@@ -224,7 +232,9 @@ let nextBlock = 0;
 // comparison is vacuous. Measured across the WHOLE corpus (strided), with each
 // keypoint's own calibration -- an earlier version sampled only the first 500
 // keypoints, i.e. one session on one calibration, and never deposited the number.
-const DSTEP = Math.max(1, Math.floor(NK / 200000));
+const DSTEP = process.env.DSTEP
+    ? Math.max(1, +process.env.DSTEP)
+    : Math.max(1, Math.floor(NK / 200000));
 const DIST = nan(Math.ceil(NK / DSTEP) * C);
 let DISTN = 0;
 for (let k = 0; k < NK; k += DSTEP) {

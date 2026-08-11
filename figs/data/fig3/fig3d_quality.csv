@@ -1,0 +1,3 @@
+label,hypotheses,method,frames,gt_exact,misgrouped,misgrouped_per_10k,pair_accuracy_mean,n_agree,n_compared
+2×6,,exhaustive,28062,28057,5,1.7817689402038344,0.999946007001812,28056,28062
+2×6,,LUC3D (greedy),28062,28061,1,0.3563537880407669,0.9999935208402175,28056,28062

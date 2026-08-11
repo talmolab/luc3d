@@ -335,19 +335,21 @@ not a measurement.
 (**c**) Hypotheses per frame for the exhaustive method, one curve per rig size, exact
 arithmetic; the dotted rule is the harness's own 10⁶ hypotheses-per-frame cap. This axis
 carries **only** the exhaustive count: the greedy solve enumerates no hypotheses at all,
-so its cost is stated in words under the axis and measured in **d**, not drawn as a
-second curve here.
-(**d**) Measured LUC3D association time per frame across rig sizes, one series per animal
-count (`scripts/bench/bench_crossview.mjs`). **n = 1 session per line** — 2 animals
-`10072022131531`, 3 animals `10072022142111`, 4 animals `10072022145420` — so the
-separation *between* lines confounds animal count with session; what the sweep *along* a
-line isolates is C, because the detection pool is identical across the camera-subset
-cells of a given animal count. The one open marker is a second corpus measured at the
-same (2 animals, 5 cameras) cell (BMimica `20250827_141755`, 1.12 ms against the
-SLAP-2M line's 0.96 ms); it is drawn at its own value rather than averaged away, because
-averaging would invent a third number that was never measured. Worst case on the panel is
-**2.4 ms per frame** at 4 animals × 6 cameras, 8× under a 20 ms per-frame budget at
-50 fps.
+so its cost is stated in words under the axis and measured in **f** (the teal series),
+not drawn as a second curve here.
+(**d**) **Grouping quality head to head against proofread ground truth, on the identical
+detections, for every frame the exhaustive method could be run at all** (137,266 clean
+frames across the three tractable configurations; a frame is clean when every camera
+holds exactly A detections). Per configuration and method: frames whose grouping differs
+from the ground-truth partition (label-invariant comparison over IoU-0.5-matched
+detections). **Each method misgroups exactly one frame — and not the same one.** The two
+frames where the methods pick different groupings split 1–1 against ground truth: on one,
+greedy's grouping scores 5.7% above the reprojection-error optimum and the optimum is
+right; on the other, the *minimum-reprojection-error grouping is the wrong grouping* — the
+exhaustive search finds it by construction, and optimising the objective harder than
+greedy does buys nothing, because the objective runs out before the search does. These
+are clean frames by construction (the composition note in **f**), so the claim is
+equivalence where the published method can run, not perfection.
 (**e**) An ablation **of LUC3D against itself**: the two cost weights swept over 24
 (corr2d, corr3d) combinations, which collapse *exactly* onto their ratio
 r = corr3d/corr2d — every pair of cells sharing an r returns identical IDF1 and
@@ -358,10 +360,14 @@ shipped r = 6 is marked because it is the default, not because the sweep picked 
 (**f**) Measured wall-clock time per frame for both methods on identical detections, over
 the four configurations that could be attempted, on a log axis from 1 ms to 1 day; the
 title carries the partition-agreement rate and both frame counts. The 4-animal,
-6-camera point (1.9 × 10⁸ hypotheses per frame, above the harness's 10⁶ cap, **zero
-frames computed**) is drawn as an **open marker — this figure's convention for "not
-measured"** — at the extrapolated ~66,343 s per frame, with a range bar spanning the
-244–347 µs per-hypothesis rates that were measured.
+6-camera point ((4!)⁶ = 1.9 × 10⁸ hypotheses per frame, above the harness's 10⁶ cap,
+**zero frames computed**) is drawn as an **open marker — this figure's convention for
+"not measured"** — at a **lower bound** of ~1,941 s (0.5 h) per frame, with a bar
+running **up** from it to the as-published ~66,343 s (18 h). The marker, and every
+claim made from it, is the floor: it grants the search the A!-fold label symmetry the
+published (A!)^C enumeration does not exploit (7.96 × 10⁶ distinct hypotheses) *and*
+uses the cheapest measured per-hypothesis rate (244 µs). The bar's upper cap is the
+un-reduced count at the 347 µs rate measured closest to this regime.
 
 *Methods.* Cost is summed over nodes k with per-node weights wₖ (wₖ = 0 drops a node
 from the association entirely) and negated, so the Hungarian solver minimises it. Both
@@ -383,11 +389,27 @@ occlusion-free sample; the panel prints all three of these figures. Panel **e** 
 BMimica sessions on a fixed **6,000-frame leading window per cell**, identical across all
 24 cells (~3% of a session; see *Pending* above — the artwork's own footer states the
 window).
-Panel **f**'s extrapolated point uses **347 µs per hypothesis**, the rate measured on the
-largest configuration that ran (3 animals × 5 cameras): 1.9 × 10⁸ × 347 µs ≈ **66,343 s
-per frame**. The bar on that marker spans the full 244–347 µs range the measured
-configurations give (46,587–66,343 s per frame). Panel **d**'s and panel **f**'s LUC3D
-times come from the same `fig3_runtime.json measured` table, matched to each
+Panel **f**'s extrapolated point is deliberately **not** priced at the published count ×
+the closest-matching rate. That product — 1.9 × 10⁸ × 347 µs ≈ 66,343 s ≈ **18.4 h per
+frame** — is what the bar's upper cap marks, and on an axis whose top tick is 1 day it
+would read as the headline "a day per frame". It is an overstatement, for a reason
+intrinsic to the (A!)^C count: applying the *same* permutation to every camera relabels
+the groups but leaves the partition and its cost identical, so each distinct hypothesis
+is enumerated A! times over. Fixing one camera's labels leaves **(A!)^(C-1) = 24⁵ =
+7,962,624** distinct hypotheses, 24× fewer. The plotted marker therefore takes that
+reduced count at the **cheapest** measured rate (244 µs, from 2 × 6): **1,941 s ≈ 0.5 h
+per frame**, i.e. one second of 50 fps video costs **≥ 1 day**. That floor is generous
+to exhaustive twice over, because 244 µs was measured at A = 2 and per-hypothesis cost
+grows with A — each hypothesis triangulates A groups and reprojects into C cameras, and
+the three measured cells cost a near-constant **116–127 µs per animal-triangulation**, so
+A = 4 should run ~2× that rate (scaling 347 µs by (4/3)(6/5) puts the un-reduced figure
+at ~29 h). Even at the floor the gap to LUC3D is **10⁶×**, which is the callout on the
+artwork. Note the harness's **10⁶ cap is a cap, not a count** — 4 × 6 exceeds it by 191×,
+which is why zero frames ran. A memoized implementation that cached per-group
+triangulations across hypotheses could beat the per-hypothesis cost model outright, but
+that is a different algorithm from the published per-frame procedure this panel
+reimplements and prices. Panel **f**'s LUC3D
+times come from the `fig3_runtime.json measured` table, matched to each
 configuration by (animals, cameras) **and corpus** rather than averaged — the (2, 5) cell
 was measured twice on two corpora and the exhaustive 2 × 5 run is BMimica, so the BMimica
 LUC3D measurement is the one set beside it.
@@ -446,14 +468,19 @@ Maree et al. 2024.
 ## Figure 4 — Triangulation
 
 > Every number below is printed by `python3 figs/fig4.py` as `[caption]` lines, read
-> straight from `figs/out/fig4.json` and `fig2.json`, so the caption can be checked
-> against that output rather than trusted.
+> straight from `figs/out/fig4.json`, so the caption can be checked against that output
+> rather than trusted. Two panels read their own deposits: (**b**) from
+> `figs/out/fig4_by_views.json` (`figs/fig4_by_views.mjs`, both LUC3D solvers by view
+> count — it used to read `fig2.json`), and the Anipose arms of (**d**, **e**) from
+> `figs/out/fig4_anipose.json` (`figs/fig4_anipose.py`).
 
 **The accuracy of a triangulated keypoint is set by how many views contribute and by
-whether a badly-fitting view is rejected — 4.75 → 1.22 mm as views go from two to five,
-and a median 7.2 mm displacement from dropping one view that disagrees by ≥ 10 px — not
-by the choice of solver, which moves the residual by 8% on the views it optimises and
-3% on a view it has never seen.**
+whether a badly-fitting view is rejected — 4.32 → 3.34 px in a camera the solve never
+saw as views go from two to four, and a median 7.2 mm displacement from dropping one
+view that disagrees by ≥ 10 px — not by the choice of solver. Across four solvers, two
+ours and two Anipose's, the whole spread on a held-out camera is 3.11–3.34 px; the
+lowest is Anipose's, and neither library's non-linear refinement earns its cost out of
+sample.**
 
 (**a**) The three solvers. Linear DLT minimises an algebraic error in ideal-pinhole
 coordinates in closed form and is the app's default. The app's non-linear
@@ -465,13 +492,61 @@ as well as the structure, exists in the codebase (`bundleAdjustCameras`) and is
 deliberately not wired to the UI, because rewriting a project's calibration
 invalidates every 3D point already derived from it. Padlocks mark cameras held fixed;
 arrows mark cameras free to move. Schematic, not data.
-(**b**) Median 3D distance to the fully-informed proofread reconstruction when the
-point is triangulated from *k* of the five views (all C-choose-*k* subsets, solver held
-constant), median over 50 sessions; band p25–p75 — a median *of* the per-session IQRs,
-not a confidence interval. 4.75 / 2.91 / 1.92 / 1.22 mm for 2/3/4/5 views. **This panel
-alone reads `fig2.json`** (DLT only, stride 200, 1,277,424 keypoints), whereas c–f read
-`fig4.json` (both solvers, stride 60, 4,253,636 keypoints); the figure's footer states
-both samplings.
+(**b**) **Reference-free.** Solve from *k* of the five cameras (every C-choose-*k*
+subset), project into each camera **outside** the subset, and score against that
+camera's raw detection in its native, still-distorted pixels. Both LUC3D solvers;
+median over 50 sessions; band p25–p75 for the DLT — a median *of* the per-session
+IQRs, not a confidence interval, drawn for one curve only because two overlapping
+ribbons read as four tints and neither stays legible (the refinement's IQR is in
+`fig4b_accuracy_vs_cameras.csv`). DLT **4.32 / 3.65 / 3.34 px** and refinement
+**4.43 / 3.53 / 3.15** for 2/3/4 cameras — a **1.29×** and **1.41×** improvement.
+No reference 3D enters this panel, and **neither solver optimises this metric**: the
+refinement minimises reprojection error in the views it *was* given, never the
+held-out one. So the ranking here is contingent, and it flips — the refinement is
+**worse** than the DLT at two views (4.43 vs 4.32) and better at three and four
+(3.53 vs 3.65, 3.15 vs 3.34). A sign flip is the one thing a rigged metric cannot
+produce.
+
+***k* stops at 4 because a five-camera rig has no fifth camera to hold out**, not by
+choice. n = 31.9 M / 21.3 M / 5.3 M held-out measurements at k = 2/3/4.
+
+**This panel used to plot 3D distance to the proofread reference, and it was changed
+because that axis cannot compare two solvers.** `figs/fig4_move_geometry.mjs` measures
+why, per keypoint, with D = DLT, R = refined, G = reference:
+
+| | \|D−G\| | \|R−D\| (the move) | \|R−G\| measured | if ⟂: √(\|D−G\|²+\|R−D\|²) | if straight away |
+|---|---|---|---|---|---|
+| k = 2 | 2.697 mm | 0.559 | **2.895** | **2.917** | 3.256 |
+| k = 5 | 1.214 | 1.249 | **1.852** | 2.116 | 2.463 |
+
+The refinement moves about as far as the reference sits from the DLT, in a direction
+essentially **uncorrelated** with the direction to the reference (median cos 0.004 at
+k = 2, 0.135 at k = 5; means 0.002 and 0.066). Adding a displacement orthogonal to an
+existing error always increases the distance — measured 2.895 mm against a
+perpendicular prediction of 2.917 — so that axis reported "the refinement moved" and
+read it out as "the refinement is worse", whichever way it moved. Arithmetic, not
+accuracy. **It equally rules out the opposite reading**, that the refinement trades 3D
+accuracy for 2D fit (real when calibration is biased): that would move systematically
+*away*, giving a clearly negative cosine and \|R−G\| → 2.463 mm at k = 5. The measured
+cosine is slightly **positive**. The refinement is not degrading the 3D; the reference
+cannot see what it did.
+
+The mm arm is still measured and deposited in `fig4_by_views.json`
+(`err3d_mm_across_sessions`) and is quotable **for one solver against itself across
+k**, where the bias is ~constant and cancels: DLT **4.73 → 1.21 mm** from two views to
+five, a **3.9×** span, reaching the *k* = 5 point this panel cannot. It is not
+plotted, and it must not be used to rank solvers.
+
+Panel b reads `figs/out/fig4_by_views.json` (`figs/fig4_by_views.mjs`, the real branch
+solvers, stride 240 = every 4th keypoint of the stride-60 export, 1,063,427 keypoints,
+55.3 M solves). Its mm arm reproduces `fig2.json`'s `err3d_mm_by_anchor_count` to
+**0.1–0.7% at every k**, which is what licenses calling this the same measurement Fig 2
+made with a second arm added. Its px arm runs **5–10% above** `fig4.json`'s
+`heldout_by_views` by construction — that one pools over keypoints and holds out one
+fixed camera, this one is a median of session medians over every C-choose-*k* subset.
+Same story, different estimator; **do not mix the two sets of numbers**. And *not*
+`fig2.json`'s `by_anchor_count` px arm, which despite the name scores against the
+reprojected reference (`gtk`) rather than the raw detection.
 (**c**) Distance the 3D estimate moves when the single worst-fitting view is dropped
 and the point re-solved from the rest, by how far that view sat from the all-view
 solution. Median 1.07 mm (< 3 px, n = 1,167,554), 1.76 mm (3–10 px, n = 3,019,181),
@@ -483,24 +558,78 @@ the **fraction where the drop actually lowered the kept views' error** (87% / 83
 96%), because a displacement has no sign and the magnitude alone is equally consistent
 with the drop fixing the point and with it wrecking it. No reference 3D enters this
 measurement.
-(**d**) Leave-one-camera-out: solve from *k* of the four remaining views, project into
-the fifth, and score against the raw detection there. Medians over 1,417,879 keypoints
-(every third keypoint, one held-out camera each). 3.92 / 3.36 / 3.06 px for DLT at
-2/3/4 views. Lower strip is refined − DLT; each bar takes the winning solver's colour.
-(**e**) Median reprojection error per session (one dot per session, joined in pairs;
-rules are the median of the 50 session dots, not of the pooled keypoints). Left, scored
-in the cameras the solver used — labelled **(enforced)** on the artwork, because the
-refinement minimises the reported metric and a backtracking guard vetoes any step that
-raises it, so "refined lower in 50/50" there cannot come out otherwise. Right, scored in
-a camera it never saw, where either solver can lose: refined is lower in 34/50.
-(**f**) Solve time per keypoint for the two shipped paths, measured in this run
-(single-threaded Node 26, `performance.now()` around each call).
+(**d**, **e**) **Four solvers, paired by algorithm class**, so that each comparison is
+between two things that do the same amount of work:
+
+| | linear (closed form) | non-linear (iterative, cameras fixed) |
+|---|---|---|
+| Anipose | `CameraGroup.triangulate` | `optim_points` |
+| LUC3D | our DLT | our refinement |
+
+Reading *across* a pair is the comparison; reading *down* a column is what refining
+costs inside one library. An earlier draft drew only Anipose's linear solve, which put
+their closed-form SVD next to our iterative one and invited the reading "our refinement
+is 1.6× slower than Anipose" — a category error, and the reason both panels now carry
+all four.
+
+(**d**) Median reprojection error per session; one dot per session, the four joined so
+the comparison is visibly paired; rules are the median of the 50 session dots, not of
+the pooled keypoints. All four columns are the same 4,253,636 keypoints. Open circles
+mark the `optim` columns, filled the linear ones. Left, scored in the cameras the solve
+used — labelled **(refined enforced)**, because our refinement minimises the reported
+metric and a backtracking guard vetoes any step that raises it, so "refined lowest"
+there cannot come out otherwise. Right, scored in a camera no solve saw, where nothing
+is enforced: **Anipose is lower in both pairs, 50/50 and 49/50** (3.11 / 3.34 linear,
+3.12 / 3.14 non-linear).
+(**e**) Solve time per keypoint. All four bars are the **solve alone** — undistortion is
+excluded from every one, because `CameraGroup.triangulate` undistorts inside the call
+and LUC3D undistorts outside it, and charging only one of them would be an artefact of
+where each library draws a function boundary (excluded: 0.45 µs Anipose, 1.17 LUC3D).
+LUC3D measured in-process (single-threaded Node 26, `performance.now()` around each
+call, 4,253,636 keypoints); Anipose with `perf_counter`, best of 3 over 88,343. **We are
+4.4× faster on the linear pair (6.3 vs 28.1 µs) and 2.7× on the non-linear one (43.8 vs
+122.1).** The `optim` bar carries a whisker because it is **not a per-keypoint
+constant**: `optim_points` is one global `scipy.least_squares` per session, so its cost
+per keypoint falls as fixed costs amortise — 393.7 µs/keypoint at 1,000 frames, then
+114.9 and 122.1 at 2,000 and 4,000. The bar is the largest run and the whisker spans the
+session-scale sizes only.
+
+**Anipose here is aniposelib 0.7.2** — the OpenCV/NumPy pipeline (`cv2.undistortPoints`,
+then a per-point `numpy.linalg.svd` DLT), the last release before the JAX rewrite and
+the newest one `anipose` itself accepts (`Requires-Dist: aniposelib >=0.7.0`). It is
+**not** 0.8.0, whose `jax.vmap` rewrite is a different program with different
+performance; `figs/fig4_anipose.py` refuses to run against a JAX build. On the linear
+path both libraries solve one keypoint at a time, so (e)'s first pair compares like with
+like rather than a batched library against a per-call one.
+
+**Which Anipose configuration each column is.** `anipose triangulate` reads two flags,
+both `False` by default (verified in `anipose/anipose.py`): `optim: false, ransac: false`
+→ `CameraGroup.triangulate` (the *linear* columns); `optim: true` → `optim_points` (the
+*optim* columns); `ransac: true` → `triangulate_ransac`, which costs **2,339
+µs/keypoint** — 83× the default path and 53× our refinement — and is reported here
+rather than drawn, because a bar that size flattens every other bar in the panel.
+Naming the flag matters: "Anipose" spans two orders of magnitude in cost depending on it.
+
+**The optim columns have temporal smoothing disabled, and that is the charitable
+choice, not a convenient one.** aniposelib's `optim_points` defaults add a smoothing
+term across consecutive frames (`scale_smooth=4`). `fig4_input` is sampled at stride 60
+and then filtered to keypoints complete in all five views, so its "consecutive" entries
+are 60+ frames apart: the smoothing term would be penalising real motion as noise, and
+the column would report *our sampling* rather than Anipose's method. With it left on,
+Anipose's optimiser is worse than **its own** linear solve in 50/50 sessions (2.270 /
+3.158 px against 2.264 / 3.111). Off, what remains is soft-L1 reprojection error with
+the cameras held fixed — exactly what our refinement is. `fig4_anipose.py` measures both
+and deposits both (`fig4e_anipose_optim_accuracy.csv`); the panels draw the fair one.
 
 ## Findings
 
-* **View count dominates.** 4.75 → 1.22 mm, a **3.9×** reduction, and the same
-  direction reference-free in (d): held-out error 3.92 → 3.06 px from two to four
-  contributing views. The px effect is smaller than the mm effect because held-out
+* **View count dominates, for both solvers, reference-free.** Held-out error 4.32 →
+  3.34 px for the DLT and 4.43 → 3.15 px for the refinement, two to four cameras
+  (**1.29×** and **1.41×**, panel b). The reference-based mm arm reaches the fifth
+  camera and is quotable for a solver against itself: DLT **4.73 → 1.21 mm**, a
+  **3.9×** span. The px effect looks smaller than the mm effect for a real reason, not
+  a measurement defect: held-out reprojection error has a floor set by the detector's
+  own noise in the held-out view, which no solve can remove. The px effect is smaller than the mm effect because held-out
   reprojection error has a floor set by the detector's own noise in the held-out view,
   which no solve can remove.
 * **One bad view has real leverage.** Where the worst view disagrees by ≥ 10 px,
@@ -516,6 +645,45 @@ a camera it never saw, where either solver can lose: refined is lower in 34/50.
   views**: with only two views in the solve the refinement is *worse* out of sample
   (3.92 → 4.06 px). So the refinement is worth its 6.9× cost when views are plentiful
   and should not be trusted to improve a two-view solve.
+* **Anipose is lower than the LUC3D solver it is paired with, in both pairs, out of
+  sample.** On the held-out camera — the only group in (d) where nothing is enforced —
+  Anipose's linear solve beats our DLT in **50/50** sessions (3.111 vs 3.335 px) and
+  its `optim_points` beats our refinement in **49/50** (3.115 vs 3.144). In the cameras
+  the solve used, Anipose's linear is below our DLT in **50/50** (2.264 vs 2.349); only
+  our refinement is lower there, and that group is enforced for it. So our refinement
+  buys — at 6.9× the cost of our DLT — an out-of-sample result Anipose's *closed-form*
+  solve already has, for 28 µs and no iteration.
+* **Anipose's own non-linear optimiser buys it almost nothing, which is the more
+  interesting half of that result.** `optim_points` improves on Anipose's linear solve
+  by **0.008 px** in sample (2.264 → 2.256, in 50/50 sessions) and is **not** an
+  improvement out of sample at all (3.111 → 3.115; better in only **13 of 50**), for
+  4.4× the cost. This is not a failed run: the optimiser terminates on its own `ftol`
+  after two iterations, and tightening `ftol` from aniposelib's `1e-3` to `1e-10`
+  changes the result by nothing (1.6237 px either way). **It has converged — there was
+  almost nothing to gain**, because a normalised DLT already sits essentially at the
+  geometric optimum. Our refinement's 8% in-sample gain is therefore mostly it
+  *recovering* the conditioning Anipose gets for free in closed form (see the next
+  bullet), which is also why that gain does not survive out of sample.
+* **The mechanism is the DLT's coordinate frame, and it is one line of algebra, not a
+  better algorithm.** Both are the same linear DLT; they differ only in the space the
+  rows are written in. LUC3D undistorts back to **pixels** and builds its system from
+  K[R|t]; aniposelib undistorts to **normalised** coordinates and builds its system
+  from [R|t] alone. That is Hartley's normalisation, the textbook conditioning fix for
+  the DLT, and it is worth the whole gap. Reproduced directly: re-solving in the pixel
+  frame recovers LUC3D's answers (median 3D separation 4.0 × 10⁻⁶ units) and re-solving
+  in the normalised frame recovers Anipose's *exactly* (0.0), giving 1.6802 px against
+  1.6697 px on the same 4,000 keypoints. **This is an actionable defect in LUC3D's
+  `triangulatePointDLT`, not a reason to prefer another toolkit** — but nothing here
+  has been changed in the app, and it should not be changed without the old-vs-new
+  pinning test that every path calling that function deserves.
+* **The metric is shared, and that was checked rather than assumed.** The Anipose arm
+  scores reprojection error with `cv2.projectPoints`; the LUC3D arms with
+  `pose-data.js`'s own `distortPoint`. The gaps in (d) are 0.07–0.22 px, so a 0.05 px
+  disagreement between those two distortion implementations would have *been* the
+  result. `figs/fig4_metric_check.mjs` dumps LUC3D's own DLT solutions and re-scores
+  those same 3D points with cv2: median |cv2 − JS| = **4.2 × 10⁻¹⁴ px** over 20,000
+  all-view keypoints and **8.7 × 10⁻¹⁴ px** over 100,000 held-out ones. Same metric to
+  float64 rounding, so every difference in (d) is solver.
 * **A software-validation note, deliberately NOT a panel.** An earlier option set in the
   app (`robustScale: Infinity`, `polish: false`, `guard: false`) raised the *displayed*
   reprojection error above the DLT value it started from on **24.6%** of keypoints
@@ -544,28 +712,54 @@ a camera it never saw, where either solver can lose: refined is lower in 34/50.
   and a backtracking guard returns the DLT seed outright unless the candidate's
   reported error is ≤ the seed's (`triangulation.js`; the refined point came back
   bit-identical to its DLT seed on 0 of 4,253,636 keypoints, so the guard never had to
-  fall all the way back). Panel e's
+  fall all the way back). Panel d's
   left group therefore *cannot* come out any other way; the artwork prints
-  "refined lower in 50/50 (enforced)" under it, and it is shown only to give the size of
-  the in-sample effect beside the out-of-sample one, which either solver can lose and
-  does ("refined lower in 34/50" under the right group). **The distribution of the signed
-  change in the app's *displayed* error, which an earlier draft drew as its own panel, is
-  no longer on the artwork** — the figure has six panels, a–f, and f is solve time. The
-  numbers that panel carried are kept in *Findings* below and printed by `fig4.py` as
-  `[caption]` lines; do not cite a panel for them.
-* **No 3D-accuracy comparison is made between solvers, and none is available from this
-  corpus.** The proofread reference's own native-space reprojection error is
-  **2.406 px**, higher than DLT's 2.245 and the refinement's 2.056 — so the reference
-  is not the minimiser of reprojection error on these detections. Distance to a
-  reference that sits *further* from the data than either candidate rewards whichever
-  candidate moved less, which is DLT by construction, and cannot arbitrate between two
-  methods that differ precisely in which error they minimise. `fig4.json` carries that
-  comparison as `by_worst_view`, labelled a diagnostic; `fig4.py` does not read it.
-  Ranking these solvers in 3D needs a real ground truth — synthetic points or a
-  calibration object, as the branch's own unit tests use.
+  "(refined enforced)" under it and quotes the Anipose-against-our-DLT count there
+  instead, because that is the comparison in that group which could have gone either
+  way. The group is shown only to give the size of the in-sample effect beside the
+  out-of-sample one, which any of the three can lose — and ours does ("Anipose lowest in
+  49/50" under the right group). **The distribution of the signed change in the app's
+  *displayed* error, which an earlier draft drew as its own panel, is no longer on the
+  artwork** — the figure has five panels, a–e, and e is solve time. The numbers that
+  panel carried are kept in *Findings* below and printed by `fig4.py` as `[caption]`
+  lines; do not cite a panel for them.
+* **No 3D-accuracy RANKING of solvers is claimed, and none is available from this
+  corpus — even though panel b now draws both solvers on a 3D axis.** That pairing is
+  deliberate and it is not a ranking; read it with the ratio, which is on the artwork.
+  The proofread reference's own native-space reprojection error is **2.406 px**, higher
+  than DLT's 2.245 and the refinement's 2.056 — so the reference is not the minimiser of
+  reprojection error on these detections. Distance to a reference that sits *further*
+  from the data than either candidate rewards whichever candidate moved less, which is
+  DLT by construction, and cannot arbitrate between two methods that differ precisely in
+  which error they minimise. **What panel b contributes is the evidence that this is a
+  metric artefact rather than an accuracy difference**: refined/DLT rises monotonically
+  1.02× → 1.54× from two views to five, i.e. the deficit grows with the information the
+  solver was given, which is what a distance-from-the-seed penalty does and what a real
+  accuracy deficit does not. `fig4.json` carries the same effect stratified by
+  worst-view disagreement as `by_worst_view` (clean 1.16→1.55, mid 1.21→1.94, outlier
+  3.19→5.20 mm), still labelled a diagnostic and still not plotted, because a stratified
+  version adds nothing panel b does not already show. Ranking these solvers in 3D needs
+  a real ground truth — synthetic points or a calibration object, as the branch's own
+  unit tests use. **This applies to the Anipose arm too**: it wins panel d's held-out
+  group, which is a statement about reprojection error in an unseen camera, and that is
+  the only thing panel d measures. It is not a claim that Anipose's 3D points are closer
+  to the truth, and the corpus cannot support one.
+* **Nothing here is a benchmark of Anipose the toolkit.** Two functions are measured —
+  `CameraGroup.triangulate` and `optim_points` — on detections produced by our pipeline,
+  with calibrations produced by our pipeline. Anipose's calibration, its 2D stage, its
+  `filter_3d` pass and the bone-length constraints its optimiser is designed to be given
+  are all absent, and several of them exist precisely to improve the 3D that
+  triangulation returns. In particular `optim_points` is run here with **no constraints
+  and no temporal smoothing**, which is the fair configuration for *this* corpus (see
+  the caption) but is not how Anipose is meant to be used: the spatiotemporal
+  regularisation is the Anipose paper's actual contribution, and this figure removes it.
+  Read (d) and (e) as "the same triangulation problem, four solvers", not as a
+  comparison between two toolkits — and do not read the small `optim` gain as evidence
+  that Anipose's optimisation is not worth running on data it was designed for.
 * **Panel b's 5-view point is a floor, and the 3.9× is a lower bound — but not for the
-  reason an earlier draft gave.** At *k* = 5 the solve uses the same views the reference
-  pipeline did, and the median is 1.22 mm. That number is close to the RANSAC-Procrustes
+  reason an earlier draft gave.** (This bullet is about the mm arm, which panel b
+  deposits but no longer plots — see (b).) At *k* = 5 the solve uses the same views the
+  reference pipeline did, and the DLT median is 1.21 mm. That number is close to the RANSAC-Procrustes
   residual (1.20 mm), but **the two are the same measurement on different frame subsets**
   ("our all-camera DLT of the per-camera 2D against the proofread 3D"), so their agreement
   is near-tautological and is *not* evidence that frame-alignment error sets the floor —
@@ -573,8 +767,10 @@ a camera it never saw, where either solver can lose: refined is lower in 34/50.
   external reference, absorbing the 2D detector's error and whatever human 3D correction
   the proofread pass applied. That still makes 3.9× a lower bound, because the denominator
   carries those errors and cannot go to zero, but the mechanism is reference error rather
-  than a bad alignment. Panel d is the version of the same effect that needs no reference
-  at all, which is why both are shown.
+  than a bad alignment. Panel **d**'s right-hand group is the reference-free counterpart
+  — scored against a raw detection in a camera no solve saw — which is why both are
+  shown. (The by-view-count breakdown that used to carry this letter was cut in the
+  2026-08 review; its numbers are in *Findings*.)
 * **This dataset does not exercise the robust loss as designed.** Only 66,901 of
   4,253,636 keypoints (1.6%) have any view off by ≥ 10 px, against the 60 px gross
   outliers the branch's own tests inject; the 11–18× advantage those tests report under
@@ -623,102 +819,194 @@ n = 1 pseudo-replication, and the reason the figure now states its n on the artw
 
 ---
 
-## Figure 5 — Proofreading
+## Figure 5 — A social 3D behaviour: the mutual upright display
 
-**Ranking keypoints by cross-view reprojection error — a number the app already has and
-that needs no ground truth — recovers 27% of the total correction a proofreader would
-have to make from a 10% review budget, against 10% for reviewing in random order
-(2.7-fold) and 12% for ranking by detector confidence, and reaches 85% of what an oracle
-with the answer achieves (32%).**
+*This section replaces the retired "Figure 5 — Proofreading" caption. The proofreading
+panels (`fig5_02/03/04`) are still in the tree and still deposit their CSVs, but they
+are no longer placed on the artwork; their caption text is in git history at
+`0d0e349`. Every number below is either printed on the artwork or listed here. Panels
+a–f come from `figs/out/fig5_upright.json` (`figs/fig5_upright.py`); panel g from
+`figs/out/fig5_rear_coupling_2animal.json` (`figs/fig5_rear_coupling.py
+--slap-animals 2`).*
 
-(**a**) What LUC3D reports for the frame you are on, in three parts. **Left tile**, the
-whole frame as the app draws it (cam 0 mid), all three animals, all overlays. **Middle
-tile**, the same frame magnified on the single (view, animal) with the largest residual
-among the exported views — cam 4 topR, animal 2, **16.8 px**: it is half-occluded by the
-arena trough, and two of its nodes reproject ~17 px from where the detector put them
-(white circles, red error vectors). The key beneath decodes the overlay (solid =
-detected, dotted = reprojected from the 3D, red = the error). **Right**, grouped bars —
-not a line, because cameras are a categorical axis — of the app's own per-view
-reprojection error for each of the three animals in that frame, from a normal all-views
-solve. The animals are labelled 0–2 as the app names them. Two sit at 2.5–5.3 px in every
-view; the third sits at 9.1–16.8 px in every view (mean 12.1 px against 3.3 and 3.2), so
-the number identifies which animal to look at before anyone has looked, and the
-(view, animal) shown magnified is computed from the manifest rather than chosen by hand.
-One frame, three animals, eight cameras — an illustration of the readout, not a corpus
-statistic; the corpus statistics are **c** and Fig 6c.
-(**b**) The loop LUC3D supports today: triangulate everything, read the per-node,
-per-view error for the frame you are on, fix it, re-triangulate that frame, export. The
-bracket marks the three stages that happen **one frame at a time**, and there is
-deliberately **no ranking box**, because the app has no ranked worklist — which is the
-limitation **c** and **d** quantify.
-(**c**) Share of the total correction distance recovered against the fraction of
-keypoints reviewed, reviewing worst-ranked first, under three rankings — the cross-view
-residual, the detector's own confidence, and an oracle that ranks by the true correction
-distance. The diagonal is review in random order. Values at the 10% budget are labelled.
-(**d**) The same 10%-budget comparison per session: the residual beats detector
-confidence in **74 of 74 sessions** (two-sided sign test *p* = 1 × 10⁻²²; residual
-21.4–44.5%, confidence 9.2–16.6%), so the pooled curve in c is not an average hiding a
-split corpus.
-n = 74 SLAP-2M sessions, 1,561,915 keypoints, 6 cameras used per session, frames
-uniformly strided every 120. Spearman ρ = 0.69 between the residual and the true
-correction distance per keypoint (per-session range 0.53–0.81).
+---
 
-## What the ranking is, and is not
+**Two mice rear together, face to face, and hold it for about 0.7 s — and the display
+is not symmetric: in each session one animal starts most of them, and pooled over all
+539 displays the session's leader starts 80% of them. The initiator is up a median
+0.37 s before the follower joins; both animals then rise, converge to a nose gap of
+0.12 body lengths, and stay still (0.44× their own baseline speed, 94% of displays
+below baseline). The coupling that makes this an event at all is in **g**: within two
+body lengths, one animal's rear leaves the other **2.9× more likely than chance** to
+be rearing at that moment and **4.1×** half a second later, against a flat 1.05× when
+they are further apart and a flat circular-shift null. This is a 3D measurement
+throughout: the configuration is defined by height above the floor and by a distance
+between two animals, and no single camera view has either.**
 
-**The ranking is a property of the signal, not a feature of the software.** LUC3D reports
-the reprojection residual per node and per view for the *current* frame (Instance Info ▸
-error breakdown, `ui/info-panel.js`). It has no ranked worklist, no sort, no filter, no
-error-coloured timeline and no worst-frame navigation — the breakdown is even ordered
-alphabetically on purpose, for a stable reading order across frames — so panels c and d
-are an offline measurement of what such an ordering would buy, not a demonstration of a
-shipped tool. A ranked worklist is a natural extension and is the obvious use of this
-result. (The one place the app acts on the residual by itself is the optional robust
-triangulation threshold, which *drops* a high-error view inside the solve; it does not
-order anything for review.)
+(**a**) One display, five views. The 3D reconstruction (left) and the same instant as
+each of the five cameras saw it. Every camera is 58–76° above the animals and the two
+noses are 93–106 px apart in every view: **no camera has the vertical**, which is why
+the height that defines the event exists only after triangulation. Real intrinsics,
+distortion and extrinsics; the pose is aligned to the calibration frame by
+RANSAC-Procrustes (98.3% inliers, 1.32 mm residual). Scale bar = 93 mm = one body
+length.
+(**b**) Time course around display onset, as the across-session median of per-session
+median curves (band = p25–p75 across sessions). The two height curves are **ranks, not
+individuals**: at each display the animal that peaked higher is drawn in teal and the
+other in pink. The event is defined by both animals being reared and within two body
+lengths — *not* by their noses being close, *not* by their heights matching, and *not*
+by anything happening at a particular time — so the nose gap falling to **0.12 body
+lengths (≈ 11 mm) exactly at onset** and the two heights rising and peaking together
+are contingent facts, not restatements of the definition. Two animals that merely
+happened to rear near each other would give two unrelated humps and a flat gap.
+(**c**) How long the initiator is already up before the follower joins, as a fraction
+of all 539 displays. Median **0.37 s** (p25–p75 0.16–0.89 s) — 56 frames at this rig's
+150 fps, and one to two frames at 30 fps, which is why this analysis lives on BMimica.
+The hatched bar is an **overflow bin**: 7.8% of displays have a lag longer than 2 s,
+out to 19 s.
+(**d**) Separation velocity between the two tail bases (left axis; negative = closing)
+and each animal's speed relative to its own baseline (right axis), split by role. The
+follower is moving fast before onset and both animals are still afterwards: they close,
+hold, and withdraw.
+(**e**) Speed during the display, as a multiple of that animal's own whole-session
+median speed. Median **0.44×**, with **94% of displays below baseline** and a median
+duration of **0.71 s**. Hatched bar = overflow (0.7% above 2×). A mutual upright
+posture at close range is the classic agonistic configuration and the obvious word is
+"boxing", but animals that are moving at four tenths of their usual speed are not
+fighting; the figure therefore says **upright display** and never "fight".
+(**f**) **The result.** One dot per session: the fraction of that session's displays
+started by its leader — the animal that started more of them — against the number of
+displays the session contains. The blue rule is the pooled figure over all displays,
+**432 of 539 = 80.1%**. The grey band is what a **fair coin** gives at each session
+size (95th percentile of max-share under Binomial(n, 0.5), 20,000 draws per n), and it
+is drawn because the leader's share cannot fall below 0.5 by construction: a session
+with three displays scores 0.67 or 1.00 whatever the animals do. **16 of the 24
+sessions with ≥ 5 displays clear that band**; among those sessions the median leader
+share is 0.83 (IQR 0.73–0.89) against a null median of 0.57 at the same session sizes.
+The pooled figure is insensitive to where the cutoff is put — 79.8% at ≥ 3 displays,
+79.6% at ≥ 5, 79.8% at ≥ 8, 79.0% at ≥ 10.
+(**g**) **The coupling the rest of the figure rests on.** For every rear onset by one
+animal (9,354 across all 56 two-animal BMimica sessions, including the 19 that
+contribute no display), the probability that the OTHER animal is rearing at each lag
+around it, divided by that other animal's own base rate; 1.0 is chance. Lines are
+across-session medians, band is p25–p75 across sessions. **Within two body lengths**
+the curve reaches 2.9× at the onset and peaks at **4.1× half a second later** — the
+time it takes to get up, i.e. the second animal is responding rather than coinciding.
+**Further apart** it is flat at 1.05×: same animals, same sessions, same detector, so
+the effect requires proximity and is not a shared drive such as a room disturbance or
+a drift over the session, which would lift both conditions together. The **null is a
+circular shift** of the other animal's rear series (24 per pair), flat at 0.99× with a
+tight band; a reshuffle would have been the wrong null, because rears last about a
+second and cluster, so scattering onsets destroys the autocorrelation as well and
+makes almost anything look significant. Rotation preserves rate, bout duration and
+autocorrelation and destroys only the alignment between the two animals — the one
+thing under test. The near curve settles at ~1.2× rather than 1.0 at ±5 s: that
+shoulder is proximity (animals close at one moment tend to still be close seconds
+later, and being close is itself associated with rearing), and the coupling is the
+peak above it. A session contributes to a condition only if it supplies ≥ 20 onsets in
+it; 21 of 56 sessions fail that for "near" because their animals are rarely within two
+body lengths.
 
-**The measurement is not circular.** The quantity being recovered is the real correction
-distance — how far a raw detection sits from the proofread answer, which requires the
-answer — while the ranking uses only the cross-view residual, which does not. Ranking by
-the residual and then reporting recovered *residual* would prove nothing.
+Corpus: 539 mutual upright displays from 37 of 56 BMimica sessions (2 mice, 5 cameras,
+150 fps, ~20 min each), 9 animals in 17 distinct pairings. A display is both animals
+reared — neck above 0.75 of that animal's own body length — with tail bases within 2
+body lengths, held ≥ 0.25 s, gaps ≤ 0.15 s merged. Body length is each animal's own
+median nose-to-tail-base distance. Panels **a–f** use the 37 sessions that contain at
+least one display; **g** uses all 56, since a session with no display still has rears
+and still tests the coupling.
 
-## Honest limits
+## The initiator asymmetry: what was tested against it
 
-**Confidence is barely better than random, so the "2.3× confidence" framing flatters the
-result and the panel gives both baselines.** Detector confidence recovers 11.7% at a 10%
-budget where random order recovers 10.0%; the residual's 27.0% is 2.3× confidence but
-2.7× random, and random is the baseline that matters.
+Every check below was run because the asymmetry in **f** is the figure's one claim
+about the animals rather than about the method, and it is the kind of claim that a
+detection threshold can manufacture.
 
-**Most of the correction is unreachable at a small budget, by any ranking.** The oracle
-itself only reaches 31.8% at 10%, i.e. **68% of the needed correction lies outside a 10%
-review budget even for a ranking that knows the answer**. That is a property of the
-corpus, not of the residual: the correction is spread over many mildly-off keypoints
-rather than concentrated in a few catastrophic ones.
+**It is not the rearing base rate.** The obvious innocent explanation is that one
+animal simply rears more and is therefore up first by arithmetic. It does not hold: a
+session's initiation share is uncorrelated with that animal's share of rearing time
+(r = −0.01, n = 24 sessions) or of rear bouts (r = −0.06), and the initiation share
+departs from 0.5 by a median 0.33 where rearing time departs by 0.08.
 
-**A keypoint that is wrong in a way every camera agrees on is invisible to this signal**,
-which is the other reason the oracle line sits well below 100%. This failure class is
-real and measured, not hypothetical: in the failure-mode taxonomy over 42 SLAP-2M
-sessions (681 episodes, 195,465 mislabelled frames), `CROSSVIEW_LOCK` — an identity
-locked wrongly in ≥3 cameras at once, hence geometrically self-consistent — accounts for
-**36 episodes (5.3%) but 18.2% of all mislabelled frames, median duration 578 frames**.
-Reprojection residual cannot see it; it is exactly the case that needs a different
-signal.
+**It is not the per-animal height threshold.** A frame counts as reared when the neck
+is above 0.75 of *that animal's own* body length, so an animal whose measured body
+length is short crosses the threshold earlier and could be recorded as the initiator
+for a reason that is pure normalisation. Re-running the whole detection with a single
+threshold for both animals — the pair's mean body length — gives the same initiator in
+**22 of 24** sessions; with an absolute 60 mm threshold, **24 of 24**. The median
+initiation share is 0.83, 0.75 and 0.82 under the three definitions.
 
-**The reference is the proofread 3D reprojected into each camera**, so "correction" means
-agreement with the proofread answer, not absolute accuracy, and the reference carries its
-own reconstruction error. Raw detections come from the benchmark's shared
-identity-stripped pool (filter-only, no tracking; 5 detections per frame, score-ordered)
-and are assigned to reference animals per frame per camera by mean keypoint distance —
-so a detector identity swap appears as error rather than as a swap.
+**It is not body size.** In the 8 sessions where the initiating animal is the *longer*
+of the pair it still starts **79%** of displays. Nor is it rearing ability: over their
+own rear bouts the *followers* peak higher than the initiators in absolute terms
+(median 118 mm vs 89 mm).
 
-**Cross-view identity for the triangulation is taken from that same reference match, so
-association is assumed already correct.** This measures the residual's value for finding
-bad *keypoints*, not bad *identities*; association is the separate step (Fig 3) a user
-runs before proofreading.
+**The leader does not change during the session.** Splitting each session's displays
+into its first and second half, the same animal leads both halves in **20 of 20**
+sessions with ≥ 8 displays. So "the leader" names a stable role within a session, not
+a run of luck at one end of it.
 
-**Panel a and panels c/d are different corpora**, stated on the artwork: a is one frame
-of the 8-camera HardFight recording driven through the real app (the only session built
-as an app session with a calibration), c and d are 74 SLAP-2M sessions. Nothing in a
-enters c or d.
+**Formal tests.** Restricted to the 24 sessions with ≥ 5 displays: leader share median
+0.83 (IQR 0.73–0.89, range 0.67–1.00), individually above chance by a two-sided
+binomial test in 16 of 24 (9 after Holm correction), Wilcoxon against 0.5
+p = 9 × 10⁻⁶, pooled 406 of 510 displays (79.6%).
+
+## What this figure deliberately does not claim
+
+**It does not claim dominance.** An asymmetry in who starts a social display is what a
+dominance relationship would look like, but no dominance assay was run — no tube test,
+no wound scoring, no independent rank — so the caption says *one animal starts most of
+them* and stops. Calling it dominance would be an inference from a
+single behavioural measure.
+
+**Sessions are not fully independent.** The 37 sessions are repeated recordings of a
+smaller number of animal pairs, so the session-level tests above are not 37 independent
+draws. This is why the headline number in **f** is pooled over *displays* and why every
+session is plotted against its own null rather than summarised as one mean: nothing in
+the panel requires the sessions to be independent of each other.
+
+**It does not claim the initiator is the "taller" or "bigger" animal, and an earlier
+version of this figure came close to doing so.** That version put "initiator reaches
+higher in 75% of displays" on panel c. The statistic is true as stated but invites
+three wrong readings and has been removed: the label is assigned *per display*, in
+units of each animal's *own* body length, so (i) it names a rank, not a mouse — it
+changes hands within a session on about a quarter of displays; (ii) it is not the
+bigger mouse — the structurally longer animal reaches higher on only 41% of displays,
+and in absolute millimetres the "initiator reaches higher" figure falls from 75% to
+68%; and (iii) the initiator is up first *by construction*, so it has had longer to
+reach its peak, which makes part of the 75% mechanical rather than behavioural.
+
+**The near/far contrast does not replicate on SLAP-2M, and the reason is geometric.**
+Its two-animal sessions give 1.08× near and 0.97× far. Its arena is 3.2 body lengths
+across against BMimica's 6.9, so "within two body lengths" covers most of the session
+there and the far condition is barely a contrast; the corpus also has ~4× fewer onsets
+(2,180). The claim in **g** is made for BMimica and is not extended.
+
+**Two other analyses were built for panel g and are not shown; both are in the tree
+and both deposit their CSVs.** (i) *Height match:* the lower animal's peak height is a
+median 0.91 of the higher one's against a within-session shuffled null of 0.86 (95%
+0.85–0.87, p < 0.001) — real, small, and not about the animals' relationship
+(`panels/fig5_11_height_match.py`, superseded). (ii) *Aftermath*
+(`figs/fig5_aftermath.py`, `panels/fig5_11_aftermath.py`): from the display's last
+frame the initiator turns away (61° → 88° body-axis angle to the partner over 3 s)
+while the follower stays pointed at it (30° → 37°), the initiator's angle being the
+larger in 22 of 24 sessions at 1 s (p = 1.2 × 10⁻⁶); neither animal flees (still
+within 2 body lengths after 72% of displays at 3 s — but also after 74% of
+separation-matched controls, so this is *not* claimed as a finding); and another
+display follows within 10 s on 40% of occasions against 18% after matched control
+moments (p = 4 × 10⁻⁵). These are reportable but did not earn the panel.
+
+**It is not video-scored.** What the display *is* — assessment, greeting, low-level
+agonism — cannot be settled by kinematics. The stillness (**e**) rules out a tussle
+and nothing more. No video was scored for this figure.
+
+**37 of 56 sessions contribute.** The other 19 have no display that meets the
+definition, not a display that was dropped. Panel **f** draws all 37, but every
+per-session statistic quoted above is restricted to the 24 sessions with ≥ 5 displays;
+the other 13 hold 29 displays between them and cannot clear the null at any share. Not
+restricting raises the "median session share" from 0.83 to 0.889 — a session with one
+display scores 1.00 by construction. That inflated number appeared on the previous
+version of this figure and is retracted; the number the figure now leads with, 80%, is
+pooled over displays and so is not exposed to this at all.
 
 ---
 
@@ -726,8 +1014,8 @@ enters c or d.
 
 **Across the 74 proofread SLAP-2M sessions, the corpus's own difficulty rating acts on
 *whether* a keypoint is detected rather than on *how well*: the per-view miss rate rises
-10.9-fold from the easiest to the hardest stratum (5.3% → 57.9%) while the mean error of
-the detections that do fire rises 1.29-fold (3.67 → 4.72 px). A keypoint missing in one
+10.8-fold from the easiest to the hardest stratum (5.3% → 57.7%) while the mean error of
+the detections that do fire rises 1.30-fold (3.65 → 4.74 px). A keypoint missing in one
 view is recoverable from the others; a keypoint degraded in every view is not.**
 (a) The rig as LUC3D renders it — all eight SLAP-2M cameras with the frame's own
 reconstructed animals inside them — cropped to the render's measured content bounds, with
@@ -761,7 +1049,7 @@ the black/white bedding split, error mean, p95 and p99, and the fraction beyond 
 The animal-count and bedding columns are where a reader can check the confound d controls
 for; the error column is the **mean**, the same statistic c plots and the headline quotes.
 
-n: panels c, d, f are **74 SLAP-2M sessions, 1,561,915 keypoint comparisons**, six
+n: panels c, d, f are **74 SLAP-2M sessions, 187,134,382 keypoint comparisons**, six
 cameras, 15 nodes, frames uniformly strided at 120 (≈16,300 of 1,954,440). Panels a and b
 are one further SLAP-2M session (difficulty 4, four animals, black bedding). The
 130-session, 12,039,174-frame corpus figure in (e) is a **composition** statement: the
@@ -797,7 +1085,7 @@ are one further SLAP-2M session (difficulty 4, four animals, black bedding). The
   (74 sessions, `detections_only_master_sheet.tsv`, stride 120, the shared
   identity-stripped **raw detection** pool) — the same measurement c and f plot, so d is c
   stratified differently. `fig6_difficulty.json` also deposits a `by_animals` table and
-  disagrees by half on the two-animal miss rate (21.95% against 33.19%), because it is a
+  disagrees by half on the two-animal miss rate (21.95% against 33.16%), because it is a
   different measurement over a different population: 42 sessions, stride 100, no detection
   pool at all, comparing the proofread labels against the reprojected proofread 3D. The
   gap is itself informative — the raw detector misses ~50% more keypoints on two-animal
@@ -837,8 +1125,8 @@ are one further SLAP-2M session (difficulty 4, four animals, black bedding). The
   labels being agreed with.
 * **The tail is heavier than the mean implies**, which is why the mean and the 95th
   percentile are both plotted in c and the 99th is tabulated in f: across the strata the
-  mean rises **1.29×** (3.67 → 4.72 px), the 95th percentile 1.40× (9.00 → 12.60), the
-  99th 1.88× (14.52 → 27.36) and the fraction beyond 20 px 5.34× (0.34% → 1.83%).
+  mean rises **1.29×** (3.65 → 4.74 px), the 95th percentile 1.40× (9.00 → 12.60), the
+  99th 1.88× (14.52 → 27.36) and the fraction beyond 20 px 5.34× (0.33% → 1.90%).
   So the hardest sessions do not merely miss more keypoints, they also place a larger
   minority badly — but even that 5.34× is half the 10.90× rise in outright misses.
   **The statistic is the mean, and the panel names it** ("mean ± s.d."), because the mean
@@ -895,10 +1183,11 @@ within-view mean **0.736** against median **0.900**. Note this is a *different q
 from **a**'s "within view": that is BMimica, 50 sessions, 5 cameras, 0.749; this is
 SLAP-2M, 74 sessions, 6 cameras.
 (**d**) The paired per-session difference in within-view IDF1, LUC3D − SLEAP, by number of
-animals in the session: mean with 95% bootstrap CI, and n and win count printed under
-every tick. **The two rightmost cells are the two where LUC3D loses**, and their intervals
-are wide because n = 4 and n = 3 — the CI is doing the disclosure that three plotted dots
-would do badly. **The pooled +0.075 over all 74 sessions is carried by the 1-animal
+animals in the session: mean with 95% bootstrap CI, **every individual session drawn as a
+dot behind its cell**, and n and win count printed under every tick. **The two rightmost
+cells are the two where LUC3D loses**, and with the sessions visible the reader can weigh
+them directly: seven multi-animal (≥ 3) sessions, all below zero, none catastrophic
+(worst −0.103). **The pooled +0.075 over all 74 sessions is carried by the 1-animal
 stratum and is not a multi-animal result**, which the panel states on the artwork: 32 of
 the 74 sessions contain one animal, where there is nothing to associate across views, and
 that cell is both the largest effect (+0.141, 25/32, sign test P = 0.002) and 43% of the
@@ -906,18 +1195,22 @@ corpus. Pooled over **≥ 2 animals it is +0.024 (n = 42, 23/42, sign test P = 0
 does not clear a sign test — and the two cells where cross-view association should help
 most are negative (3 animals −0.030, 0/4; 4 animals −0.028, 0/3).
 (**e**) Error composition against a shared ground truth of 15,947,278 keypoint-instances:
-false positives and ID switches as **exact counts**. False negatives are deliberately not
-plotted — they are 98.8–99.3% of every tracker's error budget, so including them would
-draw three identical bars and hide the terms a tracker controls; their share is stated in
-the panel's footnote instead. LUC3D does not win on within-view switches (3,710 against
-SLEAP's 3,608) and the panel does not pretend it does; ByteTrack's 12,305 is the 3.3×.
+false positives and ID switches as **percentages of camera-frames** (denominator
+11,726,640 camera-frames — 74 sessions × 6 cameras, summed from the per-camera-session
+motmetrics frame counts; raw counts are retained in the deposited table). Read the small
+numbers as reliability: an ID switch occurs on 0.0316% of LUC3D camera-frames, i.e.
+identity is held on 99.97% of them. False negatives
+are deliberately not plotted — they are 98.8–99.3% of every tracker's error budget, so
+including them would draw three identical bars and hide the terms a tracker controls;
+their share is stated in the panel's footnote instead. LUC3D does not win on within-view
+switches (0.0316% against SLEAP's 0.0308%) and the panel does not
+pretend it does; ByteTrack's 0.105% is the 3.3×.
 (**f**) Session-level within-view IDF1 against the shared detector's recall, one point per
-session, with the IDF1 = recall diagonal. ByteTrack's correlation (**r = 0.780, R² =
-0.608**) is printed but **its points are not drawn and cannot be**: the deposit's
-per-session recall table has no ByteTrack column, and its per-session IDF1 is stored
-sorted, so no point could be paired with its recall without inventing one. It is also the
-one number that cuts against the panel's claim — "the level is set by detection" holds for
-the two good trackers (LUC3D r = 0.975, SLEAP r = 0.949), not as a law.
+session for all three trackers, with the IDF1 = recall diagonal. ByteTrack's cloud
+(**r = 0.780, R² = 0.608**) is the one that cuts against the panel's claim — "the level is
+set by detection" holds for the two good trackers (LUC3D r = 0.975, SLEAP r = 0.949), not
+as a law: a tracker whose session IDF1 is only loosely tied to recall is one whose own
+failures dominate, and its points scatter visibly off the diagonal.
 (**g**) **The measured LUC3D disadvantage**: paired fragmentations per camera-session,
 LUC3D − SLEAP, mean with 95% bootstrap CI over the 74 sessions, with the median drawn
 beside it because the distribution is skewed (mean is 1.7× the median). **+24.0**

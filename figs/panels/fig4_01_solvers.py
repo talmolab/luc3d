@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """
-Fig 4a -- the three triangulation solvers, and what actually separates them.
+Fig 4a -- the two triangulation solvers the app ships, and what separates them.
 
 THE NAMING IS WRONG IN THE APP'S UI AND THIS PANEL DOES NOT REPEAT IT. LUCID's
-menu calls the middle solver "Bundle Adjustment", but it holds the cameras FIXED,
-so it is non-linear TRIANGULATION (aniposelib's `optim_points`). True joint bundle
-adjustment is a separate function, `bundleAdjustCameras`, deliberately not wired to
+menu calls the second solver "Bundle Adjustment", but it holds the cameras FIXED,
+so it is non-linear TRIANGULATION (aniposelib's `optim_points`). The panel labels
+each solver with what it actually minimises and what the app calls it.
+
+TWO CARDS, NOT THREE (review 2026-08). An earlier version drew a third, grey card
+for true joint bundle adjustment (`bundleAdjustCameras`, deliberately not wired to
 the UI because rewriting a project's calibration invalidates every 3D point derived
-from it. `pose/triangulation.js` says so itself. The panel therefore shows THREE
-boxes, not two, and each is labelled with its status in the shipped app.
+from it -- `pose/triangulation.js` says so itself). Review cut it: LUC3D does not
+DO joint bundle adjustment, and a figure about the app's solvers has no business
+diagramming an algorithm the tool never runs -- a reader skimming three cards
+reads three capabilities. The nomenclature point survives in the second card's
+tag; the not-wired function stays in Methods prose, not artwork.
 
 What is drawn, per solver, is the one distinction that matters:
   * which error it minimises  -- straight (algebraic) vs bowed (geometric, in the
     camera's native distorted pixels);
-  * whether the cameras move  -- padlock vs double arrow;
-  * whether it iterates       -- the loop on the third box.
+  * the padlock -- the cameras are held fixed by BOTH solvers.
 
 This is a nomenclature correction, not a result, which is why it leads as a
 schematic and carries no numbers.
@@ -41,10 +46,8 @@ CARD = (-1.85, -3.55, 5.85, 4.42)   # x0, y0, x1, y1 in data coordinates
 #: periwinkle here, which is SLEAP's hue in Fig 7 -- a reader who learns periwinkle
 #: on one page was then told it meant something else on the next. `entity('dlt')`
 #: is the set-wide "the thing this work is compared against" colour and
-#: `entity('refined')` is the set-wide "this work" colour, so 4a, 4d, 4e and 4f all
-#: say the same thing with the same two hues. The third card is a BOUND rather than
-#: an entity -- a function that exists and is not reachable from the UI -- and stays
-#: grey.
+#: `entity('refined')` is the set-wide "this work" colour, so every fig4 panel
+#: says the same thing with the same two hues.
 #:
 #: `ink` is the TEXT colour for the card's status tag and is not always `color`:
 #: GREY is #B3B3B3, i.e. 2.1:1 on white, which is below every legibility floor for
@@ -56,9 +59,6 @@ SOLVERS = [
     dict(title="Non-linear triangulation", sub="geometric error · native pixels",
          tag="app menu: “Bundle Adjustment”", color=entity("refined"), fixed=True,
          curved=True, iterative=False),
-    dict(title="Joint bundle adjustment", sub="cameras + structure · iterative",
-         tag="not wired to the UI", color=GREY, ink=MUTED, fixed=False, curved=True,
-         iterative=True),
 ]
 
 
@@ -121,7 +121,11 @@ def main():
     # back the 4 mm the third footer line costs and keeps the composite off the 200 mm
     # ceiling; the type stays 8 pt, and the tightest clearance in the card -- the
     # status tag above the upper camera -- is still ~0.1 of a data unit.
-    fig, axes = grid(1, 3, span="full", row=46.0, despine=False)
+    #
+    # two-thirds, not full: with the joint-BA card cut (review 2026-08) two ~45 mm
+    # cards in a 180 mm row would swim in 45 mm of gutter that reads as a missing
+    # third card. At 117.3 mm the two cards keep the same slot width they had.
+    fig, axes = grid(1, 2, span="two-thirds", row=46.0, despine=False)
     for ax, s in zip(axes, SOLVERS):
         draw(ax, s)
     fig.subplots_adjust(wspace=0.05)

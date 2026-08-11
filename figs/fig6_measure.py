@@ -12,7 +12,8 @@ Two corpora:
   SLAP-2M  /root/talmolab-smb/eric/slap_2m/<date>/<session>/
            up to 8 cameras (back, backL, mid, midL, side, sideL, top, topL),
            1-4 mice, points3d.h5 plus per-camera *.proofread.slp where a view has
-           been proofread.
+           been proofread. THE CORPUS IS DEFINED BY master_sheet.xlsx (74 rows), not
+           by what is on disk -- see SLAP_MASTER below.
 
 What is collected, per session: frame count, animal count, frame rate, which
 cameras are present, whether a proofread 3D reconstruction exists, and how many
@@ -32,6 +33,8 @@ import glob
 import json
 import os
 import sys
+import xml.etree.ElementTree as ET
+import zipfile
 
 import h5py
 import numpy as np
@@ -43,8 +46,13 @@ from build_gt_reproj import load_calibration, SERIALS  # noqa: E402
 BM_ROOT = "/root/vast/eric/BMimica"
 SLAP_ROOT = "/root/talmolab-smb/eric/slap_2m"
 SLAP_CAMS = ["back", "backL", "mid", "midL", "side", "sideL", "top", "topL"]
+#: THE DEFINITION OF THE SLAP-2M CORPUS. 74 rows, one per session, with `session`
+#: and `session_path` columns. See `scan_slap` for why the directory tree is not it.
+SLAP_MASTER = f"{SLAP_ROOT}/master_sheet.xlsx"
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out", "fig6.json")
+
+_XL = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
 
 def rig_from_calibration(toml_path, names=None):
@@ -106,7 +114,81 @@ def scan_bmimica():
     return sessions
 
 
-def scan_slap(max_sessions=0):
+def _xlsx_rows(path):
+    """The first worksheet of an .xlsx as a list of row-lists of strings.
+
+    Deliberately dependency-free (zipfile + ElementTree). The bench env this script
+    runs under has pandas but NOT openpyxl, and adding a package to a shared
+    environment to read one column is a heavier change than parsing the sheet.
+    """
+    with zipfile.ZipFile(path) as z:
+        shared = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            for si in ET.fromstring(z.read("xl/sharedStrings.xml")).findall(f"{_XL}si"):
+                shared.append("".join(t.text or "" for t in si.iter(f"{_XL}t")))
+        names = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet")]
+        root = ET.fromstring(z.read(sorted(names)[0]))
+        rows = []
+        for row in root.iter(f"{_XL}row"):
+            cells = {}
+            for c in row.findall(f"{_XL}c"):
+                letters = "".join(ch for ch in (c.get("r") or "") if ch.isalpha())
+                idx = 0
+                for ch in letters:
+                    idx = idx * 26 + (ord(ch) - 64)
+                v = c.find(f"{_XL}v")
+                if c.get("t") == "s" and v is not None and v.text is not None:
+                    val = shared[int(v.text)]
+                elif c.get("t") == "inlineStr":
+                    val = "".join(t.text or "" for t in c.iter(f"{_XL}t"))
+                else:
+                    val = v.text if v is not None and v.text is not None else ""
+                cells[idx - 1] = val.strip()
+            rows.append([cells.get(i, "") for i in range(max(cells) + 1)]
+                        if cells else [])
+        return rows
+
+
+def slap_master_sessions(path=SLAP_MASTER):
+    """`{session_path: session_id}` for every row of the SLAP-2M master sheet.
+
+    `session_path` is `<date>/<session>` relative to SLAP_ROOT, which is exactly the
+    directory layout `scan_slap` walks, so the join is on the path and not on a
+    reconstructed name.
+    """
+    rows = _xlsx_rows(path)
+    if not rows:
+        raise SystemExit(f"empty master sheet: {path}")
+    hdr = rows[0]
+    try:
+        i_s, i_p = hdr.index("session"), hdr.index("session_path")
+    except ValueError:
+        raise SystemExit(f"master sheet has no session/session_path column: {hdr}")
+    out = {}
+    for r in rows[1:]:
+        if len(r) <= max(i_s, i_p) or not r[i_s]:
+            continue
+        out[r[i_p].strip("/")] = r[i_s]
+    return out
+
+
+def scan_slap(max_sessions=0, master=SLAP_MASTER):
+    """SLAP-2M sessions, SCOPED TO THE MASTER SHEET.
+
+    WHY THE MASTER SHEET AND NOT THE DIRECTORY TREE. `{SLAP_ROOT}/20*/<session>/`
+    holds 84 session directories, but SLAP-2M is 74 sessions: the extra ten are
+    recordings that were captured and laid down on disk but never entered the corpus
+    (no 3D reconstruction, no row in the sheet, and no row in the benchmark's
+    `detections_only_master_sheet.tsv` either, which is why every measured Fig 6
+    panel already reports 74). Walking the tree therefore OVERCOUNTS, and it did:
+    `sessions_total` was 84 and Fig 6e's table printed "74 of 84", which reads as
+    ten sessions of unfinished work rather than ten directories that are not part of
+    the dataset. The corpus is defined by `master_sheet.xlsx`; join on it here so a
+    stray directory (a re-recording, a scratch copy, an aborted run) can never
+    inflate the count again.
+    """
+    want = slap_master_sessions(master)
+    seen = set()
     sessions = []
     for dd in sorted(glob.glob(f"{SLAP_ROOT}/20*")):
         if not os.path.isdir(dd):
@@ -117,6 +199,10 @@ def scan_slap(max_sessions=0):
             sid = os.path.basename(sd)
             if not sid[:1].isdigit():
                 continue
+            rel = f"{os.path.basename(dd)}/{sid}"
+            if rel not in want:
+                continue
+            seen.add(rel)
             cams = [c for c in SLAP_CAMS if os.path.isdir(f"{sd}/{c}")]
             if not cams:
                 continue
@@ -144,6 +230,12 @@ def scan_slap(max_sessions=0):
             sessions.append(rec)
             if max_sessions and len(sessions) >= max_sessions:
                 return sessions
+    # Fail loudly the other way too: a sheet row with no directory would UNDERcount,
+    # and silently reporting 73 of 74 is the same class of error as 84.
+    if not max_sessions and len(seen) != len(want):
+        missing = sorted(set(want) - seen)
+        print(f"  WARNING: {len(missing)} master-sheet session(s) not found on disk: "
+              f"{missing}")
     return sessions
 
 
@@ -204,7 +296,23 @@ def main():
         rigs=rigs, skeleton=skel,
         bmimica=bm, slap2m=slap,
         roots=dict(bmimica=BM_ROOT, slap2m=SLAP_ROOT),
+        slap_master_sheet=SLAP_MASTER,
     )
+    # TWO SCRIPTS WRITE THIS ONE FILE. `fig6_pose.py` reads fig6.json and adds
+    # `mean_pose` / `examples_3d` to it, and `panels/fig6_02_pose.py` +
+    # `panels/fig6_04_corpus.py` read those keys. A plain overwrite here silently
+    # deletes them, and the panels then fail on a KeyError a build later. Keep any
+    # key this script does not own.
+    keep = {}
+    if os.path.exists(args.out):
+        try:
+            with open(args.out) as f:
+                keep = {k: v for k, v in json.load(f).items() if k not in payload}
+        except Exception as e:                                          # noqa: BLE001
+            print(f"  existing {args.out}: {type(e).__name__}: {e}")
+    if keep:
+        print(f"  preserving keys from a previous pass: {sorted(keep)}")
+        payload.update(keep)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as f:
         json.dump(payload, f, indent=1)

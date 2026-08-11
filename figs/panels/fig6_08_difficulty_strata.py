@@ -23,8 +23,8 @@ FOUR COLUMNS CAME BACK, and each one is load-bearing rather than nostalgic:
     (Fig 7b measures its effect). Over the 74 sessions it is 44 black / 30 white and
     it is not balanced across the strata either.
   * **Error mean (px)** -- NOT `err_p50`, which is what this column briefly held. The
-    mean is the statistic panel c plots, the caption quotes ("rises 1.29-fold, 3.67 ->
-    4.72 px") and the p99 column supports; a p50 column here silently disagreed with
+    mean is the statistic panel c plots, the caption quotes ("rises 1.30-fold, 3.65 ->
+    4.74 px") and the p99 column supports; a p50 column here silently disagreed with
     all three. `err_p50` is still in the deposited CSV.
   * **Error p99 (px)** -- the tail. `captions/fig6.md:77` quotes "the 99th 1.88x" from
     this column, so removing it left a caption citing a number on no artwork.

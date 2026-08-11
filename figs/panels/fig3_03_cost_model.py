@@ -19,7 +19,8 @@ consequence was a false claim on the artwork: at A = 1 the grey curve sat at 8 w
 every exhaustive curve sat at 1, i.e. the chart stated that the greedy solve costs
 8x MORE than enumerating everything. It does not; it enumerates NO hypotheses at
 all. The greedy cost is therefore stated in words under the axis and MEASURED in
-panel d, where it belongs, and this axis carries exactly the quantity it names.
+panel f (the teal series), where it belongs, and this axis carries exactly the
+quantity it names.
 (The panel's own docstring already forbade mixing an analytic count with a
 wall-clock timing on one axis; two analytic counts of different things is the same
 error.)

@@ -1,6 +1,22 @@
 #!/usr/bin/env python3
 """
-Fig 3e -- 3D-term ablation: ID switches and cross-view IDF1 against r = corr3d/corr2d.
+Fig 3e -- 3D-term ablation: ID-switch RATE and cross-view IDF1 against r = corr3d/corr2d.
+
+SWITCHES ARE A RATE, NOT A SUM (review 2026-08). `switches` in the deposit is the
+sum of per-camera within-view ID switches over all 5 cameras of all 8 sessions --
+40,984 at r = 0 down to 272 -- and a total like that is uninterpretable without the
+exposure it accumulated over. The denominator is MEASURED, never assumed: every
+session was tracked and scored over its full length, so the exposure is
+`sum over camera, session of min(gt_frames, det_frames)` = 7,205,370 camera-frames,
+computed by `fig3_sweep.camera_frames()` from the HDF5 shapes (the same expression
+`fig3_score.score_session()` scores over) and deposited as
+`fig3_sweep.json total_camera_frames`. This panel READS that key and exits if it is
+absent -- run `python3 figs/fig3_sweep.py --denominators`, which re-measures only the
+frame counts and touches neither the tracker runs nor the scoring.
+
+Per 1,000 camera-frames rather than percent because the range is 5.69 down to 0.0378
+per 1,000: as percent those are 0.569% and 0.00378%, i.e. an axis of leading zeros.
+The RAW SUMS stay in the deposited CSV, so nothing is lost.
 
 THE SWEEP IS ONE-DIMENSIONAL AND THIS PANEL SAYS SO. The cost function sums a 2D and
 a 3D term, and only their RATIO matters -- all 24 (corr2d, corr3d) cells collapse
@@ -13,10 +29,11 @@ was unreadable for exactly that reason: 18 of 21 cells tied, because they were t
 same r. Collapsing onto r turns a flat grid into a curve with a clear knee.
 
 TWO AXES BECAUSE THE TWO METRICS SATURATE AT DIFFERENT POINTS, and that is the
-finding: cross-view IDF1 is flat from r = 1, but ID switches keep falling and only
-bottom out at r = 2, dropping from 1,329 with no 3D term at all to 2. IDF1 alone
-would say "anything >= 1 is fine"; switches say where it actually stops improving.
-The shipped r = 6 sits comfortably past both knees.
+finding: cross-view IDF1 is flat from r = 1, but the switch rate keeps falling well
+past that -- 5.69 per 1,000 camera-frames with no 3D term at all, 0.0966 at r = 1,
+0.0466 at r = 4, and a floor of 0.0378 from r = 12. IDF1 alone would say "anything
+>= 1 is fine"; the switch rate says where it actually stops improving. The shipped
+r = 6 (0.0450) sits comfortably past both knees.
 
 r IS ON A REAL LOG AXIS, NOT A CATEGORY INDEX. It used to be plotted at
 `np.arange(len(df))` -- the 12 sampled ratios 0, 0.25, 0.5, 1, 2, 3, 4, 6, 8, 12,
@@ -37,8 +54,9 @@ decades is exactly what a log axis is for. Every sampled r is still visible: eac
 drawn with its own marker.
 
 r = 0 IS OFF A LOG AXIS, SO IT GETS A BREAK. r = 0 is the "no 3D term at all"
-control the handoff asked for and the point of the panel (1,329 switches without
-it), so it cannot be dropped just because log(0) is undefined. It is drawn in a
+control the handoff asked for and the point of the panel (5.69 switches per 1,000
+camera-frames without it, 151x the shipped ratio's rate), so it cannot be dropped
+just because log(0) is undefined. It is drawn in a
 slot to the left of the log region, its tick labelled `0`, with an explicit break
 mark on the x spine and a DOTTED connector across the break -- so the one position
 on the axis that is not to scale announces itself, and the other eleven are.
@@ -65,6 +83,9 @@ from src.style import (MUTED, GREY, SALMON, TEAL, deposit, footnote, panel,  # n
 
 METRIC = "idf1_cross"
 
+#: Rate basis for ID switches. See the docstring for why not percent.
+PER = 1_000
+
 #: The app's shipped ratio (corr2d 1.0, corr3d 6.0 -> r = 6).
 SHIPPED_R = 6.0
 
@@ -84,7 +105,16 @@ LABELLED_R = (0.0, 1.0, 2.0, 6.0, 24.0)
 
 
 def build() -> pd.DataFrame:
-    cells = [c for c in load("fig3_sweep.json")["cells"] if c.get(METRIC) is not None]
+    sweep = load("fig3_sweep.json")
+    # THE DENOMINATOR IS READ, NOT ASSUMED. Without it the panel refuses to draw
+    # rather than fall back to a plausible camera-frame count: a rate against a
+    # guessed exposure is worse than the raw sum it replaced.
+    tcf = sweep.get("total_camera_frames")
+    if not tcf:
+        sys.exit("fig3e: fig3_sweep.json has no total_camera_frames -- run "
+                 "`python3 figs/fig3_sweep.py --denominators` to measure it (seconds; "
+                 "it re-reads only the HDF5 shapes, not the tracker runs or scoring).")
+    cells = [c for c in sweep["cells"] if c.get(METRIC) is not None]
     df = pd.DataFrame(cells)
     df["r"] = df.corr3d / df.corr2d
 
@@ -102,6 +132,10 @@ def build() -> pd.DataFrame:
              .agg(idf1=(METRIC, "first"), switches=("switches", "first"),
                   n_cells=("switches", "size"), n_sessions=("n_sessions", "first"))
              .reset_index().sort_values("r"))
+    # Raw sum AND rate in the deposit, with the denominator alongside, so the CSV
+    # is checkable by division.
+    out["camera_frames"] = tcf
+    out["switches_per_1k_camera_frames"] = out.switches / tcf * PER
     return out
 
 
@@ -138,10 +172,17 @@ def main():
                       zorder=3)
         axis.plot(x, y, "o", color=color, ms=ms, mec="white", mew=0.8, zorder=4)
 
-    # ID switches, log, on the left.
-    series(ax, df.switches.clip(lower=1).to_numpy(dtype=float), SALMON, 4)
+    # ID-switch RATE, log, on the left. The floor is the rate ONE switch would
+    # give, which is what `.clip(lower=1)` meant on the count axis: a cell with no
+    # switches at all cannot be placed on a log axis, and pinning it at the
+    # smallest event the measurement can resolve is the honest placement.
+    rate = df.switches.clip(lower=1).to_numpy(dtype=float) / df.camera_frames.iloc[0] * PER
+    series(ax, rate, SALMON, 4)
     ax.set_yscale("log")
-    ax.set_ylabel("ID switches", color=SALMON)
+    # The denominator is IN the axis label -- the footnote is no longer drawn
+    # (src.style.footnote reports to the build log), so a unit that lives only
+    # there would not reach the reader.
+    ax.set_ylabel("ID switches per\n1,000 camera-frames", color=SALMON)
     ax.tick_params(axis="y", colors=SALMON)
     ax.spines["left"].set_color(SALMON)
 
@@ -177,7 +218,9 @@ def main():
     # exhaustive baseline, an unlabelled two-series ablation reads as a
     # between-method comparison, which this one is not.
     footnote(ax, "r = 0: no 3D term, left of the break\n"
-                 "both series are LUC3D against itself")
+                 "both series are LUC3D against itself\n"
+                 f"rate basis: {int(df.camera_frames.iloc[0]):,} camera-frames "
+                 f"(8 sessions x 5 cameras, full length)")
 
     # Cross-view IDF1 on the right.
     ax2 = ax.twinx()
@@ -195,7 +238,7 @@ def main():
                 textcoords="offset points", color=MUTED, fontsize=6.5,
                 ha="center", va="bottom")
 
-    text_legend(ax, [("ID switches", SALMON), ("cross-view IDF1", TEAL)], "above")
+    text_legend(ax, [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL)], "above")
     save(fig, 3, "e", "sweep")
 
 

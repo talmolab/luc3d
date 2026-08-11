@@ -259,8 +259,12 @@ def slap2m():
         r = pearson(xs, [idf1[t][s] for s in sessions])
         rec_corr[t] = dict(r=r, r2=r * r, n_sessions=n,
                            t_stat=r * math.sqrt((n - 2) / (1 - r * r)))
+    # Column 4 is bytetrack IDF1, APPENDED (not inserted) so positional consumers
+    # of columns 0-3 keep working: figs/panels/fig7_07_recall.py reads 0, 1, 2.
+    # Columns: [recall, luc3d IDF1, sleap IDF1, n_animals, bytetrack IDF1].
     rec_corr["per_session"] = [[recall[s], idf1["luc3d"][s], idf1["sleap"][s],
-                               cov[s]["animals"]] for s in sessions]
+                               cov[s]["animals"], idf1["bytetrack"][s]]
+                               for s in sessions]
 
     # camera-session level wins (3-way argmax and pairwise), ties counted not hidden
     cscore = defaultdict(dict)
@@ -282,6 +286,24 @@ def slap2m():
     survival = {f"{th:g}": {t: sum(1 for s in sessions if idf1[t][s] >= th)
                             for t in trackers} for th in (0.2, 0.3, 0.5, 0.7, 0.9)}
 
+    # Frame-count denominators, so error_decomposition's raw counts can be quoted
+    # as rates (e.g. per 100,000 camera-frames). Source: the num_frames column of
+    # _eval_baseline.csv itself (motmetrics' frame count per camera-session).
+    # Asserted, not assumed: num_frames is identical across the three trackers for
+    # every camera-session AND identical across the 6 cameras within every session,
+    # so total_camera_frames sums the 444 camera-sessions and total_video_frames
+    # sums one per-session value over the 74 sessions.
+    frames_cs = {}                                # (session, camera) -> num_frames
+    for r in rows:
+        nf = int(float(r["num_frames"]))
+        k = (r["session"], r["camera"])
+        assert frames_cs.setdefault(k, nf) == nf, f"num_frames varies by tracker {k}"
+    frames_sess = {}
+    for (s, _c), nf in frames_cs.items():
+        assert frames_sess.setdefault(s, nf) == nf, f"num_frames varies by camera {s}"
+    total_camera_frames = sum(frames_cs.values())
+    total_video_frames = sum(frames_sess.values())
+
     # the honest negative: LUC3D fragments more than SLEAP
     frag = {t: sess_mean(t, "num_fragmentations") for t in trackers}
     fd = [frag["luc3d"][s] - frag["sleap"][s] for s in sessions]
@@ -291,6 +313,12 @@ def slap2m():
                        wilcoxon_p=wilcoxon_p(fd), units="fragmentations per camera")
 
     return dict(source=SLAP2M, n_sessions=len(sessions), n_camera_sessions=len(cscore),
+                total_camera_frames=total_camera_frames,
+                total_video_frames=total_video_frames,
+                frames_source=("num_frames column of _eval_baseline.csv (motmetrics "
+                               "per-camera-session frame count); identical across "
+                               "trackers per camera-session and across cameras per "
+                               "session, verified by assertion at aggregation time"),
                 within_view=within, paired_vs_sleap=paired, by_animals=by_animals,
                 by_bedding=by_bedding, error_decomposition=errdec,
                 detector_recall_corr=rec_corr, camera_session_argmax=dict(argmax),

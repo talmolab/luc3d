@@ -1,0 +1,377 @@
+# Methods
+
+Procedures behind the measurements in Figs 1 to 7. Legends are in FIGURE-LEGENDS.md.
+The script behind each panel is in PANEL-SOURCES.md.
+
+## Corpora
+
+Three multi-camera recordings were used. No animal procedures were performed for this
+work, and all three recordings are pre-existing datasets that had already been
+proofread in 3D.
+
+The BMimica corpus consists of 56 sessions, each recording two mice with five
+synchronised cameras at 150 frames per second for approximately 20 minutes, giving
+10,084,734 frames in total. The 56 sessions record 9 individual mice in 18 distinct
+pairings, so a session is a repeated recording of a pair rather than an independent
+sample, and each pair contributes between one and six sessions. Every analysis that
+treats the session as the unit of replication is therefore reported here alongside the
+same analysis with the pair as the unit. A 15-node mouse skeleton was used throughout,
+comprising the nose, left and right ears, the tail-tip and tail base (denoted TTI),
+three intermediate tail nodes, the head, trunk and neck, and the left and right
+shoulders and haunches. Figures 2, 3E, 5 and 7A were measured on this corpus.
+
+The SLAP-2M corpus consists of 74 sessions recording one to four animals with eight
+cameras at 50 frames per second, giving 1,954,440 frames; six of the eight cameras are
+proofread and every SLAP-2M measurement reported here uses those six. All 74 sessions
+carry a proofread 3D reconstruction. The animal composition is 32 sessions with one
+animal, 35 with two, 4 with three and 3 with four, giving 126 animal-sessions in total,
+of which 46 are white, 42 agouti and 38 black by coat colour. Individual animal
+identities are not recorded in the released metadata, so the number of distinct mice
+contributing to this corpus cannot be stated from the data itself, and the session is
+the unit of analysis for every SLAP-2M measurement. Each session also carries a
+curator-assigned difficulty rating from 1 to 7 (12, 13, 9, 13, 10, 4 and 13 sessions
+respectively) and a black or white bedding label (44 and 30 sessions), which were used
+as strata in Figure 6 and as a control in Figure 7B. Figures 6 and 7B to 7G were
+measured on this corpus.
+
+The third recording, HardFight, is a single session recording three mice with eight
+cameras at 60 frames per second, from which a 300-frame window was taken for Figure 1
+and Figure 2A.
+It is the only recording that was built as a complete application session with its own
+calibration, which is why the panels driven through the application itself use it.
+
+## Camera calibration
+
+Each rig ships a calibration file that gives, for every camera, its intrinsic matrix,
+its radial and tangential distortion coefficients and its extrinsic pose, in a TOML
+format compatible with aniposelib. The application reads these files unchanged, and no
+recalibration was performed for this work. Reprojection errors are reported throughout
+in each camera's own native, still-distorted pixels, because that is the space in which
+an annotator sees the error; a point is undistorted into ideal-pinhole coordinates only
+inside the linear solver, and the residual is measured after it is projected back. All
+3D coordinates are expressed in the calibration's own metric frame, in millimetres. For
+Figure 5A the reconstructed pose was aligned to the calibration frame by a
+RANSAC-Procrustes fit, which retained 98.3 per cent of correspondences as inliers and
+left a residual of 1.32 mm.
+
+## Two-dimensional detection pool
+
+Every benchmark reported here was run on a single shared detection pool from which all
+track and identity information had been removed, so that the comparisons isolate
+cross-view association and triangulation from the quality of the underlying detector.
+Each method under comparison received byte-identical input. Ground-truth identities were
+transferred onto that pool by matching detections to the proofread instances frame by
+frame and camera by camera at an intersection-over-union threshold of 0.5, so that a
+detector identity swap appears in the results as an error of the method under test
+rather than being silently absorbed. Detections were produced by SLEAP; the application
+consumes SLEAP .slp files and neither trains nor runs a detector of its own.
+
+The measurements divide into two kinds, and they treat the recordings differently. The
+association and tracking results in Figures 3 and 7, and the behavioural analysis in
+Figure 5, were computed on complete sessions, every frame, with no subsampling. The
+per-keypoint geometric measurements in Figures 2, 4 and 6 were computed on a uniform
+sample of frames, taken every 200th frame for Figure 2, every 60th for Figures 4C to
+4E and every 240th for Figure 4B; Figure 6 uses every frame. The sample is uniform and
+was never selected on any property of the data, and it is large in absolute terms:
+1,277,424 keypoints in Figure 2, 4,253,636 in Figures 4C to 4E, and 187,134,382 keypoint
+comparisons in Figure 6. Subsampling was necessary because these measurements are
+per-keypoint and combinatorial in the cameras. Figure 2 alone rests on 12,774,240
+two-anchor solves and 38,322,720 held-out view measurements at its sampled density, and
+Figure 4B on 55,298,204 solves, so measuring at every frame would multiply those figures
+by two orders of magnitude. The sampled density was checked
+against a denser one rather than assumed to be sufficient. Repeating the Figure 2
+measurement on three sessions at every 20th frame instead of every 200th, a tenfold
+increase to 264,525 keypoints per session, moves every reported quantity by less than
+one per cent: the median held-out error changes by 0.31 per cent, its 90th percentile
+by 0.60 per cent, the fraction of reprojections within 5 px by 0.16 per cent, and the
+3D error at two, three and four anchors by 0.29, 0.52 and 0.77 per cent. Two
+independent samplings of a further quantity agree to the same tolerance: the 3D error
+by anchor count computed for Figure 4B at every 240th frame reproduces the same
+quantity computed for Figure 2 at every 200th frame to within 0.1 to 0.7 per cent at
+every camera count. This is the expected result for these recordings, since at 150
+frames per second an animal moves well under a millimetre between consecutive frames,
+so a stride of 200 samples the behaviour every 1.3 s and discards redundancy rather
+than information. The one place where the stride interacts with a method rather than
+merely with the sample size is temporal smoothing, and that is the reason the smoothing
+term in the comparison triangulator was disabled, as described below.
+
+## Cross-view association
+
+For each frame the application maintains a set of 3D targets and solves one Hungarian
+assignment per camera, committing each camera's assignment to the target set before the
+next camera is solved, which costs O(C·A³) for A animals and C cameras. The cost of
+pairing a target with a detection is summed over the skeleton nodes k with per-node
+weights w_k, where a weight of zero removes that node from the association entirely, and
+the sum is negated so that the solver minimises it. The cost has two terms. The first is
+a two-dimensional term on the distance between the detection and the target's
+reprojection into that camera, decayed by the age of the target. The second is a
+three-dimensional term on the perpendicular distance from the target to the ray
+back-projected from the detection, computed from the bare extrinsic matrix in normalised
+camera coordinates. Both thresholds are soft, in the sense that exceeding one drives its
+term negative rather than preventing the pairing outright. The shipped default weights
+are 1.0 on the two-dimensional term and 6.0 on the three-dimensional term.
+
+The alternative method compared against in Figure 3 is our reimplementation of the
+published per-frame procedure of Maree et al. (2024) rather than the authors' own code.
+It enumerates every grouping of detections into identities, of which there are (A!)^C
+per frame, triangulates and reprojects each one, and keeps the grouping with the lowest
+reprojection error. That procedure is undefined on any frame where a camera does not hold
+exactly A detections, so a frame was treated as eligible only when every camera held
+exactly A, and ineligible frames were counted and reported rather than dropped. Of the
+201,092 frames considered, 137,671 were eligible and 63,421 were skipped. The harness
+caps enumeration at one million hypotheses per frame, and the configuration of four
+animals in six cameras exceeds that cap by a factor of 191, so no frames of it were
+computed at all. Its cost in Figure 3F is therefore an arithmetic lower bound rather
+than a measurement: it takes the number of distinct hypotheses that remain after the
+A!-fold global relabelling symmetry is removed and prices them at the cheapest
+per-hypothesis rate measured anywhere in the sweep, and it is drawn with the open-marker
+convention this figure uses for a quantity that was not run.
+
+Grouping quality in Figure 3D was scored by comparing partitions rather than labels.
+The grouping each method produced was compared with the ground-truth partition of the
+same matched detections, and a frame was counted as misgrouped when the two partitions
+differed, so that a consistent relabelling of the identities is not counted as an error.
+
+The weight ablation in Figure 3E crossed a three-dimensional weight drawn from the set
+0, 0.5, 1, 2, 4, 6, 8 and 12 with a two-dimensional weight drawn from 0.5, 1 and 2,
+giving 24 cells, and held every other tracker threshold at its default. Each cell was
+run on eight complete BMimica sessions, every frame, with identical detections. Cells
+that share a ratio of the two weights return identical IDF1 values and identical switch
+counts, and this collapse was verified rather than assumed, which is why the panel plots
+the ratio rather than the two weights separately. Switch counts are reported as a rate
+per 1,000 camera-frames rather than as a total, because a total is uninterpretable
+without its denominator; the denominator is 7,205,370 camera-frames, taken per camera
+and session from the same frame counts the scorer uses, and both the rate and the raw
+count are deposited.
+
+## Triangulation
+
+The linear solver, which is the application's default, undistorts the observations into
+ideal-pinhole coordinates and minimises the algebraic error in closed form by direct
+linear transformation.
+
+The non-linear solver minimises a geometric error in each camera's native,
+still-distorted pixels while holding the cameras fixed, using a soft-L1 loss followed by
+an L1 polish phase and initialised from the linear solution, with a backtracking guard
+that vetoes any step which raises the objective. Because the cameras are held fixed this
+is a triangulation and not a bundle adjustment, although the application's menu labels
+it "Bundle Adjustment". A true joint bundle adjustment, which would free the cameras as
+well as the structure, exists in the codebase and is deliberately not exposed in the
+interface, because rewriting a project's calibration would invalidate every 3D point
+already derived from it.
+
+The application can optionally drop the view with the worst residual and re-solve the
+point from the remaining views. Figure 4C measures how far the estimate moves when it
+does so, stratified by how far the dropped view sat from the all-view solution.
+
+The comparison triangulator in Figures 4D and 4E is aniposelib 0.7.2, the OpenCV and
+NumPy release that undistorts with cv2.undistortPoints and then solves each point with a
+singular value decomposition. This is the last release before the library was rewritten
+in JAX and the newest that anipose itself accepts; the build is asserted at run time and
+the measurement refuses to proceed against a JAX build, because the rewrite is a
+different program with different performance characteristics. The four solvers were
+compared in pairs matched by algorithm class, so that the linear closed-form solve of
+each library is compared with the other's and the non-linear cameras-fixed solve of each
+with the other's, and each comparison is therefore between two procedures doing the same
+amount of work. Enabling the library's RANSAC path costs 2,339 microseconds per keypoint,
+which is 83 times the default path, and it is reported here rather than drawn because a
+bar of that size would flatten every other bar in the panel. The temporal smoothing term
+in the non-linear path was disabled, because the input was sampled every 60th frame and
+consecutive entries are therefore more than a second apart, so the smoothing term would
+penalise real motion as though it were noise; with the smoothing left enabled the
+library's optimiser is worse than its own linear solve in all 50 sessions. The rule was therefore fixed
+before the results were seen: the smoothing term is invalid on strided input and is
+disabled. Both variants were measured and both are deposited, so the choice can be
+checked.
+
+Solve times exclude undistortion for every solver, because one library undistorts inside
+the triangulation call and the other outside it, and charging only one of them would
+measure where each library draws a function boundary rather than the cost of the solve;
+the excluded undistortion is 0.45 microseconds per keypoint for aniposelib and 1.17 for
+this work. Our solvers were timed in process under single-threaded Node 26 with
+performance.now around each call, and aniposelib with time.perf_counter, taking the best
+of three runs. The two libraries are written in different languages and run on different
+runtimes, so this comparison is of two implementations as a user would encounter them
+and not of two algorithms; the browser deployment that motivates this work forecloses a
+compiled implementation, which is why the shipped solver is the one measured.
+
+The accuracy measurements in Figures 2C and 4B are reference-free. A 3D point is solved
+from a subset of the cameras, projected into a camera that was not in that subset, and
+scored against that camera's own raw detection, so no reference reconstruction enters
+the metric and neither solver optimises the quantity being reported. This estimator
+replaced an earlier one that measured distance to the proofread reconstruction, which
+cannot rank two solvers: the non-linear refinement moves the estimate in a direction
+essentially uncorrelated with the direction to the reference, with a median cosine of
+0.004 at two cameras, and adding a displacement orthogonal to an existing error always
+increases the distance, so that measure reported that the refinement had moved whichever
+way it moved.
+
+## Behavioural analysis
+
+A frame was counted as reared when the animal's neck height exceeded 0.75 of its own
+body length, where body length is that animal's median nose-to-tail-base distance across
+the session. Rearing bouts shorter than 0.25 s were discarded and gaps of 0.15 s or less
+within a bout were merged.
+
+A mutual upright display was defined as both animals being reared with their tail bases
+within two body lengths of each other, held for at least 0.25 s. There are 539 such
+displays in 37 of the 56 BMimica sessions.
+
+Because a display begins only when the second animal comes up, the onset of the display
+itself cannot identify which animal started it. The initiator was therefore identified
+from each animal's own rearing bout containing that onset, taking whichever animal's
+bout began earlier, and the lag reported in Figure 5C is the interval between the two
+bout onsets.
+
+A session's leader, in Figure 5F, is whichever of the two animals initiated more of that
+session's displays. Because that statistic is the larger of the two shares it cannot
+fall below 0.5, so it was read against a simulated null rather than against a line at
+0.5: for each session size, the 95th percentile of the larger share under a binomial
+distribution with probability one half was estimated from 20,000 draws. The figure
+reported in the text is pooled over displays rather than averaged over sessions, and the
+per-session statistics are restricted to sessions containing at least five displays.
+
+Because the 37 sessions are repeated recordings of a smaller number of pairs, the same
+analysis was repeated with the PAIR as the unit of replication. Aggregating every
+session of a pair into one observation gives 14 pairs with at least five displays,
+covering 536 displays. The leading member of the pair starts a median 0.81 of that
+pair's displays (interquartile range 0.74 to 0.91, range 0.60 to 1.00), and the same
+member leads in all 14 of 14 pairs (sign test P = 1.2 x 10 to the minus 4; Wilcoxon
+signed-rank on the pair shares against 0.5, P = 9.7 x 10 to the minus 4). Eight of the
+14 pairs are individually above chance by a two-sided binomial test. Pooled over those
+pairs the leader starts 429 of 536 displays, 80.0 per cent, which is the same figure the
+session-level pooling gives. The result is therefore not an artefact of treating
+repeated recordings of one pair as independent.
+
+Three controls were run on the initiator asymmetry. It is not explained by the rearing
+base rate, since a session's initiation share is uncorrelated with that animal's share
+of rearing time (Pearson r = -0.012, P = 0.96; Spearman rho = 0.044, P = 0.84; n = 24
+sessions with at least five displays). It is not an artefact of the per-animal height
+threshold, since re-running the whole detection with a single threshold shared by both
+animals returns the same leader in 22 of 24 sessions and an absolute 60 mm threshold
+returns the same leader in all 24. It is not body size: in the eight sessions where the
+initiating animal is the longer of the pair it still starts 81 of 103 displays, 79 per
+cent (binomial against 0.5, P = 4.1 x 10 to the minus 9).
+
+The coupling in Figure 5G was computed by taking every rearing onset by one animal and
+reading out the probability that the other animal was rearing at each lag within five
+seconds either side, divided by that other animal's own base rate. Onsets were split by
+the tail-base separation at the moment of onset, into those within two body lengths and
+those beyond. The null distribution was generated by circularly shifting the other
+animal's rearing time series, 24 shifts per ordered pair, which preserves that animal's
+rearing rate, its bout durations and its autocorrelation while destroying only the
+temporal alignment between the two animals; a reshuffle would additionally have
+destroyed the autocorrelation and would have made almost any structure appear
+significant. A session contributed a curve to a condition only if it supplied at least
+20 onsets in that condition. The same measurement on the two-animal sessions of SLAP-2M
+gives 1.08 within two body lengths and 0.97 beyond, but that arena is 3.2 body lengths
+across against BMimica's 6.9, so the two conditions barely differ there and the claim is
+made for BMimica alone.
+
+## Tracking metrics
+
+IDF1, identity switches and fragmentations were computed with the motmetrics library on
+the shared detection pool. Within-view IDF1 was computed separately for each camera and
+averaged. Cross-view IDF1 pools all cameras into a single accumulator with one global
+identity per animal; a method that labels each camera independently can be matched to
+the truth in at most one camera, so 1/C is a ceiling for such a method rather than a
+chance level, and chance is set by the number of animals rather than the number of
+cameras. A fragmentation was counted each time a tracked ground-truth track became
+untracked and was later picked up again, which is a different event from an identity
+switch, in which the track continues but is assigned to the wrong animal. Error terms are
+reported as percentages of camera-frames. False negatives were measured but are not
+plotted, since they account for 98.8 to 99.3 per cent of every method's error budget and
+would draw three indistinguishable bars.
+
+## Statistics
+
+The session is the unit of analysis throughout unless stated otherwise. For BMimica this
+is a conservative-sounding choice that is not automatically conservative, because the 56
+sessions are repeated recordings of 9 mice in 18 pairings; where a session-level test
+carries a claim, the same test with the pair as the unit is reported beside it (Figure
+5F). For SLAP-2M the individual animals are not identified in the metadata, so no
+finer unit is available. Medians and
+interquartile ranges are used for the error distributions, which are right-skewed, and a
+band labelled as running from the 25th to the 75th percentile is an across-session
+spread of per-session medians rather than a confidence interval. Bootstrap confidence
+intervals at 95 per cent over sessions are used for the paired comparisons in Figures
+7A, 7D and 7G. Sign tests are used for paired per-session comparisons of direction in
+Figure 7D. A Wilcoxon signed-rank test is used for the paired session-level comparison
+against a fixed value in Figure 5F. Binomial nulls were simulated rather than
+approximated wherever the statistic is a larger-of-two share, using 20,000 draws per
+session size. Circular-shift nulls were used for the temporal coupling in Figure 5G. No
+correction for multiple comparisons is applied across figures, and where a family of
+per-session tests is reported both the uncorrected and the Holm-corrected counts are
+given.
+
+## The application
+
+LUC3D is a multi-view pose annotation and 3D proofreading interface that runs entirely
+in a web browser. It is served as static files with no installation and no build step,
+either from the hosted deployment or from any local static file server, and it keeps no
+state on a server, so a project is simply a set of local files that the user opens and
+saves.
+
+It loads multi-camera video with frame-accurate WebCodecs decoding and scrubbing
+synchronised across every view, camera calibration in TOML or JSON, and SLEAP
+predictions, which are read lazily so that a prediction file larger than available
+memory can still be opened. Several recording sessions can be held open at once, each in
+its own dockable pane. A project can also be opened with no video at all, as a skeleton
+together with imported 3D points, in which case the whole duration of the reconstruction
+remains navigable.
+
+Skeleton instances and their keypoints are created and edited directly on the video
+frames, and the node and edge definitions themselves can be edited inline. The
+reprojection-aided labelling protocol quantified in Figure 2 is available in the
+interface: the user labels two views, the 3D point is solved from those two alone, and
+the reprojection appears in every remaining view to be accepted or nudged.
+
+A cross-view tracker groups the detections that belong to the same individual across
+views and assigns one identity per animal per frame, which is the capability measured in
+Figures 3 and 7. Its behaviour is exposed through a guided dialogue that offers per-node
+weights, per-view inclusion and the cost thresholds described above, so that the
+association can be tuned to a particular rig rather than accepted as a fixed policy.
+Tracks and identities are held per session and propagate to one another, so that a
+correction to either is reflected in the other.
+
+Triangulation is offered as the linear solve and as the non-linear refinement described
+above, with optional rejection of an outlying view. The reconstruction is drawn in an
+interactive Three.js viewport that also renders the calibrated camera frustums, can be
+placed at any camera's own pose and field of view so that it can be compared directly
+against that camera's video, and can be exported as an MP4 video.
+
+Reprojection error is surfaced for each keypoint and each view as an overlay on the
+frame the user is working on, which is the signal a proofreader works from; detections
+are drawn as solid marks and reprojections from the 3D as dotted ones. A timeline widget
+in the style of SLEAP carries frames, tracks and labelled regions for navigation, and
+the keyboard shortcuts are listed and can be rebound in the settings dialogue.
+
+Projects are written as SLEAP .slp files, including the columnar session data introduced
+in version 2.8 of that format, which carries the calibration, the cross-view identities
+and the 3D points, so that a project round-trips through SLEAP and through this
+application without loss. Labels can also be exported as JSON, 3D points as HDF5, and
+the 3D viewport as MP4.
+
+## Software
+
+The application is written as vanilla ES modules with no build step. It reads and writes
+version 2.8 of the SLP format through a vendored copy of sleap-io.js and HDF5 through a
+vendored copy of h5wasm, and renders in three dimensions with Three.js. A recent
+Chromium-based browser is recommended, because frame-accurate decoding uses WebCodecs.
+The benchmark drivers run the unmodified application modules under Node 26, so the
+association and triangulation measured here are the shipped code paths rather than a
+reimplementation of them. Analysis and figures were produced in Python 3.12 with NumPy,
+pandas, h5py, SciPy and Matplotlib. Tracking metrics come from motmetrics and the
+comparison triangulator from aniposelib 0.7.2.
+
+## Figure generation
+
+Each figure is assembled from per-panel PDF files. A measurement pass writes a JSON
+deposit, a panel script reads that deposit, writes the plot-ready table as CSV and
+renders one PDF at an exact size on a 180 mm column grid, and an assembler places the
+panels, draws the letters and titles and refuses to build a row wider than the page.
+Panels are never trimmed to their ink, so that two panels of the same class are
+identical in size and their axes align across a row. A linter reads the emitted PDF
+files and reports any text that overlaps other text, sits on a data mark, falls outside
+the page or is set below five points. Text on the artwork is limited to axis labels,
+series names and the numbers a panel is about; all other prose is in the legends.

@@ -29,10 +29,19 @@
  * Frames failing that, or whose (A!)^C exceeds --max-hypotheses, are skipped
  * and counted, never silently dropped from the reported totals.
  *
+ * --clean-sample N caps how many ELIGIBLE frames are actually enumerated, without
+ * changing what is counted: the eligibility scan always runs over the whole window,
+ * so framesConsidered / framesClean stay the honest full-session numbers, and the N
+ * enumerated frames are drawn UNIFORMLY across the session's eligible frames (stride
+ * = framesClean / N) rather than as a head-of-session prefix. Needed only for the
+ * 3- and 4-animal configurations, where one frame costs seconds. The chosen indices
+ * are reported (cleanSampleStride, framesComputed) so the sample is reconstructible.
+ *
  * CLI:
  *   node fig3_exhaustive.mjs --session-idx N --num-animals N \
  *     --calibration calib.toml --pred-h5-dir DIR --out out.json \
- *     --cameras back,backL,mid,midL,top [--max-frames N] [--max-hypotheses 1000000]
+ *     --cameras back,backL,mid,midL,top [--max-frames N] [--max-hypotheses 1000000] \
+ *     [--clean-sample N]
  */
 import { register } from 'node:module';
 import * as h5 from 'h5wasm/node';
@@ -57,6 +66,7 @@ function parseArgs(argv) {
         else if (a === '--cameras') o.cameras = take();
         else if (a === '--max-frames') o.maxFrames = parseInt(take());
         else if (a === '--max-hypotheses') o.maxHypotheses = parseInt(take());
+        else if (a === '--clean-sample') o.cleanSample = parseInt(take());
     }
     return o;
 }
@@ -114,6 +124,19 @@ function instancePoints(sub, fi, animal, nAnimals, nNodes) {
         else { pts[k] = [x, y]; allNull = false; }
     }
     return allNull ? null : pts;
+}
+// Allocation-free "how many non-null instances does this camera hold this frame?",
+// used by the eligibility pre-pass so scanning a whole session is cheap. Must agree
+// EXACTLY with instancePoints()'s null rule (a slot counts iff some node is finite).
+function countInstances(sub, fi, nAnimals, nNodes) {
+    let n = 0;
+    for (let a = 0; a < nAnimals; a++) {
+        for (let k = 0; k < nNodes; k++) {
+            const base = (((fi * nAnimals) + a) * nNodes + k) * 2;
+            if (Number.isFinite(sub[base]) && Number.isFinite(sub[base + 1])) { n++; break; }
+        }
+    }
+    return n;
 }
 
 // All permutations of [0..n-1], as arrays of indices. Small n only (n<=6).
@@ -188,11 +211,41 @@ async function main() {
     let prevCentroids = null; // array of A [x,y,z] from the last computed frame
     const t0 = Date.now();
 
+    // --- Pass A: eligibility scan over the WHOLE window. A frame is eligible only
+    // when EVERY included camera holds EXACTLY A non-null detections; ineligible
+    // frames are COUNTED here, never dropped, so framesConsidered/framesClean are
+    // full-session numbers even when --clean-sample later caps what is enumerated.
+    const cleanFrames = [];
     if (!capped) {
-        outer:
+        scan:
         for (let fi = 0; fi < frameLimit; fi++) {
             framesConsidered++;
-            // Per-camera instance list for this frame; require EXACTLY A per camera.
+            for (const cam of cameras) {
+                const sl = camSlices[cam];
+                if (countInstances(sl.data, fi, sl.nAnimals, sl.nNodes) !== A) continue scan;
+            }
+            framesClean++;
+            cleanFrames.push(fi);
+        }
+    }
+    const scanSeconds = (Date.now() - t0) / 1000;
+
+    // --- Uniform subsample of the eligible frames (no-op unless --clean-sample bites).
+    // Uniform across the session, NOT a head-of-session prefix: at A>=3 one frame
+    // costs seconds, and a prefix would sample only the start of the recording.
+    let selected = cleanFrames;
+    let cleanSampleStride = 1;
+    if (opts.cleanSample && cleanFrames.length > opts.cleanSample) {
+        const N = opts.cleanSample;
+        cleanSampleStride = cleanFrames.length / N;
+        selected = [];
+        for (let i = 0; i < N; i++) selected.push(cleanFrames[Math.floor(i * cleanSampleStride)]);
+    }
+    const tEnum = Date.now();
+
+    {
+        for (const fi of selected) {
+            // Per-camera instance list for this frame (eligibility already established).
             const perCamInstances = {};
             for (const cam of cameras) {
                 const sl = camSlices[cam];
@@ -201,10 +254,8 @@ async function main() {
                     const pts = instancePoints(sl.data, fi, a, sl.nAnimals, sl.nNodes);
                     if (pts) insts.push({ slot: a, instance: new Instance(pts, a, 'predicted', 1.0) });
                 }
-                if (insts.length !== A) continue outer;   // not clean — skip whole frame
                 perCamInstances[cam] = insts;
             }
-            framesClean++;
 
             // Enumerate (A!)^C combinations via mixed-radix counter over the C views.
             const C = cameras.length;
@@ -300,6 +351,7 @@ async function main() {
         }
     }
     const runtimeSeconds = (Date.now() - t0) / 1000;
+    const enumerationSeconds = (Date.now() - tEnum) / 1000;
 
     fs.mkdirSync(path.dirname(opts.out), { recursive: true });
     fs.writeFileSync(opts.out, JSON.stringify({
@@ -312,8 +364,16 @@ async function main() {
         framesConsidered,
         framesClean,
         framesComputed,
+        cleanSample: opts.cleanSample || null,
+        cleanSampleStride,
         runtimeSeconds,
+        scanSeconds,
+        enumerationSeconds,
+        // Unchanged definition (total wall / computed frames), so these numbers stay
+        // comparable to the earlier single-session deposit; the enumeration-only rate
+        // is carried alongside because the eligibility scan is now a separate pass.
         secondsPerComputedFrame: framesComputed > 0 ? runtimeSeconds / framesComputed : null,
+        secondsPerComputedFrameEnum: framesComputed > 0 ? enumerationSeconds / framesComputed : null,
         frames,
     }));
     process.stderr.write(

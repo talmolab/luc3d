@@ -44,8 +44,8 @@ from src.data_loader import OUT, load  # noqa: E402
 from src.diagram import blank, icon, point, ray  # noqa: E402
 from src.style import MUTED, GREY, INK, SALMON, SPAN, TEAL, mm, save, tile, use  # noqa: E402
 
-STEPS = ["label 2 anchor views", "triangulate",
-         "reprojections appear", "accept or nudge"]
+STEPS = ["Label 2 anchor views", "Triangulate",
+         "Reprojections appear", "Accept or nudge"]
 REPROJ_CAMS = ["Camera0_mid", "Camera2_topC"]
 #: width / height of one grid cell, measured off the laid-out figure below. The
 #: magnified crop is cut to exactly this so it FILLS its cell: a square crop in a
@@ -195,16 +195,17 @@ def main():
             ("solid = detected", GREY, "normal")]):
         ax.text(0.0, 0.95 - i * 0.17, t, color=c, fontweight=w, fontsize=7, va="top")
 
-    # The step number goes in a filled disc and consecutive steps are joined by a
-    # chevron: four bold titles in a row are four titles, whereas 1 > 2 > 3 > 4 is a
-    # PROCEDURE, which is the only thing this panel is claiming.
+    # STEP NUMBER AND TITLE IN ONE RUN OF TYPE, "1. Label 2 anchor views". The
+    # number used to sit in a filled disc; a disc is decoration, it reads as an
+    # icon rather than as type, and at 7 pt inside a circle it is the smallest and
+    # least legible element on the page. Numbering the titles says "procedure"
+    # just as well and keeps every character in the figure's one typeface and
+    # weight. The chevrons between cells stay -- they carry the ORDER, which is the
+    # panel's actual claim.
     fig.canvas.draw()                    # so get_position() is the laid-out one
     for k, title in enumerate(STEPS):
         p = cells[(0, k)].get_position()
-        fig.text(p.x0 + 0.008, 0.945, str(k + 1), ha="center", va="center",
-                 fontweight="bold", color="white", fontsize=7,
-                 bbox=dict(boxstyle="circle,pad=0.32", fc=INK, ec="none"))
-        fig.text(p.x0 + 0.024, 0.94, title, ha="left", va="bottom",
+        fig.text(p.x0, 0.94, f"{k + 1}. {title}", ha="left", va="bottom",
                  fontweight="bold", color=INK, fontsize=8)
         if k:
             prev = cells[(0, k - 1)].get_position()

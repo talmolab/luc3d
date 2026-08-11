@@ -23,7 +23,7 @@ import numpy as np
 from matplotlib.patches import (Circle, Ellipse, FancyArrowPatch, Polygon,
                                 Rectangle)
 
-from .style import GREY, INK
+from .style import GREY, INK, SET2
 
 #: One stroke weight for the whole schematic, matching the data panels' axes.
 LW = 0.9
@@ -145,7 +145,16 @@ def loop(ax, x, y, r=0.55, color=INK, label=None):
 def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
     """One pipeline glyph in the box (x, y, s, s).
 
-    kinds: camera, cameras, skeleton, ids, triangulate, cube, check, file, mouse
+    kinds: camera, cameras, skeleton, ids, triangulate, cube, check, file, mouse,
+    pose2d, pose3d, instances3d
+
+    The last three are the Fig 1a pipeline glyphs (review 2026-08: the pipeline's
+    icons should show THIS pipeline's objects, not generic marks): `pose2d` is two
+    animals' 2D poses in ONE colour -- detections exist, identity does not yet;
+    `pose3d` is one animal's pose over a ground plane -- the triangulated result;
+    `instances3d` is two animals over the plane in the identity palette's two
+    hues -- re-identified instances, which is what proofreading acts on. They share
+    one mini-pose shape so the object reads as "the same animal, further along".
 
     COORDINATES ARE FLIPPED relative to the legacy source. `nature.py` drew these
     in SVG, where y grows DOWNWARD; matplotlib's y grows upward, so a direct port
@@ -228,6 +237,48 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
                              ec=color, lw=lw, zorder=3))
         L(cx + s * 0.34, 0.50, cx + s * 0.48, 0.40)
         L(cx - s * 0.34, 0.50, cx - s * 0.50, 0.64)
+    elif kind in ("pose2d", "pose3d", "instances3d"):
+        # One mini pose shared by the three glyphs: nose-head-hip-tailbase spine
+        # with two limb strokes -- the "skeleton" glyph compressed so two of them
+        # fit a box. (ox, oy) place its own unit box inside the icon box; sc
+        # scales it; the fractions are in the LEGACY y-down frame like the rest.
+        def pose(ox, oy, sc, col):
+            spine = [(0.10, 0.62), (0.38, 0.30), (0.66, 0.44), (0.94, 0.20)]
+            for i in range(len(spine) - 1):
+                ax.plot([x + (ox + spine[i][0] * sc) * s,
+                         x + (ox + spine[i + 1][0] * sc) * s],
+                        [Y(oy + spine[i][1] * sc), Y(oy + spine[i + 1][1] * sc)],
+                        color=col, lw=lw, solid_capstyle="round", zorder=3)
+            for (a, b) in (((0.38, 0.30), (0.30, 0.66)), ((0.66, 0.44), (0.76, 0.74))):
+                ax.plot([x + (ox + a[0] * sc) * s, x + (ox + b[0] * sc) * s],
+                        [Y(oy + a[1] * sc), Y(oy + b[1] * sc)],
+                        color=col, lw=lw, solid_capstyle="round", zorder=3)
+            for px, py in spine:
+                ax.add_patch(Circle((x + (ox + px * sc) * s, Y(oy + py * sc)),
+                                    s * sc * 0.055, facecolor=col,
+                                    edgecolor="none", zorder=4))
+
+        def plane(col):
+            # Ground parallelogram along the icon's floor: the one 3D cue, kept
+            # to a single thin outline (no shading, per the module header).
+            ax.add_patch(Polygon([(x + s * 0.02, Y(0.88)), (x + s * 0.34, Y(1.00)),
+                                  (x + s * 0.98, Y(0.94)), (x + s * 0.66, Y(0.82))],
+                                 closed=True, fill=False, ec=col, lw=lw * 0.8,
+                                 zorder=2))
+
+        if kind == "pose2d":
+            # Two animals, ONE colour: detections without identity.
+            pose(0.00, 0.02, 0.58, color)
+            pose(0.40, 0.42, 0.58, color)
+        elif kind == "pose3d":
+            plane(color)
+            pose(0.10, 0.02, 0.80, color)
+        else:  # instances3d
+            # The identity palette's first two hues, not the chevron's colour:
+            # here colour IS the payload (one identity per animal).
+            plane(GREY)
+            pose(0.00, 0.00, 0.58, SET2[0])
+            pose(0.40, 0.34, 0.58, SET2[1])
     else:
         raise ValueError(f"unknown icon kind: {kind}")
     return x, y, s, s

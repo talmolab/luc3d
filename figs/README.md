@@ -55,7 +55,10 @@ python3 figs/build_fig_session.py     # the trimmed 8-camera clip -> figs/sessio
 node    figs/fig1_tracking.mjs        # app screenshots + manifest
 python3 figs/fig2_measure.py          # bench env
 node    figs/fig4_measure.mjs
-python3 figs/fig6_detections.py       # bench env
+node    figs/fig4_by_views.mjs        # 4b, both solvers -> fig4_by_views.json (~15 min)
+ANIPOSE_PY=/root/vast/eric/luc3d-bench/anipose_env/bin/python
+$ANIPOSE_PY figs/fig4_anipose.py      # the Anipose arm of 4d/4e -> fig4_anipose.json
+python3 figs/fig6_detections.py --jobs 12   # bench env; stride 1 = every frame, ~80 s
 #    ... see the per-panel scripts' docstrings for the exact input each one needs
 
 # 2. Panels + composites (fast, pure Python).
@@ -81,7 +84,7 @@ the embedded font name differs.
 | File | What it is |
 |---|---|
 | `make_figures.py` | Builds every panel (one subprocess each, so a panel that leaves rcParams behind cannot affect the next) then assembles. Reports failures by name with the reason. |
-| `assemble.py` | Places the panel PDFs into `figures/figN/figN.pdf` as **vector** content (`show_pdf_page`). Draws the three things that belong to the figure rather than the panel: **panel letters** (Helvetica-Bold 9 pt), **panel titles** (`TITLES`, 7.5 pt beside the letter) and the **provenance footer** (`FOOTERS`, 6.5 pt). Layout is **by rows** — only membership is declared; each panel is placed at its own true size read from its PDF, so nothing can overlap or sit ragged. **`LAYOUTS`, `TITLES` and `FOOTERS` must be edited together**: a title or footer letter that has drifted onto the wrong panel is worse than none, and that has happened once already (Fig 3's footer after the cost-schematic was inserted as b). It **refuses** a row wider than 180 mm rather than centring it off-page, and warns past 200 mm. |
+| `assemble.py` | Places the panel PDFs into `figures/figN/figN.pdf` as **vector** content (`show_pdf_page`). Draws the two things that belong to the figure rather than the panel: **panel letters** (Helvetica-Bold 9 pt) and **panel titles** (`TITLES`, 7.5 pt beside the letter). The **provenance footer** mechanism (`FOOTERS`) is retained but every entry has been removed — figure-level provenance is caption text and now lives in `FIGURE-LEGENDS.md` / `METHODS.md`; put an entry back to print it on a working draft. Layout is **by rows** — only membership is declared; each panel is placed at its own true size read from its PDF, so nothing can overlap or sit ragged. **`LAYOUTS` and `TITLES` must be edited together**: a title that has drifted onto the wrong panel is worse than none, and that has happened once already (Fig 3's footer after the cost-schematic was inserted as b). Re-run `make_docs.py` after any re-lettering. It **refuses** a row wider than 180 mm rather than centring it off-page, and warns past 200 mm. |
 | `src/style.py` | The measured mimic-mjx style. `use()`, `panel()`, `text_legend()`, `annotate_series()`, `image_row()`, `save()`, `deposit()`. |
 | `src/diagram.py` | Cheese3D-style line art: `camera()`, `ray()`, `point()`, `residual()`, `lock()`, `free()`, `loop()`. Deliberately small. |
 | `src/tools_table.py` | Fig 1d's comparison table and the provenance of every cell. **Single source of truth** — read its docstring before editing any cell. |
@@ -94,6 +97,13 @@ the embedded font name differs.
 | `fig2_measure.py` | Measures Fig 2b/2c on real proofread BMimica data. Run with the bench env. |
 | `fig5_panel_a.mjs` | Stages Fig 5a in the app: Track All -> Triangulate All with **all** views contributing, then exports the tiles plus the app's own per-view reprojection errors (`fig5a.json`). Exists because Fig 5a used to reuse Fig 2's **two-anchor** frame, which inflated every non-anchor residual by design and made its headline number an artefact. |
 | `probe.mjs`, `fig1_gui.mjs` | Earlier full-GUI screenshot passes. Kept because the whole-window shot is still useful for docs/slides, but it is **not** the figure — at print size the 8-pane GUI is illegible, which is why Fig 1b uses native-resolution crops instead. **Naming rule (enforced): every file these two write is prefixed `gui-`, and no `panels/*.py` may read a `gui-*` file.** They used to write `fig1b-*.png` / `probe-full.png`, names indistinguishable from Fig 1's real panel sources — which is how `panels/fig1_03_reconstruction.py` came to read two stale pre-`setIdentityPalette()` files for weeks (see below). Do not reintroduce figure-shaped names here; a panel's source must come from the driver named after that figure. |
+| `make_docs.py` | Generates `PANEL-SOURCES.md` from `assemble.LAYOUTS` and the panel scripts themselves — the map from each placed panel to the script that draws it, the `out/*.json` it reads, the measurement pass that wrote that JSON, and the CSV it deposits. `--check` exits non-zero when the file is stale, so it works as a pre-submission gate. A hand-kept index of 48 panels is wrong within a week; this one cannot drift without the build changing. |
+| `FIGURE-LEGENDS.md`, `FIGURE-LEGENDS.txt` | **The legends that go into the manuscript**, as `Fig. 1)` / `A)` / `B)`: finding first, then panel by panel with n and statistic. The `.txt` is the same text with no markup at all, for pasting into a word processor. **No em dashes, no bold, no tables, no backticks in either** — they survive a paste badly and the manuscript sets its own type. Nothing on the artwork duplicates them: figure-level footers and all 19 per-panel sub-captions were removed (see `FOOTERS` and `src/style.footnote`) and their content lives here. |
+| `METHODS.md`, `METHODS.txt` | The procedures behind every measurement: corpora, calibration, the shared detection pool, association, triangulation, the Fig 5 behavioural definitions, tracking metrics, statistics, software versions and how the figures are built. Same markup rules and same `.txt` twin as the legends. |
+| `PANEL-SOURCES.md` | Generated by `make_docs.py`; do not edit. |
+| `REVIEW-REVIEWER2.md` | An adversarial referee report written against the submitted PDF, used to drive the revision. Kept as the record of what was objected to. |
+| `REVISION-LOG.md` | **What changed in response to that report, with the before and after value of every number that moved**, plus the items that are the manuscript's to fix rather than this repo's. A response-to-reviewers letter can be assembled from it. Update it whenever a measurement is re-run; the numbers in the docs are only checkable against something if that something is written down. |
+| `CAPTIONS.md` | The working caption document: extended reasoning, the readings each figure must NOT support, and the analyses that were run and not shown. Source material for `FIGURE-LEGENDS.md` and for a Supplementary Note; not itself a submission artefact. |
 | `lint_text.py` | Finds overlapping and clipped text in the RENDERED panel PDFs, by measuring every text span's bounding box. Non-zero exit if anything is found, so it works as a pre-submission gate. This is the useful half of the legacy `lint.py`, reinstated for the same reason: these defects exist only in the emitted geometry and reading the generator source never finds them. It caught 55 on its first run. |
 | `legacy/` | The retired `nature.py` composite-SVG path (`fig1.py`…`fig6.py`, `lint.py`, `render.mjs`). Not part of the build; kept for the provenance in its docstrings. See `legacy/README.md`. |
 
@@ -306,8 +316,19 @@ from the files:
 | corpus | cameras | animals | sessions w/ 3D | frames | hours | complete 3D |
 |---|---|---|---|---|---|---|
 | BMimica | 5 | 2 | 56/56 | 10,084,734 | 18.7 @150 fps | 56/56 |
-| SLAP-2M | 8 | 1–4 | 74/84 | 1,954,440 | 10.9 @50 fps | 74/74 |
+| SLAP-2M | 8 | 1–4 | 74/74 | 1,954,440 | 10.9 @50 fps | 74/74 |
 | **total** | | 1–4 | **130** | **12,039,174** | **29.5** | |
+
+**SLAP-2M is 74 sessions, and the `74/84` this table used to print was a bug.**
+`fig6_measure.py` enumerated the corpus by walking `{SLAP_ROOT}/20*/<session>/`, which
+holds **84** session directories — ten of them recordings that were never part of the
+dataset (no 3D, no row in `master_sheet.xlsx`, no row in the benchmark's
+`detections_only_master_sheet.tsv`). So `sessions_total` was 84, Fig 6e's table read
+"74 of 84", and the figure claimed ten sessions of unfinished proofreading that do not
+exist. `scan_slap` now joins on `master_sheet.xlsx` (74 rows, `session` /
+`session_path`) and warns if a sheet row has no directory, so the count cannot drift in
+either direction. Nothing else moved: the frame, hour and complete-3D columns were
+already summed over the 74 sessions that have 3D.
 
 Panel a is drawn from the calibration extrinsics (camera positions `-R^T t` and
 optical axes). Panel b is the generalised-Procrustes median of 1,802 complete
@@ -387,6 +408,87 @@ The cost ratio reproduces at **6.9x** DLT, against the 4.6–6.1x the commit mes
 records. The 0/4,253,636 is **enforced by a backtracking guard, not observed** — see the
 tautology note below.
 
+### The Anipose arm (`fig4_anipose.py`) — and what it found
+
+`fig4_anipose.py` runs `aniposelib.CameraGroup.triangulate` over the **same
+`fig4_input.bin`** `fig4_measure.mjs` reads, so it is the same float64 detections in
+the same order, not merely the same corpus. All 4,253,636 keypoints and all 21,268,180
+leave-one-camera-out solves. Run it from `/root/vast/eric/luc3d-bench/anipose_env`.
+
+**Pin: `aniposelib==0.7.2`.** That is the last release before the JAX rewrite and the
+newest one `anipose` itself accepts (`Requires-Dist: aniposelib >=0.7.0`), i.e. the
+original OpenCV/NumPy pipeline — `cv2.undistortPoints`, then a per-point
+`numpy.linalg.svd` DLT in a Python loop. **0.8.0 is a different program**: `jax.vmap` +
+`jnp.linalg.svd`, genuinely batched, and timing it against LUC3D's per-call solver
+would compare batching regimes rather than solvers. `fig4_anipose.py --assert-no-jax`
+(on by default) refuses to run against a JAX build; do not remove it.
+
+**Four solvers, paired by algorithm class** — Anipose linear vs our DLT, Anipose
+`optim_points` vs our refinement — because pairing their closed-form solve against our
+iterative one is a category error, and drawing only their linear column invited exactly
+that reading. Per-session medians over all 4,253,636 keypoints:
+
+| | cameras it used | held-out camera | µs/keypoint |
+|---|---|---|---|
+| Anipose linear (`triangulate`) | 2.264 px | **3.111 px** | 28.1 |
+| our DLT | 2.349 | 3.335 | **6.3** |
+| Anipose optim (`optim_points`) | 2.256 | **3.115** | 122.1 |
+| our refinement | **2.151** (enforced) | 3.144 | **43.8** |
+
+Out of sample **Anipose is lower in both pairs** — 50/50 sessions on the linear pair,
+49/50 on the non-linear one. We are **4.4× faster on the linear pair and 2.7× on the
+non-linear one**. Our refinement's in-sample win is enforced (backtracking guard) and
+does not survive the held-out group.
+
+**Anipose's own optimiser buys it almost nothing**: 0.008 px in sample over its own
+linear solve, and *nothing* out of sample (better in 13/50), for 4.4× the cost. Not a
+failed run — it terminates on aniposelib's `ftol=1e-3` after two iterations, and
+tightening to `1e-10` changes the answer by zero (1.6237 px either way). It has
+converged; a normalised DLT is already at the geometric optimum. Which reframes our own
+refinement's 8% in-sample gain as mostly *recovering the conditioning Anipose gets for
+free* — see below.
+
+**The other two config paths, measured and not drawn.** `anipose triangulate` reads two
+flags, both `False` by default (`anipose/anipose.py`): `ransac: true` →
+`triangulate_ransac` at **2,339 µs/keypoint** (83× the default path, 53× our
+refinement); `triangulate` called one keypoint per call → **86 µs/keypoint**. That last
+one is the reconciliation for "anipose takes much longer from experience": the huge
+numbers are the per-call regime and the ransac/optim flags, not the default solve.
+
+**The optim columns run with `scale_smooth=0`.** aniposelib's defaults smooth across
+consecutive frames, but `fig4_input` is stride-60 and then filtered to all-view-complete
+keypoints, so its "consecutive" entries are 60+ frames apart — the smoothing term would
+penalise real motion as noise and the column would measure our sampling. With it on,
+Anipose's optimiser is worse than its own linear solve in 50/50 sessions (2.270 /
+3.158). Both variants are deposited (`fig4e_anipose_optim_accuracy.csv`).
+
+**Anipose's linear DLT beats both of ours out of sample.** The mechanism is the
+coordinate frame the DLT is written in, not the algorithm: LUC3D undistorts back to
+**pixels** and builds its system from K[R|t]; aniposelib undistorts to **normalised**
+coordinates and builds its system from [R|t]. That is Hartley normalisation, the
+textbook conditioning fix. Reproduced both ways on the same 4,000 keypoints — pixel
+frame recovers LUC3D (median 3D separation 4.0e-6 units, 1.6802 px), normalised frame
+recovers Anipose exactly (0.0, 1.6697 px). **`triangulatePointDLT` could adopt it and
+should not, yet**: that function is on every path (tracker, Triangulate All, save), so
+it needs an old-vs-new pinning test on real + random + degenerate inputs and a decision
+first. Nothing in the app has been changed.
+
+**The control that makes any of this a comparison** is `fig4_metric_check.mjs`: the
+Anipose arm scores with `cv2.projectPoints`, the LUC3D arms with `pose-data.js`'s
+`distortPoint`, and the gaps being reported are 0.07–0.22 px. It dumps LUC3D's own DLT
+solutions and re-scores those same 3D points with cv2 — median |cv2 − JS| = **4.2e-14
+px** (20,000 all-view) and **8.7e-14 px** (100,000 held-out). Same metric to float64
+rounding. Re-run it if either distortion implementation is ever touched.
+
+Timing is the **solve alone** in all three bars: `CameraGroup.triangulate` undistorts
+inside the call and LUC3D outside it, so Anipose is timed with `undistort=False` on
+pre-undistorted points (the excluded cost is 0.45 µs Anipose, 1.21 µs LUC3D, both
+deposited). Anipose 28.1 µs/keypoint against our DLT's 6.3 and our refinement's 43.8.
+`fig4_anipose.py` also re-times **both** LUC3D solvers in its own sitting via
+`fig4_time_luc3d.mjs` and warns if they drift more than `--tol` from `fig4.json`
+(3% and 5% at the values plotted), so the three bars cannot silently become a
+comparison of two machine loads.
+
 **The earlier version of this table was a 1-session run and its numbers were all
 different** (5,866 keypoints; DLT 1.679, refined 1.577; 39% regression; 7.1 px
 distortion). Do not quote them.
@@ -440,11 +542,37 @@ imports — which also means **`scripts/bench/bench_crossview.mjs` is currently 
 on `eric/bundle-adj`**. Worth fixing there; our hooks are a local workaround so that
 branch is untouched.
 
-Fig 4d (error vs number of contributing views) is already measured by
-`fig2_measure.py`: **4.75 / 2.91 / 1.92 / 1.22 mm** for 2 / 3 / 4 / 5 views (50 sessions;
-the 4.12 / 2.63 / 1.83 / 1.24 figures were the superseded 12-session run). Note this
-makes Fig 4d a **BMimica** panel inside an otherwise single-session figure — the
-provenance mix must be flagged on the artwork.
+### Fig 4b — error vs contributing views, BOTH solvers (`fig4_by_views.mjs`)
+
+Was DLT-only and read `fig2.json`. It now reads **`fig4_by_views.json`**, because a
+refinement curve from one run overlaid on a DLT curve from another is not a comparison.
+`fig4_by_views.mjs` runs the **real branch solvers** over Fig 4's own input (stride 240
+= every 4th keypoint of the stride-60 export, 1,063,427 keypoints, 55.3 M solves,
+~15 min), with fig2's exact protocol: every C-choose-k camera subset, 3D distance to the
+proofread reference, mm via each session's own `mm_per_unit`.
+
+| k views | DLT | refined | refined/DLT |
+|---|---|---|---|
+| 2 | 4.731 mm | 4.843 | 1.02× |
+| 3 | 2.889 | 3.205 | 1.11× |
+| 4 | 1.921 | 2.371 | 1.23× |
+| 5 | **1.207** | 1.864 | **1.54×** |
+| span 2→5 | **3.9×** | 2.6× | |
+
+**Its DLT arm reproduces `fig2.json` to 0.1–0.7% at every k** (4.747→4.731, 2.910→2.889,
+1.924→1.921, 1.216→1.207) — the script prints that cross-check, and it is what licenses
+calling this the same measurement Fig 2 made rather than a different one. The superseded
+12-session run's 4.12 / 2.63 / 1.83 / 1.24 figures are stale; do not quote them.
+
+**The rising ratio is the metric, not the solver, and that is the panel's real content.**
+The reference's own reprojection error (2.406 px) exceeds both solvers' (2.245 / 2.056)
+and it came from a linear-triangulation pipeline, so distance-to-it rewards agreeing with
+a DLT — and one candidate *is* a DLT. refined/DLT climbing monotonically 1.02× → 1.54×
+as views increase is the signature: a real accuracy deficit would not scale with how
+much information the solver was given, but a distance-from-the-DLT penalty does, because
+more views give the refinement more room to move off the seed. Comparing a solver against
+**itself** across k is unaffected (the bias is ~constant in k and cancels), which is why
+both spans are quotable. **For which solver is better, cite panel d's held-out group.**
 
 ## Fig 6 — REDESIGN REQUIRED
 
@@ -469,12 +597,12 @@ since stopped using. Both facts matter, so both are recorded:
 
 | deposit | n | difficulty | bedding | what it measures |
 |---|---|---|---|---|
-| `fig6_detections.json` | **74** | **1–7** (12/13/9/13/10/4/13) | — | the benchmark's shared identity-stripped **raw detections** vs the proofread 3D reprojected into each camera. **This is what panels c, d and f read.** |
+| `fig6_detections.json` | **74** | **1–7** (12/13/9/13/10/4/13) | — | the benchmark's shared identity-stripped **raw detections** vs the proofread 3D reprojected into each camera, at **stride 1 — every frame, 187,134,382 keypoint comparisons**. **This is what panels c, d and f read.** |
 | `fig6_difficulty.json` | 42 | 2–7 (13 at 7, 10 each at 2 and 4) | black 23 / white 19 | **proofread labels** vs the same reference — i.e. the reconstruction's own 2D→3D residual. Legacy called this a "circular comparison" and used it only as a fallback. |
 | `fig3_trackers.json slap2m.by_bedding` | 74 | — | black 44 / white 30 | tracker IDF1 by bedding. **This is what Fig 7b reads.** |
 
 The two 74-session tables disagree on the 2-animal miss rate by ~50 % (21.95 % vs
-33.19 %) and that gap is a **result**, not an inconsistency to reconcile: the raw
+33.16 %) and that gap is a **result**, not an inconsistency to reconcile: the raw
 detector misses far more than the residual path suggests, which is what you expect when
 the residual path cannot see a detection that never fired. `fig6_07_animal_count.py`'s
 docstring records the reasoning for reading `fig6_detections.json`.

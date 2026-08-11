@@ -90,7 +90,12 @@ other absent feature.
                is why "runs in" matters here and is not simply "CLI".
 """
 
-NEEDS_CHECK = True
+#: The "re-verify before submission" banner is no longer PRINTED on the artwork --
+#: it is a working note, not figure content, and a publication figure should not
+#: carry one. The date it records is still load-bearing and is reported in
+#: figs/METHODS.md and figs/FIGURE-LEGENDS.md instead. Set NEEDS_CHECK back to True
+#: to put the banner on the panel while auditing the cells.
+NEEDS_CHECK = False
 CHECK_DATE = "2026-08-05"
 
 #: "No installation" and "Browser-based" replace the old free-text "Install" and

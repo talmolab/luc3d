@@ -1,13 +1,13 @@
 ranking,budget_pct,captured_pct,n_sessions
-cross-view residual,1.0,6.112412520998607,74
-cross-view residual,5.0,17.245651472635668,74
-cross-view residual,10.0,26.952837695474468,74
-cross-view residual,20.0,41.30263257885522,74
-detector confidence,1.0,1.3508640587290426,74
-detector confidence,5.0,6.1436735704077305,74
-detector confidence,10.0,11.719819892655089,74
-detector confidence,20.0,22.443268099305534,74
-oracle (ceiling),1.0,7.940910963002863,74
-oracle (ceiling),5.0,20.84255995090508,74
-oracle (ceiling),10.0,31.82342455834676,74
-oracle (ceiling),20.0,47.87625690641955,74
+cross-view residual,1.0,6.097395332460277,74
+cross-view residual,5.0,17.276972345914267,74
+cross-view residual,10.0,26.952968605233334,74
+cross-view residual,20.0,41.3226871083149,74
+detector confidence,1.0,1.3261895204365723,74
+detector confidence,5.0,6.142784973310627,74
+detector confidence,10.0,11.758900698570484,74
+detector confidence,20.0,22.49960514976524,74
+oracle (ceiling),1.0,7.9805009912268385,74
+oracle (ceiling),5.0,20.907106788367606,74
+oracle (ceiling),10.0,31.91293327186123,74
+oracle (ceiling),20.0,47.93932521566855,74
