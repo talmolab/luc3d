@@ -443,11 +443,17 @@ export function showOverlayExportModal() {
      * bump can regress the behaviour; it cannot break resizing.
      */
 
-    // SASH_GROW_ONE: the tile you drag towards grows by the full delta and every
-    // other tile on the axis gives up delta/(n-1) — but the sash then TRAILS the
-    // cursor (4 equal tiles, drag 90px => sash moves 60px). SASH_SHARE_SIDES:
-    // tiles before the sash share the gain, tiles after share the loss, and the
-    // sash stays under the cursor. Swapping this constant is the whole change.
+    // SASH_GROW_ONE treats the sash at index k as tile k's TRAILING EDGE: push it out
+    // and tile k grows by the full delta while every other tile on the axis gives up
+    // delta/(n-1); pull it in and tile k shrinks while every other tile gains
+    // delta/(n-1). One handle per tile, same target either way. Two costs: the sash
+    // TRAILS the cursor (both sides move — 4 equal tiles, drag 90px => sash moves
+    // 60px), and the LAST tile on an axis has no trailing sash, so it only ever
+    // changes as one of the evenly-adjusted others.
+    // SASH_SHARE_SIDES instead splits the axis at the sash — tiles before share the
+    // gain, tiles after share the loss — which keeps the sash exactly under the
+    // cursor but has no "shrink just this one" gesture.
+    // Swapping this constant is the whole change.
     var SASH_DISTRIBUTION = SASH_GROW_ONE;
 
     dockEl.addEventListener('pointerdown', onDockSashDown, true);   // CAPTURE
