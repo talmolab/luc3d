@@ -666,9 +666,18 @@ try {
         quality: document.getElementById('ovQuality').value,
         mode: document.getElementById('ovMode').value,
     }));
-    check(restored.res === '720' && restored.fps === '24' && restored.colorBy === 'identity' &&
+    check(restored.fps === '24' && restored.colorBy === 'identity' &&
         restored.background === 'black' && restored.quality === 'high' && restored.mode === 'individual',
         `settings are restored on reopen (got ${JSON.stringify(restored)})`);
+    // …except the QUALITY TIER, which is deliberately not remembered: it decides the
+    // pixel count, bitrate and file size of the next export, and a value silently
+    // inherited from a previous session is only noticed once an encode has finished.
+    // Note the stored blob above really does still say '720' — this is the reopen
+    // ignoring it, not the write being skipped.
+    check(restored.res === '1080',
+        `the resolution tier reopens at the 1080p default, not the stored '720' (got ${restored.res})`);
+    check(stored && stored.res === '720',
+        'and the stored blob is untouched — it is the READ that resets, not the write');
 
     // The layout itself is deliberately NOT persisted — a reopened modal starts
     // from the mirror-the-main-window seed again.

@@ -173,6 +173,41 @@
             assertEqual(__OverlayExportLayout.sanitizeSettings({ res: 'custom' }).res, 'custom', 'custom is not a preset but is legal');
         });
 
+        it('always opens at the default resolution, whatever was stored', () => {
+            // The tier is deliberately NOT remembered: it decides pixel count, bitrate
+            // and file size, so an inherited 2160 (or 480) is only noticed after an
+            // export has already run. Everything else in the blob IS still restored,
+            // which is the half that makes this worth a test rather than a comment.
+            const L = __OverlayExportLayout;
+            const KEY = L.SETTINGS_KEY;
+            const prior = localStorage.getItem(KEY);
+            try {
+                localStorage.setItem(KEY, JSON.stringify({
+                    res: '2160', outW: 640, outH: 360,          // must all be ignored
+                    fps: 60, quality: 'high', mode: 'individual', // must all survive
+                    layers: { videoNames: false },
+                }));
+                const s = L.applyStoredSettings(L.defaultOverlayExportSettings());
+                assertEqual(s.res, L.DEFAULT_RES, 'res comes back as the default, not the stored 2160');
+                assertEqual(s.res, '1080', 'and the default is 1080p');
+                assertEqual(s.outW, 1920, 'a stale custom width cannot survive behind the reset tier');
+                assertEqual(s.outH, 1080, 'nor a stale custom height');
+                // The other half of the contract: this is not a blanket "ignore storage".
+                assertEqual(s.fps, 60, 'fps is still remembered');
+                assertEqual(s.quality, 'high', 'quality is still remembered');
+                assertEqual(s.mode, 'individual', 'output mode is still remembered');
+                assertEqual(s.layers.videoNames, false, 'layer choices are still remembered');
+                // A stored blob with NO res must behave identically.
+                localStorage.setItem(KEY, JSON.stringify({ fps: 24 }));
+                const t = L.applyStoredSettings(L.defaultOverlayExportSettings());
+                assertEqual(t.res, '1080', 'default res with a res-less blob');
+                assertEqual(t.fps, 24, 'and the blob still applies');
+            } finally {
+                if (prior === null) localStorage.removeItem(KEY);
+                else localStorage.setItem(KEY, prior);
+            }
+        });
+
         it('clamps an extreme aspect to MAX_OUT_DIM and keeps the aspect', () => {
             // A 10-camera single row is ~10:1 — at 2160p that would be 21600px.
             const s = __OverlayExportLayout.outputSizeFor(10, '2160');
