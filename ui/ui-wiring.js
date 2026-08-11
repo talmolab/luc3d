@@ -73,6 +73,7 @@ import {
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
 } from './export-modals.js';
+import { showOverlayExportModal } from './overlay-export-modal.js';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
     panelRenderers, multiSelectViews,
@@ -1348,6 +1349,12 @@ export function setupMenus() {
         showSlpExportByCamModal();
     });
 
+    document.getElementById('menuExportOverlayVideo').addEventListener('click', function () {
+        closeMenus();
+        if (!state.session) { setStatus('No session to export', 'error'); return; }
+        showOverlayExportModal();
+    });
+
     document.getElementById('menuExportVideo3d').addEventListener('click', function () {
         closeMenus();
         if (!state.session) { setStatus('No session to export', 'error'); return; }
@@ -2060,8 +2067,11 @@ export function setupUI() {
     setupVisSlider('visReprojLabelSize', 'visReprojLabelSizeVal');
     setupVisSlider('visReprojLabelAlpha', 'visReprojLabelAlphaVal', 'float');
 
-    // Checkbox toggles
-    ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors'].forEach(function(id) {
+    // Checkbox toggles. `visUnlinkedBadge` only changes what is PAINTED — it
+    // cannot hide the instance a selection points at, so the deselect sweep below
+    // is a no-op for it; it rides along purely for the redraw.
+    ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
+     'visUnlinkedBadge'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) {
             el.addEventListener('change', function() {
@@ -2136,6 +2146,7 @@ export function setupUI() {
         'vis3dNodeSize', 'vis3dEdgeWeight',
     ];
     var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
+        'visUnlinkedBadge',
         'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
         'vis3dNodeShow', 'vis3dEdgeShow'];
     var visStyleIds = [

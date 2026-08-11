@@ -102,6 +102,7 @@
     <script src="test-regressions.js"></script>
     <script src="test-overlays.js"></script>
     <script src="test-node-shape.js"></script>
+    <script src="test-unlinked-badge.js"></script>
     <script src="test-integration.js"></script>
 
     <!-- Phase 5 test files -->
@@ -293,6 +294,11 @@
          classes, both from the bridge below. -->
     <script src="test-custom-delete-ops.js"></script>
 
+    <!-- Export Video Overlays: the composition geometry + encoder-parameter
+         arithmetic (issue #190). Needs window.__OverlayExportLayout plus
+         `videoToCanvas` from ui/overlays.js, both from the bridge below. -->
+    <script src="test-overlay-export-layout.js"></script>
+
     <!-- Pass 2 transitional bridge + test runner.
          Loads ESM-converted modules (pose/, ui/) and exposes their exports on
          window so the test files (loaded as classic scripts above) can find
@@ -339,6 +345,12 @@
         // `collectDeletionTargets`/`previewCascade` are too generic to be globals.
         import * as __CustomDeleteOps from '../ui/custom-delete-ops.js';
         window.__CustomDeleteOps = __CustomDeleteOps;
+        // Pure geometry/settings half of "Export Video Overlays" — imports no
+        // project modules (and, deliberately, no dockview), so it bridges without
+        // dragging the modal's DOM/WebCodecs dependencies in. Own namespace: names
+        // like `fitRect`/`mergeSettings` are far too generic to be globals.
+        import * as __OverlayExportLayout from '../ui/overlay-export-layout.js';
+        window.__OverlayExportLayout = __OverlayExportLayout;
         // Video display filters (brightness + contrast math, per-session contrast
         // store). Imports NO project modules — safe to bridge, and the only way
         // to unit-test the #149 contrast math (its DOM caller,

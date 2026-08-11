@@ -12,9 +12,11 @@ The codebase is split across four directories plus two root files:
 - root — `app.js` entry point, `demo-data.js` synthetic dataset.
 
 External script-tag globals (`three`, `mp4box`, `h5wasm`, `dockview-core` —
-**pinned to 6.6.1**, see CLAUDE.md Dependencies — and `Mp4Muxer` — local copy in
-`lib/mp4-muxer/`, used for 3D-video `.mp4` muxing) are not listed under
-"Imports from project modules".
+**pinned to 6.6.1**, see CLAUDE.md Dependencies) are not listed under
+"Imports from project modules". Neither are importmap bare specifiers
+(`mediabunny`, `h5wasm`, `pako`, `yaml`); `mediabunny` is vendored in
+`lib/mediabunny/` and is used for video DECODE (via sleap-io.js) and video
+ENCODE (via `ui/video-encode.js`).
 
 ---
 
@@ -1728,19 +1730,32 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   frame) backed by two **editable, validated Start/End fields** (illegal input —
   non-integer, out of `[0, lastFrame]`, or crossing the other bound — is rejected
   and reverted); an editable FPS (duration = selectedFrames / fps); a
-  **resolution picker** (360p/720p/1080p/2K) that sets the output dimensions and
-  the matching H.264 level (`avc1.42001E` / `42001F` / `420028` / `420032`); live
-  readouts for **Duration**, **Exported Frames** (= selected range, updates with
-  the Start/End nodes/fields) and **Estimated File Size** (`_v3dBitrate` ×
-  duration ÷ 8, formatted by `_fmtBytes`; recomputed on range/FPS/resolution
-  change — same bitrate the encoder is configured with); and
+  **`Quality` picker** — the four shared tiers **480p (854×480) / 720p (1280×720)
+  / 1080p (1920×1080) / 2160p (3840×2160)**, each label stating its pixel size.
+  `V3D_RES` is **DERIVED from `RES_PRESETS`** in `ui/overlay-export-layout.js`
+  (`refW` is the exact width here, since this viewport is always 16:9) and its
+  H.264 level comes from that module's **`h264CodecFor`** — it used to be a
+  hand-written per-tier table that had already drifted (it claimed level 3.0 for
+  640×360 where the shared table says 3.1), and a wrong level only surfaces
+  mid-export at one resolution. Live readouts for **Output** (the chosen tier
+  echoed back as literal `W×H` + the Mbps it implies, so the resolution is on
+  screen and not only inside the dropdown), **Duration**, **Exported Frames**
+  (= selected range, updates with the Start/End nodes/fields) and **Estimated
+  File Size** (the shared **`estimatedBytes`**, not a local copy of
+  `bitrate × duration ÷ 8` — the same number decides whether the export streams
+  to disk, so the readout and that decision cannot drift; formatted by
+  `_fmtBytes`, recomputed on range/FPS/quality change); and
   Cancel / Export (all inputs disabled + playback stopped during an export).
   Export renders only the selected `[start, end]` range into the viewport at the
   chosen resolution (`renderer.setPixelRatio(1)` + `setSize(W,H)` + matching
   camera aspect), captures through an even-dimensioned 2D canvas, and encodes an
-  `.mp4` via WebCodecs `VideoEncoder` muxed with `mp4-muxer` (global `Mp4Muxer`,
-  local copy in `lib/mp4-muxer/`). Timestamps are relative to the range start.
-  Requires a Chromium-based browser (WebCodecs) — error status otherwise.
+  `.mp4` through **`ui/video-encode.js`** (mediabunny), passing the resolution's
+  H.264 level as `fullCodecString`. Timestamps are relative to the range start.
+  When the estimated output exceeds `shouldStreamToDisk`'s threshold it asks for
+  a save-file destination and **streams** to it (declining cancels the export,
+  since buffering was the thing being avoided); a short clip just downloads.
+  Requires WebCodecs — error status otherwise. Covered by
+  `tests/e2e/export-3d-video.mjs`.
 - `showTriangulateMultiFrameModal()` — frame-range triangulation modal.
 - `exportLabels()` — JSON labels export.
 - `exportPoints3dH5()` — points3d H5 export.
@@ -2216,6 +2231,564 @@ grid / 3D / info-panel / timeline.
 
 ---
 
+### ui/overlay-export-layout.js
+
+**Purpose.** The pure half of "Export Video Overlays" (issue #190):
+composition geometry, output sizing, encoder parameters, the persisted settings
+schema, and the seed-layout plan. Deliberately **dependency-free** — no project
+imports, no dockview, no DOM beyond `localStorage` — so it can be bridged into
+the classic-script unit runner and exercised without a browser dock.
+
+**Key exports.**
+- `TILE_3D` — the synthetic view name (`'__3d__'`) of the 3D viewport tile.
+- `fitRect(srcW, srcH, dstW, dstH)` — aspect-preserving "contain" fit. **Must
+  stay numerically identical to `videoToCanvas()` in `ui/overlays.js`**: the
+  video is drawn with this and the skeleton with that, so any divergence offsets
+  every burned-in overlay from the animal. Pinned by
+  `tests/test-overlay-export-layout.js`, which computes both and compares.
+- `distributeAxisSizes(base, min, max, vis, k, d, mode)` + `SASH_SHARE_FAR` /
+  `SASH_GROW_ONE` / `SASH_SHARE_SIDES` — sizes for one dock AXIS after dragging the
+  sash at index `k` by `d` px, so a resize is shared by more than the one adjacent
+  tile. dockview 6.6.1 hands the whole delta to that neighbour and only spills when it
+  clamps, and nothing configures that (see the `ui/overlay-export-modal.js` entry).
+  **The governing constraint:** a sash sits at the running SUM of the sizes before it,
+  so *"the sash stays under the cursor"* is the same statement as *"the total before
+  the sash changed by exactly the drag"*. Combined with *"the dragged tile changes
+  1:1"* that forces the tiles before the sash to hold still — so wanting all three of
+  {sash tracks cursor, dragged tile 1:1, EVERY other tile shares} is **geometrically
+  impossible** for any sash but the first. One of them must be given up, which is why
+  there are three modes rather than one.
+  **`'share-far'` is what the modal uses**: the sash is tile `k`'s trailing edge and
+  only the tiles BEYOND it take part — push it out and tile `k` grows by exactly the
+  drag while each tile after it gives up an equal share; pull it in and tile `k`
+  shrinks by exactly the drag while each tile after it gains. Tiles before the sash
+  never move, so the handle tracks the cursor exactly and both "make this one bigger"
+  and "make this one smaller" stay expressible. **Accepted gap:** the LAST sash on an
+  axis has one tile beyond it, so that single drag is still neighbour-only — pinned by
+  a unit test so it reads as a decision, not a regression.
+  `'grow-one'` shares with every tile instead (`delta/(n-1)` each). **Shipped once and
+  reverted**: the sizes are right, but tiles on both sides move, so the sash trails the
+  cursor by an amount that depends on which sash you grabbed — measured in a real dock
+  at 80/53/26 px for an 80 px drag on a 4-tile axis's three sashes (100%/66%/33%), and
+  it reads as completely broken. `'share-sides'` (tiles before the sash share the gain,
+  after share the loss) tracks the cursor but has no shrink-one gesture.
+  The result **always sums to `sum(base)`**, so the axis total — and therefore the
+  dock's box and every other axis — is untouched; swept over `k`, `d` and all three
+  modes by a unit test, because a drifting total would move the exported frame.
+  `fillEvenly` does even-share-**with-spill**: a tile pinned at its 100px minimum
+  holds still and the tiles with room absorb its share. It deliberately does NOT veto
+  the drag — an earlier version did, and a real seeded dock routinely has a tile at
+  the minimum, which made the sash feel dead.
+- `rotatedBoxSize(srcW, srcH, rotationDeg)` / `rotatedFit(srcW, srcH, dstW, dstH,
+  rotationDeg)` — the rotation-aware half of the fit. The main window rotates the
+  whole `.canvas-wrapper` (`applyZoom`, loading/video.js), so a 90° camera rotation
+  SWAPS a view's effective width and height and anything asking "what aspect is
+  this view?" must ask the ROTATED box. Cardinal angles are special-cased so 90/270
+  come out **exactly** swapped — trig dust would make an output dimension odd and
+  H.264 rejects odd yuv420 dimensions. `rotatedFit` returns the scale plus the
+  UNROTATED box size (`boxWidth`/`boxHeight`), which is what a tile draw needs: it
+  paints video AND overlays into that box centred on the tile and rotates the box.
+  **At rotation 0 `rotatedFit` degenerates to `fitRect` exactly** (same
+  `Math.min(dstW/srcW, dstH/srcH)`) — pinned by a test, since that identity is the
+  whole no-regression guarantee for unrotated projects.
+- `computeTileRects(dock, tiles, outW, outH)` — maps dock-local tile rects into
+  the output canvas (the dock is fitted first, so a mismatched output aspect
+  letterboxes the whole composition rather than distorting it). Integer pixels,
+  clamped into bounds, never degenerate.
+- `outputSizeFor(aspect, presetKey)` — height from `RES_PRESETS`, width from the
+  aspect, clamped to `MAX_OUT_DIM` (3840) with the height recomputed so the aspect
+  holds. **Always even**: `VideoEncoder` rejects odd H.264 (yuv420) dimensions, so
+  an odd size is a hard export failure.
+  `RES_PRESETS` is the **one quality-tier table both video-export modals use** —
+  **480 / 720 / 1080 / 2160**, keys ARE the height, labels state the pixel size
+  (`2160p (3840×2160)`). `ui/export-modals.js` builds its `V3D_RES` from it, so
+  the two modals cannot offer different choices again. Each entry's `refW` is the
+  16:9 reference width: the exact output width for the always-16:9 3D viewport,
+  and only a label hint here, where the real width follows the composition aspect.
+  Note `2160`'s `refW` (3840) is exactly `MAX_OUT_DIM` — one pixel more and every
+  16:9 4K export would silently clamp and lose height (pinned by a test).
+  `sanitizeSettings` maps a retired key (`360`, then `1440`/`2K`) to `DEFAULT_RES`
+  rather than to the nearest surviving tier, so reopening the modal cannot
+  silently ~2.25× the pixels, bitrate and file size of the next export.
+- `outputSizeFrom(settings, aspect)` / `RES_CUSTOM` / `clampOutDim(n)` /
+  `customAspect(settings)` — the editable-dimensions path. `res: 'custom'` uses
+  `settings.outW` × `settings.outH` verbatim instead of deriving the width from
+  the composition; `clampOutDim` puts a hand-typed value through the same
+  even/2..`MAX_OUT_DIM` gate the presets satisfy by construction.
+  `customAspect` returns the aspect the modal must **shape the dock to** (null
+  for a preset, where dock and output agree already) — shaping it is what stops
+  `computeTileRects` from burning letterbox bars into a custom-size export.
+- `bitrateIsClamped(W, H, fps, quality)` — true when `bitrateFor`'s [1, 48] Mbps
+  band actually bit. The clamp makes adjacent Quality tiers **collide**: at
+  3840×2160@60 `medium` and `high` are BOTH 48 Mbps, and at 640×360@30 `low` and
+  `medium` are BOTH 1 Mbps. There, changing Quality changes neither the estimate
+  nor the encoded file — and with nothing saying so, a correctly-wired picker just
+  looks broken, which is why the modal's output note surfaces it.
+- `h264CodecFor(W, H)`, `bitrateFor(W, H, fps, quality)`, `QUALITY_BPP`. **Both
+  video-export modals call these** — `showExport3DVideoModal`'s `_v3dBitrate` is
+  now just `bitrateFor(W, H, fps, 'medium')`. Its own copy clamped to
+  [2, 24] Mbps against this module's [1, 48] Mbps, so it doubled the bitrate (and
+  its own size estimate) at the smallest tier and would have capped the 2160p tier
+  at 24 Mbps instead of the 29.9 Mbps the formula asks for.
+- `estimatedBytes(W, H, fps, quality, nFrames)` — expected size of one output
+  file. Both modals' summary lines AND both streaming decisions read this, so
+  the size the UI promises cannot drift from the size the export plans for.
+  Returns 0 for a degenerate fps/range rather than `NaN`/`Infinity`.
+- `shouldStreamToDisk(totalBytes)` / `STREAM_TO_DISK_BYTES` (256 MB) — the
+  buffer-vs-stream split. Under the threshold an export buffers and downloads
+  exactly as it always has (no destination prompt); over it, the export asks for
+  a real file/folder and streams into it, because that much output buffered in
+  the pointer-compressed heap is the failure mode CLAUDE.md documents for
+  luc3d #185/#190/#191/#193. Used by BOTH video modals.
+- `defaultOverlayExportSettings()`, `mergeSettings(base, saved)`,
+  `sanitizeSettings(s)`, `applyStoredSettings`, `saveOverlayExportSettings`,
+  `SETTINGS_KEY` (`'overlayExportSettings.v1'`), `DEFAULT_RES` (`'1080'`).
+  `mergeSettings` is schema-driven: it ignores
+  keys `base` doesn't declare and values whose `typeof` doesn't match, so a stale
+  or hand-edited blob can never introduce an unknown key or slip a string into a
+  canvas/encoder parameter. It only type-checks, though, so `applyStoredSettings`
+  follows it with `sanitizeSettings`, which holds `res` to the *current* preset
+  set — the list has already changed once (`360` → `480`), and a stored key
+  nothing recognises would blank the `<select>` while `outputSizeFor` quietly fell
+  back to `DEFAULT_RES`, leaving the summary quoting a size the visible control
+  doesn't name.
+  `UNRESTORED_KEYS` (`res`, `outW`, `outH`) are **written to storage but never read
+  back**, so the modal always opens at `DEFAULT_RES` = **1080p**. The tier decides
+  pixel count, bitrate and therefore file size, and a value silently inherited from a
+  previous session is the kind of thing you only notice after sitting through a 4K
+  encode — so a departure from 1080 is always a choice made in front of the current
+  export's summary line. `outW`/`outH` come along because they are only consulted when
+  `res === RES_CUSTOM`, and a stale custom size behind a reset tier would let one click
+  on "Custom" resurrect dimensions from another day. Everything else — layers,
+  per-type styling, fps, quality, mode — IS still restored: those are how the user
+  likes overlays to look, not how big the file will be. Note it is the **read** that
+  resets, not the write; `tests/e2e/overlay-export-modal.mjs` asserts both halves.
+- `overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH)` — the
+  settings → `drawFrameOverlays()` options translation. Explicitly nulls ALL
+  interaction state (selection / hover / drag / assignment): an export has no
+  cursor, and a stray highlight would be burned into the video.
+- `seedLayoutPlan(viewNames, include3D)` — the mirror-the-main-window seed (same
+  row-count heuristic as `addAllViewsAsGrid`, 3D docked right of the whole grid).
+  Returns add-panel steps whose positions reference **earlier** entries by index,
+  so the caller can substitute real dockview panel ids as it walks forward.
+
+**Imports from project modules.** None (by design).
+
+**Imported by.** `ui/overlay-export-modal.js`; `ui/export-modals.js`
+(`shouldStreamToDisk`, so both video exports share one threshold); bridged into
+`tests/test-runner.html` as `window.__OverlayExportLayout`.
+
+---
+
+### ui/overlay-export-modal.js
+
+**Purpose.** The "Export Video Overlays" modal (File menu, above "Export 3D
+Video") — issue #190. Renders the session's 2D camera videos **with pose
+overlays burned in**, plus the 3D viewport, either stitched into one composed
+video laid out exactly as the user arranged it, or as one file per tile. The
+counterpart of SLEAP's `View ▸ Render Video Clip with Instances…`
+(`sleap/gui/dialogs/render_clip.py`), extended with LUCID's multi-view
+composition and its user / predicted / reprojected overlay layers.
+
+**Key exports.** `showOverlayExportModal()`, `settingsFromVisibilityPanel()`,
+`loadOverlayExportSettings()`, and a re-export of `TILE_3D`.
+
+**Layout.** `[views strip] [composition dock] [settings panel]`. The strip lists
+the **3D grid FIRST**, then one thumbnail per video; drag or double-click to dock.
+An entry that IS docked is **highlighted** — accent border + `--accent-dim` wash +
+a dot, matching `.session-strip-item.active` (`styles.css:360`) — by
+`refreshStripHighlights()`. That used to be inverted: a docked entry was faded to
+`opacity: 0.55`, which reads as *disabled*, the opposite of selected. It runs from
+exactly three sites, which is exhaustive because they are the only three that
+mutate the `tiles` map behind `isDocked`: `buildStrip()`, `TilePane.init` (the sole
+choke point for every add — dockview always calls `init` from `addPanel`, even for
+an inactive stacked tab) and `onDidRemovePanel` (tab X, whole-group close,
+close-everything). A panel MOVE deliberately gets no hook: dockview wraps moves in
+`movingLock` so neither event fires, and a moved panel keeps its id, so the docked
+SET is unchanged by definition.
+**Strip order is independent of DOCK order**: the 3D tile is still SEEDED last, a
+column to the right of the whole video grid (`seedLayoutPlan`). Reordering the
+strip must not move the tile, or every existing user's exported frame layout would
+shift; `tests/e2e/overlay-export-modal.mjs` asserts the tile's geometry stays right
+of the cameras, and `tests/test-overlay-export-layout.js`'s "3D docked last" pins
+the plan.
+**`qualityPhrase(W, H, fps, approx)`** builds the Quality half of the output note —
+tier name, the Mbps it really encodes at, and a "capped" warning from
+`bitrateIsClamped`. Bitrate is the one output setting a still preview CANNOT show
+(it exists only after H.264 encoding), so this text is the whole of the live
+feedback for the Quality picker; naming the tier in only the stitched branch is
+what made a correctly-wired picker read as inert in individual mode.
+The middle is its **own `DockviewComponent` instance** (same pinned
+`dockview-core@6.6.1` as `ui/sessions-panes.js` — **three** pins now share that
+version: `index.html`'s CSS, `sessions-panes.js`, and this module), seeded via
+`seedLayoutPlan` to mirror the main window. The settings panel carries the frame
+range (**1-based display**, 0-based internally, matching the issue) at the top,
+then layers, per-layer appearance, background, and quality/output.
+
+**Output dimensions.** Quality & Output has a Resolution picker — the four shared
+tiers **480p (854×480) / 720p (1280×720) / 1080p (1920×1080) / 2160p (3840×2160)**
+from `RES_PRESETS`, plus **Custom** — and a live `width × height` row. Quality
+itself is a *separate* control here: it is the bitrate tier (low / medium / high
+via `QUALITY_BPP`), not a resolution, which is why this modal keeps both where
+`showExport3DVideoModal` labels its single tier picker `Quality`. `resTierLabel()`
+names the chosen tier in the summary line next to the literal `W×H`, because the
+two can legitimately disagree — a preset fixes only the HEIGHT, so a very wide
+composition clamps the derived width to `MAX_OUT_DIM` and recomputes the height,
+and "2160p" can encode at 3840×960 (reported as `2160p (width-capped)`). The
+fields always show the size the
+export will really be — for a preset that is the derived size, refreshed by
+`syncOutFields()` out of `refreshSummary()` as the composition changes — and
+typing in either one is itself the gesture that switches Resolution to Custom, so
+the previously-shown derived numbers become the starting point. A custom size
+re-shapes the **dock** to that aspect (`applyDockAspect`, re-run on settings
+change and by a `ResizeObserver` on `#ovDockFrame`), which keeps the composition
+WYSIWYG: dock aspect and output aspect agree again, so `computeTileRects` fills
+the frame instead of letterboxing it. In individual mode a custom size applies to
+every file, with each tile letterboxed into it.
+
+**Reprojection fill.** `ensureReprojections()` is the export-side mirror of
+`ui/rendering.js`'s lazy fill, so exporting a triangulated-but-never-viewed range
+still draws reprojections. It **resolves the method from the group**
+(`triangulationMethod === 'ba' ? 'ba' : 'dlt'`) exactly as the display path does:
+omitting the option silently re-solves with DLT, which would burn DLT
+reprojections into the video while the app shows BA's, breaking the
+"exported 3D == displayed 3D" invariant. Guarded by
+`tests/test-triangulation-method-propagation.mjs`, which scans every
+`triangulateAndReproject` call site in the repo.
+
+**Still-frame previewer, no playback.** The modal has **no transport**: no
+play/pause, no frame stepping, no `setPlaying`/`playTimer`. Scrubbing the track is
+the only way to change frames (the range fields also preview the boundary they
+commit). Playing a multi-view composition here decoded every docked view per tick
+*and* pushed every tick into the app viewer, competing with the export the modal
+exists to configure; a single rendered frame is what tells you whether the
+overlays look right. Note the consequence: exact single-frame navigation now costs
+a pixel-accurate scrub, which is coarse on a long video — the range fields are the
+precise way to land on a specific frame.
+
+**Preview ↔ app viewer.** Scrubbing in the modal drives the real viewer through
+`videoController.scrubToFrame()` (`syncViewer`, called from `showFrame`), so the
+app's canvases, overlays and timeline follow the modal playhead and closing the
+modal leaves you on the frame you stopped at. `scrubToFrame` is the **coalescing**
+entry point — it keeps one seek in flight and drops intermediate targets — so a
+fast drag doesn't queue a decode backlog behind the preview. Suppressed while
+exporting.
+
+**Track gestures.** The two gestures on the scrub track are separated by *what you
+press*, tracked by `dragging` (`'playhead' | 'start' | 'end'`). Pressing the track
+scrubs the **current frame** and drags it; a range endpoint moves only when its
+handle is grabbed directly (the handles sit above the track via `z-index` and
+claim their own `pointerdown`, so such a press never reaches the track handler).
+Pressing the track used to pull whichever endpoint was *nearer*, which meant an
+innocent click halfway along silently redefined what would be exported — and which
+end moved depended on invisible arithmetic. Scrubbing is deliberately **not**
+clamped to the export range, so you can look just outside it before committing —
+the playhead is a preview cursor, not an export bound. Releasing an endpoint
+previews the boundary it was dropped on; releasing a playhead drag leaves the
+frame where it is.
+
+**Rendering model.** Every tile owns **two** canvases (video + overlay), exactly
+like the main window's `.canvas-wrapper`, because `drawFrameOverlays()` opens
+with a full-canvas `clearRect` and would otherwise erase the video drawn beneath
+it. Preview canvases track the tile's CSS box; export allocates **separate**
+canvases at the tile's output pixel box, so preparing an export never disturbs
+the live preview. Composition geometry is read straight off the DOM
+(`captureLayout` → `computeTileRects`), which is what makes the stitched output
+WYSIWYG with the dock the user arranged. A tile whose rect is <2px (a hidden tab
+in a stacked group) is skipped. `addTile` splits right rather than stacking when
+given no position — a stacked tab is hidden, so "add to composition" would
+otherwise silently do nothing visible.
+
+**3D tile.** A second `Viewport3D` (`preserveDrawingBuffer: true`), as in
+`showExport3DVideoModal`. For export its renderer is `setSize(w, h, false)`'d to
+the output tile box (CSS size untouched) with the container `ResizeObserver`
+**disconnected**, then restored afterwards.
+
+**Encoding.** Delegated entirely to **`ui/video-encode.js`** (mediabunny), shared
+with the 3D video export — this module no longer touches `VideoEncoder` or a
+muxer. Individual mode runs N writers inside the SAME frame loop, so each frame
+is decoded once no matter how many files come out, and `await writer.addFrame()`
+is what applies backpressure. **Destination:** an export whose estimated total
+exceeds `shouldStreamToDisk` asks for a save-file (stitched) or a folder
+(individual, one `getFileHandle` per tile; the folder handle is deliberately NOT
+cached to `state.exportDirHandle`, which `showSlpExportAllModal` reuses without
+prompting) and streams into it; below the threshold it buffers and
+downloads exactly as before, so a short export is still one click. Declining the
+picker for a large export **cancels** it rather than silently falling back to the
+memory buffer that was being avoided; with no File System Access API at all the
+user gets the same `confirm()` warning `exportLabels()` uses. Cancelling a
+streamed export leaves a real partial `.mp4` on disk (mediabunny closes the
+writable), which the status message says outright.
+
+**Settings persistence.** Seeded from the live Visibility panel
+(`getVisibilitySettings()`) on first open so an export defaults to looking like
+the app, then persisted to `localStorage` — surviving session switches within a
+project and page reloads. The **layout** is deliberately NOT persisted; a
+reopened modal re-seeds from the main-window mirror.
+
+**Sash drags are taken over from dockview.** A capture-phase `pointerdown` on
+`#ovDock` intercepts sash drags and re-implements them via `distributeAxisSizes`, so
+the change is shared across the whole axis instead of dumped on one neighbour.
+dockview 6.6.1 offers no option for this: `proportionalLayout` governs CONTAINER
+resize, is hardcoded `true`, is not in `DockviewComponentOptions`, and
+`updateOptions` says "not supported" outright; `distributeViewSizes()` equalises
+every view (throwing the composition away) and is on no public API; `LayoutPriority`
+only reorders the same spill list and the sash handler passes `undefined` for both
+priority lists, so it cannot reach a drag at all. Post-correcting in
+`onDidLayoutChange` was rejected — that fires **once at drag end**, so the drag would
+look native and then jump on release. Capture-phase `stopPropagation()` on an
+ancestor prevents dockview's own listener (bound to the sash **element**) from ever
+running, so there is exactly one handler and nothing to fight. An axis of two tiles
+with nothing to keep aligned is left to dockview on purpose — there our arithmetic and
+dockview's agree exactly.
+
+**A row divider moves that boundary in EVERY column** (`axesForSash`). dockview nests a
+4+ camera grid **column-major**: the root axis's children are columns, and each column
+owns its own vertical axis of rows. So a row sash natively resizes only its own column,
+and the grid drifts ragged with no gesture anywhere able to straighten it (measured:
+dragging column 1's row divider left `c1` at 417 px and `c4` at 257 while the other
+columns stayed at 337). `axesForSash` therefore returns the dragged axis **plus every
+sibling axis that has a boundary at the same index `k`**, and the drag is applied to all
+of them with the same delta. A sibling with too few tiles to have boundary `k` — a
+camera spanning the full height, or the 3D tile — simply does not take part, which is
+what leaves full-height tiles alone instead of splitting them. The ROOT axis has no
+parent, hence no siblings, so a COLUMN drag still just resizes columns (both videos in
+a column together), and a row drag never changes a width.
+This reaches **TypeScript-private dockview internals** — `gridview.root`, node
+`children` / `element` (walked to find the branch owning the sash **and its parent**),
+`BranchNode.splitview`, `Splitview.viewItems` / `sashes` / `layoutViews()` /
+`distributeEmptySpace()` / `saveProportions()`, and `viewItem.enabled` — all verified
+to resolve at **runtime** against the live minified `/+esm` build, not just by grep.
+Every one is feature-detected: if any is missing the handler returns WITHOUT calling
+`stopPropagation()` and dockview's stock neighbour-only drag runs, so a version bump
+can regress the behaviour but cannot break resizing.
+Two e2e files cover this, and the split matters:
+`tests/e2e/overlay-export-sash-distribute.mjs` covers the sharing on a FLAT axis
+(confirmed to FAIL on the pre-fix code, delta `-60, 0, 0`) and drags twice to assert the
+first drag's asymmetry survives — the guard against an "equalise everything" fix making
+the dock un-resizable. But it only ever drags **sash 0**, where share-far and grow-one
+are the same arithmetic, and it asserts its axis is flat — so it is structurally blind
+to both cursor tracking and the grid. `tests/e2e/overlay-export-sash-tracking.mjs`
+covers exactly those: the handle tracking every sash (confirmed to fail on `grow-one`,
+naming the measured 53 px and 26 px) and the cross-column row boundary on a real 5-camera
+nested grid (confirmed to fail with the propagation disabled). **Run both.**
+
+**The tab band is overlaid on the tile, not stacked above it** (`styles.css`,
+`#ovDock`). dockview lays a group out as `[tabs][content]` in a column flexbox, so a
+35px band cost 35px of video **per grid row** — ~8% of a two-row dock spent on
+chrome, with the tiles letterboxed to pay for it. Shortening the band to 20px and
+pulling `.dv-content-container` back up by exactly that height gives the tile (and
+its canvas backing store) the group's full height; measured 639 -> 674 px, and tile
+area 91.7% -> 99.45% on a six-tile composition. The real dockview tab is KEPT, not
+hidden: `.dv-tab` is dockview's **drag source**, so `header.hidden` would remove the
+only way to rearrange tiles — and `captureLayout()` reads that arrangement off the
+DOM, where it IS the exported frame. `position: relative` + `z-index: 2` on the band
+is load-bearing: the tile's canvases are absolutely positioned and would otherwise
+paint over it and swallow every tab click. Scoped to `#ovDock` because
+`.dockview-theme-abyss` is shared with the main window's dock, and declared on
+`.dv-groupview` rather than `#ovDock` because dockview puts the theme class on its own
+`.dv-shell` **inside** the container, which would otherwise re-declare the height.
+
+**The tab shows the ✕, never the name.** `Render Video Names` burns the caption into
+the same top-left band the chip occupies, so a visible tab title drew the name twice a
+few pixels apart in a different font — a ghost, worse the longer the name. So
+`.dv-default-tab-content` is `width: 0` unconditionally: with the layer ON the name
+comes from the burned-in caption (the copy that actually reaches the `.mp4`), and with
+it OFF from **hover**. `order: 2` puts the zero-width title AFTER the ✕ so the hover
+reveal grows the chip rightward and the ✕ never moves — a control that jumps out from
+under the cursor is a bug, and the e2e pins the ✕'s x in all four (layer × hover)
+states. A 12px `padding-left` leaves 19px of bare `.dv-tab` — the drag source — to the
+left of the ✕, so tiles can still be picked up; `min-width: 44px` is a non-binding
+floor in case a dockview bump drops the tab's own padding.
+`applyTabNameMode()` toggles `#ovDock.ov-hover-tab-names` from `onChange` AND from
+`buildSettings` (Reset replaces `settings` and calls the latter, not the former).
+The hover reveal is keyed on **`.dv-groupview:hover`, NOT the tile element**: the tab
+band is a *sibling* of `.dv-content-container`, so `[data-view-name]:hover` goes false
+the moment the pointer reaches the ✕ and the label would flicker off exactly as the
+user goes to click it (measured, not assumed). It survives the
+`.dv-content-container { pointer-events: none }` bypass because that only stops the
+container being a hit *target* — `:hover` still applies to ancestors of whatever is hit.
+With the layer ON the whole band is `translateY`'d one band-height so the ✕ sits
+**below** the caption rather than on it: the caption's width follows the name while the
+✕ is pinned at 19px, so a fixed padding cannot clear it ("topL" had its L behind the
+glyph). `transform` specifically — it does not affect layout, so the tile keeps the full
+height the overlaid band bought. The 3D tile keeps its name in every state (no overlay
+canvas ⇒ never captioned), via a `:has()` rule kept SEPARATE so an engine without
+`:has()` cannot drop the hover reveal along with it.
+
+**Display settings are inherited from the main window, not re-exposed.** Every 2D
+tile is rendered with that camera's **brightness, contrast, rotation and zoom** as
+the main window has them, by one shared `drawTileContent(vctx, octx, …)` that both
+the preview (`paintTile`) and the export (`drawExportTile`) call — they used to be
+two near-identical bodies labelled "export-time twin", i.e. two things guaranteed
+to drift. The modal deliberately has **no** control for any of the four (only the
+unrelated `settings.reproj.brightness`, an overlay *marker* dimming factor), and
+says so in `#ovDisplayNote`.
+
+This is not free: the main window applies all four as **CSS on live elements** —
+`view.canvas.style.filter` for brightness/contrast (`applyVideoFilters`), a
+`.canvas-wrapper` transform for rotation and zoom (`applyZoom`) — and **none of it
+survives a `drawImage` of the decoded frame into another canvas**, the same reason
+`applyVideoFilters` must re-set the filter on duplicate panes' mirror canvases. So
+the tile re-applies them: brightness/contrast via **`ctx.filter`**, which takes
+exactly the CSS filter-function list `buildVideoFilter` already emits (so the modal
+and the live canvas cannot disagree); rotation and zoom via a context transform
+applied to **video and overlays together**, because the main window transforms one
+wrapper holding both canvases — transforming only the pixels would slide every
+skeleton off the animal. Three details are load-bearing:
+- the overlay canvas is cleared under the **identity** transform first, because
+  `drawFrameOverlays`'s own `clearRect(0,0,w,h)` clears a *rotated* rect once a
+  transform is set, leaving the previous frame's skeleton in the corners of the
+  reused export canvas;
+- the legend is drawn **outside** the transform — `drawLegend` anchors to
+  `ctx.canvas.width` rather than the size it is passed, so inside the transform it
+  drifts by the letterbox offset (a regression even at rotation 0) and lands upside
+  down at 180°;
+- `ctx.filter` is reset with `'none'`, never `''` — an empty string is an invalid
+  value the setter silently ignores, which would leak the video's brightness onto
+  the overlay composite. `buildVideoFilter` returns `''` when both are default.
+Rotation prefers `view.rotation` over the session value: the hold-to-rotate chord
+advances the view every frame and only commits on keyup, so mid-gesture the view is
+what the user is actually looking at; a view never docked in the main window has no
+`view.rotation`, hence the session fallback. `individualSizeFor` derives each
+per-tile file's aspect from the **rotated** box, so a 90°-rotated 640×480 view
+exports portrait (360×480 at the 480 tier) instead of a landscape file with the
+frame pillarboxed inside it.
+**Zoom fidelity is partial, by construction:** magnification and pan centre match
+the main window, the visible **crop cannot**. The main window's crop comes from
+`.video-cell`'s `overflow:hidden` at the *cell's* aspect; an export tile has its own
+aspect, so a wider tile simply shows more video, and at high zoom near a frame edge
+that means black past the edge. The transform mirrors `applyZoom`'s CSS list under
+`transform-origin: 0 0`, which is why there is a `(z-1)*box/2` term (CSS scales
+about the TOP-LEFT, not the centre) and why the pan is converted from main-window
+CSS px by `box/baseW`. Covered end to end by
+`tests/e2e/overlay-export-display-settings.mjs`, which needs its own file because
+the main modal e2e runs decoder-less — black pixels are invariant under
+brightness/contrast and symmetric under rotation, so that suite cannot detect
+whether any of this is applied.
+
+**Unlinked instances ARE drawn**, in the preview and in the encoded frames, by
+`collectUnlinked(frameGroup, viewName)` — which reads the RAW `FrameGroup` via
+`getUnlinkedInstances()` (NOT the `toOverlayFrameGroup` copy, which carries only
+`frameGroup.instances`) and filters by the User/Predicted layer checkboxes, so
+unticking a layer drops its unlinked instances too. It is assigned onto the
+options as `opts.unlinkedInstances = …` rather than passed in the
+`overlayOptionsFrom` literal — worth knowing, because a grep for
+`unlinkedInstances:` misses it and makes the export look like it drops them.
+`overlayOptionsFrom` pins **`showUnlinkedBadge: false`**, so the skeleton is
+exported but the amber `?` editing prompt is not.
+
+**Imports from project modules.**
+- `./app-state.js` — `state`, `videoController`, `getActiveSession`.
+- `./viewport3d.js` — `Viewport3D`.
+- `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`.
+- `./rendering.js` — `getVisibilitySettings` (the seed).
+- `./overlay-export-layout.js` — the pure helpers above.
+- `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable`.
+- `./video-filters.js` — `buildVideoFilter`, `getSessionBrightness`,
+  `getSessionContrast`, `getSessionRotation`. That module imports no project
+  modules, so this adds no cycle, and sharing `buildVideoFilter` with
+  `applyVideoFilters` is what keeps the export from drifting from the live view.
+- `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
+  `ensureLazyFrameData`, `triangulateAndReproject`, `storeReprojectedInstances`,
+  `sessionHasCalibration`.
+- `../pose/pose-data.js` — `points3dNodeCount`.
+- `../import-export/save-load.js` — `setStatus`.
+
+**Imported by.** `ui/ui-wiring.js` (`menuExportOverlayVideo`).
+
+**Tests.** `tests/test-overlay-export-layout.js` (geometry / encoder params /
+custom-size clamping / preset set / stale-`res` fallback / settings merge /
+seed plan) and
+`tests/e2e/overlay-export-modal.mjs` (menu placement, dock seeding, 1-based range
+validation, settings round-trip, absence of any playback transport,
+scrub-to-app-viewer sync, live dock
+re-shaping on a custom size, and a **real** end-to-end mp4 export in all three
+shapes — stitched, individual, and custom-size. The `avc1` sample entry's
+width/height is asserted against `outputSizeFor`/the typed dimensions, which is
+what proves the layout capture and the encoder config agree).
+
+The **track-gesture** split is driven with real mouse events rather than synthetic
+dispatch, because the behavior is entirely about which element a press hit-tests
+to. Note which assertions actually discriminate it: the ones checking the export
+range is *unchanged* by a track press. A scrub lands on the same frame under
+either implementation — the old nearest-endpoint code previewed the endpoint it
+had just dragged — so the playhead assertions alone would pass on the old code
+too. Both range assertions were confirmed to fail against it.
+
+---
+
+### ui/video-encode.js
+
+**Purpose.** The app's **only** video-encoding seam. Both video exports
+("Export Video Overlays", "Export 3D Video") go through it; neither constructs a
+`VideoEncoder` or a muxer any more.
+
+**Why it is not sleap-io.js.** sleap-io.js has **no browser video encoder** —
+verified across every ref, not just the vendored pin. Its only encoder,
+`renderVideo()` (`src/rendering/video.ts`), spawns a native `ffmpeg` and is
+exported solely from the Node entry, never from `src/index.browser.ts`; its own
+docs state "there is no encoder in the JS port". So this is the one part of the
+video pipeline LUCID must own — and it owns it thinly, on top of **mediabunny**,
+the library sleap-io.js itself uses for decode and which LUCID already vendors in
+full (`lib/mediabunny/`, importmap `mediabunny`). This replaced the vendored
+**mp4-muxer 5.2.1 (deleted)** and the duplicated hand-rolled WebCodecs pairing.
+
+**Key exports.**
+- `createMp4Writer({canvas, width, height, fps, bitrate, frameCount,
+  fullCodecString, keyFrameEveryFrames, fileHandle})` → `{addFrame(outIdx),
+  finish(), cancel(), streaming, codec, fastStart, framesAdded}`. The writer is
+  bound to ONE canvas, sampled at each `addFrame`.
+- `resolveH264Config(width, height, bitrate, preferredCodecString)` — probes with
+  `canEncodeVideo` and degrades to mediabunny's own level pick if the caller's
+  exact H.264 level string isn't encodable here. Returns `null` when H.264 is
+  unavailable at that size, which is what turns into the user-facing error.
+- `videoEncodingAvailable()`, `MP4_MIME`, `KEYFRAME_INTERVAL_FRAMES` (60).
+
+**What it buys over the old path.**
+- **Streaming.** Given a `fileHandle` it writes through a mediabunny
+  `StreamTarget` at bounded memory instead of buffering the whole `.mp4` in an
+  `ArrayBufferTarget` — the failure mode CLAUDE.md documents at length for
+  luc3d #185/#190/#191/#193 (V8's pointer-compressed cage, hard-capped near 4 GB
+  in a Chrome renderer).
+- **moov-at-front while streaming.** Callers know the frame count, so it passes
+  `fastStart: 'reserve'` (+ `maximumPacketCount` in the track metadata, which
+  that mode requires) to reserve the sample table, stream `mdat`, then seek back
+  and write `moov` ahead of it. **mediabunny defaults `fastStart` to `'in-memory'`
+  for a BufferTarget but to `false` (trailing moov) for a StreamTarget**, so it is
+  always passed explicitly; `tests/e2e/video-encode-streaming.mjs` asserts the
+  byte order so a regression to a non-seekable file can't pass silently.
+- **Real backpressure that can fail.** `await source.add(...)` settles when the
+  encoder has room and **rejects** when it died, replacing a
+  `while (encodeQueueSize > 12) await setTimeout(0)` spin that had no exit on a
+  dead encoder (the old `error:` callback only logged).
+
+**Contracts it depends on** (none compile-checked — re-verify on any mediabunny
+bump, see `lib/mediabunny/PROVENANCE.txt`): `keyFrameInterval` is in **seconds**,
+so the historical "keyframe every 60 frames" is `60/fps`, belt-and-braced with a
+per-frame `{keyFrame}` flag that mediabunny ORs with the interval; `finalize()`
+and `cancel()` both **close the target's WritableStream themselves**, so a
+cancelled streamed export commits a partial file.
+
+**Deliberately unchanged from the old encoder.** H.264 only, the callers' own
+bitrate maths, and the 60-frame keyframe cadence. VP9/AV1 fallback is a one-line
+change here but is a separate decision.
+
+**Imports from project modules.** None. Imports `mediabunny` (importmap).
+
+**Imported by.** `ui/overlay-export-modal.js`, `ui/export-modals.js`.
+
+**Tests.** `tests/e2e/video-encode-streaming.mjs` drives it directly with a
+stand-in file handle — necessary because headless Chromium rejects
+`showSaveFilePicker()` instantly with `AbortError`, so the streaming path is
+unreachable through either modal under automation. It pins position-based writes,
+moov-before-mdat on both paths, the frameCount overrun guard, the canvas/size
+mismatch guard, and the encoded dimensions. The modals' own end-to-end exports
+(`tests/e2e/overlay-export-modal.mjs`, `tests/e2e/export-3d-video.mjs`) cover the
+buffered path.
+
+---
+
 ### ui/overlays.js
 
 **Purpose.** Pure canvas-rendering helpers for skeleton overlays, color
@@ -2224,12 +2797,20 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 
 **Key exports.**
 - Node markers: `drawNodeShape(ctx, x, y, shape, size, color)` — draws one
-  keypoint marker in one of four styles (`'circle'`, `'x'`, `'triangle'`,
-  `'square'`). All 2D node draws route through it: `drawSkeleton`
+  keypoint marker in one of six styles (`'circle'`, `'x'`, `'triangle'`,
+  `'square'`, plus `'diamond'` and `'cross'` — the plus-sign form, added for
+  SLEAP parity in the overlay-video export, issue #190). All 2D node draws route
+  through it: `drawSkeleton`
   (normal + nulled nodes, via `options.nodeShape`), `drawReprojectedSkeleton`
   (via `options.nodeShape`, default `'x'`), and `drawUnlinkedInstances`
   (`instNodeShape`). `drawFrameOverlays` threads the per-type Node Style toggle
   through as `nodeShape: {user,predicted,reproj}Opts.nodeStyle`.
+- Independent node/edge visibility: `drawSkeleton` and
+  `drawReprojectedSkeleton` accept `options.showNodes` / `options.showEdges`,
+  both **defaulting to `true`** so every pre-existing caller is unchanged. Only
+  the overlay-video export sets them (SLEAP's "Show: ☑ Nodes ☑ Edges"); the live
+  Visibility panel has no such toggle. They ride in on the per-type opts bags, so
+  `drawFrameOverlays` forwards them without needing to know about them.
 - Color: `TRACK_COLORS`, `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
   `NULL_ID_COLOR` (space gray `#a7adba` for explicit-none instances when
   coloring by identity), `getTrackColor`, `getGroupColor`,
@@ -2306,7 +2887,43 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
-  `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
+  `drawInstanceTypeIndicator`, `drawUnlinkedInstances`, `drawViewNameLabel`.
+  **`drawViewNameLabel(ctx, text, options)`** draws a camera name **top-left**,
+  behind "Export Video Overlays" ▸ Layers ▸ **Render Video Names** — `layers.videoNames`,
+  **default ON** (a multi-camera composition is close to unreadable unlabelled, so the
+  caption is the expected output rather than an opt-in), and the first entry
+  in that group). The composed `.mp4` otherwise carries no labels at all — the
+  dock's per-tile name chip is UI chrome and is never encoded — so a five-camera
+  composition would ship as five anonymous rectangles. **Top**-left so it lands
+  exactly where that chip sits: the render then carries the same tag the
+  composition shows, just without the close X, and in the preview the two coincide
+  instead of reading as two labels. (It was bottom-left first, on the reasoning that
+  the corner was free — which put a *second* visible label on each tile.) No
+  collision with `drawLegend`, which owns the top-**right**. `options.corner:
+  'bottom-left'` is retained for a caller that wants it out of the way.
+  The font scales off `ctx.canvas` rather than being fixed: the same tile
+  is drawn at preview size and again at output size, and a fixed size is unreadable
+  in one or hairline in the other (`drawLegend`'s fixed 28px does drift this way —
+  deliberately not copied). It resets to the identity transform and `filter:'none'`
+  itself, and callers must invoke it OUTSIDE any view transform so a caption stays
+  upright on a rotated camera.
+  **`drawUnlinkedInstances` "?" badge is suppressible:** the amber `?` on an
+  unlinked instance is an **editing affordance** ("assign me"), so
+  `options.showUnlinkedBadge` (**default `true`** — a missing option must never
+  silently strip it) turns it off while KEEPING the other two unlinked cues, the
+  dashed edges and the reduced opacity. Hiding the badge must never hide the
+  detection. `drawFrameOverlays` spreads the flag into `unlinkedOpts`, which both
+  of its `drawUnlinkedInstances` passes (`typeFilter: 'predicted'` then `'user'`)
+  receive, so **one flag covers both types** — the badge block sits outside the
+  `isPredicted` branch, and a per-type regression would only show on one pass.
+  Two callers set it: the Visibility panel's `visUnlinkedBadge` toggle (via
+  `getVisibilitySettings`) and `overlayOptionsFrom` for video export, which pins
+  it `false` for the same reason it nulls selection/hover/drag — nobody watching
+  an `.mp4` can act on an editing prompt. Covered by
+  `tests/test-unlinked-badge.js` (pixel-level, both types, plus a whole-canvas
+  diff asserting **nothing outside the badge disc changes**) and
+  `tests/e2e/unlinked-badge-toggle.mjs` (the checkbox → settings → repaint →
+  localStorage → reload chain).
   **`drawUnlinkedInstances` same-trackIdx collision fix:** an unlinked
   instance (no group, no identity — e.g. an animal visible in only 1 camera
   this frame, so `commitTrackedFrame`'s `members.length < 2` check never
@@ -2375,6 +2992,18 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `setReprojErrorVisible(visible)` — show/hide the reproj-error info
   column.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
+  Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
+  Show "?" badge* toggle, `#visUnlinkedBadge`), passed straight through to
+  `drawFrameOverlays` in `drawAllOverlays`. Read via a `checkVal(id, fallback)`
+  helper that mirrors the existing `styleVal` tolerance and **defaults `true`
+  when the element is absent**: the headless runners build a partial DOM, and a
+  bare `.checked` on a missing node throws and takes the whole render down.
+  It is registered in `ui-wiring.js`'s `visCheckIds` (so it persists to
+  `localStorage`, and an older stored blob without the key keeps the HTML
+  `checked` default — no migration) and in the checkbox change-listener list (so
+  toggling repaints immediately rather than waiting for the next frame step).
+  Unlike the other entries in that list it needs no deselect sweep: it changes
+  only what is painted, never which instances exist.
   Each of `userOpts` / `predictedOpts` / `reprojOpts` now carries a `nodeStyle`
   (`'circle'`/`'x'`/`'triangle'`/`'square'`) read from the per-section Node
   Style button group (`visUserNodeStyle` / `visPredNodeStyle` /
@@ -3271,7 +3900,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `data-value` + `drawAllOverlays` + `saveVisSettings`); they are added to
   `visStyleIds` for persistence/restore. The handler additionally rebuilds the
   3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
-- File ▸ "Export 3D Video" (`menuExportVideo3d`) is wired to
+- File ▸ "Export Video Overlays" (`menuExportOverlayVideo`) is wired to
+  `showOverlayExportModal()` (overlay-export-modal.js); it sits directly above
+  File ▸ "Export 3D Video" (`menuExportVideo3d`), which is wired to
   `showExport3DVideoModal()` (export-modals.js).
 - Session strip: the **"+"** button (`btnAddSession`) calls
   `handleEmptySession()` to create a fresh empty session directly (inheriting the
