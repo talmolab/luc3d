@@ -118,78 +118,67 @@ def main():
     fig, ax = panel("third", "std", key=len(METHODS))
     labels = list(dict.fromkeys(df.label))
     x = np.arange(len(labels))
-    # Headroom in the SAME proportion the count version used (data max at 3, axes
-    # to 3.4, floor at -0.2), so the geometry the notes below were placed against
-    # is unchanged by the switch to a rate.
-    top = float(df.misgrouped_per_10k.max()) * 3.4 / 3.0
+
+    # A LOG RATE AXIS, because the rates now span 1.3 to 90 per 10,000. On a linear
+    # axis the 4x3 point pins the top and the three two-animal configurations pile up
+    # against the floor, which is what the corpus-scale re-run turned this panel into:
+    # with 92 sessions instead of 4 the counts went from 0/1/3 to three and four
+    # digits, and the old layout collided in five places (lint: 4 OVERLAP, 1 dropped
+    # run). Log separates them and makes the animal-count trend legible, which is the
+    # panel's actual content now that there is a trend to see.
     for mi, (key, name, color) in enumerate(METHODS):
         g = df[df.method == name].set_index("label").loc[labels]
-        xs = x + (mi - 0.5) * 0.30
+        xs = x + (mi - 0.5) * 0.52
         ax.plot(xs, g.misgrouped_per_10k, "o", color=color, ms=5.5, mec="white",
                 mew=1.0, zorder=3)
-        # THE RAW COUNT IS THE PRINTED NUMBER, the rate is the height. One
-        # misgrouped frame is a fact worth stating and a rate hides how few
-        # events it rests on; the axis carries the denominator instead.
+        # RAW COUNT ABOVE EACH MARKER. One misgrouped frame is a fact a rate hides,
+        # so the count stays. Putting one series BELOW its marker was tried and is
+        # wrong at the bottom of a log axis: LUC3D's 2x5 point sits at 1.7 per
+        # 10,000, so its label fell through the axis floor and printed on the spine.
+        # The 0.52 dodge separates the two series horizontally instead.
         for xi, v, n in zip(xs, g.misgrouped_per_10k, g.misgrouped):
-            ax.text(xi, v + 0.038 * top, str(int(n)), ha="center", va="bottom",
-                    color=color, fontsize=6.5, fontweight="bold")
+            ax.annotate(f"{int(n):,}", (xi, v), textcoords="offset points",
+                        xytext=(0, 6), ha="center", va="bottom",
+                        color=color, fontsize=6, fontweight="bold")
 
     text_legend(ax, [(n, c) for _, n, c in METHODS], "above")
     ax.set_xticks(x)
-    ax.set_xticklabels(labels)
+    # n GOES UNDER ITS OWN TICK, not into a list. "n = 4,324,330 - 237,841 - 7,001 -
+    # 3,000 frames" was too long for a 57 mm panel and PyMuPDF dropped the whole run
+    # from the PDF, so the denominators silently vanished from the artwork.
+    def _n(v):
+        return f"{v / 1e6:.1f}M" if v >= 1e6 else (f"{v / 1e3:.0f}k" if v >= 1e4
+                                                  else f"{v:,}")
+    ns = [int(df[df.label == lab].frames.iloc[0]) for lab in labels]
+    ax.set_xticklabels([f"{lab}\n{_n(n)}" for lab, n in zip(labels, ns)])
     ax.set_xlim(-0.55, len(labels) - 0.45)
-    # HEADROOM INSIDE THE AXES for both notes. They used to be an `ax.set_title` and
-    # a `footnote` (which folds into the x label): in a 57 x 52 mm panel that put a
-    # 3-line title, a 2-line key and a 4-line label around a plot area of 5 dots, and
-    # constrained_layout resolved it by CLIPPING -- the y label lost its first
-    # character, seven text runs were dropped from the PDF entirely, and the title
-    # printed straight through the key (lint: 2 CLIPPED, 3 OVERLAP, 7 TRUNCATED).
-    # The panel's own title is redundant besides: assemble.py draws one from TITLES.
-    # The data occupy the bottom third of the axes, so both notes go inside.
-    ax.set_ylim(-0.2 / 3.0 * float(df.misgrouped_per_10k.max()), top)
-    # Ticks from the locator over the positive range rather than typed in: the
-    # rate depends on the deposit's frame counts, so a hard-coded [0, 1, 2] would
-    # go stale the moment the pool changes.
-    ax.set_yticks([t for t in ax.get_yticks() if 0 <= t <= top])
+    ax.set_yscale("log")
+    # Floor just below the smallest rate, ceiling one short step above the largest so
+    # the count labels clear the frame. No band is reserved at the top any more:
+    # the pooled totals that used to sit there are legend text now.
+    ax.set_ylim(0.75, 400)
+    ax.set_yticks([1, 10, 100])
+    ax.set_yticklabels(["1", "10", "100"])
     ax.set_ylabel("frames misgrouped vs GT\nper 10,000 clean frames")
     ax.set_xlabel("animals × cameras")
 
+    # NO POOLED-TOTAL BLOCK ON THE ARTWORK. The corpus-scale re-run put four-digit
+    # counts and a 4.57M denominator into a 57 mm panel, and every arrangement of
+    # them collided with the data or was dropped by the renderer (lint: OVERLAP,
+    # CLIPPED, TRUNCATED). They are legend sentences, they are in
+    # FIGURE-LEGENDS.md, and they are printed to the build log here so a value that
+    # goes wrong is still visible to whoever runs the build.
     total = int(df[df.method == "LUC3D (greedy)"].frames.sum())
     wrong = {n: int(df[df.method == n].misgrouped.sum()) for _, n, _ in METHODS}
-    #: Pooled rate over ALL clean frames -- the honest denominator for a total, and
-    #: the number the two headline sentences below are missing without it.
     rate = {n: wrong[n] / total * PER for _, n, _ in METHODS}
-    # BOTH COUNTS, EACH IN ITS METHOD'S COLOUR, and computed rather than typed. The
-    # previous version printed "each method misgroups 1 of 137,266 clean frames" in
-    # teal, which was true of the deposit it was written against and is not true of
-    # this one: on the 4x3 configuration exhaustive now misses 3 frames and greedy
-    # none, so the totals are 4 and 1. A hard-coded reading of the data is exactly
-    # the failure a re-run is supposed to catch, and it only surfaced because the
-    # panel was re-rendered.
-    ax.text(0.03, 0.98, f"LUC3D misgroups {wrong['LUC3D (greedy)']} of\n"
-            f"{total:,} clean frames\n"
-            f"({rate['LUC3D (greedy)']:.2f} per 10,000)",
-            transform=ax.transAxes, ha="left", va="top",
-            color=TEAL, fontsize=6.5, fontweight="bold", linespacing=1.25)
-    ax.text(0.03, 0.70, f"exhaustive misgroups {wrong['exhaustive']}\n"
-            f"({rate['exhaustive']:.2f} per 10,000)",
-            transform=ax.transAxes, ha="left", va="top", color=SALMON,
-            fontsize=6.5, fontweight="bold", linespacing=1.25)
-    # The 1-1 split, from the deposit's disagreement_detail (not typed in): on one
-    # of the two frames where the methods differ, the reprojection-error OPTIMUM is
-    # the GT-wrong grouping. What that MEANS is caption text (FIGURE-LEGENDS.md);
-    # the panel carries the counts.
     gt_g = sum(1 for d in detail if d.get("gt_matches") == "greedy")
     gt_e = sum(1 for d in detail if d.get("gt_matches") == "exhaustive")
-    ns = [int(df[df.label == lab].frames.iloc[0]) for lab in labels]
-    # 0.50, not 0.66: both notes above gained their rate line, so this one drops
-    # by two line heights. The n list is what makes the rates checkable.
-    ax.text(0.03, 0.50,
-            "n = " + " · ".join(f"{n:,}" for n in ns) + " frames\n"
-            f"they disagree on {len(detail)}: GT sides with\n"
-            f"LUC3D on {gt_g}, exhaustive on {gt_e}",
-            transform=ax.transAxes, ha="left", va="top", color=MUTED, fontsize=6,
-            linespacing=1.25)
+    print(f"  pooled over {total:,} clean frames: "
+          + ", ".join(f"{n} {wrong[n]:,} ({rate[n]:.2f} per {PER:,})"
+                      for _, n, _ in METHODS))
+    print(f"  methods disagree on {len(detail):,}: GT sides with greedy {gt_g:,}, "
+          f"exhaustive {gt_e:,}")
+
     save(fig, 3, "d", "quality")
 
 

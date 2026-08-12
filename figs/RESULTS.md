@@ -73,11 +73,13 @@ LUC3D instead solves one assignment problem per camera and commits it before mov
 the next, which costs C times A cubed (Figure 3A).
 
 The question is whether the cheap procedure gives up accuracy, and Figure 3D answers it
-against proofread ground truth rather than against the other method. On all 137,671
+against proofread ground truth rather than against the other method, over 92 sessions:
+every session that has both pool detections and proofread ground truth. On all 4,572,172
 frames where exhaustive enumeration could be run at all, the greedy grouping differs
-from ground truth on one frame and the exhaustive optimum on four. On the five frames
-where the two methods choose different groupings, ground truth agrees with the greedy
-choice on four of them. Optimising the reprojection objective harder does not buy
+from ground truth on 1,052 frames and the exhaustive optimum on 1,309, that is 2.30
+against 2.86 per 10,000. On the 642 frames where the two methods choose different
+groupings, ground truth agrees with the greedy choice on 449 of them and with exhaustive
+on 192. Optimising the reprojection objective harder does not buy
 accuracy here, because the objective itself is what runs out: the
 lowest-reprojection-error grouping is not always the correct grouping.
 
@@ -92,8 +94,11 @@ would cost more than a day.
 Two limits belong with this result. Exhaustive enumeration is undefined unless every
 camera holds exactly as many detections as there are animals, so it was run only on the
 69 per cent of frames that satisfy that, and the excluded frames are the occluded ones,
-which is to say exactly the frames association finds hardest. And 89 per cent of the
-eligible frames are the easiest configuration, two animals in five cameras. The
+which is to say exactly the frames association finds hardest. And 94.6 per cent of the
+computed frames are the easiest configuration, two animals in five cameras. Agreement
+between the two methods falls monotonically as animals are added, from 99.996 per cent
+at two animals in five cameras to 99.000 per cent at four animals in three, a trend the
+earlier four-session version of this benchmark could not have shown. The
 equivalence therefore holds where the published method can run, and is not a claim
 about the frames where it cannot.
 

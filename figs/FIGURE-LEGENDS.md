@@ -69,8 +69,8 @@ Every session enters every panel.
 ## Fig. 3)
 
 Greedy per-camera Hungarian assignment chooses the same grouping as exhaustive
-hypothesis enumeration on 137,666 of 137,671 eligible frames, at 10⁶-fold lower cost
-in the configuration where enumeration becomes intractable.
+hypothesis enumeration on 4,571,669 of 4,572,311 eligible frames across 92 sessions, at
+10⁶-fold lower cost in the configuration where enumeration becomes intractable.
 
 A) The two search strategies. Exhaustive hypothesis testing (Maree et al., 2024)
 enumerates every grouping of detections into identities, (A!)^C per frame for A
@@ -87,9 +87,13 @@ arithmetic. Dotted line, the harness cap of 10⁶ hypotheses per frame.
 
 D) Frames whose grouping differs from proofread ground truth, per configuration and
 method, on identical detections and on every frame exhaustive enumeration could run
-(137,671 frames in which every camera holds exactly A detections). LUC3D misgroups 1
-frame and exhaustive 4. On the 5 frames where the two methods choose different
-groupings, ground truth agrees with LUC3D on 4.
+(4,572,172 frames in which every camera holds exactly A detections, from 92 sessions).
+Log axis; the raw count is printed above each marker and the configuration's clean-frame
+count under its tick. Pooled, LUC3D misgroups 1,052 frames, 2.30 per 10,000, and
+exhaustive 1,309, 2.86 per 10,000. On the 642 frames where the two methods choose
+different groupings, ground truth agrees with LUC3D on 449 and with exhaustive on 192.
+Agreement between the methods falls monotonically with animal count: 99.996%, 99.814%,
+99.829% and 99.000% for 2 x 5, 2 x 6, 3 x 5 and 4 x 3.
 
 E) Ablation of LUC3D against itself: 24 combinations of the two cost weights, which
 collapse onto their ratio r = corr3d/corr2d. Cross-view IDF1 (right axis) and summed
@@ -100,9 +104,13 @@ F) Measured time per frame for both methods on identical detections. The 4-anima
 6-camera configuration exceeds the cap and ran zero frames; its open marker is an
 arithmetic lower bound and the bar reaches its as-published value.
 
-Of 201,092 frames considered, 137,671 were eligible for exhaustive enumeration and
-63,421 were skipped because a camera did not hold exactly A detections. 89% of
-eligible frames are 2 animals in 5 cameras.
+92 sessions: 50 BMimica at 2 x 5 and all 35 two-animal, 4 three-animal and 3
+four-animal SLAP-2M sessions, being every session with both pool detections and
+proofread ground truth. Of 9,678,503 frames considered, 4,591,864 were eligible for
+exhaustive enumeration and 5,086,639 were skipped because a camera did not hold exactly
+A detections. 94.6% of computed frames are 2 animals in 5 cameras. The two expensive
+configurations are capped at 2,000 (3 x 5) and 1,000 (4 x 3) eligible frames per
+session, sampled uniformly across the whole session rather than from its start.
 
 ---
 

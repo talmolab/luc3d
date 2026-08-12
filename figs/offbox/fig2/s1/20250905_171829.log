@@ -1,2 +1,3 @@
 /root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig2_measure.py:218: RuntimeWarning: Mean of empty slice
   for tt in range(T):
+20250905_171829: K=5329930 retained=0.987 held-out p50=2.63px frames_used=180055 stride=1  1933.1s

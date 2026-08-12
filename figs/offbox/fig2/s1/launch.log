@@ -11,3 +11,52 @@
 [start      45s] 20250905_191445  (10 running, 21 queued, 462 GB avail)
 [start      50s] 20250905_194049  (11 running, 20 queued, 455 GB avail)
 [start      55s] 20250905_200953  (12 running, 19 queued, 449 GB avail)
+[done     1740s] 20250904_183921 rc=0 1720s | 20250904_183921: K=4694219 retained=0.869 held-out p50=3.66px frames_used=180058 stride=1  1715.4s
+[start    1740s] 20250905_203607  (12 running, 18 queued, 355 GB avail)
+[done     1915s] 20250905_174513 rc=0 1880s | 20250905_174513: K=5146295 retained=0.953 held-out p50=2.55px frames_used=180057 stride=1  1873.8s
+[start    1915s] 20250905_210254  (12 running, 17 queued, 361 GB avail)
+[done     1930s] 20250904_181215 rc=0 1915s | 20250904_181215: K=5227628 retained=0.968 held-out p50=2.92px frames_used=180058 stride=1  1904.3s
+[done     1930s] 20250905_181402 rc=0 1890s | 20250905_181402: K=5101550 retained=0.944 held-out p50=2.59px frames_used=180054 stride=1  1886.6s
+[start    1930s] 20250905_213215  (11 running, 16 queued, 382 GB avail)
+[start    1935s] 20250907_143021  (12 running, 15 queued, 402 GB avail)
+[done     1950s] 20250904_160014 rc=0 1950s | 20250904_160014: K=5271802 retained=0.976 held-out p50=2.76px frames_used=180053 stride=1  1932.5s
+[done     1950s] 20250904_165017 rc=0 1945s | 20250904_165017: K=5322052 retained=0.984 held-out p50=2.77px frames_used=180197 stride=1  1942.1s
+[done     1950s] 20250905_194049 rc=0 1900s | 20250905_194049: K=5171093 retained=0.957 held-out p50=2.66px frames_used=180055 stride=1  1884.3s
+[start    1950s] 20250907_151901  (10 running, 14 queued, 413 GB avail)
+[start    1955s] 20250907_154801  (11 running, 13 queued, 412 GB avail)
+[start    1960s] 20250907_161657  (12 running, 12 queued, 433 GB avail)
+[done     1975s] 20250904_174232 rc=0 1965s | 20250904_174232: K=5272892 retained=0.975 held-out p50=2.78px frames_used=180201 stride=1  1946.7s
+[done     1975s] 20250905_165151 rc=0 1950s | 20250905_165151: K=5252249 retained=0.972 held-out p50=2.56px frames_used=180055 stride=1  1932.6s
+[done     1975s] 20250905_171829 rc=0 1945s | 20250905_171829: K=5329930 retained=0.987 held-out p50=2.63px frames_used=180055 stride=1  1933.1s
+[start    1975s] 20250907_164826  (10 running, 11 queued, 445 GB avail)
+[start    1980s] 20250907_171538  (11 running, 10 queued, 460 GB avail)
+[start    1985s] 20250907_174343  (12 running, 9 queued, 455 GB avail)
+[done     2000s] 20250905_191445 rc=0 1955s | 20250905_191445: K=5238537 retained=0.970 held-out p50=2.66px frames_used=180057 stride=1  1930.0s
+[done     2000s] 20250905_200953 rc=0 1945s | 20250905_200953: K=5290184 retained=0.979 held-out p50=2.73px frames_used=180053 stride=1  1923.2s
+[start    2000s] 20250907_181225  (11 running, 8 queued, 447 GB avail)
+[start    2005s] 20250907_183823  (12 running, 7 queued, 444 GB avail)
+[done     3660s] 20250905_203607 rc=0 1920s | 20250905_203607: K=5256186 retained=0.973 held-out p50=2.67px frames_used=180060 stride=1  1916.5s
+[start    3660s] 20250907_190610  (12 running, 6 queued, 359 GB avail)
+[done     3735s] 20250907_174343 rc=0 1750s | 20250907_174343: K=4759743 retained=0.881 held-out p50=2.79px frames_used=180055 stride=1  1748.4s
+[start    3735s] 20250908_152229  (12 running, 5 queued, 363 GB avail)
+[done     3750s] 20250908_152229 rc=3 15s | 20250908_152229: skip (missing inputs / too little overlap)  0.0s
+[start    3750s] 20250908_154926  (12 running, 4 queued, 359 GB avail)
+[done     3765s] 20250908_154926 rc=3 15s | 20250908_154926: skip (missing inputs / too little overlap)  0.0s
+[start    3765s] 20250908_161812  (12 running, 3 queued, 365 GB avail)
+[done     3780s] 20250907_143021 rc=0 1845s | 20250907_143021: K=5022330 retained=0.929 held-out p50=2.72px frames_used=180252 stride=1  1835.2s
+[done     3780s] 20250908_161812 rc=3 15s | 20250908_161812: skip (missing inputs / too little overlap)  0.0s
+[start    3780s] 20250908_164528  (11 running, 2 queued, 368 GB avail)
+[start    3785s] 20250908_171240  (12 running, 1 queued, 372 GB avail)
+[done     3800s] 20250907_151901 rc=0 1850s | 20250907_151901: K=5017634 retained=0.928 held-out p50=2.94px frames_used=180198 stride=1  1844.3s
+[done     3800s] 20250908_164528 rc=3 20s | 20250908_164528: skip (missing inputs / too little overlap)  0.0s
+[done     3800s] 20250908_171240 rc=3 15s | 20250908_171240: skip (missing inputs / too little overlap)  0.0s
+[start    3800s] 20250908_173928  (10 running, 0 queued, 387 GB avail)
+[done     3815s] 20250907_183823 rc=0 1810s | 20250907_183823: K=4948350 retained=0.916 held-out p50=2.75px frames_used=180055 stride=1  1807.6s
+[done     3815s] 20250908_173928 rc=3 15s | 20250908_173928: skip (missing inputs / too little overlap)  0.0s
+[done     3835s] 20250905_210254 rc=0 1920s | 20250905_210254: K=5216762 retained=0.966 held-out p50=2.71px frames_used=180052 stride=1  1917.5s
+[done     3835s] 20250905_213215 rc=0 1905s | 20250905_213215: K=5212079 retained=0.965 held-out p50=2.70px frames_used=180053 stride=1  1901.2s
+[done     3835s] 20250907_154801 rc=0 1880s | 20250907_154801: K=5077470 retained=0.940 held-out p50=2.76px frames_used=180053 stride=1  1873.6s
+[done     3865s] 20250907_161657 rc=0 1905s | 20250907_161657: K=5183165 retained=0.960 held-out p50=2.73px frames_used=180058 stride=1  1897.9s
+[done     3885s] 20250907_164826 rc=0 1910s | 20250907_164826: K=5225859 retained=0.967 held-out p50=2.81px frames_used=180056 stride=1  1909.1s
+[done     3885s] 20250907_171538 rc=0 1905s | 20250907_171538: K=5175105 retained=0.958 held-out p50=2.76px frames_used=180057 stride=1  1895.3s
+[done     3915s] 20250907_181225 rc=0 1915s | 20250907_181225: K=5169927 retained=0.957 held-out p50=2.66px frames_used=180057 stride=1  1908.3s

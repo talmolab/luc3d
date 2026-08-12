@@ -18,7 +18,7 @@ FOUR COLUMNS, PAIRED BY ALGORITHM CLASS, which is what Fig 4e also does:
 Without the Anipose columns the figure only ever compared us against us. With only
 Anipose's LINEAR column it compared their closed-form solve against our iterative
 one, which is the category error 4e used to make. `aniposelib` is scored on the same
-4,253,636 keypoints, the same 50 sessions, the same 3 calibrations, by the same error
+17,013,412 keypoints, the same 50 sessions, the same 3 calibrations, by the same error
 definition -- see figs/fig4_anipose.py.
 
 READ THE RIGHT-HAND GROUP BEFORE WRITING ANYTHING ABOUT WHO WINS. Out of sample,
@@ -31,8 +31,8 @@ the winning one.
 
 THE ANIPOSE OPTIM COLUMN HAS TEMPORAL SMOOTHING DISABLED, and the footer says so.
 aniposelib's default `optim_points` adds a smoothing term across consecutive frames
-(`scale_smooth=4`), but fig4_input is sampled at stride 60 and then filtered to
-keypoints complete in all five views, so its "consecutive" entries are 60+ frames
+(`scale_smooth=4`), but fig4_input is sampled at stride 15 and then filtered to
+keypoints complete in all five views, so its "consecutive" entries are 15+ frames
 apart. The smoothing term would be penalising real motion as noise, and the column
 would report OUR SAMPLING rather than Anipose's method -- with it on, Anipose's optim
 is worse than its own linear solve in 50/50 sessions. Off, what remains is soft-L1

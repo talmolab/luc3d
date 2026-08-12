@@ -1,0 +1,3 @@
+/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig2_measure.py:221: RuntimeWarning: Mean of empty slice
+  cost[:, a, tt] = np.nanmean(d, axis=1)
+20250907_154801: K=5077470 retained=0.940 held-out p50=2.76px frames_used=180053 stride=1  1873.6s

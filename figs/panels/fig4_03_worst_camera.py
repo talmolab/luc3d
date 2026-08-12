@@ -29,7 +29,7 @@ the whole content of the finding.
 THE THREE BOXES ARE NOT DRAWN AT EQUAL WIDTH. n differs 45-fold across the strata
 and three equal boxes read as three equal conditions -- the exact failure printing n
 was meant to prevent. Width goes as sqrt(n), the standard variable-width boxplot,
-and each stratum's share of the 4,253,636 keypoints is printed under its own tick,
+and each stratum's share of the 17,013,412 keypoints is printed under its own tick,
 so the 7.2 mm headline cannot be read as typical: that stratum is 1.6% of the data.
 
 Source: figs/out/fig4.json `robust.{clean,mid,outlier}.{moved_mm,improved_frac,n}`.

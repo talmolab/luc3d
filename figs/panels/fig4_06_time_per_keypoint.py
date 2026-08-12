@@ -65,9 +65,15 @@ from src.data_loader import load  # noqa: E402
 from src.style import MUTED, deposit, entity, panel, save, use  # noqa: E402
 
 #: Frames below which `optim_points` is still paying start-up rather than a
-#: session-scale cost. Set from the sweep itself: 1,000 frames measures 383 us/kp
-#: against 113-120 at every larger size, i.e. the fixed cost has amortised by 2,000.
-OPTIM_AMORTISED_FRAMES = 2000
+#: session-scale cost. SET FROM THE SWEEP ITSELF, and it moved when the export got
+#: denser: at stride 15 a session is ~23,500 frames, and the sweep reads 669 us/kp
+#: at 1,000 frames and 277 at 2,000 against 204-229 at every size from 4,000 up. So
+#: the fixed cost has amortised by 4,000, not by 2,000 -- on the stride-60 export
+#: (sessions of ~5,900 frames) the sweep stopped at 4,000 and read 383 / 115 / 122,
+#: which put the knee one step earlier. Including a still-amortising point would
+#: make the whisker say the session-scale cost varies 204-277 when it varies
+#: 204-229.
+OPTIM_AMORTISED_FRAMES = 4000
 
 
 def build() -> pd.DataFrame:
@@ -102,7 +108,7 @@ def main():
     # only time. It is the evidence for the caption's claim that Anipose's optimiser
     # buys almost nothing over its own DLT, and a claim in a caption needs a file
     # behind it. `optim` (aniposelib's defaults) carries temporal smoothing that our
-    # stride-60 sampling makes meaningless -- `optim_nosmooth` is the like-for-like
+    # stride-15 sampling makes meaningless -- `optim_nosmooth` is the like-for-like
     # arm. Panel d deliberately has no optim column for that reason.
     po = load("fig4_anipose.json").get("per_session_optim") or []
     if po:
@@ -124,26 +130,32 @@ def main():
                linewidth=0)
     top = df.us_per_keypoint.max()
     hi = df.hi.max()
+    # THE HIGHEST INK, not the highest bar. The whisker can out-top every bar (at
+    # stride 15 the optim bar is 229 us/kp and its whisker reaches 277), and pinning
+    # the bracket row to the tallest BAR then ran it straight through the bar label
+    # -- caught by lint_text as a 23% overlap of '228.8' with '3.6x ours'. Everything
+    # above is measured from `cap` so the row cannot be reached by any mark again.
+    cap = float(max(top, hi if hi == hi else 0.0))
     for i, r in df.iterrows():
         if r.lo is not None and r.hi is not None and r.hi > r.lo:
             ax.plot([i, i], [r.lo, r.hi], color=MUTED, lw=0.8, zorder=3)
             for y in (r.lo, r.hi):
                 ax.plot([i - 0.09, i + 0.09], [y, y], color=MUTED, lw=0.8, zorder=3)
         y = max(r.us_per_keypoint, r.hi if r.hi is not None else 0)
-        ax.text(i, y + top * 0.025, f"{r.us_per_keypoint:.1f}", ha="center",
+        ax.text(i, y + cap * 0.025, f"{r.us_per_keypoint:.1f}", ha="center",
                 va="bottom", fontweight="bold", color=colors[i])
 
     # THE TWO PAIRWISE RATIOS, which are the panel's whole point, drawn as brackets
     # over each pair rather than left to the reader's arithmetic.
     v = df.us_per_keypoint.values
-    for (lo_i, hi_i), yf in (((0, 1), 1.20), ((2, 3), 1.20)):
-        y = top * yf
+    for (lo_i, hi_i), yf in (((0, 1), 1.16), ((2, 3), 1.16)):
+        y = cap * yf
         ax.annotate("", xy=(hi_i, y), xytext=(lo_i, y),
                     arrowprops=dict(arrowstyle="-", lw=0.7, color=MUTED))
-        ax.text((lo_i + hi_i) / 2, y + top * 0.015,
+        ax.text((lo_i + hi_i) / 2, y + cap * 0.015,
                 f"{v[hi_i] / v[lo_i]:.1f}× ours", ha="center", va="bottom",
                 fontsize=6, fontweight="bold", color=MUTED)
-    ax.set_ylim(0, top * 1.40)
+    ax.set_ylim(0, cap * 1.36)
     ax.set_xticks(x)
     ax.set_xticklabels(df.label)
     for lab, c in zip(ax.get_xticklabels(), colors):

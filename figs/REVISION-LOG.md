@@ -71,16 +71,10 @@ magnitude.
 rejected because every value is below 0.9 per cent and the two headline totals would
 carry four leading zeros. The raw count is still printed beside each marker.
 
-| configuration | clean frames | exhaustive | LUC3D |
-|---|---|---|---|
-| 2 animals x 5 cameras | 122,830 | 0 (0.00 per 10,000) | 0 (0.00) |
-| 2 x 6 | 14,275 | 1 (0.70) | 1 (0.70) |
-| 3 x 5 | 200 | 0 (0.00) | 0 (0.00) |
-| 4 x 3 | 366 | 3 (81.97) | 0 (0.00) |
-
-The rate axis is what makes the 4 x 3 result legible: as counts, 3 and 1 sit next to
-each other; as rates they are two orders of magnitude apart. Pooled: LUC3D 1 of 137,671
-(0.07 per 10,000), exhaustive 4 (0.29 per 10,000).
+The rate axis is what makes the configurations comparable at all: their denominators
+differ by three orders of magnitude, so equal counts are wildly unequal rates. The
+values that motivated the change are superseded by the corpus-scale re-run in section 8
+below; see that table for the current ones.
 
 **Figure 3E** now plots identity switches per 1,000 camera-frames. The denominator was
 not in the deposit and was added: **7,205,370 camera-frames**, reproduced per camera and
@@ -174,19 +168,75 @@ The three controls on the initiator asymmetry now carry tests:
   qualification it carried, that the 130-session total is a composition statement and not
   the n behind any panel, moved into the Fig 6 legend.
 
-## 8. Full-data reruns still in flight (IN PROGRESS)
+## 8. Figure 3 head-to-head, 4 sessions to 92 (DONE)
 
-- **Figure 2** re-measured at every frame across all 50 sessions.
+The referee's principal objection was that the central benchmark was four recordings,
+one per configuration, with 89 per cent of its frames from a single two-mouse session
+and the whole multi-animal case resting on 566 frames. Re-run across every session that
+has both pool detections and proofread ground truth:
+
+| configuration | sessions before | after | frames computed before | after |
+|---|---|---|---|---|
+| 2 animals x 5 cameras | 1 | 50 | 122,830 | 4,324,469 |
+| 2 x 6 | 1 | 35 | 14,275 | 237,841 |
+| 3 x 5 | 1 | 4 | 200 | 7,001 |
+| 4 x 3 | 1 | 3 | 366 | 3,000 |
+| 4 x 6 | 0 | 0 of 3 available | 0 | 0, still not run |
+| total | 4 | 92 | 137,671 | 4,572,311 |
+
+Frames considered rose from 201,092 to 9,678,503 and eligible from 137,671 to
+4,591,864. The binding constraint was never the corpora: it is which sessions have both
+detections and ground truth, which is 50 of 56 BMimica and all 74 SLAP-2M.
+
+**Agreement fell from 99.99637 to 99.98596 per cent**, and the more useful result is
+that it now degrades monotonically with animal count, which four sessions could not
+show: 99.996 per cent at 2 x 5, 99.814 at 2 x 6, 99.829 at 3 x 5, 99.000 at 4 x 3.
+
+**Misgrouping against ground truth** went from 1 frame (LUC3D) and 4 (exhaustive) to
+**1,052 and 1,309** over 4,572,172 clean frames, that is 2.30 and 2.86 per 10,000. The
+qualitative result strengthens: on the 642 frames where the methods disagree, ground
+truth sides with greedy on 449 and with exhaustive on 192. That claim rested on 5 events
+and now rests on 642.
+
+Per-frame exhaustive timings moved: 0.0115 s at 2 x 5 (was 0.0081), 0.0159 at 2 x 6,
+3.356 at 3 x 5 (was 3.85), 6.951 at 4 x 3 (was 7.82). Re-derived from those rates, the
+unrun 4 x 6 bound moves from 0.5 to 18 hours per frame to **0.55 to 26.7 hours**.
+
+Frame caps apply only to the two expensive configurations, 2,000 eligible frames per
+session at 3 x 5 and 1,000 at 4 x 3, because uncapped 4 x 3 alone would have been 37
+core-hours. A new `--clean-sample` scans the whole session for eligibility, so the
+considered and eligible counts stay honest full-session numbers, then enumerates a
+uniform sample across the session rather than a head-of-session prefix. It is verified
+bit-identical to the old driver when the cap does not bind.
+
+Total exhaustive compute: 27.1 core-hours, about 4 hours end to end.
+
+**Panel 3D had to be rebuilt for the new numbers.** Counts went from 0/1/3 to three and
+four digits and the layout collided in five places. It is now a log rate axis, which
+also makes the animal-count trend legible, with the raw count above each marker, the
+per-configuration n under each tick, and the pooled totals moved to the legend where
+they no longer have to fit in 57 mm.
+
+**Do not cite the IDF1 in this deposit.** Greedy 0.791 against exhaustive 0.378 is
+harness artefact twice over: the disclosed identity threading, plus the fact that
+exhaustive is scored only on the frames it computed while greedy is scored on whole
+sessions. Both are recorded in the deposit's caveats and no panel plots it.
+
+## 9. Full-data reruns still in flight (IN PROGRESS)
+
+- **Figure 2** re-measured at every frame. Stopped here at 25 of 50 runnable sessions
+  and handed to another machine; see `HANDOFF-FIG2.md`. The partial result already
+  answers the objection: on the same 25 sessions, 200 times the data moves every
+  headline by under 1 per cent.
 - **Figure 4** at the highest achievable density, with the arithmetic recorded for any
   arm that cannot be run at every frame. The aniposelib `optim_points` arm is the one at
   risk, since it is a single global least-squares per session and both its time and its
   memory grow with points per session.
-- **Figure 3** head-to-head extended past one session per configuration.
 
 Numbers from these will be appended here and propagated to METHODS, RESULTS and
 FIGURE-LEGENDS in one pass.
 
-## 9. Referee items that are the manuscript's to fix, not these files (NOT DONE)
+## 10. Referee items that are the manuscript's to fix, not these files (NOT DONE)
 
 These are in the submitted PDF rather than in `figs/`, and none of them can be fixed
 from this repository:
