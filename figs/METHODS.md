@@ -70,11 +70,10 @@ The measurements divide into two kinds, and they treat the recordings differentl
 association and tracking results in Figures 3 and 7, and the behavioural analysis in
 Figure 5, were computed on complete sessions, every frame, with no subsampling. The
 per-keypoint geometric measurements in Figures 2, 4 and 6 were computed on a uniform
-sample of frames, taken every 60th frame for Figures 4C to 4E and every 240th for
-Figure 4B; Figures 2 and 6 use every frame. The sample is uniform and
+sample of frames, every 15th frame for Figure 4; Figures 2 and 6 use every frame. The sample is uniform and
 was never selected on any property of the data, and it is large in absolute terms:
-286,200,174 keypoints in Figure 2, 4,253,636 in Figures 4C to 4E, and 187,134,382
-keypoint comparisons in Figure 6. Subsampling was necessary because these measurements are
+286,200,174 keypoints in Figure 2, 17,013,412 in Figure 4, and 187,134,382 keypoint
+comparisons in Figure 6. Subsampling was necessary because these measurements are
 per-keypoint and combinatorial in the cameras. Figure 2 alone rests on 12,774,240
 two-anchor solves and 38,322,720 held-out view measurements at its sampled density, and
 Figure 4B on 55,298,204 solves, so measuring at every frame would multiply those figures

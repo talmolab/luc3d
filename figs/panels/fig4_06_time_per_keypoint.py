@@ -8,12 +8,18 @@ slower than Anipose" -- a category error. A closed-form SVD and an iterative rob
 solve are not the same amount of arithmetic, and the panel was comparing across that
 line. The bars are now PAIRED BY ALGORITHM CLASS:
 
-    linear      LUC3D DLT              6.3  <->  Anipose triangulate      28.0
-    non-linear  LUC3D refinement      43.8  <->  Anipose optim_points    120.4
+    linear      LUC3D DLT              6.3  <->  Anipose triangulate      29.0
+    non-linear  LUC3D refinement      44.0  <->  Anipose optim_points    228.8
 
-Read across a pair and the comparison is real: **we are 4.3x faster on the linear
-solve and 2.9x faster on the non-linear one.** Read down a column and you get the
+Read across a pair and the comparison is real: **we are 4.6x faster on the linear
+solve and 5.2x faster on the non-linear one.** Read down a column and you get the
 cost of refining within one library.
+
+(The non-linear ratio was 2.9x on the stride-60 export and is 5.2x here. Nothing
+about either solver changed: `optim_points` is one global least-squares per SESSION,
+so its cost per keypoint depends on how many keypoints a session has, and the sweep
+now reaches the real session size -- 23,000 frames rather than 4,000. See
+OPTIM_AMORTISED_FRAMES.)
 
 THE ORDER DELIBERATELY DIFFERS FROM PANEL d, which runs Anipose / DLT / refined. The
 pairing IS this panel's argument, and it cannot be made while also matching d's
@@ -24,29 +30,36 @@ configuration rather than a fourth method.
 
 WHICH ANIPOSE CONFIGURATION EACH BAR IS. `anipose triangulate` reads two flags,
 both `False` by default (verified in `anipose/anipose.py`):
-    optim: false, ransac: false  ->  CameraGroup.triangulate        28.0  (bar 2)
-    optim: true                  ->  CameraGroup.optim_points      120.4  (bar 4)
-    ransac: true                 ->  CameraGroup.triangulate_ransac 2324  (caption)
-The ransac path is 83x the default and would flatten every other bar, so it is
+    optim: false, ransac: false  ->  CameraGroup.triangulate        29.0  (bar 2)
+    optim: true                  ->  CameraGroup.optim_points      228.8  (bar 4)
+    ransac: true                 ->  CameraGroup.triangulate_ransac 2467  (caption)
+The ransac path is 85x the default and would flatten every other bar, so it is
 reported in the caption rather than drawn. Naming the config on the artwork matters
 because "Anipose" spans two orders of magnitude depending on it.
 
 THE OPTIM BAR IS NOT A PER-KEYPOINT CONSTANT, and the whisker says so.
 `optim_points` is one global `scipy.least_squares` per session, so its cost per
-keypoint falls as fixed costs amortise: 383 us/kp at 1,000 frames, then 112.8 and
-120.4 at 2,000 and 4,000. The bar is the largest run and the whisker spans the
-SESSION-SCALE sizes only (>= 2,000 frames); the 383 start-up point is in the caption,
-not averaged into a number that would then describe neither regime.
+keypoint depends on the session's size: 668.6 us/kp at 1,000 frames and 276.5 at
+2,000 while the fixed cost is still amortising, then 216.1 / 203.6 / 217.0 / 228.8
+at 4,000 / 8,000 / 16,000 / 23,000. The bar is the largest run -- 23,000 frames,
+which at stride 15 IS a whole session -- and the whisker spans the session-scale
+sizes only (>= 4,000 frames); the two start-up points are in the caption, not
+averaged into a number that would then describe neither regime.
 
-The LUC3D bars come from the whole-corpus run (`fig4.json`, 4,253,636 keypoints);
+The LUC3D bars come from the whole-corpus run (`fig4.json`, 17,013,412 keypoints);
 the Anipose bars from `fig4_anipose.json`. To make that one comparison rather than
 two machine loads, `fig4_anipose.py` re-times BOTH LUC3D solvers in its own sitting
-and reports the disagreement -- 3% on DLT and 5% on the refinement here.
+and reports the disagreement -- 4% on DLT and 11% on the refinement here. That
+matters more than usual for this figure: `fig4.json`'s figures are accumulated
+inside the whole-corpus sweep, so a run sharing the machine with a dozen other
+processes inflates them (measured: 7.67 / 64.35 us/kp under a 13-process load
+against 6.32 / 44.00 for the same 17 M keypoints on a quiet machine, with every
+accuracy field bit-identical). The deposited run is the quiet one.
 
 All bars are the SOLVE ONLY: undistortion is excluded from every one, because
 `CameraGroup.triangulate` undistorts inside the call and LUC3D outside it, and
 charging one and not the other would be an artefact of where each library draws a
-function boundary. Excluded: 0.45 us Anipose, 1.14 us LUC3D.
+function boundary. Excluded: 0.57 us Anipose, 1.16 us LUC3D.
 
 Source: figs/out/fig4.json         `methods.{dlt,ba}.us_per_keypoint`
         figs/out/fig4_anipose.json `timing.{anipose,anipose_optim,anipose_ransac}`

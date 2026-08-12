@@ -54,10 +54,19 @@ idiom — the expensive pass deposits a table, the plotting pass reads it back.
 python3 figs/build_fig_session.py     # the trimmed 8-camera clip -> figs/session/
 node    figs/fig1_tracking.mjs        # app screenshots + manifest
 python3 figs/fig2_measure.py          # bench env
-node    figs/fig4_measure.mjs
-node    figs/fig4_by_views.mjs        # 4b, both solvers -> fig4_by_views.json (~15 min)
+LP3D_PY=/root/vast/eric/luc3d-bench/lp3d_env/bin/python
+$LP3D_PY figs/fig4_export.py          # stride 15 -> fig4_input.{json,bin}, 1.8 GB, ~6 min
+HOV_SUB=1 DSTEP=1 node figs/fig4_measure.mjs   # ~2.3 h, no secondary subsample
+#   run it on a QUIET machine: its us/keypoint is accumulated inside the sweep, and a
+#   13-process load inflated it 21%/46% (7.67/64.35 against 6.32/44.00, same 17 M
+#   keypoints, every accuracy field bit-identical).
+# 4b, both solvers, sharded by session (BLOCKS=lo:hi) -> fig4_by_views.json, ~36 min:
+for r in 0:5 5:9 9:13 13:17 17:21 21:25 25:29 29:33 33:37 37:41 41:45 45:50; do
+  BLOCKS=$r STRIDE=1 OUT_JSON=figs/out/bv-$r.json node figs/fig4_by_views.mjs & done; wait
+node figs/fig4_by_views.mjs --merge figs/out/bv-*.json
 ANIPOSE_PY=/root/vast/eric/luc3d-bench/anipose_env/bin/python
-$ANIPOSE_PY figs/fig4_anipose.py      # the Anipose arm of 4d/4e -> fig4_anipose.json
+$ANIPOSE_PY figs/fig4_anipose.py --jobs 12 --optim-jobs 12 \
+    --optim-sweep 1000 2000 4000 8000 16000 23000   # 4d/4e -> fig4_anipose.json, ~2.2 h
 python3 figs/fig6_detections.py --jobs 12   # bench env; stride 1 = every frame, ~80 s
 #    ... see the per-panel scripts' docstrings for the exact input each one needs
 
@@ -396,25 +405,48 @@ Status of the panels:
 
 `fig4_export.py` (real BMimica observations) then `fig4_measure.mjs`, which imports
 the **`eric/bundle-adj` worktree's** `pose/triangulation.js` read-only. **All 50
-sessions, 3 calibrations, 4,253,636 keypoints at stride 60**, 5 cameras, median
-distortion displacement **8.42 px** (p95 23.36) — so native-vs-ideal space is a real
+sessions, 3 calibrations, 17,013,412 keypoints at stride 15**, 5 cameras, median
+distortion displacement **8.41 px** (p95 23.34) — so native-vs-ideal space is a real
 distinction here, not a vacuous one.
 
 | method | reproj p50 | µs/keypoint | worse than DLT |
 |---|---|---|---|
 | DLT | 2.245 px | 6.3 | — |
-| refined (post-fix) | **2.056 px** | 43.8 | **0 / 4,253,636** (enforced) |
-| refined (pre-fix options) | — | — | **1,048,210 / 4,253,636 (24.6%)** |
+| refined (post-fix) | **2.056 px** | 44.0 | **0 / 17,013,412** (enforced) |
+| refined (pre-fix options) | — | — | **4,193,925 / 17,013,412 (24.7%)** |
 
-The cost ratio reproduces at **6.9x** DLT, against the 4.6–6.1x the commit message
-records. The 0/4,253,636 is **enforced by a backtracking guard, not observed** — see the
+The cost ratio reproduces at **7.0x** DLT, against the 4.6–6.1x the commit message
+records. The 0/17,013,412 is **enforced by a backtracking guard, not observed** — see the
 tautology note below.
+
+**THE EXPORT IS AT STRIDE 15 SINCE 2026-08-12, AND EVERY ARM RUNS ON ALL OF IT.** It was
+stride 60 (4,253,636 keypoints), and Fig 4b then took every 4th keypoint of that
+(effective stride 240). No arm subsamples now: `fig4_measure.mjs` runs its
+`heldout_by_views` and its lens-distortion fixture on every keypoint too (`HOV_SUB=1
+DSTEP=1`), and `fig4_by_views.mjs` runs at `STRIDE=1`. **Nothing moved**: every median in
+this section shifted by less than 1%, the 50/50 and 49/50 head-to-heads are unchanged,
+and the k = 2..4 curve moved by <= 0.005 px. That stability, on 4x the data with 16x the
+subsets, is the answer to "the corpus numbers rest on a subsample" — the stride-60
+numbers are in `out/fig4.stride60.json`, `out/fig4_by_views.stride60-within4.json` and
+`out/fig4_anipose.stride60.json` if the comparison needs to be re-made.
+
+**What stride 15 costs, and why not stride 1.** Export is cheap (5m51s for the whole
+corpus, a 1.77 GB `.bin`) and the two LUC3D arms scale linearly — but
+`CameraGroup.optim_points` is ONE global least-squares per session, so its cost and
+memory scale with keypoints-per-session, and it is what sets the ceiling. Measured on
+one real session at five sizes: 88 k keypoints 15.9 s / 1.6 GB, 177 k 24.8 s / 3.7 GB,
+353 k 55.6 s / 6.2 GB, 707 k 124 s / 11.0 GB, 884 k 169 s / 12.4 GB. A stride-1 export
+is 5.3 M keypoints per session, i.e. ~75 GB and ~17 min for ONE of the 18 solves
+`_block_optim` runs per session — ~4 h per session, ~200 h of CPU for the corpus, and at
+most 6 workers would fit in 500 GB, so ~30 h wall clock for that arm alone. Stride 15
+puts a session at 353 k, which is the last size that fits 12 workers and finished the
+whole arm in 83 min.
 
 ### The Anipose arm (`fig4_anipose.py`) — and what it found
 
 `fig4_anipose.py` runs `aniposelib.CameraGroup.triangulate` over the **same
 `fig4_input.bin`** `fig4_measure.mjs` reads, so it is the same float64 detections in
-the same order, not merely the same corpus. All 4,253,636 keypoints and all 21,268,180
+the same order, not merely the same corpus. All 17,013,412 keypoints and all 85,067,060
 leave-one-camera-out solves. Run it from `/root/vast/eric/luc3d-bench/anipose_env`.
 
 **Pin: `aniposelib==0.7.2`.** That is the last release before the JAX rewrite and the
@@ -428,22 +460,24 @@ would compare batching regimes rather than solvers. `fig4_anipose.py --assert-no
 **Four solvers, paired by algorithm class** — Anipose linear vs our DLT, Anipose
 `optim_points` vs our refinement — because pairing their closed-form solve against our
 iterative one is a category error, and drawing only their linear column invited exactly
-that reading. Per-session medians over all 4,253,636 keypoints:
+that reading. Per-session medians over all 17,013,412 keypoints:
 
 | | cameras it used | held-out camera | µs/keypoint |
 |---|---|---|---|
-| Anipose linear (`triangulate`) | 2.264 px | **3.111 px** | 28.1 |
-| our DLT | 2.349 | 3.335 | **6.3** |
-| Anipose optim (`optim_points`) | 2.256 | **3.115** | 122.1 |
-| our refinement | **2.151** (enforced) | 3.144 | **43.8** |
+| Anipose linear (`triangulate`) | 2.265 px | **3.107 px** | 29.0 |
+| our DLT | 2.348 | 3.336 | **6.3** |
+| Anipose optim (`optim_points`) | 2.256 | **3.111** | 228.8 |
+| our refinement | **2.152** (enforced) | 3.147 | **44.0** |
 
 Out of sample **Anipose is lower in both pairs** — 50/50 sessions on the linear pair,
-49/50 on the non-linear one. We are **4.4× faster on the linear pair and 2.7× on the
-non-linear one**. Our refinement's in-sample win is enforced (backtracking guard) and
+49/50 on the non-linear one. We are **4.6× faster on the linear pair and 5.2× on the
+non-linear one** (the non-linear ratio was 2.7× at stride 60 and moved because
+`optim_points` is priced per SESSION: the cost sweep now reaches the real session size,
+23,000 frames rather than 4,000). Our refinement's in-sample win is enforced (backtracking guard) and
 does not survive the held-out group.
 
-**Anipose's own optimiser buys it almost nothing**: 0.008 px in sample over its own
-linear solve, and *nothing* out of sample (better in 13/50), for 4.4× the cost. Not a
+**Anipose's own optimiser buys it almost nothing**: 0.009 px in sample over its own
+linear solve, and *nothing* out of sample (better in 13/50), for 7.9× the cost. Not a
 failed run — it terminates on aniposelib's `ftol=1e-3` after two iterations, and
 tightening to `1e-10` changes the answer by zero (1.6237 px either way). It has
 converged; a normalised DLT is already at the geometric optimum. Which reframes our own
@@ -452,14 +486,14 @@ free* — see below.
 
 **The other two config paths, measured and not drawn.** `anipose triangulate` reads two
 flags, both `False` by default (`anipose/anipose.py`): `ransac: true` →
-`triangulate_ransac` at **2,339 µs/keypoint** (83× the default path, 53× our
-refinement); `triangulate` called one keypoint per call → **86 µs/keypoint**. That last
+`triangulate_ransac` at **2,467 µs/keypoint** (85× the default path, 56× our
+refinement); `triangulate` called one keypoint per call → **89 µs/keypoint**. That last
 one is the reconciliation for "anipose takes much longer from experience": the huge
 numbers are the per-call regime and the ransac/optim flags, not the default solve.
 
 **The optim columns run with `scale_smooth=0`.** aniposelib's defaults smooth across
-consecutive frames, but `fig4_input` is stride-60 and then filtered to all-view-complete
-keypoints, so its "consecutive" entries are 60+ frames apart — the smoothing term would
+consecutive frames, but `fig4_input` is stride-15 and then filtered to all-view-complete
+keypoints, so its "consecutive" entries are 15+ frames apart — the smoothing term would
 penalise real motion as noise and the column would measure our sampling. With it on,
 Anipose's optimiser is worse than its own linear solve in 50/50 sessions (2.270 /
 3.158). Both variants are deposited (`fig4e_anipose_optim_accuracy.csv`).
@@ -484,11 +518,11 @@ rounding. Re-run it if either distortion implementation is ever touched.
 
 Timing is the **solve alone** in all three bars: `CameraGroup.triangulate` undistorts
 inside the call and LUC3D outside it, so Anipose is timed with `undistort=False` on
-pre-undistorted points (the excluded cost is 0.45 µs Anipose, 1.21 µs LUC3D, both
-deposited). Anipose 28.1 µs/keypoint against our DLT's 6.3 and our refinement's 43.8.
+pre-undistorted points (the excluded cost is 0.57 µs Anipose, 1.16 µs LUC3D, both
+deposited). Anipose 29.0 µs/keypoint against our DLT's 6.3 and our refinement's 44.0.
 `fig4_anipose.py` also re-times **both** LUC3D solvers in its own sitting via
 `fig4_time_luc3d.mjs` and warns if they drift more than `--tol` from `fig4.json`
-(3% and 5% at the values plotted), so the three bars cannot silently become a
+(4% and 11% at the values plotted), so the three bars cannot silently become a
 comparison of two machine loads.
 
 **The earlier version of this table was a 1-session run and its numbers were all
@@ -515,12 +549,12 @@ So Fig 4a is a THREE-way schematic, not two:
 Measured: BA's 3D error against the proofread 3D is *worse* than DLT's (1.72 vs
 1.28 mm median), in every worst-view stratum (clean 1.21x, mid 1.57x, outlier 1.48x)
 — including the stratum where a robust loss is supposed to win. The diagnostic that
-explains it: **the reference's OWN native-space reprojection error is 2.41 px
+explains it: **the reference's OWN native-space reprojection error is 2.40 px
 (median over all 50 sessions; it was 1.88 px on the single session this was first measured
 on), higher than both DLT and the refined solver.** One quantity, four values had
 crept into the repo (2.0 in CAPTIONS.md, 1.92 in `fig4.py`'s docstring, 1.922 here,
 1.884 p50 / 2.099 mean in `fig4.json`). **Standardised on `fig4.json`
-`reference_reproj_px.p50`, always named as a median.** That value is now **2.41 px**
+`reference_reproj_px.p50`, always named as a median.** That value is now **2.40 px**
 (mean 2.73) because Fig 4 was re-measured over all 50 sessions and 3 calibrations; the
 1.88 px figure was the single-session run. Anything quoting 1.88 is stale. The proofread 3D is therefore not the
 minimiser of reprojection error on these detections — it comes from a different
@@ -535,7 +569,7 @@ real ground truth — synthetic points with known 3D, or a calibration object �
 is exactly what the branch's own tests use, and whose numbers (11–18x better under a
 60 px outlier; +10% worse on clean Gaussian noise) should be quoted from there rather
 than re-derived from this corpus. Note also this dataset is too clean to exercise the
-robust loss at all: only a small minority of keypoints have any view off by even 10 px (66,901 of 4,253,636 at >= 10 px on the all-sessions run), versus
+robust loss at all: only a small minority of keypoints have any view off by even 10 px (268,426 of 17,013,412, 1.6%, at >= 10 px on the all-sessions run), versus
 the 60 px gross outliers the branch's tests inject.
 
 `figs/fig4_hooks.mjs` exists because that branch's own `scripts/bench/hooks.mjs`
@@ -548,26 +582,27 @@ branch is untouched.
 
 Was DLT-only and read `fig2.json`. It now reads **`fig4_by_views.json`**, because a
 refinement curve from one run overlaid on a DLT curve from another is not a comparison.
-`fig4_by_views.mjs` runs the **real branch solvers** over Fig 4's own input (stride 240
-= every 4th keypoint of the stride-60 export, 1,063,427 keypoints, 55.3 M solves,
-~15 min), with fig2's exact protocol: every C-choose-k camera subset, 3D distance to the
+`fig4_by_views.mjs` runs the **real branch solvers** over Fig 4's own input (**stride 15
+= EVERY keypoint of the stride-15 export, 17,013,412 keypoints, 884.7 M solves**, 36 min
+across 12 shards — it was every 4th keypoint of a stride-60 export, i.e. effective
+stride 240, 1,063,427 keypoints, 55.3 M solves), with fig2's exact protocol: every C-choose-k camera subset, 3D distance to the
 proofread reference, mm via each session's own `mm_per_unit`.
 
 | k views | DLT | refined | refined/DLT |
 |---|---|---|---|
-| 2 | 4.731 mm | 4.843 | 1.02× |
-| 3 | 2.889 | 3.205 | 1.11× |
-| 4 | 1.921 | 2.371 | 1.23× |
-| 5 | **1.207** | 1.864 | **1.54×** |
-| span 2→5 | **3.9×** | 2.6× | |
+| 2 | 4.738 mm | 4.847 | 1.02× |
+| 3 | 2.890 | 3.197 | 1.11× |
+| 4 | 1.909 | 2.359 | 1.24× |
+| 5 | **1.195** | 1.861 | **1.56×** |
+| span 2→5 | **4.0×** | 2.6× | |
 
-**Its DLT arm reproduces `fig2.json` to 0.1–0.7% at every k** (4.747→4.731, 2.910→2.889,
-1.924→1.921, 1.216→1.207) — the script prints that cross-check, and it is what licenses
+**Its DLT arm reproduces `fig2.json` to 0.0–1.1% at every k** (4.732→4.738, 2.890→2.890,
+1.916→1.909, 1.207→1.195; against the fig2 run current on 2026-08-12) — the script prints that cross-check, and it is what licenses
 calling this the same measurement Fig 2 made rather than a different one. The superseded
 12-session run's 4.12 / 2.63 / 1.83 / 1.24 figures are stale; do not quote them.
 
 **The rising ratio is the metric, not the solver, and that is the panel's real content.**
-The reference's own reprojection error (2.406 px) exceeds both solvers' (2.245 / 2.056)
+The reference's own reprojection error (2.404 px) exceeds both solvers' (2.245 / 2.056)
 and it came from a linear-triangulation pipeline, so distance-to-it rewards agreeing with
 a DLT — and one candidate *is* a DLT. refined/DLT climbing monotonically 1.02× → 1.54×
 as views increase is the signature: a real accuracy deficit would not scale with how
@@ -758,18 +793,18 @@ is out of scope for the figure pipeline.
 
 The single-session run said the refinement does **not** generalise: held-out DLT 2.27 px
 against refined 2.35 px, i.e. worse out of sample. I reported that to the user as the
-figure's honest headline. **On all 50 sessions and 3 calibrations (4,253,636 keypoints at
-stride 60) the sign flips**: held-out median DLT **3.051** px against refined **2.971** px,
+figure's honest headline. **On all 50 sessions and 3 calibrations (17,013,412 keypoints at
+stride 15) the sign flips**: held-out median DLT **3.051** px against refined **2.971** px,
 so the refinement is better out of sample — but only just, and the effect is negligible:
 
 * median paired difference **0.058 px**, a 2.6% reduction;
-* refined wins on **53.1%** of individual held-out keypoints (11,301,539 of 21,268,180) —
+* refined wins on **53.1%** of individual held-out keypoints (45,197,705 of 85,067,060) —
   barely above a coin flip;
 * refined lower in **34 of 50** sessions.
 
 So neither of the two clean stories is true. It is not "the refinement does not
 generalise" (n = 1 artefact, wrong sign) and not "the refinement improves accuracy"
-(0.08 px is far below the reference's own 2.41 px error). The defensible statement is
+(0.08 px is far below the reference's own 2.40 px error). The defensible statement is
 **detectable but negligible out of sample**, which is why Fig 4 now leads with view count
 (4.7 -> 1.2 mm, 3.9x) and outlier rejection (up to 7.2 mm) instead of with the solver
 comparison.
@@ -778,12 +813,13 @@ This is the second time a single-session Fig 4 number misled a conclusion in thi
 set. Treat any n = 1 result here as a pilot, never as a finding.
 
 Other numbers that moved with the full run:
-* **pre-#113 regression rate: 24.6%** (1,048,210 / 4,253,636), not the 35% (12-session) or
+* **pre-#113 regression rate: 24.7%** (4,193,925 / 17,013,412), not the 35% (12-session) or
   39% (single-session) previously quoted.
-* **Median lens-distortion displacement: 8.42 px** (p95 23.36, mean 10.10, n = 1,012,775),
+* **Median lens-distortion displacement: 8.41 px** (p95 23.34, n = 85,067,060 — every
+  detection in every view, no longer a 1-in-85 sample),
   now actually deposited in `fig4.json distortion_px`. The earlier 4.6 px was
   `console.log`-only and the 7.1 px in this README was from a superseded run.
-* **Reference 3D's own reprojection error: 2.41 px median** (mean 2.73), up from 1.88 px.
+* **Reference 3D's own reprojection error: 2.40 px median** (mean 2.73), up from 1.88 px.
 
 ### Fig 4's language was internal jargon, and one panel was a changelog
 
@@ -873,7 +909,7 @@ human 3D correction the proofread pass applied, and any residual frame mismatch.
 * the *spacing* 4.75 -> 2.91 -> 1.92 -> 1.22 mm is real, and "two anchors cost ~3.5 mm
   relative to five" is supported;
 * the *absolute* values are not absolute 3D accuracy, because the reference carries its own
-  error (median reprojection 2.41 px, above either candidate solver's -- the same reason
+  error (median reprojection 2.40 px, above either candidate solver's -- the same reason
   Fig 4 makes no 3D comparison between solvers);
 * the on-artwork label is now "comparison floor", not "alignment floor", and the axis reads
   "3D error vs proofread (mm)" so it cannot be mistaken for a reprojection error.

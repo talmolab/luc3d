@@ -135,7 +135,7 @@ The solver, by contrast, barely matters. Across four solvers, two from this work
 two from aniposelib, the entire spread on a held-out camera is 3.11 to 3.34 px (Figure
 4D). Neither library's non-linear refinement earns its cost out of sample, and
 aniposelib's linear solve is the lowest of the four. We report that plainly: our
-solvers are 4.4 and 2.8 times faster than the corresponding aniposelib paths (Figure
+solvers are 4.6 and 5.2 times faster than the corresponding aniposelib paths (Figure
 4E), and that is a speed result, not an accuracy result.
 
 Two measurement decisions carry this figure and are worth stating. Scoring in a camera

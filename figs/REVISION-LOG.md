@@ -247,14 +247,58 @@ grew from 50 sessions to **56**: the six sessions that were skipped at stride 20
 having too little cross-camera overlap have enough of it once every frame is used, so
 the figure now covers every BMimica session rather than 50 of 56.
 
-## 10. Full-data reruns still in flight (IN PROGRESS)
+## 10. Figure 4 at four times the density, and why not more (DONE)
+
+Every secondary subsample removed and the export stride taken from 60 to 15.
+
+| arm | before | after |
+|---|---|---|
+| keypoints | 4,253,636 | 17,013,412 |
+| panel B solves | 55,298,204 | 884,697,424 |
+| panel B sampling | export 60 then every 4th keypoint | export 15, every keypoint |
+| held-out-by-views | every 3rd keypoint | every keypoint |
+| worst-camera n per stratum | 1,167,554 / 3,019,181 / 66,901 | 4,671,933 / 12,073,053 / 268,426 |
+
+**Nothing moved.** Every median shifted by under 1 per cent and both head-to-head win
+counts are unchanged: aniposelib's linear solve still beats ours in 50 of 50 sessions
+out of sample and beats our refinement in 49 of 50. Held-out error at 2, 3 and 4 cameras
+is 4.32, 3.66, 3.34 px for the DLT and 4.42, 3.54, 3.15 for the refinement.
+
+**One number did move, for a real reason.** aniposelib's optim_points went from 122.1 to
+228.8 microseconds per keypoint, because it is one global least-squares per session and
+the cost sweep now reaches the true session size of about 23,000 frames rather than
+stopping at 4,000. The speed ratios are therefore 4.6x on the linear pair and 5.2x on
+the non-linear pair, not 4.4x and 2.8x. RANSAC moved 2,339 to 2,467.
+
+**Full frames is ruled out by measurement, not by assertion.** optim_points was profiled
+at five densities on a real session: memory is linear at about 14 GB per million points,
+so stride 1 needs roughly 75 GB and 17 minutes for a single solve, times 18 solves per
+session, which is about 200 CPU-hours and some 33 hours of wall clock at the six workers
+that fit in 500 GB. Every 15th frame is the densest setting at which the slowest arm
+fits, and all four solvers share it because panel D compares them on the same keypoints.
+
+**Panel E's timings were nearly wrong.** The agent's own 12 concurrent processes inflated
+them to 7.67 and 64.35 microseconds per keypoint, since fig4_measure accumulates timing
+inside its sweep. Re-run alone it gives 6.32 and 44.00, with every accuracy field
+bit-identical. The contaminated run is kept at `out/fig4.stride15-timing-underload.json`.
+A timing benchmark taken on a loaded machine measures the machine.
+
+**Panel D was reduced to the all-cameras arm on request**, with the win counts and the
+group label removed and everything enlarged. The held-out arm is still deposited and is
+quoted in the legend; the y label now names the scoring space, because the arm that
+remains is the one our refinement minimises by construction.
+
+## 11. Full-data reruns: all complete
+
+Figures 2 and 6 at every frame, Figure 4 at the densest setting its slowest arm allows,
+Figure 3 across every session that has detections and ground truth. None outstanding.
 
 - **Figure 4** at the highest achievable density. Still running.
 
 Numbers from these will be appended here and propagated to METHODS, RESULTS and
 FIGURE-LEGENDS in one pass.
 
-## 11. Referee items that are the manuscript's to fix, not these files (NOT DONE)
+## 12. Referee items that are the manuscript's to fix, not these files (NOT DONE)
 
 These are in the submitted PDF rather than in `figs/`, and none of them can be fixed
 from this repository:

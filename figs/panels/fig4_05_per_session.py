@@ -94,6 +94,14 @@ SOLVERS = [("anipose", "Anipose\nlinear", ANI_C),
 #: reader to assume it is a free comparison.
 GROUPS = [("reproj_p50", None, None)]
 
+#: EVERY GROUP IS DEPOSITED, only the first is drawn. Cutting the held-out arm from
+#: the artwork must not cut it from the record: it is the arm in which nothing is
+#: enforced, it is the one Anipose wins, and the legend quotes it. Dropping it from
+#: GROUPS alone silently emptied the CSV of it, which is precisely the failure the
+#: deposit exists to prevent.
+DEPOSIT_GROUPS = [("reproj_p50", "cameras it used", None),
+                  ("heldout_p50", "a camera it never saw", None)]
+
 #: x offsets within a group, and the gap between group centres. NO COLUMN MAY SIT AT
 #: 0.0: that is the group centre, where the group's major tick goes, and matplotlib
 #: deletes a minor tick colliding with a major one (see `remove_overlapping_locs`
@@ -129,7 +137,7 @@ def build() -> pd.DataFrame:
     for s in load("fig4.json")["per_session"]:
         sid = s["session"]
         a, o = ani.get(sid), opt.get(sid)
-        for key, label, _ in GROUPS:
+        for key, label, _ in DEPOSIT_GROUPS:
             v = s.get(key) or {}
             if v.get("dlt") is None or v.get("ba") is None:
                 continue
