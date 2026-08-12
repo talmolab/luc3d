@@ -60,3 +60,5 @@
 [done     3885s] 20250907_164826 rc=0 1910s | 20250907_164826: K=5225859 retained=0.967 held-out p50=2.81px frames_used=180056 stride=1  1909.1s
 [done     3885s] 20250907_171538 rc=0 1905s | 20250907_171538: K=5175105 retained=0.958 held-out p50=2.76px frames_used=180057 stride=1  1895.3s
 [done     3915s] 20250907_181225 rc=0 1915s | 20250907_181225: K=5169927 retained=0.957 held-out p50=2.66px frames_used=180057 stride=1  1908.3s
+[done     5565s] 20250907_190610 rc=0 1905s | 20250907_190610: K=5250609 retained=0.972 held-out p50=2.66px frames_used=180055 stride=1  1897.0s
+[launch] finished in 1.55 h  ok=25 fail/skip=6

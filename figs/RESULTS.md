@@ -38,14 +38,14 @@ remaining views can be filled by reprojection, and the labeller only has to corr
 those reprojections that land badly. The saving is therefore governed by one measurable
 quantity, the fraction of reprojections that a labeller would reject.
 
-We measured that fraction on 50 proofread sessions of 9 mice in 18 pairings (Figure 2C).
-A 3D point solved from two views and projected into a view that was not labelled lands a
-median 4.32 px from that view's own detection. The reference here is the detector's
-output in the held-out view rather than a human label, so this measures agreement with a
-detector; whether an annotator would accept the same reprojections is a separate
-question that we have not tested, with 94.6 per cent of reprojections
-within 10 px and 99.68 per cent within 20 px. At a 10 px acceptance tolerance only 5.4
-per cent of reprojections need touching at all.
+We measured that fraction on every frame of all 56 sessions, 286,200,174 keypoints from
+9 mice in 18 pairings (Figure 2C). A 3D point solved from two views and projected into a
+view that was not labelled lands a median 4.27 px from that view's own detection, with
+94.6 per cent of reprojections within 10 px and 99.6 per cent within 20 px, so at a 10 px
+acceptance tolerance only 5.5 per cent need touching at all. The reference here is the
+detector's output in the held-out view rather than a human label, so this measures
+agreement with a detector; whether an annotator would accept the same reprojections is a
+separate question we have not tested.
 
 Figure 2B turns that into placements per animal per frame. On the five-camera rig we
 measured, accepting reprojections at 10 px reduces manual placements from 75 to 32, a

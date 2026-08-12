@@ -9,12 +9,12 @@ Fig. 1)
 	D) Capability comparison against 7 multi-animal or multi-camera pose tools, read from each tool's published documentation on 4 August 2026. A dash means the capability is not documented, except in the DANNCE and SDANNCE cross-view cell, where it means not applicable.
 
 Fig. 2)
-	Labelling two anchor views and accepting the reprojection in the rest cuts manual keypoint placements 2.3-fold on a 5-camera rig, because only 5.4% of reprojections fall outside a 10 px tolerance.
+	Labelling two anchor views and accepting the reprojection in the rest cuts manual keypoint placements 2.3-fold on a 5-camera rig, because only 5.5% of reprojections fall outside a 10 px tolerance.
 	A) The protocol in the app: two anchor views labelled (cam 1 topB, cam 6 sideL); the 3D solved from those two alone; the resulting reprojection drawn into the remaining views (cam 0 mid and cam 2 topC, neither labelled); and one view magnified beside that frame's measured per-view error split.
 	B) Manual keypoint placements per animal per frame against rig size C, for two accept tolerances (tau = 10 px, solid; tau = 5 px, dashed) and for labelling every view. The filled marker is the only measured point (C = 5); both curves are the model aided = 2N + (C - 2)Np against traditional = CN, with N = 15 nodes.
 	C) Cumulative distribution of reprojection error in views that were not labelled, scored against that view's own detection (solid) and against the all-view reference 3D (dashed). Median 4.32 px; 59.9% at or below 5 px, 94.6% at or below 10 px.
 	D) Median 3D error of a two-anchor solve against the angle the anchor pair subtends at the animal, one marker per camera pair. Dashed curve, the depth-uncertainty law k/sin(theta) with k = 1.52 mm; band, plus or minus 25%; dotted line, the all-five-view floor (1.2 mm).
-	n = 50 BMimica sessions, 5 cameras, 2 mice per session, 15 nodes; the corpus is 9 individual mice in 18 pairings, so sessions are repeated recordings of those pairs. Every session enters every panel.
+	n = all 56 BMimica sessions, every frame, 286,200,174 keypoints; 5 cameras, 2 mice per session, 15 nodes. The corpus is 9 individual mice in 18 pairings, so sessions are repeated recordings of those pairs. Every session enters every panel.
 
 Fig. 3)
 	Greedy per-camera Hungarian assignment chooses the same grouping as exhaustive hypothesis enumeration on 4,571,669 of 4,572,311 eligible frames across 92 sessions, at 10⁶-fold lower cost in the configuration where enumeration becomes intractable.

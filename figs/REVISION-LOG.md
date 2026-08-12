@@ -222,21 +222,39 @@ harness artefact twice over: the disclosed identity threading, plus the fact tha
 exhaustive is scored only on the frames it computed while greedy is scored on whole
 sessions. Both are recorded in the deposit's caveats and no panel plots it.
 
-## 9. Full-data reruns still in flight (IN PROGRESS)
+## 9. Figure 2 measured on every frame, and on 6 more sessions (DONE)
 
-- **Figure 2** re-measured at every frame. Stopped here at 25 of 50 runnable sessions
-  and handed to another machine; see `HANDOFF-FIG2.md`. The partial result already
-  answers the objection: on the same 25 sessions, 200 times the data moves every
-  headline by under 1 per cent.
-- **Figure 4** at the highest achievable density, with the arithmetic recorded for any
-  arm that cannot be run at every frame. The aniposelib `optim_points` arm is the one at
-  risk, since it is a single global least-squares per session and both its time and its
-  memory grow with points per session.
+Started here, stopped at 25 of 50 when it was holding 138.6 GB, handed to another
+machine (`HANDOFF-FIG2.md`) and completed there.
+
+| | stride 200 | every frame |
+|---|---|---|
+| sessions | 50 | **56** |
+| frames used | 45,053 | 10,084,734 |
+| keypoints | 1,277,424 | **286,200,174** |
+| held-out median, own detection | 4.32 px | 4.27 px |
+| at or below 5 px | 59.90% | 60.7% |
+| at or below 10 px | 94.59% | 94.55% |
+| at or below 20 px | 99.68% | 99.64% |
+| outside the 10 px tolerance | 5.41% | 5.45% |
+| placements at C = 5, tau = 10 px | 32.43 | 32.45 |
+| saving at C = 5 | 2.31x | 2.31x |
+
+Two things worth noting. The sample grew **224-fold** and not one headline moved by more
+than a tenth of a pixel or a tenth of a percentage point, which is the direct answer to
+the referee's sampling objection: the 0.5 per cent sample was unbiased. And the corpus
+grew from 50 sessions to **56**: the six sessions that were skipped at stride 200 for
+having too little cross-camera overlap have enough of it once every frame is used, so
+the figure now covers every BMimica session rather than 50 of 56.
+
+## 10. Full-data reruns still in flight (IN PROGRESS)
+
+- **Figure 4** at the highest achievable density. Still running.
 
 Numbers from these will be appended here and propagated to METHODS, RESULTS and
 FIGURE-LEGENDS in one pass.
 
-## 10. Referee items that are the manuscript's to fix, not these files (NOT DONE)
+## 11. Referee items that are the manuscript's to fix, not these files (NOT DONE)
 
 These are in the submitted PDF rather than in `figs/`, and none of them can be fixed
 from this repository:

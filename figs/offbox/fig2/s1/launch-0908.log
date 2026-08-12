@@ -1,0 +1,14 @@
+[launch] 6 sessions, 6 to run, stride=1, nproc=6
+[start       0s] 20250908_152229  (1 running, 5 queued, 487 GB avail)
+[start       5s] 20250908_154926  (2 running, 4 queued, 486 GB avail)
+[start      10s] 20250908_161812  (3 running, 3 queued, 483 GB avail)
+[start      15s] 20250908_164528  (4 running, 2 queued, 479 GB avail)
+[start      20s] 20250908_171240  (5 running, 1 queued, 478 GB avail)
+[start      25s] 20250908_173928  (6 running, 0 queued, 474 GB avail)
+[done     1830s] 20250908_173928 rc=0 1805s | 20250908_173928: K=4935662 retained=0.914 held-out p50=2.70px frames_used=180059 stride=1  1798.8s
+[done     1870s] 20250908_161812 rc=0 1860s | 20250908_161812: K=5110806 retained=0.946 held-out p50=2.67px frames_used=180057 stride=1  1855.1s
+[done     1890s] 20250908_154926 rc=0 1885s | 20250908_154926: K=5130347 retained=0.950 held-out p50=2.66px frames_used=180056 stride=1  1883.3s
+[done     1930s] 20250908_152229 rc=0 1930s | 20250908_152229: K=5290085 retained=0.979 held-out p50=2.46px frames_used=180056 stride=1  1922.1s
+[done     1930s] 20250908_164528 rc=0 1915s | 20250908_164528: K=5243804 retained=0.971 held-out p50=2.58px frames_used=180055 stride=1  1906.3s
+[done     1940s] 20250908_171240 rc=0 1920s | 20250908_171240: K=5285392 retained=0.978 held-out p50=2.61px frames_used=180059 stride=1  1918.2s
+[launch] finished in 0.54 h  ok=6 fail/skip=0

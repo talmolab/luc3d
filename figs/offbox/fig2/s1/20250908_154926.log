@@ -1,1 +1,3 @@
-20250908_154926: skip (missing inputs / too little overlap)  0.0s
+/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig2_measure.py:221: RuntimeWarning: Mean of empty slice
+  cost[:, a, tt] = np.nanmean(d, axis=1)
+20250908_154926: K=5130347 retained=0.950 held-out p50=2.66px frames_used=180056 stride=1  1883.3s

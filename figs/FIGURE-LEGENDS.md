@@ -38,7 +38,7 @@ applicable.
 ## Fig. 2)
 
 Labelling two anchor views and accepting the reprojection in the rest cuts manual
-keypoint placements 2.3-fold on a 5-camera rig, because only 5.4% of reprojections
+keypoint placements 2.3-fold on a 5-camera rig, because only 5.5% of reprojections
 fall outside a 10 px tolerance.
 
 A) The protocol in the app: two anchor views labelled (cam 1 topB, cam 6 sideL); the
@@ -60,9 +60,9 @@ the animal, one marker per camera pair. Dashed curve, the depth-uncertainty law
 k/sin(theta) with k = 1.52 mm; band, plus or minus 25%; dotted line, the all-five-view
 floor (1.2 mm).
 
-n = 50 BMimica sessions, 5 cameras, 2 mice per session, 15 nodes; the corpus is 9
-individual mice in 18 pairings, so sessions are repeated recordings of those pairs.
-Every session enters every panel.
+n = all 56 BMimica sessions, every frame, 286,200,174 keypoints; 5 cameras, 2 mice per
+session, 15 nodes. The corpus is 9 individual mice in 18 pairings, so sessions are
+repeated recordings of those pairs. Every session enters every panel.
 
 ---
 
