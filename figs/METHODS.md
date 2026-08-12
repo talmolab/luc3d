@@ -148,7 +148,7 @@ run on eight complete BMimica sessions, every frame, with identical detections. 
 that share a ratio of the two weights return identical IDF1 values and identical switch
 counts, and this collapse was verified rather than assumed, which is why the panel plots
 the ratio rather than the two weights separately. Switch counts are reported as a rate
-per 1,000 camera-frames rather than as a total, because a total is uninterpretable
+per 100,000 camera-frames rather than as a total, because a total is uninterpretable
 without its denominator; the denominator is 7,205,370 camera-frames, taken per camera
 and session from the same frame counts the scorer uses, and both the rate and the raw
 count are deposited.

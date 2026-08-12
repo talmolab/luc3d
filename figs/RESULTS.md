@@ -106,11 +106,11 @@ Figure 3E asks what the three-dimensional term in the association cost contribut
 sweeping it against the two-dimensional term over 24 combinations on eight complete
 sessions. The two weights turn out to matter only through their ratio: every pair of
 combinations sharing a ratio returns identical scores. The term is necessary. With it
-switched off entirely, identity switches run at 5.69 per 1,000 camera-frames and
+switched off entirely, identity switches run at 569 per 100,000 camera-frames and
 cross-view IDF1 falls to 0.595. Bringing the term up to parity with the two-dimensional
-one removes 98 per cent of those switches, leaving 0.097 per 1,000, and lifts IDF1 to
+one removes 98 per cent of those switches, leaving 9.7 per 100,000, and lifts IDF1 to
 0.750. Beyond parity the two metrics behave differently: the switch rate continues to
-fall slowly, reaching 0.038 per 1,000 at the largest weights tested, while IDF1 varies
+fall slowly, reaching 3.8 per 100,000 at the largest weights tested, while IDF1 varies
 between 0.71 and 0.76 without a clear trend. Rates are over the 7,205,370 camera-frames
 of the eight sessions, and the raw counts, 40,984 falling to 272, are deposited
 alongside them. The

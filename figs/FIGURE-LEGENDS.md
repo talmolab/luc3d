@@ -96,8 +96,8 @@ Agreement between the methods falls monotonically with animal count: 99.996%, 99
 99.829% and 99.000% for 2 x 5, 2 x 6, 3 x 5 and 4 x 3.
 
 E) Ablation of LUC3D against itself: 24 combinations of the two cost weights, which
-collapse onto their ratio r = corr3d/corr2d. Cross-view IDF1 (right axis) and summed
-within-view ID switches (left axis, log scale). r = 0, the 3D term switched off, sits
+collapse onto their ratio r = corr3d/corr2d. Cross-view IDF1 (right axis) and within-view ID switches per 100,000 camera-frames
+(left axis, log scale; denominator 7,205,370). r = 0, the 3D term switched off, sits
 left of the axis break. The shipped default, r = 6, is marked.
 
 F) Measured time per frame for both methods on identical detections. The 4-animal,

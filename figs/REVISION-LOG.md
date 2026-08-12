@@ -76,7 +76,7 @@ differ by three orders of magnitude, so equal counts are wildly unequal rates. T
 values that motivated the change are superseded by the corpus-scale re-run in section 8
 below; see that table for the current ones.
 
-**Figure 3E** now plots identity switches per 1,000 camera-frames. The denominator was
+**Figure 3E** now plots identity switches per 100,000 camera-frames. The denominator was
 not in the deposit and was added: **7,205,370 camera-frames**, reproduced per camera and
 session from the same `min(gt_frames, det_frames)` rule the scorer uses, read from HDF5
 shapes only. A new `python3 figs/fig3_sweep.py --denominators` mode re-measures only the
@@ -84,15 +84,15 @@ frame counts and merges them into the existing JSON; no tracker run and no re-sc
 The panel exits rather than drawing if the key is absent, so the rate cannot silently
 revert to an assumed denominator.
 
-| weight ratio r | switches | per 1,000 camera-frames |
+| weight ratio r | switches | per 100,000 camera-frames |
 |---|---|---|
-| 0 | 40,984 | 5.688 |
-| 0.5 | 1,548 | 0.2148 |
-| 1 | 696 | 0.0966 |
-| 2 | 418 | 0.0580 |
-| 6 (shipped) | 324 | 0.0450 |
-| 12 | 272 | 0.0377 |
-| 24 | 272 | 0.0377 |
+| 0 | 40,984 | 568.8 |
+| 0.5 | 1,548 | 21.5 |
+| 1 | 696 | 9.7 |
+| 2 | 418 | 5.8 |
+| 6 (shipped) | 324 | 4.5 |
+| 12 | 272 | 3.8 |
+| 24 | 272 | 3.8 |
 
 **Figure 7E** already reported percentages of camera-frames (denominator 11,726,640) and
 was left alone.

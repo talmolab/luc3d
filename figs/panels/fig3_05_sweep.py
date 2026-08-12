@@ -14,8 +14,9 @@ computed by `fig3_sweep.camera_frames()` from the HDF5 shapes (the same expressi
 absent -- run `python3 figs/fig3_sweep.py --denominators`, which re-measures only the
 frame counts and touches neither the tracker runs nor the scoring.
 
-Per 1,000 camera-frames rather than percent because the range is 5.69 down to 0.0378
-per 1,000: as percent those are 0.569% and 0.00378%, i.e. an axis of leading zeros.
+Per 100,000 camera-frames rather than percent or per 1,000: the range is 569 down to
+3.8 per 100,000, which sets on an axis in whole numbers. As percent those are 0.569%
+and 0.0038%, and per 1,000 they are 5.69 and 0.0378 -- both axes of leading zeros.
 The RAW SUMS stay in the deposited CSV, so nothing is lost.
 
 THE SWEEP IS ONE-DIMENSIONAL AND THIS PANEL SAYS SO. The cost function sums a 2D and
@@ -30,7 +31,7 @@ same r. Collapsing onto r turns a flat grid into a curve with a clear knee.
 
 TWO AXES BECAUSE THE TWO METRICS SATURATE AT DIFFERENT POINTS, and that is the
 finding: cross-view IDF1 is flat from r = 1, but the switch rate keeps falling well
-past that -- 5.69 per 1,000 camera-frames with no 3D term at all, 0.0966 at r = 1,
+past that -- 569 per 100,000 camera-frames with no 3D term at all, 9.66 at r = 1,
 0.0466 at r = 4, and a floor of 0.0378 from r = 12. IDF1 alone would say "anything
 >= 1 is fine"; the switch rate says where it actually stops improving. The shipped
 r = 6 (0.0450) sits comfortably past both knees.
@@ -54,7 +55,7 @@ decades is exactly what a log axis is for. Every sampled r is still visible: eac
 drawn with its own marker.
 
 r = 0 IS OFF A LOG AXIS, SO IT GETS A BREAK. r = 0 is the "no 3D term at all"
-control the handoff asked for and the point of the panel (5.69 switches per 1,000
+control the handoff asked for and the point of the panel (569 switches per 100,000
 camera-frames without it, 151x the shipped ratio's rate), so it cannot be dropped
 just because log(0) is undefined. It is drawn in a
 slot to the left of the log region, its tick labelled `0`, with an explicit break
@@ -84,7 +85,7 @@ from src.style import (MUTED, GREY, SALMON, TEAL, deposit, footnote, panel,  # n
 METRIC = "idf1_cross"
 
 #: Rate basis for ID switches. See the docstring for why not percent.
-PER = 1_000
+PER = 100_000
 
 #: The app's shipped ratio (corr2d 1.0, corr3d 6.0 -> r = 6).
 SHIPPED_R = 6.0
@@ -135,7 +136,7 @@ def build() -> pd.DataFrame:
     # Raw sum AND rate in the deposit, with the denominator alongside, so the CSV
     # is checkable by division.
     out["camera_frames"] = tcf
-    out["switches_per_1k_camera_frames"] = out.switches / tcf * PER
+    out["switches_per_100k_camera_frames"] = out.switches / tcf * PER
     return out
 
 
@@ -182,7 +183,7 @@ def main():
     # The denominator is IN the axis label -- the footnote is no longer drawn
     # (src.style.footnote reports to the build log), so a unit that lives only
     # there would not reach the reader.
-    ax.set_ylabel("ID switches per\n1,000 camera-frames", color=SALMON)
+    ax.set_ylabel("ID switches per\n100,000 camera-frames", color=SALMON)
     ax.tick_params(axis="y", colors=SALMON)
     ax.spines["left"].set_color(SALMON)
 
