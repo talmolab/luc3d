@@ -1,5 +1,5 @@
 solver,who,kind,us_per_keypoint,lo,hi,config
-DLT,ours,linear,7.673019214913427,,,"LUC3D, closed form"
+DLT,ours,linear,6.316437924295728,,,"LUC3D, closed form"
 Anipose,anipose,linear,29.031496066600084,,,"CameraGroup.triangulate (optim: false, ransac: false)"
-refined,ours,non-linear,64.35496336377872,,,"LUC3D refinement, soft-L1 + L1 polish, DLT-seeded"
+refined,ours,non-linear,43.996669498217805,,,"LUC3D refinement, soft-L1 + L1 polish, DLT-seeded"
 Anipose optim,anipose,non-linear,228.76772711026496,203.6401585675776,228.76772711026496,"CameraGroup.optim_points (optim: true), n-dependent"

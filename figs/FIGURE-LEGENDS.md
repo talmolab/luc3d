@@ -138,10 +138,13 @@ that view sat from the all-view solution. Medians 1.07, 1.76 and 7.18 mm
 width proportional to the square root of n.
 
 D) Median reprojection error per session for four solvers, paired by algorithm class;
-one dot per session, rules at the median of the 50 sessions, the same 4,253,636
-keypoints in every column. Left, scored in the cameras the solve used; right, in a
-camera no solve saw, where Anipose is lower in both pairs (50 of 50 and 49 of 50
-sessions).
+one dot per session joined across the four, rules at the median of the 50 sessions, the
+same 4,253,636 keypoints in every column. Scored in the cameras the solve used, where
+LUC3D's refinement is lowest by construction, since that is the quantity it minimises
+and a backtracking guard vetoes any step that raises it. Scored instead in a camera no
+solve saw, which is the comparison in which nothing is enforced, Anipose is lower in
+both pairs, in 50 of 50 and 49 of 50 sessions (3.11 against 3.34 px linear, 3.12 against
+3.14 px non-linear); those values are in the deposited table and in Fig 4B's estimator.
 
 E) Solve time per keypoint, with undistortion excluded from all four measurements.
 LUC3D is 4.4 times faster on the linear pair and 2.8 times on the non-linear pair. The

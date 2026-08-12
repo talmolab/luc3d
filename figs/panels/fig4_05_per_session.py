@@ -86,8 +86,13 @@ SOLVERS = [("anipose", "Anipose\nlinear", ANI_C),
            ("dlt", "LUC3D\nDLT", DLT_C),
            ("anipose_optim", "Anipose\noptim", ANI_C),
            ("refined", "LUC3D\nrefined", REF_C)]
-GROUPS = [("reproj_p50", "cameras it used", "(refined enforced)"),
-          ("heldout_p50", "a camera it never saw", None)]
+#: ONE GROUP. The held-out-camera arm was dropped from the artwork on request; its
+#: numbers are still deposited in the CSV and still quoted in the legend, because it
+#: is the arm in which nothing is enforced and it is the one Anipose wins. What is
+#: plotted here is the in-sample metric, which our refinement minimises by
+#: construction, so the y label names the scoring space rather than leaving the
+#: reader to assume it is a free comparison.
+GROUPS = [("reproj_p50", None, None)]
 
 #: x offsets within a group, and the gap between group centres. NO COLUMN MAY SIT AT
 #: 0.0: that is the group centre, where the group's major tick goes, and matplotlib
@@ -101,6 +106,8 @@ GROUPS = [("reproj_p50", "cameras it used", "(refined enforced)"),
 OFFSET = {"anipose": -0.75, "dlt": -0.25, "anipose_optim": 0.25, "refined": 0.75}
 GROUP_DX = 2.0
 #: where the divider between the two groups goes
+#: Retained for reference only: it separated the two groups, and there is one
+#: group now, so nothing draws it.
 DIVIDER_X = GROUP_DX / 2.0
 
 
@@ -175,22 +182,24 @@ def main():
             # the marker has to carry "which configuration" -- as the hatch does on
             # 4e's optim bar. Two solid green columns read as two methods.
             fill = "none" if k.endswith("_optim") else color
-            ax.plot(np.full(len(g), xs[k]), g[k], "o", ms=3, zorder=2,
+            ax.plot(np.full(len(g), xs[k]), g[k], "o", ms=4.5, zorder=2,
                     color=color, markerfacecolor=fill, markeredgecolor=color,
-                    markeredgewidth=0.6, linestyle="none")
-            ax.plot([xs[k] - 0.13, xs[k] + 0.13], [median(g[k])] * 2, color=color,
-                    lw=2.2, zorder=3, solid_capstyle="butt")
+                    markeredgewidth=0.8, linestyle="none")
+            ax.plot([xs[k] - 0.18, xs[k] + 0.18], [median(g[k])] * 2, color=color,
+                    lw=3.0, zorder=3, solid_capstyle="butt")
 
     keys = [k for k, *_ in SOLVERS]
     lo, hi = df[keys].min().min(), df[keys].max().max()
     ax.set_ylim(lo - 0.2, hi + 0.55)
-    ax.set_xlim(-1.25, GROUP_DX + 1.25)
-    ax.axvline(DIVIDER_X, color="#E8E8E8", lw=0.8, zorder=0)
+    # The four columns and a margin, not the two-group span: with the held-out
+    # group gone, the old limit left the right half of the panel empty and the
+    # marks smaller than the space allowed.
+    ax.set_xlim(min(OFFSET.values()) - 0.45, max(OFFSET.values()) + 0.45)
     # TWO LINES, not one. "reprojection error, median (px)" is 37 mm of rotated type
     # and adding the solver tick row below leaves the axes ~35 mm, so the one-line
     # form was clipped off the top of the page. Broken in two it needs only the
     # width of its longer line -- and costs ~4 mm of the panel instead.
-    ax.set_ylabel("reprojection error,\nmedian (px)")
+    ax.set_ylabel("reprojection error, median (px)\nin the cameras the solve used")
 
     ticks, labels = [], []
     for centre, label, note, g in centres.values():
@@ -204,7 +213,7 @@ def main():
         # so the numbers line up under the columns they belong to.
         for k, _, color in SOLVERS:
             ax.text(centre + OFFSET[k], hi + 0.42, f"{median(g[k]):.2f}",
-                    ha="center", va="top", fontweight="bold", fontsize=6,
+                    ha="center", va="top", fontweight="bold", fontsize=8,
                     color=color)
         # The win count belongs to its group, so it goes INTO the tick label on a
         # second line. As free-floating text it landed on the tick labels.
@@ -221,15 +230,11 @@ def main():
         # it was dominated by the enforced refinement. Each pair's own count says
         # which of two comparable solvers won, which is the question the pairing
         # poses.
-        lin = int((g.anipose < g.dlt).sum())
-        nl = int((g.anipose_optim < g.refined).sum())
+        # NO WIN COUNTS ON THE ARTWORK. With one group they would report only the
+        # enforced comparison, which cannot come out any other way; the honest
+        # counts belong to the arm that is no longer drawn and are in the legend.
         ticks.append(centre)
-        # SHORT. The full sentence ("Anipose lower: 50/50 linear, 0/50 non-linear")
-        # is ~55 mm of type against a ~50 mm group half-width, so the two groups'
-        # labels overprinted each other. "50/50 · 49/50" reads in pair order, left
-        # pair then right pair, which the column labels above have just established.
-        labels.append(f"{label}\nAnipose lower {lin}/{len(g)} · {nl}/{len(g)}"
-                      + (f"\n{note}" if note else ""))
+        labels.append("")
 
     # THE COLUMNS ARE NAMED UNDER THEMSELVES, which is what the legacy panel did and
     # what the restyle dropped in favour of a corner colour key. A key makes the
@@ -248,14 +253,14 @@ def main():
     # miscoloured, on artwork that otherwise looked finished.
     ax.xaxis.remove_overlapping_locs = False
     ax.set_xticks([x for x, *_ in cols], minor=True)
-    ax.set_xticklabels([t for _, t, _ in cols], minor=True, fontsize=6)
+    ax.set_xticklabels([t for _, t, _ in cols], minor=True, fontsize=8)
     for lab, (_, _, color) in zip(ax.get_xticklabels(minor=True), cols):
         lab.set_color(color)
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels)
-    ax.tick_params(axis="x", which="minor", length=0, pad=2.0)
+    ax.tick_params(axis="x", which="minor", length=0, pad=3.0)
     # 20, not 13: the minor row is now TWO lines, so the group row has to clear both.
-    ax.tick_params(axis="x", which="major", length=0, pad=20.0)
+    ax.tick_params(axis="x", which="major", length=0, pad=2.0)
     save(fig, 4, "d", "per_session")
 
 
