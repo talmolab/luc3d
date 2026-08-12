@@ -117,15 +117,25 @@ It enumerates every grouping of detections into identities, of which there are (
 per frame, triangulates and reprojects each one, and keeps the grouping with the lowest
 reprojection error. That procedure is undefined on any frame where a camera does not hold
 exactly A detections, so a frame was treated as eligible only when every camera held
-exactly A, and ineligible frames were counted and reported rather than dropped. Of the
-201,092 frames considered, 137,671 were eligible and 63,421 were skipped. The harness
+exactly A, and ineligible frames were counted and reported rather than dropped. The
+benchmark covers 92 sessions, being every session that has both pool detections and
+proofread ground truth: 50 of the 56 BMimica sessions, and all 35 two-animal, 4
+three-animal and 3 four-animal SLAP-2M sessions. Of the 9,678,503 frames considered,
+4,591,864 were eligible and 5,086,639 were skipped. The two most expensive
+configurations are capped at 2,000 eligible frames per session at three animals and
+1,000 at four, because uncapped the four-animal configuration alone would have cost 37
+core-hours. Eligibility is still evaluated over the whole session, so the considered and
+eligible counts are full-session numbers, and the frames that are enumerated are a
+uniform sample across the session rather than a prefix of it. The harness
 caps enumeration at one million hypotheses per frame, and the configuration of four
 animals in six cameras exceeds that cap by a factor of 191, so no frames of it were
 computed at all. Its cost in Figure 3F is therefore an arithmetic lower bound rather
 than a measurement: it takes the number of distinct hypotheses that remain after the
 A!-fold global relabelling symmetry is removed and prices them at the cheapest
 per-hypothesis rate measured anywhere in the sweep, and it is drawn with the open-marker
-convention this figure uses for a quantity that was not run.
+convention this figure uses for a quantity that was not run. Re-derived from the
+per-frame rates measured across the 92 sessions, that bound is 0.55 to 26.7 hours per
+frame.
 
 Grouping quality in Figure 3D was scored by comparing partitions rather than labels.
 The grouping each method produced was compared with the ground-truth partition of the
