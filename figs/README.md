@@ -115,6 +115,7 @@ the embedded font name differs.
 | `HANDOFF-OFFBOX.md` | Which measurement jobs are worth running on a different machine and how. Short version: only the 4-animal 6-camera exhaustive configuration, which is the one number in the paper that is extrapolated rather than measured, travels in under 2 GB, and is parallel across frames. |
 | `REVISION-LOG.md` | **What changed in response to that report, with the before and after value of every number that moved**, plus the items that are the manuscript's to fix rather than this repo's. A response-to-reviewers letter can be assembled from it. Update it whenever a measurement is re-run; the numbers in the docs are only checkable against something if that something is written down. |
 | `CAPTIONS.md` | The working caption document: extended reasoning, the readings each figure must NOT support, and the analyses that were run and not shown. Source material for `FIGURE-LEGENDS.md` and for a Supplementary Note; not itself a submission artefact. |
+| `fig8_param_sweeps.py` | **EXPLORATORY, NOT IN THE MANUSCRIPT.** Sweeps every remaining `CrossViewTracker` threshold one at a time (10 parameters, 35 cells) on exactly Fig 3e's measurement — same 8 BMimica sessions, full length, same detections, same `fig3_score.py`, same 7,205,370-camera-frame denominator — so its rates are directly comparable to Fig 3e's. Imports `fig3_sweep.py` for the corpus/driver/scorer rather than re-deriving them; does not modify it and does not touch `out/fig3_sweep.json`. Deposits `out/fig8_param_sweeps.json`, caches per-cell tracker runs under `out/tmp/fig8/` so it is restartable, and **reuses Fig 3e's `corr2d=1/corr3d=6` cell as the shipped-default cell by symlink** — that one configuration is the default for all ten parameters and is measured once, not ten times. Run it with the bench interpreter (`/root/vast/eric/luc3d-bench/liezl_env/bin/python`); scoring needs motmetrics. See "Fig 8" below for what it found. |
 | `lint_text.py` | Finds overlapping and clipped text in the RENDERED panel PDFs, by measuring every text span's bounding box. Non-zero exit if anything is found, so it works as a pre-submission gate. This is the useful half of the legacy `lint.py`, reinstated for the same reason: these defects exist only in the emitted geometry and reading the generator source never finds them. It caught 55 on its first run. |
 | `legacy/` | The retired `nature.py` composite-SVG path (`fig1.py`…`fig6.py`, `lint.py`, `render.mjs`). Not part of the build; kept for the provenance in its docstrings. See `legacy/README.md`. |
 
@@ -650,6 +651,81 @@ coat-colour counts — are still unused by any panel.
 `fig6_measure.py` / `fig6_pose.py` are kept for the corpus totals (130 sessions,
 12,039,174 frames, 29.5 h) which are still wanted for the text; `legacy/fig6.py`'s panel
 layout is superseded.
+
+## Fig 8 — the rest of the tracker's parameters (EXPLORATORY, NOT IN THE MANUSCRIPT)
+
+**Figure 8 is not part of the paper.** It has no entry in `FIGURE-LEGENDS.md`,
+`METHODS.md`, `RESULTS.md` or `CAPTIONS.md`, no panel of Figures 1–7 refers to it,
+and nothing was renumbered to make room. It exists to answer one internal question:
+Fig 3e swept `corr2dWeight` × `corr3dWeight` and held every other tracker threshold
+at its default — do any of the others matter?
+
+`fig8_param_sweeps.py` sweeps the remaining ten one at a time (35 cells) on exactly
+Fig 3e's measurement: the same 8 BMimica sessions at full length, the same shared
+detections, the same `fig3_score.py`, and the same measured 7,205,370-camera-frame
+denominator, so every rate below is directly comparable to a Fig 3e rate. The
+shipped-default cell is Fig 3e's own `corr2d=1/corr3d=6` run, reused by symlink
+rather than re-measured ten times.
+
+**Seven of the ten sweeps produced BYTE-IDENTICAL tracker output at every value**, and
+that is deliberately measured rather than argued: the deposit records the SHA-256 of
+each run's `identities`+`frames` payload and compares it to the default's on all 8
+sessions. Three quite different things are hiding behind those flat lines.
+
+| | thresholds | why flat |
+|---|---|---|
+| **never read** | `track3dWeight`, `prevIdentityBonus`, `minMatchScore`, `reprojSigma`, `epipolarDecay` | `runCrossViewTracker` does not read them at all — see below |
+| **read, never decisive** | `velocityThreshold` (2 → 40) | it normalises the 2D term, which saturates in normalised image units; the 3D term decides matches. A genuine null. |
+| **not exercisable** | `filterMinInstanceScore` (0 → 0.85) | the filter gates on `inst.score != null` and the BMimica `{cam}_predictions.h5` pool holds a `tracks` dataset and nothing else. **Uninformative, not negative.** |
+
+**`runCrossViewTracker` — the function `trackAll()` calls — reads exactly seven
+thresholds**: `corr2dWeight`, `corr3dWeight`, `velocityThreshold`,
+`distanceThreshold`, `timePenalty` (via `crossViewHyperparams()`, `pose/tracker.js`
+l.840) and `filterMinVisibleNodes`, `filterMinInstanceScore` (via
+`buildTrackerDetections()`, l.853–855). The other five are read only inside
+`matchFrameInstances` and its helpers — **the legacy bench-only matcher**, whose only
+call sites in the repo are `scripts/bench/bench_driver.mjs`,
+`scripts/bench/speed_test.mjs` and `tests/test-tracker-luc3d.mjs`. This is the
+`matchFrameInstances`-is-not-the-app's-tracker trap again, and `track3dWeight` is
+where it bites: `ui/settings.js` describes it as the temporal identity-linking weight
+that "suppresses sustained ID swaps" and names **6 ≈ the benchmark champion** against
+a shipped **1** — and on the shipped path it does nothing at any value. **Either the
+description should say it is inert outside the legacy bench matcher, or the tracker
+should start reading it.** Same for the `filterMinVisibleNodes` description's "the
+sleap-3d reference used 8", which is byte-identical to 0 on this detector's output.
+
+Only three thresholds moved a single assignment, and the default is at the best
+sampled value for only one of them (rates per 100,000 camera-frames):
+
+| threshold | shipped | rate at shipped | best sampled | rate there | cross-view IDF1 |
+|---|---|---|---|---|---|
+| `distanceThreshold` | 50 | 4.497 | **25** | **3.636** | 0.735 → **0.795** |
+| `corr3dWeight` | 6 | 4.497 | 12–36 (flat) | 3.78 | 0.735 → 0.766 |
+| `filterMinVisibleNodes` | 0 | 4.497 | 0 (= 4 = 8) | 4.497 | 12 is **worse**: 5.08, IDF1 0.685 |
+
+`distanceThreshold = 25` has **fewer switches in 4 of 8 sessions and more in none**,
+and its IDF1 gain (+0.060) is more than twice the ±0.027 band Fig 8b draws — a band
+itself measured from Fig 3e's own plateau (six near-replicate cells whose IDF1 still
+spreads 0.707–0.762 while the switch rate does not move). That band is the reason 8b
+exists as a separate panel rather than a twin axis on 8a: the switch rate resolves a
+factor of 150 in Fig 3e and IDF1 here resolves almost nothing.
+
+**The `corr3dWeight` tail is flat, which is what 18 and 36 were run to test**: 12 →
+3.78, 18 → 3.91, 36 → 3.78. Nothing past Fig 3e's r = 12.
+
+**`distanceThreshold` and `corr3dWeight` are two knobs on the SAME term** —
+`w_k·corr3d·(1 − dist/distThresh)` — and they improve the same sessions, so the 1-D
+sweeps cannot say whether one buys anything over the other. `fig8_param_sweeps.py
+--interaction` measured it (deposit key `interaction_check`, deliberately not
+plotted): they **partially stack**. `dt=25, corr3d=36` is the best configuration
+found — **3.497 per 100,000 and IDF1 0.818**, against the shipped 4.497 / 0.735 —
+better in 4 of 8 sessions and worse in none.
+
+**Before changing any shipped default**, note the standing caveats: one rig, one
+detector, two animals, five cameras; `distanceThreshold` is in world units (mm) and
+`velocityThreshold` in normalised image units, so both are tied to this geometry;
+and 4-of-8-better/4-tied is a small n by this repo's own standards (see the Fig 4
+sections on how badly single-run and small-n conclusions have travelled here).
 
 ## Open## Open
 

@@ -121,6 +121,13 @@ TITLES = {
     (7, "e"): "Error composition",
     (7, "f"): "IDF1 vs detector recall",
     (7, "g"): "Fragmentation",
+    # FIGURE 8 IS EXPLORATORY AND UNPLACED. It is not part of the manuscript: it has
+    # no entry in FIGURE-LEGENDS.md, METHODS.md, RESULTS.md or CAPTIONS.md, and no
+    # panel of Figures 1-7 refers to it. It is assembled here only so
+    # `assemble.py 8` produces something a reader can look at while deciding whether
+    # any shipped tracker default should move. Nothing was renumbered to make room.
+    (8, "a"): "ID-switch rate per threshold",
+    (8, "b"): "Cross-view IDF1 per threshold",
 }
 TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 
@@ -171,6 +178,11 @@ LAYOUTS = {
     7: [[("a", "within_vs_cross"), ("b", "bedding")],
         [("c", "survival"), ("d", "by_animals")],
         [("e", "decomposition"), ("f", "recall"), ("g", "fragmentations")]],
+    # EXPLORATORY, NOT IN THE MANUSCRIPT -- see the note beside its TITLES entries.
+    # Two full-width rows of 2x5 small multiples: one threshold per sub-plot, the
+    # ID-switch rate above and cross-view IDF1 below.
+    8: [[("a", "switch_rate")],
+        [("b", "idf1")]],
 }
 
 
