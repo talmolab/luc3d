@@ -184,6 +184,19 @@ def main():
     # (src.style.footnote reports to the build log), so a unit that lives only
     # there would not reach the reader.
     ax.set_ylabel("ID switches per\n100,000 camera-frames", color=SALMON)
+    # PLAIN NUMBERS ON EVERY DECADE THE DATA TOUCHES, not matplotlib's default
+    # powers of ten. The series runs 3.8 to 569, so the default labelled only 10^1
+    # and 10^2 and the four lowest points sat BELOW the lowest label with nothing to
+    # place them against: read quickly, 3.8 looks like it could be 0.38. Ticks at 3,
+    # 10, 30, 100 and 300 in plain digits make the bottom of the range readable,
+    # which is where the panel's own claim lives -- the 3D term takes the rate from
+    # 569 to under 4.
+    from matplotlib.ticker import FixedLocator, FixedFormatter
+    decades = [3, 10, 30, 100, 300]
+    ax.yaxis.set_major_locator(FixedLocator(decades))
+    ax.yaxis.set_major_formatter(FixedFormatter([str(v) for v in decades]))
+    ax.yaxis.set_minor_locator(FixedLocator([]))
+    ax.set_ylim(rate.min() * 10 ** -0.12, rate.max() * 10 ** 0.12)
     ax.tick_params(axis="y", colors=SALMON)
     ax.spines["left"].set_color(SALMON)
 
