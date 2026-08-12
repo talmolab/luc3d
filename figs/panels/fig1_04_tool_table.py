@@ -85,20 +85,48 @@ NOTE_BELOW_LAST_PT = 11.08      # 1.05 u
 HEAD_GAP_PT = 10.55
 
 
-def tick(ax, x, y, color=TEAL, s=0.0075, lw=1.1):
-    """A checkmark drawn as two strokes.
+#: The affirmative mark. U+2714 HEAVY CHECK MARK, set in DejaVu Sans and NOT in the
+#: panel's own family: Liberation Sans (the Arial substitute here) has no glyph for it,
+#: nor for U+2713, and matplotlib renders a tofu box in every affirmative cell without
+#: saying so. That is why this used to be drawn as two strokes. Mixing one family in for
+#: one symbol is the smaller cost -- a checkmark is read as a mark, not as type -- and
+#: it is checked at import rather than trusted, because a silent tofu is exactly the
+#: failure that put the drawn version here in the first place.
+TICK_CHAR = "\u2714"
+TICK_FONT = "DejaVu Sans"
 
-    NOT the character U+2713: Liberation Sans (the Arial substitute) has no glyph
-    for it and matplotlib silently rendered a tofu box in every affirmative cell.
-    Drawing it also keeps the mark on the same stroke weight as the rules.
-    """
-    down, up = TICK_DOWN_PT / ROW_PITCH_PT, TICK_UP_PT / ROW_PITCH_PT
-    ax.plot([x, x + s, x + 2.8 * s], [y, y - down, y + up],
-            color=color, lw=lw, solid_capstyle="round",
-            solid_joinstyle="miter", clip_on=False)
+#: A green dark enough to read at 6.5 pt. Set2's own green is 1.67:1 on white and the
+#: teal this mark used to be is 2.14:1, both below any legibility floor; this is 4.25:1.
+#: It is deliberately NOT the ENTITY green, which means Anipose set-wide and appears as
+#: a row in this very table.
+TICK_GREEN = "#2E8B57"
+
+
+def _tick_font_has_glyph():
+    """Refuse to ship a tofu box. Checked once, at import."""
+    from matplotlib import font_manager as fm
+    try:
+        from fontTools.ttLib import TTFont
+    except ImportError:
+        return True                       # cannot check; the render is inspected anyway
+    path = fm.findfont(fm.FontProperties(family=TICK_FONT), fallback_to_default=False)
+    f = TTFont(path, fontNumber=0)
+    return any(ord(TICK_CHAR) in tbl.cmap for tbl in f["cmap"].tables)
+
+
+def tick(ax, x, y, color=TICK_GREEN, size=8.0):
+    """The affirmative cell mark: a heavy check, set as a character."""
+    ax.text(x, y, TICK_CHAR, color=color, fontsize=size, fontfamily=TICK_FONT,
+            ha="left", va="center", clip_on=False)
 
 
 def main():
+    if not _tick_font_has_glyph():
+        raise SystemExit(
+            f"{TICK_FONT} has no glyph for U+{ord(TICK_CHAR):04X}; matplotlib would "
+            f"render a tofu box in every affirmative cell. Install a font that has it "
+            f"or restore the two-stroke drawn tick (see git history).")
+
     use()
     deposit(pd.DataFrame(TOOLS, columns=COLS), 1, "fig1d_tool_table.csv")
 
