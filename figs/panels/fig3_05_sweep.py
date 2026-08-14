@@ -341,14 +341,14 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     ax_top.yaxis.set_major_formatter(FixedFormatter(["1", "10", "100"]))
     sweep_line(ax_top, "rate")
     exh_line(ax_top, exh_rate, -7)
-    # HORIZONTAL CAPTIONS, NOT ROTATED YLABELS (Eric, 2026-08-15: "the y labels are
-    # colliding"): rotated, either label sets ~26-30 mm of type against a ~17 mm
-    # axis, so each ran past its own subplot into the other's -- shortening could
-    # not fix what the geometry forbids. A one-line horizontal caption above each
-    # plot's top-left spends width, which these axes have.
-    ax_top.text(0.0, 1.04, "ID switches per 100,000 camera-frames",
-                transform=ax_top.transAxes, ha="left", va="bottom", color=INK,
-                fontsize=7)
+    # ROTATED Y LABELS, SIZED TO FIT (Eric, 2026-08-15: "you should label the y
+    # axis but just make the text fit" -- the horizontal-caption attempt is out).
+    # The constraint is real: a label may not overrun its own ~17 mm axis. At 7 pt,
+    # "ID switches /100k" is ~16.5 mm and "cross-view IDF1" ~15 mm set along the
+    # rule, so both fit INSIDE their own axis with a hair to spare; the full
+    # denominator ("per 100,000 camera-frames") stays in the footnote, where the
+    # rate basis is stated exactly.
+    ax_top.set_ylabel("ID switches /100k", fontsize=7)
     ax_top.tick_params(labelbottom=False)
     ax_top.set_xlabel("")
 
@@ -360,8 +360,7 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     ax_bot.set_ylim(0.35, 0.92)
     sweep_line(ax_bot, "idf1")
     exh_line(ax_bot, exh["idf1_cross_mean"], 5)
-    ax_bot.text(0.0, 1.04, "cross-view IDF1", transform=ax_bot.transAxes,
-                ha="left", va="bottom", color=INK, fontsize=7)
+    ax_bot.set_ylabel("cross-view IDF1", fontsize=7)
 
     footnote(ax_bot, "r = 0: no 3D term, left of the break\n"
              f"rate basis: {tcf:,} camera-frames (50 sessions x 5 cameras, "
@@ -370,13 +369,10 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
 
     for axis in (ax_top, ax_bot):
         axis.axvline(SHIPPED_R, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
-    # Inside the plot, right of its own rule, mid-height: the band above the axes
-    # now belongs to the caption (lint: 100% overlap when both sat there), and the
-    # region right of r = 6 between the two flat series is empty.
-    ax_top.annotate(f"app default", (SHIPPED_R, 0.45),
-                    xycoords=("data", "axes fraction"), xytext=(3, 0),
+    ax_top.annotate(f"app default r = {SHIPPED_R:g}", (SHIPPED_R, 1.0),
+                    xycoords=("data", "axes fraction"), xytext=(0, 2),
                     textcoords="offset points", color=MUTED, fontsize=6.5,
-                    ha="left", va="center")
+                    ha="center", va="bottom")
 
     # The key rides INSIDE the top plot's clear upper-right corner: grid() has no
     # reserved key band, and drawn "above" it landed on the axes (lint: on the 300
