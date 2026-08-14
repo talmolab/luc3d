@@ -187,7 +187,7 @@ def main():
     cols.append("Total")
 
     deposit(pd.DataFrame([{"attribute": r, **{c: cells[c][r] for c in cols}}
-                          for r in ROWS]), 6, "fig6e_corpora.csv")
+                          for r in ROWS]), 6, "fig6f_corpora.csv")
 
     nline = len(ROWS) + 1                     # + the header
     widths = [0.31, 0.25, 0.25, 0.19]
@@ -236,7 +236,7 @@ def main():
                   (row_y(len(ROWS) - 1) - RULE_MM["bottom"] / LINE, 0.9)):
         ax.plot([0, 1], [y, y], color=INK, lw=lw, clip_on=False)
 
-    save(fig, 6, "e", "corpora")
+    save(fig, 6, "f", "corpora")
 
 
 if __name__ == "__main__":

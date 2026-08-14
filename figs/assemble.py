@@ -116,8 +116,10 @@ TITLES = {
     (6, "b"): "One frame, six cameras",
     (6, "c"): "Missing keypoints vs difficulty and cameras",
     (6, "d"): "Animal-count control",
-    (6, "e"): "Corpora",
-    (6, "f"): "Difficulty strata",
+    (6, "e"): "Per-camera detection quality",
+    (6, "f"): "Corpora",
+    (6, "g"): "Detection quality",
+    (6, "h"): "Difficulty strata",
     (7, "a"): "Within- vs cross-view IDF1 (+ experimental arm)",
     (7, "b"): "Within-view IDF1 per session",
     (7, "c"): "Per-session paired difference",
@@ -202,13 +204,19 @@ LAYOUTS = {
         [("c", "upright_initiator"), ("d", "upright_velocity"),
          ("e", "upright_stats")],
         [("f", "leader"), ("g", "rear_coupling")]],
+    # FIG 6 REFLOWED 2026-08-15 (Eric: "I didn't tell you to get rid of the other
+    # plots ... bring the other plots back and keep 6c"). The surface stays at c; the
+    # detection-quality and strata rows return (g, h); and the rows pack without
+    # white space by pairing the four half-width panels two and two -- the fourth
+    # half is the per-camera split built tonight (e), the third leg of the
+    # difficulty (c) / animal-count (d) / camera (e) breakdown the review asked for.
+    # NOTE the page runs ~235 mm, over the 200 mm soft ceiling -- panels to cut or
+    # shrink is Eric's call, not one more overnight re-letter.
     6: [[("a", "rig"), ("b", "cameras")],
-        # 6c REPLACED 2026-08-15 (Eric): the recovery surface (# cameras x difficulty
-        # x missing keypoints); the three-sub-plot detection-quality panel moved to
-        # supplementary s6.
-        [("c", "recovery_surface")],
-        [("d", "animal_count"), ("e", "corpora")],
-        [("f", "difficulty_strata")]],
+        [("c", "recovery_surface"), ("d", "animal_count")],
+        [("e", "percam_quality"), ("f", "corpora")],
+        [("g", "detection_quality")],
+        [("h", "difficulty_strata")]],
     # Panel a carries the EXPERIMENTAL high-performing arm (2026-08-13, on
     # instruction): the variant is fig7a plus `LUC3D + fresh anchor`. (It was briefly
     # lettered "h" by mistake; every `fig7h_*` artifact has been deleted and the code no

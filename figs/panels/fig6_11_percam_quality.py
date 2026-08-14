@@ -87,7 +87,7 @@ def build():
 def main():
     use()
     df, cell, cams = build()
-    deposit(cell, 6, "fig6s5_percam_quality.csv")
+    deposit(cell, 6, "fig6e_percam_quality.csv")
 
     fig, ax = panel("half", "std")
     x = np.arange(len(cams))
@@ -125,7 +125,7 @@ def main():
              "Fig 6c\n"
              + " · ".join(f"{r.camera} {r.miss_pooled_pct:.1f}%"
                           for r in cell.itertuples()))
-    save(fig, 6, "s5", "percam_quality")
+    save(fig, 6, "e", "percam_quality")
 
 
 if __name__ == "__main__":

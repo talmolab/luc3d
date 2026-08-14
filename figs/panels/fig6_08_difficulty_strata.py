@@ -109,7 +109,7 @@ def main():
             "err_p95": v["err_p95"], "err_p99": v["err_p99"],
             "over_tau_pct": v["frac_over_tau"] * 100.0})
     df = pd.DataFrame(rows)
-    deposit(df, 6, "fig6f_difficulty_strata.csv")
+    deposit(df, 6, "fig6h_difficulty_strata.csv")
 
     #: how each cell is set -- everything else is printed as-is.
     fmt = {"difficulty": "{:d}", "sessions": "{:d}", "keypoints": "{:,d}",
@@ -140,7 +140,7 @@ def main():
 
     for y, lw in zip(RULES, (0.9, 0.6, 0.9)):
         ax.plot([0, 1], [y, y], color=INK, lw=lw, clip_on=False)
-    save(fig, 6, "f", "difficulty_strata")
+    save(fig, 6, "h", "difficulty_strata")
 
 
 if __name__ == "__main__":
