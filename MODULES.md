@@ -877,9 +877,10 @@ computing `loader`/`windowed` first and checking `loader.nFrames > 0` instead of
 `tests/e2e/track-all-fresh-lazy-session.mjs` (reopens a real saved lazy project
 with 0 resident frameGroups and asserts Track All finds identities instead of
 bailing). Hyperparameters come from the
-`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`
+`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`/`stale`
 tracking thresholds (`ui/settings.js`; defaults are the `G_keeptrack_3d6`
-champion values). Track Frame/Track All pass the user's animal count as
+champion values, except `distanceThreshold`/`stale` which carry the 2026-08-14
+stale-anchor-fix values — see `pose/cross-view-tracker.js`). Track Frame/Track All pass the user's animal count as
 `maxTargets` so the tracker caps live targets at that number (a LUCID divergence
 from the reference — see `pose/cross-view-tracker.js`; `null`/omitted =
 uncapped/faithful). Covered by `tests/test-crossview-populate.mjs` (data-structure
@@ -901,12 +902,49 @@ from the Tracking Wizard.
 
 **Purpose.** `CrossViewTracker` — LUCID's cross-view 3D tracker and the app's
 only temporal tracker. Adapted from the `CrossViewTracker` written by Liezl Maree
-in the talmolab/sleap-3d repo (Python) and reimplemented in JS; a faithful port
-of `/root/vast/eric/sleap-3d/sleap_3d/tracker.py`. A cross-view 3D
-multi-target tracker: associates per-camera 2D detections to a running list of 3D
-`Target`s, one camera-view at a time, via Hungarian assignment on a cost that
-sums a 2D reprojection term and a 3D point-to-ray term. No Kalman filter, no
-velocity model, no track aging (matches the reference).
+in the talmolab/sleap-3d repo (Python) and reimplemented in JS; originally a
+faithful port of `/root/vast/eric/sleap-3d/sleap_3d/tracker.py`, and as of
+2026-08-14 no longer byte-faithful — see "Stale-anchor fix" below. A cross-view
+3D multi-target tracker: associates per-camera 2D detections to a running list
+of 3D `Target`s, one camera-view at a time, via Hungarian assignment on a cost
+that sums a 2D reprojection term and a 3D point-to-ray term. Still no Kalman
+filter, no velocity model (matches the reference).
+
+**Stale-anchor fix (2026-08-14).** The reference keeps one detection per camera
+FOREVER (never expired) and re-fuses mid-frame, mutating the shared target list
+one camera's Hungarian at a time — so after an occlusion a target's 3D anchor
+stays frozen at wherever it was last seen, and the surviving animal's own
+detection can drift closer to that stale ghost than to its own target,
+permanently swapping the two identities with nothing downstream able to detect
+it. Validated on real multi-view rodent corpora in `talmolab/luc3d@eric/figs`
+(`figs/fig8-bench/xv_experimental.js`, methods M1 `sync`/`stale`): BMimica
+cross-view switches 2,071 → 413 (50 sessions), SLAP-2M within-view switches
+3,094 → 1,312 / IDF1 0.7040 → 0.7212 (42 multi-animal sessions), at the
+recommended `stale: 20` + `distanceThreshold: 25` (`corr3dWeight` unchanged at
+6). Two changes, both additive (default/zero config reproduces the pre-fix
+tracker exactly):
+- **`stale` (hp, frames, default 20).** At the start of every `trackFrame()`
+  call (`_beginFrame`), evict any `detsByCam` entry older than `stale` frames,
+  before that frame's association runs, so `_retriangulate` can no longer fuse
+  one fresh view with several ancient ones. `0` restores the pre-fix,
+  unbounded-staleness behavior. Wired from the Tracking Wizard's new `stale`
+  threshold (`ui/settings.js`) via `crossViewHyperparams()` (`pose/tracker.js`).
+- **Frame-synchronous association (unconditional, no flag).** A target's
+  `points3d`/`frameIdxMean()` snapshot (`_snapMean`) is frozen at frame start
+  and every camera's Hungarian this frame is scored against it; the one
+  `_retriangulate()` happens once, in `_endFrame()`, after every camera in the
+  frame has been processed — replacing the reference's mid-frame
+  Gauss-Seidel-style mutation with a Jacobi-style update. `_adjacency2d`/
+  `_adjacency3d` still read `target.points3d` directly (unchanged signature) —
+  it is simply not mutated again until frame end — so calling them directly
+  outside a `trackFrame()` lifecycle (as `tests/test-crossview-features.mjs`
+  does) is unaffected; `_snapMean` is `null` there and the live
+  `frameIdxMean()` is used instead, matching pre-fix behavior exactly. Births
+  (`_initializeTargets`) still retriangulate immediately, unchanged, since a
+  target born mid-frame has nothing for `_endFrame` to defer.
+`distanceThreshold`'s Tracking Wizard default moved 50 → 25 alongside this
+fix (`ui/settings.js`); `scripts/bench/hooks.mjs`'s `THRESHOLD_DEFAULTS` was
+updated to match (its own comment requires staying in sync).
 
 **Coordinate conventions (verified vs `sleap_3d/geometry.py`).** Works entirely
 in NORMALIZED camera coordinates: detections are undistorted + K⁻¹-applied on
@@ -920,12 +958,13 @@ the 3D term dominates — hence `corr3dWeight` is the meaningful knob).
 maintains `.targets`), `Detection` (2D observation: `pointsNorm`/`pointsPixel` +
 `cam`/`frameIdx`/`slot`), `normalizePoint`.
 
-**Faithful-port quirks preserved (do NOT "fix").** Per-view-per-frame
-association; `velocity`/`distance` thresholds are SOFT (drive the cost negative,
-not hard gates) and negative matches are not filtered; the 3D term ignores the
-time gap; 3D velocity is zero; re-triangulation is plain DLT over all stored
-per-view detections. Adds a defensive `nansum`-style skip of non-finite cost
-terms (robust to a degenerate `[I|0]` camera).
+**Faithful-port quirks still preserved (do NOT "fix" without new measurement —
+not implicated by the fig8-bench search).** `velocity`/`distance` thresholds are
+SOFT (drive the cost negative, not hard gates) and negative matches are not
+filtered; the 3D term ignores the time gap; 3D velocity is zero;
+re-triangulation is plain DLT over all (now freshness-filtered) stored per-view
+detections. Adds a defensive `nansum`-style skip of non-finite cost terms
+(robust to a degenerate `[I|0]` camera).
 
 **LUCID divergence — `maxTargets` (opt-in target cap).** The reference has NO
 animal-count cap; births are unbounded and IDs stay bounded only via upstream
