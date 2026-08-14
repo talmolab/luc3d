@@ -92,14 +92,12 @@ def main():
     fig, ax = panel("half", "std")
     x = np.arange(len(cams))
     ax.bar(x, cell.miss_pooled_pct, width=0.62, color=MISS_HUE, linewidth=0, zorder=2)
-    for c, xi in zip(cams, x):
-        g = df[df.camera == c]
-        vals = (g.num_misses / g.num_objects * 100.0).to_numpy()
-        # Deterministic golden-ratio jitter (the house move, fig7_02) so the 74
-        # sessions read as a distribution rather than a stripe.
-        jit = ((np.arange(len(vals)) * 0.6180339887) % 1.0 - 0.5) * 0.34
-        ax.plot(xi + jit, vals, "o", ms=1.8, color="#7A2A0E", alpha=0.40,
-                mec="none", zorder=3)
+    # NO PER-SESSION DOTS (Eric, 2026-08-15: "what are all those outliers? just
+    # give me the bar charts"). The dots were the 74 per-session rates -- the
+    # high ones are real (hard sessions miss most of their instances in every
+    # camera), but 444 dots over six bars buried the panel's one finding, the
+    # ~10-point top-vs-back spread. The per-session distribution stays in the
+    # deposited CSV.
     # The pooled value, printed on each bar -- the ~10-point top-vs-back spread IS
     # the panel's finding, so it goes on the artwork in numbers.
     for xi, v in zip(x, cell.miss_pooled_pct):
@@ -110,14 +108,14 @@ def main():
     ax.set_xticklabels(cams)
     ax.set_xlabel("camera")
     ax.set_ylabel("GT instances missed (%)")
-    # 103, not 100: the worst sessions sit AT 100 % (back has one at exactly 100)
-    # and a dot centred on the limit is drawn half-cut by the axes clip.
-    ax.set_ylim(0, 103)
-    ax.set_yticks([0, 20, 40, 60, 80, 100])
+    # Axis to the BARS now the dots are gone: bars top out at 40.3%, and a 0-103
+    # axis left two-thirds of the panel empty.
+    ax.set_ylim(0, 45)
+    ax.set_yticks([0, 10, 20, 30, 40])
 
     footnote(ax,
              "bar: pooled over all frames of all 74 sessions (value printed at its "
-             "base) · dots: the 74 per-session rates\n"
+             "base); per-session rates in the deposited CSV\n"
              "misses are the shipped LUC3D tracker's MOT misses on the shared "
              "detection pool, which measure the DETECTOR (fig3_trackers.py: the "
              "three trackers' recalls agree to ~0.003)\n"
