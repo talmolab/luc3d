@@ -344,16 +344,27 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
 
     # The shipped ratio, at its own place on the r axis.
     ax.axvline(SHIPPED_R, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
-    ax.annotate(f"shipped r = {SHIPPED_R:g}", (SHIPPED_R, 1.0),
+    # "app default", not "shipped": on the default render the curve at this rule is
+    # the FRESH ANCHOR, and calling the marker "shipped" attached that word to a
+    # curve that is not the shipped tracker (review 2026-08-14, finding 5).
+    ax.annotate(f"app default r = {SHIPPED_R:g}", (SHIPPED_R, 1.0),
                 xycoords=("data", "axes fraction"), xytext=(0, 2),
                 textcoords="offset points", color=MUTED, fontsize=6.5,
                 ha="center", va="bottom")
 
+    # "hollow: fresh anchor" answered a question the default render no longer asks
+    # (hollow as opposed to WHAT? -- the filled shipped arm only exists under
+    # --with-shipped). The series is named plainly; the exhaustive rules keep their
+    # dash description plus their denominator caveat, which is the one fact a reader
+    # needs to not compare the two rates as equals (review 2026-08-14, finding 2).
     key = [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
-           ("long dashes: exhaustive (no r)", MUTED),
-           ("hollow: fresh anchor", MUTED)]
+           ("dashes: exhaustive (clean frames)", MUTED),
+           ("curves: fresh anchor", MUTED)]
     if with_shipped:
-        key.insert(2, ("filled: shipped tracker", MUTED))
+        key = [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
+               ("dashes: exhaustive (clean frames)", MUTED),
+               ("filled: shipped tracker", MUTED),
+               ("hollow: fresh anchor", MUTED)]
     text_legend(ax, key, "above")
     save(fig, 3, "d", "sweep" if not with_shipped else "sweep_with_shipped")
 

@@ -105,7 +105,7 @@ def main():
                     lw=0)
     ax.plot(th, law, color=TEAL, lw=1.2, ls=(0, (2.5, 1.5)))
 
-    ax.axhline(floor, color=PERIWINKLE, lw=0.8, ls=(0, (1.5, 1.5)))
+    ax.axhline(floor, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)))
     # DECLUTTERED 2026-08-13 (review: "get rid of a lot of the writing on there").
     # The panel's finding is that a WIDER anchor pair gives a lower error, and it was
     # being read through five separate blocks of prose. What stays is what a mark
@@ -120,8 +120,11 @@ def main():
     # floor -- lint: ON DATA, 9% inked, and 32% when nudged upward. At the LEFT end
     # the law is at its steepest (k/sin 10 deg ~ 8.8 mm), so the strip just above the
     # floor is empty for the whole first third of the axis.
+    # GREY, not periwinkle: this rule is a BOUND, and periwinkle is SLEAP's reserved
+    # hue set-wide -- a Fig 7 reader returning here read a SLEAP series into a panel
+    # SLEAP is not in (review 2026-08-14).
     ax.text(th[0], floor + 0.25, f"all 5 views {floor:.1f}",
-            color=PERIWINKLE, fontsize=7, ha="left", va="bottom")
+            color=MUTED, fontsize=7, ha="left", va="bottom")
 
     # The curve is named ON the curve, in its own colour, just above the band's upper
     # edge in the one stretch (theta ~ 25-33 deg) where neither a point nor the corner
@@ -166,7 +169,7 @@ def main():
     ax.text(0.97, 0.97, f"k = {k:.2f} mm", transform=ax.transAxes, ha="right",
             va="top", color=TEAL, fontsize=7)
 
-    ax.set_xlabel("anchor-pair baseline angle (°)")
+    ax.set_xlabel("anchor-pair angle at the animal (°)")
     ax.set_ylabel("3D error vs proofread (mm)")
     ax.set_ylim(0, df.err3d_mm.max() * 1.15)
     save(fig, 2, "d", "baseline_angle")

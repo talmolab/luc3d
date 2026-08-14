@@ -177,7 +177,7 @@ def main():
     # Left-aligned just inside the y spine rather than centred: centred, the leading
     # glyph hung over the spine and read as clipped.
     ax.text(2.12, CMAX * NODES * 1.10 * 0.985,
-            f"one measured rig (marker): C = {ncam}.\nBoth curves are a model.",
+            f"one measured rig (marker): C = {ncam}.\nAll three curves are the model.",
             color=MUTED, ha="left", va="top", fontsize=7, linespacing=1.35)
 
     # The ratio, at the measured rig size only. The label sits to the RIGHT of the

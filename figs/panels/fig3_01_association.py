@@ -129,12 +129,17 @@ def draw_exhaustive(ax):
     # The dots stay INK: before a grouping is chosen a detection has no identity, and
     # that is the whole premise of the panel -- the same statement Fig 1a's `tiles2d`
     # glyph makes by drawing both animals in one colour.
+    # IDENTITY INDICES 0, 1, 3 -- NOT 0, 1, 2. identity(2) is a dark teal that
+    # collided with the teal "Greedy" heading in the same panel (teal = LUC3D
+    # set-wide); index 3 is a dark yellow with no entity meaning (review 2026-08-14).
+    ID_IDX = [0, 1, 3]
     rows = list(range(NA))
     for c, perm in enumerate(WINNER):
         for a in range(NA):
             ax.plot([X_COLS[c], X_COLS[c + 1]],
                     [Y_DOTS[rows[a]], Y_DOTS[perm[rows[a]]]],
-                    color=identity(a), lw=1.4, zorder=3, solid_capstyle="round")
+                    color=identity(ID_IDX[a]), lw=1.4, zorder=3,
+                    solid_capstyle="round")
         rows = [perm[r] for r in rows]
     for c in range(NCAM):
         icon(ax, "camera", X_COLS[c] - 0.31, Y_CAM, s=0.62, color=INK)
@@ -167,8 +172,11 @@ def draw_greedy(ax):
         # they rendered outside the frame. Laid across the H box's own width they sit
         # inside the band with room to spare.
         for a in range(NA):
-            ax.plot([x + 0.12 + a * 0.24], [Y_BAND + 0.08], "o", ms=3.4,
-                    mfc=identity(a), mec="white", mew=0.6, zorder=4)
+            # ms 5.0, not 3.4: at this panel's print scale 3.4 pt is ~1.2 mm and the
+            # dark-green/dark-teal pair was indistinguishable (review 2026-08-14).
+            # Same 0,1,3 identity indices as the exhaustive half's paths.
+            ax.plot([x + 0.14 + a * 0.26], [Y_BAND + 0.10], "o", ms=5.0,
+                    mfc=identity([0, 1, 3][a]), mec="white", mew=0.6, zorder=4)
         if i < NCAM - 1:
             ax.add_patch(FancyArrowPatch((x + 0.86, y_h + 0.31),
                                          (x + 2.2, y_h + 0.31),

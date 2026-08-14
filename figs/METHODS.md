@@ -18,7 +18,8 @@ treats the session as the unit of replication is therefore reported here alongsi
 same analysis with the pair as the unit. A 15-node mouse skeleton was used throughout,
 comprising the nose, left and right ears, the tail-tip and tail base (denoted TTI),
 three intermediate tail nodes, the head, trunk and neck, and the left and right
-shoulders and haunches. Figures 2, 3E, 5 and 7A were measured on this corpus.
+shoulders and haunches. Figures 2, 5 and 7A, and Figure 3's two-animal five-camera
+configuration and weight sweep, were measured on this corpus.
 
 The SLAP-2M corpus consists of 74 sessions recording one to four animals with eight
 cameras at 50 frames per second, giving 1,954,440 frames; six of the eight cameras are
@@ -31,8 +32,12 @@ contributing to this corpus cannot be stated from the data itself, and the sessi
 the unit of analysis for every SLAP-2M measurement. Each session also carries a
 curator-assigned difficulty rating from 1 to 7 (12, 13, 9, 13, 10, 4 and 13 sessions
 respectively) and a black or white bedding label (44 and 30 sessions), which were used
-as strata in Figure 6 and as a control in Figure 7B. Figures 6 and 7B to 7G were
-measured on this corpus.
+as strata in Figure 6. A bedding comparison formerly in Figure 7 was removed from the
+artwork: the detector's training data are overwhelmingly black-background, so the
+white-bedding arm confounds tracking with out-of-distribution detection and the
+invariance claim cannot be defended; the panel and its table still regenerate.
+Figures 6 and 7B to 7F, and the 2 x 6, 3 x 5 and 4 x 3 configurations of Figure 3,
+were measured on this corpus.
 
 The third recording, HardFight, is a single session recording three mice with eight
 cameras at 60 frames per second, from which a 300-frame window was taken for Figure 1
@@ -70,7 +75,10 @@ The measurements divide into two kinds, and they treat the recordings differentl
 association and tracking results in Figures 3 and 7, and the behavioural analysis in
 Figure 5, were computed on complete sessions, every frame, with no subsampling. The
 per-keypoint geometric measurements in Figures 2, 4 and 6 were computed on a uniform
-sample of frames, every 15th frame for Figure 4; Figures 2 and 6 use every frame. The sample is uniform and
+sample of frames, every 15th frame for Figure 4; Figures 2 and 6 use every frame,
+except that Figure 2C plots the Figure 4B measurement — the held-out estimator broken
+out by camera count — and therefore carries Figure 4's sampling and its 50 proofread
+sessions. The sample is uniform and
 was never selected on any property of the data, and it is large in absolute terms:
 286,200,174 keypoints in Figure 2, 17,013,412 in Figure 4, and 187,134,382 keypoint
 comparisons in Figure 6. Subsampling was necessary because these measurements are
@@ -99,16 +107,37 @@ term in the comparison triangulator was disabled, as described below.
 For each frame the application maintains a set of 3D targets and solves one Hungarian
 assignment per camera, committing each camera's assignment to the target set before the
 next camera is solved, which costs O(C·A³) for A animals and C cameras. The cost of
-pairing a target with a detection is summed over the skeleton nodes k with per-node
+pairing a target t with a detection d is summed over the skeleton nodes k with per-node
 weights w_k, where a weight of zero removes that node from the association entirely, and
-the sum is negated so that the solver minimises it. The cost has two terms. The first is
-a two-dimensional term on the distance between the detection and the target's
-reprojection into that camera, decayed by the age of the target. The second is a
-three-dimensional term on the perpendicular distance from the target to the ray
-back-projected from the detection, computed from the bare extrinsic matrix in normalised
-camera coordinates. Both thresholds are soft, in the sense that exceeding one drives its
-term negative rather than preventing the pairing outright. The shipped default weights
-are 1.0 on the two-dimensional term and 6.0 on the three-dimensional term.
+the sum is negated so that the solver minimises it. The cost has two terms, stated here
+in full as implemented (pose/cross-view-tracker.js) since no panel now carries them. The
+two-dimensional term compares the detection with the target's projection pi(t) into that
+camera, in undistorted ideal-pinhole (normalised) coordinates, and decays with the age
+of the target:
+
+    w_k · corr2d · (1 − |d_k − pi(t)_k| / (velThresh · (1 + Δt))) · e^(−λ·Δt)
+
+where Δt is the target's age — the detection's frame index minus the mean frame index of
+the detections fused into the target — and λ is the time penalty, so age acts twice:
+the distance allowance grows with (1 + Δt) while the whole term decays exponentially.
+The three-dimensional term is on the perpendicular distance from the target's 3D point
+to the ray back-projected from the detection, computed from the bare extrinsic matrix,
+with no age decay (the reference implementation fixes Δt = 0 here):
+
+    w_k · corr3d · (1 − dist(t_k, ray(d_k)) / distThresh)
+
+Both thresholds are soft, in the sense that exceeding one drives its term negative
+rather than preventing the pairing outright. The shipped defaults are corr2d = 1.0 and
+corr3d = 6.0 — the ratio r = corr3d/corr2d = 6 marked in Figure 3D — with
+velocityThreshold 10, distanceThreshold 50 and timePenalty 0.1.
+
+The fresh-anchor configuration that appears in Figures 3C, 3D and 7A is the same
+tracker at a different operating point, run through the benchmark harness rather than
+the application: per-view detections older than 20 frames expire from a target's 3D
+anchor instead of being fused indefinitely, the anchor is updated synchronously, and
+the 3D distance normaliser is 25 rather than 50, with the cost weights unchanged. It
+is experimental — the configuration is not in the shipped application — and every
+panel that carries it labels it so.
 
 The alternative method compared against in Figure 3 is our reimplementation of the
 published per-frame procedure of Maree et al. (2024) rather than the authors' own code.
@@ -128,30 +157,70 @@ eligible counts are full-session numbers, and the frames that are enumerated are
 uniform sample across the session rather than a prefix of it. The harness
 caps enumeration at one million hypotheses per frame, and the configuration of four
 animals in six cameras exceeds that cap by a factor of 191, so no frames of it were
-computed at all. Its cost in Figure 3F is therefore an arithmetic lower bound rather
-than a measurement: it takes the number of distinct hypotheses that remain after the
-A!-fold global relabelling symmetry is removed and prices them at the cheapest
-per-hypothesis rate measured anywhere in the sweep, and it is drawn with the open-marker
-convention this figure uses for a quantity that was not run. Re-derived from the
-per-frame rates measured across the 92 sessions, that bound is 0.55 to 26.7 hours per
-frame.
+computed at all. Its cost in Figure 3E is therefore an arithmetic lower bound rather
+than a measurement: the marker takes the number of distinct hypotheses that remain
+after the A!-fold global relabelling symmetry is removed, (A!)^(C-1) = 7,962,624, and
+prices them at the cheapest per-hypothesis rate measured anywhere in the sweep, 249
+microseconds, about 0.55 hours per frame; the bar runs up to the as-published count,
+(A!)^C = 191,102,976, at the 503 microseconds per hypothesis measured at the largest
+configuration that did run, about 26.7 hours per frame. It is drawn with the
+open-marker convention this figure uses for a quantity that was not run.
 
-Grouping quality in Figure 3D was scored by comparing partitions rather than labels.
+Grouping quality in Figure 3C was scored by comparing partitions rather than labels.
 The grouping each method produced was compared with the ground-truth partition of the
 same matched detections, and a frame was counted as misgrouped when the two partitions
 differed, so that a consistent relabelling of the identities is not counted as an error.
+The agreement rate between the two methods is the same comparison made between their
+own outputs, pooled over frames, and is defined only on the frames exhaustive computed.
+Two scoring conventions separate the methods and both are disclosed. First, exhaustive
+enumeration is a pure per-frame procedure with no cross-frame identity mechanism; to
+make the IDF1 and switch-count reference levels in Figure 3D computable for it at all,
+the harness threads identity between consecutive computed frames by nearest-3D-centroid
+Hungarian matching. That threading is scaffolding added by this benchmark, not part of
+the published method, so the like-for-like comparison between the methods is the
+per-frame agreement rate, and any identity metric quoted for exhaustive describes the
+method plus the scaffolding. Second, the two methods are scored over different
+exposures: exhaustive only runs on clean frames, so its switch rate in Figure 3D is
+over its own denominator, the 21,622,345 clean camera-frames it computed on the 50
+BMimica sessions, while the greedy arms in the same panel are tracked and scored over
+whole sessions, 45,021,960 camera-frames; the two rates are labelled with their own
+denominators and are not directly comparable to one another as totals.
 
-The weight ablation in Figure 3E crossed a three-dimensional weight drawn from the set
-0, 0.5, 1, 2, 4, 6, 8 and 12 with a two-dimensional weight drawn from 0.5, 1 and 2,
-giving 24 cells, and held every other tracker threshold at its default. Each cell was
-run on eight complete BMimica sessions, every frame, with identical detections. Cells
-that share a ratio of the two weights return identical IDF1 values and identical switch
-counts, and this collapse was verified rather than assumed, which is why the panel plots
-the ratio rather than the two weights separately. Switch counts are reported as a rate
-per 100,000 camera-frames rather than as a total, because a total is uninterpretable
-without its denominator; the denominator is 7,205,370 camera-frames, taken per camera
-and session from the same frame counts the scorer uses, and both the rate and the raw
-count are deposited.
+The weight ablation in Figure 3D was established in two passes. A 24-cell grid — a
+three-dimensional weight from 0, 0.5, 1, 2, 4, 6, 8 and 12 crossed with a
+two-dimensional weight from 0.5, 1 and 2, every other threshold at its default — was
+run on eight complete BMimica sessions with identical detections, and cells that share
+a ratio of the two weights return identical IDF1 values and identical switch counts;
+this collapse was verified rather than assumed, which is why the panel plots the ratio
+rather than the two weights separately. The manuscript sweep then samples each of the
+twelve ratios once, at corr2d = 1, over all 50 BMimica sessions at full length, for
+both the shipped tracker and the fresh-anchor configuration; the panel draws the
+fresh-anchor arm against the exhaustive reference and the shipped arm is deposited.
+Switch counts are reported as a rate per 100,000 camera-frames rather than as a total,
+because a total is uninterpretable without its denominator; the denominator,
+45,021,960 camera-frames, is taken per camera and session from the same frame counts
+the scorer uses, is checked identical between the two arms before they are drawn on
+one axis, and both the rate and the raw count are deposited.
+
+## Camera-subset identity
+
+How many cameras identity needs was measured by re-running the shipped tracker on
+camera subsets of the BMimica rig: k = 2, 3 and 4 cameras with three fixed subsets per
+k, plus k = 5, the full rig, over the same 50 sessions and the same shared detections.
+The subsets are deterministic: the C-choose-k combinations of the five camera serials
+are sorted and taken at the first, middle and last index, with no random draw, so the
+run is reproducible from the script alone, and the same three subsets are used for
+every session, so between-session spread is not confounded with between-subset spread
+(the full 26-subset design at 50 sessions, 1,300 runs, was ruled infeasible). The
+k = 5 cell is not re-tracked: it is required to reproduce the shipped tracker's
+deposited 50-session numbers exactly, and does (maximum absolute IDF1 difference 0.0
+against the reference deposit), which is what makes the subset cells attributable to
+the subset rather than to harness drift. Within-view IDF1 rises with the cameras
+available: subset means 0.669 to 0.688 at k = 2, 0.726 to 0.743 at k = 3 and 0.730 to
+0.776 at k = 4, against 0.749 for the full rig — per-k means of roughly 0.68, 0.74,
+0.75 and 0.75. Because the exposure shrinks with k, switch counts from different k are
+compared only as rates over the camera-frames of the cameras used, never as raw sums.
+The panel drawn from this measurement is not yet placed on any figure.
 
 ## Triangulation
 
@@ -282,15 +351,73 @@ made for BMimica alone.
 IDF1, identity switches and fragmentations were computed with the motmetrics library on
 the shared detection pool. Within-view IDF1 was computed separately for each camera and
 averaged. Cross-view IDF1 pools all cameras into a single accumulator with one global
-identity per animal; a method that labels each camera independently can be matched to
-the truth in at most one camera, so 1/C is a ceiling for such a method rather than a
-chance level, and chance is set by the number of animals rather than the number of
-cameras. A fragmentation was counted each time a tracked ground-truth track became
-untracked and was later picked up again, which is a different event from an identity
-switch, in which the track continues but is assigned to the wrong animal. Error terms are
-reported as percentages of camera-frames. False negatives were measured but are not
-plotted, since they account for 98.8 to 99.3 per cent of every method's error budget and
-would draw three indistinguishable bars.
+identity per animal. For a tracker that has no cross-view identity of its own, that
+pooling is CAMERA-SCOPED: its hypothesis ids are keyed by camera, so the same track
+number appearing in two cameras is two identities, and global ids are used only for
+methods that actually assert cross-view identity. The scoped convention is the
+conservative one — unscoped pooling can only add cross-view matches, and with two
+enforced tracks per camera it would credit the capped SLEAP baseline of Figure 7A with
+a cross-view IDF1 of 0.600 through nothing but shared slot numbering. Under scoped
+pooling a method that labels each camera independently can be matched to the truth in
+at most one camera, which puts such a method near 1/C; that level is a property of the
+pooling convention rather than a strict bound, and chance is set by the number of
+animals rather than the number of cameras. A fragmentation was counted each time a
+tracked ground-truth track became untracked and was later picked up again, which is a
+different event from an identity switch, in which the track continues but is assigned
+to the wrong animal. Error terms are reported as percentages of camera-frames. False
+negatives were measured but are not plotted, since they account for 98.8 to 99.3 per
+cent of every method's error budget and would draw three indistinguishable bars.
+
+ID accuracy (IDA) is idtp divided by the number of matches: of the detections matched
+to a ground-truth animal, the fraction carrying the correct identity. It excludes both
+detector misses, which sit in IDR's denominator, and false-positive detections, which
+sit in IDP's, so it isolates the association from the detector on both sides, and
+IDA >= IDP always. For the fresh-anchor configuration on the 50 BMimica sessions,
+pooled IDA is 92.46 per cent (72,794,704 of 78,734,134 matches), the session median is
+100 per cent and the worst session 56.6 per cent; false-positive detections are 0.104
+per cent of matches (81,754).
+
+## Baseline configuration
+
+The per-camera baselines in Figure 7A are re-run at the most favourable configuration
+we could give them, because the shipped comparison charged them for constraints
+LUC3D's arm does not face: LUC3D holds two global identities by construction, while
+SLEAP ran with an unbounded track pool and ByteTrack with a 2-second retirement
+horizon on 20-minute sessions.
+
+SLEAP was re-run with the track count capped at the true animal count. The original
+retrack ran sleap-nn 0.3.0 with no cap — its --max_tracks option is honoured only
+under candidates_method 'local_queues', and the default 'fixed_window' silently
+ignores it — yielding a median of 47 tracks per camera-session. The re-run adds
+exactly two flags, --max_tracks 2 --candidates_method local_queues, and changes
+nothing else, so the only difference between the runs is the cap; the cap was
+verified after the fact, with all 250 camera-sessions holding at most 2 tracks. The
+output is scored from the tracked .slp files directly, every track.
+
+ByteTrack was re-run with track retirement disabled — lost_track_buffer set to the
+session length, against the shipped 60 frames (2 s), which retires a track on any
+longer occlusion — and its output was then reduced to two identities by a greedy,
+tracklet-whole stitch that uses no ground truth: each ByteTrack id is bound at birth
+to one of two slots, the slot whose last-seen box is nearest the tracklet's first box
+(intersection-over-union first, centroid distance as the tie-break), among slots not
+held by an id alive in the same frame, and keeps that slot for life, so ByteTrack's
+own association is untouched. The never-retire knob alone reaches within-view IDF1
+0.272; with the stitch, 0.676. Two gates anchor the re-runs to the shipped
+measurement: re-scoring the shipped ByteTrack arm through the re-run's scorer
+reproduces the reference evaluation to a maximum absolute difference of 0.0 on all 50
+sessions, and re-running one camera-session at the shipped parameters under the
+pinned library version reproduces the stored output cell for cell.
+
+3D-MuPPET could not be made fair the same way, and its Figure 7A number is reported
+as the coverage artefact it is. Its detector was replaced by the shared pool and its
+dmin retuned from 200 to 100 mm for mouse scale, so what runs is the published
+method's tracking logic on our detections; but that logic builds its camera-to-global
+identity map once, at the initialisation frame, while its SORT tracker retires tracks
+after 10 frames, so once a tracklet dies that camera goes permanently silent.
+Assignments cover a median 1.31 per cent of a session (range 0.17 to 7.22 per cent),
+a contiguous prefix from frame 0 in all 50 sessions, and every unlabelled frame
+scores as a miss; on the frames it does label it scores within-view IDF1 0.21 to 0.67
+(4 sessions, first 20,000 frames) with coherent identities where present.
 
 ## Statistics
 
@@ -304,8 +431,8 @@ interquartile ranges are used for the error distributions, which are right-skewe
 band labelled as running from the 25th to the 75th percentile is an across-session
 spread of per-session medians rather than a confidence interval. Bootstrap confidence
 intervals at 95 per cent over sessions are used for the paired comparisons in Figures
-7A, 7D and 7G. Sign tests are used for paired per-session comparisons of direction in
-Figure 7D. A Wilcoxon signed-rank test is used for the paired session-level comparison
+7A, 7C and 7F. Sign tests are used for paired per-session comparisons of direction in
+Figure 7C. A Wilcoxon signed-rank test is used for the paired session-level comparison
 against a fixed value in Figure 5F. Binomial nulls were simulated rather than
 approximated wherever the statistic is a larger-of-two share, using 20,000 draws per
 session size. Circular-shift nulls were used for the temporal coupling in Figure 5G. No

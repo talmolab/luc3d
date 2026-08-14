@@ -148,8 +148,10 @@ def schematic(ax, anchors=()):
     for cy in (1.8, 0.0, -1.8):                  # the views reprojected into
         icon(ax, "camera", 4.0, cy - 0.3, s=0.6, color=GREY)
         ray(ax, px, py, 3.9, cy, color=TEAL, ls=(0, (2.0, 1.5)))
-    point(ax, px, py, color=SALMON, r=0.17)
-    ax.text(px, py + 0.35, "3D", ha="center", va="bottom", color=SALMON,
+    # INK, not salmon: the triangulated point is the pipeline's own product, and
+    # salmon is the comparator's hue set-wide (review 2026-08-14).
+    point(ax, px, py, color=INK, r=0.17)
+    ax.text(px, py + 0.35, "3D", ha="center", va="bottom", color=INK,
             fontsize=6.5, fontweight="bold")
     ax.text(-2.4, -2.6, "2 views labelled", color=INK, fontsize=6.5)
     ax.text(-2.4, -3.2, "other 6: weight 0", color=MUTED, fontsize=6.5)

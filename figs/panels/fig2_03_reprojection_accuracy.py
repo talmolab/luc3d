@@ -128,8 +128,16 @@ def main():
         g = agg[k]["dlt"]
         # The session dots first (zorder under the box): value-decorrelated
         # golden-ratio jitter, the same idiom as Fig 7c's cells.
-        vals = np.array([s_["by_k"][k]["dlt"]["p50"] for s_ in per
-                         if k in s_["by_k"]])
+        # `heldout_px_by_k`, NOT `by_k`. `by_k` is the 3D ERROR IN MM -- a different
+        # quantity in a different unit that lands in the same numeric range, so the
+        # dots sat below the k = 3, 4 box medians (50 sessions outside their own IQR,
+        # which is arithmetically impossible for one quantity). Caught twice by
+        # adversarial review: the first fix DIED IN A FAILED SHELL CALL and was then
+        # claimed in a commit message without having run -- which is why this comment
+        # states the check: after rendering, the k=4 dot cloud must straddle 3.34, not
+        # sit at ~1.9.
+        vals = np.array([s_["heldout_px_by_k"][k]["dlt"]["p50"] for s_ in per
+                         if k in s_.get("heldout_px_by_k", {})])
         jit = ((np.arange(len(vals)) * 0.6180339887) % 1.0 - 0.5) * 0.30
         ax.plot(i + jit, vals, "o", color=TEAL, ms=2.2, alpha=0.40, mec="none",
                 zorder=2)
@@ -142,9 +150,11 @@ def main():
                boxprops=dict(edgecolor=INK, lw=0.9, facecolor="none"),
                medianprops=dict(color=TEAL, lw=1.6),
                whiskerprops=dict(color=INK, lw=0), capprops=dict(color=INK, lw=0))
-        ax.annotate(f"{g['p50']:.2f}", (i, g["p50"]),
-                    textcoords="offset points", xytext=(16, 0), ha="left",
-                    va="center", color=TEAL, fontsize=6.5, fontweight="bold")
+        # NO on-artwork value labels. Right of the box they landed on the next
+        # box's dots, left of it on the previous box's (lint: ON DATA at 16, 8 and
+        # -26 pt) -- at "third" width three columns leave no clear horizontal band.
+        # The medians ARE the teal rules; their values (4.32/3.66/3.34) are in the
+        # deposit and the legend, which is where the PI wants numbers anyway.
         rows.append({"cameras_in_solve": int(k), "p25": g["p25"], "p50": g["p50"],
                      "p75": g["p75"], "n_keypoint_solves": g["n_values"],
                      "n_sessions": g["n_sessions"]})

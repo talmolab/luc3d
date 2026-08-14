@@ -360,6 +360,10 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
             mouse_pose(ax_, bx + fx * bw - aw / 2, by + fy * bh - ah / 2, aw, ah,
                        color=col, lw=lw, dot=0.085)
 
+        # tiles2d draws its mice in INK even when the chevron (and `color`) is GREY:
+        # the un-contributed 2D-pose stage's grey is 2.1:1 on white, and at ~2 mm the
+        # one-colour "before" state of the collapse story vanished in print (review
+        # 2026-08-14). The tile FRAMES keep the stage colour; the animals must read.
         if kind in ("tiles2d", "tilesid"):
             # Two animals per tile at DIFFERENT positions in each tile: the same
             # pair seen from three viewpoints, not three copies of one picture.
@@ -373,7 +377,7 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
                 ax.add_patch(Rectangle((bx, y), tw, s, fill=False, ec=color,
                                        lw=lw * 0.9, zorder=3))
                 for a, (fx, fy) in enumerate(poses[t]):
-                    col = color if kind == "tiles2d" else _identity(a)
+                    col = INK if kind == "tiles2d" else _identity(a)
                     animal(ax, bx, y, tw, s, fx, fy, col)
         else:
             # ONE box for the collapsed 3D volume, with a ground parallelogram so
