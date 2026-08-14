@@ -2,6 +2,41 @@
 """
 Fig 7b -- bedding invariance: does the tracker survive a change of background?
 
+    ############################################################################
+    THE MANUSCRIPT PANEL `fig7b_bedding.pdf` PLOTS A RETIRED TRACKER. Corrected
+    CUT FROM THE FIGURE 2026-08-13 (review): the panel claims invariance to bedding
+    colour, but the detector's training set is overwhelmingly BLACK background, so
+    the white-bedding arm is confounded with out-of-distribution DETECTION and the
+    invariance claim cannot be defended. The script and its CSV stay -- un-plotted,
+    not deleted, as Fig 8's dropped panels are -- and it now saves under the
+    supplementary letter `s2` so it cannot be mistaken for the figure's panel b
+    (which is the survival curve since the re-lettering). It is also the last panel
+    that still plots the retired pre-#131 tracker; nothing in the figure does now.
+
+    ONLY in the `--variant` render; fixing this panel itself would mean REGENERATING
+    `figs/out/fig3_trackers.json`, a manuscript deposit and Eric's decision.
+
+    Its LUC3D column comes from `matchFrameInstances`, the pre-#131 PER-FRAME
+    matcher (run 2026-05-15); `pose/cross-view-tracker.js` was merged 2026-07-06.
+    Re-scored, same pool, same 44 black / 30 white sessions:
+
+        pre-#131 (this panel)   0.7407 -> 0.7291   loses 0.0116
+        SHIPPED                 0.7582 -> 0.7430   loses 0.0151
+
+    The panel's ARGUMENT survives intact -- LUC3D still loses far less to the
+    background than SLEAP (0.079) or ByteTrack (0.148), and those two columns do
+    not move at all -- but its stated 0.012 is a retired tracker's number, and the
+    shipped tracker is very slightly WORSE on this axis, not better. Both are drawn.
+
+    ONE MORE THING THIS EXPOSED: the grey "detector recall" control is taken from
+    the LUC3D rows of the CSV, and motmetrics' `recall` counts MATCHED predictions
+    -- so it is not purely a detector property and it moves with the arm (black ->
+    white 0.7300 -> 0.7262 on the retired arm, 0.7262 -> 0.7277 on the shipped one,
+    i.e. the sign of a 0.004 difference flips). It still rules out a large detection
+    confound, which is all the panel claims of it; it is not a tracker-independent
+    constant and the variant's key says so.
+    ############################################################################
+
 White mice on white bedding is the hard case; black bedding is the easy one. The
 SAME identity-stripped detections feed every tracker, and detector recall barely
 moves between the two conditions (delta 0.004), so any drop is the TRACKER's, not
@@ -28,9 +63,13 @@ groups also differ in difficulty. The recall control (delta 0.004) rules out a
 DETECTION confound only. There are no intervals because the deposit carries one pooled
 IDF1 per condition, not per-session values.
 
-Source: figs/out/fig3_trackers.json `slap2m.by_bedding`, `slap2m.paired_vs_sleap`.
+Source: figs/out/fig3_trackers.json `slap2m.by_bedding`, `slap2m.paired_vs_sleap`; with
+`--variant`, figs/out/fig7_variant_best.json (`slap2m` = shipped tracker,
+`slap2m_fresh_anchor` = the experimental arm, `slap2m_pre131_reference` = what the
+manuscript panel plots).
 
-    python3 figs/panels/fig7_06_bedding.py
+    python3 figs/panels/fig7_06_bedding.py            # the manuscript panel
+    python3 figs/panels/fig7_06_bedding.py --variant  # shipped + fresh anchor
 """
 import sys
 from pathlib import Path
@@ -39,9 +78,11 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.data_loader import load  # noqa: E402
-from src.style import (footnote, GREY, entity, deposit, panel,  # noqa: E402
-                       save, use)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from src.style import (footnote, GREY, MUTED, entity, deposit, panel,  # noqa: E402
+                       save, text_legend, use)
+from fig7_variant_common import (FRESH_LABEL, FRESH_NOTE, arms,  # noqa: E402
+                                 pool_note, slug)
 
 #: Hues from `entity()` -- one hue per tracker set-wide, resolved in one place rather
 #: than re-picked in each of the seven panels (review finding C3). Unchanged colours.
@@ -69,38 +110,76 @@ ROW_H = 50.0
 BAR_W = 0.34
 
 
-def main():
+def main(variant=False):
     use()
-    t = load("fig3_trackers.json")
-    bb = t["slap2m"]["by_bedding"]
-    pv = t["slap2m"]["paired_vs_sleap"]
+    sl, fresh, ref, _tab = arms(variant)
+    bb = sl["by_bedding"]
+    pv = sl["paired_vs_sleap"]
 
     # Groups: the three trackers, then the shared detector as the control. The
     # control is a rate on the same 0-1 axis, which is why the legacy panel drew it
     # here rather than in a panel of its own.
-    groups = [(lab, color, [bb[c][k]["idf1"] for c in CONDS])
+    #
+    # THE VARIANT INSERTS THE EXPERIMENTAL ARM as a fourth pair, in the SAME
+    # `entity("luc3d")` teal as the shipped tracker but HATCHED -- LUC3D's hue is
+    # reserved and experimental status is carried by pattern and words, not colour
+    # (see fig7_variant_common). (label, colour, [black, white], hatch)
+    groups = [(lab, color, [bb[c][k]["idf1"] for c in CONDS], None)
               for k, lab, color in TRACKERS]
+    if variant:
+        groups[0] = ("LUC3D\n(shipped)", entity("luc3d"), groups[0][2], None)
+        groups.insert(1, ("LUC3D\n+fresh", entity("luc3d"),
+                          [fresh["by_bedding"][c]["luc3d"]["idf1"] for c in CONDS],
+                          "////"))
     groups.append(("detector\nrecall", GREY,
-                   [bb[c]["detector_recall"] for c in CONDS]))
+                   [bb[c]["detector_recall"] for c in CONDS], None))
 
     rows = []
-    fig, ax = panel("half", ROW_H)
+    fig, ax = panel("half", ROW_H, key=3 if variant else 0)
     x = np.arange(len(groups))
-    for i, (lab, color, ys) in enumerate(groups):
+    for i, (lab, color, ys, hatch) in enumerate(groups):
         # Solid = black bedding, open = white bedding. The fills are a mnemonic for
         # the condition, and no bar touches another group's, so nothing here can be
         # mistaken for a within-session change.
-        ax.bar(i - BAR_W / 2, ys[0], width=BAR_W, color=color, zorder=2)
-        ax.bar(i + BAR_W / 2, ys[1], width=BAR_W, facecolor="white",
-               edgecolor=color, lw=0.9, zorder=2)
+        if hatch:
+            ax.bar(i - BAR_W / 2, ys[0], width=BAR_W, color=color, zorder=2,
+                   hatch=hatch, edgecolor="white", linewidth=0.0)
+            ax.bar(i + BAR_W / 2, ys[1], width=BAR_W, facecolor="white",
+                   edgecolor=color, lw=0.9, zorder=2, hatch=hatch)
+        else:
+            ax.bar(i - BAR_W / 2, ys[0], width=BAR_W, color=color, zorder=2)
+            ax.bar(i + BAR_W / 2, ys[1], width=BAR_W, facecolor="white",
+                   edgecolor=color, lw=0.9, zorder=2)
         ax.text(i, max(ys) + 0.035, f"Δ{ys[0] - ys[1]:.3f}", ha="center",
                 va="bottom", color=color, fontsize=6.5, fontweight="bold")
         rows += [{"series": lab.replace("\n", " "), "bedding": c, "value": y,
                   "n_sessions": bb[c]["n_sessions"]} for c, y in zip(CONDS, ys)]
 
-    deposit(pd.DataFrame(rows), 7, "fig7b_bedding.csv")
+    if variant:
+        # THE RETIRED ARM AS TWO GREY RULES on the bars it supersedes -- the height
+        # this panel publishes -- rather than a fifth pair of bars. It is not a method
+        # on offer, so it gets the set's reference grey, not a series colour.
+        rb = [ref["by_bedding"][c]["luc3d"]["idf1"] for c in CONDS]
+        for dx, yv in zip((-BAR_W / 2, BAR_W / 2), rb):
+            ax.plot([dx - BAR_W * 0.6, dx + BAR_W * 0.6], [yv] * 2, color=MUTED,
+                    lw=1.1, zorder=6, solid_capstyle="butt")
+        rows += [{"series": "LUC3D pre-#131 (manuscript panel)", "bedding": c,
+                  "value": y, "n_sessions": bb[c]["n_sessions"]}
+                 for c, y in zip(CONDS, rb)]
+        text_legend(ax, [
+            (f"LUC3D shipped Δ{groups[0][2][0] - groups[0][2][1]:.3f} · "
+             f"fresh Δ{groups[1][2][0] - groups[1][2][1]:.3f} (hatched, "
+             f"EXPERIMENTAL)", entity("luc3d")),
+            (f"grey rules: LUC3D pre-#131, what Fig 7b prints "
+             f"(Δ{rb[0] - rb[1]:.3f})", MUTED),
+            ("grey bars: recall of MATCHED predictions, so it moves with the arm",
+             GREY)],
+            "above", size=6, dy=0.052 * 52.0 / ROW_H, xy=(0.10, 0.985),
+            transform=fig.transFigure)
+
+    deposit(pd.DataFrame(rows), 7, f"{slug('fig7b_bedding', variant)}.csv")
     ax.set_xticks(x)
-    ax.set_xticklabels([lab for lab, _, _ in groups])
+    ax.set_xticklabels([lab for lab, _, _, _ in groups])
     ax.tick_params(axis="x", length=0)
     ax.set_xlim(-0.62, len(groups) - 0.38)
     ax.set_ylabel("IDF1  /  recall")
@@ -126,9 +205,33 @@ def main():
              "BETWEEN-SESSION: different sessions, not paired\n"
              f"animal mix differs too (1 animal {one['black']}/{nb} vs "
              f"{one['white']}/{nw})\n"
-             "no per-session values deposited, so no intervals")
-    save(fig, 7, "b", "bedding")
+             "no per-session values deposited, so no intervals"
+             + ("" if not variant else
+                f"\nLUC3D here is the SHIPPED tracker: black -> white "
+                f"{bb['black']['luc3d']['idf1']:.4f} -> "
+                f"{bb['white']['luc3d']['idf1']:.4f} (loses "
+                f"{bb['black']['luc3d']['idf1'] - bb['white']['luc3d']['idf1']:.4f}), "
+                f"against the {ref['by_bedding']['black']['luc3d']['idf1']:.4f} -> "
+                f"{ref['by_bedding']['white']['luc3d']['idf1']:.4f} (loses "
+                f"{ref['by_bedding']['black']['luc3d']['idf1'] - ref['by_bedding']['white']['luc3d']['idf1']:.4f}) "
+                f"the manuscript panel prints for the pre-#131 tracker retired "
+                f"2026-07-06 -- so the shipped tracker is marginally WORSE on this axis, "
+                f"and the panel's argument rests on the comparison with SLEAP "
+                f"({bb['black']['sleap']['idf1'] - bb['white']['sleap']['idf1']:.4f}) and "
+                f"ByteTrack "
+                f"({bb['black']['bytetrack']['idf1'] - bb['white']['bytetrack']['idf1']:.4f}), "
+                f"neither of which moves"
+                f"\nthe EXPERIMENTAL fresh anchor loses "
+                f"{fresh['by_bedding']['black']['luc3d']['idf1'] - fresh['by_bedding']['white']['luc3d']['idf1']:.4f}"
+                f"\nthe grey control is motmetrics `recall` from the LUC3D rows, i.e. "
+                f"MATCHED predictions, so it is not tracker-independent: "
+                f"{ref['by_bedding']['black']['detector_recall']:.4f} -> "
+                f"{ref['by_bedding']['white']['detector_recall']:.4f} on the retired arm, "
+                f"{bb['black']['detector_recall']:.4f} -> "
+                f"{bb['white']['detector_recall']:.4f} on the shipped one"
+                f"\n{pool_note()}"))
+    save(fig, 7, "s2", slug("bedding", variant))
 
 
 if __name__ == "__main__":
-    main()
+    main(variant="--variant" in sys.argv)

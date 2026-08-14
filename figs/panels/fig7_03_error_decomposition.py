@@ -1,13 +1,42 @@
 #!/usr/bin/env python3
 """
-Fig 7e -- error composition: false positives and ID switches, as a PERCENTAGE of
+Fig 7d -- error composition: false positives and ID switches, as a PERCENTAGE of
 camera-frames.
+
+    ############################################################################
+    FIXED 2026-08-13, ON ERIC'S INSTRUCTION: THIS PANEL NOW PLOTS THE SHIPPED
+    TRACKER, and its "LUC3D does not win on switches" note is GONE because the
+    shipped tracker does win. Until then the LUC3D column came from
+    `fig3_trackers.json`, where it was produced by `matchFrameInstances`, the
+    pre-#131 PER-FRAME matcher, on 2026-05-15; `pose/cross-view-tracker.js` was
+    merged 2026-07-06. Same pool, same 444 camera-sessions:
+
+        ID switches        3,710 -> 3,094  (0.0316% -> 0.0264% of camera-frames)
+        false positives   34,240 -> 37,126 (0.292%  -> 0.317%)
+
+    THE SWITCH CLAIM FLIPS SIGN. The retired arm's note read "LUC3D DOES NOT WIN
+    ON WITHIN-VIEW SWITCHES ... SLEAP's 3,608 is fractionally better". The shipped
+    tracker is at 3,094 against SLEAP's UNCHANGED 3,608 -- LUC3D ahead by 14% --
+    and the experimental fresh anchor at 1,312, a 2.7x margin.
+
+    THAT CORRECTION IS IN OUR FAVOUR, SO THE ONE THAT IS NOT MUST BE DRAWN WITH IT:
+    the shipped tracker emits 8.4% MORE false positives than the tracker it
+    replaced (34,240 -> 37,126). Both terms are bars on this panel, so a reader
+    gets both movements or neither -- and the FP bars are ~12x the switch bars, so
+    the term we lost on is the one the eye lands on first. That is the correct
+    emphasis and it is not to be "fixed".
+
+    `--as-shipped` re-renders the retired arm under a `_pre131` slug; `--variant`
+    additionally draws the fresh anchor and marks the retired heights as grey
+    rules. `figs/out/fig3_trackers.json` is NOT rewritten. Account:
+    `figs/out/ITEM3-SLAP2M-GATE.md`.
+    ############################################################################
 
 PERCENTAGES, NOT RAW COUNTS (review 2026-08, second pass). The counts-version's
 bars were exact but unanchored: "3,710 switches" means nothing without the
 exposure it accumulated over. A first revision normalised to errors per 100,000
 camera-frames; review then asked for plain percent -- the unit nobody has to
-convert: an ID switch happens on 0.0316% of LUC3D's camera-frames, i.e. the
+convert: an ID switch happens on 0.0264% of LUC3D's camera-frames, i.e. the
 tracker holds identity on 99.97% of them, which is the sentence a reader takes
 away. The denominator comes from the deposit itself
 (`slap2m.total_camera_frames` = 11,726,640, summed from the motmetrics
@@ -25,23 +54,32 @@ An earlier version plotted all three SHARES OF THE ERROR BUDGET on a log axis.
 That was legible but answered the wrong question: shares of a budget dominated
 by detection say more about the detector than the tracker. Percentages of
 EXPOSURE (camera-frames) are what separate the trackers -- ID switches LUC3D
-0.0316% against ByteTrack 0.105%, a 3.3x reduction.
+0.0264% against ByteTrack 0.105%, a 4.0x reduction.
 
-THREE SIGNIFICANT FIGURES, AND IT HAS TO BE THREE. The two comparisons the panel
-exists to support survive the rounding only there: SLEAP's switch rate is
-essentially LUC3D's (0.0308% vs 0.0316% -- at two significant figures
-"0.031 vs 0.032" reads as a coincidence of rounding), and ByteTrack's 3.3x ratio
-is recoverable from 0.105 / 0.0316. `%.3g` keeps three significant figures on
-both the large FP percentages and the small switch ones.
+THREE SIGNIFICANT FIGURES, AND IT HAS TO BE THREE. Both switch rates round to the
+same two-significant-figure string: LUC3D 0.0264% and SLEAP 0.0308% become "0.026 vs
+0.031", which understates a 17% gap, and ByteTrack's 4.0x ratio is only recoverable
+from 0.105 / 0.0264. (On the retired arm this mattered even more -- 0.0316 vs 0.0308
+was a real dead heat that two figures turned into a coincidence of rounding.) `%.3g`
+keeps three significant figures on both the large FP percentages and the small switch
+ones.
 
-NOTE LUC3D DOES NOT WIN ON WITHIN-VIEW SWITCHES, and the panel does not pretend
-otherwise: SLEAP's 3,608 is fractionally better. LUC3D's advantage is cross-view
-(Fig 7a) and under changing background (Fig 7b) -- and it fragments MORE than SLEAP,
-which is the panel next door (Fig 7g).
+LUC3D NOW WINS ON WITHIN-VIEW SWITCHES, WHICH IT DID NOT BEFORE. 3,094 against
+SLEAP's 3,608 -- 14% fewer, and 0.0264% vs 0.0308% of camera-frames. This paragraph
+used to say the opposite ("SLEAP's 3,608 is fractionally better"), and that was a true
+statement ABOUT THE RETIRED TRACKER, whose 3,710 was a dead heat with SLEAP. What has
+NOT changed: LUC3D still fragments MORE than SLEAP, which is the panel next door (Fig
+7g), and it still emits more false positives than either the retired arm or SLEAP --
+so "wins on switches" is not "wins on 7d".
 
-Source: figs/out/fig3_trackers.json `slap2m.error_decomposition`.
+Source: figs/out/fig7_variant_best.json `slap2m.error_decomposition` (`slap2m` = the
+SHIPPED tracker); with `--variant`, also `slap2m_fresh_anchor` = experimental arm and
+`slap2m_pre131_reference` = the retired arm, drawn as grey reference rules; with
+`--as-shipped`, figs/out/fig3_trackers.json `slap2m` (pre-#131).
 
-    python3 figs/panels/fig7_03_error_decomposition.py
+    python3 figs/panels/fig7_03_error_decomposition.py               # the manuscript panel
+    python3 figs/panels/fig7_03_error_decomposition.py --variant     # + fresh anchor
+    python3 figs/panels/fig7_03_error_decomposition.py --as-shipped  # retired, _pre131 slug
 """
 import sys
 from pathlib import Path
@@ -50,9 +88,11 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.data_loader import load  # noqa: E402
-from src.style import (footnote, entity, deposit, panel, save,  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from src.style import (MUTED, footnote, entity, deposit, panel, save,  # noqa: E402
                        text_legend, use)
+from fig7_variant_common import (FRESH_LABEL, FRESH_NOTE, SHIPPED_LABEL,  # noqa: E402
+                                 arms, flags, pool_note, slug)
 
 #: Hues from `entity()` -- one hue per tracker across the whole set, resolved in one
 #: place instead of re-picked per panel (review finding C3). Colours unchanged.
@@ -85,40 +125,127 @@ KEY_DY = 0.052 * 52.0 / ROW_H
 
 
 
-def main():
+def main(variant=False, corrected=True):
     use()
-    sl = load("fig3_trackers.json")["slap2m"]
+    sl, fresh, ref, _tab = arms(variant, corrected)
     ed = sl["error_decomposition"]
     tcf = sl.get("total_camera_frames")
     if not tcf:
-        sys.exit("fig7e: fig3_trackers.json has no slap2m.total_camera_frames -- "
-                 "re-run figs/fig3_trackers.py to regenerate the deposit.")
+        sys.exit("fig7e: the deposit has no slap2m.total_camera_frames -- re-run "
+                 "figs/fig3_trackers.py (or figs/fig7_variant_tracker.py --slap2m, "
+                 "which is what the corrected render reads) to regenerate it.")
 
-    df = pd.DataFrame([{"tracker": lab, "term": name, "count": ed[k][key],
-                        "pct_of_camera_frames": ed[k][key] / tcf * 100,
-                        "camera_frames": tcf, "fn_share": ed[k]["fn_share"]}
-                       for k, lab, _ in TRACKERS for key, name in TERMS])
-    deposit(df, 7, "fig7e_error_decomposition.csv")
+    # THE SERIES, AND THE VARIANT'S EXTRA ARM. `--variant` puts the SHIPPED tracker in
+    # the LUC3D slot and draws the experimental fresh anchor beside it, both in
+    # `entity("luc3d")` teal -- the arm is distinguished by a HATCH and by the word
+    # EXPERIMENTAL in the key, never by recolouring LUC3D (see fig7_variant_common).
+    # (block, label, colour, hatch)
+    series = [(sl, SHIPPED_LABEL if variant else "LUC3D", entity("luc3d"), None)]
+    if variant:
+        series.append((fresh, FRESH_LABEL, entity("luc3d"), "////"))
+    series += [(sl, "SLEAP", entity("sleap"), None),
+               (sl, "ByteTrack", entity("bytetrack"), None)]
+    tkey = ["luc3d", "luc3d", "sleap", "bytetrack"] if variant \
+        else ["luc3d", "sleap", "bytetrack"]
+
+    # ONLY THE LUC3D COLUMN MOVED, asserted rather than assumed. The substitution
+    # re-scores LUC3D and copies the sleap/bytetrack rows of _eval_baseline.csv through
+    # byte for byte, so if either of those moved, something re-scored that should not
+    # have and every paired statistic in this figure would be comparing two different
+    # baselines.
+    if variant:
+        for t in ("sleap", "bytetrack"):
+            for term, _n in TERMS:
+                for other, who in ((ref, "pre-#131"), (fresh, "fresh anchor")):
+                    if other["error_decomposition"][t][term] != ed[t][term]:
+                        sys.exit(f"fig7e: {t}'s {term} differs between the shipped arm "
+                                 f"and the {who} arm -- only the LUC3D column may move.")
+
+    # THE DEFAULT DEPOSIT IS UNCHANGED, COLUMN FOR COLUMN. The variant's table needs an
+    # `arm` column and four extra rows; adding them to the manuscript panel's committed
+    # CSV would edit a manuscript artefact for no reason, so the two shapes are built
+    # separately rather than one being a superset of the other.
+    if not variant:
+        df = pd.DataFrame([{"tracker": lab, "term": name, "count": ed[k][key],
+                            "pct_of_camera_frames": ed[k][key] / tcf * 100,
+                            "camera_frames": tcf, "fn_share": ed[k]["fn_share"]}
+                           for k, lab, _ in TRACKERS for key, name in TERMS])
+    else:
+        rows = [(lab, tk, blk) for (blk, lab, _c, _h), tk in zip(series, tkey)]
+        rows.append(("LUC3D pre-#131 (what the manuscript panel plotted until "
+                     "2026-08-13)", "luc3d", ref))
+        df = pd.DataFrame([{"arm": lab, "tracker": tk, "term": name,
+                            "count": blk["error_decomposition"][tk][key],
+                            "pct_of_camera_frames":
+                                blk["error_decomposition"][tk][key] / tcf * 100,
+                            "camera_frames": tcf,
+                            "fn_share": blk["error_decomposition"][tk]["fn_share"]}
+                           for lab, tk, blk in rows for key, name in TERMS])
+    deposit(df, 7,
+            f"{slug('fig7d_error_decomposition', variant, corrected)}.csv")
 
     # 80 mm rather than a half: this row now carries three panels (e, f, g) and the
     # six labelled rates need the width. At 88 mm the row would not fit 180 mm.
-    fig, ax = panel(80.0, ROW_H, key=1)
-    top = max(ed[k]["false_positives"] for k, _, _ in TRACKERS) / tcf * 100 * 1.30
+    #
+    # THE VARIANT PUTS ITS VALUES IN THE KEY, NOT ON THE BARS. Four bars per group at
+    # BAR_W 0.20 are ~6 mm apart on an 80 mm panel and a "0.0264%" label sets ~8 mm at
+    # 6 pt, so eight on-bar labels cannot be laid out without collisions (and
+    # `lint_text.py` would say so). In the key each line carries its own two rates and
+    # nothing can overlap.
+    nser = len(series)
+    bar_w = BAR_W if not variant else 0.20
+    fig, ax = panel(80.0, ROW_H, key=(nser + 2) if variant else 1)
+    top = max(blk["error_decomposition"][tk]["false_positives"]
+              for (blk, _l, _c, _h), tk in zip(series, tkey)) / tcf * 100 * 1.30
     x = np.arange(len(TERMS))
-    for i, (k, lab, color) in enumerate(TRACKERS):
-        vals = [ed[k][key] / tcf * 100 for key, _ in TERMS]
-        pos = x + (i - 1) * BAR_W
-        ax.bar(pos, vals, width=BAR_W, color=color, zorder=2)
-        for j, (px, v) in enumerate(zip(pos, vals)):
-            # The two switch rates differ by 3% (0.0316 vs 0.0308), so their
-            # labels would sit at the same height on adjacent bars. Stagger the
-            # middle tracker upward; the FP group is spread enough not to need it.
-            lift = 0.055 if (j == 1 and i == 1) else 0.0
-            ax.text(px, v + (0.02 + lift) * top, f"{v:.3g}%", ha="center",
-                    va="bottom", color=color, fontsize=6, fontweight="bold")
+    entries = []
+    for i, ((blk, lab, color, hatch), tk) in enumerate(zip(series, tkey)):
+        e = blk["error_decomposition"][tk]
+        vals = [e[key] / tcf * 100 for key, _ in TERMS]
+        pos = x + (i - (nser - 1) / 2) * bar_w
+        # The hatched call is the VARIANT's only; the plain one is byte-for-byte the
+        # manuscript panel's, because passing hatch/edgecolor/linewidth even as no-ops
+        # changes the emitted PDF stream (measured: the default render's sha256 moved).
+        if hatch:
+            ax.bar(pos, vals, width=bar_w, color=color, zorder=2, hatch=hatch,
+                   edgecolor="white", linewidth=0.0)
+        else:
+            ax.bar(pos, vals, width=bar_w, color=color, zorder=2)
+        if not variant:
+            for j, (px, v) in enumerate(zip(pos, vals)):
+                # The two switch rates are 0.0264% and 0.0308% -- 17% apart in value
+                # but ~1% of the axis height apart in POSITION, so their labels would
+                # still sit on the same line on adjacent bars. Stagger the middle
+                # tracker upward; the FP group is spread enough not to need it. (On the
+                # retired arm these were 0.0316 vs 0.0308, i.e. closer still.)
+                lift = 0.055 if (j == 1 and i == 1) else 0.0
+                ax.text(px, v + (0.02 + lift) * top, f"{v:.3g}%", ha="center",
+                        va="bottom", color=color, fontsize=6, fontweight="bold")
+        else:
+            entries.append((f"{lab}  FP {vals[0]:.3g}% · sw {vals[1]:.3g}%", color))
+            if lab == FRESH_LABEL:
+                entries.append((FRESH_NOTE, color))
 
-    text_legend(ax, [(lab, c) for _, lab, c in TRACKERS], "above", dy=KEY_DY,
-                xy=(0.14, 0.985), transform=fig.transFigure)
+    if variant:
+        # THE RETIRED ARM AS A GREY MARK ON THE BAR IT SUPERSEDES, not as a fifth bar.
+        # It is not a method on offer -- it is where this panel's own published number
+        # sits -- so it gets the set's reference-level grey and a rule rather than a
+        # series colour and an area. A reader sees the shipped bar and, on it, the
+        # height the manuscript prints.
+        er = ref["error_decomposition"]["luc3d"]
+        p0 = x + (0 - (nser - 1) / 2) * bar_w
+        for px, key in zip(p0, [k for k, _ in TERMS]):
+            ax.plot([px - bar_w * 0.62, px + bar_w * 0.62], [er[key] / tcf * 100] * 2,
+                    color=MUTED, lw=1.1, zorder=6, solid_capstyle="butt")
+        # SHORT: at 6 pt on an 80 mm panel this key line has ~52 characters before it
+        # runs off the artwork, and matplotlib drops the overhang silently (lint:
+        # CLIPPED + TRUNCATED). "what Fig 7d printed until 2026-08-13" does not fit and
+        # is in the footnote instead; the grey rule's job here is to say WHICH arm.
+        entries.append((f"grey rule: LUC3D pre-#131, retired "
+                        f"(sw {er['id_switches'] / tcf * 100:.3g}%)", MUTED))
+
+    text_legend(ax, entries if variant else [(lab, c) for (_b, lab, c, _h) in series],
+                "above", dy=KEY_DY, xy=(0.14, 0.985), transform=fig.transFigure)
     ax.set_xticks(x)
     ax.set_xticklabels([n for _, n in TERMS])
     ax.set_xlim(-0.45, len(TERMS) - 0.55)
@@ -132,10 +259,27 @@ def main():
     # 100_000/… not .1%: the shares are the SAME numbers as before, but the line
     # must be ~4 characters shorter now that 3-digit y ticks push the axes centre
     # (and the axes-centred footnote) rightward -- lint clipped the old wording.
-    footnote(ax, f"rate basis: {tcf:,} camera-frames\n"
-             f"false negatives: {lo:.1%}–{hi:.1%} of the error")
-    save(fig, 7, "e", "decomposition")
+    note = (f"rate basis: {tcf:,} camera-frames\n"
+            f"false negatives: {lo:.1%}–{hi:.1%} of the error")
+    if variant:
+        er = ref["error_decomposition"]["luc3d"]
+        ef = fresh["error_decomposition"]["luc3d"]
+        note += (
+            f"\nLUC3D here is the SHIPPED tracker (pose/cross-view-tracker.js), re-scored "
+            f"per camera-session; the arm Fig 7d printed until 2026-08-13 is the pre-#131 per-frame matcher "
+            f"retired 2026-07-06 -- ID switches {er['id_switches']:,} -> "
+            f"{ed['luc3d']['id_switches']:,}, false positives {er['false_positives']:,} -> "
+            f"{ed['luc3d']['false_positives']:,}"
+            f"\nso the retired arm's note 'LUC3D does not win on within-view "
+            f"switches' no longer holds: shipped {ed['luc3d']['id_switches']:,} against "
+            f"SLEAP's unchanged {ed['sleap']['id_switches']:,}, and the EXPERIMENTAL fresh "
+            f"anchor {ef['id_switches']:,} -- but the shipped arm's false positives are "
+            f"{ed['luc3d']['false_positives'] / er['false_positives'] - 1:+.1%} against the "
+            f"retired one, so the correction is not one-sided"
+            f"\n{pool_note()}")
+    footnote(ax, note)
+    save(fig, 7, "d", slug("decomposition", variant, corrected))
 
 
 if __name__ == "__main__":
-    main()
+    main(*flags(sys.argv))

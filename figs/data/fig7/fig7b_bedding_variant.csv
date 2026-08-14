@@ -1,0 +1,13 @@
+series,bedding,value,n_sessions
+LUC3D (shipped),black,0.7581594424233704,44
+LUC3D (shipped),white,0.7430242187174888,30
+LUC3D +fresh,black,0.7617563876543033,44
+LUC3D +fresh,white,0.7589316747743119,30
+SLEAP,black,0.693506925862615,44
+SLEAP,white,0.6142896056888534,30
+ByteTrack,black,0.587497552270916,44
+ByteTrack,white,0.4392295098393504,30
+detector recall,black,0.7262472089325861,44
+detector recall,white,0.7276807436893212,30
+LUC3D pre-#131 (manuscript panel),black,0.74074534377238,44
+LUC3D pre-#131 (manuscript panel),white,0.7291272520776643,30

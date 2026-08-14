@@ -96,6 +96,11 @@ TITLES = {
     (3, "d"): "Grouping accuracy, head to head",
     (3, "e"): "3D-term ablation",
     (3, "f"): "Time per frame",
+    # EXPLORATORY (2026-08-13): the corr2d x corr3d sweep re-run on all 50
+    # BMimica sessions with the fresh-anchor tracker. The manuscript 3e is
+    # untouched. Not in LAYOUTS[3] -- it is a separate finding, not a
+    # replacement panel, and adding it would renumber the figure.
+    (3, "g"): "corr3d sweep, fresh anchor, 50 sessions",
     (4, "a"): "Triangulation solvers",
     (4, "b"): "Accuracy vs cameras used",
     (4, "c"): "Dropping the worst camera",
@@ -114,13 +119,12 @@ TITLES = {
     (6, "d"): "Animal-count control",
     (6, "e"): "Corpora",
     (6, "f"): "Difficulty strata",
-    (7, "a"): "Within- vs cross-view IDF1",
-    (7, "b"): "Bedding invariance",
-    (7, "c"): "Within-view IDF1 per session",
-    (7, "d"): "Per-session paired difference",
-    (7, "e"): "Error composition",
-    (7, "f"): "IDF1 vs detector recall",
-    (7, "g"): "Fragmentation",
+    (7, "a"): "Within- vs cross-view IDF1 (+ experimental arm)",
+    (7, "b"): "Within-view IDF1 per session",
+    (7, "c"): "Per-session paired difference",
+    (7, "d"): "Error composition",
+    (7, "e"): "IDF1 vs detector recall",
+    (7, "f"): "Fragmentation",
     # FIGURE 8 IS EXPLORATORY AND UNPLACED. It is not part of the manuscript: it has
     # no entry in FIGURE-LEGENDS.md, METHODS.md, RESULTS.md or CAPTIONS.md, and no
     # panel of Figures 1-7 refers to it. It is assembled here only so
@@ -128,6 +132,24 @@ TITLES = {
     # any shipped tracker default should move. Nothing was renumbered to make room.
     (8, "a"): "ID-switch rate per threshold",
     (8, "b"): "Cross-view IDF1 per threshold",
+    (8, "c"): "Where the IDF1 goes",
+    (8, "d"): "Parameter sets on all 50 sessions",
+    (8, "e"): "All 50 sessions",
+    # FIGURE 9 IS EXPLORATORY AND UNPLACED, on the same footing as Figure 8: no entry in
+    # FIGURE-LEGENDS.md, METHODS.md, RESULTS.md or CAPTIONS.md, and no panel of Figures
+    # 1-7 refers to it. It is the SECOND-CORPUS check on Fig 8's winner -- the same two
+    # configurations run over the 42 MULTI-ANIMAL SLAP-2M sessions instead of the 50
+    # BMimica ones (the corpus has 74; the 32 one-animal sessions were dropped on
+    # 2026-08-13 because they contribute exactly 0 switches and 0 misgrouped detections and
+    # so only inflated the denominator) --
+    # assembled only so `assemble.py 9` produces something a reader can look at while
+    # deciding whether any shipped tracker default should move. The arm it draws
+    # (`M1 + stale 20 + distThresh 25`) is EXPERIMENTAL: it lives in
+    # figs/fig8-bench/xv_experimental.js and is NOT in the shipped app. Nothing was
+    # renumbered to make room.
+    (9, "a"): "Cross-view identity on 42 multi-animal SLAP-2M sessions",
+    (9, "b"): "Switch and misgrouped-detection rates",
+    (9, "c"): "By difficulty and animal count",
 }
 TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 
@@ -144,8 +166,12 @@ LAYOUTS = {
     2: [[("a", "protocol")],
         [("b", "placements_vs_rig"), ("c", "reprojection_accuracy"),
          ("d", "baseline_angle")]],
-    3: [[("a", "association")],
-        [("b", "cost_terms"), ("c", "cost_model")],
+    # 3a STACKED AND HALVED, c MOVED UP BESIDE IT (review 2026-08-13). a now reads
+    # exhaustive-above-greedy in the order the text introduces them and takes half the
+    # page, so c -- the quantitative form of the same contrast, hypotheses per frame --
+    # sits in the freed half. b keeps its own row.
+    3: [[("a", "association"), ("c", "cost_model")],
+        [("b", "cost_terms")],
         [("d", "quality"), ("e", "sweep"), ("f", "head_to_head")]],
     4: [[("a", "solvers")],
         [("b", "accuracy_vs_cameras"), ("c", "worst_camera")],
@@ -175,14 +201,78 @@ LAYOUTS = {
         [("c", "detection_quality")],
         [("d", "animal_count"), ("e", "corpora")],
         [("f", "difficulty_strata")]],
-    7: [[("a", "within_vs_cross"), ("b", "bedding")],
-        [("c", "survival"), ("d", "by_animals")],
-        [("e", "decomposition"), ("f", "recall"), ("g", "fragmentations")]],
+    # Panel a carries the EXPERIMENTAL high-performing arm (2026-08-13, on
+    # instruction): the variant is fig7a plus `LUC3D + fresh anchor`. (It was briefly
+    # lettered "h" by mistake; every `fig7h_*` artifact has been deleted and the code no
+    # longer emits that name.) The manuscript panel
+    # fig7a_within_vs_cross.pdf is untouched on disk and still renders byte-identical;
+    # swapping the slug back restores it.
+    #
+    # ONLY PANEL a CARRIES THE FRESH-ANCHOR ARM, and the reason is no longer "it has
+    # never been run on SLAP-2M" -- it has been, and `fig7_variant_best.json` holds it as
+    # `slap2m_fresh_anchor` (item 3/4). The reason is that it is EXPERIMENTAL and not in
+    # the shipped app, so it enters the composite on one panel, on instruction, labelled.
+    # On b-g it is drawn only by `--variant`, which writes a `_variant` slug that is not
+    # a letter here and so cannot reach the artwork.
+    #
+    # PANELS c, d, e, f, g were switched to the SHIPPED tracker on 2026-08-13 (Eric):
+    # their slugs are unchanged, but the panel scripts now read `fig7_variant_best.json`'s
+    # `slap2m` block instead of `fig3_trackers.json`'s pre-#131 one. See figs/README.md
+    # and each panel's docstring. `b` (bedding) was NOT in that instruction and still
+    # plots the pre-#131 arm, so this composite currently carries TWO tracker generations
+    # under the name "LUC3D".
+    # BEDDING CUT 2026-08-13 (review): the panel claimed invariance to bedding colour,
+    # but the detector's training set is overwhelmingly black-background, so the
+    # white-bedding arm is confounded with out-of-distribution DETECTION and the claim
+    # cannot be defended. `fig7_06_bedding.py` and its CSV stay on disk and still
+    # regenerate -- un-plotted, not deleted, as Fig 8's dropped panels are. Cutting it
+    # also removed the last panel still plotting the retired pre-#131 tracker, so the
+    # figure no longer carries two tracker generations under the name "LUC3D".
+    # Panels c-g moved up one letter to b-f.
+    7: [[("a", "within_vs_cross_variant"), ("b", "survival")],
+        [("c", "by_animals"), ("d", "decomposition")],
+        [("e", "recall"), ("f", "fragmentations")]],
     # EXPLORATORY, NOT IN THE MANUSCRIPT -- see the note beside its TITLES entries.
-    # Two full-width rows of 2x5 small multiples: one threshold per sub-plot, the
-    # ID-switch rate above and cross-view IDF1 below.
-    8: [[("a", "switch_rate")],
-        [("b", "idf1")]],
+    # Rows 1-2: two full-width 2x5 blocks of small multiples, one threshold per
+    # sub-plot, the ID-switch rate above and cross-view IDF1 below.
+    # Rows 3-4 (added): the THRESHOLD sweeps above answer "do the constants matter";
+    # 8c and 8d answer the question that follows. 8c decomposes the shipped tracker's
+    # IDF1 loss into identity versus coverage and so sets the ceiling any method could
+    # reach; 8d is what the algorithmic methods got out of it. 8c comes first because
+    # it is what chose 8d's methods, and 8d is unreadable without its ceiling line.
+    # Row 5 (added): 8a-8d are measured on Fig 3e's 8 sessions, which is what makes them
+    # comparable to Fig 3e and is also their weakness -- Fig 4 over all 50 sessions once
+    # REVERSED a subset conclusion in this repo. 8e is the all-50-session check on the two
+    # configurations 8d put forward, and it is the panel that decides whether any of them
+    # is a candidate for a shipped default.
+    # FIG 8 IS NOW THE METHODS RESULT ONLY, on all 50 BMimica sessions.
+    # 8a/8b (the ten threshold sweeps) and 8c (the identity-vs-coverage loss budget) were
+    # dropped from the figure on 2026-08-12: 8e showed the threshold conclusion did not
+    # survive the full corpus (+0.084 IDF1 on 8 sessions -> +0.012 mean / -0.001 median on
+    # 50), so plotting it beside a result that DOES survive invited the wrong reading.
+    # Their scripts, rendered PDFs and deposited CSVs are all still on disk and still
+    # regenerate -- they are un-plotted, not deleted.
+    # 8e (per-session paired differences) was dropped from the figure on
+    # instruction 2026-08-13; its script and rendered PDF are retained.
+    8: [[("d", "pr_switches")]],
+    # EXPLORATORY, NOT IN THE MANUSCRIPT -- see the note beside its TITLES entries.
+    # Three full-width rows, one question each, in the order a reader has to take them:
+    # 9a is the distribution (survival curves for identity precision, recall and cross-view
+    # IDF1 over the 42 MULTI-ANIMAL sessions -- the pooled all-74 curve was dropped
+    # 2026-08-13 -- with the deposit's identity-only ceiling drawn and labelled as belonging
+    # to a DIFFERENT detection pool); 9b is the two failure rates per 100,000 camera-frames
+    # with their raw totals beside them; 9c is where those rates live, by the master sheet's
+    # own 1-7 difficulty rating and by animal count. 9a first because 9b's rates are
+    # meaningless without knowing the IDF1 barely moved, and 9c last because it explains 9b
+    # rather than restating it.
+    # 58 + 64 + 96 = 218 mm of panels, which lands the page at 243 mm and OVER the 200 mm
+    # soft ceiling -- 9c grew to 96 mm when it became a 2x5 block of five metrics by two
+    # stratifications, and it cannot carry ten sub-plots plus its key in 52. Fig 9 is
+    # exploratory and unplaced, so the overrun is tolerated here rather than paid for by
+    # cramming 9c; do not grow a Fig 9 panel further without shrinking another.
+    9: [[("a", "idf1_survival")],
+        [("b", "rates")],
+        [("c", "strata")]],
 }
 
 

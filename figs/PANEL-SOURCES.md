@@ -29,8 +29,8 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 | **a** | Grouping strategies | `panels/fig3_01_association.py` | — (drawn) | — | — |
 | **b** | Association cost | `panels/fig3_02_cost_terms.py` | — (drawn) | — | — |
 | **c** | Hypotheses per frame | `panels/fig3_03_cost_model.py` | `out/fig3_headtohead.json`, `out/fig3_runtime.json` | `figs/fig3_headtohead.py`, `figs/fig3_scale_runtime.py` | `data/fig3/fig3c_cost_model.csv` |
-| **d** | Grouping accuracy, head to head | `panels/fig3_04_quality.py` | `out/fig3_quality.json` | `figs/fig3_quality.py` | `data/fig3/fig3d_quality.csv` |
-| **e** | 3D-term ablation | `panels/fig3_05_sweep.py` | `out/fig3_sweep.json` | `figs/fig3_sweep.py` | `data/fig3/fig3e_sweep.csv` |
+| **d** | — | **MISSING** | | | |
+| **e** | 3D-term ablation | `panels/fig3_05_sweep.py` | `out/fig3_sweep.json`, `out/fig3_sweep50.json` | `figs/fig3_sweep.py` | `data/fig3/fig3e_sweep.csv`, `data/fig3/fig3e_sweep_legacy8.csv` |
 | **f** | Time per frame | `panels/fig3_06_head_to_head.py` | `out/fig3_headtohead.json`, `out/fig3_runtime.json` | `figs/fig3_headtohead.py`, `figs/fig3_scale_runtime.py` | `data/fig3/fig3f_head_to_head.csv` |
 
 ## Figure 4
@@ -70,13 +70,27 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
-| **a** | Within- vs cross-view IDF1 | `panels/fig7_05_within_vs_cross.py` | `out/fig3_trackers.json` | `figs/fig3_trackers.py` | `data/fig7/fig7a_within_vs_cross.csv` |
-| **b** | Bedding invariance | `panels/fig7_06_bedding.py` | `out/fig3_trackers.json` | `figs/fig3_trackers.py` | `data/fig7/fig7b_bedding.csv` |
-| **c** | Within-view IDF1 per session | `panels/fig7_01_survival.py` | `out/fig3_trackers.json` | `figs/fig3_trackers.py` | `data/fig7/fig7c_survival.csv` |
-| **d** | Per-session paired difference | `panels/fig7_02_by_animals.py` | `out/fig3_trackers.json` | `figs/fig3_trackers.py` | `data/fig7/fig7d_by_animals.csv` |
-| **e** | Error composition | `panels/fig7_03_error_decomposition.py` | `out/fig3_trackers.json` | `figs/fig3_trackers.py` | `data/fig7/fig7e_error_decomposition.csv` |
-| **f** | IDF1 vs detector recall | `panels/fig7_07_recall.py` | `out/fig3_trackers.json` | `figs/fig3_trackers.py` | `data/fig7/fig7f_recall.csv` |
-| **g** | Fragmentation | `panels/fig7_08_fragmentations.py` | `out/fig3_trackers.json` | `figs/fig3_trackers.py` | `data/fig7/fig7g_fragmentations.csv` |
+| **a** | Within- vs cross-view IDF1 (+ experimental arm) | `panels/fig7_05_within_vs_cross.py` | `out/fig3_trackers.json`, `out/fig7_sleap_scoped.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7a_within_vs_cross_variant.csv` |
+| **b** | — | **MISSING** | | | |
+| **c** | — | **MISSING** | | | |
+| **d** | — | **MISSING** | | | |
+| **e** | — | **MISSING** | | | |
+| **f** | — | **MISSING** | | | |
+| **g** | — | **MISSING** | | | |
+
+## Figure 8
+
+| Panel | Title | Drawn by | Reads | Measured by | Deposits |
+|---|---|---|---|---|---|
+| **d** | Parameter sets on all 50 sessions | `panels/fig8_07_pr_switches.py` | `out/fig8_methods_50.json` | — | — |
+
+## Figure 9
+
+| Panel | Title | Drawn by | Reads | Measured by | Deposits |
+|---|---|---|---|---|---|
+| **a** | Cross-view identity on 42 multi-animal SLAP-2M sessions | `panels/fig9_01_idf1_survival.py` | `out/fig9_slap2m.json` | — | `data/fig9/fig9a_idf1_survival.csv` |
+| **b** | Switch and misgrouped-detection rates | `panels/fig9_02_rates.py` | `out/fig9_slap2m.json`, `out/fig9_slap2m_predictions.json` | — | `data/fig9/fig9b_rates.csv` |
+| **c** | By difficulty and animal count | `panels/fig9_03_strata.py` | `out/fig9_slap2m.json`, `out/fig9_slap2m_predictions.json` | — | `data/fig9/fig9c_strata.csv` |
 
 ## Panel scripts kept but not placed
 
@@ -84,6 +98,8 @@ These still run under `make_figures.py` and still deposit their CSVs; they are n
 
 | Script | What it draws |
 |---|---|
+| `panels/fig3_04_quality.py` | greedy vs exhaustive against GROUND TRUTH, per configuration --. |
+| `panels/fig3_07_sweep50_freshanchor.py` | the corr2d x corr3d sweep re-run on ALL 50 BMimica sessions with the FRESH-ANCHOR. |
 | `panels/fig5_01_loop.py` | the proofreading loop LUC3D supports today. |
 | `panels/fig5_02_per_view_error.py` | what the app reports for the frame you are on: the reprojection against. |
 | `panels/fig5_03_capture.py` | how much real correction a bounded review budget finds. |
@@ -92,5 +108,19 @@ These still run under `make_figures.py` and still deposit their CSVs; they are n
 | `panels/fig6_01_rigs.py` | Fig 6 supplementary -- the two camera rigs, from their real calibration extrinsics. |
 | `panels/fig6_02_pose.py` | Fig 6s2 (SUPPLEMENTARY) -- the mean proofread pose, and the scale of the animal. |
 | `panels/fig6_03_difficulty.py` | Fig 6s3 (SUPPLEMENTARY) -- reprojection error and miss rate by session difficulty,. |
+| `panels/fig7_01_survival.py` | within-view IDF1 per session, across the SLAP-2M corpus. |
+| `panels/fig7_02_by_animals.py` | per-session paired difference in IDF1, LUC3D minus SLEAP, by animal count. |
+| `panels/fig7_03_error_decomposition.py` | error composition: false positives and ID switches, as a PERCENTAGE of. |
 | `panels/fig7_04_trackers.py` | Fig 7 supplementary -- per-session IDF1 for the three trackers, across SLAP-2M. |
+| `panels/fig7_06_bedding.py` | bedding invariance: does the tracker survive a change of background?. |
+| `panels/fig7_07_recall.py` | session IDF1 against the shared detector's recall. |
+| `panels/fig7_08_fragmentations.py` | the measured LUC3D DISADVANTAGE: it fragments more tracks than SLEAP. |
+| `panels/fig7_variant_common.py` | Shared machinery for the tracker arms of Fig 7 b-g. |
+| `panels/fig8_01_switch_rate.py` | ID-switch RATE against every remaining tracker threshold, one at a time. |
+| `panels/fig8_02_idf1.py` | cross-view IDF1 for the same ten one-dimensional threshold sweeps as 8a. |
+| `panels/fig8_03_loss_budget.py` | WHERE the shipped tracker's cross-view IDF1 actually goes, per session. |
+| `panels/fig8_04_methods.py` | ALGORITHMIC methods for the cross-view tracker, against the ceiling 8c set. |
+| `panels/fig8_05_all50.py` | the two candidate tracker changes over ALL 50 proofread BMimica sessions. |
+| `panels/fig8_06_horizon50.py` | Fig 8d (REDONE) -- the staleness HORIZON on all 50 BMimica sessions: shipped vs stale 1 / 10 / 20 / 30. |
+| `panels/fig9_common.py` | Shared loading, guards and constants for Figure 9's three panels. |
 

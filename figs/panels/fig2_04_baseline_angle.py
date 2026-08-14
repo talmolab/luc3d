@@ -106,8 +106,22 @@ def main():
     ax.plot(th, law, color=TEAL, lw=1.2, ls=(0, (2.5, 1.5)))
 
     ax.axhline(floor, color=PERIWINKLE, lw=0.8, ls=(0, (1.5, 1.5)))
-    ax.text(th[-1], floor + 0.25, f"all 5 views {floor:.1f} — comparison floor",
-            color=PERIWINKLE, fontsize=7, ha="right", va="bottom")
+    # DECLUTTERED 2026-08-13 (review: "get rid of a lot of the writing on there").
+    # The panel's finding is that a WIDER anchor pair gives a lower error, and it was
+    # being read through five separate blocks of prose. What stays is what a mark
+    # cannot say for itself: the floor's value, the law's name, the two pairs the law
+    # misses, and the two extremes. What went: the "comparison floor" gloss (it is the
+    # dotted line at the bottom and the legend defines it), and the in-sample-band
+    # count, which was three lines explaining that a band fitted on ten points
+    # contains eight of them -- a statement about the fit, not about the geometry, and
+    # it belongs in the legend where it now lives.
+    # LEFT END, not right. Shortening this label (see above) narrowed its box, which
+    # moved it into the stretch where the k/sin-theta band has come down to meet the
+    # floor -- lint: ON DATA, 9% inked, and 32% when nudged upward. At the LEFT end
+    # the law is at its steepest (k/sin 10 deg ~ 8.8 mm), so the strip just above the
+    # floor is empty for the whole first third of the axis.
+    ax.text(th[0], floor + 0.25, f"all 5 views {floor:.1f}",
+            color=PERIWINKLE, fontsize=7, ha="left", va="bottom")
 
     # The curve is named ON the curve, in its own colour, just above the band's upper
     # edge in the one stretch (theta ~ 25-33 deg) where neither a point nor the corner
@@ -144,22 +158,13 @@ def main():
                     color=MUTED, ha=ha, va=va, textcoords="offset points",
                     xytext=xy)
 
-    # WHAT THE 8/10 IS, said before the number rather than after it. `k` is
-    # median(err*sin theta) over these same ten pairs, so the +/-25% band is fitted
-    # and scored on one set of points -- roughly half sit near the curve by
-    # construction, and +/-25% is a wide target against a 2.7-12.6 mm range. Set in
-    # TEAL beside a bold count it read as a test the model had passed. It is not a
-    # test: this design has no held-out pair to score against (there are ten pairs and
-    # all ten went into k), so the honest framing is descriptive, and "in-sample band"
-    # leading the line is what makes it descriptive. The informative content is the
-    # two MISSES, which is why they and only they are named on the data.
+    # `k` STAYS, the band count GOES. k is the one number that makes the dashed curve
+    # reproducible from the panel alone. The 8/10 was a statement about a band fitted
+    # and scored on the same ten pairs -- descriptive, not a test, and it needed two
+    # lines of hedging to say so honestly. Both the count and the hedge are now in the
+    # legend, which is where a claim that needs a paragraph belongs.
     ax.text(0.97, 0.97, f"k = {k:.2f} mm", transform=ax.transAxes, ha="right",
             va="top", color=TEAL, fontsize=7)
-    # 0.885, not 0.865: at 0.865 the second line's descenders came within 0.1 pt of
-    # the `cam 0+2` label -- under the linter's tolerance, but touching.
-    ax.text(0.97, 0.885, f"in-sample band:\n{int(df.within_band.sum())}/{len(df)} "
-            f"within ±{BAND:.0%}", transform=ax.transAxes, ha="right", va="top",
-            color=MUTED, fontsize=7, linespacing=1.35)
 
     ax.set_xlabel("anchor-pair baseline angle (°)")
     ax.set_ylabel("3D error vs proofread (mm)")

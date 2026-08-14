@@ -33,6 +33,31 @@ sys.path.insert(0, str(BENCH / "scripts"))
 import evaluate as ev  # noqa: E402  (installs the np.asfarray shim + motmetrics)
 import motmetrics as mm  # noqa: E402
 
+#: Metrics asked of motmetrics. `idf1` and `num_switches` were the original two and their
+#: values are UNAFFECTED by asking for more -- each is computed from the same accumulator,
+#: so this is purely additive and no existing Fig 3 or Fig 8 number can move. `idp`/`idr`
+#: are the identity precision and recall whose harmonic mean IS idf1, so plotting the pair
+#: says which way a tracker is failing: idp down means it is attaching an identity to
+#: detections that are not that animal, idr down means it is failing to attach the right
+#: identity where it should. IDF1 alone cannot distinguish those and they have different
+#: fixes.
+#: `recall`/`precision` are DETECTION quantities (did a box match a GT box at all) while
+#: idr/idp are IDENTITY ones (did it carry the right name). Fig 7f plots IDF1 against
+#: detector recall precisely because those are different axes. num_false_positives,
+#: num_misses and num_fragmentations are what Fig 7e and Fig 7g need. Every one is
+#: computed from the same accumulator, so asking for them cannot move idf1 or
+#: num_switches -- verified by re-scoring a stored session and comparing all 16 digits.
+# `idtp` and `num_matches` added 2026-08-13 for ID ACCURACY (IDA) = idtp / num_matches:
+# "of the detections that were matched to a real animal, what fraction carry the right
+# identity". IDP has the same numerator but keeps unmatched (false-positive) detections
+# in its denominator, so IDA >= IDP always, and the two are EQUAL when a pool emits no
+# false positives. Purely additive: motmetrics computes these from the same accumulator
+# and no existing key changes value.
+METRICS = ["idf1", "idp", "idr", "num_switches", "recall", "precision", "idtp",
+           "num_matches",
+           "num_false_positives", "num_misses", "num_fragmentations",
+           "num_objects", "num_detections"]
+
 
 def score_session(result_json_path, det_dir, gt_dir, cameras, num_animals, max_frames=None,
                    det_session_idx=0, gt_paths=None):
@@ -59,9 +84,15 @@ def score_session(result_json_path, det_dir, gt_dir, cameras, num_animals, max_f
         gt_path = Path(gt_paths[cam]) if gt_paths else Path(gt_dir) / cam / "proofread.analysis.h5"
         gt_all[cam] = ev.load_gt(gt_path)
 
+    within_idtp = 0
+    within_matches = 0
     pooled = mm.MOTAccumulator(auto_id=False)
     percam_idf1 = []
-    within_sw = 0
+    percam_idp = []
+    percam_idr = []
+    percam_recall = []
+    percam_precision = []
+    within_sw = within_fp = within_miss = within_frag = within_obj = 0
     for ci, cam in enumerate(cameras):
         det = det_all[cam]
         gt, occ = gt_all[cam]
@@ -96,16 +127,44 @@ def score_session(result_json_path, det_dir, gt_dir, cameras, num_animals, max_f
             dist = mm.distances.iou_matrix(gtn, prn, max_iou=0.5)
             pc.update(gti, pid_local, dist, frameid=fi)
             pooled.update(gti, pid_global, dist, frameid=ci * 10_000_000 + fi)
-        s = mm.metrics.create().compute(pc, metrics=["idf1", "num_switches"], name="c")
+        s = mm.metrics.create().compute(pc, metrics=METRICS, name="c")
         percam_idf1.append(float(s["idf1"]["c"]))
+        percam_idp.append(float(s["idp"]["c"]))
+        percam_idr.append(float(s["idr"]["c"]))
+        percam_recall.append(float(s["recall"]["c"]))
+        percam_precision.append(float(s["precision"]["c"]))
         within_sw += int(s["num_switches"]["c"])
+        within_fp += int(s["num_false_positives"]["c"])
+        within_miss += int(s["num_misses"]["c"])
+        within_frag += int(s["num_fragmentations"]["c"])
+        within_obj += int(s["num_objects"]["c"])
+        within_idtp += int(s["idtp"]["c"])
+        within_matches += int(s["num_matches"]["c"])
 
-    sp = mm.metrics.create().compute(pooled, metrics=["idf1", "num_switches"], name="p")
+    sp = mm.metrics.create().compute(pooled, metrics=METRICS, name="p")
     return {
         "within_idf1": float(np.mean(percam_idf1)),
+        "within_idp": float(np.mean(percam_idp)),
+        "within_idr": float(np.mean(percam_idr)),
         "within_switches": within_sw,
         "cross_idf1": float(sp["idf1"]["p"]),
+        "cross_idp": float(sp["idp"]["p"]),
+        "cross_idr": float(sp["idr"]["p"]),
         "cross_switches": int(sp["num_switches"]["p"]),
+        "within_recall": float(np.mean(percam_recall)),
+        "within_precision": float(np.mean(percam_precision)),
+        "within_false_positives": within_fp,
+        "within_misses": within_miss,
+        "within_fragmentations": within_frag,
+        "within_objects": within_obj,
+        # IDA = idtp / num_matches, summed over cameras (a rate, not a mean of rates).
+        "within_idtp": within_idtp,
+        "within_matches": within_matches,
+        "within_ida": (within_idtp / within_matches) if within_matches else None,
+        "cross_idtp": int(sp["idtp"]["p"]),
+        "cross_matches": int(sp["num_matches"]["p"]),
+        "cross_ida": (float(sp["idtp"]["p"]) / float(sp["num_matches"]["p"])
+                      if float(sp["num_matches"]["p"]) else None),
         "per_camera_idf1": percam_idf1,
     }
 
@@ -115,9 +174,17 @@ def score_cell(session_scores):
     n = len(session_scores)
     if n == 0:
         return None
+    def mean_of(key):
+        # `.get` because a cell scored before idp/idr were added has neither, and an
+        # older deposit must still aggregate rather than raise.
+        vals = [s[key] for s in session_scores if s.get(key) is not None]
+        return float(np.mean(vals)) if vals else None
+
     return {
         "idf1_within": float(np.mean([s["within_idf1"] for s in session_scores])),
         "idf1_cross": float(np.mean([s["cross_idf1"] for s in session_scores])),
+        "idp_within": mean_of("within_idp"), "idr_within": mean_of("within_idr"),
+        "idp_cross": mean_of("cross_idp"), "idr_cross": mean_of("cross_idr"),
         "switches": int(sum(s["within_switches"] for s in session_scores)),
         "n_sessions": n,
     }

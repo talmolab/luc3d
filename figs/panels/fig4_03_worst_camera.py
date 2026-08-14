@@ -26,11 +26,17 @@ tick row leaves the boxes ~24 mm of axes, and the rotated y label -- 28 mm of ty
 is then clipped off the top of the page. The number carries the direction, which is
 the whole content of the finding.
 
-THE THREE BOXES ARE NOT DRAWN AT EQUAL WIDTH. n differs 45-fold across the strata
-and three equal boxes read as three equal conditions -- the exact failure printing n
-was meant to prevent. Width goes as sqrt(n), the standard variable-width boxplot,
-and each stratum's share of the 17,013,412 keypoints is printed under its own tick,
-so the 7.2 mm headline cannot be read as typical: that stratum is 1.6% of the data.
+THE THREE BOXES ARE DRAWN AT EQUAL WIDTH (review 2026-08-14). They were
+sqrt(n)-scaled -- the standard variable-width boxplot -- because n differs 45-fold
+across the strata and three equal boxes read as three equal conditions. At this
+panel's size that produced a 0.09-wide sliver beside a 0.54-wide box and it read as
+a rendering fault rather than as an encoding.
+
+Nothing is lost by equalising them, which is why the change is safe: `n` is printed
+above every box and each stratum's SHARE of the 17,013,412 keypoints is printed under
+its own tick, so the two statements the width was making are both still on the
+artwork, in numbers, twice. The 7.2 mm headline still cannot be read as typical --
+that stratum is 1.6% of the data and says so under its tick.
 
 Source: figs/out/fig4.json `robust.{clean,mid,outlier}.{moved_mm,improved_frac,n}`.
 
@@ -50,6 +56,10 @@ STRATA = [("clean", "< 3"), ("mid", "3–10"), ("outlier", "≥ 10")]
 
 #: Widest box, and the floor below which a box stops being visible at all. The
 #: 1.6% stratum comes out at ~0.15 of the widest -- thin, which is the point.
+#: One width for all three boxes; see the docstring. W_MIN is retained
+#: because `build()` and the deposit are unchanged and a future variable-width
+#: render would want the same floor.
+W_BOX = 0.42
 W_MAX, W_MIN = 0.54, 0.09
 
 
@@ -82,7 +92,7 @@ def main():
         # Drawn from the deposited percentiles rather than from raw samples: the
         # measurement pass summarised 4.2 M keypoints and only the percentiles
         # survive into the JSON, so a real bxp is the honest primitive here.
-        w = max(W_MIN, W_MAX * (r.n / n_max) ** 0.5)
+        w = W_BOX
         ax.bxp([{
             "med": r.p50, "q1": r.p25, "q3": r.p75,
             "whislo": r.p5, "whishi": r.p95, "fliers": [],
@@ -100,8 +110,9 @@ def main():
                 ha="left" if i == 0 else "center", color=MUTED, fontsize=7)
         # +0.45 in y, not centred exactly on the median: box 0's median is 1.07 mm on
         # a 0-27 mm axis, so a vertically centred label straddled y = 0 and sat on the
-        # x spine (the linter measured 12% of its box inked). x = 0.30 clears the
-        # widest box, whose half-width is 0.27.
+        # x spine (the linter measured 12% of its box inked). x = 0.30 cleared the
+        # widest box when widths varied (half-width 0.27) and still clears the
+        # constant W_BOX (half-width 0.21).
         ax.text(i + 0.30, r.p50 + 0.45, f"{r.p50:.1f}", ha="left", va="center",
                 color=PINK, fontweight="bold")
 

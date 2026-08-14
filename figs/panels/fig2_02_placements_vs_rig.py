@@ -86,6 +86,14 @@ def build():
         row = {"cameras": c, "traditional": c * NODES, "measured": c == ncam}
         for t in (TAU_STRICT, TAU_MAIN):
             row[f"aided_tau{int(t)}"] = 2 * NODES + (c - 2) * NODES * p[t]
+            # THE PANEL'S QUANTITY SINCE 2026-08-13 (review: "instead of the y axis
+            # being manual placements per frame, labour-free labels per frame"). Same
+            # model, same numbers, stated as the benefit rather than the cost: of the
+            # CN placements a traditional pass would make, this many arrive correct
+            # from the reprojection and are never touched. It is a DERIVED column, not
+            # a new measurement, and both are deposited so the old framing is
+            # recoverable from the CSV.
+            row[f"free_tau{int(t)}"] = c * NODES - row[f"aided_tau{int(t)}"]
         rows.append(row)
     return pd.DataFrame(rows), ncam, p
 
@@ -115,9 +123,16 @@ def main():
     # means "a measurement exists here" and none does on this curve -- not even at
     # C = 5. Weight, dash and marker all say the same thing, because one signal alone
     # is easy to miss at 57 mm.
+    # THE SALMON LINE IS THE DENOMINATOR, NOT A SERIES OF FREE LABELS. It is C x N,
+    # every label the frame needs; the teal curves are how many of those the
+    # reprojection supplies for nothing. Naming it "all placements by hand" on an axis
+    # of FREE labels said that labelling everything by hand yields the most free
+    # labels, which is exactly backwards -- hand labelling yields none. The axis is
+    # therefore "labels per animal per frame" and each line says which labels it
+    # counts. (Caught in review, 2026-08-14.)
     ax.plot(df.cameras, df.traditional, color=SALMON, lw=1.4, ls=(0, (6, 2.5)))
-    ax.plot(df.cameras, df[f"aided_tau{int(TAU_MAIN)}"], color=TEAL, lw=2.0)
-    ax.plot(df.cameras, df[f"aided_tau{int(TAU_STRICT)}"], color=TEAL, lw=1.2,
+    ax.plot(df.cameras, df[f"free_tau{int(TAU_MAIN)}"], color=TEAL, lw=2.0)
+    ax.plot(df.cameras, df[f"free_tau{int(TAU_STRICT)}"], color=TEAL, lw=1.2,
             ls=(0, (2.5, 1.5)))
 
     # ONE filled marker on the whole panel, at the ONE rig size p was measured on, on
@@ -126,22 +141,28 @@ def main():
     # mistake for four measured rigs -- or for a measured traditional cost.
     m = df[df.measured]
     assert len(m) == 1, m
-    ax.plot(m.cameras, m[f"aided_tau{int(TAU_MAIN)}"], "o", color=TEAL, ms=5.5,
+    ax.plot(m.cameras, m[f"free_tau{int(TAU_MAIN)}"], "o", color=TEAL, ms=5.5,
             mec="white", mew=1.0, zorder=5)
 
-    text_legend(ax, [("traditional (assumed)", SALMON),
-                     ("reprojection-aided", TEAL)], "above",
+    # THE TOLERANCES MOVED INTO THE KEY. On the old quantity the two teal curves ran
+    # apart at the right edge and could be labelled there; on this one they converge
+    # toward the ceiling, and both end-labels landed on a stroke (the τ = 10 label
+    # read as naming the salmon line, and τ = 5 sat across the solid curve). The key
+    # band is free and names each line once.
+    # SHORT ENOUGH FOR 57 mm: "of those, free from reprojection, τ = 10 px" is 43
+    # characters at 8 pt and ran off the panel (lint: CLIPPED, TRUNCATED). "free by
+    # reprojection" carries the same relation to the line above it, which already says
+    # what the total is.
+    text_legend(ax, [("labels needed, C × N (assumed)", SALMON),
+                     ("free by reprojection, τ = 10 px", TEAL),
+                     ("free by reprojection, τ = 5 px", TEAL)], "above",
                 xy=(0.14, 0.972), dy=0.064, transform=fig.transFigure)
 
     # The two tolerances stay ON the plot, because each one names a specific curve
     # and there are two teal curves. Both are pushed well clear of the line they
     # label -- 6 units above the dashed one, 7 below the solid one -- since at this
     # panel size a 2.0 pt line is ~2.5 data units thick on its own.
-    ax.text(CMAX, df[f"aided_tau{int(TAU_STRICT)}"].iloc[-1] + 6,
-            f"τ = {TAU_STRICT:.0f} px", color=TEAL, ha="right", va="bottom",
-            fontsize=7)
-    ax.text(CMAX, df[f"aided_tau{int(TAU_MAIN)}"].iloc[-1] - 7,
-            f"τ = {TAU_MAIN:.0f} px", color=TEAL, ha="right", va="top", fontsize=7)
+
     # What is measured and what is not, in the empty wedge above the traditional line
     # on the left -- INSIDE the axes, because the panel saves at an exact size and
     # anything above y = 1 in axes coordinates is cut off rather than accommodated.
@@ -165,10 +186,18 @@ def main():
     # the traditional line and the dashed curve respectively.
     aided = df.loc[df.cameras == ncam, f"aided_tau{int(TAU_MAIN)}"].iloc[0]
     trad = ncam * NODES
-    ax.annotate("", (ncam - 0.35, trad), (ncam - 0.35, aided),
+    free = trad - aided
+    # BOTH READINGS OF THE SAME MEASURED POINT, because the panel changed which one
+    # it plots and the paper quotes the other. The arrow spans the free labels at the
+    # measured rig; the label gives the count, the share of CN it is, and the
+    # placements-ratio the abstract uses -- all three are the same arithmetic.
+    ax.annotate("", (ncam - 0.35, 0), (ncam - 0.35, free),
                 arrowprops=dict(arrowstyle="<->", lw=0.8, color=INK))
-    ax.text(ncam + 0.12, 62, f"{trad / aided:.1f}×", ha="left",
-            va="center", fontweight="bold", color=INK)
+    # TWO SHORT LINES: the one-line form ran off the right edge of a 57 mm panel.
+    ax.text(ncam + 0.15, free * 0.55,
+            f"{free:.0f} of {trad:.0f} free\n{free / trad:.0%} · "
+            f"{trad / aided:.1f}× fewer", ha="left", va="center", fontsize=6.5,
+            fontweight="bold", color=INK, linespacing=1.35)
 
     # Every integer: C is a count, and the one measured marker sits at C = 5, which
     # the old [2, 4, 6, 8] left between ticks.
@@ -190,7 +219,7 @@ def main():
     # centred line under a 57 mm axis takes ~30 characters before it reaches the
     # panel edge (the full sentence, 37 characters, cleared the edge by 0.2 mm).
     footnote(ax, f"assumed: {NODES} nodes × C views")
-    ax.set_ylabel("manual placements\nper animal per frame")
+    ax.set_ylabel("labels\nper animal per frame")
     ax.set_xlim(2, CMAX)
     ax.set_ylim(0, CMAX * NODES * 1.10)
     save(fig, 2, "b", "placements_vs_rig")

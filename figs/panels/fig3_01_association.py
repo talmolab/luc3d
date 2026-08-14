@@ -49,7 +49,8 @@ from matplotlib.patches import FancyArrowPatch, Rectangle
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.diagram import blank, icon  # noqa: E402
-from src.style import MUTED, GREY, INK, SALMON, TEAL, grid, save, use  # noqa: E402
+from src.style import (MUTED, GREY, INK, SALMON, TEAL, grid, identity,  # noqa: E402
+                       save, use)
 
 NCAM = 4                   # camera columns, both boxes
 NA = 3                     # detections per camera, exhaustive box
@@ -110,12 +111,23 @@ def draw_exhaustive(ax):
                         color="#DDDDDD", lw=0.6, zorder=2,
                         solid_capstyle="round")
     # One consistent whole-frame grouping: A disjoint paths threading the mesh.
+    #
+    # COLOURED BY IDENTITY, NOT BY METHOD (review 2026-08-13: "not all orange lines,
+    # the colours should be IDs"). The three kept paths are not three copies of one
+    # thing -- each is one ANIMAL's detections linked across the cameras, which is
+    # exactly what an identity is, so each takes its own `identity()` hue and the same
+    # hues the app's screenshots and Fig 1a's icons use. SALMON stays on the accent
+    # bar, where it means the METHOD (exhaustive), which is the entity rule.
+    #
+    # The dots stay INK: before a grouping is chosen a detection has no identity, and
+    # that is the whole premise of the panel -- the same statement Fig 1a's `tiles2d`
+    # glyph makes by drawing both animals in one colour.
     rows = list(range(NA))
     for c, perm in enumerate(WINNER):
         for a in range(NA):
             ax.plot([X_COLS[c], X_COLS[c + 1]],
                     [Y_DOTS[rows[a]], Y_DOTS[perm[rows[a]]]],
-                    color=SALMON, lw=1.4, zorder=3, solid_capstyle="round")
+                    color=identity(a), lw=1.4, zorder=3, solid_capstyle="round")
         rows = [perm[r] for r in rows]
     for c in range(NCAM):
         icon(ax, "camera", X_COLS[c] - 0.31, Y_CAM, s=0.62, color=INK)
@@ -139,6 +151,17 @@ def draw_greedy(ax):
         ax.add_patch(Rectangle((x, y_h), 0.72, 0.62, fill=False, ec=TEAL, lw=0.9))
         ax.text(x + 0.36, y_h + 0.31, "H", ha="center", va="center", color=TEAL,
                 fontsize=7, fontweight="bold")
+        # THE RESULT OF EACH SOLVE, in the identity hues, so the two halves of this
+        # panel end in the same place: A identities, resolved in every camera. Without
+        # them the greedy side showed only machinery ("H") and the reader had to take
+        # on trust that it produces the same object the exhaustive side draws.
+        # A ROW under the solve, not a column: stacked, the three dots needed 0.78
+        # units below `y_h` and the content band has 0.20 before it leaves the box --
+        # they rendered outside the frame. Laid across the H box's own width they sit
+        # inside the band with room to spare.
+        for a in range(NA):
+            ax.plot([x + 0.12 + a * 0.24], [Y_BAND + 0.08], "o", ms=3.4,
+                    mfc=identity(a), mec="white", mew=0.6, zorder=4)
         if i < NCAM - 1:
             ax.add_patch(FancyArrowPatch((x + 0.86, y_h + 0.31),
                                          (x + 2.2, y_h + 0.31),
@@ -150,7 +173,13 @@ def draw_greedy(ax):
 
 def main():
     use()
-    fig, axes = grid(1, 2, span="full", row=ROW_MM, despine=False)
+    # STACKED, NOT SIDE BY SIDE (review 2026-08-13: "move greedy under exhaustive and
+    # then c can go next to it"). Two consequences, both intended: the two strategies
+    # are read top-to-bottom in the order the text introduces them, and the panel
+    # becomes HALF the page wide, which is what frees the right-hand half of that row
+    # for panel c -- the quantitative version of the same contrast (hypotheses per
+    # frame). `row` doubles because the panel now carries two content bands.
+    fig, axes = grid(2, 1, span="half", row=2 * ROW_MM, despine=False)
     # Vertical pad only. `w_pad` is left at matplotlib's default, so the horizontal
     # geometry -- and therefore the ink bounding box's WIDTH -- is untouched.
     fig.get_layout_engine().set(h_pad=HPAD_MM / 25.4)

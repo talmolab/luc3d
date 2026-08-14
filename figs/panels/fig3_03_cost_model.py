@@ -48,7 +48,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (SALMON, SET2, deposit, footnote,  # noqa: E402
+from src.style import (GREY, SALMON, SET2, deposit, footnote, level,  # noqa: E402
                        panel, save, text_legend, use)
 
 CAMERAS = [2, 4, 6, 8]
@@ -95,12 +95,21 @@ def main():
     fig, ax = panel("half", "std", key=4)
     for i, c in enumerate(CAMERAS):
         g = df[df.cameras == c]
-        ax.plot(g.animals, g.exhaustive, color=SET2[i], lw=2.0, zorder=3)
-        ax.plot(g.animals, g.exhaustive, "o", color=SET2[i], ms=4, mec="white",
+        # `level()`, NOT SET2 (review 2026-08-13, X.1). Rig size is an ORDERED
+        # QUANTITY, and drawing it in the categorical set gave "4 cameras" the salmon
+        # that means "the comparator" and "2 cameras" the teal that means "this work"
+        # -- in a figure whose panel d, two rows down, uses both of those hues for
+        # exactly those meanings. A sequential ramp also shows the ordering, which
+        # four categorical hues actively hide.
+        ax.plot(g.animals, g.exhaustive, color=level(i, len(CAMERAS)), lw=2.0, zorder=3)
+        ax.plot(g.animals, g.exhaustive, "o", color=level(i, len(CAMERAS)), ms=4,
+                mec="white",
                 mew=0.8, zorder=4)
 
     # A tractability rule, so the axis has a meaning a reader can act on.
-    ax.axhline(cap, color=SALMON, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
+    # GREY, not SALMON: this is the harness's CAP -- a bound, not a method -- and the
+    # set reserves grey for bounds (see the rule above ENTITY in src/style.py).
+    ax.axhline(cap, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
 
     # NO TEXT INSIDE THESE AXES, and that is deliberate rather than timid. Four
     # curves over 24 decades leave no gap wide enough for a label, and
@@ -109,7 +118,8 @@ def main():
     # A = 3.0, 3.4 and 4.2. The rule is therefore named in the footnote, BY WHAT IT
     # IS rather than by its colour (a caption that says "the salmon rule" is unusable
     # to a colourblind reader and reads as internal shorthand).
-    text_legend(ax, [(f"{c} cameras", SET2[i]) for i, c in enumerate(CAMERAS)],
+    text_legend(ax, [(f"{c} cameras", level(i, len(CAMERAS)))
+                     for i, c in enumerate(CAMERAS)],
                 "above")
     ax.set_yscale("log")
     ax.set_xticks(ANIMALS)

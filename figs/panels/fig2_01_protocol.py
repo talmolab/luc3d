@@ -118,13 +118,33 @@ def chevron(fig, x, y, *, h=0.023, w=0.010, color=GREY, lw=1.2):
                           solid_capstyle="round", clip_on=False))
 
 
-def schematic(ax):
-    """Two solid rays in from the anchors, several dashed reprojections out."""
+def schematic(ax, anchors=()):
+    """Two solid rays in from the anchors, several dashed reprojections out.
+
+    THE ANCHOR CAMERAS ARE NAMED (review 2026-08-13: "if you labelled, the diagram
+    should label the cam 2 and cam 6"). The tiles either side of this schematic badge
+    themselves `cam 1 topB . anchor`, but the ray diagram between them did not, so the
+    one element that shows WHY two views suffice was the only one that did not say
+    which two. Names come from `anchors`, the same list the tiles use, so the
+    schematic cannot drift from the render it sits beside. (For the record, the
+    current render's pair is cam 1 topB and cam 6 sideL -- the meeting note's "cam 2"
+    was approximate and FIGURE-LEGENDS.md is right.)"""
     blank(ax)
     px, py = 1.6, 0.0
-    for cy in (1.6, -1.6):                       # the two anchor cameras
+    for cy, cam in zip((1.6, -1.6), list(anchors) + [None, None]):
         icon(ax, "camera", -2.3, cy - 0.3, s=0.6, color=INK)
         ray(ax, -1.6, cy, px, py, color=INK, lw=0.9)
+        if cam:
+            # Above the upper camera and below the lower one, so neither label sits
+            # between the two rays where they converge on the 3D point.
+            # BOTH ABOVE their camera. Below the lower one the label ran into the
+            # "2 views labelled" caption at the foot of the schematic (lint: 84%
+            # overlap); above it there is clear space on both.
+            # 0.62 above, not 0.42: the lower camera's icon top edge sits at
+            # cy + 0.30, so a 6 pt label 0.42 above it clipped the icon (lint: 5%
+            # inked). Both labels use the same offset so the pair reads as a pair.
+            ax.text(-2.35, cy + 0.62, cam_label(cam), ha="left", va="bottom",
+                    color=INK, fontsize=6.0)
     for cy in (1.8, 0.0, -1.8):                  # the views reprojected into
         icon(ax, "camera", 4.0, cy - 0.3, s=0.6, color=GREY)
         ray(ax, px, py, 3.9, cy, color=TEAL, ls=(0, (2.0, 1.5)))
@@ -163,7 +183,7 @@ def main():
              badge=f"{cam_label(cam)} · anchor", pad=0.06)
 
     # --- 2: the solve, and what it produced -------------------------------
-    schematic(cells[(0, 1)])
+    schematic(cells[(0, 1)], anchors)
     tile(cells[(1, 1)], OUT / "fig2p-3d-animals.png", None,
          badge="3D from the 2 anchors")
 

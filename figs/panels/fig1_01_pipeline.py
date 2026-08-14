@@ -38,14 +38,28 @@ from src.style import MUTED, grid, GREY, INK, SALMON, TEAL, save, use  # noqa: E
 #: is the two re-identified instances in the identity palette -- the same mini
 #: pose at three stages, so the row reads as one object moving through the
 #: pipeline. The glyphs live in src/diagram.py `icon()`.
+#: EXPORT IS OURS (review 2026-08-13). It was marked False, which made the pipeline
+#: read as ending in someone else's format. Emitting SLP 2.8 with the columnar
+#: `/session_data` is this work -- it is what makes the 3D and the identities readable
+#: by SLEAP at all -- so it joins the contributed run, and the "this work" bracket
+#: (drawn from the contiguous run of contributed stages) now reaches the end of the row.
+#:
+#: CALIBRATION IS A SIDE INPUT, NOT PART OF STAGE 1 (review 2026-08-13: "just videos
+#: and make calibration separate?"). It used to be glued to "videos", which implied it
+#: arrives with them. It is a separate artefact, and it is consumed at TRIANGULATION,
+#: not at 2D pose -- a detector needs no calibration. It is therefore drawn as a
+#: labelled arrow entering the triangulate stage from below; see `main()`.
 STAGES = [
-    ("videos +\ncalibration", "N cameras, .toml", False, "cameras"),
-    ("2D pose", "SLEAP or similar", False, "pose2d"),
-    ("cross-view\nre-ID", "1 identity / animal", True, "ids"),
-    ("triangulate", "DLT, N ≥ 2 views", True, "pose3d"),
+    ("videos", "N cameras", False, "cameras"),
+    ("2D pose", "SLEAP or similar", False, "tiles2d"),
+    ("cross-view\nre-ID", "1 identity / animal", True, "tilesid"),
+    ("triangulate", "DLT, N ≥ 2 views", True, "volume3d"),
     ("proofread 3D", "3D + reproj.", True, "instances3d"),
-    ("export", ".slp 2.8 / H5", False, "file"),
+    ("export", ".slp 2.8 / H5", True, "file"),
 ]
+
+#: Which stage the calibration side-input points at, by index into STAGES.
+CALIB_STAGE = 3
 
 #: Chevron geometry. The box holds the ICON ONLY and the label sits under it --
 #: see `main()` for why the label is no longer inside the chevron.
@@ -56,7 +70,10 @@ W, H, GAP, NOTCH = 2.05, 1.05, 0.36, 0.24
 #: of the "this work" label, which sits at about -2.10 -- measured off the render, not
 #: guessed. The panel used to declare (-2.22, H/2 + 0.30), i.e. 0.28 units of pure
 #: white above the chevrons, which is 2.8 mm of the figure at the scale below.
-YLIM = (-2.20, H / 2 + 0.06)
+#: Where the calibration side-input's arrow starts, above the chevron row. The top of
+#: YLIM follows from it plus the 6.5 pt label, which is why the two are declared together.
+CAL_Y = H / 2 + 0.30
+YLIM = (-2.20, CAL_Y + 0.42)
 
 #: Millimetres per data unit. THIS, NOT THE PANEL HEIGHT, IS THE FIXED QUANTITY.
 #: `blank()` sets aspect='equal' and the drawing is 14.8 units wide against 2.8 tall,
@@ -106,6 +123,9 @@ def main():
         # one-line label ("proofread 3D") ran out through the right point. Under the
         # box there is the whole pitch to write in, so nothing has to be shrunk
         # below the 7.5 pt this row already uses.
+        # The three multi-view glyphs are WIDE (see src/diagram.icon): they are
+        # centred on the same point and spend the chevron's spare width, which is what
+        # lets three camera tiles stay legible at this scale.
         icon(ax, kind, x + W / 2 - 0.25, -0.25, s=0.50, color=color)
         ax.text(x + W / 2, -H / 2 - 0.16, label, ha="center", va="top", color=INK,
                 fontsize=7.5, linespacing=1.25)
@@ -118,6 +138,21 @@ def main():
             ax.add_patch(FancyArrowPatch(
                 (x - GAP + 0.06, 0), (x + 0.04, 0), arrowstyle="-|>",
                 mutation_scale=7, color=GREY, lw=0.9, shrinkA=0, shrinkB=0))
+
+    # CALIBRATION, ENTERING WHERE IT IS ACTUALLY USED. An arrow up into the
+    # triangulate chevron rather than a word inside stage 1: 2D pose does not need
+    # calibration and triangulation cannot proceed without it, and the figure should
+    # say which. Drawn in MUTED so it reads as an input to the row, not a stage in it.
+    # ABOVE the row, not below it: under the chevron the label landed on the
+    # "triangulate" caption and its sub-label ("DLT, N >= 2 views"), which is the one
+    # band of this panel that is already full. Above the chevrons nothing is drawn at
+    # all, and an input arriving from outside the row reads correctly as an input.
+    cx_cal = CALIB_STAGE * (W + GAP) + W / 2
+    ax.text(cx_cal, CAL_Y + 0.10, "calibration (.toml)", ha="center", va="bottom",
+            color=MUTED, fontsize=6.5)
+    ax.add_patch(FancyArrowPatch((cx_cal, CAL_Y + 0.06), (cx_cal, H / 2 + 0.03),
+                                 arrowstyle="-|>", mutation_scale=6,
+                                 color=MUTED, lw=0.8, shrinkA=0, shrinkB=0))
 
     # ONE bracket under the three stages this paper contributes, as in the legacy
     # figure. Per-stage "this paper" tags said the same thing three times and did

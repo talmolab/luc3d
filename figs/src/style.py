@@ -138,6 +138,57 @@ ENTITY = {
 }
 
 
+#: THE APP'S OWN IDENTITY PALETTE, mirrored from `pose/pose-data.js`
+#: `IDENTITY_COLORS`. Fig 1b, Fig 1c, Fig 2a and Fig 6b are SCREENSHOTS of the app, so
+#: any schematic that draws the same identities -- Fig 1a's pipeline icons, Fig 3's
+#: association diagrams -- has to use the same hues or the reader is asked to follow an
+#: identity across a colour change (review 2026-08-13: "watch the colour matching the
+#: instance"). Keep this list in sync with the app; it is the app that owns it.
+IDENTITY_SCREEN = [
+    "#00ff00", "#ff00ff", "#00ffff", "#ffff00", "#ff8800",
+    "#0088ff", "#ff0088", "#88ff00", "#8800ff", "#00ff88",
+]
+
+
+def identity(i, print_safe=True):
+    """Colour for animal identity `i`, matching what the app drew in the screenshots.
+
+    `print_safe` (the default) keeps the HUE and drops the lightness: the app's palette
+    is pure screen primaries -- `#00ff00` is 1.4:1 against white and vanishes in print,
+    which is a real defect in a figure and not a matter of taste. The darkened hue still
+    reads as "the green animal" beside the screenshot it accompanies. Pass
+    `print_safe=False` where the mark sits ON a screenshot and must match it exactly.
+    """
+    import colorsys
+    hexcol = IDENTITY_SCREEN[i % len(IDENTITY_SCREEN)]
+    if not print_safe:
+        return hexcol
+    r, g, b = (int(hexcol[k:k + 2], 16) / 255 for k in (1, 3, 5))
+    h, l, sat = colorsys.rgb_to_hls(r, g, b)
+    # 0.30, MEASURED not chosen: at that lightness cap the WORST of the ten hues
+    # (yellow) reaches 3.53:1 against white and the best 11.8:1, so every identity
+    # clears the 3:1 floor this set uses for a mark that carries meaning. At 0.42 the
+    # worst was 1.83:1 -- lighter than GREY (#B3B3B3, 2.1:1), which the panels already
+    # treat as too faint to carry a result.
+    r, g, b = colorsys.hls_to_rgb(h, min(l, 0.30), min(sat, 0.85))
+    return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+
+def level(i, n, lo=0.25, hi=0.85):
+    """Colour for the `i`-th of `n` values of an ORDERED, non-entity quantity --
+    a cost-weight ratio, a camera count, a difficulty stratum.
+
+    A sequential ramp, deliberately NOT a Set2 categorical: those hues are spoken for
+    (see the rule above ENTITY), and an ordered quantity drawn in categorical colours
+    both wastes the reader's learned mapping and hides the ordering. Reserving the
+    categoricals for entities is what stops teal meaning "us" on one panel and "r = 4"
+    on the next (review 2026-08-13).
+    """
+    import matplotlib as mpl
+    t = lo if n <= 1 else lo + (hi - lo) * (i / (n - 1))
+    return mpl.colormaps["viridis"](t)
+
+
 def entity(name):
     """Colour for a recurring entity, so one hue means one thing set-wide.
 

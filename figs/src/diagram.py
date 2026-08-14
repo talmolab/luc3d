@@ -142,8 +142,45 @@ def loop(ax, x, y, r=0.55, color=INK, label=None):
 # Same shapes, same proportions, redrawn in matplotlib. Every icon is drawn into
 # the unit box (x, y) .. (x+s, y+s) so a stage can place one without measuring.
 
+def mouse_pose(ax, bx, by, bw, bh, color=INK, lw=None, dot=0.075):
+    """The set's mini mouse -- nose-head-hip-tailbase spine plus two limbs -- drawn to
+    fill the rectangle (bx, by, bw, bh) in ordinary y-up coordinates.
+
+    ONE SHAPE, USED EVERYWHERE. Fig 1a's `pose2d` / `pose3d` / `instances3d` glyphs
+    already drew this; the multi-view tile glyphs first used a stroke-and-dot mark
+    instead and it read as a smudge rather than an animal (review 2026-08-14: "they
+    should still look like little mice like the proofread3d does, but just 2D
+    projections in the squares"). Hoisted here so both call sites are literally the
+    same drawing at different sizes, and a change to the animal is a change to all of
+    them. The fractions are the legacy y-DOWN ones flipped once, here, rather than at
+    every call site.
+    """
+    lw = lw or LW * 0.85
+    spine = [(0.10, 0.38), (0.38, 0.70), (0.66, 0.56), (0.94, 0.80)]
+    limbs = (((0.38, 0.70), (0.30, 0.34)), ((0.66, 0.56), (0.76, 0.26)))
+    P = lambda f: (bx + f[0] * bw, by + f[1] * bh)
+    for a, b in zip(spine, spine[1:]):
+        (x1, y1), (x2, y2) = P(a), P(b)
+        ax.plot([x1, x2], [y1, y2], color=color, lw=lw, solid_capstyle="round",
+                zorder=4)
+    for a, b in limbs:
+        (x1, y1), (x2, y2) = P(a), P(b)
+        ax.plot([x1, x2], [y1, y2], color=color, lw=lw, solid_capstyle="round",
+                zorder=4)
+    for f in spine:
+        ax.add_patch(Circle(P(f), min(bw, bh) * dot, facecolor=color,
+                            edgecolor="none", zorder=5))
+
+
+#: How many icon-heights wide the multi-view glyphs are. Three tiles plus their gaps
+#: at a legible size; see the block comment in `icon()`.
+TILES_W = 2.7
+
+
 def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
-    """One pipeline glyph in the box (x, y, s, s).
+    """One pipeline glyph in the box (x, y, s, s) -- except the multi-view glyphs
+    (`tiles2d`, `tilesid`, `volume3d`), which are `TILES_W * s` wide and CENTRED on
+    x + s/2, and return their own (x, y, w, h).
 
     kinds: camera, cameras, skeleton, ids, triangulate, cube, check, file, mouse,
     pose2d, pose3d, instances3d
@@ -275,10 +312,84 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
             pose(0.10, 0.02, 0.80, color)
         else:  # instances3d
             # The identity palette's first two hues, not the chevron's colour:
-            # here colour IS the payload (one identity per animal).
+            # here colour IS the payload (one identity per animal). `identity()`
+            # rather than SET2 since 2026-08-13: SET2[0]/SET2[1] are teal and salmon,
+            # which are RESERVED ENTITY hues (this work / its comparator), so the two
+            # animals in this glyph were wearing the colours that mean "LUC3D" and
+            # "the baseline" three panels later -- and they disagreed with the two
+            # identity hues the tiles glyphs and the app's own screenshots use.
+            from src.style import identity as _id
             plane(GREY)
-            pose(0.00, 0.00, 0.58, SET2[0])
-            pose(0.40, 0.34, 0.58, SET2[1])
+            pose(0.00, 0.00, 0.58, _id(0))
+            pose(0.40, 0.34, 0.58, _id(1))
+    elif kind in ("tiles2d", "tilesid", "volume3d"):
+        # ##################################################################
+        # THE PIPELINE'S ACTUAL SHAPE (review 2026-08-13). The three glyphs
+        # before this one drew ONE pose per stage, so Fig 1a asserted a
+        # single-view pipeline -- the opposite of the paper's claim. These
+        # three carry the real story in colour alone:
+        #
+        #   tiles2d   N camera tiles, two animals each, ALL ONE COLOUR
+        #             -- detections exist in every view, identity does not
+        #   tilesid   the SAME tiles, each animal now in its own identity
+        #             colour, consistent tile to tile -- that is the
+        #             cross-view re-ID result and nothing else changed
+        #   volume3d  ONE 3D volume, two animals, the SAME two identity
+        #             colours -- the views have collapsed into one space
+        #
+        # Colours come from `identity()`, which mirrors the app's own
+        # IDENTITY_COLORS, so the schematic and the Fig 1b/1c screenshots
+        # name the same animal the same way.
+        #
+        # WIDE, NOT SQUARE: three tiles in a 0.5-unit square would be 1.5 mm
+        # each at this panel's scale. `s` is read as the HEIGHT and the glyph
+        # spends `TILES_W * s` of width, which the chevron has to spare.
+        # ##################################################################
+        from src.style import identity as _identity
+        n_tiles = 3
+        wide = TILES_W * s
+        x0 = cx - wide / 2.0
+        tw = wide / (n_tiles + (n_tiles - 1) * 0.22)     # tile width
+        gap = tw * 0.22
+
+        def animal(ax_, bx, by, bw, bh, fx, fy, col, scale=1.0):
+            """One mini mouse (see `mouse_pose`) centred on (fx, fy) of the tile,
+            at `scale` of the tile's width -- the SAME glyph the proofread-3D icon
+            draws, so a reader follows one animal shape through the whole row."""
+            aw, ah = bw * 0.52 * scale, bh * 0.42 * scale
+            mouse_pose(ax_, bx + fx * bw - aw / 2, by + fy * bh - ah / 2, aw, ah,
+                       color=col, lw=lw, dot=0.085)
+
+        if kind in ("tiles2d", "tilesid"):
+            # Two animals per tile at DIFFERENT positions in each tile: the same
+            # pair seen from three viewpoints, not three copies of one picture.
+            # Pulled apart: a mini pose fills ~half the tile, so the old
+            # near-diagonal pairs overlapped once the glyph stopped being a stroke.
+            poses = [((0.27, 0.28), (0.71, 0.72)),
+                     ((0.29, 0.73), (0.73, 0.27)),
+                     ((0.26, 0.70), (0.72, 0.30))]
+            for t in range(n_tiles):
+                bx = x0 + t * (tw + gap)
+                ax.add_patch(Rectangle((bx, y), tw, s, fill=False, ec=color,
+                                       lw=lw * 0.9, zorder=3))
+                for a, (fx, fy) in enumerate(poses[t]):
+                    col = color if kind == "tiles2d" else _identity(a)
+                    animal(ax, bx, y, tw, s, fx, fy, col)
+        else:
+            # ONE box for the collapsed 3D volume, with a ground parallelogram so
+            # it reads as a space rather than a fourth camera tile.
+            bw = wide * 0.62
+            bx = cx - bw / 2.0
+            ax.add_patch(Polygon([(bx, y + s * 0.16), (bx + bw * 0.18, y),
+                                  (bx + bw, y + s * 0.10),
+                                  (bx + bw * 0.82, y + s * 0.26)],
+                                 closed=True, fill=False, ec=GREY,
+                                 lw=lw * 0.8, zorder=2))
+            ax.add_patch(Rectangle((bx, y), bw, s, fill=False, ec=color,
+                                   lw=lw * 0.9, zorder=3))
+            for a, (fx, fy) in enumerate(((0.30, 0.42), (0.70, 0.66))):
+                animal(ax, bx, y, bw, s, fx, fy, _identity(a), scale=1.05)
+        return x0, y, wide, s
     else:
         raise ValueError(f"unknown icon kind: {kind}")
     return x, y, s, s

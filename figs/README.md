@@ -116,6 +116,10 @@ the embedded font name differs.
 | `REVISION-LOG.md` | **What changed in response to that report, with the before and after value of every number that moved**, plus the items that are the manuscript's to fix rather than this repo's. A response-to-reviewers letter can be assembled from it. Update it whenever a measurement is re-run; the numbers in the docs are only checkable against something if that something is written down. |
 | `CAPTIONS.md` | The working caption document: extended reasoning, the readings each figure must NOT support, and the analyses that were run and not shown. Source material for `FIGURE-LEGENDS.md` and for a Supplementary Note; not itself a submission artefact. |
 | `fig8_param_sweeps.py` | **EXPLORATORY, NOT IN THE MANUSCRIPT.** Sweeps every remaining `CrossViewTracker` threshold one at a time (10 parameters, 35 cells) on exactly Fig 3e's measurement — same 8 BMimica sessions, full length, same detections, same `fig3_score.py`, same 7,205,370-camera-frame denominator — so its rates are directly comparable to Fig 3e's. Imports `fig3_sweep.py` for the corpus/driver/scorer rather than re-deriving them; does not modify it and does not touch `out/fig3_sweep.json`. Deposits `out/fig8_param_sweeps.json`, caches per-cell tracker runs under `out/tmp/fig8/` so it is restartable, and **reuses Fig 3e's `corr2d=1/corr3d=6` cell as the shipped-default cell by symlink** — that one configuration is the default for all ten parameters and is measured once, not ten times. Run it with the bench interpreter (`/root/vast/eric/luc3d-bench/liezl_env/bin/python`); scoring needs motmetrics. See "Fig 8" below for what it found. |
+| `fig8_diag_loss.py` | **EXPLORATORY.** Decomposes the tracker's cross-view IDF1 loss into IDENTITY versus COVERAGE error, off existing result JSONs (no re-tracking): `as_is`, `oracle_id` (every LABELLED detection relabelled to its best-IoU GT box) and `oracle_full` (every detection with a bbox). Answers "what is the missing IDF1 made of" before any method is written, and sets the ceiling Fig 8d is read against. `--cell`/`--root` select any cached cell from either `tmp/fig8/` or `tmp/fig8m/`. Bench interpreter. Deposits `out/fig8_diag_loss_<cell>.json`. |
+| `fig8_diag_anchor_age.py` | **EXPLORATORY.** Measures how OLD the per-camera detections are that `Target._retriangulate()` fuses into the 3D each association is scored against — the mechanism behind Fig 8d's best result. Behaviour-neutral, and that is *proved* per session by digest-comparing against the `shipped` cell, because a probe that perturbs what it measures is worthless. Deposits `out/fig8_diag_anchor_age.json`. |
+| `fig8_methods.py` | **EXPLORATORY, NOT IN THE MANUSCRIPT.** ALGORITHMIC methods for the cross-view tracker on exactly Fig 8's measurement, via `figs/fig8-bench/` (an ESM loader hook serving `xv_experimental.js` in place of `pose/cross-view-tracker.js`; **no app source is modified**). `--verify` proves the fork with an empty method block is byte-identical to the shipped tracker on all 8 full sessions. `--recheck` re-tracks one session per cached cell under today's code — the cache outlives tracker edits and this is the tripwire against silently mixing code versions (it has already caught one real bug). `--all-sessions` re-runs over all 50 proofread BMimica sessions into a separate cache and deposit, since `switches` is a raw sum whose denominator differs. `--reaggregate` recomputes the per-session comparison without re-scoring. Bench interpreter. Deposits `out/fig8_methods.json`. |
+| `fig8_report50.py` | Reads `out/fig8_methods_50.json` and prints the all-50-session picture: a harness cross-check against `fig3_trackers.json`'s independent 50-session LUC3D number FIRST, then medians and quartiles rather than means, per-session win/loss, worst single-session harm, and paired Wilcoxon tests. |
 | `lint_text.py` | Finds overlapping and clipped text in the RENDERED panel PDFs, by measuring every text span's bounding box. Non-zero exit if anything is found, so it works as a pre-submission gate. This is the useful half of the legacy `lint.py`, reinstated for the same reason: these defects exist only in the emitted geometry and reading the generator source never finds them. It caught 55 on its first run. |
 | `legacy/` | The retired `nature.py` composite-SVG path (`fig1.py`…`fig6.py`, `lint.py`, `render.mjs`). Not part of the build; kept for the provenance in its docstrings. See `legacy/README.md`. |
 
@@ -354,6 +358,21 @@ proximity percentiles (81 / 259 / 603 mm). Do not relabel these as named behavio
 without an annotation pass.
 
 ## Fig 3 — cross-view association (planned)
+
+**UPDATE 2026-08-14, on instruction — 3d and 3e now carry the FRESH ANCHOR
+(`sync` + `stale 20` + `distanceThreshold 25`, corr3dWeight 6) alongside the shipped
+arm, never substituted.** 3d gained a third series (fresh-anchor greedy, hollow teal;
+data `out/fig3_quality__distanceThreshold25-stale20-sync_e508a7ab.json`, harness gated
+byte-identical on 92 sessions in `out/fig3_hh_gate.json`; pooled misgrouped 1,052
+shipped / 926 fresh / 1,309 exhaustive). 3e was RE-BASED from 8 sessions to the full
+50-session corpus, both arms on the same 45,021,960-camera-frame denominator
+(`out/fig3_sweep50.json` + the tagged fresh deposit; shipped r = 6 gives 2,071
+switches / cross 0.7493, fresh 413 / 0.8613). **Every statement elsewhere in this
+file that pins a number to "Fig 3e's measurement" — 8 sessions, the 7,205,370
+camera-frame denominator, `out/fig3_sweep.json` — refers to the RETIRED render,
+still reproducible pixel-for-pixel via `fig3_05_sweep.py --legacy8` (and 3d's via
+`fig3_04_quality.py --as-shipped`); those deposits are untouched and Fig 8's
+comparability to them is unaffected.**
 
 **The comparison is legitimate, but two different components share a name.**
 `pose/cross-view-tracker.js` is a faithful port of Liezl Maree's *temporal*
@@ -699,7 +718,7 @@ sampled value for only one of them (rates per 100,000 camera-frames):
 
 | threshold | shipped | rate at shipped | best sampled | rate there | cross-view IDF1 |
 |---|---|---|---|---|---|
-| `distanceThreshold` | 50 | 4.497 | **25** | **3.636** | 0.735 → **0.795** |
+| `distanceThreshold` | 50 | 4.497 | **25** | **3.636** | 0.735 → **0.795** ⚠ (see 8e) |
 | `corr3dWeight` | 6 | 4.497 | 12–36 (flat) | 3.78 | 0.735 → 0.766 |
 | `filterMinVisibleNodes` | 0 | 4.497 | 0 (= 4 = 8) | 4.497 | 12 is **worse**: 5.08, IDF1 0.685 |
 
@@ -726,6 +745,258 @@ detector, two animals, five cameras; `distanceThreshold` is in world units (mm) 
 `velocityThreshold` in normalised image units, so both are tied to this geometry;
 and 4-of-8-better/4-tied is a small n by this repo's own standards (see the Fig 4
 sections on how badly single-run and small-n conclusions have travelled here).
+
+### Fig 8c/8d — what an ALGORITHM change buys, once you know what the loss is made of
+
+8a/8b answer "do the constants matter". 8c and 8d answer what follows. Same 8 BMimica
+sessions, same full length, same detections, same `fig3_score.py`, same 7,205,370-camera-
+frame denominator, so every number here is comparable to a Fig 3e or Fig 8a/8b number.
+`fig8_methods.py` drives `figs/fig8-bench/fig8_bench.mjs`, which serves
+`figs/fig8-bench/xv_experimental.js` in place of `pose/cross-view-tracker.js` through an
+ESM loader hook. **No app source is modified** — the shipped tracker file is read, never
+written, per the figs "no app-source edits" rule.
+
+**The fork is proved honest before anything is read off it.** With an EMPTY method block
+it is **byte-identical to the shipped tracker on all 8 full sessions** — same SHA-256 of
+the `identities`+`frames` payload that 8a used to prove five thresholds inert
+(`out/fig8_methods_verify.json`, `fig8_methods.py --verify`). So any row below is the
+method's difference, not the fork's.
+
+**8c: 98.6% of the recoverable loss is IDENTITY, not coverage.** Relabelling every
+detection to the id of its best-IoU GT box (`fig8_diag_loss.py`, full sessions):
+
+| | mean cross-view IDF1 |
+|---|---|
+| shipped | 0.7347 |
+| + perfect identities at today's coverage | **0.9367** |
+| + perfect coverage too | 0.9395 |
+
+99.4% of detections with a bbox already get an identity, so `commitTrackedFrame`'s
+">= 2 views" rule costs almost nothing. **Quote 0.9367 as the ceiling, not 1.0** — and
+note two of the eight sessions already sit ON it.
+
+**The swaps are rare and PERMANENT, not frequent.** 324 within-view switches across 7.2M
+camera-frames, yet IDF1 0.735. 20250904_131913 loses **0.311 IDF1 to TEN switches**. The
+same tracker scores **0.935 over the leading 20,000 frames** of each session and 0.735
+over the full ~180,000. Two consequences: optimising switch count is optimising a number
+that is already tiny, and **a windowed experiment cannot see this failure at all**.
+
+**8d: the winner is anchor freshness, and it was not one of the three methods this
+started with.** `Target.detsByCam` keeps one detection per camera and **never expires
+it**, and `_retriangulate()` fuses all of them — so the 3D state every association is
+scored against blends the current pose with wherever each other camera last saw the
+animal. `fig8_diag_anchor_age.py` measures it (behaviour-neutral, verified by digest):
+mean detection age **3.0–49.8 frames** by session, maxima **844–8,652 frames**. Faithful
+to the sleap-3d reference, which has no track aging.
+
+"Headroom" below is the fraction of 8c's 0.202 identity gap that the configuration
+closes. "Worst" columns are the largest single-session harm against shipped — the number
+that decides shippability here, because two sessions are already at their ceiling.
+
+| configuration | switches | per 100k | cross-view IDF1 | headroom | better/worse | worst IDF1 | worst sw |
+|---|---|---|---|---|---|---|---|
+| shipped | 324 | 4.497 | 0.7347 | — | — | — | — |
+| best pure-threshold (`dt=25`, `corr3d=36`, 8a/8b) | 252 | 3.497 | 0.8185 | 41.5% | 4 / 1 | −0.023 | +0 |
+| `sync` alone | 296 | 4.108 | 0.7620 | 13.5% | 2 / 2 | −0.040 | +20 |
+| `stale: 1` alone | 150 | 2.082 | 0.8042 | 34.4% | 6 / 1 | −0.319 | +18 |
+| `sync` + `stale: 1` | 118 | 1.638 | 0.8341 | 49.2% | 6 / 1 | −0.068 | +18 |
+| **`sync` + `stale: 10` + `dt=25`** | **64** | **0.888** | 0.8581 | 61.1% | 5 / 1 | **−0.040** | **+0** |
+| **`sync` + `stale: 1` + `dt=25`** | 108 | 1.499 | **0.8745** | **69.2%** | 6 / 1 | −0.068 | +18 |
+
+**Two finalists, and the horizon is the choice between them.** `stale: 1` reaches the
+highest IDF1 (0.8745, 69% of headroom) but pays +18 switches on 20250827_141755, a session
+that was sitting exactly on its own ceiling. `stale: 10` leaves that session alone (its
+mean anchor age is 4.5 frames — it never had a staleness problem), gives up 0.016 IDF1,
+which is INSIDE the ±0.027 band, and in exchange reaches **64 switches, an 80% reduction
+against shipped, with no session gaining a single switch**. On the evidence available
+`stale: 10` is the better engineering choice and `stale: 1` the better headline; the
+0.016 between them is not resolvable by this measurement.
+
+Adding `corr3d=36` on top of `stale: 1 + dt=25` changes nothing (0.87452 either way),
+which is 8a/8b's "`distanceThreshold` and `corr3dWeight` are one knob" showing up again.
+
+**The gain is not bought with coverage.** Re-running 8c's decomposition on `sync` +
+`stale: 1` gives an assignment rate of 0.9944 — identical to shipped to four places — and
+an unchanged oracle ceiling of 0.9367, with the identity gap falling 0.2020 → 0.1027. So
+it removed **49% of the identity error** while emitting exactly as much output.
+
+**The controls are what make it a mechanism rather than a lucky cell.** Every method here
+changes how fresh the scored-against state is, and the ordering is monotone over four
+orders of magnitude: `stale: 1` 108–118 switches, shipped 324, `anchorSmooth` 0.1 → 2,800,
+freezing the anchor on near-tie frames → 1,700 at margin 100 and **27,042** at margin 400.
+Fresher better, staler worse, every step.
+
+**Three initial premises were refuted by measurement, and those are the reusable part:**
+
+| premise | verdict |
+|---|---|
+| the swap is a within-frame cascade (per-camera Hungarian re-triangulating on each match) | **partly** — `sync` fixes it for +0.027/−28, but its pooled gain is carried by ONE of eight sessions |
+| the swap is a cross-view-inconsistent labelling | **no** — `xvRefine` (offer each view's detection to another target, keep it if total triangulation residual falls) accepted **0 and 5 exchanges out of ~170,000 tests**. All five views swap TOGETHER and the triangulation stays tight |
+| a skeletal descriptor can re-identify the animals | **no** — frozen prototype, P(closer to its own animal) = **0.40–0.57** over 8 full sessions, i.e. chance. Block means separate them in 2 of 8 pairings |
+
+**The re-id trap is worth recording.** An early probe read P = 0.908 (3.2 mm to its own
+animal vs 7.7 mm to the other) and that was an artefact of a **live EMA prototype**: at
+`reidEma` 0.01 the prototype is roughly "this target 100 frames ago", so it measured the
+descriptor's autocorrelation, not identity. Only a frozen prototype can survive a swap,
+and that is the one that collapses to chance.
+
+**`bundle` — the most respectable method here — was 70x worse** (22,882 switches). It
+grouped detections across views by pairwise epipolar error before associating, which is
+the standard multi-view MOT shape, but pairwise epipolar error is a far weaker cue than
+agreement with a 5-view 3D state, so the grouping flickered and took the identities with
+it. Not "grouping-then-associating is wrong"; "this grouping threw away the strong cue".
+
+**Two other identity signals are ruled out for this corpus without new code.** Per-camera
+`trackIdx` continuity: Fig 3's tracker comparison puts SLEAP's own per-camera tracker at
+within-view IDF1 **0.115** on BMimica. Pixel appearance: the `{cam}_predictions.h5`
+detection pool holds a `tracks` keypoint dataset and no images, so a real appearance
+re-id model has no input on this measurement.
+
+**The rest of the method inventory, all negative, all measured rather than assumed.**
+Every flag implemented in `xv_experimental.js` was put through the full 8-session pass,
+including the ones expected to fail — otherwise they would be asserted, not measured:
+
+| method | result | reading |
+|---|---|---|
+| M6 robust per-node aggregation (25% trimmed mean instead of the shipped sum) | 286–318 switches, IDF1 0.750–0.763 | consistently WORSE than the same configuration without it (`dist25` 262/0.795 → `dist25_robust25` 318/0.763). The sum's outlier sensitivity is apparently doing useful work, not harm |
+| OC-SORT-style 15-frame velocity baseline | 230 switches / 0.8147 on the threshold bar | better than the naive 1-frame version (344/0.746) and roughly neutral against no motion model at all (252/0.8185). The 1-frame baseline was the bug; a motion model is simply not the lever |
+| M3 re-id, frozen prototype (the variant the probe said to test) | 23,108–25,331 switches, IDF1 0.711–0.769 | exactly what a chance-level descriptor predicts |
+| `sync` on the threshold bar | 220 switches / 0.8212 | a genuine small gain over 252/0.8185, consistent with M1 elsewhere |
+| M3′ prototype-driven identity EXCHANGE (permute the labels, leave the geometry alone) | 572 switches / 0.7638 | the better-posed form of re-id, and still dead: it applied **31 exchanges** across 8 full sessions, and its own audit shows "keep" at 13.23 mm against "exchange" at 12.21 mm. That 1.02 mm is the Hungarian-minimum bias — the exchange cost is a minimum so it is *always* ≤ the diagonal — not evidence. Each exchange cost switches and bought nothing |
+| `gateAdj` = 0 (refuse negative-adjacency matches, let the target coast) | 1,223 switches / **0.3401** | catastrophic, and predictably: with `maxTargets` = 2 and two targets alive, `_initializeTargets` returns immediately, so a refused detection is simply DROPPED. It buys identity purity with the coverage 8c says there is only 0.003 of to spend |
+
+So of the method families tried, **one worked** (anchor freshness), **one helped
+marginally** (`sync`), and **six did not**. The failures are what localise the fault, and
+between them they rule out cross-view grouping, cross-view consistency, motion modelling,
+robust aggregation, ambiguity gating, coverage gating, and both formulations of re-id.
+
+**One bug was found this way, and the numbers were re-measured.** The `motionBase` ring
+buffer stamped each history entry with the CURRENT frame instead of `_lastFrame`, which at
+`motionBase` = 1 made `dtPrev` zero, tripped `_stateFor`'s `dtPrev > 0` guard, and left the
+constant-velocity model **silently inert** — `sync_motion` was quietly running as plain
+`sync`. `--recheck` caught it; the three motion cells were re-tracked and re-scored after
+the fix. `sync_motion` came back at 344 switches / 0.7458702406650748, matching its
+pre-existing round-1 measurement to all sixteen digits, which is what confirms the fix
+RESTORED the original semantics rather than merely changing them. The practical damage was
+an off-by-one in the 15-frame baseline (14 frames, not 15) worth 2 switches: `230/0.8147`
+after the fix against `228/0.8147` before. No conclusion moves — a motion model is still
+not the lever.
+
+**Cache integrity is checked, not assumed.** The per-cell tracker cache is what makes this
+restartable, and it outlived many tracker edits across nine rounds — `motionBase`,
+`_ambigCams`/`_retriangulate(exclude)`, `robustTrim`, `anchorSmooth` and `probeAge` were
+all added after some cells were already cached. `fig8_methods.py --recheck` re-tracks one
+session per cached cell under today's code and compares the same digest `--verify` uses,
+so "the deposit does not mix code versions" is a measurement
+(`out/fig8_methods_recheck.json`). Five `ambigMargin`-on-a-stronger-baseline cells whose
+provenance straddled that fix were quarantined to `out/tmp/fig8m_quarantine/` rather than
+reported, since `ambigMargin` had already been measured at three margins on the `sync`
+substrate and is decisively harmful.
+
+**Before changing any shipped default**, the standing caveats from 8a/8b all apply — one
+rig, one detector, two animals, five cameras, and `distanceThreshold` in world units so it
+is tied to this geometry — plus three specific to this result:
+
+* **Every configuration still harms one session.** `stale: 1` costs 20250827_141755
+  0.0675 IDF1 and +18 switches; `stale: 10` costs 20250905_165151 0.0404. Neither is free,
+  and this repo's history with identity fixes is that clean sessions pay.
+* **n = 8, and the pooled mean is carried by a few sessions.** `stale: 1 + dt=25` gains
+  +0.29 and +0.31 on two sessions; strike those and the mean advantage over the best
+  threshold setting largely goes. Against `dist25_corr36` specifically it is better on 3
+  sessions, worse on 3 and tied on 2 — a much weaker statement than the pooled 0.8745 vs
+  0.8185 suggests.
+* **`stale` is a change to `Target.detsByCam` lifetime, not a threshold.** It is a real
+  code change to a shipped path, and the app's Track All has no way to express it. Adding
+  it as an eleventh threshold would also need an `ACTION_CATALOG`-style decision about
+  whether users see it (see CLAUDE.md's maintenance rules) and a `MODULES.md` update.
+
+### WHICH PANELS ARE ON WHICH CORPUS — read this before quoting any Fig 8 number
+
+| panel | sessions | status |
+|---|---|---|
+| 8a, 8b — threshold sweeps (35 cells) | **8** | its headline is **contradicted** by 8e; see the correction below |
+| 8c — loss decomposition / oracle ceiling | **8** | mechanism, not a ranking; not re-run at 50 |
+| 8d — algorithmic methods (24 cells) | **8** | the *negative* results are decisive at 8; the two winners are re-run at 50 in 8e |
+| **8e — the two candidates + the bar** | **50** | the pass that decides the recommendation |
+
+Fig 8 is therefore **not wholly a 50-session figure**. Only the four configurations in 8e
+were re-measured on the full corpus, chosen because they are the ones a shipped-default
+decision turns on. Re-running 8a/8b at 50 sessions would be 35 cells x 50 sessions and
+8d's full grid another 24 x 50 — hours of tracking plus hours of motmetrics — and the
+methods that failed at 8 sessions failed by one to two ORDERS OF MAGNITUDE (`bundle` 70x
+worse, `ambigMargin` up to 83x worse), which no corpus change plausibly reverses. The
+thresholds are the ones that would repay it, precisely because 8e shows their 8-session
+gain was mostly subset noise.
+
+### Fig 8e — ALL 50 BMimica sessions, which corrected two of the conclusions above
+
+Everything from 8a to 8d is measured on Fig 3e's 8 sessions. `fig8_methods.py
+--all-sessions` re-ran the control, the best pure-threshold setting and both candidates
+over **all 50 proofread BMimica sessions** at full length — 45,021,960 camera-frames, with
+sessions PAIRED across configurations. Report: `$PY figs/fig8_report50.py`.
+
+**The harness validated exactly, before anything was read off it.** `fig3_trackers.json`
+already holds an independent 50-session measurement of the shipped tracker through a
+different pipeline. This pass reproduced it to every digit: cross-view IDF1
+**0.7492538449691502** here against **0.7492538449691503** there, within-view
+0.7493820567067009 against 0.7493820567067009, and **2,071 switches against 2,071**. Two
+independent pipelines agreeing bit for bit is the strongest available statement that these
+50-session numbers are real.
+
+| configuration | switches | per 100k | mean | median | q25 | q75 | better / worse | worst session |
+|---|---|---|---|---|---|---|---|---|
+| shipped | 2,071 | 4.600 | 0.7493 | 0.7604 | 0.609 | 0.832 | — | — |
+| best thresholds (`dt25`+`corr3d36`) | 1,841 | 4.089 | 0.7615 | 0.7595 | 0.665 | 0.923 | 14 / 11 | **−0.275** |
+| `M1 + stale 1 + dt25` | 677 | 1.504 | 0.8393 | 0.8807 | 0.728 | 0.934 | 31 / 9 | −0.215 |
+| **`M1 + stale 10 + dt25`** | **511** | **1.135** | **0.8498** | **0.9127** | 0.746 | 0.947 | **32 / 6** | **−0.138** |
+
+Paired Wilcoxon signed-rank on the per-session IDF1 differences:
+
+| comparison | median diff | better / worse | p |
+|---|---|---|---|
+| `stale 10 + dt25` vs shipped | **+0.0777** | 32 / 6 | **1.7e-06** |
+| `stale 1 + dt25` vs shipped | +0.0757 | 31 / 9 | 8.3e-05 |
+| `stale 10 + dt25` vs best thresholds | +0.0777 | 28 / 8 | 2.7e-05 |
+| `stale 1 + dt25` vs best thresholds | +0.0327 | 26 / 10 | 7.2e-05 |
+| `stale 10` vs `stale 1` | +0.0000 | 12 / 16 | 0.8 |
+
+**TWO CONCLUSIONS ABOVE MUST BE CORRECTED, in opposite directions.**
+
+1. **The pure-threshold result largely does NOT survive.** On 8 sessions `dt25 + corr3d36`
+   looked like +0.084 IDF1 (0.7347 → 0.8185). On 50 it is **+0.012 on the mean and −0.001
+   on the median** — 14 sessions better, 11 worse, one damaged by 0.275. This is exactly
+   the subset reversal this file warns about for Fig 4, arriving this time for Fig 8's own
+   headline. **`distanceThreshold` 25 (+ `corr3dWeight` 36) must not be presented as a
+   recommendation on the strength of 8a/8b alone.**
+2. **The anchor-freshness result DOES survive, and strengthens.** 2,071 → **511** switches
+   (**−75%**), mean IDF1 +0.101, **median +0.152** (0.7604 → 0.9127), better on 32 of 50
+   sessions and worse on 6, p = 1.7e-06 paired. It beats the best threshold setting by a
+   median +0.078 at p = 2.7e-05.
+3. **The 8-session ordering of the two candidates REVERSED.** On 8 sessions `stale: 1` led
+   (0.8745 vs 0.8581); on 50 `stale: 10` leads (0.8498 vs 0.8393) — and the two are
+   statistically indistinguishable from each other (median diff 0.0000, p = 0.8). So the
+   8-session preference for `stale: 1` was noise, while every robustness measure already
+   favoured `stale: 10`: fewer switches (511 vs 677), fewer damaged sessions (6 vs 9),
+   smaller worst-case harm (−0.138 vs −0.215). **`stale: 10` is the recommendation.**
+
+**It is still not free.** Six of 50 sessions get worse, the worst by 0.138
+(`20250829_141847`, 0.7173 → 0.5793 — though its switches fall 88 → 36, so that loss is
+mislabelled mass, not churn). Any rollout should quote the per-session table, not the mean.
+
+`assemble.py 8` now reports **516 mm, over the 200 mm ceiling** — four stacked full-width
+rows cannot fit one page and the assembler flags it rather than silently scaling. Fig 8 is
+an internal figure and the per-panel PDFs are the artefact that matters (see the top of
+this file), so the composite is left as a tall proof sheet. If Fig 8 ever needs to be one
+page, split the thresholds (8a/8b) from the methods (8c/8d) into two figures rather than
+shrinking panels below the 5 pt floor `lint_text.py` enforces. Reproduce all of it with:
+
+```bash
+$PY figs/fig8_methods.py --verify      # prove the fork == the shipped tracker
+$PY figs/fig8_diag_loss.py --cell default            # 8c
+$PY figs/fig8_diag_anchor_age.py                     # the anchor-age mechanism
+$PY figs/fig8_methods.py                             # all method cells (hours)
+python3 figs/panels/fig8_03_loss_budget.py figs/panels/fig8_04_methods.py
+```
 
 ## Open## Open
 
@@ -993,3 +1264,67 @@ human 3D correction the proofread pass applied, and any residual frame mismatch.
 The claim that Fig 4b's 3.9x is a lower bound *because alignment error inflates the
 denominator* was withdrawn with the same reasoning. It may still be a lower bound, since
 the denominator includes detector and proofreading error, but not for the stated reason.
+
+### Fig 7 c-g now plot the tracker LUCID actually ships (2026-08-13)
+
+On instruction. Panels **c, d, e, f, g** took their LUC3D arm from
+`out/fig3_trackers.json`'s `slap2m` block, which was produced by `matchFrameInstances` —
+the **pre-#131 per-frame matcher** — against a flat LUCID snapshot on 2026-05-15.
+`pose/cross-view-tracker.js` (`runCrossViewTracker`) was merged **2026-07-06**, seven weeks
+later, so those five panels described a tracker the app no longer contained. They now read
+`out/fig7_variant_best.json`'s `slap2m` block, which is the shipped tracker re-scored over
+the **same 74 sessions, same pool, same detections** (detector recall 0.7285 vs 0.7268 — it
+has to be the same detections, and it is). `fig3_trackers.json` is **not** rewritten; the
+panels changed which deposit they read, and it stays git-clean.
+
+The substitution is a **drop-in**: the two `slap2m` blocks were compared key for key,
+nested, and neither side has a key the other lacks — no panel needed a new code path.
+`--as-shipped` re-renders the retired arm under a `_pre131` slug and was verified to
+reproduce each committed panel **pixel for pixel at 150 dpi** (max channel difference 0 on
+all five), so the old artwork is recoverable and the only thing that moved is the data.
+
+| panel | quantity | pre-#131 | shipped |
+|---|---|---|---|
+| c | within-view IDF1, mean / median | 0.736 / 0.900 | **0.752 / 0.920** |
+| c | sessions ≥ 0.9 · camera-sessions won | 36/74 · 229/444 | **39/74 · 269/444** |
+| d | paired Δ vs SLEAP, all 74 | +0.075 (48/74) | **+0.091 (55/74)** |
+| d | paired Δ, 3 animals (n = 4) / 4 animals (n = 3) | −0.030 / −0.028 | **−0.052 / −0.080** |
+| e | ID switches | 3,710 (0.0316%) | **3,094 (0.0264%)** |
+| e | false positives | 34,240 (0.292%) | **37,126 (0.317%)** |
+| f | r(session IDF1, detector recall) | 0.9747 | **0.9900** |
+| g | paired fragmentations vs SLEAP | +24.0, median +14.1 | **+6.2, median +1.3** |
+
+**Three of this figure's own claims moved, and two of them moved in our favour** — which is
+exactly why each one is written into its panel's docstring rather than quietly absorbed:
+
+* **7e's "LUC3D does not win on within-view switches" is now false** (3,094 against SLEAP's
+  unchanged 3,608, 14% ahead) and the note is gone. But the **false-positive term went the
+  other way**, +8.4%, and FP bars are ~12x the switch bars on that panel, so the term we
+  lost on is the one the eye lands on first. That emphasis is correct and is not to be
+  "fixed".
+* **7d's "the pooled gain is carried by the 1-animal stratum" weakened.** Pooled over the 42
+  sessions with ≥ 2 animals it was +0.024 (23/42, sign P = 0.64, no effect) and is now
+  +0.052 (30/42, **P = 0.008**). The 1-animal caveat stays — that cell is still 2.7x the
+  ≥ 2 one and still not a cross-view result — but the panel's own split now supports a
+  weaker claim than it was built to make, and the artwork line "carried by the 1-animal
+  stratum, NOT a multi-animal result" was replaced with the two numbers.
+* **7g's +24.0 was a property of the retired tracker**; the shipped one is +6.2. The sign,
+  the CI excluding zero and "SLEAP fragments fewer in 72 of 74" all hold, so the panel
+  stands — but its mean is now **4.7x its median** (it was 1.7x), so the corpus mean is a
+  tail and the typical session is nearly level. The `caveats` string in
+  `fig3_trackers.json` still quotes +24.0 and must not be cited for this panel.
+
+**7d is still the panel this costs us**, and it is untouched by the flattering corrections:
+the shipped tracker emits **3.6x and 2.0x more** within-view switches than the retired one
+on the 3- and 4-animal sessions (205 → 744, 299 → 606) and scores lower there, worst session
+−0.103 → **−0.152**. n = 4 and n = 3: weak, reproducible, never to be averaged away.
+
+**7b (bedding) WAS NOT IN THE INSTRUCTION and is still on the pre-#131 arm**
+(`arms(variant, corrected=False)`). Until it is switched, one figure carries two tracker
+generations under the name "LUC3D" — b is the old one, c-g are the shipped one. It is one
+keyword away and it needs a decision, not an inference. **7a** is BMimica and always was
+`runCrossViewTracker`.
+
+`FIGURE-LEGENDS.md` was updated for c, d, f and g (e's legend quotes no tracker number).
+Lint is back at its two pre-existing issues; three clipping/overlap defects surfaced in the
+`--variant` renders while re-rendering and were fixed there too.
