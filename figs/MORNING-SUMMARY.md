@@ -15,10 +15,10 @@ against the scripts before anything moved); everything below is committed on
    — caught by review), 3D-MuPPET's line says "1.3% coverage" instead of a
    misleading ×1.00, the ~30% dead band is reclaimed, and the corpus pointer is
    back. All caveats live in the legend.
-2. `figures/fig2/fig2.png` — 2c is your box-plot-by-cameras (medians 4.32/3.66/3.34
-   px at k=2/3/4; the axis explains why k stops at 4: one camera must judge). 2b
-   plots labels-free-by-reprojection with C×N as the labelled denominator. 2a draws
-   six grey cameras where its caption says six, and names its anchor cams.
+2. `figures/fig2/fig2.png` — 2c is the box-plot-by-cameras in mm, ALL FIVE cameras
+   included (4.74 → 1.19 mm; the held-out px form is under `--heldout`). 2b plots
+   labels-free-by-reprojection with C×N as the labelled denominator. 2a draws six
+   grey cameras where its caption says six, and names its anchor cams.
 3. **New measurement, finished and gated:** `figures/fig2/fig2s1_cams_identity.png`
    — cross-view identity vs cameras used. 450 tracking runs over deterministic
    camera subsets; the k=5 cell reproduces the published 50-session numbers to
@@ -31,7 +31,7 @@ against the scripts before anything moved); everything below is committed on
 |---|---|---|
 | `fig7s3_idf1_by_difficulty` | three trackers' within-view IDF1 by SLAP-2M difficulty, median + IQR, n under ticks | Fig 7, beside 7c |
 | `fig6s4_quality_by_animals` | miss rate vs difficulty per animal-count stratum | replaces 6d, or stays supplementary (same cells as 6d — don't place both) |
-| `fig6s5_percam_quality` | per-camera miss %, pooled bars + 74 session dots (top 30.1% → back 40.3%) | Fig 6, row c/d |
+| ~~fig6s5~~ **now Fig 6e** | per-camera miss %, pooled bars + 74 session dots (top 30.1% → back 40.3%) | PLACED — it fills the reflowed grid |
 | `fig2s1_cams_identity` | identity vs cameras used (above) | Fig 2, beside 2c |
 
 ## The late-night instruction round (all committed)
