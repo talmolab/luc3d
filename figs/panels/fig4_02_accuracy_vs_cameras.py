@@ -115,7 +115,13 @@ def main():
         # refinement's IQR is deposited in the CSV and is the same shape; the drawn
         # band belongs to the curve the span is quoted for.
         if key == "dlt":
-            ax.fill_between(df.cameras, df[f"{key}_p25"], df[f"{key}_p75"],
+            # THE DLT IQR BAND IS GONE (review 2026-08-14): the same measurement's
+            # per-session spread is now Fig 2c's boxes and dots, and drawing it twice
+            # invited "why do these disagree" for two renderings of one deposit. This
+            # panel keeps what is UNIQUE to it -- the refined arm and the crossing.
+            _band_dropped = True
+            if False:
+                ax.fill_between(df.cameras, df[f"{key}_p25"], df[f"{key}_p75"],
                             color=color, alpha=0.18, lw=0)
         ax.plot(df.cameras, df[f"{key}_p50"], color=color, lw=2.0, zorder=3)
         ax.plot(df.cameras, df[f"{key}_p50"], "o", color=color, ms=5, mec="white",

@@ -97,7 +97,10 @@ def main():
             "med": r.p50, "q1": r.p25, "q3": r.p75,
             "whislo": r.p5, "whishi": r.p95, "fliers": [],
         }], positions=[i], widths=w, showfliers=False, manage_ticks=False,
-            boxprops=dict(edgecolor=INK, lw=0.8, facecolor=PINK, alpha=0.55),
+            # NOT PINK: that is 3D-MuPPET's reserved hue and this panel has no
+            # tracker in it at all (review 2026-08-14). A neutral grey fill keeps
+            # the boxes read as boxes; the medians carry the accent.
+            boxprops=dict(edgecolor=INK, lw=0.8, facecolor="#DDDDDD", alpha=0.8),
             medianprops=dict(color=INK, lw=1.4),
             whiskerprops=dict(color=INK, lw=0.8),
             capprops=dict(color=INK, lw=0.8),
@@ -114,7 +117,7 @@ def main():
         # widest box when widths varied (half-width 0.27) and still clears the
         # constant W_BOX (half-width 0.21).
         ax.text(i + 0.30, r.p50 + 0.45, f"{r.p50:.1f}", ha="left", va="center",
-                color=PINK, fontweight="bold")
+                color=INK, fontweight="bold")
 
     ax.set_xticks(range(len(df)))
     # THE SHARE AND THE DIRECTION GO IN THE TICK BLOCK, under the stratum each

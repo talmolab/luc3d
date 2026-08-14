@@ -89,10 +89,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
 from src.style import deposit, footnote, panel, save, use  # noqa: E402
 
-#: animal count -> colour. Light-to-dark on SALMON (= panel c's miss-rate hue); every
-#: step is at least as dark as SALMON itself, so none is less legible than type the
-#: rest of the set already sets in that colour.
-RAMP = {1: "#FC8D62", 2: "#E0653C", 3: "#B24420", 4: "#7A2A0E"}
+#: animal count -> colour: the set-wide `level()` ramp for ordered non-entity series
+#: (review 2026-08-14). The old ramp was tints of SALMON, ByteTrack's reserved hue --
+#: an ordered stratum wearing an entity colour, exactly the X.1 collision class. Also
+#: matches fig6s4, which strata the same counts on the same ramp.
+from src.style import level as _level
+RAMP = {a: _level(a - 1, 4, hi=0.75) for a in (1, 2, 3, 4)}
 MARKS = {1: "o", 2: "s", 3: "^", 4: "D"}
 
 #: Panel height in mm, and the key's line pitch in POINTS. 5.91 pt is MEASURED off the

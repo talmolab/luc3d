@@ -69,7 +69,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import INK, SALMON, TEAL, PERIWINKLE, deposit, grid, save, use  # noqa: E402
+from src.style import INK, deposit, grid, level, save, use  # noqa: E402
 
 #: Panel height in mm; this figure's rows are height-budgeted -- see assemble.py.
 #: 32, down from 34: the ink measured 32.3 of 34.0 mm on the 300 dpi render, so the
@@ -91,11 +91,14 @@ PLOTS = [
     # 0.68, not 0.80: at 0.80 this note's span box overlapped the "10.90x" ratio's by
     # 21 % and the linter caught it. PyMuPDF span boxes carry the full ascender and
     # descender, so two 6-8 pt lines need ~0.14 of a ~22 mm axis between anchors.
-    ("miss_rate", "keypoints\nmissing (%)", SALMON, 100.0, "miss_rate_sd", None,
+    # level() colours, NOT entity hues (review 2026-08-14): these are three
+    # QUANTITIES, and they were wearing ByteTrack's, SLEAP's and LUC3D's reserved
+    # colours -- the "beyond 20 px" bars were in the hue that means "us".
+    ("miss_rate", "keypoints\nmissing (%)", level(0, 3), 100.0, "miss_rate_sd", None,
      (0.05, 0.68)),
-    ("err_mean", "error when\npresent (px)", PERIWINKLE, 1.0, "err_mean_sd",
+    ("err_mean", "error when\npresent (px)", level(1, 3), 1.0, "err_mean_sd",
      "err_p95", (0.52, 0.08)),
-    ("frac_over_tau", "beyond\n20 px (%)", TEAL, 100.0, None, None, None),
+    ("frac_over_tau", "beyond\n20 px (%)", level(2, 3), 100.0, None, None, None),
 ]
 FIELDS = ("miss_rate", "miss_rate_sd", "err_mean", "err_mean_sd", "err_p50",
           "err_p95", "err_p99", "frac_over_tau", "n_sessions", "n_keypoints")

@@ -145,9 +145,15 @@ def schematic(ax, anchors=()):
             # inked). Both labels use the same offset so the pair reads as a pair.
             ax.text(-2.35, cy + 0.62, cam_label(cam), ha="left", va="bottom",
                     color=INK, fontsize=6.0)
-    for cy in (1.8, 0.0, -1.8):                  # the views reprojected into
-        icon(ax, "camera", 4.0, cy - 0.3, s=0.6, color=GREY)
-        ray(ax, px, py, 3.9, cy, color=TEAL, ls=(0, (2.0, 1.5)))
+    # SIX grey cameras, because the caption beside them says "other 6" and a reader
+    # counts (review 2026-08-14: three were drawn against a caption saying six, on an
+    # 8-camera exemplar session in a figure whose other panels are the 5-camera
+    # corpus -- the mismatch invited exactly the wrong question). Two columns of
+    # three keeps them inside the axes at the same icon size.
+    for i_c, cy in enumerate((2.0, 1.2, 0.4, -0.4, -1.2, -2.0)):
+        cx_ = 4.0 if i_c % 2 == 0 else 4.6
+        icon(ax, "camera", cx_, cy - 0.25, s=0.5, color=GREY)
+        ray(ax, px, py, cx_ - 0.1, cy, color=TEAL, ls=(0, (2.0, 1.5)))
     # INK, not salmon: the triangulated point is the pipeline's own product, and
     # salmon is the comparator's hue set-wide (review 2026-08-14).
     point(ax, px, py, color=INK, r=0.17)
@@ -155,8 +161,11 @@ def schematic(ax, anchors=()):
             fontsize=6.5, fontweight="bold")
     ax.text(-2.4, -2.6, "2 views labelled", color=INK, fontsize=6.5)
     ax.text(-2.4, -3.2, "other 6: weight 0", color=MUTED, fontsize=6.5)
-    ax.text(5.0, -2.6, "rest reprojected", color=TEAL, fontsize=6.5, ha="right")
-    ax.set_xlim(-2.6, 5.2)
+    # The exemplar is the 8-CAMERA demo session; panels b-d are the 5-camera corpus.
+    # Said here because the row of grey cameras is where the count question arises.
+    ax.text(5.4, -2.6, "rest reprojected", color=TEAL, fontsize=6.5, ha="right")
+    ax.text(5.4, -3.2, "(8-camera session)", color=MUTED, fontsize=6.5, ha="right")
+    ax.set_xlim(-2.6, 5.6)
     ax.set_ylim(-3.6, 2.6)
 
 
