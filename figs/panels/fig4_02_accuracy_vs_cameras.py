@@ -184,7 +184,7 @@ def main():
     # session's own p25/p50/p75 -- neither a confidence interval on the plotted median
     # nor any one session's IQR, and an unnamed ribbon is read as the former.
     footnote(ax, f"all C-choose-k subsets · stride {int(df.stride.iloc[0])}\n"
-                 "band: median session p25–p75, DLT")
+                 "same held-out measurement as Fig 2c")
     save(fig, 4, "b", "accuracy_vs_cameras")
 
 

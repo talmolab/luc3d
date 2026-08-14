@@ -157,7 +157,7 @@ def main():
     text_legend(ax, [(LABEL[t], entity(t)) for t in TRACKERS], "above")
     footnote(ax,
              "session-level IDF1 = mean over that session's camera-sessions; a "
-             "stratum is the mean ± 1 s.d. over its sessions\n"
+             "stratum is the median, p25–p75 whiskers over its sessions\n"
              "corpus means (all 74 sessions): "
              + ", ".join(f"{LABEL[t]} {corpus[t]:.4f}" for t in TRACKERS)
              + " — reproduced from the source CSV to 1e-9 before drawing\n"
