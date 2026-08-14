@@ -34,6 +34,26 @@ against the scripts before anything moved); everything below is committed on
 | `fig6s5_percam_quality` | per-camera miss %, pooled bars + 74 session dots (top 30.1% → back 40.3%) | Fig 6, row c/d |
 | `fig2s1_cams_identity` | identity vs cameras used (above) | Fig 2, beside 2c |
 
+## The late-night instruction round (all committed)
+
+- **2c** now shows 3D error vs the proofread reference in **mm for k = 2..5,
+  including all cameras** (4.74 → 2.89 → 1.91 → 1.19 mm) — your "include all
+  cameras" ask; the held-out px form lives under `--heldout`.
+- **3d** is **two stacked plots** — switch rate above, IDF1 below — one colour
+  scheme (teal = fresh anchor, salmon = exhaustive, flat because it has no r),
+  rotated y-labels sized to fit after the horizontal-caption experiment was
+  rejected.
+- **4a** unboxed like 3a; **4c** is the two-condition comparison (all views vs
+  worst dropped, pooled mean over 17M solves, strata in grey).
+- **6c** is the **missing-keypoints × difficulty × cameras surface** — a NEW
+  measurement (`fig6_recovery.py`, 74 sessions in 29 s, exact over all camera
+  subsets): 26.1% of keypoints missing per view; recovery 0% at k=2 (one other
+  view can't triangulate) rising to **45.7% of misses at k=6**. The 3D-plane
+  render exists under `--surface`.
+- **Fig 6 reflowed** around it on your instruction: everything back, no white
+  space, per-camera panel promoted to e. **The figure now runs 249 mm against
+  the 200 mm ceiling — something needs to shrink or move; your call.**
+
 ## Fig 3, per your instructions
 
 3a unboxed (coloured headings, screenshot-matching identity colours); 3b cut (the
@@ -48,9 +68,14 @@ labelled); 3e has no prose. Panels re-lettered c→b, d→c, e→d, f→e.
 - **Camera subsets** (above): `figs/out/fig2_cams_identity.json`.
 - **ID accuracy**: IDA = 92.46% pooled for the fresh anchor, median 100%, worst
   56.6%; false positives are 0.104% of matches, so IDA ≈ IDP. In METHODS.md.
-- **Uncapped exhaustive 3×5 and 4×3**: running all eligible frames (10,419 and
-  19,135 instead of the 7,001/3,000 samples you flagged). 6 of 7 sessions done at
-  last check (`figs/out/tmp/hh_uncap.log`); panels 3c/3e re-render when it lands.
+- **Uncapped exhaustive 3×5 and 4×3**: DONE — every eligible frame computed
+  (10,419 and 19,135 instead of the 7,001/3,000 samples you flagged; ~14 h at 2.7
+  and 5.5 s/frame). Agreement 99.760% / 99.038%, pooled 99.982% over 4.59M frames;
+  3c re-rendered with the full denominators, no sampling caveat left. One incident,
+  recorded honestly: the run's aggregation step overwrote the four-config
+  `fig3_headtohead.json` with a two-config file (my launch scoped the compute but
+  not the output). Caught at harvest, rebuilt from intact caches in ~9 min, A2 rows
+  verified unchanged. Commit `0c1f334`.
 
 ## Fixed after being caught by review (worth knowing)
 
