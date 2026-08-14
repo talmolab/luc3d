@@ -72,14 +72,13 @@ def card(ax, s):
     tight bbox, and ink outside the axes is simply cut off.
     """
     x0, y0, x1, y1 = CARD
-    ax.add_patch(FancyBboxPatch(
-        (x0, y0), x1 - x0, y1 - y0,
-        boxstyle="round,pad=0,rounding_size=0.25",
-        linewidth=0.8, edgecolor="#DCDCDC", facecolor="none", zorder=0))
+    # NO CARD, NO ACCENT BAR (Eric, 2026-08-15: "get rid of the box with the colour
+    # around linear dlt and non-linear triangulation, make it look like 3a"). The
+    # frame and the colour bar were two devices doing what one coloured word does --
+    # same de-decoration as 3a's unboxing. The solver's entity hue moves onto its
+    # TITLE, which is the same hue that solver has in 4b/4d.
     # The rule carries the solver's colour, which is the same colour its residual
     # and its status tag are drawn in, so the card is attributable at a glance.
-    ax.plot([x0 + 0.09] * 2, [y0 + 0.16, y1 - 0.16], color=s["color"], lw=3.0,
-            solid_capstyle="butt", zorder=1)
 
 
 def draw(ax, s):
@@ -108,7 +107,8 @@ def draw(ax, s):
     ax.set_xlim(CARD[0] - 0.15, CARD[2] + 0.15)
     ax.set_ylim(CARD[1] - 0.12, CARD[3] + 0.12)
     # Title block reads top-down: what it is, what it minimises, what the app calls it.
-    ax.text(-1.4, 4.3, s["title"], fontweight="bold", va="top", color=INK)
+    ax.text(-1.4, 4.3, s["title"], fontweight="bold", va="top",
+            color=s["color"])
     ax.text(-1.4, 3.6, s["sub"], va="top", color=MUTED, fontsize=7)
     ax.text(-1.4, 3.0, s["tag"], va="top", color=ink, fontsize=7)
 

@@ -95,6 +95,14 @@ def ink_under_text(path, ss, dpi=200, thresh=0.045):
 
     doc = fitz.open(path)
     page = doc[0]
+    # TEXT INSIDE A RASTER IMAGE IS ON DATA BY DESIGN (2026-08-15): a heat-map's
+    # in-cell value labels sit on imshow's raster field deliberately -- flagging all
+    # 30 of them buries the real hits. A text box fully inside an image block is
+    # therefore exempt; text on STROKED data (curves, bars) is still flagged, which
+    # is the defect class this check exists for.
+    img_rects = [page.get_image_bbox(im) for im in page.get_images(full=True)]
+    ss = [(t, r, z) for (t, r, z) in ss
+          if not any(ir.contains(r) for ir in img_rects)]
     for _t, r, _z in ss:
         page.add_redact_annot(r)
     # Remove the TEXT only -- keep every stroke and fill, which is the point.

@@ -230,7 +230,7 @@ def build():
 def _axes_setup(ax, rate_min, rate_max, zero_x, first, has_zero):
     """The shared r-axis machinery: log x with the r = 0 break, log rate y."""
     ax.set_yscale("log")
-    ax.set_ylabel("ID switches per\n100,000 camera-frames", color=SALMON)
+
     # PLAIN NUMBERS ON EVERY DECADE THE DATA TOUCHES, not matplotlib's default
     # powers of ten (see the legacy section's reasoning). The candidate ladder is
     # filtered to the measured range so the two-arm panel (0.8 .. ~630 per 100k)
@@ -241,8 +241,6 @@ def _axes_setup(ax, rate_min, rate_max, zero_x, first, has_zero):
     ax.yaxis.set_major_formatter(FixedFormatter([f"{v:g}" for v in decades]))
     ax.yaxis.set_minor_locator(FixedLocator([]))
     ax.set_ylim(rate_min * 10 ** -0.12, rate_max * 10 ** 0.12)
-    ax.tick_params(axis="y", colors=SALMON)
-    ax.spines["left"].set_color(SALMON)
 
     ax.set_xscale("log")
     ax.set_xlim((zero_x if has_zero else first) * 10 ** -0.22, 24 * 10 ** 0.11)
@@ -271,7 +269,10 @@ def main(with_shipped=False):
 
     # A THIRD: this panel shares its row with d and f (see the legacy section's
     # note on why the grid only closes at 180 mm if all three are "third").
-    fig, ax = panel("third", "std", key=4)
+    # TWO STACKED AXES (Eric, 2026-08-15): grid() at panel width, ~34 mm per plot.
+    from src.style import grid as _grid
+    fig, (ax_top, ax_bot) = _grid(2, 1, span="third", row="std")
+    ax = ax_top
 
     r = np.sort(df.r.unique()).astype(float)
     first = float(r[r > 0].min())
@@ -303,86 +304,85 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
         else:
             axis.plot(x, y, "o", color=color, ms=4, mec="white", mew=0.8, zorder=4)
 
-    # ID-switch RATE, log, on the left. `.clip(lower=1)` pins a zero-switch cell at
-    # the smallest event the measurement can resolve (see the legacy section).
-    # EXHAUSTIVE vs THE FRESH ANCHOR (review 2026-08-14: "3e should be exhaustive vs
-    # fresh anchor, not greedy shipped"). The shipped arm is out of the default render
-    # -- still swept, still deposited, back with --with-shipped -- and the reference
-    # level is exhaustive enumeration, which has no r (it does not use the cost
-    # weights), so it is a horizontal rule on each axis in its own colours.
-    # Its numbers come from figs/out/fig3_exhaustive_bmimica.json, the 50-session
-    # aggregation of the head-to-head harness's own per-session scores. Its switch
-    # RATE uses ITS OWN denominator (clean camera-frames -- exhaustive only runs where
-    # every camera holds exactly 2 detections); the deposit states both.
+    # TWO STACKED PLOTS, ONE METRIC EACH (Eric, 2026-08-15: "I hate that there are
+    # two axes and two colour schemes and hollow and solid and dashed and solid --
+    # make two different graphs, one for switches and one for IDF1, stack them
+    # vertically"). One encoding everywhere: teal = LUC3D fresh anchor, salmon =
+    # exhaustive, solid lines, filled markers; the metric is the SUBPLOT. Exhaustive
+    # is flat because it has no cost-weight ratio to sweep, and its label is the bare
+    # word -- "(no r)" went, per the same message.
     exh = load("fig3_exhaustive_bmimica.json")
-    arms_drawn = ([(SHIPPED_NAME, False)] if with_shipped else []) + \
-        [(FRESH_NAME, True)]
     df["rate"] = df.switches.clip(lower=1) / tcf * PER
     exh_rate = exh["switches_per_100k_camera_frames"]
-    _axes_setup(ax, min(float(df.rate.min()), exh_rate),
-                max(float(df.rate.max()), exh_rate),
-                zero_x, first, has_zero)
-    for arm, is_fresh in arms_drawn:
-        series(ax, df[df.arm == arm], "rate", SALMON, is_fresh)
-    # EXHAUSTIVE AS A SERIES, NOT FURNITURE (Eric, 2026-08-15: "why only lines?").
-    # It cannot curve -- r is LUC3D's cost-weight ratio and exhaustive never uses the
-    # weights, so its value is identical at every r; flat is its true shape. But a
-    # thin axhline read as a gridline, so it is now drawn at series weight, with
-    # endpoint markers and its name ON the line in its own colour.
-    ax.axhline(exh_rate, color=SALMON, lw=1.6, ls=(0, (4.0, 2.0)), zorder=2)
-    ax.plot([zero_x, r[-1]], [exh_rate] * 2, "s", color=SALMON, ms=3.4,
-            mec="white", mew=0.7, zorder=3, clip_on=False)
-    # BELOW the line, not above: above it the label sat on the fresh-anchor curve
-    # descending through the same band (lint: 7% inked).
-    ax.annotate("exhaustive (no r)", (zero_x, exh_rate),
-                textcoords="offset points", xytext=(2, -7), ha="left", va="top",
-                color=SALMON, fontsize=6.5, fontweight="bold")
 
-    footnote(ax, "r = 0: no 3D term, left of the break\n"
-                 f"rate basis: {tcf:,} camera-frames (50 sessions x 5 cameras, "
-                 f"full length), corr2d = 1 row; exhaustive's rate is over its own "
-                 f"{exh['camera_frames_computed']:,} clean camera-frames")
+    def sweep_line(axis, ycol):
+        g = df[df.arm == FRESH_NAME].sort_values("r")
+        rr = g.r.to_numpy(dtype=float)
+        x = np.where(rr > 0, rr, zero_x)
+        pos = rr > 0
+        y = g[ycol].to_numpy(dtype=float)
+        axis.plot(x[pos], y[pos], color=TEAL, lw=1.8, zorder=3)
+        if has_zero:
+            axis.plot(x[:2], y[:2], color=TEAL, lw=1.2, ls=(0, (1.4, 1.2)), zorder=3)
+        axis.plot(x, y, "o", color=TEAL, ms=4, mec="white", mew=0.8, zorder=4)
 
-    # Cross-view IDF1 on the right.
-    ax2 = ax.twinx()
-    ax2.spines["top"].set_visible(False)
-    for arm, is_fresh in arms_drawn:
-        series(ax2, df[df.arm == arm], "idf1", TEAL, is_fresh)
-    ax2.axhline(exh["idf1_cross_mean"], color=TEAL, lw=1.6, ls=(0, (4.0, 2.0)),
-                zorder=2)
-    ax2.plot([zero_x, r[-1]], [exh["idf1_cross_mean"]] * 2, "s", color=TEAL,
-             ms=3.4, mec="white", mew=0.7, zorder=3, clip_on=False)
-    ax2.annotate("exhaustive", (r[-1], exh["idf1_cross_mean"]),
-                 textcoords="offset points", xytext=(-2, 5), ha="right",
-                 color=TEAL, fontsize=6.5, fontweight="bold")
-    ax2.set_ylabel("cross-view IDF1", color=TEAL)
-    ax2.tick_params(axis="y", colors=TEAL)
-    ax2.spines["right"].set_color(TEAL)
+    # No in-plot "exhaustive" labels (Eric, 2026-08-15): the key above names it
+    # once, and in the top plot the label collided with the descending curve.
+    def exh_line(axis, yval, off):
+        axis.axhline(yval, color=SALMON, lw=1.8, zorder=2)
+        axis.plot([zero_x, r[-1]], [yval] * 2, "s", color=SALMON, ms=3.4,
+                  mec="white", mew=0.7, zorder=3, clip_on=False)
 
-    # The shipped ratio, at its own place on the r axis.
-    ax.axvline(SHIPPED_R, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
-    # "app default", not "shipped": on the default render the curve at this rule is
-    # the FRESH ANCHOR, and calling the marker "shipped" attached that word to a
-    # curve that is not the shipped tracker (review 2026-08-14, finding 5).
-    ax.annotate(f"app default r = {SHIPPED_R:g}", (SHIPPED_R, 1.0),
-                xycoords=("data", "axes fraction"), xytext=(0, 2),
-                textcoords="offset points", color=MUTED, fontsize=6.5,
-                ha="center", va="bottom")
+    _axes_setup(ax_top, min(float(df.rate.min()), exh_rate),
+                max(float(df.rate.max()), exh_rate), zero_x, first, has_zero)
+    # Compact axis: full decades only. The 0.3/3/30/300 half-steps collided at
+    # ~17 mm of axis height (lint: adjacent labels 19% overlapped).
+    ax_top.yaxis.set_major_locator(FixedLocator([1, 10, 100]))
+    ax_top.yaxis.set_major_formatter(FixedFormatter(["1", "10", "100"]))
+    sweep_line(ax_top, "rate")
+    exh_line(ax_top, exh_rate, -7)
+    ax_top.set_ylabel("ID switches\n/100k cam-frames")
+    ax_top.tick_params(labelbottom=False)
+    ax_top.set_xlabel("")
 
-    # "hollow: fresh anchor" answered a question the default render no longer asks
-    # (hollow as opposed to WHAT? -- the filled shipped arm only exists under
-    # --with-shipped). The series is named plainly; the exhaustive rules keep their
-    # dash description plus their denominator caveat, which is the one fact a reader
-    # needs to not compare the two rates as equals (review 2026-08-14, finding 2).
-    key = [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
-           ("squares: exhaustive (clean frames)", MUTED),
-           ("curves: fresh anchor", MUTED)]
-    if with_shipped:
-        key = [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
-               ("squares: exhaustive (clean frames)", MUTED),
-               ("filled: shipped tracker", MUTED),
-               ("hollow: fresh anchor", MUTED)]
-    text_legend(ax, key, "above")
+    _axes_setup(ax_bot, 1.0, 10.0, zero_x, first, has_zero)  # x machinery
+    ax_bot.set_yscale("linear")                              # ...linear y for IDF1
+    ax_bot.yaxis.set_major_locator(FixedLocator([0.4, 0.6, 0.8]))
+    ax_bot.yaxis.set_major_formatter(FixedFormatter(["0.4", "0.6", "0.8"]))
+    ax_bot.yaxis.set_minor_locator(NullLocator())
+    ax_bot.set_ylim(0.35, 0.92)
+    sweep_line(ax_bot, "idf1")
+    exh_line(ax_bot, exh["idf1_cross_mean"], 5)
+    ax_bot.set_ylabel("cross-view IDF1")
+
+    footnote(ax_bot, "r = 0: no 3D term, left of the break\n"
+             f"rate basis: {tcf:,} camera-frames (50 sessions x 5 cameras, "
+             f"full length), corr2d = 1 row; exhaustive's rate is over its own "
+             f"{exh['camera_frames_computed']:,} clean camera-frames")
+
+    for axis in (ax_top, ax_bot):
+        axis.axvline(SHIPPED_R, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
+    ax_top.annotate(f"app default r = {SHIPPED_R:g}", (SHIPPED_R, 1.0),
+                    xycoords=("data", "axes fraction"), xytext=(0, 2),
+                    textcoords="offset points", color=MUTED, fontsize=6.5,
+                    ha="center", va="bottom")
+
+    # The key rides INSIDE the top plot's clear upper-right corner: grid() has no
+    # reserved key band, and drawn "above" it landed on the axes (lint: on the 300
+    # tick and the data). At r >= 1 the switch-rate curve is at the bottom decade,
+    # so the corner is empty.
+    ax_top.text(0.97, 0.93, "LUC3D, fresh anchor", transform=ax_top.transAxes,
+                ha="right", va="top", color=TEAL, fontsize=7, fontweight="bold")
+    # ONE NAME PER SUBPLOT: two 7 pt lines need ~0.30 of a 17 mm axis and the top
+    # corner has ~0.20 above the exhaustive rule -- they collided with each other or
+    # with the rule at every spacing tried. The teal name stays here; the salmon name
+    # labels the BOTTOM plot, whose region below the flat 0.40 rule is empty, and the
+    # colours bind the pairs across the two plots.
+    # x = 0.60: at 0.97 the label crossed the app-default r = 6 rule (10% inked);
+    # between r = 2 and r = 6 nothing is drawn below the exhaustive rule.
+    ax_bot.text(0.60, 0.15, "exhaustive", transform=ax_bot.transAxes,
+                ha="right", va="bottom", color=SALMON, fontsize=7,
+                fontweight="bold")
     save(fig, 3, "d", "sweep" if not with_shipped else "sweep_with_shipped")
 
 
@@ -469,7 +469,7 @@ def main_legacy8():
     # The denominator is IN the axis label -- the footnote is no longer drawn
     # (src.style.footnote reports to the build log), so a unit that lives only
     # there would not reach the reader.
-    ax.set_ylabel("ID switches per\n100,000 camera-frames", color=SALMON)
+
     # PLAIN NUMBERS ON EVERY DECADE THE DATA TOUCHES, not matplotlib's default
     # powers of ten. The series runs 3.8 to 569, so the default labelled only 10^1
     # and 10^2 and the four lowest points sat BELOW the lowest label with nothing to
@@ -482,8 +482,6 @@ def main_legacy8():
     ax.yaxis.set_major_formatter(FixedFormatter([str(v) for v in decades]))
     ax.yaxis.set_minor_locator(FixedLocator([]))
     ax.set_ylim(rate.min() * 10 ** -0.12, rate.max() * 10 ** 0.12)
-    ax.tick_params(axis="y", colors=SALMON)
-    ax.spines["left"].set_color(SALMON)
 
     ax.set_xscale("log")
     # Limits in decades either side, so the r = 0 slot and the 24 label both clear

@@ -1,47 +1,27 @@
 #!/usr/bin/env python3
 """
-Fig 4c -- how far the 3D point moves when the single worst-fitting camera is dropped,
-and how often that move was an improvement.
+Fig 4c -- reprojection error with all cameras against the same solve with the
+worst-fitting view dropped.
 
-The second half of the figure's claim. Rejecting one outlying camera moves a point
-a median 7.2 mm in the stratum where that camera disagreed by >= 10 px -- an order
-of magnitude more than any solver choice does. Stratified by how badly the dropped
-camera disagreed, because the effect is entirely carried by the tail.
+REDESIGNED 2026-08-15 (Eric: "I don't understand the x axis at all ... just show the
+error with all cameras and then the error when we drop the worst camera"). Two
+conditions on the x axis, nothing else: the solve from ALL views, scored in the KEPT
+views against their own detections, and the same solve re-run with the single
+worst-fitting view excluded, scored in the SAME kept views. The paired change is the
+finding: dropping a disagreeing view lowers the error in every view you keep.
 
-A DISPLACEMENT HAS NO SIGN, which is why `improved_frac` is now on the artwork.
-"The 3D point moves 7.2 mm" is a magnitude: on its own it is equally consistent
-with the drop fixing the point and with the drop wrecking it, and the boxes alone
-cannot tell a reader which. `robust.*.improved_frac` was measured in the same pass
-and was deposited but never plotted -- it is the fraction of keypoints where
-dropping the camera actually LOWERED the error in the views that were kept -- so it
-is printed against the box whose magnitude it qualifies: 87 / 83 / 96%.
-Note what it is and is not: one solver, one camera removed, scored on the kept
-views' own detections. It is not a comparison between solvers and it needs no
-reference 3D.
+The teal pair is the POOLED mean (weighted by each stratum's n -- means pool exactly;
+percentiles do not). The three thin grey pairs are the deposit's three
+disagreement strata (how far the worst view sat from the all-view solution), drawn so
+the spread is visible without an axis of bins; their n's span 4.7M / 12.1M / 0.27M
+solves and the outlier stratum is where the drop buys 7 mm of 3D movement (the old
+panel's headline, now in the legend).
 
-It is printed rather than plotted as a fourth mark, and that is a size decision,
-not a preference. A shared-x difference strip below the boxes (the construction 4d
-uses) was built first and does not fit a 57.3 x 52 mm slot: the strip plus its own
-tick row leaves the boxes ~24 mm of axes, and the rotated y label -- 28 mm of type --
-is then clipped off the top of the page. The number carries the direction, which is
-the whole content of the finding.
-
-THE THREE BOXES ARE DRAWN AT EQUAL WIDTH (review 2026-08-14). They were
-sqrt(n)-scaled -- the standard variable-width boxplot -- because n differs 45-fold
-across the strata and three equal boxes read as three equal conditions. At this
-panel's size that produced a 0.09-wide sliver beside a 0.54-wide box and it read as
-a rendering fault rather than as an encoding.
-
-Nothing is lost by equalising them, which is why the change is safe: `n` is printed
-above every box and each stratum's SHARE of the 17,013,412 keypoints is printed under
-its own tick, so the two statements the width was making are both still on the
-artwork, in numbers, twice. The 7.2 mm headline still cannot be read as typical --
-that stratum is 1.6% of the data and says so under its tick.
-
-Source: figs/out/fig4.json `robust.{clean,mid,outlier}.{moved_mm,improved_frac,n}`.
+Source: figs/out/fig4.json `robust.{clean,mid,outlier}.kept_view_err_{before,after}`.
 
     python3 figs/panels/fig4_03_worst_camera.py
 """
+
 import sys
 from pathlib import Path
 
@@ -49,7 +29,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (MUTED, GREY, INK, PINK, deposit, footnote, panel, save,  # noqa: E402
+from src.style import (MUTED, GREY, INK, TEAL, deposit, footnote, panel, save, text_legend,  # noqa: E402
                        use)
 
 STRATA = [("clean", "< 3"), ("mid", "3–10"), ("outlier", "≥ 10")]
@@ -83,62 +63,43 @@ def build() -> pd.DataFrame:
 
 def main():
     use()
-    df = build()
+    r = load("fig4.json")["robust"]
+    strata = ["clean", "mid", "outlier"]
+    rows = []
+    for st in strata:
+        rows.append({"stratum": st, "n": r[st]["n"],
+                     "all_views_px": r[st]["kept_view_err_before"]["mean"],
+                     "worst_dropped_px": r[st]["kept_view_err_after"]["mean"],
+                     "moved_mm_p50": r[st]["moved_mm"]["p50"],
+                     "improved_frac": r[st]["improved_frac"]})
+    df = pd.DataFrame(rows)
+    n_tot = df.n.sum()
+    pooled = {c: float((df[c] * df.n).sum() / n_tot)
+              for c in ("all_views_px", "worst_dropped_px")}
+    df = pd.concat([df, pd.DataFrame([{"stratum": "POOLED", "n": int(n_tot),
+                                       **pooled}])], ignore_index=True)
     deposit(df, 4, "fig4c_worst_camera.csv")
 
-    fig, ax = panel("third", "std")
-    n_max = df.n.max()
-    for i, r in df.iterrows():
-        # Drawn from the deposited percentiles rather than from raw samples: the
-        # measurement pass summarised 4.2 M keypoints and only the percentiles
-        # survive into the JSON, so a real bxp is the honest primitive here.
-        w = W_BOX
-        ax.bxp([{
-            "med": r.p50, "q1": r.p25, "q3": r.p75,
-            "whislo": r.p5, "whishi": r.p95, "fliers": [],
-        }], positions=[i], widths=w, showfliers=False, manage_ticks=False,
-            # NOT PINK: that is 3D-MuPPET's reserved hue and this panel has no
-            # tracker in it at all (review 2026-08-14). A neutral grey fill keeps
-            # the boxes read as boxes; the medians carry the accent.
-            boxprops=dict(edgecolor=INK, lw=0.8, facecolor="#DDDDDD", alpha=0.8),
-            medianprops=dict(color=INK, lw=1.4),
-            whiskerprops=dict(color=INK, lw=0.8),
-            capprops=dict(color=INK, lw=0.8),
-            patch_artist=True)
-        # "n=1,167,554" is 39 pt wide and the first box sits ~6 pt inside the axes, so
-        # centred on that box the label crossed the left spine. The leftmost n is
-        # therefore anchored at its box's centre and grows RIGHTWARD instead; the
-        # others have room on both sides and stay centred.
-        ax.text(i, r.p95 + 0.6, f"n={r.n:,}", va="bottom",
-                ha="left" if i == 0 else "center", color=MUTED, fontsize=7)
-        # +0.45 in y, not centred exactly on the median: box 0's median is 1.07 mm on
-        # a 0-27 mm axis, so a vertically centred label straddled y = 0 and sat on the
-        # x spine (the linter measured 12% of its box inked). x = 0.30 cleared the
-        # widest box when widths varied (half-width 0.27) and still clears the
-        # constant W_BOX (half-width 0.21).
-        ax.text(i + 0.30, r.p50 + 0.45, f"{r.p50:.1f}", ha="left", va="center",
-                color=INK, fontweight="bold")
+    fig, ax = panel("third", "std", key=2)
+    x = [0, 1]
+    for _, row in df[df.stratum != "POOLED"].iterrows():
+        ax.plot(x, [row.all_views_px, row.worst_dropped_px], color=GREY, lw=0.9,
+                zorder=2)
+        ax.plot(x, [row.all_views_px, row.worst_dropped_px], "o", color=GREY,
+                ms=2.6, mec="white", mew=0.5, zorder=3)
+    ax.plot(x, [pooled["all_views_px"], pooled["worst_dropped_px"]], color=TEAL,
+            lw=2.2, zorder=4)
+    ax.plot(x, [pooled["all_views_px"], pooled["worst_dropped_px"]], "o",
+            color=TEAL, ms=6, mec="white", mew=1.0, zorder=5)
 
-    ax.set_xticks(range(len(df)))
-    # THE SHARE AND THE DIRECTION GO IN THE TICK BLOCK, under the stratum each
-    # belongs to, and that placement is forced. There is no room left in the data
-    # area: the three n labels already sit at three different heights above the boxes
-    # to keep clear of each other, so a second line on any of them collides with the
-    # next; and stacking the direction beside the pink median instead put it across
-    # the neighbouring box's whisker. Under the tick, each number is unambiguously
-    # attached to one stratum and nothing else can move into it.
-    ax.set_xticklabels([f"{r.label}\n{r.share:.0%}\n{r.improved_frac:.0%} better"
-                        if r.share >= 0.10 else
-                        f"{r.label}\n{r.share:.1%}\n{r.improved_frac:.0%} better"
-                        for _, r in df.iterrows()])
-    ax.set_xlabel("how far that camera disagreed (px)")
-    # "the 3D point moves (mm)" is 28 mm of rotated type and the three-line tick
-    # block leaves the axes ~28 mm, so the long form was clipped off the top of the
-    # page. The x label carries "that camera", so "3D point moves" is not ambiguous.
-    ax.set_ylabel("3D point moves (mm)")
-    ax.set_ylim(0, None)
-    footnote(ax, "under each: share of the keypoints;\n"
-                 "% better: the kept views' error fell")
+    text_legend(ax, [("pooled mean, 17.0M solves", TEAL),
+                     ("disagreement strata (n 4.7M / 12.1M / 0.27M)", GREY)],
+                "above", size=6.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(["all views\nin the solve", "worst view\ndropped"])
+    ax.set_xlim(-0.4, 1.4)
+    ax.set_ylabel("reprojection error in\nthe kept views (px)")
+    ax.set_ylim(0, 7)
     save(fig, 4, "c", "worst_camera")
 
 

@@ -112,7 +112,7 @@ def main():
     ks = [k for k in sorted(bd, key=int) if bd[k].get("n_sessions")]
     df = pd.DataFrame([dict(difficulty=int(k),
                             **{c: bd[k].get(c) for c in FIELDS}) for k in ks])
-    deposit(df, 6, "fig6c_detection_quality.csv")
+    deposit(df, 6, "fig6s6_detection_quality.csv")
 
     fig, axes = grid(1, 3, span="full", row=H)
     # rect is (left, bottom, WIDTH, HEIGHT) -- NOT (left, bottom, right, top).
@@ -165,7 +165,7 @@ def main():
              + ", ".join(str(int(v)) for v in df.n_sessions)
              + " sessions at difficulty 1–7",
              ha="center", va="center", color=INK, fontsize=6.0)
-    save(fig, 6, "c", "detection_quality")
+    save(fig, 6, "s6", "detection_quality")
 
 
 if __name__ == "__main__":

@@ -114,7 +114,7 @@ TITLES = {
     (5, "g"): "One rear invites another — up close",
     (6, "a"): "Rig and 3D",
     (6, "b"): "One frame, six cameras",
-    (6, "c"): "Detection quality",
+    (6, "c"): "Missing keypoints vs difficulty and cameras",
     (6, "d"): "Animal-count control",
     (6, "e"): "Corpora",
     (6, "f"): "Difficulty strata",
@@ -203,7 +203,10 @@ LAYOUTS = {
          ("e", "upright_stats")],
         [("f", "leader"), ("g", "rear_coupling")]],
     6: [[("a", "rig"), ("b", "cameras")],
-        [("c", "detection_quality")],
+        # 6c REPLACED 2026-08-15 (Eric): the recovery surface (# cameras x difficulty
+        # x missing keypoints); the three-sub-plot detection-quality panel moved to
+        # supplementary s6.
+        [("c", "recovery_surface")],
         [("d", "animal_count"), ("e", "corpora")],
         [("f", "difficulty_strata")]],
     # Panel a carries the EXPERIMENTAL high-performing arm (2026-08-13, on
