@@ -240,15 +240,18 @@ artwork are each solver's own improvement from 2 to 4 cameras: 1.29× for the DL
 (4.32 to 3.34) and 1.41× for the refinement (4.42 to 3.15). The refined solver is
 worse than the DLT at 2 views and better at 3 and 4.
 
-C) Reprojection error in the kept views, with all views in the solve against the
-same solve with the worst-fitting view dropped, scored against the kept views' own
-detections. The teal pair is the pooled mean over the 17,013,412 solves, 2.05 to
-1.70 px; the thin grey pairs are the three disagreement strata — how far the worst
-view sat from the all-view solution, under 3 px, 3 to 10 px and 10 px or more,
-n = 4,671,933, 12,073,053 and 268,426 — falling 1.37 to 1.15, 2.22 to 1.87 and 6.10
-to 4.13 px. Dropping the disagreeing view lowers the error in every view that is
-kept; in the 10 px-or-more stratum the 3D estimate moves a median 7.18 mm when it
-does so.
+C) Reprojection error in the kept views, per session, with all views in the solve
+against the same solve with the worst-fitting view dropped, scored against the kept
+views' own detections. One grey line per session connects its two means, 50 lines
+over 17,013,412 solves, and every one slopes down — dropping the disagreeing view
+lowers the error in the views that are kept in 50 of 50 sessions; the teal pair is
+the across-session mean, 2.06 to 1.71 px. The per-session numbers are a
+re-measurement of the robust arm with session capture, because the original pass
+pooled without recording sessions; the re-run is gated — its pooled strata reproduce
+the original deposit's means to about 2.5 x 10⁻¹³ with identical counts, and the
+panel refuses to draw if that gate fails. The disagreement strata themselves stay in
+the deposit: in the stratum where the worst view sat 10 px or more from the all-view
+solution, the 3D estimate moves a median 7.18 mm when that view is dropped.
 
 D) Median reprojection error per session for four solvers, paired by algorithm class;
 one dot per session joined across the four, rules at the median of the 50 sessions, the
