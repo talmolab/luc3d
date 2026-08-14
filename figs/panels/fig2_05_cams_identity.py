@@ -63,7 +63,7 @@ def main():
     ax.plot(ks, means, color=TEAL, lw=1.6, zorder=2)
 
     ax.set_xticks(ks)
-    ax.set_xlabel("cameras in the rig, k")
+    ax.set_xlabel("cameras used, k of 5")
     ax.set_ylabel("cross-view IDF1\n(50-session mean)")
     ax.set_ylim(0.6, 0.8)
     ax.set_yticks([0.6, 0.65, 0.7, 0.75, 0.8])

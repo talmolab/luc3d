@@ -170,10 +170,10 @@ def main():
     # at EVERY k -- and it is only ~0.5 px tall, which is why this is one short line
     # rather than two.
     y0 = max(0.0, lo_y - 0.35)
-    if df.ratio_ba_over_dlt.iloc[0] > 1 > df.ratio_ba_over_dlt.iloc[-1]:
-        ax.text(ks[0] - 0.55, y0 + (df.dlt_p25.min() - y0) * 0.42,
-                "refined worse at 2 views, better at 3–4", ha="left", va="center",
-                color=MUTED, fontsize=5.4)
+    # The crossing sentence ("refined worse at 2 views, better at 3-4") moved to the
+    # legend (review round 3) -- the same prose class the 7a purge removed, and the
+    # crossing is visible in the two curves. 5.4 pt was also under Nature's 5 pt
+    # floor once print-scaled.
 
     ax.set_xticks(ks)
     ax.set_xlabel("cameras in the solve")

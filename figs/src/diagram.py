@@ -321,7 +321,7 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
             from src.style import identity as _id
             plane(GREY)
             pose(0.00, 0.00, 0.58, _id(0))
-            pose(0.40, 0.34, 0.58, _id(1))
+            pose(0.40, 0.34, 0.58, _id(4))
     elif kind in ("tiles2d", "tilesid", "volume3d"):
         # ##################################################################
         # THE PIPELINE'S ACTUAL SHAPE (review 2026-08-13). The three glyphs
@@ -377,7 +377,11 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
                 ax.add_patch(Rectangle((bx, y), tw, s, fill=False, ec=color,
                                        lw=lw * 0.9, zorder=3))
                 for a, (fx, fy) in enumerate(poses[t]):
-                    col = INK if kind == "tiles2d" else _identity(a)
+                    # slots 0 and 4 (green, orange): the hues the app's own demo
+                    # session gives its first two identities in the fig2a
+                    # screenshots (review round 3) -- not 0 and 1, whose magenta
+                    # exists in no photograph in the set.
+                    col = INK if kind == "tiles2d" else _identity((0, 4)[a])
                     animal(ax, bx, y, tw, s, fx, fy, col)
         else:
             # ONE box for the collapsed 3D volume, with a ground parallelogram so
@@ -392,7 +396,7 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
             ax.add_patch(Rectangle((bx, y), bw, s, fill=False, ec=color,
                                    lw=lw * 0.9, zorder=3))
             for a, (fx, fy) in enumerate(((0.30, 0.42), (0.70, 0.66))):
-                animal(ax, bx, y, bw, s, fx, fy, _identity(a), scale=1.05)
+                animal(ax, bx, y, bw, s, fx, fy, _identity((0, 4)[a]), scale=1.05)
         return x0, y, wide, s
     else:
         raise ValueError(f"unknown icon kind: {kind}")

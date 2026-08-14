@@ -31,7 +31,7 @@ CAMERAS themselves stay in a fixed order -- top is the best view in the pooled
 number and near the bottom of every session's spread.
 
 Cameras are NAMED CATEGORIES, not an ordered stratum, so no `level()` ramp: one
-quantity, one colour -- SALMON, this figure's established miss-rate hue (6c). Drawn
+quantity, one colour -- MISS_HUE, this figure's established miss-rate hue (6c). Drawn
 in the rig's own name order (back, backL, mid, midL, top, topL); the rig's other two
 cameras (side, sideL) are not in the scored pool and 74/74 sessions use these six.
 
@@ -43,11 +43,17 @@ per-camera n cross-checked at build time (74 sessions each, no side/sideL rows).
 import sys
 from pathlib import Path
 
+
+
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.style import SALMON, deposit, footnote, panel, save, use  # noqa: E402
+from src.style import deposit, footnote, level, panel, save, use  # noqa: E402
+
+#: A neutral non-entity hue for the bars (review round 3): salmon now means ByteTrack
+#: alone set-wide, and these bars are error percentages -- the worst neighbour for it.
+MISS_HUE = level(0, 3)
 
 FIGS = Path(__file__).resolve().parent.parent
 SOURCE = FIGS / "data" / "fig7" / "slap2m_luc3d_shipped_percam_ITEM3.csv"
@@ -85,7 +91,7 @@ def main():
 
     fig, ax = panel("half", "std")
     x = np.arange(len(cams))
-    ax.bar(x, cell.miss_pooled_pct, width=0.62, color=SALMON, linewidth=0, zorder=2)
+    ax.bar(x, cell.miss_pooled_pct, width=0.62, color=MISS_HUE, linewidth=0, zorder=2)
     for c, xi in zip(cams, x):
         g = df[df.camera == c]
         vals = (g.num_misses / g.num_objects * 100.0).to_numpy()

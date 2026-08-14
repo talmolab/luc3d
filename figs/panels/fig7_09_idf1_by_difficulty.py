@@ -97,8 +97,16 @@ def build():
             byd[diff[s]].append(v)
         for d in sorted(byd):
             v = byd[d]
+            # QUARTILES, NOT +/- s.d. (review round 3): a symmetric s.d. whisker on
+            # a [0, 1] metric asserted IDF1 up to 1.14 on the artwork. p25/p75 stay
+            # inside the metric's range by construction and are the deposit
+            # convention everywhere else in the set. The s.d. is kept as a CSV
+            # column; it is just not drawn as a bar.
             rows.append({"tracker": t, "difficulty": d, "n_sessions": len(v),
                          "idf1_mean": float(np.mean(v)),
+                         "idf1_median": float(np.median(v)),
+                         "idf1_p25": float(np.percentile(v, 25)),
+                         "idf1_p75": float(np.percentile(v, 75)),
                          "idf1_sd": float(np.std(v)) if len(v) > 1 else 0.0})
     return pd.DataFrame(rows), {t: best["within_view"][t]["mean"] for t in TRACKERS}
 
@@ -109,12 +117,7 @@ def main():
     deposit(df, 7, "fig7s3_idf1_by_difficulty.csv")
 
     fig, ax = panel("half", "std", key=3)
-    # The IDF1 ceiling, drawn because the axes deliberately run PAST it: several
-    # mean + 1 s.d. whiskers exceed 1.0 (LUC3D at rating 2 reaches 1.14) and the
-    # first render's ylim of 1.0 silently CLIPPED their caps. The s.d. is an honest
-    # between-session spread, so the whisker is drawn whole and the bound is drawn
-    # as a bound -- GREY, the set's colour for bounds, never for a method.
-    ax.axhline(1.0, color=GREY, lw=0.8, ls=(0, (2.5, 1.5)), zorder=1)
+
     # Trackers dodge within the tick: at ratings 3 and 6 two means sit within 0.03
     # of each other, and three coincident error bars overprint into one unreadable
     # glyph.
@@ -123,10 +126,17 @@ def main():
         g = df[df.tracker == t].sort_values("difficulty")
         c = entity(t)
         xs = g.difficulty + dodge[t]
-        ax.errorbar(xs, g.idf1_mean, yerr=g.idf1_sd, fmt="none",
+        # ANCHORED ON THE MEDIAN, not the mean: at strata where the mean falls
+        # outside [p25, p75] (skewed cells with n = 4) a mean-anchored quartile bar
+        # has a negative arm. Median-in-IQR holds by definition.
+        anchor = g.idf1_median
+        yerr = np.vstack([anchor - g.idf1_p25, g.idf1_p75 - anchor])
+        ax.errorbar(xs, anchor, yerr=yerr, fmt="none",
                     ecolor=c, elinewidth=0.7, capsize=1.4, capthick=0.7, zorder=3)
-        ax.plot(xs, g.idf1_mean, color=c, lw=1.8, zorder=4)
-        ax.plot(xs, g.idf1_mean, "o", color=c, ms=4.0, mec="white",
+        # The line and markers follow the MEDIAN too, so the mark and its interval
+        # are one statistic; the mean stays in the CSV.
+        ax.plot(xs, anchor, color=c, lw=1.8, zorder=4)
+        ax.plot(xs, anchor, "o", color=c, ms=4.0, mec="white",
                 mew=0.8, zorder=5)
 
     ticks = sorted(df.difficulty.unique())
@@ -138,13 +148,11 @@ def main():
     ax.set_xticklabels([f"{d}\n{ns[d]}" for d in ticks], linespacing=1.2)
     ax.set_xlabel("difficulty rating\nn sessions", labelpad=2)
     ax.set_ylabel("within-view IDF1")
-    # Top from the WHISKERS, not the metric's range -- see the ceiling note above.
-    ax.set_ylim(0, float((df.idf1_mean + df.idf1_sd).max()) * 1.03)
+    # Quartile whiskers cannot leave [0, 1], so the metric's own range is the axis.
+    ax.set_ylim(0, 1.0)
     # MUTED for the label, GREY for the rule: GREY (#B3B3B3) is 2.1:1 on white,
     # below the floor this set holds text to (see the MUTED note in src/style.py).
-    ax.annotate("IDF1 ceiling", (ticks[-1] + 0.4, 1.0),
-                textcoords="offset points", xytext=(0, -3), ha="right", va="top",
-                color=MUTED, fontsize=6.0, fontweight="bold")
+    # the ceiling rule and its label went with the s.d. whiskers (round 3)
 
     text_legend(ax, [(LABEL[t], entity(t)) for t in TRACKERS], "above")
     footnote(ax,

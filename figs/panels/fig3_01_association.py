@@ -104,6 +104,12 @@ def box(ax, title, sub, accent):
     ax.text(0.45, Y_SUB, sub, color=MUTED, fontsize=8.0, va="center")
 
 
+#: Identity palette slots for the three schematic animals, shared by both halves of
+#: the panel. 0, 4, 5 = green, orange, blue -- the hues the app's demo session gives
+#: its identities in the fig2a screenshots. See the block comment at the winner paths.
+ID_IDX = [0, 4, 5]
+
+
 def draw_exhaustive(ax):
     blank(ax)
     ax.set_aspect("auto")
@@ -129,10 +135,13 @@ def draw_exhaustive(ax):
     # The dots stay INK: before a grouping is chosen a detection has no identity, and
     # that is the whole premise of the panel -- the same statement Fig 1a's `tiles2d`
     # glyph makes by drawing both animals in one colour.
-    # IDENTITY INDICES 0, 1, 3 -- NOT 0, 1, 2. identity(2) is a dark teal that
-    # collided with the teal "Greedy" heading in the same panel (teal = LUC3D
-    # set-wide); index 3 is a dark yellow with no entity meaning (review 2026-08-14).
-    ID_IDX = [0, 1, 3]
+    # IDENTITY INDICES 0, 4, 5 (review round 3). Not 0,1,2: identity(2) is a dark
+    # teal colliding with the LUC3D entity hue. Not 0,1,3 either: the SCREENSHOTS the
+    # reader matches these against (fig2a's mice, labelled id_0/id_1/id_2 in the app)
+    # wear palette slots 0, 4 and 5 -- green, orange, blue -- because the demo session
+    # stores those colours. The schematic must use the hues a reader can actually see
+    # in a photograph, or the "same animal, same colour" promise fails exactly where
+    # it is tested.
     rows = list(range(NA))
     for c, perm in enumerate(WINNER):
         for a in range(NA):
@@ -176,7 +185,7 @@ def draw_greedy(ax):
             # dark-green/dark-teal pair was indistinguishable (review 2026-08-14).
             # Same 0,1,3 identity indices as the exhaustive half's paths.
             ax.plot([x + 0.14 + a * 0.26], [Y_BAND + 0.10], "o", ms=5.0,
-                    mfc=identity([0, 1, 3][a]), mec="white", mew=0.6, zorder=4)
+                    mfc=identity(ID_IDX[a]), mec="white", mew=0.6, zorder=4)
         if i < NCAM - 1:
             ax.add_patch(FancyArrowPatch((x + 0.86, y_h + 0.31),
                                          (x + 2.2, y_h + 0.31),

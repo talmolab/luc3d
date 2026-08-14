@@ -8,7 +8,7 @@ measures.
 docstring cited the wrong panel.)
 
 Everything here is read from the files themselves by `fig6_measure.py`, not from a lab
-notebook: 130 sessions with 3D, 12,039,174 frames, 29.5 hours.
+notebook: 130 sessions with 3D, 12,039,174 frames, 29.6 hours.
 
 WHICH CORPUS EACH PANEL MEASURES IS IN THE LEGEND, NOT IN THIS TABLE. c, d and f are
 SLAP-2M only, and BMimica carries 84 % of the corpus frame count while contributing
@@ -176,7 +176,12 @@ def main():
         "Sessions with 3D": (f"{sum(c['sessions_with_3d'] for c in used)} of "
                              f"{sum(c['sessions_total'] for c in used)}"),
         "Frames": f"{sum(c['frames_total'] for c in used):,}",
-        "Hours": f"{sum(c['hours'] for c in used):.1f}",
+        # SUM OF THE DISPLAYED VALUES, not display of the exact sum (review round
+        # 3): 18.68 + 10.86 = 29.54 prints as 29.5, while the addends print as 18.7
+        # and 10.9 -- so the table showed 18.7 + 10.9 = 29.5 and failed its own
+        # arithmetic as read. Rounding the addends first makes the printed column
+        # self-consistent; the exact total lives in the deposit.
+        "Hours": f"{sum(round(c['hours'], 1) for c in used):.1f}",
         "Nodes": nodes,
     }
     cols.append("Total")

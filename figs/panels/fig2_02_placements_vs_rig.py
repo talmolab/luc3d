@@ -176,7 +176,9 @@ def main():
     # partitioned into regions by eye.
     # Left-aligned just inside the y spine rather than centred: centred, the leading
     # glyph hung over the spine and read as clipped.
-    ax.text(2.12, CMAX * NODES * 1.10 * 0.985,
+    # 0.90, not 0.985: the C x N dashed line passes y ~ 115 near C = 7, exactly
+    # where the second text line used to end (review round 3).
+    ax.text(2.12, CMAX * NODES * 1.10 * 0.90,
             f"one measured rig (marker): C = {ncam}.\nAll three curves are the model.",
             color=MUTED, ha="left", va="top", fontsize=7, linespacing=1.35)
 

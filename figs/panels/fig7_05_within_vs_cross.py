@@ -459,7 +459,11 @@ ROW_H = 50.0
 #: this constant -- 187.0 mm at 62 mm and 195.0 mm at 70 mm, against the 200 mm page
 #: ceiling. Both measured on the assembled PDF after the change, not assumed; re-check it
 #: with `assemble.py 7` after touching this number. Anything past ~74 mm breaches it.
-ROW_H_VARIANT = 70.0
+#: 62, not 70, since review round 3 (2026-08-14): the key is five lines again --
+#: the per-series caveats moved to the legend -- and 70 mm was sized for nine. The
+#: note above records "62 mm did it for five lines". Assembled fig7.pdf returns to
+#: ~187 mm.
+ROW_H_VARIANT = 62.0
 
 
 def key_dy(h):
@@ -548,9 +552,11 @@ def main(variant=False, fair=True):
     # Key lines: one per series, plus the EXPERIMENTAL note, plus the two-line SLEAP
     # correction note when the deposit carries the corrected series. `panel(key=n)`
     # reserves the band, so an undercount here would let the top key line sit on the plot.
-    fig, ax = panel("half", height,
-                    key=len(order) + (1 if variant else 0) + (2 if sleap_fixed else 0)
-                    + (len(MUPPET_NOTE) if muppet_cov else 0))
+    # KEY COUNT MATCHES WHAT IS APPENDED (review round 3): the sleap_fixed and
+    # MuPPET reservations counted lines that stopped being appended when the
+    # per-series notes moved to the legend, so ~30% of the panel was a blank band
+    # between key and axes. Five lines: four series + the EXPERIMENTAL note.
+    fig, ax = panel("half", height, key=len(order) + (1 if variant else 0))
     for rank, (key, name, color) in enumerate(order):
         if key not in bm:
             continue
@@ -694,6 +700,19 @@ def main(variant=False, fair=True):
 
     text_legend(ax, entries, "above", dy=key_dy(height), xy=(0.14, 0.985),
                 transform=fig.transFigure)
+    # THE CORPUS, ON THE ARTWORK (review round 3): 7b kept its "SLAP-2M corpus ·
+    # a is BMimica" header when footnote() was suppressed set-wide; this panel's half
+    # of that two-way pointer was IN footnote() and silently vanished -- leaving five
+    # headline numbers with no corpus, one panel away from a SLEAP median of 0.749 on
+    # a different corpus. Same idiom as 7b: one MUTED line, in the plot's empty
+    # upper-left, saying which corpus and pointing at the rest of the figure.
+    if variant:
+        # LOWER LEFT, not upper: the amber arm runs flat at 0.861, right through the
+        # upper-left band (lint: 20% inked). Below the descending baselines' left
+        # ends (~0.64 at x=0) the corner under y~0.55 is empty on this render.
+        ax.text(0.02, 0.40, "50 BMimica sessions\nb–f: SLAP-2M",
+                transform=ax.transAxes, ha="left", va="top", color=MUTED,
+                fontsize=6.5, linespacing=1.4)
     ax.set_xlim(-0.15, 1.05)
     ax.set_xticks([0, 1])
     ax.set_xticklabels(["within view", "cross view"])
