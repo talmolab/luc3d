@@ -20,7 +20,7 @@ Two reasons, both measured rather than aesthetic:
 
 ONE HUE = ONE METRIC, ARM = FILL. Salmon is the switch rate and teal is cross-view
 IDF1, exactly as before; the two ARMS are distinguished by fill and line style
-(thin dotted = shipped, bold solid = fresh anchor; the filled/hollow idiom this
+(filled + solid = shipped, hollow + dashed = fresh anchor), the same idiom Fig 3d and
 Fig 7's variant panels use for "same tracker, different operating point". A second hue
 per arm would read as four metrics.
 
@@ -281,27 +281,27 @@ def main():
     def series(axis, arm_df, col, color, fresh_arm):
         """One arm of one metric.
 
-        NO FILLED-VS-HOLLOW (review 2026-08-14: "I don't like the filled vs hollow").
-        It asked the reader to hold a marker-fill convention across two y axes and
-        four series, and a 4 pt ring at print size is barely distinguishable from a
-        4 pt disc anyway. The arms are now separated by WEIGHT and DASH alone -- the
-        shipped tracker a thin dotted line, the fresh anchor the bold solid one -- so
-        the eye reads "the bold curve is the one being proposed" without decoding
-        anything. Marker fill is now constant and means only "a measured cell".
+HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
+        thin-dotted vs bold-solid on 2026-08-14 and changed straight back on review:
+        the weight-only encoding made the shipped arm look like a de-emphasised
+        annotation rather than the control it is, and the marker fill is what actually
+        separates the four series where the two curves cross.
         """
         g = arm_df.sort_values("r")
         rr = g.r.to_numpy(dtype=float)
         x = np.where(rr > 0, rr, zero_x)
         pos = rr > 0
         y = g[col].to_numpy(dtype=float)
-        ls = "-" if fresh_arm else (0, (1.6, 1.6))
-        lw = 2.0 if fresh_arm else 1.1
+        ls = (0, (2.6, 1.6)) if fresh_arm else "-"
+        lw = 1.5 if fresh_arm else 2.0
         axis.plot(x[pos], y[pos], color=color, lw=lw, ls=ls, zorder=3)
         if has_zero:
-            axis.plot(x[:2], y[:2], color=color, lw=1.0, ls=(0, (1.4, 1.2)),
+            axis.plot(x[:2], y[:2], color=color, lw=1.2, ls=(0, (1.4, 1.2)),
                       zorder=3)
-        axis.plot(x, y, "o", color=color, ms=3.6 if not fresh_arm else 4.2,
-                  mec="white", mew=0.8, zorder=4)
+        if fresh_arm:
+            axis.plot(x, y, "o", mfc="white", mec=color, mew=1.2, ms=4, zorder=4)
+        else:
+            axis.plot(x, y, "o", color=color, ms=4, mec="white", mew=0.8, zorder=4)
 
     # ID-switch RATE, log, on the left. `.clip(lower=1)` pins a zero-switch cell at
     # the smallest event the measurement can resolve (see the legacy section).
@@ -312,8 +312,8 @@ def main():
         series(ax, df[df.arm == arm], "rate", SALMON, is_fresh)
 
     footnote(ax, "r = 0: no 3D term, left of the break\n"
-                 "all four series are LUC3D against itself: thin dotted = shipped "
-                 "tracker, bold solid = fresh anchor (sync + stale 20 + "
+                 "all four series are LUC3D against itself: filled+solid = shipped "
+                 "tracker, hollow+dashed = fresh anchor (sync + stale 20 + "
                  "distThresh 25)\n"
                  f"rate basis: {tcf:,} camera-frames "
                  f"(50 sessions x 5 cameras, full length), corr2d = 1 row")
@@ -335,8 +335,8 @@ def main():
                 ha="center", va="bottom")
 
     text_legend(ax, [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
-                     ("thin dotted: shipped tracker", MUTED),
-                     ("bold solid: fresh anchor", MUTED)], "above")
+                     ("filled: shipped tracker", MUTED),
+                     ("hollow: fresh anchor", MUTED)], "above")
     save(fig, 3, "e", "sweep")
 
 

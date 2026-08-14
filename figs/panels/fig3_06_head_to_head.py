@@ -279,16 +279,13 @@ def main():
     # the upper-left quadrant is genuinely empty -- the exhaustive curve does not
     # reach 10^3 s until x = 2.7 and the "10^n x" callout sits a decade below the
     # block. Placed in axes fractions so it tracks the axes if the panel is resized.
-    skipped = int(df.frames_considered.sum() - df.frames_computed.sum())
-    big = df.loc[df.frames_computed.idxmax()]
-    share = big.frames_computed / df.frames_computed.sum()
-    n3 = int(df.loc[df.animals == 3, "frames_computed"].sum())
-    ax.text(0.012, 0.995,
-            f"{skipped:,} skipped as occluded\n"
-            f"{share:.0%} of the rest is {big.label}\n"
-            f"{n3:,} frames test 3 animals",
-            transform=ax.transAxes, ha="left", va="top", color=MUTED,
-            fontsize=6.5, linespacing=1.3)
+    # THE COMPOSITION BLOCK AND THE TITLE SENTENCE ARE GONE (review 2026-08-14:
+    # "get rid of all that descriptive text, it is a figure"). Three lines of
+    # frame-accounting inside the axes plus a three-line title above it was a caption
+    # typeset on the artwork -- and this panel is a two-series timing comparison whose
+    # point is legible from the two curves alone. All of it is in FIGURE-LEGENDS.md:
+    # the agreement rate, both frame counts, the occluded remainder and the 3-animal
+    # sample. Nothing is dropped from the record, only from the drawing.
 
     # The gap at the biggest configuration, which is the sentence the panel exists
     # to support. NOT at the geometric midpoint: that lands at ~13 s, exactly where
@@ -315,10 +312,7 @@ def main():
     # version "of 137,266 frames"). Both frame counts stay: 137,266 is what agreement
     # was computed on, 198,292 is what exhaustive was offered, and the difference is
     # the occluded frames it could not take.
-    ax.set_title(f"same grouping on {h['agreement_rate']:.3%}\n"
-                 f"of the {df.frames_computed.sum():,} of "
-                 f"{df.frames_considered.sum():,}\nframes exhaustive could run",
-                 color=TEAL, fontsize=7, fontweight="bold", loc="left")
+
     # Same width limit, and tighter: footnote() folds the note into the x label, which
     # is CENTRED on the axes, so a line may only be ~2x the smaller side margin --
     # ~44 mm here. The provenance of the two rates is in the docstring and caption.
