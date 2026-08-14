@@ -1,10 +1,29 @@
 # Figure review plan — meeting notes of 2026-08-13, formalised
 
-> **STATUS 2026-08-14.** Done and rendered: **F1.1, F1.2, F1.3, F7.1, F2.5, F2.7**, plus
-> the `identity()` / `level()` half of **X.1**. Lint is back at its 2 pre-existing issues
-> and Figs 1, 2 and 7 are re-assembled. Not started: F2.1/F2.2/F2.3 (need a decision or an
-> app re-render), F3.1/F3.2/F3.3/F3.4, F6.1, F7.2's panel, F7.3, X.2, and the X.1 sweep
-> across the remaining panels. Each done item carries a **DONE** note below.
+> **STATUS 2026-08-15 (overnight loop).** Done and rendered: X.1 sweep across Figs
+> 1/2/3/4/6 (entity hues off quantities, level() for ordered strata, identity slots
+> matching the screenshots), F1.1-F1.3, F2.1, F2.5, F2.7, **F2.6b MEASURED AND DRAWN**
+> (fig2_cams_identity.json, k=5 gate exact; panel fig2s1: 0.67 -> 0.74 -> 0.75 -> 0.75,
+> the 2->3 jump is the story), F3.1, F3.2, F7.1, plus tonight: 3a unboxed, 3b cut
+> (cost function now in METHODS.md), 3c fresh-anchor-only without count labels, 3d
+> exhaustive-vs-fresh-anchor with denominator-labelled reference rules, 3e decluttered,
+> 7a fair baselines + amber experimental arm + coverage caveat + corpus pointer, three
+> stratified supplementary panels (6s4 by-animals, 6s5 by-camera, 7s3 by-difficulty)
+> answering the "more plots by difficulty/camera/animals" ask from existing deposits.
+> FIGURE-LEGENDS.md/.txt and METHODS.md synced by a dedicated agent (fair baselines,
+> IDA, exhaustive denominators, the association cost in the CODE's form). Three
+> adversarial review rounds applied; lint at the 2 pre-existing issues.
+>
+> **Placement proposals for Eric** (supplementary letters until placed): fig2s1 ->
+> Fig 2 bottom row beside 2c (geometry + identity halves of how-many-cameras); fig7s3
+> -> Fig 7 beside 7c (difficulty companion to the animal-count split); fig6s4 ->
+> REPLACES 6d or stays supplementary (same cells, better encoding -- placing both
+> would put one dataset in the figure twice); fig6s5 -> Fig 6 row c/d as the third
+> split once its legend entry lands.
+>
+> **Still blocked on Eric:** F2.2/2a-3D re-render from sideL (needs the app), F7.3
+> recovery tolerance, X.2 px->cm scale plane, F3.3 "the square" reading, F3.4 nodes
+> timing. The uncapped 3x5/4x3 exhaustive re-run is at 6/7 sessions in flight.
 
 Every item below is one reviewer comment, restated against the panel and the script that
 produces it, with what would actually change and what it costs. Panels are named by their
