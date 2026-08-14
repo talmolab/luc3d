@@ -79,7 +79,10 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     a = ap.parse_args()
 
-    sessions = sorted(p.stem for p in (CACHE / a.cell).glob("*.json"))
+    # session files only: the cell dir also holds params.json, which is not a
+    # session and would count as a phantom 51st entry (it fails scoring and is
+    # excluded from the aggregate either way -- this keeps the log honest).
+    sessions = sorted(p.stem for p in (CACHE / a.cell).glob("2*.json"))
     if a.limit:
         sessions = sessions[:a.limit]
     print(f"[ida] cell {a.cell}: {len(sessions)} cached sessions, {a.workers} workers",
