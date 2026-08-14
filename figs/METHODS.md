@@ -76,9 +76,9 @@ association and tracking results in Figures 3 and 7, and the behavioural analysi
 Figure 5, were computed on complete sessions, every frame, with no subsampling. The
 per-keypoint geometric measurements in Figures 2, 4 and 6 were computed on a uniform
 sample of frames, every 15th frame for Figure 4; Figures 2 and 6 use every frame,
-except that Figure 2C plots the Figure 4B measurement — the held-out estimator broken
-out by camera count — and therefore carries Figure 4's sampling and its 50 proofread
-sessions. The sample is uniform and
+except that Figure 2C is drawn from Figure 4's by-camera-count measurement pass —
+the k-view solves and their held-out scorings — and therefore carries Figure 4's
+sampling and its 50 proofread sessions. The sample is uniform and
 was never selected on any property of the data, and it is large in absolute terms:
 286,200,174 keypoints in Figure 2, 17,013,412 in Figure 4, and 187,134,382 keypoint
 comparisons in Figure 6. Subsampling was necessary because these measurements are
@@ -149,12 +149,13 @@ exactly A, and ineligible frames were counted and reported rather than dropped. 
 benchmark covers 92 sessions, being every session that has both pool detections and
 proofread ground truth: 50 of the 56 BMimica sessions, and all 35 two-animal, 4
 three-animal and 3 four-animal SLAP-2M sessions. Of the 9,678,503 frames considered,
-4,591,864 were eligible and 5,086,639 were skipped. The two most expensive
-configurations are capped at 2,000 eligible frames per session at three animals and
-1,000 at four, because uncapped the four-animal configuration alone would have cost 37
-core-hours. Eligibility is still evaluated over the whole session, so the considered and
-eligible counts are full-session numbers, and the frames that are enumerated are a
-uniform sample across the session rather than a prefix of it. The harness
+4,591,864 were eligible, 5,086,639 were skipped, and every eligible frame was
+computed. An earlier pass had capped the two most expensive configurations at 2,000
+eligible frames per session at three animals and 1,000 at four; the caps were
+removed, and the full 10,419 eligible three-animal five-camera frames and 19,135
+four-animal three-camera frames were enumerated, at a measured 2.7 and 5.5 seconds
+per frame (7.8 and 29.1 core-hours for the two configurations) against 11 to 16
+milliseconds per frame in the two-animal configurations. The harness
 caps enumeration at one million hypotheses per frame, and the configuration of four
 animals in six cameras exceeds that cap by a factor of 191, so no frames of it were
 computed at all. Its cost in Figure 3E is therefore an arithmetic lower bound rather
@@ -162,8 +163,8 @@ than a measurement: the marker takes the number of distinct hypotheses that rema
 after the A!-fold global relabelling symmetry is removed, (A!)^(C-1) = 7,962,624, and
 prices them at the cheapest per-hypothesis rate measured anywhere in the sweep, 249
 microseconds, about 0.55 hours per frame; the bar runs up to the as-published count,
-(A!)^C = 191,102,976, at the 503 microseconds per hypothesis measured at the largest
-configuration that did run, about 26.7 hours per frame. It is drawn with the
+(A!)^C = 191,102,976, at the 396 microseconds per hypothesis measured at the largest
+configuration that did run, about 21.0 hours per frame. It is drawn with the
 open-marker convention this figure uses for a quantity that was not run.
 
 Grouping quality in Figure 3C was scored by comparing partitions rather than labels.
@@ -172,6 +173,9 @@ same matched detections, and a frame was counted as misgrouped when the two part
 differed, so that a consistent relabelling of the identities is not counted as an error.
 The agreement rate between the two methods is the same comparison made between their
 own outputs, pooled over frames, and is defined only on the frames exhaustive computed.
+The ground-truth comparison in Figure 3C is currently scored on the 4,572,172 clean
+frames enumerated before the caps were lifted (7,001 and 3,000 in the two expensive
+configurations); the agreement rate covers the full uncapped computation.
 Two scoring conventions separate the methods and both are disclosed. First, exhaustive
 enumeration is a pure per-frame procedure with no cross-frame identity mechanism; to
 make the IDF1 and switch-count reference levels in Figure 3D computable for it at all,
@@ -239,8 +243,12 @@ interface, because rewriting a project's calibration would invalidate every 3D p
 already derived from it.
 
 The application can optionally drop the view with the worst residual and re-solve the
-point from the remaining views. Figure 4C measures how far the estimate moves when it
-does so, stratified by how far the dropped view sat from the all-view solution.
+point from the remaining views. Figure 4C scores the same solve before and after that
+drop by its reprojection error in the kept views against their own detections, pooled
+over all solves and split into three strata of how far the worst view sat from the
+all-view solution (under 3, 3 to 10, and 10 px or more); the 3D displacement of the
+estimate is deposited alongside, with a median of 7.18 mm in the 10 px-or-more
+stratum.
 
 The comparison triangulator in Figures 4D and 4E is aniposelib 0.7.2, the OpenCV and
 NumPy release that undistorts with cv2.undistortPoints and then solves each point with a
@@ -273,7 +281,7 @@ runtimes, so this comparison is of two implementations as a user would encounter
 and not of two algorithms; the browser deployment that motivates this work forecloses a
 compiled implementation, which is why the shipped solver is the one measured.
 
-The accuracy measurements in Figures 2C and 4B are reference-free. A 3D point is solved
+The accuracy measurement in Figure 4B is reference-free. A 3D point is solved
 from a subset of the cameras, projected into a camera that was not in that subset, and
 scored against that camera's own raw detection, so no reference reconstruction enters
 the metric and neither solver optimises the quantity being reported. This estimator
@@ -282,7 +290,36 @@ cannot rank two solvers: the non-linear refinement moves the estimate in a direc
 essentially uncorrelated with the direction to the reference, with a median cosine of
 0.004 at two cameras, and adding a displacement orthogonal to an existing error always
 increases the distance, so that measure reported that the refinement had moved whichever
-way it moved.
+way it moved. Figure 2C, by contrast, reports the 3D distance to the proofread
+reference in millimetres, deliberately: there the comparison is across camera counts
+within one solver rather than between solvers, so the objection above does not apply,
+and the reference's own noise — its median reprojection error is 2.40 px — enters
+every camera count equally. Its absolute level is therefore a comparison value rather
+than absolute 3D accuracy, which its legend states.
+
+## Reprojection recovery
+
+Figure 6C measures how many of the detector's per-view misses the rest of the rig
+could fill in by reprojection, as a function of rig size. For every keypoint-instance
+— one node of one animal in one frame — g is the number of cameras whose proofread
+reference carries that keypoint and m is the number of those cameras whose matched
+detection carries it too. The matching is identical to the Figure 6 detection-quality
+convention, a mean-keypoint-distance Hungarian assignment against the proofread
+reference, run at stride 1, so "missing" in this measurement is the same notion the
+detection-quality panels plot. Each session deposits its (g, m) histogram, and the
+histograms are the whole measurement: every rig-size statistic is exact arithmetic on
+them, with no sampling and no per-subset re-runs. A view that misses a keypoint is
+recovered when at least two of the other cameras in the rig detect it, because the
+keypoint can then be triangulated from those views and reprojected into the view that
+missed it; one other view cannot triangulate, so recovery at a rig of two cameras is
+zero by construction. For a rig of k of the six cameras, the probability that a
+missing view is recoverable is an exact hypergeometric expectation over all C(6, k)
+camera subsets: conditioned on the missing view being in the subset, the other k − 1
+slots draw from the remaining cameras, of which m detect, and recovery requires at
+least two detecting among them. Pooled over the 74 sessions, 42,184,875
+keypoint-instances, 26.1 per cent of keypoints are missing per view; recovery rises
+from zero at k = 2 to 45.7 per cent of misses at k = 6, leaving 14.2 per cent of
+keypoints still missing at the full proofread rig.
 
 ## Behavioural analysis
 

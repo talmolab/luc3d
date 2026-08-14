@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 """
-Fig 4c -- reprojection error with all cameras against the same solve with the
-worst-fitting view dropped.
+Fig 4c -- per-session reprojection error: all views in the solve vs the worst view
+dropped.
 
-REDESIGNED 2026-08-15 (Eric: "I don't understand the x axis at all ... just show the
-error with all cameras and then the error when we drop the worst camera"). Two
-conditions on the x axis, nothing else: the solve from ALL views, scored in the KEPT
-views against their own detections, and the same solve re-run with the single
-worst-fitting view excluded, scored in the SAME kept views. The paired change is the
-finding: dropping a disagreeing view lowers the error in every view you keep.
+THIRD FORM IN ONE NIGHT, each on instruction, this one final (Eric, 2026-08-15):
+"just do the reprojection error per session scatter for all views and worst view
+dropped for all sessions, then take the average -- I don't like the disagreement
+strata, that just seems weird." The strata existed because fig4.json pooled the
+before/after quantities by worst-view disagreement and never recorded sessions; the
+per-session form needed a re-measurement with session capture
+(figs/fig4_robust_sessions.mjs -- the robust arm alone, two DLT solves per keypoint,
+same export, same solve and error calls, GATED to reproduce fig4.json's pooled
+strata means to 1e-9).
 
-The teal pair is the POOLED mean (weighted by each stratum's n -- means pool exactly;
-percentiles do not). The three thin grey pairs are the deposit's three
-disagreement strata (how far the worst view sat from the all-view solution), drawn so
-the spread is visible without an axis of bins; their n's span 4.7M / 12.1M / 0.27M
-solves and the outlier stratum is where the drop buys 7 mm of 3D movement (the old
-panel's headline, now in the legend).
+WHAT IS DRAWN. One grey line per session connecting its two means (all views ->
+worst dropped), 50 of them; the teal pair is the across-session mean. Every session
+improves -- the line field all slopes down -- which is the finding, and no stratum
+axis is needed to say it.
 
-Source: figs/out/fig4.json `robust.{clean,mid,outlier}.kept_view_err_{before,after}`.
+Source: figs/out/fig4_robust_sessions.json (refuses to draw if its gate failed).
 
     python3 figs/panels/fig4_03_worst_camera.py
 """
+
 
 import sys
 from pathlib import Path
@@ -63,43 +65,37 @@ def build() -> pd.DataFrame:
 
 def main():
     use()
-    r = load("fig4.json")["robust"]
-    strata = ["clean", "mid", "outlier"]
-    rows = []
-    for st in strata:
-        rows.append({"stratum": st, "n": r[st]["n"],
-                     "all_views_px": r[st]["kept_view_err_before"]["mean"],
-                     "worst_dropped_px": r[st]["kept_view_err_after"]["mean"],
-                     "moved_mm_p50": r[st]["moved_mm"]["p50"],
-                     "improved_frac": r[st]["improved_frac"]})
-    df = pd.DataFrame(rows)
-    n_tot = df.n.sum()
-    pooled = {c: float((df[c] * df.n).sum() / n_tot)
-              for c in ("all_views_px", "worst_dropped_px")}
-    df = pd.concat([df, pd.DataFrame([{"stratum": "POOLED", "n": int(n_tot),
-                                       **pooled}])], ignore_index=True)
-    deposit(df, 4, "fig4c_worst_camera.csv")
+    j = load("fig4_robust_sessions.json")
+    if not j["gate"]["passed"]:
+        sys.exit("fig4c: fig4_robust_sessions.json failed its gate against "
+                 "fig4.json's pooled strata -- the per-session numbers are not the "
+                 "published quantity's. Re-run figs/fig4_robust_sessions.mjs and "
+                 "investigate before drawing.")
+    ps = [r for r in j["per_session"] if r["n"]]
+    df = pd.DataFrame(ps)
+    mean_b = float(df.all_views_px.mean())
+    mean_a = float(df.worst_dropped_px.mean())
+    deposit(pd.concat([df, pd.DataFrame([{"session": "MEAN", "n": int(df.n.sum()),
+                                          "all_views_px": mean_b,
+                                          "worst_dropped_px": mean_a}])],
+                      ignore_index=True), 4, "fig4c_worst_camera.csv")
 
     fig, ax = panel("third", "std", key=2)
     x = [0, 1]
-    for _, row in df[df.stratum != "POOLED"].iterrows():
-        ax.plot(x, [row.all_views_px, row.worst_dropped_px], color=GREY, lw=0.9,
-                zorder=2)
-        ax.plot(x, [row.all_views_px, row.worst_dropped_px], "o", color=GREY,
-                ms=2.6, mec="white", mew=0.5, zorder=3)
-    ax.plot(x, [pooled["all_views_px"], pooled["worst_dropped_px"]], color=TEAL,
-            lw=2.2, zorder=4)
-    ax.plot(x, [pooled["all_views_px"], pooled["worst_dropped_px"]], "o",
-            color=TEAL, ms=6, mec="white", mew=1.0, zorder=5)
+    for _, row in df.iterrows():
+        ax.plot(x, [row.all_views_px, row.worst_dropped_px], color=GREY, lw=0.7,
+                alpha=0.8, zorder=2)
+    ax.plot(x, [mean_b, mean_a], color=TEAL, lw=2.2, zorder=4)
+    ax.plot(x, [mean_b, mean_a], "o", color=TEAL, ms=6, mec="white", mew=1.0,
+            zorder=5)
 
-    text_legend(ax, [("pooled mean, 17.0M solves", TEAL),
-                     ("disagreement strata (n 4.7M / 12.1M / 0.27M)", GREY)],
-                "above", size=6.5)
+    text_legend(ax, [(f"mean of {len(df)} sessions", TEAL),
+                     ("one line per session", GREY)], "above")
     ax.set_xticks(x)
     ax.set_xticklabels(["all views\nin the solve", "worst view\ndropped"])
-    ax.set_xlim(-0.4, 1.4)
+    ax.set_xlim(-0.35, 1.35)
     ax.set_ylabel("reprojection error in\nthe kept views (px)")
-    ax.set_ylim(0, 7)
+    ax.set_ylim(0, float(df.all_views_px.max()) * 1.1)
     save(fig, 4, "c", "worst_camera")
 
 
