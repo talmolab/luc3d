@@ -149,24 +149,21 @@ B) Hypotheses per frame for exhaustive enumeration, one curve per rig size, exac
 arithmetic. Dotted line, the harness cap of 10⁶ hypotheses per frame.
 
 C) Frames whose grouping differs from proofread ground truth, per configuration, on
-identical detections, as a rate per 10,000 clean frames (log axis; the clean-frame
-count each configuration is scored on is under its tick: 4.3M, 238k, 7,001 and
-3,000). Two series: exhaustive (filled salmon) and LUC3D's greedy grouping at the
-fresh-anchor operating point (hollow teal; per-view detections expire from the 3D
-anchor after 20 frames, synchronous update, 3D distance normaliser 25 mm, cost
-weights unchanged — see Methods). Pooled over the 4,572,172 scored clean frames the
-fresh anchor misgroups 926 frames, 2.03 per 10,000, against exhaustive's 1,309, 2.86
-per 10,000; per configuration the rates are 1.32, 14.5, 8.6 and 6.7 per 10,000 for
-the fresh anchor against 1.29, 30.1, 11.4 and 90.0 for exhaustive at 2 x 5, 2 x 6,
-3 x 5 and 4 x 3. The ground-truth scoring covers the clean frames enumerated before
-the 3 x 5 and 4 x 3 caps were lifted (7,001 and 3,000 of the 10,419 and 19,135 now
-computed); panel E and the agreement rates cover the full uncapped computation. On
-the 516 scored frames where the two choose different groupings, ground truth agrees
-with the greedy grouping on 449 and with exhaustive on 66 — optimising the
-reprojection objective exhaustively is not the same thing as being right. The
-tracker as shipped misgroups 1,052 frames, 2.30 per 10,000 (642 disagreements with
-exhaustive, ground truth siding 449 to 192); its raw counts are in the deposited
-table and its own render is kept under a separate slug.
+identical detections and on every frame exhaustive enumeration could run, as a rate
+per 10,000 clean frames (log axis; each configuration's clean-frame count is under
+its tick: 4.3M, 238k, 10k and 19k). Two series: exhaustive (filled salmon) and
+LUC3D's greedy grouping at the fresh-anchor operating point (hollow teal; per-view
+detections expire from the 3D anchor after 20 frames, synchronous update, 3D distance
+normaliser 25 mm, cost weights unchanged — see Methods). Pooled over the 4,591,725
+scored clean frames the fresh anchor misgroups 940 frames, 2.05 per 10,000, against
+exhaustive's 1,453, 3.16 per 10,000; per configuration the rates are 1.32, 14.5,
+12.5 and 4.7 per 10,000 for the fresh anchor against 1.29, 30.1, 15.4 and 85.2 for
+exhaustive at 2 x 5, 2 x 6, 3 x 5 and 4 x 3. On the 672 frames where the two choose
+different groupings, ground truth agrees with the greedy grouping on 592 and with
+exhaustive on 79 — optimising the reprojection objective exhaustively is not the same
+thing as being right. The tracker as shipped misgroups 1,077 frames, 2.35 per 10,000
+(809 disagreements with exhaustive, ground truth siding 592 to 216); its raw counts
+are in the deposited table and its own render is kept under a separate slug.
 
 D) Ablation of the 3D term over all 50 BMimica sessions, for the fresh-anchor
 configuration of panel C (teal), in two stacked plots on one shared r axis

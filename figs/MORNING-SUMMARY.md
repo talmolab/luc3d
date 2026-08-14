@@ -43,8 +43,11 @@ against the scripts before anything moved); everything below is committed on
   scheme (teal = fresh anchor, salmon = exhaustive, flat because it has no r),
   rotated y-labels sized to fit after the horizontal-caption experiment was
   rejected.
-- **4a** unboxed like 3a; **4c** is the two-condition comparison (all views vs
-  worst dropped, pooled mean over 17M solves, strata in grey).
+- **4a** unboxed like 3a; **4c** went through three forms on your messages and
+  landed as the per-session line field: 50 grey lines (all views → worst view
+  dropped, **every one of the 50 slopes down**), teal mean pair 2.06 → 1.71 px.
+  That needed a re-measurement with session capture (`fig4_robust_sessions.mjs`,
+  ~90 s), gated to reproduce the published pooled numbers to 2.5e-13.
 - **6c** is the **missing-keypoints × difficulty × cameras surface** — a NEW
   measurement (`fig6_recovery.py`, 74 sessions in 29 s, exact over all camera
   subsets): 26.1% of keypoints missing per view; recovery 0% at k=2 (one other
@@ -54,14 +57,17 @@ against the scripts before anything moved); everything below is committed on
   space, per-camera panel promoted to e. **The figure now runs 249 mm against
   the 200 mm ceiling — something needs to shrink or move; your call.**
 
-## Fig 3, per your instructions
+## Fig 3, final state
 
 3a unboxed (coloured headings, screenshot-matching identity colours); 3b cut (the
-cost function now lives in METHODS.md, stated in the code's own form — which carries
-a `(1+Δt)` factor the old schematic omitted); 3c is fresh-anchor vs exhaustive only,
-no count labels; 3d sweeps the fresh anchor against exhaustive reference rules
-(within 0.400 IDF1 / 81 switches per 100k on its own clean-frames denominator,
-labelled); 3e has no prose. Panels re-lettered c→b, d→c, e→d, f→e.
+cost function lives in METHODS.md, in the code's own form — including a `(1+Δt)`
+factor the old schematic omitted); 3c is fresh-anchor vs exhaustive, **fully
+uncapped**: GT scoring now covers every eligible frame (ticks 10k/19k), and the
+full-sample 4×3 contrast is greedy ~4.7 vs exhaustive ~85 misgrouped per 10,000 —
+stronger than the sampled version suggested; 3d is your two stacked plots (teal
+fresh anchor, salmon exhaustive drawn flat because it has no r term); 3e has no
+prose and its 4×6 bound is re-priced from the measured uncapped rate (0.55–21 h
+per frame). Panels re-lettered c→b, d→c, e→d, f→e.
 
 ## Measured overnight (all gated)
 

@@ -173,9 +173,9 @@ same matched detections, and a frame was counted as misgrouped when the two part
 differed, so that a consistent relabelling of the identities is not counted as an error.
 The agreement rate between the two methods is the same comparison made between their
 own outputs, pooled over frames, and is defined only on the frames exhaustive computed.
-The ground-truth comparison in Figure 3C is currently scored on the 4,572,172 clean
-frames enumerated before the caps were lifted (7,001 and 3,000 in the two expensive
-configurations); the agreement rate covers the full uncapped computation.
+The ground-truth comparison in Figure 3C covers the same full computation: 4,591,725
+of the 4,591,864 computed frames carry a transferred ground-truth match and are
+scored.
 Two scoring conventions separate the methods and both are disclosed. First, exhaustive
 enumeration is a pure per-frame procedure with no cross-frame identity mechanism; to
 make the IDF1 and switch-count reference levels in Figure 3D computable for it at all,
@@ -244,11 +244,13 @@ already derived from it.
 
 The application can optionally drop the view with the worst residual and re-solve the
 point from the remaining views. Figure 4C scores the same solve before and after that
-drop by its reprojection error in the kept views against their own detections, pooled
-over all solves and split into three strata of how far the worst view sat from the
-all-view solution (under 3, 3 to 10, and 10 px or more); the 3D displacement of the
-estimate is deposited alongside, with a median of 7.18 mm in the 10 px-or-more
-stratum.
+drop by its reprojection error in the kept views against their own detections, per
+session — one line per session with the across-session mean — from a re-measurement
+of the robust arm that records sessions, gated to reproduce the original pooled
+deposit's strata means. The disagreement strata — how far the worst view sat from the
+all-view solution: under 3, 3 to 10, and 10 px or more — remain in the deposit as
+context rather than on the artwork, with a median 3D displacement of 7.18 mm in the
+10 px-or-more stratum.
 
 The comparison triangulator in Figures 4D and 4E is aniposelib 0.7.2, the OpenCV and
 NumPy release that undistorts with cv2.undistortPoints and then solves each point with a
