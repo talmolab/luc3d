@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 3f -- greedy vs exhaustive, run for real, on identical detections: time per frame.
+Fig 3e -- greedy vs exhaustive, run for real, on identical detections: time per frame.
 
 DO NOT PLOT IDF1 HERE. An earlier version of this panel drew greedy 0.982 against
 exhaustive 0.714 and read as "the greedy method beats the published exhaustive one".
@@ -214,7 +214,7 @@ def main():
     use()
     df, meta = build()
     h = meta["h"]
-    deposit(df, 3, "fig3f_head_to_head.csv")
+    deposit(df, 3, "fig3e_head_to_head.csv")
 
     fig, ax = panel("third", "std")
     x = np.arange(len(df))
@@ -334,7 +334,7 @@ def main():
                  f"bar → {df.hypotheses.iloc[-1] / 1e8:.1f}×10⁸ × "
                  f"{meta['rate'] * 1e6:.0f} µs = {hi_h:.0f} h\n"
                  f"1 s of {FPS:g} fps video ≥ {days_per_s_video:.0f} day")
-    save(fig, 3, "f", "head_to_head")
+    save(fig, 3, "e", "head_to_head")
 
 
 if __name__ == "__main__":

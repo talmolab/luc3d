@@ -87,10 +87,17 @@ WINNER = [(1, 0, 2), (0, 1, 2), (2, 1, 0)]     # perm[row in col c] -> row in co
 
 
 def box(ax, title, sub, accent):
-    """The panel's frame, accent bar and two-line heading."""
-    ax.add_patch(Rectangle((0, 0), 10, H_BOX, fill=False, ec="#DDDDDD", lw=0.8))
-    ax.add_patch(Rectangle((0, 0), 0.16, H_BOX, facecolor=accent, edgecolor="none"))
-    ax.text(0.45, Y_TITLE, title, fontweight="bold", color=INK, fontsize=7.5,
+    """The two-line heading. NO FRAME AND NO ACCENT BAR (review 2026-08-14: "i dont
+    really like the way that 3a is structured, it looks weird with the colour indicator
+    and in a box... just make the text for Exhaustive hypothesis testing in the orange
+    colour and the Greedy per-view assignment in green").
+
+    The frame and the 0.16-wide colour swatch were two devices doing what one coloured
+    word does: say which method this half is. Dropping them also removes the only
+    boxes in the figure that carry no data, and the title now uses the method's own
+    entity hue, which is the same hue that method has in 3d and 3f.
+    """
+    ax.text(0.45, Y_TITLE, title, fontweight="bold", color=accent, fontsize=7.5,
             va="center")
     # 8.0, not 6.5: mathtext superscripts render at ~0.7x, so (A!)$^C$ at
     # 6.5 pt put its C at 4.55 pt -- under Nature's 5 pt floor.

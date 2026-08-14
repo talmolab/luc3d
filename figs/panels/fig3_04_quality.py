@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 3d -- greedy vs exhaustive against GROUND TRUTH, per configuration --
+Fig 3c -- greedy vs exhaustive against GROUND TRUTH, per configuration --
 now with the greedy arm at BOTH of its operating points.
 
 UPDATED 2026-08 (on instruction): the manuscript panel carries THREE series --
@@ -160,8 +160,13 @@ def build(as_shipped=False):
         var = load(variant_deposit_name())
         _check_exhaustive_unchanged(q, var)
         vc = {c["key"]: c for c in var["configs"] if c.get("status") == "ok"}
+        # FRESH ANCHOR ONLY (review 2026-08-14: "for the 3c just do fresh anchor not
+        # shipped"). Three series at four x positions with a raw count over each was
+        # twelve markers and twelve labels in 57 mm. The shipped arm is still measured
+        # and still in the deposit -- `--as-shipped` renders the two-series panel it
+        # belonged to -- but the comparison this panel makes is exhaustive against the
+        # configuration we would recommend, and that is two series.
         methods = [("exhaustive", "exhaustive", SALMON),
-                   ("greedy", SHIPPED_NAME, TEAL),
                    ("greedy_fresh", FRESH_NAME, TEAL)]
     rows = []
     for c in q["configs"]:
@@ -194,8 +199,8 @@ def build(as_shipped=False):
 def main(as_shipped=False):
     use()
     df, detail, methods, vdetail = build(as_shipped)
-    deposit(df, 3, "fig3d_quality_shipped.csv" if as_shipped
-            else "fig3d_quality.csv")
+    deposit(df, 3, "fig3c_quality_shipped.csv" if as_shipped
+            else "fig3c_quality.csv")
 
     # A THIRD, in both renders: this panel shares its LAYOUTS[3] row with e and f
     # and the grid only closes at 180 mm if all three are "third" (see 3e's note).
@@ -231,11 +236,12 @@ def main(as_shipped=False):
         # The horizontal dodge separates the series instead; in the three-series
         # render the hollow arm's label goes a step higher so two arms landing at a
         # similar rate cannot stack their labels.
-        for xi, v, n in zip(xs, g.misgrouped_per_10k, g.misgrouped):
-            ax.annotate(f"{int(n):,}", (xi, v), textcoords="offset points",
-                        xytext=(0, 13 if name in hollow else 6),
-                        ha="center", va="bottom",
-                        color=color, fontsize=6, fontweight="bold")
+        # THE RAW COUNTS ARE OFF THE ARTWORK (review 2026-08-14: "i also dont like all
+        # the numbers above them its annoying and hard to read"). Eight bold labels
+        # over eight markers on a log axis was the densest text in the figure. The
+        # counts are in the deposited CSV and in the legend; the y axis is a rate and
+        # the denominators are under their own ticks, so the panel still says what
+        # each point is a fraction of.
 
     text_legend(ax, [(n, c) for _, n, c in methods], "above")
     ax.set_xticks(x)
@@ -285,7 +291,7 @@ def main(as_shipped=False):
         print(f"  fresh anchor vs exhaustive disagree on {len(vdetail):,}: GT sides "
               f"with greedy {vg:,}, exhaustive {ve:,}")
 
-    save(fig, 3, "d", "quality_shipped" if as_shipped else "quality")
+    save(fig, 3, "c", "quality_shipped" if as_shipped else "quality")
 
 
 if __name__ == "__main__":

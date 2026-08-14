@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 3e -- 3D-term ablation: ID-switch RATE and cross-view IDF1 against r = corr3d/corr2d,
+Fig 3d -- 3D-term ablation: ID-switch RATE and cross-view IDF1 against r = corr3d/corr2d,
 now over ALL 50 proofread BMimica sessions and BOTH tracker states.
 
 UPDATED 2026-08 (on instruction): the manuscript panel now draws TWO ARMS -- the
@@ -267,7 +267,7 @@ def _axes_setup(ax, rate_min, rate_max, zero_x, first, has_zero):
 def main():
     use()
     df, tcf = build()
-    deposit(df, 3, "fig3e_sweep.csv")
+    deposit(df, 3, "fig3d_sweep.csv")
 
     # A THIRD: this panel shares its row with d and f (see the legacy section's
     # note on why the grid only closes at 180 mm if all three are "third").
@@ -337,7 +337,7 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     text_legend(ax, [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
                      ("filled: shipped tracker", MUTED),
                      ("hollow: fresh anchor", MUTED)], "above")
-    save(fig, 3, "e", "sweep")
+    save(fig, 3, "d", "sweep")
 
 
 # --------------------------------------------------------------------------------
@@ -383,7 +383,7 @@ def build_legacy8() -> pd.DataFrame:
 def main_legacy8():
     use()
     df = build_legacy8()
-    deposit(df, 3, "fig3e_sweep_legacy8.csv")
+    deposit(df, 3, "fig3d_sweep_legacy8.csv")
 
     # A THIRD, NOT A HALF. This panel shares its row with d and f, and the grid only
     # closes at 180 mm if all three are "third": at "half" that row summed to 210.6 mm
@@ -492,7 +492,7 @@ def main_legacy8():
                 ha="center", va="bottom")
 
     text_legend(ax, [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL)], "above")
-    save(fig, 3, "e", "sweep_legacy8")
+    save(fig, 3, "d", "sweep_legacy8")
 
 
 if __name__ == "__main__":

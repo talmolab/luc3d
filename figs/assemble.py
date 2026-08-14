@@ -91,11 +91,10 @@ TITLES = {
     (2, "c"): "Cost of two anchors",
     (2, "d"): "Anchor-pair geometry",
     (3, "a"): "Grouping strategies",
-    (3, "b"): "Association cost",
-    (3, "c"): "Hypotheses per frame",
-    (3, "d"): "Grouping accuracy, head to head",
-    (3, "e"): "3D-term ablation",
-    (3, "f"): "Time per frame",
+    (3, "b"): "Hypotheses per frame",
+    (3, "c"): "Grouping accuracy, head to head",
+    (3, "d"): "3D-term ablation",
+    (3, "e"): "Time per frame",
     # EXPLORATORY (2026-08-13): the corr2d x corr3d sweep re-run on all 50
     # BMimica sessions with the fresh-anchor tracker. The manuscript 3e is
     # untouched. Not in LAYOUTS[3] -- it is a separate finding, not a
@@ -170,9 +169,15 @@ LAYOUTS = {
     # exhaustive-above-greedy in the order the text introduces them and takes half the
     # page, so c -- the quantitative form of the same contrast, hypotheses per frame --
     # sits in the freed half. b keeps its own row.
-    3: [[("a", "association"), ("c", "cost_model")],
-        [("b", "cost_terms")],
-        [("d", "quality"), ("e", "sweep"), ("f", "head_to_head")]],
+    # 3b (association cost) CUT from the layout 2026-08-14 (review: "maybe get rid of
+    # the b association cost, it just takes up too much space and doesn't really add
+    # anything"). `fig3_02_cost_terms.py` still runs and still deposits -- un-plotted,
+    # not deleted, as Fig 7's bedding panel and Fig 8's threshold sweeps are. NOTE it
+    # was the only place the cost function appeared on any artwork, so METHODS.md now
+    # has to carry the 2D and 3D terms in full or the r sweep in 3e is a sweep over an
+    # unstated quantity. Panels re-lettered: c->b, d->c, e->d, f->e.
+    3: [[("a", "association"), ("b", "cost_model")],
+        [("c", "quality"), ("d", "sweep"), ("e", "head_to_head")]],
     4: [[("a", "solvers")],
         [("b", "accuracy_vs_cameras"), ("c", "worst_camera")],
         [("d", "per_session"), ("e", "time_per_keypoint")]],

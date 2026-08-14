@@ -121,7 +121,7 @@ def main():
     draw_3d(ax)
     ax.set_xlim(-0.1, W + 0.1)
     ax.set_ylim(-0.1, H + 0.1)
-    save(fig, 3, "b", "cost_terms")
+    save(fig, 3, "s1", "cost_terms")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 3c -- what exhaustive multi-view association costs: (A!)^C hypotheses per frame.
+Fig 3b -- what exhaustive multi-view association costs: (A!)^C hypotheses per frame.
 
 CREDIT WHERE IT IS DUE. The exhaustive method is Maree, Afshar, Oline, Leonardis,
 Falkner & Pereira (2024), "Multi-view triangulation-enabled annotation for
@@ -83,7 +83,7 @@ def build() -> pd.DataFrame:
 def main():
     use()
     df = build()
-    deposit(df, 3, "fig3c_cost_model.csv")
+    deposit(df, 3, "fig3b_cost_model.csv")
 
     #: The harness's own ceiling, from the head-to-head deposit, so the rule on this
     #: panel and the "not run" point in panel f are the SAME number.
@@ -132,7 +132,7 @@ def main():
     footnote(ax, f"dotted rule: the harness's 10{_sup(round(math.log10(cap)))} "
                  "hypotheses/frame cap\n"
                  "greedy (LUC3D) enumerates none: C solves per frame")
-    save(fig, 3, "c", "cost_model")
+    save(fig, 3, "b", "cost_model")
 
 
 if __name__ == "__main__":
