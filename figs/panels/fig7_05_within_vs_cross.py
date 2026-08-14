@@ -522,7 +522,12 @@ def main(variant=False, fair=True):
     elif VARIANT_KEY in t["bmimica_50_sessions"]:
         order = ORDER + [(VARIANT_KEY, VARIANT_KEY, VARIANT_COLOR)]
     else:
-        order = [(("LUC3D", "LUC3D (fresh anchor)", col) if k == "LUC3D"
+        # VARIANT_COLOR, NOT `col` (caught in adversarial review 2026-08-14): `col`
+        # is entity("luc3d") teal, and this branch is the one whose docstring says a
+        # bare LUC3D in teal "would present an EXPERIMENTAL tracker as the shipped
+        # one, which is the single thing this panel must never do" -- teal here also
+        # collided with panels b-f, where teal IS the shipped tracker at 0.752.
+        order = [(("LUC3D", "LUC3D (fresh anchor)", VARIANT_COLOR) if k == "LUC3D"
                   else (k, nm, col)) for k, nm, col in ORDER]
     height = ROW_H_VARIANT if variant else ROW_H
     # Whether this deposit's SLEAP series is the CORRECTED one. See SLEAP_INVALID_KEY:
@@ -578,9 +583,18 @@ def main(variant=False, fair=True):
                         mfc="white" if limited else color,
                         mec=color if limited else "white", mew=0.6,
                         elinewidth=1.0, capsize=1.8, capthick=1.0, zorder=5)
-        entry = f"{name}  {w:.3f} → {c:.3f} ×{c / w:.2f}"
-        if name in CORPUS_NOTE:
-            entry += f"  {CORPUS_NOTE[name]}"
+        # NO RETENTION RATIO for a coverage-limited series (review 2026-08-14):
+        # 3D-MuPPET's x1.00 printed in the same format as LUC3D's headline x1.00,
+        # visually classing a tracker that labels 1.3% of frames with the one that
+        # retains its score across cameras. The ratio is dropped and the denominator
+        # is named in-line; the dotted/hollow mark stays.
+        # "1.3% coverage" REPLACES "· BMimica only" on this line rather than joining
+        # it -- both suffixes together are 56 characters and run off the panel (lint:
+        # CLIPPED). Coverage is the one a reader must have to not misread the mark;
+        # the corpus note is in the legend with the other provenance.
+        entry = (f"{name}  {w:.3f} → {c:.3f} · 1.3% coverage" if limited else
+                 f"{name}  {w:.3f} → {c:.3f} ×{c / w:.2f}"
+                 + (f"  {CORPUS_NOTE[name]}" if name in CORPUS_NOTE else ""))
         entries.append((entry, color))
         # EACH NOTE DIRECTLY UNDER THE SERIES IT QUALIFIES, in that series' own hue, so it
         # reads as that entry's second line. They used to be appended after the loop, which
@@ -590,19 +604,16 @@ def main(variant=False, fair=True):
         # ride on the entry text itself (the key runs out of width at ~50 characters).
         if variant and key == vkey:
             entries.append((VARIANT_NOTE,
-                            VARIANT_COLOR if vkey != "LUC3D" else entity("luc3d")))
+                            VARIANT_COLOR))
         # THE PER-SERIES NOTES ARE GONE FROM THE KEY for the same reason as the
         # in-plot prose: nine lines of 6.5 pt caveat above a four-line plot is a
-        # caption typeset on the artwork. Every one of them is now in the legend --
-        # SLEAP's cap, ByteTrack's stitch, 3D-MuPPET's coverage denominator -- and
-        # they are all claims a reader must still be given, so the legend entry is
-        # not optional and FIGURE-LEGENDS.md carries them verbatim.
-        if not variant:
-            if sleap_fixed and key == SLEAP_KEY:
-                entries.extend((line, color) for line in SLEAP_FIX_NOTE)
-            if limited:
-                entries.extend((line.format(cov=muppet_cov), color)
-                               for line in MUPPET_NOTE)
+        # caption typeset on the artwork. SLEAP's cap, ByteTrack's stitch and
+        # 3D-MuPPET's coverage denominator are legend material (FIGURE-LEGENDS.md
+        # Fig 7) -- EXCEPT the coverage denominator's two-word form, which rides on
+        # the MuPPET key line above, because its x-ratio would otherwise read as a
+        # retention claim. The dead `if not variant` guard that used to sit here
+        # (variant-only preconditions under a not-variant gate, so the notes were
+        # drawn on NO render) was removed in the same review.
 
     df = pd.DataFrame(rows)
     # THE TABLE CARRIES THE SAME PANEL LETTER AS THE ARTWORK. This deposited `fig7h_*`

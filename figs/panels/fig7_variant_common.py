@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Shared machinery for the tracker arms of Fig 7 b-g.
+"""Shared machinery for the tracker arms of Fig 7's SLAP-2M panels (b-f since the
+2026-08-14 re-lettering; the docstrings below say "b-g"/"c-g" where they narrate the
+HISTORY of the substitution, which happened under the old letters -- the letters in
+prose about past events are the letters things had at the time).
 
     ############################################################################
     THE SUBSTITUTION IS NOW LIVE ON c, d, e, f AND g (Eric, 2026-08-13). Their
@@ -16,11 +19,11 @@
     `_pre131` slug so it can never overwrite the manuscript PDF. `--variant` is
     unchanged and still draws all three arms.
 
-    7b (bedding) WAS NOT IN THAT INSTRUCTION and is deliberately left on the
-    pre-#131 arm (`arms(variant, corrected=False)` in `fig7_06_bedding.py`).
-    Until it is switched, ONE FIGURE CARRIES TWO TRACKER GENERATIONS UNDER THE
-    NAME "LUC3D" -- b is the old one, c-g are the shipped one. That is a real
-    inconsistency, it needs Eric's word, and it is one keyword away.
+    THE BEDDING PANEL WAS CUT FROM THE FIGURE 2026-08-14 (review): it now renders
+    as supplementary `fig7s2_bedding` and still plots the pre-#131 arm for its own
+    historical reasons. With it gone, NO placed panel plots the retired tracker and
+    the two-generations-under-one-name inconsistency is closed. Panels re-lettered
+    c-g -> b-f.
     ############################################################################
 
     ############################################################################

@@ -46,7 +46,7 @@ reader no way to tell. 7a's "within view" is 0.749 -- BMimica, 50 sessions, 5
 cameras. This is SLAP-2M, 74 sessions, 6 cameras, where LUC3D's within-view mean is
 0.752. Two different quantities, both called within-view IDF1; the corpus and n are
 now on the panel, and BOTH DIRECTIONS OF THE POINTER ARE DRAWN -- `SLAP-2M corpus ·
-a is BMimica` heads the count block here, and 7a's footer carries `c-g: SLAP-2M`.
+a is BMimica` heads the count block here, and 7a's footer carries `b-f: SLAP-2M`.
 One-sided labelling was the state that made 7.6 a finding: naming the corpus on the
 panel a reader happens to be looking at does nothing if the panel they are comparing
 it with is unlabelled, and the two numbers (0.749 vs 0.752) are close enough to read
