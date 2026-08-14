@@ -264,7 +264,7 @@ def _axes_setup(ax, rate_min, rate_max, zero_x, first, has_zero):
                     clip_on=False, zorder=6)
 
 
-def main():
+def main(with_shipped=False):
     use()
     df, tcf = build()
     deposit(df, 3, "fig3d_sweep.csv")
@@ -305,24 +305,39 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
 
     # ID-switch RATE, log, on the left. `.clip(lower=1)` pins a zero-switch cell at
     # the smallest event the measurement can resolve (see the legacy section).
+    # EXHAUSTIVE vs THE FRESH ANCHOR (review 2026-08-14: "3e should be exhaustive vs
+    # fresh anchor, not greedy shipped"). The shipped arm is out of the default render
+    # -- still swept, still deposited, back with --with-shipped -- and the reference
+    # level is exhaustive enumeration, which has no r (it does not use the cost
+    # weights), so it is a horizontal rule on each axis in its own colours.
+    # Its numbers come from figs/out/fig3_exhaustive_bmimica.json, the 50-session
+    # aggregation of the head-to-head harness's own per-session scores. Its switch
+    # RATE uses ITS OWN denominator (clean camera-frames -- exhaustive only runs where
+    # every camera holds exactly 2 detections); the deposit states both.
+    exh = load("fig3_exhaustive_bmimica.json")
+    arms_drawn = ([(SHIPPED_NAME, False)] if with_shipped else []) + \
+        [(FRESH_NAME, True)]
     df["rate"] = df.switches.clip(lower=1) / tcf * PER
-    _axes_setup(ax, float(df.rate.min()), float(df.rate.max()),
+    exh_rate = exh["switches_per_100k_camera_frames"]
+    _axes_setup(ax, min(float(df.rate.min()), exh_rate),
+                max(float(df.rate.max()), exh_rate),
                 zero_x, first, has_zero)
-    for arm, is_fresh in ((SHIPPED_NAME, False), (FRESH_NAME, True)):
+    for arm, is_fresh in arms_drawn:
         series(ax, df[df.arm == arm], "rate", SALMON, is_fresh)
+    ax.axhline(exh_rate, color=SALMON, lw=0.9, ls=(0, (4.0, 2.0)), zorder=2)
 
     footnote(ax, "r = 0: no 3D term, left of the break\n"
-                 "all four series are LUC3D against itself: filled+solid = shipped "
-                 "tracker, hollow+dashed = fresh anchor (sync + stale 20 + "
-                 "distThresh 25)\n"
-                 f"rate basis: {tcf:,} camera-frames "
-                 f"(50 sessions x 5 cameras, full length), corr2d = 1 row")
+                 f"rate basis: {tcf:,} camera-frames (50 sessions x 5 cameras, "
+                 f"full length), corr2d = 1 row; exhaustive's rate is over its own "
+                 f"{exh['camera_frames_computed']:,} clean camera-frames")
 
     # Cross-view IDF1 on the right.
     ax2 = ax.twinx()
     ax2.spines["top"].set_visible(False)
-    for arm, is_fresh in ((SHIPPED_NAME, False), (FRESH_NAME, True)):
+    for arm, is_fresh in arms_drawn:
         series(ax2, df[df.arm == arm], "idf1", TEAL, is_fresh)
+    ax2.axhline(exh["idf1_cross_mean"], color=TEAL, lw=0.9, ls=(0, (4.0, 2.0)),
+                zorder=2)
     ax2.set_ylabel("cross-view IDF1", color=TEAL)
     ax2.tick_params(axis="y", colors=TEAL)
     ax2.spines["right"].set_color(TEAL)
@@ -334,10 +349,13 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
                 textcoords="offset points", color=MUTED, fontsize=6.5,
                 ha="center", va="bottom")
 
-    text_legend(ax, [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
-                     ("filled: shipped tracker", MUTED),
-                     ("hollow: fresh anchor", MUTED)], "above")
-    save(fig, 3, "d", "sweep")
+    key = [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
+           ("long dashes: exhaustive (no r)", MUTED),
+           ("hollow: fresh anchor", MUTED)]
+    if with_shipped:
+        key.insert(2, ("filled: shipped tracker", MUTED))
+    text_legend(ax, key, "above")
+    save(fig, 3, "d", "sweep" if not with_shipped else "sweep_with_shipped")
 
 
 # --------------------------------------------------------------------------------
@@ -496,4 +514,4 @@ def main_legacy8():
 
 
 if __name__ == "__main__":
-    main_legacy8() if "--legacy8" in sys.argv else main()
+    main_legacy8() if "--legacy8" in sys.argv else main(with_shipped='--with-shipped' in sys.argv)

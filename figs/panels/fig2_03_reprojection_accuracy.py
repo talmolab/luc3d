@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """
-Fig 2c -- where a two-anchor reprojection lands in the views nobody labelled.
+Fig 2c -- held-out reprojection error against the number of cameras in the solve.
 
-The cost side of the protocol. Each keypoint is triangulated from TWO views and
-reprojected into the views that were not used; this is the cumulative distribution
-of that error.
+REBUILT 2026-08-14 (review: "fig 2c should just be a box and whisker plot of the
+reprojection error by number of cameras on the x axis and that will tell us the same
+thing"). It does, and it answers a second question the CDF could not -- the
+how-many-cameras question -- with the SAME measurement: every C-choose-k camera
+subset, the solve reprojected into a camera it never saw, scored against that
+camera's own detection. k = 2 IS the two-anchor protocol, so the old panel's headline
+(median 4.32 px) is this panel's first box.
 
-TWO REFERENCES, AND THEY ANSWER DIFFERENT QUESTIONS. The solid curve scores against
-the held-out view's OWN detection; the dashed one against the fully-informed
-reference 3D. The gap between them (~1.65 px at the median) is the held-out view's
-own detection noise -- error a labeller would have introduced by hand in that view
-anyway. So the solid curve is conservative and the dashed one is
-optimistic-by-shared-bias, and every headline number quotes the SOLID one:
-median 4.32 px, 94.6% within the marked tau = 10 px, 99.68% within 20 px.
+WHAT THE MARKS ARE. Box = p25-p50-p75 of held-out keypoint error (the deposit's
+across-session medians of per-session percentiles; ~510M/340M/85M keypoint solves at
+k = 2/3/4). No whiskers: p5/p95 were never computed upstream, and drawing whiskers
+from a different quantity (per-session spread) on the same box would mix units --
+the dots carry the spread instead. Dots = each session's own median, 50 per box.
 
-An earlier draft plotted only the flattering curve. Both are drawn here precisely so
-that choice is visible rather than silent.
+The retired CDF renders under `--cdf` (slug `reprojection_cdf`); its two-reference
+comparison (vs own detection / vs reference 3D) lives on in the legend.
 
-Source: figs/out/fig2.json `per_session[].{held_out,held_out_vs_observation}`.
+Source: figs/out/fig4_by_views.json `heldout_px_across_sessions`, `per_session`.
 
-    python3 figs/panels/fig2_03_reprojection_accuracy.py
+    python3 figs/panels/fig2_03_reprojection_accuracy.py         # the box plot
+    python3 figs/panels/fig2_03_reprojection_accuracy.py --cdf   # the retired CDF
 """
 import sys
 from pathlib import Path
@@ -37,7 +40,7 @@ QUANTILES = [("p5", 5), ("p25", 25), ("p50", 50), ("p75", 75), ("p90", 90),
 TOLERANCES = [2.0, 5.0, 10.0, 20.0, 40.0]
 
 
-def curve(ps, key) -> pd.DataFrame:
+def _curve(ps, key) -> pd.DataFrame:
     """One CDF, assembled from the deposited percentiles AND accuracy-at-tolerance.
 
     The measurement pass summarised 38 M held-out views; only these order statistics
@@ -61,11 +64,11 @@ def curve(ps, key) -> pd.DataFrame:
     return pd.DataFrame(pts, columns=["error_px", "cumulative_pct"]), agg
 
 
-def main():
+def main_cdf():
     use()
     ps = load("fig2.json")["per_session"]
-    obs, obs_agg = curve(ps, "held_out_vs_observation")
-    ref, _ = curve(ps, "held_out")
+    obs, obs_agg = _curve(ps, "held_out_vs_observation")
+    ref, _ = _curve(ps, "held_out")
     obs["reference"] = "held-out view's own detection"
     ref["reference"] = "fully-informed reference 3D"
     deposit(pd.concat([obs, ref]), 2, "fig2c_reprojection_accuracy.csv")
@@ -108,8 +111,57 @@ def main():
     ax.set_yticks([0, 25, 50, 75, 100])
     ax.set_xlabel("error in an unlabelled view (px)")
     ax.set_ylabel("cumulative % of keypoints")
+    save(fig, 2, "c", "reprojection_cdf")
+
+
+def main():
+    use()
+    j = load("fig4_by_views.json")
+    agg = j["heldout_px_across_sessions"]
+    per = j["per_session"]
+    ks = sorted(agg, key=int)
+
+    rows = []
+    fig, ax = panel("third", "std")
+    import numpy as np
+    for i, k in enumerate(ks):
+        g = agg[k]["dlt"]
+        # The session dots first (zorder under the box): value-decorrelated
+        # golden-ratio jitter, the same idiom as Fig 7c's cells.
+        vals = np.array([s_["by_k"][k]["dlt"]["p50"] for s_ in per
+                         if k in s_["by_k"]])
+        jit = ((np.arange(len(vals)) * 0.6180339887) % 1.0 - 0.5) * 0.30
+        ax.plot(i + jit, vals, "o", color=TEAL, ms=2.2, alpha=0.40, mec="none",
+                zorder=2)
+        ax.bxp([{"med": g["p50"], "q1": g["p25"], "q3": g["p75"],
+                 "whislo": g["p25"], "whishi": g["p75"], "fliers": []}],
+               positions=[i], widths=0.42, showfliers=False, manage_ticks=False,
+               # whisker ends coincide with the box edges: no whisker is drawn,
+               # deliberately -- see the docstring.
+               patch_artist=True,
+               boxprops=dict(edgecolor=INK, lw=0.9, facecolor="none"),
+               medianprops=dict(color=TEAL, lw=1.6),
+               whiskerprops=dict(color=INK, lw=0), capprops=dict(color=INK, lw=0))
+        ax.annotate(f"{g['p50']:.2f}", (i, g["p50"]),
+                    textcoords="offset points", xytext=(16, 0), ha="left",
+                    va="center", color=TEAL, fontsize=6.5, fontweight="bold")
+        rows.append({"cameras_in_solve": int(k), "p25": g["p25"], "p50": g["p50"],
+                     "p75": g["p75"], "n_keypoint_solves": g["n_values"],
+                     "n_sessions": g["n_sessions"]})
+    deposit(pd.DataFrame(rows), 2, "fig2c_error_by_cameras.csv")
+
+    ax.set_xticks(range(len(ks)))
+    ax.set_xticklabels(ks)
+    # "of 5": the axis stops at 4 because the metric is HELD-OUT -- one of the rig's
+    # 5 cameras must stay out of the solve to judge it, so k = C - 1 is the maximum
+    # the quantity exists for. Asked immediately by the first reader (2026-08-14), so
+    # it belongs on the axis, not just in the legend.
+    ax.set_xlabel("cameras in the solve, of 5\n(1 held out as judge)")
+    ax.set_ylabel("held-out reprojection\nerror (px)")
+    ax.set_xlim(-0.55, len(ks) - 0.45)
+    ax.set_ylim(0, 8)
     save(fig, 2, "c", "reprojection_accuracy")
 
 
 if __name__ == "__main__":
-    main()
+    main_cdf() if "--cdf" in sys.argv else main()
