@@ -437,3 +437,17 @@ ByteTrack holds in all seven strata, falling from 1.00, 1.00 and 0.95 at rating 
 within-view IDF1 is detection coverage, not identity. The panel refuses to draw
 unless its recomputed corpus means reproduce Fig 7's deposited 0.7520, 0.6614 and
 0.5274 to 1e-9.
+
+S4) Supplementary; not placed in the composite. ID accuracy of the cross-view
+tracker on the 50 BMimica sessions — IDA = idtp / num_matches: of the detections
+matched to a real animal, the share carrying the correct identity, with detector
+misses and false-positive detections both excluded from the denominator. False
+positives are 0.11% of the shipped arm's 78,728,126 matches and 0.10% of the fresh
+anchor's 78,734,134, so IDA is within a whisker of IDP on this corpus. One dot per
+session; the heavy rule is the pooled rate over all matched detections, not a mean
+of the dots. The shipped tracker (filled) pools to 80.56%, session median 84.0%,
+worst session 53.3%; the fresh-anchor configuration (hollow markers, EXPERIMENTAL)
+pools to 92.46%, median 100.0%, worst 56.6%. The distribution is bimodal: on the
+fresh anchor the median session carries no mislabelled detection at all, while a
+tail of hard sessions remains — a split a mean alone would hide. Both source passes
+are gated: their IDF1 reproduces fig8_methods_50.json for the same cells.

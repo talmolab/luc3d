@@ -1,28 +1,34 @@
 #!/usr/bin/env python3
 """
-Fig 2c -- held-out reprojection error against the number of cameras in the solve.
+Fig 2c -- 3D error against the number of cameras in the solve, ALL FIVE included.
 
-REBUILT 2026-08-14 (review: "fig 2c should just be a box and whisker plot of the
-reprojection error by number of cameras on the x axis and that will tell us the same
-thing"). It does, and it answers a second question the CDF could not -- the
-how-many-cameras question -- with the SAME measurement: every C-choose-k camera
-subset, the solve reprojected into a camera it never saw, scored against that
-camera's own detection. k = 2 IS the two-anchor protocol, so the old panel's headline
-(median 4.32 px) is this panel's first box.
+REBUILT TWICE ON REVIEW. First (2026-08-14) from a CDF to a by-cameras box plot of
+HELD-OUT reprojection error -- which only exists for k <= 4, because one camera must
+stay out of the solve to judge it. Eric: "what do you mean 1 held out as judge? just
+give me the error by number of cameras and include all cameras." So the panel now
+plots the quantity that exists for the WHOLE rig: the 3D distance between the k-view
+solve and the proofread reference, k = 2..5. Medians 4.74 / 2.89 / 1.91 / 1.19 mm --
+the same story (big gains early, diminishing later), now in a physical unit (the
+px->physical request of review item X.2), ending at the all-view solve instead of an
+explanation of why it cannot be drawn.
 
-WHAT THE MARKS ARE. Box = p25-p50-p75 of held-out keypoint error (the deposit's
-across-session medians of per-session percentiles; ~510M/340M/85M keypoint solves at
-k = 2/3/4). No whiskers: p5/p95 were never computed upstream, and drawing whiskers
-from a different quantity (per-session spread) on the same box would mix units --
-the dots carry the spread instead. Dots = each session's own median, 50 per box.
+WHAT THE NUMBER IS AND IS NOT. It is measured against the corpus's proofread 3D,
+which carries its own error (median reprojection 2.40 px) -- so these are COMPARISON
+values, not absolute 3D accuracy; the spacing is real, the absolute level includes
+the reference's own noise. Same caveat Fig 2d carries for the same reference
+(figs/README.md, "the Fig 2c '3D error' floor"). Box = across-session median of
+per-session p25/p50/p75; dots = each session's own median of the SAME field
+(per_session[].by_k -- the field is verified against the box source at build time).
 
-The retired CDF renders under `--cdf` (slug `reprojection_cdf`); its two-reference
-comparison (vs own detection / vs reference 3D) lives on in the legend.
+The held-out px version renders under `--heldout` (k <= 4, slug
+`reprojection_heldout`) -- it remains the out-of-sample form Fig 4b builds on. The
+retired CDF renders under `--cdf`.
 
-Source: figs/out/fig4_by_views.json `heldout_px_across_sessions`, `per_session`.
+Source: figs/out/fig4_by_views.json `err3d_mm_across_sessions`, `per_session[].by_k`.
 
-    python3 figs/panels/fig2_03_reprojection_accuracy.py         # the box plot
-    python3 figs/panels/fig2_03_reprojection_accuracy.py --cdf   # the retired CDF
+    python3 figs/panels/fig2_03_reprojection_accuracy.py            # mm, k = 2..5
+    python3 figs/panels/fig2_03_reprojection_accuracy.py --heldout  # px, k = 2..4
+    python3 figs/panels/fig2_03_reprojection_accuracy.py --cdf      # the retired CDF
 """
 import sys
 from pathlib import Path
@@ -114,10 +120,11 @@ def main_cdf():
     save(fig, 2, "c", "reprojection_cdf")
 
 
-def main():
+def main(heldout=False):
     use()
     j = load("fig4_by_views.json")
-    agg = j["heldout_px_across_sessions"]
+    agg = j["err3d_mm_across_sessions" if not heldout else "heldout_px_across_sessions"]
+    per_field = "by_k" if not heldout else "heldout_px_by_k"
     per = j["per_session"]
     ks = sorted(agg, key=int)
 
@@ -126,52 +133,45 @@ def main():
     import numpy as np
     for i, k in enumerate(ks):
         g = agg[k]["dlt"]
-        # The session dots first (zorder under the box): value-decorrelated
-        # golden-ratio jitter, the same idiom as Fig 7c's cells.
-        # `heldout_px_by_k`, NOT `by_k`. `by_k` is the 3D ERROR IN MM -- a different
-        # quantity in a different unit that lands in the same numeric range, so the
-        # dots sat below the k = 3, 4 box medians (50 sessions outside their own IQR,
-        # which is arithmetically impossible for one quantity). Caught twice by
-        # adversarial review: the first fix DIED IN A FAILED SHELL CALL and was then
-        # claimed in a commit message without having run -- which is why this comment
-        # states the check: after rendering, the k=4 dot cloud must straddle 3.34, not
-        # sit at ~1.9.
-        vals = np.array([s_["heldout_px_by_k"][k]["dlt"]["p50"] for s_ in per
-                         if k in s_.get("heldout_px_by_k", {})])
+        # Dots read the SAME field family as the boxes -- per_field pairs with agg
+        # above, asserted by name rather than trusted, after the mm/px mix-up this
+        # panel has already had once.
+        vals = np.array([s_[per_field][k]["dlt"]["p50"] for s_ in per
+                         if k in s_.get(per_field, {})])
         jit = ((np.arange(len(vals)) * 0.6180339887) % 1.0 - 0.5) * 0.30
         ax.plot(i + jit, vals, "o", color=TEAL, ms=2.2, alpha=0.40, mec="none",
                 zorder=2)
         ax.bxp([{"med": g["p50"], "q1": g["p25"], "q3": g["p75"],
                  "whislo": g["p25"], "whishi": g["p75"], "fliers": []}],
                positions=[i], widths=0.42, showfliers=False, manage_ticks=False,
-               # whisker ends coincide with the box edges: no whisker is drawn,
-               # deliberately -- see the docstring.
                patch_artist=True,
                boxprops=dict(edgecolor=INK, lw=0.9, facecolor="none"),
                medianprops=dict(color=TEAL, lw=1.6),
                whiskerprops=dict(color=INK, lw=0), capprops=dict(color=INK, lw=0))
-        # NO on-artwork value labels. Right of the box they landed on the next
-        # box's dots, left of it on the previous box's (lint: ON DATA at 16, 8 and
-        # -26 pt) -- at "third" width three columns leave no clear horizontal band.
-        # The medians ARE the teal rules; their values (4.32/3.66/3.34) are in the
-        # deposit and the legend, which is where the PI wants numbers anyway.
         rows.append({"cameras_in_solve": int(k), "p25": g["p25"], "p50": g["p50"],
                      "p75": g["p75"], "n_keypoint_solves": g["n_values"],
                      "n_sessions": g["n_sessions"]})
-    deposit(pd.DataFrame(rows), 2, "fig2c_error_by_cameras.csv")
+    deposit(pd.DataFrame(rows), 2,
+            "fig2c_error_by_cameras.csv" if not heldout
+            else "fig2c_heldout_by_cameras.csv")
 
     ax.set_xticks(range(len(ks)))
     ax.set_xticklabels(ks)
-    # "of 5": the axis stops at 4 because the metric is HELD-OUT -- one of the rig's
-    # 5 cameras must stay out of the solve to judge it, so k = C - 1 is the maximum
-    # the quantity exists for. Asked immediately by the first reader (2026-08-14), so
-    # it belongs on the axis, not just in the legend.
-    ax.set_xlabel("cameras in the solve, of 5\n(1 held out as judge)")
-    ax.set_ylabel("held-out reprojection\nerror (px)")
+    if heldout:
+        ax.set_xlabel("cameras in the solve, of 5\n(1 held out as judge)")
+        ax.set_ylabel("held-out reprojection\nerror (px)")
+        ax.set_ylim(0, 8)
+    else:
+        ax.set_xlabel("cameras in the solve")
+        ax.set_ylabel("3D error vs proofread\n(mm)")
+        ax.set_ylim(0, 10)
     ax.set_xlim(-0.55, len(ks) - 0.45)
-    ax.set_ylim(0, 8)
-    save(fig, 2, "c", "reprojection_accuracy")
+    save(fig, 2, "c", "reprojection_accuracy" if not heldout
+         else "reprojection_heldout")
 
 
 if __name__ == "__main__":
-    main_cdf() if "--cdf" in sys.argv else main()
+    if "--cdf" in sys.argv:
+        main_cdf()
+    else:
+        main(heldout="--heldout" in sys.argv)

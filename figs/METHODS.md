@@ -375,7 +375,9 @@ sit in IDP's, so it isolates the association from the detector on both sides, an
 IDA >= IDP always. For the fresh-anchor configuration on the 50 BMimica sessions,
 pooled IDA is 92.46 per cent (72,794,704 of 78,734,134 matches), the session median is
 100 per cent and the worst session 56.6 per cent; false-positive detections are 0.104
-per cent of matches (81,754).
+per cent of matches (81,754). The shipped tracker on the same corpus pools to 80.56
+per cent (63,422,131 of 78,728,126 matches), with a session median of 84.0 per cent
+and a worst session of 53.3 per cent.
 
 ## Baseline configuration
 

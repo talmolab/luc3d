@@ -324,7 +324,19 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
                 zero_x, first, has_zero)
     for arm, is_fresh in arms_drawn:
         series(ax, df[df.arm == arm], "rate", SALMON, is_fresh)
-    ax.axhline(exh_rate, color=SALMON, lw=0.9, ls=(0, (4.0, 2.0)), zorder=2)
+    # EXHAUSTIVE AS A SERIES, NOT FURNITURE (Eric, 2026-08-15: "why only lines?").
+    # It cannot curve -- r is LUC3D's cost-weight ratio and exhaustive never uses the
+    # weights, so its value is identical at every r; flat is its true shape. But a
+    # thin axhline read as a gridline, so it is now drawn at series weight, with
+    # endpoint markers and its name ON the line in its own colour.
+    ax.axhline(exh_rate, color=SALMON, lw=1.6, ls=(0, (4.0, 2.0)), zorder=2)
+    ax.plot([zero_x, r[-1]], [exh_rate] * 2, "s", color=SALMON, ms=3.4,
+            mec="white", mew=0.7, zorder=3, clip_on=False)
+    # BELOW the line, not above: above it the label sat on the fresh-anchor curve
+    # descending through the same band (lint: 7% inked).
+    ax.annotate("exhaustive (no r)", (zero_x, exh_rate),
+                textcoords="offset points", xytext=(2, -7), ha="left", va="top",
+                color=SALMON, fontsize=6.5, fontweight="bold")
 
     footnote(ax, "r = 0: no 3D term, left of the break\n"
                  f"rate basis: {tcf:,} camera-frames (50 sessions x 5 cameras, "
@@ -336,8 +348,13 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     ax2.spines["top"].set_visible(False)
     for arm, is_fresh in arms_drawn:
         series(ax2, df[df.arm == arm], "idf1", TEAL, is_fresh)
-    ax2.axhline(exh["idf1_cross_mean"], color=TEAL, lw=0.9, ls=(0, (4.0, 2.0)),
+    ax2.axhline(exh["idf1_cross_mean"], color=TEAL, lw=1.6, ls=(0, (4.0, 2.0)),
                 zorder=2)
+    ax2.plot([zero_x, r[-1]], [exh["idf1_cross_mean"]] * 2, "s", color=TEAL,
+             ms=3.4, mec="white", mew=0.7, zorder=3, clip_on=False)
+    ax2.annotate("exhaustive", (r[-1], exh["idf1_cross_mean"]),
+                 textcoords="offset points", xytext=(-2, 5), ha="right",
+                 color=TEAL, fontsize=6.5, fontweight="bold")
     ax2.set_ylabel("cross-view IDF1", color=TEAL)
     ax2.tick_params(axis="y", colors=TEAL)
     ax2.spines["right"].set_color(TEAL)
@@ -358,11 +375,11 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     # dash description plus their denominator caveat, which is the one fact a reader
     # needs to not compare the two rates as equals (review 2026-08-14, finding 2).
     key = [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
-           ("dashes: exhaustive (clean frames)", MUTED),
+           ("squares: exhaustive (clean frames)", MUTED),
            ("curves: fresh anchor", MUTED)]
     if with_shipped:
         key = [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL),
-               ("dashes: exhaustive (clean frames)", MUTED),
+               ("squares: exhaustive (clean frames)", MUTED),
                ("filled: shipped tracker", MUTED),
                ("hollow: fresh anchor", MUTED)]
     text_legend(ax, key, "above")

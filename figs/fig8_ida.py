@@ -19,6 +19,16 @@
     from the denominator can only raise it) and the two are EQUAL when the pool
     emits no false positives -- which is worth checking rather than assuming,
     since some BMimica sessions score IDP exactly 1.0.
+
+    KNOWN 1e-6-LEVEL ARTEFACT (caught by the docs pass, 2026-08-15): a handful of
+    per-session values print marginally ABOVE 100% (e.g. 100.00006). That is not a
+    bug in the sums -- motmetrics computes `idtp` from the GLOBAL trajectory
+    alignment (the ID-measures bipartite matching over whole tracks) while
+    `num_matches` counts FRAME-LEVEL match events, and the two alignments can
+    disagree on a few detections per million. The quoted corpus numbers are
+    unaffected (IDA and IDP agree to three decimals here because false positives
+    are ~0.1% of matches); any consumer needing a hard [0,1] bound should quote
+    IDP, whose numerator and denominator come from one alignment.
     ############################################################################
 
 IT RE-SCORES, IT DOES NOT RE-TRACK. `figs/out/tmp/fig8m50/<cell>/<session>.json`
