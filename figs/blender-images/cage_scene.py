@@ -16,9 +16,8 @@ Data (all per session, from /root/talmolab-smb/eric/slap_2m/<date>/<session>/):
   calibration.toml           aniposelib: per-cam Rodrigues rvec + tvec (mm),
                              OpenCV world→camera (x_cam = R X + t)
 Skeleton node orders from slap_2m/{cage,mouse}_skeleton.toml. The surface and
-edge node lists are copied VERBATIM from viz_08.ipynb cells 15–16 — they are the
-figure's ground truth for which faces exist; do not "fix" them by symmetry
-(east_wall really does route through SpoutBot_NW, exactly as the notebook draws).
+edge node lists are copied verbatim from viz_08.ipynb cells 15–16, with ONE
+measured correction (east_wall — see the comment at its entry).
 
 Runs in the pip-installed bpy (bpyenv/, Blender 5.0) — no blender binary needed:
 
@@ -53,7 +52,12 @@ CAGE_SURFACES = {
     "spout_wall":   ["Top_SE", "Top_SW", "SpoutMid_SW", "SpoutMid_SE"],
     "filter_wall":  ["Bot_NW", "FilterBot_NW", "FilterBot_NE", "Bot_NE", "Top_NE", "Top_NNE", "Top_NNW", "Top_NW"],
     "west_wall":    ["Top_SW", "Top_NW", "Bot_NW", "SpoutBot_NW", "SpoutMid_NW", "SpoutMid_SW"],
-    "east_wall":    ["Top_SE", "Top_NE", "Bot_NE", "SpoutBot_NW", "SpoutMid_NE", "SpoutMid_SE"],
+    # east_wall is the ONE deviation from the verbatim viz_08 lists: the
+    # notebook routes it through SpoutBot_NW, which sits 124 mm off the east-
+    # wall plane (fit residual 54.7 mm with it, 2.3 mm without; SpoutBot_NE is
+    # 4.5 mm from the plane) — a typo that warped the rendered wall and tilted
+    # the tail-clamp plane 17 degrees inward. Measured 2026-08-15; fix viz_08 too.
+    "east_wall":    ["Top_SE", "Top_NE", "Bot_NE", "SpoutBot_NE", "SpoutMid_NE", "SpoutMid_SE"],
     "spout_top":    ["SpoutMid_NE", "SpoutMid_SE", "SpoutMid_SW", "SpoutMid_NW"],
     "spout_front":  ["SpoutMid_NE", "SpoutBot_NE", "SpoutBot_NW", "SpoutMid_NW"],
     "filter_top":   ["FilterTop_NE", "FilterTop_NW", "FilterTop_SW", "FilterTop_SE"],
