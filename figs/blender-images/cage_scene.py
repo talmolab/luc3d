@@ -382,21 +382,46 @@ def build_camera_support(name, C, M, coll, floor_z):
 
 def build_animal(track, pts, mouse_nodes, M, coll):
     """viz_08's ball-and-stick mouse in tab10, plus its translucent body
-    membranes — surfaces filled, as asked."""
+    membranes — surfaces filled, as asked. Returns handles so update_animal
+    can re-pose the same objects on later video frames instead of rebuilding
+    (object creation/deletion dominated per-frame cost — the GPU sat idle)."""
     idx = {n: i for i, n in enumerate(mouse_nodes)}
     col = TAB10[track % len(TAB10)]
     solid = M.setdefault(f"mouse{track}", matte_mat(f"mouse{track}", col))
     body = M.setdefault(f"body{track}", matte_mat(f"body{track}", col, alpha=0.38))
     sub = bpy.data.collections.new(f"animal_{track}")
     coll.children.link(sub)
+    h = {"balls": [], "tubes": [], "surfs": []}
     for n, i in idx.items():
         r = 0.0095 if n in ("Head", "Trunk", "TTI") else 0.0068
-        ball(f"a{track}_{n}", pts[i], r, solid, sub)
+        h["balls"].append((ball(f"a{track}_{n}", pts[i], r, solid, sub), i))
     for j, (a, b) in enumerate(MOUSE_EDGES):
-        tube(f"a{track}_e{j}", pts[[idx[a], idx[b]]], 0.0036, solid, sub)
+        h["tubes"].append((tube(f"a{track}_e{j}", pts[[idx[a], idx[b]]], 0.0036, solid, sub),
+                           idx[a], idx[b]))
     for j, snodes in enumerate(MOUSE_SURFACES):
-        ngon(f"a{track}_s{j}", pts[[idx[n] for n in snodes]], body, sub)
-    return sub
+        ni = [idx[n] for n in snodes]
+        h["surfs"].append((ngon(f"a{track}_s{j}", pts[ni], body, sub), ni))
+    return h
+
+
+def update_animal(h, pts):
+    """Re-pose an existing animal in place: spheres are rigid (move the
+    object), tubes rewrite their two spline points, membranes rewrite their
+    fan vertices (centroid first, matching ngon())."""
+    for ob, i in h["balls"]:
+        ob.location = pts[i]
+    for ob, ia, ib in h["tubes"]:
+        sp = ob.data.splines[0]
+        sp.points[0].co = (*pts[ia], 1.0)
+        sp.points[1].co = (*pts[ib], 1.0)
+    for ob, ni in h["surfs"]:
+        P = pts[ni]
+        c = P.mean(axis=0)
+        me = ob.data
+        me.vertices[0].co = c
+        for k in range(len(ni)):
+            me.vertices[1 + k].co = P[k]
+        me.update()
 
 
 def clear_animals(scene_coll):
@@ -557,6 +582,7 @@ def main():
         if args.clamp_tail:
             clamp_tails(trx, cage_planes(cage_nodes, cage))
         o0, o1 = args.orbit_range if args.orbit_range else (start, end)
+        animals = {}  # track -> handles; rebuilt only if the live-track set changes
         for i, fr in enumerate(frames):
             # frames are named by ABSOLUTE frame number so parallel workers
             # writing one outdir can't collide; assemble with
@@ -573,11 +599,15 @@ def main():
                      math.cos(math.radians(el)) * math.sin(math.radians(az)),
                      math.sin(math.radians(el))))
                 aim(cam, view_focus)
-            clear_animals(scn_coll)
             pts = trx[fr - start]
-            for tr in range(pts.shape[0]):
-                if not np.isnan(pts[tr]).all():
-                    build_animal(tr, pts[tr], mouse_nodes, M, scn_coll)
+            live = [tr for tr in range(pts.shape[0]) if not np.isnan(pts[tr]).all()]
+            if set(live) != set(animals):
+                clear_animals(scn_coll)
+                animals = {tr: build_animal(tr, pts[tr], mouse_nodes, M, scn_coll)
+                           for tr in live}
+            else:
+                for tr in live:
+                    update_animal(animals[tr], pts[tr])
             render_to(outpath)
             print(f"[{i + 1}/{len(frames)}] frame {fr}", flush=True)
     else:
