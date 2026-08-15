@@ -290,6 +290,44 @@ def load_session(session):
     return cage_nodes, cage, mouse_nodes, ali, cams
 
 
+TAIL_NODES = [7, 8, 9, 4]  # Tail_0, Tail_1, Tail_2, TailTip in mouse node order
+
+
+def cage_planes(cage_nodes, cage, margin=0.004):
+    """Half-space model of the cage interior: the floor and the four outer
+    walls, each fit by least squares over its surface's nodes, normals facing
+    the cage centroid. (The spout/filter notches are ignored — the visible
+    artifact is tails through the OUTER walls and floor.)"""
+    idx = {n: i for i, n in enumerate(cage_nodes)}
+    ctr = cage.mean(axis=0)
+    planes = []
+    for sname in ("floor", "spout_wall", "filter_wall", "west_wall", "east_wall"):
+        P = cage[[idx[n] for n in CAGE_SURFACES[sname]]]
+        c = P.mean(axis=0)
+        _, _, vt = np.linalg.svd(P - c)
+        n = vt[2]
+        if np.dot(ctr - c, n) < 0:
+            n = -n
+        planes.append((n, float(np.dot(n, c)) + margin))
+    return planes
+
+
+def clamp_tails(trx, planes, iters=8):
+    """Project tail keypoints back inside the cage volume: any tail node below
+    a wall/floor plane is moved onto that plane (a few mm inside), iterated so
+    points pushed out of one half-space by another converge in corners.
+    trx is (frames, tracks, 15, 3) or (tracks, 15, 3), modified in place."""
+    tails = trx[..., TAIL_NODES, :]
+    for _ in range(iters):
+        for n, d in planes:
+            s = tails @ n - d
+            viol = s < 0
+            if viol.any():
+                tails[viol] -= s[viol][..., None] * n
+    trx[..., TAIL_NODES, :] = tails
+    return trx
+
+
 def load_frame(session, frame):
     with h5py.File(f"{session}/aligned_points3d.h5") as f:
         return f["tracks"][frame] * MM                     # (tracks, 15, 3) m
@@ -469,6 +507,9 @@ def main():
                          "the cage centroid so the overhead cameras stay in frame")
     ap.add_argument("--cam-scale", type=float, default=1.0,
                     help="scale factor on the camera body meshes")
+    ap.add_argument("--clamp-tail", action="store_true",
+                    help="project tail keypoints that triangulated outside the "
+                         "cage back inside its walls/floor (visualization only)")
     args = ap.parse_args()
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -502,6 +543,8 @@ def main():
         cam = setup_render_camera(view_focus, args.azim, args.elev, args.ortho)
         with h5py.File(f"{args.session}/aligned_points3d.h5") as f:
             trx = f["tracks"][start:end] * MM
+        if args.clamp_tail:
+            clamp_tails(trx, cage_planes(cage_nodes, cage))
         for i, fr in enumerate(frames):
             if args.orbit:
                 az = args.azim + args.orbit * i / max(1, len(frames) - 1)
@@ -521,6 +564,8 @@ def main():
             print(f"[{i + 1}/{len(frames)}] frame {fr}", flush=True)
     else:
         pts = load_frame(args.session, args.frame)
+        if args.clamp_tail:
+            clamp_tails(pts, cage_planes(cage_nodes, cage))
         for tr in range(pts.shape[0]):
             if not np.isnan(pts[tr]).all():
                 build_animal(tr, pts[tr], mouse_nodes, M, scn_coll)
