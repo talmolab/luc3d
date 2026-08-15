@@ -468,6 +468,10 @@ def setup_cycles(samples, res):
     scn.render.engine = "CYCLES"
     scn.cycles.samples = samples
     scn.cycles.use_denoising = True
+    scn.cycles.use_adaptive_sampling = True
+    # only the animals change between video frames — keep the cage/cameras/
+    # lights synced and the BVH warm instead of rebuilding the world per frame
+    scn.render.use_persistent_data = True
     scn.render.resolution_x, scn.render.resolution_y = res
     scn.render.film_transparent = False
     scn.view_settings.view_transform = "Standard"  # panelA: no filmic grey-out
@@ -498,6 +502,9 @@ def main():
     ap.add_argument("--outdir", default=os.path.join(HERE, "renders", "video"))
     ap.add_argument("--orbit", type=float, default=0.0,
                     help="degrees of render-camera azimuth sweep across the video")
+    ap.add_argument("--orbit-range", nargs=2, type=int, metavar=("START", "END"),
+                    help="frame range the orbit spans (defaults to --video's); "
+                         "lets parallel workers render disjoint chunks of one sweep")
     ap.add_argument("--samples", type=int, default=128)
     ap.add_argument("--res", type=int, nargs=2, default=[1600, 1200])
     ap.add_argument("--azim", type=float, default=205.0)
@@ -549,9 +556,16 @@ def main():
             trx = f["tracks"][start:end] * MM
         if args.clamp_tail:
             clamp_tails(trx, cage_planes(cage_nodes, cage))
+        o0, o1 = args.orbit_range if args.orbit_range else (start, end)
         for i, fr in enumerate(frames):
+            # frames are named by ABSOLUTE frame number so parallel workers
+            # writing one outdir can't collide; assemble with
+            # ffmpeg -start_number <START>
+            outpath = os.path.join(args.outdir, f"f{fr:05d}.png")
+            if os.path.exists(outpath):
+                continue  # resume/parallel-safe
             if args.orbit:
-                az = args.azim + args.orbit * i / max(1, len(frames) - 1)
+                az = args.azim + args.orbit * (fr - o0) / max(1, o1 - o0 - 1)
                 el = args.elev
                 d = Vector(cam.location) - Vector(view_focus)
                 cam.location = Vector(view_focus) + d.length * Vector(
@@ -564,7 +578,7 @@ def main():
             for tr in range(pts.shape[0]):
                 if not np.isnan(pts[tr]).all():
                     build_animal(tr, pts[tr], mouse_nodes, M, scn_coll)
-            render_to(os.path.join(args.outdir, f"f{i:05d}.png"))
+            render_to(outpath)
             print(f"[{i + 1}/{len(frames)}] frame {fr}", flush=True)
     else:
         pts = load_frame(args.session, args.frame)
