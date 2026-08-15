@@ -161,8 +161,35 @@ def pbr_mat(name, hexcolor, rough, metal, alpha, coat):
     return m
 
 
+def flat_translucent(name, hexcolor, opacity, strength=1.0):
+    """matplotlib-style alpha film (panelA's wedge_mat): Transparent + Emission
+    mix. Emission is LIGHT-INDEPENDENT, so a membrane or wall seen from its
+    unlit side mid-orbit stays its own colour instead of rendering black —
+    which is also exactly how viz_08's alpha-blended surfaces behave."""
+    m = bpy.data.materials.new(name)
+    m.use_nodes = True
+    nt = m.node_tree
+    for n in list(nt.nodes):
+        nt.nodes.remove(n)
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    mix = nt.nodes.new("ShaderNodeMixShader")
+    tr = nt.nodes.new("ShaderNodeBsdfTransparent")
+    em = nt.nodes.new("ShaderNodeEmission")
+    em.inputs["Color"].default_value = hex2rgba(hexcolor)
+    em.inputs["Strength"].default_value = strength
+    mix.inputs["Fac"].default_value = opacity
+    nt.links.new(tr.outputs[0], mix.inputs[1])
+    nt.links.new(em.outputs[0], mix.inputs[2])
+    nt.links.new(mix.outputs[0], out.inputs["Surface"])
+    m.diffuse_color = hex2rgba(hexcolor)
+    return m
+
+
 def matte_mat(name, hexcolor, alpha=1.0):
-    """viz_08 animal look: saturated matte, no metal, no sheen."""
+    """viz_08 animal look: saturated matte for the solid parts; the translucent
+    body membranes use the flat film so they can't go black when back-lit."""
+    if alpha < 1.0:
+        return flat_translucent(name, hexcolor, alpha)
     return pbr_mat(name, hexcolor, 0.78, 0.0, alpha, 0.0)
 
 
@@ -557,6 +584,9 @@ def main():
     view_focus = (ctr[0] + args.aim_x, ctr[1], args.aim_z)  # framing: cage + cameras
 
     M = {k: pbr_mat(k, *v) for k, v in PBR.items()}
+    # walls as the flat film too — same back-lit-black failure mode as the
+    # membranes; the near-horizontal cage floor keeps real shading (shadows)
+    M["cage_wall"] = flat_translucent("cage_wall", PBR["cage_wall"][0], PBR["cage_wall"][3])
     build_cage(cage_nodes, cage, M, scn_coll)
     zmin_cage = float(cage[:, 2].min())
     for c in cams:
