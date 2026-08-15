@@ -3,3 +3,5 @@ __pycache__/
 *.blend1
 renders/video/
 renders/video60/
+renders/video5min_tailclamp/
+renders/video5min_plain/
