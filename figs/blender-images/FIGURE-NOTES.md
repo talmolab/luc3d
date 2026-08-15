@@ -855,3 +855,25 @@ wireframe-only look of the RatVid_3D_Blender clips).
   orphans_purge would free the cached materials), then
   `ffmpeg -framerate 30 -i renders/video/f%05d.png -c:v libx264 -pix_fmt
   yuv420p -crf 20 renders/cage_two_mice.mp4`.
+
+### Video v2 — true fps + warp-scored section (2026-08-15, after Eric's review)
+
+`renders/cage_two_mice_60s.mp4` supersedes the first clip. Eric caught two
+things in v1 (frames 3000–3600, step 2): the blue mouse "warping out of form"
+and wrong playback speed.
+
+- **fps**: the cameras record at exactly 30 fps (ffprobe on the session's own
+  mp4s: r_frame_rate 1000000/33333, 18,247 frames / 608 s). Step-2 frames
+  encoded at 30 fps played 2× real speed; v2 renders EVERY frame and encodes
+  at 30 fps — real time.
+- **Warp**: it's in the triangulation, not the render. Section selection is
+  scored per frame as max relative deviation of each skeleton bone's length
+  from its session-median (body edges; tail scored separately), both tracks.
+  The v1 window had bones reaching 2.5× their true length; the chosen window,
+  **frames 13900–15700** (t = 463–523 s), is the cleanest active minute of
+  the session: body p99 deviation 0.63 vs 2.38, 4% vs 18% of frames with any
+  bone off by >50%. Runner-up windows: 13500, 14250, 16350.
+- Command: `bpyenv/bin/python cage_scene.py --video 13900 15700 1 --orbit 60
+  --samples 96 --res 1280 960 --outdir renders/video60` (~2.5 h / 1800 frames
+  on the A40), then `ffmpeg -framerate 30 -i renders/video60/f%05d.png -c:v
+  libx264 -pix_fmt yuv420p -crf 20 renders/cage_two_mice_60s.mp4`.

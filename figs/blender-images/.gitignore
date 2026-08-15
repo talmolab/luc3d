@@ -2,3 +2,4 @@ bpyenv/
 __pycache__/
 *.blend1
 renders/video/
+renders/video60/
