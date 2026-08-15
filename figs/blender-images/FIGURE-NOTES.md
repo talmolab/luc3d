@@ -828,3 +828,30 @@ models used to illustrate the setup.
 9. Panel A still uses the pre-August-14 eye/ear/nose work — none of §3d–3g has been applied
    to the full-room dog, which is at a scale where none of it would be visible. Worth a
    check only if Panel A is ever recropped tighter.
+
+## cage_scene.py — SLAP-2M cage + animals + calibrated cameras (2026-08-15)
+
+Renders a real session in the panelA aesthetic with the cage surfaces FILLED
+(viz_08's grey translucent walls + black edge wireframe — per Eric, not the
+wireframe-only look of the RatVid_3D_Blender clips).
+
+- Data: `/root/talmolab-smb/eric/slap_2m/<date>/<session>/` —
+  `aligned_cage_points3d.h5` (24 cage corners, mm, floor z≈0),
+  `aligned_points3d.h5` (frames × tracks × 15 × 3), `alignment.toml`
+  (calibration-world → cage frame; **values stored as strings**, cast to float),
+  `calibration.toml` (aniposelib Rodrigues rvec + tvec, OpenCV world→cam, mm).
+  Camera pose in the cage frame: center `Ra @ (−Rᵀt − ta)`, rotation `(R Raᵀ)ᵀ`;
+  checked to 5.7e-14 against the aligned cage, all aim_cos ≥ 0.98.
+- Surface/edge node lists are verbatim from viz_08.ipynb cells 15–16 — don't
+  "fix" them by symmetry (east_wall really routes through SpoutBot_NW).
+- Default session `2022-10-07/10072022180149` (2 animals; frames 3000–3800 are
+  NaN-free). Still: frame 3200. Lights are panelA's four soft areas at ~¼
+  energy — the room-scale energies blow out this 1.5 m tabletop scene.
+- Still: `bpyenv/bin/python cage_scene.py` → `renders/cage_two_mice.png`
+  (~40 s at 256 samples on the A40 via OptiX).
+- Video: `bpyenv/bin/python cage_scene.py --video 3000 3600 2 --orbit 30
+  --samples 96 --res 1280 960` (~25 min for 300 frames; per-frame animal
+  rebuild removes its mesh/curve datablocks explicitly — a blanket
+  orphans_purge would free the cached materials), then
+  `ffmpeg -framerate 30 -i renders/video/f%05d.png -c:v libx264 -pix_fmt
+  yuv420p -crf 20 renders/cage_two_mice.mp4`.
