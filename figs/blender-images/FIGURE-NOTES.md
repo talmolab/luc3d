@@ -877,3 +877,30 @@ and wrong playback speed.
   --samples 96 --res 1280 960 --outdir renders/video60` (~2.5 h / 1800 frames
   on the A40), then `ffmpeg -framerate 30 -i renders/video60/f%05d.png -c:v
   libx264 -pix_fmt yuv420p -crf 20 renders/cage_two_mice_60s.mp4`.
+
+### 5-minute videos, final (2026-08-16)
+
+`renders/cage_two_mice_5min_tailclamp.mp4` and `renders/cage_two_mice_5min.mp4`
+(with/without --clamp-tail): frames 9000–18000 (t = 300–600 s, best 5-min
+window by the warp score; contains the clean minute 13900–15700), every frame
+at the true 30 fps, 120° sweep, 1280×960, 32 samples + denoiser.
+
+Two black-artifact classes were found and fixed along the way — check for
+BOTH when changing materials or adding geometry:
+1. **Back-lit translucency** — one-sided lit diffuse membranes render black
+   from their unlit side. Fix: `flat_translucent` (Transparent+Emission mix,
+   light-independent — matplotlib-alpha behavior) for membranes + cage walls.
+2. **Transparent-bounce exhaustion** — a ray crossing 2 walls + stacked
+   membranes exceeds Cycles' default 8 transparent bounces and terminates
+   BLACK (black torso patches when membranes go edge-on).
+   `transparent_max_bounces = 32` in setup_cycles.
+Detector: flag frames whose sub-sampled dark fraction (<70 luma at 320×240)
+exceeds 0.03% — lens baseline is ≤0.02%. Both final videos scan clean at 0.
+Bounce-cap fixes are splice-safe (only ray-exhausted pixels change), so only
+flagged frames were re-rendered; material fixes are NOT (full re-render).
+
+Pipeline speed: 19 → 86 frames/min (persistent_data; re-pose animals in
+place; 32 samples; 3 workers ×2 videos saturate the 64 cores; frames named
+by absolute index, resume-safe, `--orbit-range` shares one sweep across
+workers). Assemble: `ffmpeg -framerate 30 -start_number 9000 -i f%05d.png`.
+Cut any sub-section without re-rendering: `-start_number N -frames:v M`.
